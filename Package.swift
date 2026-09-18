@@ -2,7 +2,7 @@
 import PackageDescription
 
 // XiaolaiDict — a menu-bar dictionary for macOS. Design: dev-docs/macos-intelligent-dictionary.md.
-// `swift test` runs the tests.
+// `swift test` runs the tests; `make` assembles, signs and embeds everything into XiaolaiDict.app.
 let package = Package(
     name: "XiaolaiDict",
     platforms: [.macOS(.v26)],
