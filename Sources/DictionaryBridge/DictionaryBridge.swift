@@ -94,43 +94,61 @@ public enum DictionaryBridge {
         }
     }
 
+    static let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
+
+    /// `document` with the XHTML namespace declared on its root. The dictionaries declare only
+    /// their own `d:` namespace there, and parsed as XML — which the panel must do, or the `d:`
+    /// elements lose the namespace their stylesheets select on — a root outside the XHTML namespace
+    /// is not HTML: `style` shows as text and nothing is laid out. A root that already declares a
+    /// default namespace, and text with no `html` root, are returned as they are.
+    static func renderable(_ document: String) -> String {
+        guard let open = document.range(of: #"<html(?=[\s>/])"#, options: .regularExpression),
+              let close = document[open.upperBound...].firstIndex(of: ">"),
+              document[open.upperBound..<close].range(of: #"\sxmlns\s*="#, options: .regularExpression) == nil
+        else { return document }
+        return document.replacingCharacters(in: open, with: "<html xmlns=\"\(xhtmlNamespace)\"")
+    }
+
     /// Whether `document` is what the styled form promises: a well-formed XHTML document — the
-    /// panel parses it as XML, so anything less renders as an error page — rooted at `html`, with
-    /// the dictionary's stylesheet inlined: a `style` element holding at least one whole rule, a
-    /// selector and a `property: value` block, not merely the tag or a stray brace. Blank text, plain
-    /// text, or the bare entry of another form after an ABI change all fail.
+    /// panel parses it as XML, so anything less renders as an error page — whose root is `html` in
+    /// the XHTML namespace, with the dictionary's stylesheet inlined: an XHTML `style` element
+    /// holding at least one whole rule, a selector and a `property: value` block, not merely the tag
+    /// or a stray brace. Blank text, plain text, a document outside the XHTML namespace, or the
+    /// bare entry of another form after an ABI change all fail.
     static func isStyledDocument(_ document: String) -> Bool {
         let parser = XMLParser(data: Data(document.utf8))
+        parser.shouldProcessNamespaces = true
         let inspector = DocumentInspector()
         parser.delegate = inspector
-        guard parser.parse(), inspector.root == "html" else { return false }
+        guard parser.parse(), inspector.root == "html", inspector.rootNamespace == xhtmlNamespace else { return false }
         // Comments first: a rule inside one is not a rule.
         let rules = inspector.stylesheet.replacingOccurrences(of: #"/\*[\s\S]*?(\*/|$)"#, with: " ", options: .regularExpression)
         return rules.range(of: #"[^{}\s][^{}]*\{[^{}]*[\w-]\s*:[^{}]*\S[^{}]*\}"#, options: .regularExpression) != nil
     }
 }
 
-/// Collects what `isStyledDocument` checks, by local name: entries use Apple's `d:` namespace.
+/// Collects what `isStyledDocument` checks, by name and namespace.
 private final class DocumentInspector: NSObject, XMLParserDelegate {
     var root: String?
-    /// The text of every `style` element.
+    var rootNamespace: String?
+    /// The text of every XHTML `style` element.
     var stylesheet = ""
     private var styleDepth = 0
 
-    private static func local(_ name: String) -> String {
-        name.split(separator: ":").last.map(String.init)?.lowercased() ?? name
+    private static func isStyle(_ name: String, _ namespace: String?) -> Bool {
+        name == "style" && namespace == DictionaryBridge.xhtmlNamespace
     }
 
     func parser(
         _ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
         attributes: [String: String] = [:]
     ) {
-        if root == nil { root = Self.local(name) }
-        if Self.local(name) == "style" { styleDepth += 1 }
+        if root == nil { (root, rootNamespace) = (name, namespaceURI) }
+        if Self.isStyle(name, namespaceURI) { styleDepth += 1 }
     }
 
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if Self.local(name) == "style" { styleDepth -= 1 }
+        if Self.isStyle(name, namespaceURI) { styleDepth -= 1 }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
@@ -228,10 +246,9 @@ private struct API: @unchecked Sendable {
 
     /// Nil when the record's document cannot be had, or is not the styled document form 1 promises.
     func styledDocument(of record: CFTypeRef) -> String? {
-        guard let document = recordCopyData(record, Self.styledDocumentForm)?.takeRetainedValue() as String?,
-              DictionaryBridge.isStyledDocument(document)
-        else { return nil }
-        return document
+        guard let document = recordCopyData(record, Self.styledDocumentForm)?.takeRetainedValue() as String? else { return nil }
+        let renderable = DictionaryBridge.renderable(document)
+        return DictionaryBridge.isStyledDocument(renderable) ? renderable : nil
     }
 
     /// The pointer is typed as a CFArray only because that is what the symbol is believed to

@@ -45,6 +45,17 @@ struct DictionaryBridgeTests {
         }
     }
 
+    /// Found in the panel on the E2E machine: the dictionaries' documents declare only Apple's `d:`
+    /// namespace, and parsed as XML a root outside the XHTML namespace is not HTML — the panel
+    /// showed each entry as one run of text, stylesheet included. What the service sends must be
+    /// XHTML at the root.
+    @Test func everyEntryIsXHTMLAtItsRoot() throws {
+        for entry in try DictionaryBridge.entries(for: "meeting").entries {
+            let root = try #require(entry.html.range(of: #"<html\b[^>]*>"#, options: .regularExpression).map { entry.html[$0] })
+            #expect(root.contains(#"xmlns="http://www.w3.org/1999/xhtml""#), "\(entry.dictionary): \(root)")
+        }
+    }
+
     /// An inflection is answered with whatever headword each installed dictionary chooses — "run"
     /// in some, "running" in others, and which depends on what is installed. What must hold in every
     /// case: each entry names a headword, and its match agrees with it.
@@ -99,6 +110,20 @@ struct DictionaryBridgeTests {
 
 /// What the styled form promises, checked before an entry is passed on as a confident result.
 struct StyledDocumentTests {
+    private let xhtml = "http://www.w3.org/1999/xhtml"
+
+    /// The documents as the dictionaries give them lack the XHTML namespace; the service adds it,
+    /// and leaves a document that already has it — or has no html root at all — as it was.
+    @Test func theXHTMLNamespaceIsAddedWhereMissing() {
+        let bare = #"<?xml version="1.0"?><html xmlns:d="urn:d" class="c"><head><style>p { margin: 0 }</style></head><body/></html>"#
+        let renderable = DictionaryBridge.renderable(bare)
+        #expect(renderable.contains(#"<html xmlns="\#(xhtml)" xmlns:d="urn:d" class="c">"#))
+        #expect(DictionaryBridge.isStyledDocument(renderable))
+        let declared = #"<html xmlns="\#(xhtml)"><head><style>p { margin: 0 }</style></head><body/></html>"#
+        #expect(DictionaryBridge.renderable(declared) == declared)
+        #expect(DictionaryBridge.renderable("plain text") == "plain text")
+    }
+
     @Test func aStyledXHTMLDocumentPasses() {
         #expect(DictionaryBridge.isStyledDocument(
             #"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><style>p { margin: 0 }</style></head><body><d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng"><p>x</p></d:entry></body></html>"#))
@@ -117,6 +142,9 @@ struct StyledDocumentTests {
         #"<html><head><style>p {}</style></head><body><p>x</p></body></html>"#,
         // Found by the verifier: a rule inside a comment is not a stylesheet.
         #"<html><head><style>/* p { color: red } */</style></head><body><p>x</p></body></html>"#,
+        // Found on the E2E machine: outside the XHTML namespace, html, style and body are not HTML,
+        // and the whole document renders as one run of text.
+        #"<html xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng"><head><style>p { margin: 0 }</style></head><body><p>x</p></body></html>"#,
         // Malformed: the panel parses entries as XML and would show an error page.
         #"<html><head><style>p{}</style></head><body><p>x</body></html>"#,
     ])
