@@ -17,8 +17,10 @@ let package = Package(
         .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictCore"]),
 
         .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictCore", "DictionaryBridge"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictCore"]),
 
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictCore"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDict"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         .testTarget(name: "DictionaryBridgeTests", dependencies: ["DictionaryBridge"]),
     ]
