@@ -58,7 +58,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web; do
+for helper in select-text select-web keys panel claim-escape; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -183,6 +183,62 @@ select_then_read "Safari: wrapping punctuation is not part of the term" com.appl
 select_then_read "Safari: a past form NLTagger leaves alone is read from its grammar" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari saw -- \
     text=saw lemma=see lemmaBasis=inferred
+
+# 6. The reader's own path: a selection, the shortcut, the panel, the ledger, and Escape.
+#    The shortcut is XiaolaiDict's default, Control-Option-D; a machine where it was changed fails here.
+ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
+rows() { sqlite3 -readonly "$ledger" "select count(*) from lookups" 2>/dev/null || echo 0; }
+before=$(rows)
+open -a TextEdit "$helpers/notes.txt"; sleep 1.5
+if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+    flunk "shortcut: could not select ($why)"
+else
+    "$helpers/keys" 2 control option
+    view=""
+    for _ in $(seq 1 50); do
+        view=$("$helpers/panel" com.xiaolaidict)
+        printf '%s' "$view" | grep -q '→ meet' && break
+        sleep 0.1
+    done
+    sleep 1  # the entry's page, loaded after the panel shows
+    view=$("$helpers/panel" com.xiaolaidict)
+    if why=$(python3 - "$view" 2>&1 <<'PY'
+import json, sys
+view = json.loads(sys.argv[1])
+panels = [w for w in view["windows"] if "→ meet" in w["texts"]]
+problems = []
+if view["frontmost"] != "com.apple.TextEdit": problems.append(f"focus moved to {view['frontmost']}")
+if not panels: sys.exit(f"no panel with the entry: {view}")
+page = panels[0].get("webTexts")
+if page is None: problems.append("no rendered entry in the panel")
+elif len(page) < 3 or any("@namespace" in t or "@charset" in t for t in page):
+    problems.append(f"the entry is not laid out as a page ({len(page)} text runs, first: {page[0][:60]!r})")
+sys.exit("; ".join(problems) if problems else 0)
+PY
+    ); then pass "shortcut: the panel shows the rendered entry, and TextEdit keeps focus"; else flunk "shortcut: $why"; fi
+
+    held=$("$helpers/claim-escape" || true)
+    "$helpers/keys" 53
+    sleep 1
+    free=$("$helpers/claim-escape" || true)
+    closed=$("$helpers/panel" com.xiaolaidict)
+    if [ "$held" = held ] && [ "$free" = free ] && printf '%s' "$closed" | grep -q '"windows":\[\]'; then
+        pass "escape: held while the panel shows, closes it, and is released"
+    else
+        flunk "escape: while shown '$held', after '$free', panel after Escape: $closed"
+    fi
+
+    after=$(rows)
+    row=$(sqlite3 -readonly -json "$ledger" "select surface, lemma, context, source_app, result, answered_by, capture_source, context_quality from lookups order by id desc limit 1" 2>&1)
+    if [ "$after" -eq $((before + 1)) ] && why=$(expect "$(printf '%s' "$row" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)[0]))')" \
+            surface=meeting lemma=meet "context=The meeting ended after we stopped meeting at noon." \
+            source_app=com.apple.TextEdit result=found answered_by=dictionaryService \
+            capture_source=accessibilityTextRange context_quality=complete 2>&1); then
+        pass "ledger: the lookup is recorded, with its capture quality"
+    else
+        flunk "ledger: $before rows before, $after after; last row: ${why:-$row}"
+    fi
+fi
 
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
