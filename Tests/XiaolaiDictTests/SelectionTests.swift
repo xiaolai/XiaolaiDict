@@ -222,6 +222,15 @@ struct CaptureTests {
         #expect(AccessibilitySession.answer(for: .failure) == .absent)
     }
 
+    /// macOS 27 renamed the list the permission is granted in; the message must name the one the
+    /// reader will find. Found when a reader looked for "Accessibility" on macOS 27 and it was not there.
+    @Test func thePermissionMessageNamesTheListOnThisMacOS() {
+        #expect(PrivacySettings.accessibilityLocation(majorVersion: 26) == "System Settings → Privacy & Security → Accessibility")
+        #expect(PrivacySettings.accessibilityLocation(majorVersion: 27)
+            == "System Settings → Privacy & Security → Device Control and Data Access")
+        #expect(SelectionReader.message(for: .accessibilityDisabled, app: "Safari").contains(PrivacySettings.accessibilityLocation))
+    }
+
     @Test(arguments: [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled])
     func eachFailureHasItsOwnMessage(error: CaptureError) {
         let others = [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled]

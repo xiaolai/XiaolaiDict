@@ -55,7 +55,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
             panel.show(.message(
                 title: "XiaolaiDict needs Accessibility access",
-                detail: "It reads your selection through Accessibility. Allow XiaolaiDict in System Settings → Privacy & Security → Accessibility, then press the shortcut again."),
+                detail: "It reads your selection through Accessibility. Allow XiaolaiDict in \(PrivacySettings.accessibilityLocation), then press the shortcut again."),
                 near: pointer, for: ticket)
             return
         }
