@@ -11,6 +11,15 @@ let package = Package(
         // the part that has to be exhaustively testable.
         .target(name: "XiaolaiDictCore"),
 
+        // The private DictionaryServices API. Linked only by the XPC service and its tests, never
+        // by the app: its failure mode is a segfault, and a crash must take down the service, not
+        // the app the reader is using (design note §10).
+        .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictCore"]),
+
+        .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictCore", "DictionaryBridge"]),
+
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictCore"]),
+        // Integration tests against the dictionaries actually installed on this Mac.
+        .testTarget(name: "DictionaryBridgeTests", dependencies: ["DictionaryBridge"]),
     ]
 )
