@@ -126,8 +126,12 @@ def radial_png(rg: Radial, size: int = CANVAS) -> bytes:
 
 def rounded_rect_path(x: float, y: float, w: float, h: float, r: float) -> str:
     """A rounded rectangle as path data, clockwise, omitting straight runs of zero length."""
-    f = lambda v: f"{round(v, 4):g}"  # noqa: E731
-    arc = lambda ex, ey: f"A{f(r)} {f(r)} 0 0 1 {f(ex)} {f(ey)}"  # noqa: E731
+    def f(v: float) -> str:
+        return f"{round(v, 4):g}"
+
+    def arc(ex: float, ey: float) -> str:
+        return f"A{f(r)} {f(r)} 0 0 1 {f(ex)} {f(ey)}"
+
     parts = [f"M{f(x + r)} {f(y)}"]
     if w > 2 * r:
         parts.append(f"H{f(x + w - r)}")
