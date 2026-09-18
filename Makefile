@@ -5,6 +5,7 @@
 #   make run      the same, then quit the running copy, open the new one and check it answers
 #   make test     swift test, and the icon generator's tests
 #   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from design/icon
+#   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST)
 #   make clean    remove the bundle and staging (not SwiftPM's build cache)
 #
 # Nothing here is decided by timestamps: the script rebuilds when a digest of the inputs' names and
@@ -16,7 +17,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-icon icon clean
+.PHONY: all run test test-swift test-icon icon e2e clean
 
 # A Developer ID, never ad hoc, for two reasons:
 #   - macOS keys Accessibility and Screen Recording grants on the signing identity. An ad-hoc
@@ -27,6 +28,8 @@
 SIGN_ID ?= Developer ID Application: HANDO K.K. (Y53RSUA3SM)
 # Empty for a development build, numbered from the clock. Releases pass the release counter's value.
 BUILD_NUMBER ?=
+# The SSH name of the machine end-to-end tests run on. They never run on the machine that builds.
+E2E_HOST ?= mbp16
 
 # Handed to the script through the environment, as data: never spliced into a shell command,
 # where a quote in the identity would become code.
@@ -53,6 +56,9 @@ test-icon:
 
 icon:
 	@Tools/build-bundle.sh icon
+
+e2e: all
+	@Tools/e2e.sh "$(E2E_HOST)"
 
 clean:
 	@Tools/build-bundle.sh clean
