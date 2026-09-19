@@ -74,15 +74,37 @@ public enum DictionaryBridge {
     /// service process — each probe parses a real entry, and Longman's *hold* alone is 625 KB.
     public static func capabilities() -> [DictionaryCapability] {
         if let known = probed.withLock({ $0 }) { return known }
-        var found: [DictionaryCapability] = []
-        for dictionary in (try? activeDictionaries()) ?? [] {
-            found.append(capability(of: dictionary.identity))
+        // The *probe* is serialised, not merely its result cached. Reading the cache and then
+        // probing without holding anything lets two callers both find it empty and both parse
+        // every installed dictionary — 625 KB for Longman's *hold* alone — with the loser throwing
+        // its work away. The XPC listener happens to deliver requests one at a time, but nothing
+        // here makes that a guarantee, and the doc above promises once per process.
+        //
+        // Found by counting probes in a test. The assertion it replaced timed the second call, and
+        // timing could not see this: the second call is fast either way.
+        //
+        // Safe to hold across `activeDictionaries()`, which takes `serial`: nothing anywhere calls
+        // `capabilities()` while holding `serial`, so the two are never taken in the other order.
+        return probing.withLock { _ in
+            if let known = probed.withLock({ $0 }) { return known }   // another caller won the race
+            var found: [DictionaryCapability] = []
+            for dictionary in (try? activeDictionaries()) ?? [] {
+                found.append(capability(of: dictionary.identity))
+            }
+            probeRuns.withLock { $0 += 1 }
+            probed.withLock { $0 = found }
+            return found
         }
-        probed.withLock { $0 = found }
-        return found
     }
 
     private static let probed = Mutex<[DictionaryCapability]?>(nil)
+    /// Held across the probe itself, so it happens once however many callers arrive together.
+    private static let probing = Mutex(())
+
+    /// How many times the probe has actually run. Counted because it cannot be *timed*: the cache
+    /// is process-wide, so a test that happens to run second measures a warm cache, passes in
+    /// microseconds, and has checked nothing at all.
+    static let probeRuns = Mutex(0)
 
     private static func capability(of identity: DictionaryIdentity) -> DictionaryCapability {
         for word in probeWords {

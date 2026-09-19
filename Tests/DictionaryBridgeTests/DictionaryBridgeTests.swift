@@ -345,11 +345,20 @@ struct DictionaryCapabilityTests {
     }
 
     /// Probed once per process: each probe parses a real entry, and Longman's *hold* is 625 KB.
+    ///
+    /// Counted, not timed. The old version asserted the second call took under 5 ms, which proves
+    /// nothing twice over: the cache is process-wide, so if any other test probed first this one
+    /// measured an already-warm cache and passed without exercising anything — and on a loaded
+    /// machine a 5 ms bound measures the load instead of the cache.
     @Test func theProbeRunsOnce() {
         let first = DictionaryBridge.capabilities()
-        let started = ContinuousClock.now
         let second = DictionaryBridge.capabilities()
-        #expect(ContinuousClock.now - started < .milliseconds(5), "the probe ran again")
+        let runs = DictionaryBridge.probeRuns.withLock { $0 }
+
+        // Process-wide, not a delta across these two calls. Other tests probe in parallel, and the
+        // claim is exactly that the probe runs once for the whole process however many callers
+        // arrive and in whatever order — which a delta cannot express and timing cannot see.
+        #expect(runs == 1, "the probe ran \(runs) times in this process")
         #expect(first == second)
     }
 }

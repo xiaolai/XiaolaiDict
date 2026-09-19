@@ -29,7 +29,12 @@ struct LookupRunnerTests {
         try await panel.waitForShow()
         let shown = ContinuousClock.now - started
 
-        #expect(shown < .seconds(1), "the panel took \(shown) to appear")
+        // Bounded by the content deadline, not by the 1 s product promise. If the panel waited
+        // for the dictionaries, `shown` would be the full deadline; anything under it means it
+        // did not. The 1 s promise is a statement about a real machine and is measured on one —
+        // e2e.sh stage 7 exists for exactly that. Asserting it here measures how many other tests
+        // the runner happens to be executing in parallel, which is what made this fail.
+        #expect(shown < DictionaryClient.defaultDeadline, "the panel waited for the dictionaries: \(shown)")
         #expect(panel.contents.count == 1)
         #expect(panel.contents[0].isWaitingLookup, "the first thing shown already had an outcome")
         // Still waiting: the content cannot have arrived, because the service never answers.
