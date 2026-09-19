@@ -10,6 +10,22 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let client = DictionaryClient()
     private let primaryDictionary = PrimaryDictionaryStore()
     private lazy var runner = makeRunner()
+    private lazy var drawer = makeDrawer()
+
+    /// The history drawer reads the ledger itself, bounded in both directions, and reports a
+    /// failure rather than an empty drawer — the two must not look the same.
+    private func makeDrawer() -> HistoryDrawerController {
+        HistoryDrawerController { [weak self] in
+            guard let opening = self?.ledger else { return .unavailable("The ledger is not open yet.") }
+            do {
+                let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
+                return .entries(try await opening.value.recentLookups(
+                    since: since, limit: HistoryDrawerController.cardLimit))
+            } catch {
+                return .unavailable("\(error)")
+            }
+        }
+    }
 
     private func makeRunner() -> LookupRunner {
         let store = primaryDictionary
@@ -59,6 +75,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if ledgerStatus.request == 0 { ledgerStatus = (0, "Lookups are not being recorded: \(error)") }
                 log.error("ledger unavailable: \(String(describing: error), privacy: .public)")
             }
+        }
+        drawer.statusItemFrame = { [weak self] in
+            guard let button = self?.statusItem?.button, let window = button.window else { return nil }
+            return window.convertToScreen(button.convert(button.bounds, to: nil))
         }
         registerShortcut(shortcuts.load())
         quitOnTerminationSignal()
@@ -195,6 +215,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lookUp.target = self
         if let hotkey { lookUp.title = "Look Up Selection    \(hotkey.shortcut.label())" }
         menu.addItem(withTitle: "Change Shortcut…", action: #selector(changeShortcut), keyEquivalent: "").target = self
+        let history = menu.addItem(
+            withTitle: drawer.isVisible ? "Hide Reading History" : "Reading History",
+            action: #selector(toggleHistory), keyEquivalent: "")
+        history.target = self
         menu.addItem(primaryDictionaryItem())
         for problem in [hotkeyProblem, ledgerStatus.problem].compactMap({ $0 }) {
             let item = menu.addItem(withTitle: problem, action: nil, keyEquivalent: "")
@@ -240,6 +264,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         item.submenu = submenu
         return item
+    }
+
+    @objc private func toggleHistory() {
+        drawer.toggle()
     }
 
     @objc private func choosePrimaryDictionary(_ sender: NSMenuItem) {
