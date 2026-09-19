@@ -31,6 +31,18 @@ public struct SentenceContext: Equatable, Sendable {
 ///
 /// Word-under-the-pointer segmentation (Milestone 2 hover) lives in the screen-word spike until
 /// that milestone ports it: product code carries no API without a caller.
+/// A word found under a pointer, with the sentence it sits in.
+public struct WordAtPoint: Equatable, Sendable {
+    public let word: String
+    /// The sentence around it, carrying its own `mayBeCut` flag and the word's range within it.
+    public let sentence: SentenceContext
+
+    public init(word: String, sentence: SentenceContext) {
+        self.word = word
+        self.sentence = sentence
+    }
+}
+
 public enum TextSegmenter {
     /// Which ends of a text are cuts in a longer document rather than the document's own ends.
     public struct Clipping: OptionSet, Sendable {
@@ -70,6 +82,43 @@ public enum TextSegmenter {
         return SentenceContext(
             text: String(text[sentence]), mayBeCut: mayBeCut,
             selection: inside ? NSRange(location: offset, length: range.length) : nil)
+    }
+
+    /// Every word in `text`, as the tokeniser breaks them. Used by the bounds-scan dialect, which
+    /// asks the app where each of them sits, and by the recogniser, which needs a box per word.
+    public static func wordRanges(in text: String) -> [Range<String.Index>] {
+        tokens(.word, in: text).map { trimmed($0, in: text) }.filter { !$0.isEmpty }
+    }
+
+    /// The word containing `utf16Offset`, and the sentence around it.
+    ///
+    /// `clipped` says whether the text this was read from ran into the edge of what could be
+    /// captured, so a sentence spliced from two cut lines is marked rather than passed off as
+    /// whole. Nil when the offset is outside the text or lands on no word.
+    public static func word(
+        in text: String, utf16Offset: Int, clipped: Clipping = []
+    ) -> WordAtPoint? {
+        guard utf16Offset >= 0, utf16Offset < text.utf16.count else { return nil }
+        let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: utf16Offset)
+        // An offset landing on the *low* surrogate of a pair has no `String.Index`, and the hover
+        // paths estimate offsets from a pointer position — so pointing at the right half of a
+        // supplementary character produced exactly that and the word was lost. Step back to the
+        // character it belongs to rather than refusing.
+        var index = String.Index(utf16Index, within: text)
+        if index == nil, utf16Offset > 0 {
+            index = String.Index(text.utf16.index(before: utf16Index), within: text)
+        }
+        guard let index else { return nil }
+        guard let range = wordRanges(in: text).first(where: { $0.contains(index) || $0.lowerBound == index })
+        else { return nil }
+        let word = String(text[range])
+        guard !word.isEmpty else { return nil }
+        let location = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
+        let length = text.utf16.distance(from: range.lowerBound, to: range.upperBound)
+        guard let sentence = sentence(
+            in: text, around: NSRange(location: location, length: length), clipped: clipped)
+        else { return nil }
+        return WordAtPoint(word: word, sentence: sentence)
     }
 
     private static func tokens(_ unit: NLTokenUnit, in text: String) -> [Range<String.Index>] {

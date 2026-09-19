@@ -1,0 +1,179 @@
+import Foundation
+
+/// The modifier the reader must hold before the pointer does anything at all.
+///
+/// Hover is **opt-in per lookup, not per session** (`feature-ledger-ux.md` A4): without this, the
+/// pointer resting anywhere is a lookup, and the reader cannot read a page without being helped.
+/// There is no "none" case on purpose — a hover with no modifier is the design this exists to
+/// prevent, and making it unrepresentable is cheaper than remembering not to configure it.
+public enum HoverModifier: String, Codable, Sendable, CaseIterable {
+    case option
+    case control
+    case command
+    case shift
+}
+
+/// Why a hover did not fire. Every refusal is nameable, because "the popup did not appear" with no
+/// reason is indistinguishable from a bug.
+public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
+    /// The modifier is not held. The ordinary case, and not a problem.
+    case modifierNotHeld
+    /// This app is excluded — a password manager, a terminal (A3).
+    case excludedApp
+    /// This site is excluded (A3).
+    case excludedSite
+    /// The reader asked XiaolaiDict to stop for a while (A5).
+    case paused
+    /// The pointer has not settled yet. Debouncing is non-negotiable (design note §8).
+    case stillMoving
+    /// The pointer has not left the word XiaolaiDict last looked up, so there is nothing new to say.
+    case samePlace
+    /// A capture is already running. Two simultaneous `SCScreenshotManager` captures deadlock —
+    /// measured 6 times out of 6 — so a second one is refused rather than started.
+    case captureInFlight
+
+    public var reason: String {
+        switch self {
+        case .modifierNotHeld: "Hold the hover modifier to look up the word under the pointer."
+        case .excludedApp: "XiaolaiDict does not look things up in this app."
+        case .excludedSite: "XiaolaiDict does not look things up on this site."
+        case .paused: "XiaolaiDict is paused."
+        case .stillMoving: "The pointer is still moving."
+        case .samePlace: "This is the word XiaolaiDict just looked up."
+        case .captureInFlight: "A capture is already running."
+        }
+    }
+}
+
+public enum HoverDecision: Sendable, Equatable {
+    case look
+    case stayQuiet(HoverRefusal)
+
+    public var willLook: Bool { self == .look }
+}
+
+/// Where the pointer is, in terms a decision can be made about.
+public struct HoverSite: Sendable, Equatable {
+    public let bundleID: String?
+    /// The page's host, when the app is a browser and could say.
+    public let host: String?
+    /// Which word the pointer is over, if the capture already knows — used only to tell "the same
+    /// word again" from "a new word".
+    public let wordKey: String?
+
+    public init(bundleID: String?, host: String? = nil, wordKey: String? = nil) {
+        self.bundleID = bundleID
+        self.host = host
+        self.wordKey = wordKey
+    }
+}
+
+/// Whether a hover may fire. All three gates are P0 in the feature ledger, and all three have to
+/// exist **before** any capture does: the first hover that fires in a password field is already
+/// the problem they prevent.
+public struct HoverPolicy: Sendable, Equatable, Codable {
+    /// Held before the pointer does anything (A4).
+    public var modifier: HoverModifier
+    /// Apps XiaolaiDict never looks things up in (A3). Ships non-empty, and for the same reason the place
+    /// exclusions do: a popup in a password field or a terminal is worse than no popup.
+    public var excludedApps: Set<String>
+    /// Sites XiaolaiDict never looks things up on (A3), by host.
+    public var excludedHosts: Set<String>
+    /// How long the pointer must be still. Debouncing is non-negotiable.
+    public var settleMilliseconds: Int
+
+    /// Terminals and password managers, at minimum. A terminal is on the list because a popup over
+    /// a half-typed command is worse than useless, and because what is on screen there is often
+    /// not prose.
+    public static let defaultExcludedApps: Set<String> = PlacePolicy.passwordManagers.union([
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable",
+        "net.kovidgoyal.kitty",
+        "co.zeit.hyper",
+    ])
+
+    public static let shipped = HoverPolicy(
+        modifier: .option, excludedApps: defaultExcludedApps, excludedHosts: [], settleMilliseconds: 180)
+
+    public init(
+        modifier: HoverModifier, excludedApps: Set<String>, excludedHosts: Set<String>,
+        settleMilliseconds: Int
+    ) {
+        self.modifier = modifier
+        self.excludedApps = excludedApps
+        self.excludedHosts = excludedHosts
+        self.settleMilliseconds = settleMilliseconds
+    }
+
+    /// The order is deliberate: the cheapest and commonest refusal first, so the ordinary case —
+    /// the reader is just reading — costs one comparison and never touches Accessibility.
+    public func decide(
+        at site: HoverSite, modifiersHeld: Set<HoverModifier>, pointerStillFor: Duration,
+        pausedUntil: Date?, lastLookedUp: String?, captureInFlight: Bool, now: Date
+    ) -> HoverDecision {
+        guard modifiersHeld.contains(modifier) else { return .stayQuiet(.modifierNotHeld) }
+        if let pausedUntil, now < pausedUntil { return .stayQuiet(.paused) }
+        if let bundleID = site.bundleID, excludedApps.contains(bundleID) { return .stayQuiet(.excludedApp) }
+        if let host = site.host, Self.isExcluded(host, by: excludedHosts) { return .stayQuiet(.excludedSite) }
+        if captureInFlight { return .stayQuiet(.captureInFlight) }
+        guard pointerStillFor >= .milliseconds(settleMilliseconds) else { return .stayQuiet(.stillMoving) }
+        if let wordKey = site.wordKey, wordKey == lastLookedUp { return .stayQuiet(.samePlace) }
+        return .look
+    }
+
+    /// Host names are case-insensitive and may carry a trailing root dot, so `EXAMPLE.COM.` and
+    /// `example.com` are the same site. Compared without normalising, an exclusion the reader set
+    /// is bypassed by the capitalisation of a link they clicked — which is not an exclusion.
+    static func normalisedHost(_ host: String) -> String {
+        var normalised = host.trimmingCharacters(in: .whitespaces).lowercased()
+        while normalised.hasSuffix(".") { normalised.removeLast() }
+        return normalised
+    }
+
+    /// Whether `host` is excluded by `excluded`, matching the name itself or any subdomain of it.
+    /// Both sides are normalised, so it does not matter how either was typed.
+    static func isExcluded(_ host: String, by excluded: Set<String>) -> Bool {
+        let host = normalisedHost(host)
+        guard !host.isEmpty else { return false }
+        return excluded.contains { name in
+            let name = normalisedHost(name)
+            guard !name.isEmpty else { return false }
+            return host == name || host.hasSuffix(".\(name)")
+        }
+    }
+}
+
+/// The pause switch: "stop looking things up for an hour", reachable in one click (A5). No surveyed
+/// dictionary has one, and the reader sometimes wants to read without being helped.
+public struct HoverPause: Sendable, Equatable {
+    public static let durations: [Duration] = [.seconds(900), .seconds(3_600), .seconds(28_800)]
+
+    public var until: Date?
+
+    public init(until: Date? = nil) {
+        self.until = until
+    }
+
+    public func isPaused(at now: Date) -> Bool {
+        guard let until else { return false }
+        return now < until
+    }
+
+    public mutating func pause(for duration: Duration, from now: Date) {
+        until = now.addingTimeInterval(TimeInterval(duration.components.seconds))
+    }
+
+    public mutating func resume() {
+        until = nil
+    }
+
+    /// What the menu says, so a paused XiaolaiDict is never silently paused.
+    public func label(at now: Date) -> String {
+        guard let until, now < until else { return "Pause Hover…" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "Paused — resumes \(formatter.localizedString(for: until, relativeTo: now))"
+    }
+}
