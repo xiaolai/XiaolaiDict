@@ -9,6 +9,12 @@
 /.claude-english-buddy.json
 /dev-docs
 
+# Spikes — throwaway investigations, not code XiaolaiDict ships. Slash-free trailing for
+# the same reason as above. Note this does NOT untrack spikes/screen-word, which
+# was committed before this rule: git ignores ignore-rules for tracked files, and
+# AGENTS.md cites its README as the evidence for the capture-quality invariant.
+/spikes
+
 
 
 # Swift build output. Slash-free for the same reason as above: a worktree's symlink must match too.
