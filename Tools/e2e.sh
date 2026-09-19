@@ -58,7 +58,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape; do
+for helper in select-text select-web keys panel claim-escape word-point; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -99,6 +99,13 @@ wrong = []
 for pair in sys.argv[2:]:
     key, want = pair.split("=", 1)
     have = str(got.get(key))
+    # The reports are Swift's, so "nil" is how a missing value is written when asking for one.
+    # Python stringifies JSON null as "None", and comparing those two spellings fails a test that
+    # is actually passing.
+    if want == "nil":
+        if got.get(key) is None: continue
+        wrong.append(f"{key}: wanted nothing, got {have!r}")
+        continue
     ok = have.startswith(want[:-1]) if want.endswith("*") else have.endswith(want[1:]) if want.startswith("*") else have == want
     if not ok: wrong.append(f"{key}: wanted {want!r}, got {have!r}")
 sys.exit("; ".join(wrong) if wrong else 0)
@@ -176,7 +183,7 @@ open -a Safari "$helpers/page.html"; sleep 3
 select_then_read "Safari: a selection across a sentence end gets both sentences (markers)" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "here. Second" -- \
     "sentence=First one here. Second one follows." "lemma=here second" captureSource=accessibilityTextMarkers \
-    context=complete "url=*page.html"
+    context=complete "page=*page.html" precision=page document=nil
 select_then_read "Safari: wrapping punctuation is not part of the term" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "“ephemeral,”" -- \
     text=ephemeral lemma=ephemeral
@@ -239,6 +246,111 @@ PY
         flunk "ledger: $before rows before, $after after; last row: ${why:-$row}"
     fi
 fi
+
+# 7. The 1 s promise, against a service that is hung rather than dead. SIGSTOP is the only way to
+#    get a genuinely unresponsive service from outside: a killed one fails fast, which is the easy
+#    case and proves nothing. With the panel shown before the lookup is asked, it must appear at
+#    once and say what it is waiting for; the entry arrives when the deadline gives up and the
+#    public fallback answers. Before this was so, there was no panel at all until then.
+stopped=""
+resume() { [ -z "$stopped" ] || kill -CONT $stopped 2>/dev/null || true; stopped=""; }
+trap resume EXIT
+if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+    flunk "waiting panel: could not select ($why)"
+else
+    stopped=$(pids "$service" | tr '\n' ' ')
+    if [ -z "$stopped" ]; then
+        flunk "waiting panel: no dictionary service to suspend — the test did not happen"
+    else
+        kill -STOP $stopped
+        started=$EPOCHREALTIME
+        "$helpers/keys" 2 control option
+        shown="" ; waiting=""
+        for _ in $(seq 1 200); do
+            view=$("$helpers/panel" com.xiaolaidict)
+            if printf '%s' "$view" | grep -q 'Looking up'; then
+                shown=$EPOCHREALTIME; waiting=$view; break
+            fi
+            sleep 0.05
+        done
+        if [ -z "$shown" ]; then
+            flunk "waiting panel: never appeared while the service was suspended"
+        else
+            took=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$started" "$shown")
+            if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)" "$took"; then
+                pass "waiting panel: shown in ${took}s with the service hung, saying what it waits for"
+            else
+                flunk "waiting panel: took ${took}s, over the 1 s budget"
+            fi
+        fi
+        # It fills in on its own once the deadline gives up: same panel, no second window.
+        resume
+        filled=""
+        for _ in $(seq 1 100); do
+            view=$("$helpers/panel" com.xiaolaidict)
+            if printf '%s' "$view" | grep -q '→ meet' && ! printf '%s' "$view" | grep -q 'Looking up'; then
+                filled=$view; break
+            fi
+            sleep 0.1
+        done
+        if [ -n "$filled" ] && [ "$(printf '%s' "$filled" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["windows"]))')" = 1 ]; then
+            pass "waiting panel: filled itself in, in the one panel it already had"
+        else
+            flunk "waiting panel: never filled in after the service resumed: ${filled:-nothing}"
+        fi
+        "$helpers/keys" 53; sleep 0.5
+    fi
+fi
+
+# 8. Hover: the word under a *point*, through the three Accessibility dialects and, where no app
+#    exposes its text, the recogniser. Ported from the screen-word spike, and only meaningful
+#    inside the signed bundle: a bare binary inherits the terminal's grants and has none of its
+#    own, which is how the recogniser times out when run from a shell.
+check_hover() {  # check_hover <json> <expected source>: prints a summary, or exits with problems
+    python3 - "$@" <<'HOVERPY'
+import json, sys
+try:
+    r = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(f"not JSON: {sys.argv[1][:80]}")
+want = sys.argv[2]
+problems = []
+if r.get("captureSource") != want:
+    problems.append(f"read by {r.get('captureSource')}, wanted {want}")
+if not r.get("text"):
+    problems.append("no word")
+if not (r.get("sentence") or ""):
+    problems.append("no sentence")
+elif r["text"] not in r["sentence"]:
+    problems.append(f"word {r['text']!r} is not in its own sentence")
+if not 0 < r.get("confidence", 0) <= 1:
+    problems.append(f"confidence {r.get('confidence')}")
+if problems:
+    sys.exit('; '.join(problems))
+print(f"{r['text']!r} via {r['captureSource']} in {r['milliseconds']:.0f} ms")
+HOVERPY
+}
+
+hover_at() {  # hover_at <label> <bundle-id> <expected capture source>
+    local label=$1 app_id=$2 want=$3
+    local point reading summary
+    if ! point=$("$helpers/word-point" "$app_id" 2>&1); then
+        flunk "$label: could not find a word to point at ($point)"; return
+    fi
+    if ! reading=$("$exe" --read-point $point 2>&1); then
+        flunk "$label: $reading (at $point)"; return
+    fi
+    if summary=$(check_hover "$reading" "$want" 2>&1); then
+        pass "$label: $summary"
+    else
+        flunk "$label: $summary"
+    fi
+}
+
+open -a TextEdit "$helpers/notes.txt"; sleep 2
+hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
+open -a Safari "$helpers/page.html"; sleep 3
+hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers
 
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
