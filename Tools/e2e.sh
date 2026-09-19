@@ -201,13 +201,22 @@ if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "shortcut: could not select ($why)"
 else
     "$helpers/keys" 2 control option
+    # Waits for the lemma *and* the rendered page, rather than polling for the first and sleeping
+    # a fixed second for the second. The page is laid out by WebKit after the panel shows, and on
+    # a machine that has just been unlocked — apps relaunching, WebKit cold — that takes longer
+    # than a second. A fixed wait turns load into a failure about rendering, which is what it did.
+    # The assertion below is unchanged: a page that never arrives still fails, it just is not
+    # declared missing while it is still on its way.
     view=""
-    for _ in $(seq 1 50); do
+    for _ in $(seq 1 150); do
         view=$("$helpers/panel" com.xiaolaidict)
-        printf '%s' "$view" | grep -q '→ meet' && break
+        printf '%s' "$view" | python3 -c '
+import json, sys
+panels = [w for w in json.load(sys.stdin)["windows"] if "→ meet" in w["texts"]]
+sys.exit(0 if panels and panels[0].get("webTexts") else 1)
+' && break
         sleep 0.1
     done
-    sleep 1  # the entry's page, loaded after the panel shows
     view=$("$helpers/panel" com.xiaolaidict)
     if why=$(python3 - "$view" 2>&1 <<'PY'
 import json, sys
