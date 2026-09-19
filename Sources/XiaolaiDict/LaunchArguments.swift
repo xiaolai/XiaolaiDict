@@ -20,6 +20,10 @@ enum LaunchMode: Equatable {
     /// availability API says it could. Same reason as `--speech-report`: a status that reports
     /// `available` and then fails on a signing-policy check has happened here before.
     case translationReport
+
+    /// Whether the history drawer appears, docked as asked, without activating the app. Only a
+    /// running bundle can answer the last part.
+    case historyReport
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -36,6 +40,7 @@ enum LaunchArguments {
                XiaolaiDict --read-point X Y
                XiaolaiDict --speech-report
                XiaolaiDict --translation-report
+               XiaolaiDict --history-report
         """
 
     static let repeatRange = 1...1_000
@@ -54,6 +59,8 @@ enum LaunchArguments {
             arguments.count == 1 ? .success(.speechReport) : fail("unexpected \(arguments[1]) after --speech-report")
         case "--translation-report":
             arguments.count == 1 ? .success(.translationReport) : fail("unexpected \(arguments[1]) after --translation-report")
+        case "--history-report":
+            arguments.count == 1 ? .success(.historyReport) : fail("unexpected \(arguments[1]) after --history-report")
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }

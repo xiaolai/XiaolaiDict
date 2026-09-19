@@ -38,6 +38,15 @@ case .success(.translationReport):
     Task { exit(await TranslationReport.run().rawValue) }
     dispatchMain()
 
+// Unlike the other reports this one shows a window, so it needs AppKit's runloop rather than
+// dispatchMain(). `.accessory` for the same reason the app uses it: no Dock icon, and nothing
+// here may activate XiaolaiDict.
+case .success(.historyReport):
+    let reporter = NSApplication.shared
+    reporter.setActivationPolicy(.accessory)
+    Task { @MainActor in exit(await HistoryReport.run().rawValue) }
+    reporter.run()
+
 case .success(.app):
     let app = NSApplication.shared
     let delegate = XiaolaiDictApp()
