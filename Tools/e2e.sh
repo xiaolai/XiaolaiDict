@@ -352,6 +352,43 @@ hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit acc
 open -a Safari "$helpers/page.html"; sleep 3
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers
 
+# 9. The history drawer: it appears, docked where the geometry said, and **without activating
+#    XiaolaiDict**. The last part is the whole reason this runs here. The spike this drawer came from
+#    activated the app and made its panel key; a unit test can prove the code does not call
+#    `activate`, but only a running bundle can prove nothing else did it either. Safari is left
+#    frontmost by the stage above, so there is a real app with focus to steal.
+drawer=$("$exe" --history-report 2>&1) && drawer_status=0 || drawer_status=$?
+if [ "$drawer_status" -ne 0 ] && ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
+    flunk "drawer: --history-report did not report ($drawer)"
+else
+    if why=$(expect "$drawer" insideBundle=True appeared=True activatedTheApp=False \
+                    claimedEscapeWhileShown=True releasedEscapeAfterClosing=True 2>&1); then
+        pass "drawer: shows and closes without taking focus"
+    else
+        flunk "drawer: $why"
+    fi
+    # Docking is geometry the report checks against its own display, so a mismatch here means the
+    # window AppKit gave us is not the one DrawerGeometry asked for.
+    if why=$(expect "$drawer" dockedWhereAsked=True 2>&1); then
+        pass "drawer: docked exactly where the geometry asked"
+    else
+        flunk "drawer: $why"
+    fi
+    # Earlier stages recorded lookups, so the drawer must have something to show. An empty drawer
+    # here would mean the ledger read silently returned nothing.
+    if why=$(expect "$drawer" problem=none 2>&1); then
+        days=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["days"])' "$drawer")
+        entries=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["entries"])' "$drawer")
+        if [ "$entries" -gt 0 ]; then
+            pass "drawer: shows $entries lookup(s) across $days day(s) from the ledger"
+        else
+            flunk "drawer: the ledger has rows from earlier stages but the drawer showed none"
+        fi
+    else
+        flunk "drawer: $why"
+    fi
+fi
+
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
 SH
