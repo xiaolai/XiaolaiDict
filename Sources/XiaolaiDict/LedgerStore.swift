@@ -42,4 +42,11 @@ actor LedgerStore {
     func record(_ encounter: SenseEncounter, for lookup: Int) throws {
         try ledger.record(encounter, for: lookup)
     }
+
+    /// What the history drawer shows. Bounded in both directions — a window of days and a cap on
+    /// rows — because the drawer is a surface the reader opens often, and a ledger years deep must
+    /// never arrive whole on the main actor.
+    func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
+        try ledger.recentLookups(since: since, limit: limit)
+    }
 }

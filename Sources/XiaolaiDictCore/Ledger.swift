@@ -381,6 +381,49 @@ public final class Ledger {
         return records
     }
 
+    /// What the history drawer reads: lookups since `since`, newest first, at most `limit` of them.
+    ///
+    /// It joins nothing that could supply a definition. `ReadingEntry` has no field to put one in,
+    /// and this query has no column to fill it from — the C2 rule against answering the question in
+    /// a review surface is enforced twice, in the type and in the SQL, rather than by the caller
+    /// remembering not to show something it was handed.
+    ///
+    /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
+    /// selection, and telling that from a real gap is the reason the row was recorded at all.
+    public func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
+        // A limit of none asks for nothing. Passing a non-positive limit to SQLite means *no
+        // limit*, so the guard is what stops `limit: 0` returning a ledger years deep.
+        guard limit > 0 else { return [] }
+
+        var entries: [ReadingEntry] = []
+        try run(
+            """
+            SELECT id, surface, lemma, context, looked_up_at, result,
+                   context_range_location, context_range_length,
+                   source_app, source_name, source_document, source_page, source_title, source_title_raw
+            FROM lookups WHERE looked_up_at >= ?1
+            -- The row id breaks a tie, so two lookups sharing a timestamp keep their order between
+            -- one reading of the drawer and the next.
+            ORDER BY looked_up_at DESC, id DESC
+            LIMIT ?2
+            """,
+            bind: [.real(since.timeIntervalSince1970), .integer(limit)]
+        ) { row in
+            let range: NSRange? = sqlite3_column_type(row.statement, 6) == SQLITE_NULL
+                ? nil : NSRange(location: row.integer(6), length: row.integer(7))
+            entries.append(ReadingEntry(
+                id: row.integer(0), lemma: try row.text(2), surface: try row.text(1),
+                sentence: try row.text(3), sentenceRange: range,
+                place: ReadingPlace(
+                    bundleID: row.optionalText(8), name: row.optionalText(9),
+                    document: row.optionalText(10), page: row.optionalText(11),
+                    title: row.optionalText(12), rawTitle: row.optionalText(13)),
+                at: Date(timeIntervalSince1970: row.real(4)),
+                result: try row.result(5)))
+        }
+        return entries
+    }
+
     // MARK: - Schema
 
     /// One transaction, taken before the version is read: two processes opening an old file at
