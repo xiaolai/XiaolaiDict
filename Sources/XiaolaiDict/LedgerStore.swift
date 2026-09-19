@@ -23,7 +23,23 @@ actor LedgerStore {
         }.value
     }
 
-    func record(_ record: LookupRecord) throws {
-        try ledger.record(record)
+    /// What the reader met of this lemma before `before`. Encounters, never meanings.
+    func priorEncounters(of lemma: String, before: Date) throws -> PriorEncounters {
+        try ledger.priorEncounters(of: lemma, before: before)
+    }
+
+    /// The lookup, and the sense it met where that is a fact — in one call, so a sense can never
+    /// end up in the ledger without the lookup it belongs to.
+    @discardableResult
+    func record(_ recording: LookupRecording) throws -> Int {
+        let lookup = try ledger.record(recording.record)
+        if let encounter = recording.encounter { try ledger.record(encounter, for: lookup) }
+        return lookup
+    }
+
+    /// A sense the reader picked, hung off a lookup already recorded. Kept apart from the model's
+    /// guesses by `chosenBy`, which is the whole point of that column.
+    func record(_ encounter: SenseEncounter, for lookup: Int) throws {
+        try ledger.record(encounter, for: lookup)
     }
 }

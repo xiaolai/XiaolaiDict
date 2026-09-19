@@ -34,7 +34,9 @@ struct SelectionReaderTests {
         guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.sentence == "The meeting ended after we stopped meeting at noon.")
         #expect(selection.quality == .accessibility(.accessibilityTextRange, context: .complete))
-        #expect(selection.url == "file:///tmp/notes.txt")
+        #expect(selection.place.document == "file:///tmp/notes.txt")
+        #expect(selection.place.page == nil, "a file was reported as a page")
+        #expect(selection.place.precision == .document)
         #expect(Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence).text == "meet")
     }
 
@@ -58,7 +60,9 @@ struct SelectionReaderTests {
         #expect(selection.quality.source == .accessibilityTextMarkers)
         #expect(selection.sentence == "A word here.")
         #expect(selection.rangeInSentence == NSRange(location: 2, length: 4))
-        #expect(selection.url == "https://example.com/a")
+        #expect(selection.place.page == "https://example.com/a")
+        #expect(selection.place.document == nil, "a page was reported as a file")
+        #expect(selection.place.precision == .page)
     }
 
     /// A sentence that does not contain the selection describes something else — the selection moved
@@ -106,11 +110,12 @@ struct SelectionReaderTests {
         tree.fail(field, kAXWindowAttribute, with: .notResponding)
         guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.text == "ephemeral")
-        #expect(selection.url == nil)
+        #expect(selection.place.document == nil)
+        #expect(selection.place.precision == .appOnly)
     }
 
-    /// The URL comes from the capture's own window — never the app's focused window, which may hold
-    /// another document.
+    /// Where it was read comes from the capture's own window — never the app's focused window,
+    /// which may hold another document.
     @Test func provenanceNeverComesFromAnotherWindow() {
         let tree = FakeAccessibility()
         let field = tree.element(1)
@@ -120,7 +125,7 @@ struct SelectionReaderTests {
         tree.set(otherWindow, kAXDocumentAttribute, "file:///tmp/other.txt" as CFString)
         tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
         guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
-        #expect(selection.url == nil)
+        #expect(selection.place.document == nil)
     }
 
     /// Found by the verifier: a cancelled read stays inside its current Accessibility request, and

@@ -52,10 +52,12 @@ struct Selection: Sendable, Equatable {
     /// Where `text` sits in `sentence`, UTF-16, when the capture knows.
     let rangeInSentence: NSRange?
     let quality: CaptureQuality
-    let appName: String
-    let bundleID: String?
-    /// The page or file, when the app can say.
-    let url: String?
+    /// Where it was read: the app always, and the page or the file where the app could say — never
+    /// both in one field, which is the defect `where-a-word-was-read.md` §2 is about.
+    let place: ReadingPlace
+
+    var appName: String { place.name ?? "" }
+    var bundleID: String? { place.bundleID }
 }
 
 /// Reads an app's selection through Accessibility. Apps expose text in one of two dialects — the
@@ -123,8 +125,9 @@ enum SelectionReader {
             case .found(let capture):
                 // Where it came from is worth having, not worth the selection: if reading it fails,
                 // the selection stands without it.
-                let url = try? sourceURL(host: capture.host, ax)
-                return selection(from: capture, app: app, url: url)
+                let place = (try? readPlace(host: capture.host, app: app, ax)) ?? ReadingPlace(
+                    bundleID: app.bundleID, name: app.name)
+                return selection(from: capture, app: app, place: place)
             case .nothing:
                 return .nothing("Nothing is selected in \(app.name), or it does not expose its selection to Accessibility.")
             case .searchLimitReached:
@@ -277,19 +280,54 @@ enum SelectionReader {
         return nil
     }
 
-    /// A browser's page URL, or a document app's file — from the element the selection was read
-    /// from, and its own window: never the app's focused window, which may be another document.
-    private static func sourceURL(host: AXUIElement, _ ax: some AccessibilityReading) throws(CaptureError) -> String? {
-        if let page = try webArea(containing: host, ax), let url = try ax.attribute(page, kAXURLAttribute, ofApplication: false) {
-            return (url as? URL)?.absoluteString ?? (url as? String)
+    /// Where the word was read: a browser's page URL, a document app's file, and the window's
+    /// title — three separate coordinates, read from the element the selection came from and its
+    /// own window, never the app's focused window, which may be another document.
+    ///
+    /// The page and the file are never folded into one field. A page URL can itself be a `file://`,
+    /// so a local HTML page open in Safari and a file open in an editor are indistinguishable once
+    /// they share a column, and nothing downstream can separate them afterwards.
+    ///
+    /// Apps on the exclusion list contribute their name and nothing more.
+    static func readPlace(
+        host: AXUIElement, app: FrontApp, _ ax: some AccessibilityReading,
+        policy: PlacePolicy = .shipped
+    ) throws(CaptureError) -> ReadingPlace {
+        var page: String?
+        if let area = try webArea(containing: host, ax),
+           let url = try ax.attribute(area, kAXURLAttribute, ofApplication: false) {
+            page = (url as? URL)?.absoluteString ?? (url as? String)
         }
-        guard let window = try ax.element(host, kAXWindowAttribute) else { return nil }
-        return try ax.string(window, kAXDocumentAttribute)
+        var document: String?
+        var rawTitle: String?
+        if let window = try ax.element(host, kAXWindowAttribute) {
+            document = try ax.string(window, kAXDocumentAttribute)
+            // The window's title, not the web area's: Safari leaves the web area's empty, and
+            // Chrome puts 157 characters in it.
+            rawTitle = try ax.string(window, kAXTitleAttribute)
+        }
+        return policy.applied(to: ReadingPlace(
+            bundleID: app.bundleID, name: app.name, document: document, page: page,
+            title: rawTitle.map { Self.strippingAppName(app.name, from: $0) }, rawTitle: rawTitle))
+    }
+
+    /// A window title with its app-name suffix removed — Chrome appends " - Google Chrome". The raw
+    /// title is kept beside this, because the stripping is a heuristic and a heuristic's input is
+    /// worth keeping. A title that is *only* the app's name strips to nothing, so it is left whole.
+    static func strippingAppName(_ app: String, from title: String) -> String {
+        let title = title.trimmingCharacters(in: .whitespaces)
+        guard !app.isEmpty else { return title }
+        for separator in [" - ", " — ", " – ", " | "] {
+            let suffix = separator + app
+            guard title.hasSuffix(suffix), title.count > suffix.count else { continue }
+            return String(title.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+        }
+        return title
     }
 
     // MARK: - The result
 
-    static func selection(from capture: Capture, app: FrontApp, url: String?) -> Outcome {
+    static func selection(from capture: Capture, app: FrontApp, place: ReadingPlace) -> Outcome {
         guard let term = SelectedTerm(from: capture.text) else {
             return .nothing("The selection in \(app.name) has no word in it.")
         }
@@ -307,8 +345,7 @@ enum SelectionReader {
         }
         return .selected(Selection(
             text: term.text, sentence: context?.text, rangeInSentence: rangeInSentence,
-            quality: .accessibility(capture.source, context: quality),
-            appName: app.name, bundleID: app.bundleID, url: url))
+            quality: .accessibility(capture.source, context: quality), place: place))
     }
 
     static func message(for error: CaptureError, app: String) -> String {

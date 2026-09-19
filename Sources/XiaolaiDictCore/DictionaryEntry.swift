@@ -13,8 +13,9 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
         case headwordUnknown
     }
 
-    /// The dictionary's display name, e.g. "New Oxford American Dictionary".
-    public let dictionary: String
+    /// Which dictionary answered — by identifier where it has one, not only by the display name,
+    /// which changes with the interface language.
+    public let dictionary: DictionaryIdentity
     /// The headword the dictionary answered with; the term itself when it did not say (`match`
     /// is then `.headwordUnknown`).
     public let headword: String
@@ -22,13 +23,47 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
     /// A complete XHTML document with the dictionary's own stylesheet inlined — renderable as is,
     /// with nothing to fetch from disk.
     public let html: String
+    /// `d:entry`'s id — the homograph distinction that tells *fine* the penalty from *fine* the
+    /// adjective, and the key a study card hangs on (`dev-docs/study-unit.md` §3). Nil when the
+    /// document declared none: unknown, never guessed.
+    public let entryID: String?
+    /// The dictionary's own homograph number for this entry — NOAD's *fine¹ fine² fine³ fine⁴*.
+    /// Nil where the dictionary does not number them; the panel then tells its entries apart by
+    /// part of speech rather than by an ordinal XiaolaiDict made up.
+    public let homograph: String?
+    /// The entry's part-of-speech blocks and the senses in them. Empty for a dictionary with no
+    /// sense structure — the sideloaded conversions whose sense boundary is a colour change — which
+    /// is an entry-level entry, and says so.
+    public let blocks: [SenseBlock]
+    /// The pronunciations the entry prints (`d:prn`).
+    public let pronunciations: [String]
+
+    /// Every sense in the entry, across its blocks.
+    public var senses: [DictionarySense] { blocks.flatMap(\.senses) }
+    /// "Sense 47 of 49" needs both halves; this is the second.
+    public var senseCount: Int { blocks.reduce(0) { $0 + $1.senses.count } }
+    /// How precisely this entry's senses can be addressed at best — the quality signal a card must
+    /// carry, so a positional claim never reads as a publisher's.
+    public var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
 
     /// `term` is what was looked up; the match is worked out from it rather than asserted.
-    public init(dictionary: String, headword: String?, lookedUp term: String, html: String) {
+    ///
+    /// `document` is `html` already parsed. It is passed in rather than parsed here because a
+    /// 625 KB entry costs a quarter of a second to walk — measured on Longman's *hold* — and the
+    /// service has already walked it once to check the styled form. One walk per record is the
+    /// difference between a lookup inside its 1 s budget and one at twice it.
+    public init(
+        dictionary: DictionaryIdentity, headword: String?, lookedUp term: String, html: String,
+        document: EntryDocument?
+    ) {
         self.dictionary = dictionary
         self.headword = headword ?? term
         self.match = Self.match(of: headword, for: term)
         self.html = html
+        self.entryID = document?.entryID
+        self.homograph = document?.homograph
+        self.blocks = document?.blocks ?? []
+        self.pronunciations = document?.pronunciations ?? []
     }
 
     private static func match(of headword: String?, for term: String) -> Match {
@@ -36,6 +71,50 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
         if term.lowercased() == headword.lowercased() { return .exact }
         // Only a differing headword needs the tagger.
         return Lemmatizer.lemma(of: term, in: nil).text == Lemmatizer.canonical(headword) ? .dictionaryForm : .otherHeadword
+    }
+}
+
+/// What the app asks the dictionary service for. An envelope rather than a bare `LookupRequest`,
+/// because the menu needs to list the enabled dictionaries and say what each can key, and that is
+/// not a lookup.
+public enum ServiceRequest: Codable, Sendable, Equatable {
+    case lookup(LookupRequest)
+    /// Every enabled dictionary, in the reader's order, with what each can address.
+    case dictionaries
+}
+
+/// What the dictionary service answers with. Typed per request, so a reply can never be read as
+/// the answer to a different question.
+public enum ServiceReply: Codable, Sendable, Equatable {
+    case lookup(LookupReply)
+    case dictionaries([DictionaryCapability])
+}
+
+/// One enabled dictionary and the finest rung it can key a study item to — which is what makes
+/// "choosing this one costs you sense-level study" sayable in the menu before the reader chooses.
+public struct DictionaryCapability: Codable, Sendable, Equatable {
+    public let identity: DictionaryIdentity
+    /// The best rung reached on the words probed. `.none` means the dictionary marks senses with
+    /// nothing a parser can key to, so it can only ever be studied at entry level.
+    public let senseKeyKind: SenseKeyKind
+    /// False when no probe word was found in this dictionary at all, so `senseKeyKind` is a floor
+    /// rather than a measurement — said plainly instead of passed off as a finding.
+    public let probed: Bool
+
+    public init(identity: DictionaryIdentity, senseKeyKind: SenseKeyKind, probed: Bool) {
+        self.identity = identity
+        self.senseKeyKind = senseKeyKind
+        self.probed = probed
+    }
+
+    /// What the menu prints beside the dictionary's name.
+    public var note: String {
+        guard probed else { return "not yet known" }
+        switch senseKeyKind {
+        case .publisher: return "senses"
+        case .position: return "senses, by position"
+        case .none: return "whole entries only"
+        }
     }
 }
 

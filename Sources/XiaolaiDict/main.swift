@@ -21,6 +21,23 @@ case .success(.readSelection(let bundleID)):
     Task { @MainActor in exit(await LookupCommand.readSelection(bundleID: bundleID).rawValue) }
     dispatchMain()
 
+// The hover paths, at a point, without moving anyone's pointer.
+case .success(.readPoint(let x, let y)):
+    Task { @MainActor in exit(await LookupCommand.readPoint(x: x, y: y).rawValue) }
+    dispatchMain()
+
+// Spike S1's instrument. It must run inside the signed bundle: a bare CLI binary reported voices
+// that could not be resolved and a voice that synthesised zero frames.
+case .success(.speechReport):
+    Task { exit(await SpeechReport.run().rawValue) }
+    dispatchMain()
+
+// Whether the signed bundle can actually translate. Measured, because an availability API
+// already reported `available` here for a model that then refused Developer ID signatures.
+case .success(.translationReport):
+    Task { exit(await TranslationReport.run().rawValue) }
+    dispatchMain()
+
 case .success(.app):
     let app = NSApplication.shared
     let delegate = XiaolaiDictApp()

@@ -33,7 +33,7 @@ let listener = try XPCListener(
     targetQueue: lookups,
     requirement: .isFromSameTeam(andMatchesSigningIdentifier: XiaolaiDictIdentity.app)
 ) { request in
-    request.accept { (message: LookupRequest) -> (any Encodable)? in
+    request.accept { (message: ServiceRequest) -> (any Encodable)? in
         watchdog.run { DictionaryBridge.reply(to: message) }
     }
 }

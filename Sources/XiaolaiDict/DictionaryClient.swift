@@ -32,7 +32,7 @@ enum LookupOutcome: Sendable, Equatable {
 /// One conversation with the dictionary service — the seam tests replace. The real one is an XPC
 /// session; `DictionaryClient` owns the policy around it.
 protocol DictionaryTransport: Sendable {
-    func send(_ request: LookupRequest) async throws -> LookupReply
+    func send(_ request: ServiceRequest) async throws -> ServiceReply
     func cancel(reason: String)
 }
 
@@ -101,7 +101,23 @@ actor DictionaryClient {
         case unreachable(String)
     }
 
+    /// Which dictionaries are enabled, and what each can key a study item to.
+    ///
+    /// Nil when the service could not answer: the menu then says it does not know, rather than
+    /// offering a list that is missing whatever the service would have added.
+    func dictionaries() async -> [DictionaryCapability]? {
+        guard case .dictionaries(let found)? = try? await ask(.dictionaries) else { return nil }
+        return found
+    }
+
     private func ask(_ term: String) async throws(AskError) -> LookupReply {
+        guard case .lookup(let reply) = try await ask(.lookup(LookupRequest(term: term))) else {
+            throw .unreachable("the dictionary service answered a lookup with something else")
+        }
+        return reply
+    }
+
+    private func ask(_ request: ServiceRequest) async throws(AskError) -> ServiceReply {
         let session: Session
         do {
             session = try currentSession()
@@ -109,7 +125,7 @@ actor DictionaryClient {
             throw .unreachable("dictionary service could not be reached: \(error)")
         }
         do {
-            return try await withDeadline(deadline) { try await session.transport.send(LookupRequest(term: term)) }
+            return try await withDeadline(deadline) { try await session.transport.send(request) }
         } catch where Task.isCancelled {
             throw .cancelled
         } catch {
@@ -160,10 +176,10 @@ struct XPCDictionaryTransport: DictionaryTransport {
             xpcService: XiaolaiDictIdentity.dictionaryService, cancellationHandler: { _ in onCancel() }))
     }
 
-    func send(_ request: LookupRequest) async throws -> LookupReply {
+    func send(_ request: ServiceRequest) async throws -> ServiceReply {
         try await withCheckedThrowingContinuation { continuation in
             do {
-                try session.send(request) { (result: Result<LookupReply, any Error>) in
+                try session.send(request) { (result: Result<ServiceReply, any Error>) in
                     continuation.resume(with: result)
                 }
             } catch {

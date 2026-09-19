@@ -155,7 +155,7 @@ struct CaptureTests {
 
     @Test func aCompleteSentenceIsReportedAsComplete() throws {
         let context = SentenceContext(text: "An ephemeral beauty.", mayBeCut: false, selection: NSRange(location: 3, length: 9))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, url: nil) else {
+        guard case .selected(let selection) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }
@@ -166,8 +166,8 @@ struct CaptureTests {
     /// Every capture says what its context amounts to: cut by the window, or missing altogether.
     @Test func aDegradedContextSaysSo() throws {
         let cut = SentenceContext(text: "rest of a long sentence", mayBeCut: true)
-        guard case .selected(let clipped) = SelectionReader.selection(from: capture("long", context: cut), app: app, url: nil),
-              case .selected(let bare) = SelectionReader.selection(from: capture("word", context: nil), app: app, url: nil)
+        guard case .selected(let clipped) = SelectionReader.selection(from: capture("long", context: cut), app: app, place: ReadingPlace()),
+              case .selected(let bare) = SelectionReader.selection(from: capture("word", context: nil), app: app, place: ReadingPlace())
         else {
             Issue.record("expected selections")
             return
@@ -180,7 +180,7 @@ struct CaptureTests {
     /// The term's range in the sentence accounts for punctuation trimmed off the selection.
     @Test func theRangeFollowsTheTrimmedTerm() throws {
         let context = SentenceContext(text: "He said “ephemeral,” twice.", mayBeCut: false, selection: NSRange(location: 8, length: 12))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, url: nil) else {
+        guard case .selected(let selection) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }
@@ -191,7 +191,7 @@ struct CaptureTests {
 
     @Test func aPassageIsRefused() {
         let passage = String(repeating: "word ", count: 20)
-        guard case .nothing(let reason) = SelectionReader.selection(from: capture(passage, context: nil), app: app, url: nil) else {
+        guard case .nothing(let reason) = SelectionReader.selection(from: capture(passage, context: nil), app: app, place: ReadingPlace()) else {
             Issue.record("expected a refusal")
             return
         }

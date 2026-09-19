@@ -8,7 +8,7 @@ import Testing
 /// what the command itself verifies, inside the built bundle.
 struct LookupCommandTests {
     private static let entries = NonEmpty([
-        DictionaryEntry(dictionary: "Oxford", headword: "run", lookedUp: "running", html: "<html/>"),
+        DictionaryEntry(dictionary: DictionaryIdentity(name: "Oxford"), headword: "run", lookedUp: "running", html: "<html/>", document: nil),
     ])!
 
     private final class Output: Sendable {
@@ -97,7 +97,9 @@ struct LookupCommandTests {
         let selection = Selection(
             text: "saw", sentence: "I saw it yesterday.", rangeInSentence: NSRange(location: 2, length: 3),
             quality: .accessibility(.accessibilityTextMarkers, context: .mayBeCut),
-            appName: "Safari", bundleID: "com.apple.Safari", url: "https://example.com/")
+            place: ReadingPlace(
+                bundleID: "com.apple.Safari", name: "Safari", document: nil,
+                page: "https://example.com/", title: "Example", rawTitle: "Example"))
         let line = try LookupCommand.jsonLine(SelectionReport(selection))
         let object = try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
         #expect(object["captureSource"] as? String == "accessibilityTextMarkers")

@@ -6,6 +6,16 @@ public struct CaptureQuality: Sendable, Equatable {
         case accessibilityTextRange
         /// `AXSelectedTextMarkerRange`: WebKit and Chromium pages.
         case accessibilityTextMarkers
+        /// `AXBoundsForRange` per word of the element under the pointer — the third dialect, and
+        /// the only one Chromium answers. It answers neither `AXRangeForPosition` (unsupported)
+        /// nor `AXTextMarkerForPosition` (advertised, returns nil), so scanning bounds took Chrome
+        /// from **0 of 64 probes to 62 of 64** (`spikes/screen-word/README.md`, finding 2).
+        case accessibilityBoundsScan
+        /// Read off the pixels with Vision, where no app exposes its text at all — a terminal, a
+        /// canvas, an image. Costs 250–570 ms warm against 1–9 ms for Accessibility, and unlike
+        /// the others it can be **wrong rather than absent**, which is why its confidence is the
+        /// recogniser's own and not 1.
+        case opticalRecognition
     }
 
     /// What the context — the sentence recorded with the word — amounts to.
@@ -22,7 +32,7 @@ public struct CaptureQuality: Sendable, Equatable {
 
     public let source: Source
     /// 0...1. Accessibility hands over the app's own characters, so its captures are 1; recognised
-    /// text (OCR, Milestone 2) will report less.
+    /// text reports the recogniser's own confidence in the line the word came from.
     public let confidence: Double
     public let context: Context
 

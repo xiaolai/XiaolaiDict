@@ -4,7 +4,9 @@ import Synchronization
 
 /// A dictionary enabled in Dictionary.app's settings.
 public struct InstalledDictionary: Sendable, Equatable {
-    public let name: String
+    public let identity: DictionaryIdentity
+
+    public var name: String { identity.name }
 }
 
 public enum DictionaryBridgeError: Error, Equatable {
@@ -19,9 +21,11 @@ public enum DictionaryBridgeError: Error, Equatable {
 
 /// What the dictionaries had for a term.
 public struct DictionaryLookup: Sendable, Equatable {
-    /// One per dictionary that had the term, in the reader's dictionary order.
+    /// Every entry every dictionary had for the term, grouped under its dictionary, in the
+    /// reader's dictionary order. A dictionary contributes as many as it has records.
     public let entries: [DictionaryEntry]
-    /// Dictionaries that had the term but whose entry could not be read.
+    /// Dictionaries that had the term but at least one of whose entries could not be read. Named
+    /// once each, however many of their records failed.
     public let unreadable: [String]
 }
 
@@ -42,12 +46,54 @@ public enum DictionaryBridge {
         try serial.withLock { _ throws(DictionaryBridgeError) in
             let api = try API.loaded.get()
             var installed: [InstalledDictionary] = []
-            for dictionary in try api.dictionaries() { installed.append(InstalledDictionary(name: try api.name(of: dictionary))) }
+            for dictionary in try api.dictionaries() {
+                installed.append(InstalledDictionary(identity: try api.identity(of: dictionary)))
+            }
             return installed
         }
     }
 
-    /// The XPC service's answer to a request. Errors become typed `.failure` values, so the app
+    /// The XPC service's answer to whatever the app asked.
+    public static func reply(to request: ServiceRequest) -> ServiceReply {
+        switch request {
+        case .lookup(let lookup): .lookup(reply(to: lookup))
+        case .dictionaries: .dictionaries(capabilities())
+        }
+    }
+
+    /// Which words the capability probe tries, in order, until one is found in the dictionary being
+    /// probed. Mixed scripts on purpose: a Chinese-only or Korean-only dictionary has no "fine",
+    /// and reporting it as unkeyable because an English word missed would be a measurement error
+    /// dressed as a finding.
+    static let probeWords = ["fine", "hold", "water", "水", "人", "하다", "する"]
+
+    /// Every enabled dictionary and the finest rung it can key a study item to.
+    ///
+    /// Measured rather than assumed, because the rung is a property of the entries: the Writer's
+    /// Thesaurus carries publisher sense ids on some entries and not on others. Computed once per
+    /// service process — each probe parses a real entry, and Longman's *hold* alone is 625 KB.
+    public static func capabilities() -> [DictionaryCapability] {
+        if let known = probed.withLock({ $0 }) { return known }
+        var found: [DictionaryCapability] = []
+        for dictionary in (try? activeDictionaries()) ?? [] {
+            found.append(capability(of: dictionary.identity))
+        }
+        probed.withLock { $0 = found }
+        return found
+    }
+
+    private static let probed = Mutex<[DictionaryCapability]?>(nil)
+
+    private static func capability(of identity: DictionaryIdentity) -> DictionaryCapability {
+        for word in probeWords {
+            let entries = ((try? entries(for: word))?.entries ?? []).filter { $0.dictionary == identity }
+            guard let best = entries.map(\.senseKeyKind).max() else { continue }
+            return DictionaryCapability(identity: identity, senseKeyKind: best, probed: true)
+        }
+        return DictionaryCapability(identity: identity, senseKeyKind: SenseKeyKind.none, probed: false)
+    }
+
+    /// The service's answer to one lookup. Errors become typed `.failure` values, so the app
     /// can tell "nothing found" from "could not look", and why.
     public static func reply(to request: LookupRequest) -> LookupReply {
         do {
@@ -66,9 +112,14 @@ public enum DictionaryBridge {
         }
     }
 
-    /// One entry per dictionary that has `term`, in the reader's dictionary order. A dictionary
-    /// whose entry exists but cannot be read is named in `unreadable`; when that is every
-    /// dictionary that had the term, the lookup fails rather than reporting "not found".
+    /// Every entry every dictionary has for `term`, grouped under its dictionary, in the reader's
+    /// dictionary order. A dictionary whose entry exists but cannot be read is named in
+    /// `unreadable`; when that is every dictionary that had the term, the lookup fails rather than
+    /// reporting "not found".
+    ///
+    /// Every record, not the first: NOAD files *fine* as four entries and *hold* as two, and the
+    /// one the reader needed — the penalty, the ship's hold — is never the first
+    /// (`dev-docs/study-unit.md` §2).
     public static func entries(for term: String) throws(DictionaryBridgeError) -> DictionaryLookup {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw .blankTerm }
@@ -80,14 +131,20 @@ public enum DictionaryBridge {
             var entries: [DictionaryEntry] = []
             var unreadable: [String] = []
             for dictionary in try api.dictionaries() {
-                guard let record = try api.firstRecord(for: trimmed, in: dictionary) else { continue }
-                let name = try api.name(of: dictionary)
-                guard let html = api.styledDocument(of: record) else {
-                    unreadable.append(name)
-                    continue
+                let records = try api.records(for: trimmed, in: dictionary)
+                guard !records.isEmpty else { continue }
+                let identity = try api.identity(of: dictionary)
+                var readable = 0
+                for record in records {
+                    guard let styled = api.styledDocument(of: record) else { continue }
+                    readable += 1
+                    entries.append(DictionaryEntry(
+                        dictionary: identity, headword: api.headword(of: record), lookedUp: trimmed,
+                        html: styled.html, document: styled.document))
                 }
-                entries.append(DictionaryEntry(
-                    dictionary: name, headword: api.headword(of: record), lookedUp: trimmed, html: html))
+                // Named once per dictionary, however many of its records failed: the reader is told
+                // this dictionary had the term and could not show it, not how many times.
+                if readable < records.count { unreadable.append(identity.name) }
             }
             if entries.isEmpty, !unreadable.isEmpty { throw .unreadable(dictionaries: unreadable) }
             return DictionaryLookup(entries: entries, unreadable: unreadable)
@@ -95,6 +152,20 @@ public enum DictionaryBridge {
     }
 
     static let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
+
+    /// A dictionary bundle's content version, read once per bundle per process — a plist read per
+    /// lookup, across seven dictionaries, would be seven file reads on a path with a 1 s budget.
+    private static let versions = Mutex<[String: String?]>([:])
+
+    static func version(ofBundleAt bundle: URL) -> String? {
+        versions.withLock { cache in
+            if let known = cache[bundle.path] { return known }
+            let plist = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist"))
+            let version = plist?["CFBundleShortVersionString"] as? String
+            cache[bundle.path] = version
+            return version
+        }
+    }
 
     /// `document` with the XHTML namespace declared on its root. The dictionaries declare only
     /// their own `d:` namespace there, and parsed as XML — which the panel must do, or the `d:`
@@ -115,48 +186,11 @@ public enum DictionaryBridge {
     /// holding at least one whole rule, a selector and a `property: value` block, not merely the tag
     /// or a stray brace. Blank text, plain text, a document outside the XHTML namespace, or the
     /// bare entry of another form after an ABI change all fail.
+    ///
+    /// The same walk that reads the entry's structure, because walking a 625 KB entry twice costs a
+    /// quarter of a second the lookup does not have; `styledDocument(of:)` keeps the result.
     static func isStyledDocument(_ document: String) -> Bool {
-        let parser = XMLParser(data: Data(document.utf8))
-        parser.shouldProcessNamespaces = true
-        let inspector = DocumentInspector()
-        parser.delegate = inspector
-        guard parser.parse(), inspector.root == "html", inspector.rootNamespace == xhtmlNamespace else { return false }
-        // Comments first: a rule inside one is not a rule.
-        let rules = inspector.stylesheet.replacingOccurrences(of: #"/\*[\s\S]*?(\*/|$)"#, with: " ", options: .regularExpression)
-        return rules.range(of: #"[^{}\s][^{}]*\{[^{}]*[\w-]\s*:[^{}]*\S[^{}]*\}"#, options: .regularExpression) != nil
-    }
-}
-
-/// Collects what `isStyledDocument` checks, by name and namespace.
-private final class DocumentInspector: NSObject, XMLParserDelegate {
-    var root: String?
-    var rootNamespace: String?
-    /// The text of every XHTML `style` element.
-    var stylesheet = ""
-    private var styleDepth = 0
-
-    private static func isStyle(_ name: String, _ namespace: String?) -> Bool {
-        name == "style" && namespace == DictionaryBridge.xhtmlNamespace
-    }
-
-    func parser(
-        _ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
-        attributes: [String: String] = [:]
-    ) {
-        if root == nil { (root, rootNamespace) = (name, namespaceURI) }
-        if Self.isStyle(name, namespaceURI) { styleDepth += 1 }
-    }
-
-    func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if Self.isStyle(name, namespaceURI) { styleDepth -= 1 }
-    }
-
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if styleDepth > 0 { stylesheet += string }
-    }
-
-    func parser(_ parser: XMLParser, foundCDATA block: Data) {
-        if styleDepth > 0 { stylesheet += String(decoding: block, as: UTF8.self) }
+        EntryDocument.parse(document)?.isStyled ?? false
     }
 }
 
@@ -171,6 +205,8 @@ private struct API: @unchecked Sendable {
     typealias DictionaryName = @convention(c) (CFTypeRef) -> Unmanaged<CFString>?
     typealias RecordsForSearchString =
         @convention(c) (CFTypeRef?, CFString, UnsafeRawPointer?, UnsafeRawPointer?) -> Unmanaged<CFArray>?
+    typealias DictionaryIdentifier = @convention(c) (CFTypeRef) -> Unmanaged<CFString>?
+    typealias DictionaryURL = @convention(c) (CFTypeRef) -> Unmanaged<CFURL>?
     typealias RecordHeadword = @convention(c) (CFTypeRef) -> Unmanaged<CFString>?
     typealias RecordCopyData = @convention(c) (CFTypeRef, Int) -> Unmanaged<CFString>?
 
@@ -182,6 +218,8 @@ private struct API: @unchecked Sendable {
 
     let activeDictionaries: ActiveDictionaries
     let dictionaryName: DictionaryName
+    let dictionaryIdentifier: DictionaryIdentifier
+    let dictionaryURL: DictionaryURL
     let recordsForSearchString: RecordsForSearchString
     let recordHeadword: RecordHeadword
     let recordCopyData: RecordCopyData
@@ -202,6 +240,8 @@ private struct API: @unchecked Sendable {
             return .success(API(
                 activeDictionaries: try symbol("DCSGetActiveDictionaries", as: ActiveDictionaries.self),
                 dictionaryName: try symbol("DCSDictionaryGetName", as: DictionaryName.self),
+                dictionaryIdentifier: try symbol("DCSDictionaryGetIdentifier", as: DictionaryIdentifier.self),
+                dictionaryURL: try symbol("DCSDictionaryGetURL", as: DictionaryURL.self),
                 recordsForSearchString: try symbol("DCSCopyRecordsForSearchString", as: RecordsForSearchString.self),
                 recordHeadword: try symbol("DCSRecordGetHeadword", as: RecordHeadword.self),
                 recordCopyData: try symbol("DCSRecordCopyData", as: RecordCopyData.self)))
@@ -230,25 +270,50 @@ private struct API: @unchecked Sendable {
         return name
     }
 
+    /// Which dictionary this is, by identifier and content version as well as by display name.
+    ///
+    /// `DCSDictionaryGetIdentifier` answers `com.apple.dictionary.NOAD` for Apple's assets and an
+    /// **empty string** for a sideloaded conversion — measured on all three enabled here — so empty
+    /// is read as "has none" rather than stored as an identifier of "".
+    ///
+    /// There is no `DCSDictionaryGetVersion`: the version comes from the bundle's own Info.plist,
+    /// reached through `DCSDictionaryGetURL`. That is a file read, so it is done once per
+    /// dictionary per process rather than once per lookup.
+    func identity(of dictionary: CFTypeRef) throws(DictionaryBridgeError) -> DictionaryIdentity {
+        let name = try name(of: dictionary)
+        let identifier = dictionaryIdentifier(dictionary)?.takeUnretainedValue() as String?
+        let bundle = dictionaryURL(dictionary)?.takeUnretainedValue() as URL?
+        return DictionaryIdentity(
+            name: name,
+            identifier: identifier?.isEmpty == false ? identifier : nil,
+            version: bundle.flatMap { DictionaryBridge.version(ofBundleAt: $0) })
+    }
+
     /// Always one explicit dictionary. Passing NULL — "every dictionary" before macOS 26 — segfaults
-    /// now, and it is what effectively every published sample for this API does. Nil means the
+    /// now, and it is what effectively every published sample for this API does. Empty means the
     /// dictionary has no record for the term.
-    func firstRecord(for term: String, in dictionary: CFTypeRef) throws(DictionaryBridgeError) -> CFTypeRef? {
+    ///
+    /// Every record it returns, in its own order: a dictionary answers *fine* with one record per
+    /// homograph, and the reader's meaning is rarely the first.
+    func records(for term: String, in dictionary: CFTypeRef) throws(DictionaryBridgeError) -> [CFTypeRef] {
         guard let records = recordsForSearchString(dictionary, term as CFString, nil, nil)?.takeRetainedValue() else {
-            return nil
+            return []
         }
-        return try Self.list(records, from: "DCSCopyRecordsForSearchString").first
+        return try Self.list(records, from: "DCSCopyRecordsForSearchString")
     }
 
     func headword(of record: CFTypeRef) -> String? {
         recordHeadword(record)?.takeUnretainedValue() as String?
     }
 
-    /// Nil when the record's document cannot be had, or is not the styled document form 1 promises.
-    func styledDocument(of record: CFTypeRef) -> String? {
-        guard let document = recordCopyData(record, Self.styledDocumentForm)?.takeRetainedValue() as String? else { return nil }
-        let renderable = DictionaryBridge.renderable(document)
-        return DictionaryBridge.isStyledDocument(renderable) ? renderable : nil
+    /// The record's document and the single parse of it, or nil when the document cannot be had or
+    /// is not what form 1 promises. The parse is returned rather than repeated: it is how the
+    /// styled form is checked, and it carries the entry's id.
+    func styledDocument(of record: CFTypeRef) -> (html: String, document: EntryDocument)? {
+        guard let text = recordCopyData(record, Self.styledDocumentForm)?.takeRetainedValue() as String? else { return nil }
+        let renderable = DictionaryBridge.renderable(text)
+        guard let parsed = EntryDocument.parse(renderable), parsed.isStyled else { return nil }
+        return (renderable, parsed)
     }
 
     /// The pointer is typed as a CFArray only because that is what the symbol is believed to

@@ -56,6 +56,38 @@ enum LookupCommand {
         return status
     }
 
+    /// `XiaolaiDict --read-point X Y`: the word under a screen point, through the hover paths — the
+    /// three Accessibility dialects, then the recogniser. Reports which path answered and what it
+    /// cost, so the dialects can be verified on a real app without moving anyone's pointer.
+    ///
+    /// The modifier gate is bypassed here on purpose: this is the instrument, and a probe that
+    /// needed a key held could not be driven over SSH.
+    @MainActor
+    static func readPoint(x: Double, y: Double) async -> CommandStatus {
+        let started = ContinuousClock.now
+        let reader = HoverReader(policy: { .shipped })
+        let outcome = await reader.read(
+            at: CGPoint(x: x, y: y), modifiersHeld: [HoverPolicy.shipped.modifier],
+            pointerStillFor: .seconds(1))
+        let took = (ContinuousClock.now - started).milliseconds
+        switch outcome {
+        case .selection(let selection):
+            do {
+                writeLine(try jsonLine(PointReport(selection, milliseconds: took.rounded())))
+                return .success
+            } catch {
+                writeError("could not encode the report: \(error)")
+                return .internalError
+            }
+        case .quiet(let refusal):
+            writeError("nothing read: \(refusal.reason)")
+            return .failure
+        case .nothing(let why):
+            writeError("nothing read: \(why)")
+            return .failure
+        }
+    }
+
     /// `XiaolaiDict --read-selection BUNDLE_ID`: what the reader would see from that app's selection. The
     /// app is found on the main actor; its Accessibility tree is read off it.
     @MainActor
@@ -111,6 +143,13 @@ struct LookupReport: Encodable, Equatable {
     var headwords: [String]?
     var matches: [String]?
     var bytes: [Int]?
+    /// One per entry, so a run through the real XPC path shows that every record arrived — not
+    /// only the first of each dictionary — and that each carries its identity.
+    var entryIDs: [String]?
+    /// One per entry: how many senses it has, and how precisely they can be addressed. This is
+    /// what makes a sense-level regression visible from outside the process.
+    var senseCounts: [Int]?
+    var senseKeyKinds: [String]?
     var unreadable: [String]?
     var serviceFailure: String?
     /// The plain-text fallback, whole: a truncated definition under the name "text" would read as
@@ -124,10 +163,13 @@ struct LookupReport: Encodable, Equatable {
         switch outcome {
         case .entries(let entries, let unreadable):
             self.outcome = "entries"
-            dictionaries = entries.map(\.dictionary)
+            dictionaries = entries.map(\.dictionary.name)
             headwords = entries.map(\.headword)
             matches = entries.map(\.match.rawValue)
             bytes = entries.map(\.html.utf8.count)
+            entryIDs = entries.map { $0.entryID ?? "" }
+            senseCounts = entries.map(\.senseCount)
+            senseKeyKinds = entries.map(\.senseKeyKind.rawValue)
             self.unreadable = unreadable
         case .plainText(let text, let failure):
             self.outcome = "plainText"
@@ -140,6 +182,35 @@ struct LookupReport: Encodable, Equatable {
     }
 }
 
+/// A word under a point, as `--read-point` reports it — with which path read it, and how far to
+/// trust it. The path matters: Accessibility is exact, the recogniser can be *wrong*.
+struct PointReport: Encodable, Equatable {
+    let text: String
+    let sentence: String?
+    let lemma: String
+    let app: String
+    let bundleID: String?
+    /// `accessibilityTextRange` | `accessibilityTextMarkers` | `accessibilityBoundsScan` |
+    /// `opticalRecognition`
+    let captureSource: String
+    let confidence: Double
+    let context: String
+    let milliseconds: Double
+
+    init(_ selection: Selection, milliseconds: Double) {
+        text = selection.text
+        sentence = selection.sentence
+        lemma = Lemmatizer.lemma(
+            of: selection.text, in: selection.sentence, at: selection.rangeInSentence).text
+        app = selection.appName
+        bundleID = selection.bundleID
+        captureSource = selection.quality.source.rawValue
+        confidence = selection.quality.confidence
+        context = selection.quality.context.rawValue
+        self.milliseconds = milliseconds
+    }
+}
+
 /// A selection, as `--read-selection` reports it — with its capture quality, so exact Accessibility
 /// text is never confused with a degraded capture.
 struct SelectionReport: Encodable, Equatable {
@@ -149,7 +220,13 @@ struct SelectionReport: Encodable, Equatable {
     let lemmaBasis: String
     let app: String
     let bundleID: String?
-    let url: String?
+    /// A page URL and a file are reported apart, as they are now stored apart: a page URL can
+    /// itself be a `file://`, so one field could never separate them.
+    let page: String?
+    let document: String?
+    let title: String?
+    /// `page` | `document` | `appOnly` — 12 of 17 apps measured could say nothing beyond their name.
+    let precision: String
     let captureSource: String
     let confidence: Double
     let context: String
@@ -162,7 +239,10 @@ struct SelectionReport: Encodable, Equatable {
         lemmaBasis = "\(lemma.basis)"
         app = selection.appName
         bundleID = selection.bundleID
-        url = selection.url
+        page = selection.place.page
+        document = selection.place.document
+        title = selection.place.title
+        precision = selection.place.precision.rawValue
         captureSource = selection.quality.source.rawValue
         confidence = selection.quality.confidence
         context = selection.quality.context.rawValue

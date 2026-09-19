@@ -15,7 +15,8 @@ struct LedgerTests {
         quality: CaptureQuality? = CaptureQuality.accessibility(.accessibilityTextRange, context: .complete)
     ) -> LookupRecord {
         LookupRecord(
-            surface: surface, lemma: lemma, context: context, sourceApp: app, sourceURL: url,
+            surface: surface, lemma: lemma, context: context,
+            place: ReadingPlace(bundleID: app, document: url),
             lookedUpAt: now.addingTimeInterval(offset), result: result, answeredBy: answeredBy, quality: quality)
     }
 
@@ -241,7 +242,8 @@ struct LedgerTests {
 }
 
 /// A second, raw connection: what another process would do to the same file.
-private final class SQLiteFile: @unchecked Sendable {  // used from one task at a time
+/// Shared with `LedgerSchema4Tests`, which writes older schemas to migrate from.
+final class SQLiteFile: @unchecked Sendable {  // used from one task at a time
     private let db: OpaquePointer
 
     init(path: String) throws {
@@ -259,4 +261,4 @@ private final class SQLiteFile: @unchecked Sendable {  // used from one task at 
     }
 }
 
-private struct SQLiteFileError: Error { let message: String }
+struct SQLiteFileError: Error { let message: String }

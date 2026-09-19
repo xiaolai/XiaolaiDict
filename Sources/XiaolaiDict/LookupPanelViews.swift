@@ -14,13 +14,40 @@ struct PanelView: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        case .lookup(let term, let lemma, let source, let capture, let outcome):
+        case .lookup(let presentation):
             VStack(alignment: .leading, spacing: 0) {
-                Header(term: term, lemma: lemma, source: source, capture: capture)
+                Header(
+                    term: presentation.term, lemma: presentation.lemma,
+                    source: presentation.source, capture: presentation.capture)
                 Divider()
-                OutcomeView(term: term, outcome: outcome)
+                // The panel is a container that fills in: the heading is there from the first
+                // frame, and what the dictionaries say replaces the waiting line when it arrives.
+                // Prior encounters, never prior meanings — and absent entirely on a first lookup.
+                if let memory = presentation.memory { MemoryStripView(memory: memory) }
+                if let outcome = presentation.outcome {
+                    OutcomeView(
+                        term: presentation.term, outcome: outcome, sense: presentation.sense,
+                        met: presentation.met, sentence: presentation.sentence)
+                } else {
+                    WaitingView(detail: content.waitingDescription)
+                }
             }
         }
+    }
+}
+
+/// Waiting for the dictionaries, saying so. Never a blank pane: the invariant that a failure must
+/// not render as confidently as a success applies just as much to a result that has not arrived.
+private struct WaitingView: View {
+    let detail: String?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(detail ?? "Looking up…").foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -53,27 +80,68 @@ private struct Header: View {
 }
 
 private struct OutcomeView: View {
+    /// The encounter a tap on `senseKey` amounts to. Nil when there is nothing to key it to — an
+    /// entry with no id, or a dictionary whose senses carry none.
+    static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
+        guard let entryID = entry.entryID,
+              let sense = entry.senses.first(where: { $0.key == senseKey }),
+              sense.keyKind != SenseKeyKind.none
+        else { return nil }
+        return SenseEncounter(
+            dictionary: entry.dictionary, entryID: entryID, senseKey: sense.key,
+            senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
+            senseHash: sense.textHash, gloss: sense.label, chosenBy: .reader, chosenAt: .now)
+    }
+
     let term: String
     let outcome: LookupOutcome
-    @State private var selected: Int? = 0
+    /// Nil while the selector is still deciding. The entry does not wait for it.
+    let sense: SenseMark?
+    let met: Set<StudyItem>
+    /// The reader's own sentence, where one was captured.
+    let sentence: String?
+    /// Nil until the reader picks a row: the first entry is shown, but nothing is *claimed* to be
+    /// the sense they read.
+    @State private var selected: OutlineSelection?
+    @Environment(\.studySense) private var studySense
 
     var body: some View {
         switch outcome {
         case .entries(let entries, let unreadable):
             VStack(alignment: .leading, spacing: 0) {
                 if !unreadable.isEmpty {
-                    Notice(text: "The entry in \(unreadable.joined(separator: ", ")) could not be read.")
+                    // A dictionary is named once however many of its records failed, so this says
+                    // "an entry": claiming all of them, or only one, would both be guesses.
+                    Notice(text: "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it.")
+                }
+                if case .couldNot(let why) = sense {
+                    // The other half of marking a sense: saying why it did not.
+                    Notice(text: why.reason, symbol: "questionmark.circle")
                 }
                 HStack(spacing: 0) {
-                    List(entries.indices, id: \.self, selection: $selected) { index in
-                        EntryRow(entry: entries[index])
-                    }
-                    .listStyle(.sidebar)
-                    .frame(width: 210)
+                    OutlineSidebar(
+                        outline: EntryOutline(entries: Array(entries)), selected: $selected, mark: sense)
+                        .frame(width: 260)
                     Divider()
-                    // `entries` is never empty, and the index is clamped into it.
-                    let entry = entries[min(max(selected ?? 0, 0), entries.count - 1)]
-                    EntryPane(entry: entry).id(entry.dictionary)
+                    // `entries` is never empty, and the index is clamped into it. Selecting a sense
+                    // still renders its whole entry: decision D2 is to mark a sense, never to jump
+                    // to it — a wrong jump hides the right sense, a wrong mark is recoverable.
+                    let index = min(max(selected?.entryIndex ?? 0, 0), entries.count - 1)
+                    EntryPane(
+                        entry: entries[index], term: term,
+                        popup: EntryPresentation(entry: entries[index], mark: sense, met: met),
+                        chosenSense: selected?.senseKey, sentence: sentence)
+                        .id(index)
+                }
+                // Tapping a sense is the reader saying "this is the one" — a fact, recorded as
+                // theirs and never merged with the selector's guess. It works in any dictionary,
+                // including an auxiliary one, which is what D8 allows.
+                .onChange(of: selected) { _, choice in
+                    guard let choice, let key = choice.senseKey,
+                          let encounter = Self.encounter(
+                              from: entries[min(max(choice.entryIndex, 0), entries.count - 1)], senseKey: key)
+                    else { return }
+                    studySense(encounter)
                 }
             }
         case .plainText(let text, let failure):
@@ -94,24 +162,96 @@ private struct OutcomeView: View {
     }
 }
 
-/// A dictionary in the sidebar — and, when it answered with another headword, which.
+/// The sidebar: dictionary → entry → sense (decision D1), each dictionary a section the reader can
+/// collapse. `NavigationSplitView` is unusable in a hosted window — measured in the ledger-ux
+/// spike, which saw it lay out 1284 pt inside a 640 pt frame — so this is a plain `List`.
+private struct OutlineSidebar: View {
+    let outline: EntryOutline
+    @Binding var selected: OutlineSelection?
+    let mark: SenseMark?
+
+    var body: some View {
+        List(selection: $selected) {
+            ForEach(outline.dictionaries) { dictionary in
+                Section {
+                    ForEach(dictionary.entries) { entry in
+                        EntryRow(entry: entry).tag(OutlineSelection.entry(entry.index))
+                        ForEach(entry.senses) { sense in
+                            SenseRow(sense: sense, mark: mark).tag(sense.id)
+                        }
+                    }
+                } header: {
+                    Text(dictionary.name).lineLimit(2)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+}
+
+/// One entry in the sidebar — and, when it is not headed by the term itself, which headword
+/// answered. A dictionary that cannot key senses says so here, once, rather than showing rows it
+/// cannot stand behind.
 private struct EntryRow: View {
-    let entry: DictionaryEntry
+    let entry: EntryNode
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(entry.dictionary).lineLimit(2)
-            if let note = entry.matchNote { Text(note).font(.caption).foregroundStyle(.secondary) }
+            Text(entry.label).lineLimit(1)
+            if let note = entry.note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            if entry.senseKeyKind == SenseKeyKind.none {
+                Text("senses not marked in this dictionary").font(.caption).foregroundStyle(.tertiary)
+            }
         }
+    }
+}
+
+/// One sense under its entry. A sense addressed only by where it sits is a weaker claim than one
+/// carrying the publisher's id, and reads as one.
+private struct SenseRow: View {
+    let sense: SenseNode
+    let mark: SenseMark?
+
+    /// Marked, never jumped to (decision D2): a wrong jump hides the right sense, a wrong mark is
+    /// visible and recoverable — which matters, because the selector's measured confidently-wrong
+    /// rate is not small.
+    private var isMarked: Bool { mark?.key == sense.sense.key }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(sense.sense.path.ordinal)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(minWidth: 16, alignment: .trailing)
+            Text(sense.label).font(.callout).lineLimit(2)
+            if sense.keyKind == .position {
+                Image(systemName: "questionmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help("This dictionary does not number its senses, so this one is identified by its position.")
+            }
+            if isMarked, let mark {
+                Spacer(minLength: 4)
+                // A sense XiaolaiDict guessed and one the reader chose must never read alike.
+                Image(systemName: mark.isHypothesis ? "sparkle" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(mark.isHypothesis ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.tint))
+                    .help(mark.isHypothesis
+                        ? "XiaolaiDict's guess at the sense you were reading, from your sentence. It may be wrong."
+                        : "The only sense in this entry.")
+            }
+        }
+        .padding(.leading, 14)
     }
 }
 
 /// A result that is less than it looks must say so, in the result.
 struct Notice: View {
     let text: String
+    var symbol = "exclamationmark.triangle"
 
     var body: some View {
-        Label(text, systemImage: "exclamationmark.triangle")
+        Label(text, systemImage: symbol)
             .font(.callout)
             .foregroundStyle(.orange)
             .padding(12)
@@ -120,20 +260,208 @@ struct Notice: View {
     }
 }
 
-/// One entry, or why it could not be shown — never a blank pane that looks like an entry.
-private struct EntryPane: View {
-    let entry: DictionaryEntry
-    @State private var failure: String?
+/// The strip that says the reader has been here before — how many times, when, and where. It never
+/// says what the word meant last time: an earlier encounter says *you should know this*, while an
+/// earlier gloss answers the question and destroys the retrieval (`feature-ledger-ux.md` C2).
+private struct MemoryStripView: View {
+    let memory: MemoryStrip
 
     var body: some View {
-        if let failure {
-            VStack(alignment: .leading) {
-                Notice(text: "This entry could not be displayed: \(failure)")
-                Spacer()
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(memory.headline).font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(memory.lines, id: \.self) { line in
+                    Text(line).font(.caption).foregroundStyle(.secondary)
+                }
+                if memory.more > 0 {
+                    Text("and \(memory.more) more").font(.caption).foregroundStyle(.tertiary)
+                }
             }
-        } else {
-            EntryView(html: entry.html) { failure = $0 }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+        // The honey accent only where XiaolaiDict owns the meaning — memory and study (J2).
+        .background(Color.accentColor.opacity(0.07))
+    }
+}
+
+/// One entry, or why it could not be shown — never a blank pane that looks like an entry. Above the
+/// publisher's own rendering sits the chrome XiaolaiDict draws: what this entry is, how it sounds, and
+/// what can be done with it.
+private struct EntryPane: View {
+    let entry: DictionaryEntry
+    let term: String
+    let popup: EntryPresentation
+    /// The sense row the reader selected in the sidebar, if any — what pin and speak act on.
+    let chosenSense: String?
+    /// The reader's own sentence, for the pane that explains it.
+    let sentence: String?
+    @State private var failure: String?
+    @State private var explanation: SentenceExplanation?
+
+    private var selected: SensePresentation? {
+        popup.senses.first { $0.key != nil && $0.key == chosenSense }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            EntryChrome(
+                popup: popup, selected: selected, term: term, sentence: sentence,
+                explanation: $explanation)
+            if let explanation { SentencePaneView(explanation: explanation) }
+            Divider()
+            if let failure {
+                VStack(alignment: .leading) {
+                    Notice(text: "This entry could not be displayed: \(failure)")
+                    Spacer()
+                }
+            } else {
+                EntryView(html: entry.html) { failure = $0 }
+            }
+        }
+    }
+}
+
+/// Entry heading · part of speech · IPA · speak · copy · pin.
+private struct EntryChrome: View {
+    let popup: EntryPresentation
+    let selected: SensePresentation?
+    let term: String
+    /// The reader's own sentence, when one was captured.
+    let sentence: String?
+    @Environment(\.pinNote) private var pin
+    @State private var copied = false
+    @State private var explaining = false
+    @State private var speechCaveat: String?
+    @Binding var explanation: SentenceExplanation?
+
+    private var spokenText: String { selected?.label ?? popup.heading }
+
+    private func explain() async {
+        guard let sentence else { return }
+        explaining = true
+        defer { explaining = false }
+        explanation = await OnDeviceSentenceExplainer().explain(SentenceQuestion(
+            sentence: sentence, term: term, senseText: selected?.label ?? popup.senses.first?.label))
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(popup.heading).font(.title3.weight(.semibold))
+            if !popup.partsOfSpeech.isEmpty {
+                Text(popup.partsOfSpeech.joined(separator: " · "))
+                    .font(.caption).italic().foregroundStyle(.secondary)
+            }
+            ForEach(popup.pronunciations.prefix(2), id: \.self) { pronunciation in
+                Text(pronunciation).font(.caption).foregroundStyle(.secondary)
+            }
+            if !popup.canKeySenses {
+                Text("whole entries only")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .help("This dictionary marks its senses with nothing XiaolaiDict can key a card to.")
+            }
+            Spacer(minLength: 8)
+
+            Button {
+                Speech.say(spokenText)
+            } label: {
+                Image(systemName: "speaker.wave.2")
+            }
+            // Spike S1 measured that no enhanced or premium voice is downloaded by default. A
+            // reader who does not know better ones exist concludes that XiaolaiDict sounds bad.
+            // Computed once when the chrome appears, never in the body: both calls behind it are
+            // expensive, and a body is evaluated many times per layout.
+            .help(speechCaveat ?? "Speak")
+            .task(id: spokenText) {
+                speechCaveat = Speech.caveat(for: Lemmatizer.language(of: spokenText, in: nil) ?? "en")
+            }
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(selected?.label ?? popup.heading, forType: .string)
+                copied = true
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            }
+            .help("Copy")
+
+            // Decision D4: on request, per lookup. Automatic would mean every hover starts a
+            // generation, and Milestone 2's whole point is that a hover is cheap.
+            Button {
+                Task { await explain() }
+            } label: {
+                Image(systemName: explaining ? "ellipsis" : "text.bubble")
+            }
+            .disabled(explaining || sentence == nil)
+            .help(sentence == nil
+                ? "No sentence was captured, so there is nothing to explain."
+                : "Explain how this word is used in your sentence — runs on this Mac")
+
+            Button {
+                pin(PinnedNote(
+                    term: term, heading: popup.heading, dictionary: popup.dictionary,
+                    partOfSpeech: selected?.partOfSpeech ?? popup.partsOfSpeech.first,
+                    pronunciation: popup.pronunciations.first,
+                    // Copied now, by value (decision D3): a dictionary update must not rewrite it.
+                    text: selected?.label ?? popup.senses.first?.label ?? popup.heading,
+                    senseKey: selected?.key, pinnedAt: .now))
+            } label: {
+                Image(systemName: "pin")
+            }
+            .help("Pin this as a note that stays until you close it")
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+    }
+}
+
+/// What the on-device model made of the reader's sentence — or why it could not. Never a blank
+/// pane: a model that declined says so.
+private struct SentencePaneView: View {
+    let explanation: SentenceExplanation
+
+    var body: some View {
+        switch explanation {
+        case .explained(let text, let tier):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text).font(.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Which tier answered, so "this stayed on my Mac" is visible rather than promised.
+                Text(tier == .onDevice ? "on this Mac" : "sent to a remote service")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.05))
+        case .unavailable(let why):
+            Notice(text: why, symbol: "text.bubble")
+        }
+    }
+}
+
+/// Pinning is the app's job, not the view's; the panel is handed a way to do it.
+private struct PinNoteKey: EnvironmentKey {
+    static let defaultValue: @MainActor (PinnedNote) -> Void = { _ in }
+}
+
+/// So is writing to the ledger. Decision D8: an auxiliary dictionary's sense becomes a study item
+/// only when the reader asks for one, and it is recorded as theirs.
+private struct StudySenseKey: EnvironmentKey {
+    static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var pinNote: @MainActor (PinnedNote) -> Void {
+        get { self[PinNoteKey.self] }
+        set { self[PinNoteKey.self] = newValue }
+    }
+
+    var studySense: @MainActor (SenseEncounter) -> Void {
+        get { self[StudySenseKey.self] }
+        set { self[StudySenseKey.self] = newValue }
     }
 }
 

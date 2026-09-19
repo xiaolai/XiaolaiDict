@@ -6,8 +6,24 @@ import os
 @MainActor
 final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
-    private let client = DictionaryClient()
     private let panel = LookupPanelController()
+    private let client = DictionaryClient()
+    private let primaryDictionary = PrimaryDictionaryStore()
+    private lazy var runner = makeRunner()
+
+    private func makeRunner() -> LookupRunner {
+        let store = primaryDictionary
+        return LookupRunner(
+            client: client, panel: panel, primary: { store.load() },
+            priorEncounters: { [weak self] lemma, before in
+                guard let opening = await MainActor.run(body: { self?.ledger }) else { return PriorEncounters() }
+                // A ledger that cannot be read costs the memory strip, never the lookup.
+                return (try? await opening.value.priorEncounters(of: lemma, before: before)) ?? PriorEncounters()
+            })
+    }
+    /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
+    /// the menu says it does not know rather than showing a list it made up.
+    private var dictionaries: [DictionaryCapability]?
     private let recorder = ShortcutRecorder()
     private let shortcuts = ShortcutStore(defaults: .standard)
     private var statusItem: NSStatusItem?
@@ -25,8 +41,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// happened to finish last.
     private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
 
+    /// The lookup a reader-chosen sense hangs off: the newest one recorded. A tap before anything
+    /// was recorded has nothing to attach to, and writes nothing.
+    private var lastLookup: Int?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = makeStatusItem()
+        panel.onStudySense = { [weak self] encounter in self?.study(encounter) }
         let opening = Task { try await LedgerStore.openDefault() }
         ledger = opening
         Task {
@@ -73,6 +94,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .selected(let selection):
                 await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket)
             }
+
         }
     }
 
@@ -80,24 +102,28 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
     /// answer arrived was never seen, and is not.
     private func lookUp(_ selection: Selection, near pointer: NSPoint, requestedAt: Date, ticket: PanelTicket) async {
-        let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
-        guard let outcome = try? await client.lookup(selection.text), panel.isCurrent(ticket) else { return }
-        let source = [selection.appName, selection.url.flatMap { URL(string: $0)?.host() }]
-            .compactMap { $0 }.joined(separator: " · ")
-        panel.show(
-            .lookup(term: selection.text, lemma: lemma, source: source, capture: selection.quality, outcome: outcome),
-            near: pointer, for: ticket)
-        await record(LookupRecord(
-            surface: selection.text, lemma: lemma.text, context: selection.sentence ?? selection.text,
-            sourceApp: selection.bundleID, sourceURL: selection.url, lookedUpAt: requestedAt,
-            result: outcome.result, answeredBy: outcome.answeredBy, quality: selection.quality), request: ticket.number)
+        guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) else { return }
+        await record(row, request: ticket.number)
     }
 
-    private func record(_ record: LookupRecord, request: Int) async {
+    /// A sense the reader tapped. Recorded as theirs — `chosen_by: reader` — which the ledger
+    /// keeps apart from the selector's guesses, because a hypothesis and a fact must never merge.
+    private func study(_ encounter: SenseEncounter) {
+        guard let ledger, let lookup = lastLookup else { return }
+        Task {
+            do {
+                try await ledger.value.record(encounter, for: lookup)
+            } catch {
+                log.error("sense not recorded: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    private func record(_ record: LookupRecording, request: Int) async {
         guard let ledger else { return }
         var problem: String?
         do {
-            try await ledger.value.record(record)
+            lastLookup = try await ledger.value.record(record)
         } catch {
             problem = "The last lookup was not recorded: \(error)"
             log.error("ledger write failed: \(String(describing: error), privacy: .public)")
@@ -169,12 +195,55 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lookUp.target = self
         if let hotkey { lookUp.title = "Look Up Selection    \(hotkey.shortcut.label())" }
         menu.addItem(withTitle: "Change Shortcut…", action: #selector(changeShortcut), keyEquivalent: "").target = self
+        menu.addItem(primaryDictionaryItem())
         for problem in [hotkeyProblem, ledgerStatus.problem].compactMap({ $0 }) {
             let item = menu.addItem(withTitle: problem, action: nil, keyEquivalent: "")
             item.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Problem")
         }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit XiaolaiDict", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    /// Which dictionary XiaolaiDict studies from (decision D7), and what choosing each one can key: a
+    /// dictionary that marks senses with nothing a parser can read will only ever give whole-entry
+    /// cards, and the reader should see that before choosing it, not afterwards.
+    private func primaryDictionaryItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Study From", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let chosen = primaryDictionary.load().chosen
+
+        let automatic = submenu.addItem(
+            withTitle: "First that marks senses", action: #selector(choosePrimaryDictionary(_:)), keyEquivalent: "")
+        automatic.target = self
+        automatic.representedObject = nil as String?
+        automatic.state = chosen == nil ? .on : .off
+        submenu.addItem(.separator())
+
+        if let dictionaries {
+            for capability in dictionaries {
+                let entry = submenu.addItem(
+                    withTitle: "\(capability.identity.name)    · \(capability.note)",
+                    action: #selector(choosePrimaryDictionary(_:)), keyEquivalent: "")
+                entry.target = self
+                entry.representedObject = capability.identity.key
+                entry.state = chosen == capability.identity.key ? .on : .off
+            }
+        } else {
+            submenu.addItem(withTitle: "Asking the dictionary service…", action: nil, keyEquivalent: "")
+            // Asked when the menu opens rather than at launch: it probes real entries, and Longman's
+            // *hold* alone is 625 KB to parse.
+            Task { [weak self] in
+                guard let self else { return }
+                let found = await client.dictionaries()
+                self.dictionaries = found
+            }
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func choosePrimaryDictionary(_ sender: NSMenuItem) {
+        primaryDictionary.save(sender.representedObject as? String)
     }
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's

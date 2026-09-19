@@ -10,9 +10,10 @@ struct LookupProtocolTests {
 
     private let entries = NonEmpty([
         DictionaryEntry(
-            dictionary: "牛津英汉汉英词典", headword: "ephemeral", lookedUp: "ephemeral",
-            html: "<html><style>.hw { font-weight: 600; }</style><span class=\"hw\">ephemeral</span> 短暂的</html>"),
-        DictionaryEntry(dictionary: "Thesaurus", headword: "ephemeral", lookedUp: "ephemeral", html: "<p/>"),
+            dictionary: DictionaryIdentity(name: "牛津英汉汉英词典", identifier: "com.apple.dictionary.zh_CN-en.OCD", version: "1.1"), headword: "ephemeral", lookedUp: "ephemeral",
+            html: "<html><style>.hw { font-weight: 600; }</style><span class=\"hw\">ephemeral</span> 短暂的</html>",
+            document: nil),
+        DictionaryEntry(dictionary: DictionaryIdentity(name: "Thesaurus"), headword: "ephemeral", lookedUp: "ephemeral", html: "<p/>", document: nil),
     ])!
 
     @Test func entriesSurviveTheBoundary() throws {
@@ -59,13 +60,13 @@ struct LookupProtocolTests {
         ("转瞬即逝", "转瞬即逝", .exact),
     ])
     func anEntryKnowsHowItMatchesTheTerm(term: String, headword: String, match: DictionaryEntry.Match) {
-        #expect(DictionaryEntry(dictionary: "D", headword: headword, lookedUp: term, html: "<p/>").match == match)
+        #expect(DictionaryEntry(dictionary: DictionaryIdentity(name: "D"), headword: headword, lookedUp: term, html: "<p/>", document: nil).match == match)
     }
 
     /// Found by the verifier: a dictionary that named no headword had the term put in its place and
     /// the entry called exact.
     @Test func aMissingHeadwordIsNotCalledExact() {
-        let entry = DictionaryEntry(dictionary: "D", headword: nil, lookedUp: "ephemeral", html: "<p/>")
+        let entry = DictionaryEntry(dictionary: DictionaryIdentity(name: "D"), headword: nil, lookedUp: "ephemeral", html: "<p/>", document: nil)
         #expect(entry.match == .headwordUnknown)
         #expect(entry.headword == "ephemeral")
     }

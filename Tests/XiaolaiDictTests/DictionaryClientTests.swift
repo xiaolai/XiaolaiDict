@@ -7,7 +7,7 @@ import Testing
 /// session a late failure may touch. The transport is faked; `XiaolaiDict --lookup` covers the real one.
 struct DictionaryClientTests {
     private static let entries = NonEmpty([
-        DictionaryEntry(dictionary: "Oxford", headword: "ephemeral", lookedUp: "ephemeral", html: "<html/>"),
+        DictionaryEntry(dictionary: DictionaryIdentity(name: "Oxford"), headword: "ephemeral", lookedUp: "ephemeral", html: "<html/>", document: nil),
     ])!
 
     @Test func entriesPassThrough() async throws {
@@ -162,9 +162,10 @@ private final class FakeService: Sendable {
         let service: FakeService
         let number: Int
 
-        func send(_ request: LookupRequest) async throws -> LookupReply {
+        func send(_ request: ServiceRequest) async throws -> ServiceReply {
             service.state.withLock { _ = $0.sent.insert(number) }
-            return try await service.reply(number)
+            guard case .lookup = request else { return .dictionaries([]) }
+            return .lookup(try await service.reply(number))
         }
 
         func cancel(reason: String) {

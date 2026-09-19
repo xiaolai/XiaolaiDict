@@ -1,3 +1,4 @@
+import AVFoundation
 @testable import XiaolaiDict
 import Testing
 
@@ -77,5 +78,44 @@ struct LaunchArgumentsTests {
     private func refused(of arguments: [String]) -> Bool {
         if case .failure = LaunchArguments.parse(arguments) { return true }
         return false
+    }
+}
+
+/// Spike S1's instrument has to be reachable, and reachable only as written.
+struct SpeechReportArgumentTests {
+    @Test func theReportIsACommand() {
+        #expect(LaunchArguments.parse(["--speech-report"]) == .success(.speechReport))
+    }
+
+    @Test func itTakesNoArguments() {
+        #expect(throws: (any Error).self) {
+            try LaunchArguments.parse(["--speech-report", "extra"]).get()
+        }
+    }
+
+    /// One voice per quality, plus Siri — enough to answer the question without synthesising 180
+    /// times.
+    @Test func theProbeIsBoundedAndCoversEachQuality() {
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+        let probes = SpeechReport.probes(among: voices)
+        #expect(probes.count <= 4)
+        #expect(Set(probes.map(\.identifier)).count == probes.count, "a voice was probed twice")
+        for probe in probes { #expect(voices.contains { $0.identifier == probe.identifier }) }
+    }
+}
+
+/// The hover instrument's command line. A verification command that accepted a typo would report
+/// success for something nobody asked for.
+struct ReadPointArgumentTests {
+    @Test func aPointIsParsed() {
+        #expect(LaunchArguments.parse(["--read-point", "120", "340.5"]) == .success(.readPoint(x: 120, y: 340.5)))
+        #expect(LaunchArguments.parse(["--read-point", "-5", "0"]) == .success(.readPoint(x: -5, y: 0)))
+    }
+
+    @Test(arguments: [["--read-point"], ["--read-point", "120"],
+                      ["--read-point", "120", "340", "extra"],
+                      ["--read-point", "x", "340"], ["--read-point", "120", "nan"]])
+    func anythingElseIsRefused(arguments: [String]) {
+        #expect(throws: (any Error).self) { try LaunchArguments.parse(arguments).get() }
     }
 }

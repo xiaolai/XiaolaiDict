@@ -17,6 +17,25 @@ public struct Lemma: Equatable, Sendable {
         case surface
 
         public static func < (lhs: Basis, rhs: Basis) -> Bool { lhs.rawValue < rhs.rawValue }
+
+        /// The name the ledger stores. Spelled out rather than taken from the raw value, which is
+        /// an `Int` so that "less certain" can be compared — a stored ordinal would silently
+        /// re-point every old row if a case were ever inserted in the middle.
+        public var name: String {
+            switch self {
+            case .tagger: "tagger"
+            case .inferred: "inferred"
+            case .ambiguous: "ambiguous"
+            case .surface: "surface"
+            }
+        }
+
+        public init?(name: String) {
+            guard let match = Basis.allCases.first(where: { $0.name == name }) else { return nil }
+            self = match
+        }
+
+        static var allCases: [Basis] { [.tagger, .inferred, .ambiguous, .surface] }
     }
 
     /// Lowercased, NFC, single-spaced: one spelling per ledger entry.
@@ -31,6 +50,49 @@ public struct Lemma: Equatable, Sendable {
 
 /// Dictionary forms, so the ledger counts "running", "ran" and "runs" as one word (design note §9).
 public enum Lemmatizer {
+    /// The part of speech `word` is being used as, in the sentence around it. Nil when there is no
+    /// sentence, or when the tagger will not commit — a guessed part of speech would rule out the
+    /// right sense as confidently as it rules out the wrong ones.
+    ///
+    /// Reported in the dictionaries' own vocabulary — "noun", "verb", "adjective", "adverb" — so it
+    /// can be compared against a part-of-speech block's `d:pos` without a mapping table.
+    public static func partOfSpeech(of word: String, in sentence: String?, at range: NSRange?) -> String? {
+        guard let sentence, !sentence.isEmpty else { return nil }
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = sentence
+        let target: Range<String.Index>
+        if let range, let converted = Range(range, in: sentence) {
+            target = converted
+        } else if let found = sentence.range(of: word) {
+            target = found
+        } else {
+            return nil
+        }
+        let tag = tagger.tag(at: target.lowerBound, unit: .word, scheme: .lexicalClass).0
+        switch tag {
+        case .noun, .personalName, .placeName, .organizationName: return "noun"
+        case .verb: return "verb"
+        case .adjective: return "adjective"
+        case .adverb: return "adverb"
+        default: return nil
+        }
+    }
+
+    /// The language of `word`, judged from the sentence around it where there is one — a single
+    /// word is often too little to tell. A lemma alone collides across languages: *die*, *chat*,
+    /// *pain*, *gift*, which is why the ledger keeps this beside it.
+    ///
+    /// Nil when the recognizer will not commit, which is honest: a guessed language would split one
+    /// word into two study items or merge two into one.
+    public static func language(of word: String, in sentence: String?) -> String? {
+        let sample = (sentence?.isEmpty == false ? sentence : nil) ?? word
+        guard !sample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
+        return language.rawValue
+    }
+
     /// The lemma of `word`. The sentence settles words whose lemma depends on how they are used —
     /// "leaves" is "leaf" as a noun, "leave" as a verb — so pass it when there is one, and `range`
     /// (UTF-16, within `sentence`) when the capture knows exactly where the word is. Without a
