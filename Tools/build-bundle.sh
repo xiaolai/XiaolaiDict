@@ -217,6 +217,14 @@ verify_bundle() {
         || { echo "the service's CFBundleIdentifier is not $SERVICE_ID"; return 1; }
     [ "$(plist_value "$bundle/Contents/Info.plist" CFBundleIconName)" = "$APP_NAME" ] \
         || { echo "CFBundleIconName is not $APP_NAME"; return 1; }
+    # One version declared in two tracked plists, with nothing else holding them together: edit
+    # one and the app and its service ship different answers to "which XiaolaiDict is this?". Asserted
+    # here rather than remembered.
+    local app_version service_version
+    app_version=$(plist_value "$bundle/Contents/Info.plist" CFBundleShortVersionString)
+    service_version=$(plist_value "$bundle/$XPC_PATH/Contents/Info.plist" CFBundleShortVersionString)
+    [ -n "$app_version" ] && [ "$app_version" = "$service_version" ] \
+        || { echo "app ($app_version) and service ($service_version) declare different versions"; return 1; }
     codesign --verify --strict --deep "$bundle" || { echo "the signature does not verify"; return 1; }
     # The service trusts only its own team, so a bundle whose parts disagree is one where every
     # lookup is refused at runtime. Checked here, where the cause is still visible.
