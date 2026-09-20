@@ -11,13 +11,24 @@ final class SettingsModel {
     private(set) var hasAsked = false
 
     func refresh() async {
-        report = await .probe()
+        show(await .probe())
+    }
+
+    /// Takes a report from wherever it came. Previews use it to show a state this machine is not
+    /// in — a permission being *off* is what the window has to be designed around, and asking the
+    /// system can only ever show how this Mac happens to be set up.
+    func show(_ report: PermissionsReport) {
+        self.report = report
         hasAsked = true
     }
 }
 
 struct SettingsView: View {
-    @State private var model = SettingsModel()
+    @State private var model: SettingsModel
+
+    init(model: SettingsModel = SettingsModel()) {
+        _model = State(initialValue: model)
+    }
 
     var body: some View {
         ScrollView {
@@ -104,3 +115,35 @@ private struct PermissionRow: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 }
+
+
+// MARK: - Previews
+
+#if DEBUG
+@MainActor private func settingsModel(_ states: [PermissionState]) -> SettingsModel {
+    let model = SettingsModel()
+    model.show(PermissionsReport(states: states))
+    return model
+}
+
+/// The state worth designing against: something is off, so the row carries what stops working,
+/// where to grant it, and the two buttons. The happy state is the one that needs no thought.
+#Preview("A permission is off") {
+    SettingsView(model: settingsModel([
+        PermissionState(permission: .accessibility, isGranted: true),
+        PermissionState(permission: .screenRecording, isGranted: false),
+    ]))
+}
+
+#Preview("Both off") {
+    SettingsView(model: settingsModel(Permission.allCases.map {
+        PermissionState(permission: $0, isGranted: false)
+    }))
+}
+
+#Preview("Everything granted") {
+    SettingsView(model: settingsModel(Permission.allCases.map {
+        PermissionState(permission: $0, isGranted: true)
+    }))
+}
+#endif

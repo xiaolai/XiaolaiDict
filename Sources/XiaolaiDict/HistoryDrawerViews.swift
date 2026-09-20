@@ -403,3 +403,88 @@ struct LeadingEdge: Shape {
         return path
     }
 }
+
+// MARK: - Previews
+
+// Sample data, so the drawer can be looked at and changed in Xcode's canvas without launching
+// XiaolaiDict, reading a ledger or docking a window. `#if DEBUG` because a preview is a development
+// tool and has no business in the bundle a reader installs.
+#if DEBUG
+private extension ReadingEntry {
+    /// One card's worth, with the word marked in its sentence the way a real one arrives.
+    static func sample(
+        _ lemma: String, _ sentence: String, place: String = "Safari",
+        result: LookupResult = .found, minutesAgo: Int = 0
+    ) -> ReadingEntry {
+        let range = (sentence as NSString).range(of: lemma)
+        return ReadingEntry(
+            id: abs(lemma.hashValue), lemma: lemma, surface: lemma, sentence: sentence,
+            sentenceRange: range.location == NSNotFound ? nil : range,
+            place: ReadingPlace(name: place, title: place == "Safari" ? "A page" : nil),
+            at: Date().addingTimeInterval(TimeInterval(-60 * minutesAgo)), result: result)
+    }
+}
+
+private let sampleDays: [ReadingDay] = [
+    ReadingDay(id: "2026-09-20", date: .now, label: .today, entries: [
+        .sample("ephemeral", "The ephemeral beauty of morning frost.", minutesAgo: 4),
+        .sample("hold", "The ship's hold was full.", place: "Ghostty", minutesAgo: 30),
+        .sample("qqqq", "qqqq", place: "Ghostty", result: .notFound, minutesAgo: 44),
+    ]),
+    ReadingDay(id: "2026-09-19", date: .now.addingTimeInterval(-86400), label: .yesterday, entries: [
+        .sample("temper", "Justice tempered with mercy.", minutesAgo: 1500),
+        .sample("rein", "He kept a tight rein on the budget.", place: "TextEdit", minutesAgo: 1600),
+        .sample("sanction", "The sanctions were lifted.", minutesAgo: 1700),
+        .sample("table", "They tabled the motion.", place: "TextEdit", minutesAgo: 1800),
+    ]),
+]
+
+@MainActor private func sampleModel() -> HistoryDrawerModel {
+    let model = HistoryDrawerModel()
+    model.geometry = DrawerGeometry.make(
+        DrawerLayout(thickness: 380, edge: .right),
+        on: ScreenMetrics(
+            frame: UpRect(x: 0, y: 0, width: 1440, height: 900),
+            visibleFrame: UpRect(x: 0, y: 0, width: 1440, height: 870)))
+    model.days = sampleDays
+    model.revealed = true
+    return model
+}
+
+/// The cards on their own — the fastest loop for their colour, spacing and marked word.
+#Preview("Cards") {
+    VStack(spacing: 8) {
+        ForEach(sampleDays[0].entries + sampleDays[1].entries.prefix(2)) { entry in
+            ReadingCardView(entry: entry)
+        }
+    }
+    .padding(12)
+    .frame(width: 380)
+    .background(.background)
+}
+
+/// A day's pile, both ways, since the fanned and piled states look nothing alike.
+#Preview("Pile, closed") {
+    DayPileView(day: sampleDays[1], expanded: .constant(false))
+        .padding(12).frame(width: 380).background(.background)
+}
+
+#Preview("Pile, fanned") {
+    DayPileView(day: sampleDays[1], expanded: .constant(true))
+        .padding(12).frame(width: 380).background(.background)
+}
+
+/// The whole drawer, glass and all. The glass reads as grey here — a preview has no wallpaper
+/// behind it to refract, so judge the material in the running app, not in the canvas.
+#Preview("Drawer") {
+    HistoryDrawerSurface(model: sampleModel(), geometry: sampleModel().geometry!)
+        .frame(width: 380, height: 700)
+}
+
+#Preview("Drawer, nothing read yet") {
+    let empty = HistoryDrawerModel()
+    empty.geometry = sampleModel().geometry
+    return HistoryDrawerSurface(model: empty, geometry: empty.geometry!)
+        .frame(width: 380, height: 420)
+}
+#endif
