@@ -40,6 +40,43 @@ enum HistoryReading: Sendable {
     case unavailable(String)
 }
 
+/// A borderless, non-activating panel docked to a screen edge.
+///
+/// `becomesKeyOnlyIfNeeded` and no `NSApp.activate()`: the drawer appears **without taking focus
+/// from whatever the reader was reading**, which is the same rule the lookup panel follows. The
+/// spike this came from activated the app and made the panel key, and built its Escape handling and
+/// its click-away dismissal on the panel being key — neither of which survives the rule.
+final class HistoryDrawerPanel: NSPanel {
+    /// Key only when the reader clicks into the drawer, never just because it appeared.
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+
+        isFloatingPanel = true
+        level = .floating
+        // In whichever Space the reader is in, over a full-screen app, and not a window to cycle to.
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        becomesKeyOnlyIfNeeded = true
+
+        isOpaque = false
+        backgroundColor = .clear
+        // The shadow is drawn by SwiftUI inside the window. A window shadow is computed from the
+        // opaque content and would smear while the drawer slides.
+        hasShadow = false
+
+        hidesOnDeactivate = false
+        isMovableByWindowBackground = false
+        isMovable = false
+        isReleasedWhenClosed = false
+        animationBehavior = .none   // the slide is ours, not AppKit's
+    }
+}
+
 /// Shows and hides the history drawer.
 ///
 /// **The window never animates.** It is placed at its final docked rect and the SwiftUI content
@@ -56,11 +93,8 @@ final class HistoryDrawerController {
     let model = HistoryDrawerModel()
 
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "drawer")
-    /// The rect the scene should be placed at, computed when the drawer is asked to open and read
-    /// back by `defaultWindowPlacement`. A scene cannot be handed a frame directly.
-    private(set) var placement: CGRect?
-    /// SwiftUI owns the window, so "is it up" is the controller's own bookkeeping.
-    private var isOnScreenNow = false
+    private let panel = HistoryDrawerPanel()
+    private var hostingView: NSHostingView<HistoryDrawerRootView>!
     private let escape: EscapeKey
     private let layout: DrawerLayout
 
@@ -108,6 +142,9 @@ final class HistoryDrawerController {
         self.clock = clock
         self.load = load
 
+        hostingView = NSHostingView(rootView: HistoryDrawerRootView(model: model))
+        panel.contentView = hostingView
+
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -132,11 +169,12 @@ final class HistoryDrawerController {
 
         model.revealed = false
         relayout()
+        // Commits the parked state *before* the window is on screen. Without it the first frame
+        // shows the drawer already in place and it never appears to slide.
+        hostingView.layoutSubtreeIfNeeded()
 
-        // SwiftUI opens it, and a `UtilityWindow` scene comes up without activating the app —
-        // measured, not assumed: visible, not key, `NSApp.isActive` false, frontmost app unchanged.
-        isOnScreenNow = true
-        EnvironmentValues().openWindow(id: XiaolaiDictScene.drawerID)
+        // Ordered front without activating: the app the reader was reading keeps focus.
+        panel.orderFrontRegardless()
         escape.claim { [weak self] in self?.hide() }
         installClickAway()
         refresh()
@@ -163,8 +201,7 @@ final class HistoryDrawerController {
             model.revealed = false
         } completion: { [weak self] in
             guard let self, !self.isVisible else { return }
-            self.isOnScreenNow = false
-            EnvironmentValues().dismissWindow(id: XiaolaiDictScene.drawerID)
+            self.panel.orderOut(nil)
             self.activeScreen = nil
         }
     }
@@ -172,9 +209,9 @@ final class HistoryDrawerController {
     // MARK: - What an instrument can measure
 
     /// Whether the panel is actually on screen — not whether the controller thinks it should be.
-    var isOnScreen: Bool { isOnScreenNow }
+    var isOnScreen: Bool { panel.isVisible }
     /// The panel's frame as AppKit has it, so a report can compare it with the geometry it asked for.
-    var windowFrame: CGRect { placement ?? .zero }
+    var windowFrame: CGRect { panel.frame }
     /// Whether Escape is currently XiaolaiDict's. It must be claimed only while the drawer shows.
     var isEscapeClaimed: Bool { escape.isHeld }
 
@@ -210,7 +247,7 @@ final class HistoryDrawerController {
         guard let screen = activeScreen else { return }
         let geometry = DrawerGeometry.make(layout, on: screen)
         model.geometry = geometry
-        placement = geometry.windowRect.cg
+        panel.setFrame(geometry.windowRect.cg, display: false)
     }
 
     /// Also called by the screen-parameters notification. Internal so the unplug path can be

@@ -51,8 +51,10 @@ case .success(.translationReport):
 // dispatchMain(). `.accessory` for the same reason the app uses it: no Dock icon, and nothing
 // here may activate XiaolaiDict.
 case .success(.historyReport):
-    HistoryReport.isWanted = true
-    XiaolaiDictScene.main()
+    let reporter = NSApplication.shared
+    reporter.setActivationPolicy(.accessory)
+    Task { @MainActor in exit(await HistoryReport.run().rawValue) }
+    reporter.run()
 
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.

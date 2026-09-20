@@ -102,11 +102,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         if hoverEnabled { hover.start() }
         registerShortcut(shortcuts.load())
         quitOnTerminationSignal()
-        // The report measures the running app rather than a controller built for the occasion,
-        // because a SwiftUI scene exists only inside the app that declares it.
-        if HistoryReport.isWanted {
-            Task { exit(await HistoryReport.run(in: self).rawValue) }
-        }
     }
 
     // MARK: - Looking up
@@ -243,13 +238,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Menu
-
-    // MARK: - What the scenes read
-
-    var drawerModel: HistoryDrawerModel { drawer.model }
-    var drawerPlacement: CGRect? { drawer.placement }
-    var drawerReload: Task<Void, Never>? { drawer.reload }
-    var drawerHoldsEscape: Bool { drawer.isEscapeClaimed }
 
     // MARK: - What the menu reads
 

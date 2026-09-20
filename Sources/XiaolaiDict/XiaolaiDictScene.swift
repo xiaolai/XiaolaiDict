@@ -17,8 +17,6 @@ import SwiftUI
 /// `main()` is called from `main.swift` rather than `@main`, because XiaolaiDict's other launch modes —
 /// the lookup, the reports, the instruments — must be able to run without a scene at all.
 struct XiaolaiDictScene: App {
-    static let drawerID = "reading-history"
-
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
     var body: some Scene {
@@ -30,24 +28,6 @@ struct XiaolaiDictScene: App {
             } else {
                 Text("XiaolaiDict")   // no image at all is still no reason to show nothing
             }
-        }
-
-        UtilityWindow("Reading History", id: Self.drawerID) {
-            HistoryDrawerRootView(model: delegate.drawerModel)
-                .xiaolaiDictPanelBehaviour()
-        }
-        .windowStyle(.plain)
-        .windowLevel(.floating)
-        .windowResizability(.contentSize)
-        // Opened on demand from the menu, never at launch, and never restored into a Space the
-        // reader is no longer in.
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        // The docked rect the geometry worked out, which depends on the display the pointer was on
-        // when the drawer was asked for. A scene cannot be handed a frame, so it is read back here.
-        .defaultWindowPlacement { _, _ in
-            let rect = delegate.drawerPlacement ?? .zero
-            return WindowPlacement(rect.origin, size: rect.size)
         }
 
         Settings {
