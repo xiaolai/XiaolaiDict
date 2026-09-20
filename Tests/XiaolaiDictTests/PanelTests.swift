@@ -6,24 +6,24 @@ import Testing
 import WebKit
 
 struct PanelPlacementTests {
-    private let screen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
+    private let screen = UpRect(x: 0, y: 0, width: 1_440, height: 900)
 
     @Test func belowAndRightOfThePointer() {
-        let frame = PanelPlacement.frame(for: NSSize(width: 400, height: 200), near: NSPoint(x: 100, y: 700), within: screen)
+        let frame = PanelPlacement.frame(for: NSSize(width: 400, height: 200), near: UpPoint(x: 100, y: 700), within: screen)
         #expect(frame.origin == NSPoint(x: 112, y: 476))
     }
 
     @Test func keptOnTheScreenNearAnEdge() {
-        let frame = PanelPlacement.frame(for: NSSize(width: 400, height: 200), near: NSPoint(x: 1_430, y: 10), within: screen)
-        #expect(screen.insetBy(dx: 8, dy: 8).contains(frame))
+        let frame = PanelPlacement.frame(for: NSSize(width: 400, height: 200), near: UpPoint(x: 1_430, y: 10), within: screen)
+        #expect(screen.cg.insetBy(dx: 8, dy: 8).contains(frame))
     }
 
     /// Found by audit: a panel larger than the screen got an upper clamp below its lower one and was
     /// placed partly off screen. It is shrunk to fit first.
     @Test func aPanelLargerThanTheScreenIsShrunkOntoIt() {
-        let small = NSRect(x: 0, y: 0, width: 600, height: 400)
-        let frame = PanelPlacement.frame(for: NSSize(width: 760, height: 520), near: NSPoint(x: 300, y: 200), within: small)
-        #expect(small.insetBy(dx: 8, dy: 8).contains(frame))
+        let small = UpRect(x: 0, y: 0, width: 600, height: 400)
+        let frame = PanelPlacement.frame(for: NSSize(width: 760, height: 520), near: UpPoint(x: 300, y: 200), within: small)
+        #expect(small.cg.insetBy(dx: 8, dy: 8).contains(frame))
         #expect(frame.size == NSSize(width: 584, height: 384))
     }
 

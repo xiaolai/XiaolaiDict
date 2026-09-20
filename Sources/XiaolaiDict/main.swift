@@ -22,9 +22,18 @@ case .success(.readSelection(let bundleID)):
     dispatchMain()
 
 // The hover paths, at a point, without moving anyone's pointer.
+//
+// Under AppKit's runloop, not `dispatchMain()`. ScreenCaptureKit's window-scoped capture needs a
+// window-server connection and a serviced main runloop; `dispatchMain()` gives neither, and the
+// capture never returns at all — measured here as 27 s blocked on a 30 s deadline against 5 s of
+// CPU, while the identical capture under AppKit takes 127 ms. The Accessibility dialects never
+// noticed, because they touch none of this: that is why both hover stages passed for months while
+// the recogniser this instrument exists to exercise could not run once.
 case .success(.readPoint(let x, let y)):
+    let pointReader = NSApplication.shared
+    pointReader.setActivationPolicy(.accessory)
     Task { @MainActor in exit(await LookupCommand.readPoint(x: x, y: y).rawValue) }
-    dispatchMain()
+    pointReader.run()
 
 // Spike S1's instrument. It must run inside the signed bundle: a bare CLI binary reported voices
 // that could not be resolved and a voice that synthesised zero frames.

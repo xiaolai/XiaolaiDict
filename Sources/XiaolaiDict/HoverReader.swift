@@ -17,6 +17,11 @@ final class HoverReader {
     /// and only one may be in flight.
     static let captureDeadline: Duration = .seconds(5)
 
+    /// What *this* reader allows. The shipped value protects the reader from a wedged capture; an
+    /// instrument measuring the path needs to be allowed to finish, because a measurement that is
+    /// killed at the budget can only ever report "over budget" and never by how much or why.
+    private let captureDeadline: Duration
+
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "hover")
     private let recogniser = ScreenTextRecogniser()
     private let policy: () -> HoverPolicy
@@ -48,10 +53,12 @@ final class HoverReader {
 
     init(
         policy: @escaping () -> HoverPolicy = { .shipped },
-        pause: @escaping () -> HoverPause = { HoverPause() }
+        pause: @escaping () -> HoverPause = { HoverPause() },
+        captureDeadline: Duration = HoverReader.captureDeadline
     ) {
         self.policy = policy
         self.pause = pause
+        self.captureDeadline = captureDeadline
     }
 
     enum Outcome: Sendable {
@@ -157,7 +164,7 @@ final class HoverReader {
             return try await work()
         }
         do {
-            return try await withDeadline(Self.captureDeadline) { try await finished.value }
+            return try await withDeadline(captureDeadline) { try await finished.value }
         } catch {
             // The deadline won. `finished` keeps running and will release the guard itself.
             throw error

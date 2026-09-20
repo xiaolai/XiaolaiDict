@@ -1,4 +1,3 @@
-import AppKit
 import XiaolaiDictCore
 import SwiftUI
 
@@ -58,7 +57,7 @@ struct HistoryDrawerRootView: View {
                     .animation(.easeOut(duration: 0.16), value: model.revealed)
             }
             .frame(
-                width: geometry.windowRect.width, height: geometry.windowRect.height,
+                width: geometry.windowRect.size.width, height: geometry.windowRect.size.height,
                 alignment: .topLeading)
             .clipped()
             .ignoresSafeArea()
@@ -76,10 +75,11 @@ struct HistoryDrawerSurface: View {
             Divider().opacity(0.4)
             contents
         }
-        .background(DrawerBackdrop())
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-        .shadow(color: .black.opacity(0.30), radius: 26)
+        // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
+        // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
+        // is glass, and it brings its own edge treatment, so the hand-drawn border is gone with it.
+        .glassEffect(.regular, in: shape)
+        .shadow(color: .black.opacity(0.22), radius: 20)
     }
 
     /// The corners touching the screen edge stay square, the way system panels do. Which pair that
@@ -176,20 +176,6 @@ struct HistoryDrawerSurface: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct DrawerBackdrop: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.state = .active
     }
 }
 
@@ -352,8 +338,9 @@ struct ReadingCardView: View {
         .opacity(contentOpacity)
         .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(shape.fill(.regularMaterial))
-        .background(shape.fill(Color.primary.opacity(hovering ? 0.10 : 0.04)))
+        // A plain tinted surface, deliberately not another material: the drawer around it is
+        // already glass, and layering glass inside glass muddies both.
+        .background(shape.fill(Color.primary.opacity(hovering ? 0.12 : 0.06)))
         .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

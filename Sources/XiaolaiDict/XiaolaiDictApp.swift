@@ -11,6 +11,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let primaryDictionary = PrimaryDictionaryStore()
     private lazy var runner = makeRunner()
     private lazy var drawer = makeDrawer()
+    /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
+    /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
+    private let hover = HoverWatcher()
+    private let settings = SettingsWindowController()
+    /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
+    /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
+    private var permissions = PermissionsReport(states: [])
 
     /// The history drawer reads the ledger itself, bounded in both directions, and reports a
     /// failure rather than an empty drawer — the two must not look the same.
@@ -80,6 +87,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let button = self?.statusItem?.button, let window = button.window else { return nil }
             return window.convertToScreen(button.convert(button.bounds, to: nil))
         }
+        Task { [weak self] in self?.permissions = await .probe() }
+        hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
+        // Watching the pointer is something the reader must be able to stop, so it is a setting
+        // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
+        if hoverEnabled { hover.start() }
         registerShortcut(shortcuts.load())
         quitOnTerminationSignal()
     }
@@ -87,7 +99,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Looking up
 
     @objc private func lookUpSelection() {
-        let pointer = NSEvent.mouseLocation
+        let pointer = UpPoint(NSEvent.mouseLocation)
         let requestedAt = Date.now
         let ticket = panel.newRequest()
         lookup?.cancel()
@@ -118,10 +130,34 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// A word the reader rested on. The same path as the shortcut from here: one lookup at a
+    /// time, and a newer one supersedes whatever was still arriving.
+    private func lookUpHovered(_ selection: Selection, at pointer: UpPoint) {
+        let requestedAt = Date.now
+        let ticket = panel.newRequest()
+        lookup?.cancel()
+        lookup = Task { await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) }
+    }
+
+    // MARK: - Hover
+
+    private static let hoverEnabledKey = "hoverLookupEnabled"
+
+    /// Defaults to on for a reader who has never chosen, and remembers a reader who has.
+    private var hoverEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: Self.hoverEnabledKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.hoverEnabledKey) }
+    }
+
+    @objc private func toggleHover() {
+        hoverEnabled.toggle()
+        if hoverEnabled { hover.start() } else { hover.stop() }
+    }
+
     /// Every answered lookup is recorded — a miss too, marked as one: it is usually a typo or a
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
     /// answer arrived was never seen, and is not.
-    private func lookUp(_ selection: Selection, near pointer: NSPoint, requestedAt: Date, ticket: PanelTicket) async {
+    private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket) async {
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) else { return }
         await record(row, request: ticket.number)
     }
@@ -215,12 +251,21 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lookUp.target = self
         if let hotkey { lookUp.title = "Look Up Selection    \(hotkey.shortcut.label())" }
         menu.addItem(withTitle: "Change Shortcut…", action: #selector(changeShortcut), keyEquivalent: "").target = self
+        let hoverItem = menu.addItem(
+            withTitle: "Hover Lookup    hold \u{2325}", action: #selector(toggleHover), keyEquivalent: "")
+        hoverItem.target = self
+        // Read from the watcher, not from the setting: if starting it failed, the menu says off.
+        hoverItem.state = hover.isWatching ? .on : .off
         let history = menu.addItem(
             withTitle: drawer.isVisible ? "Hide Reading History" : "Reading History",
             action: #selector(toggleHistory), keyEquivalent: "")
         history.target = self
         menu.addItem(primaryDictionaryItem())
-        for problem in [hotkeyProblem, ledgerStatus.problem].compactMap({ $0 }) {
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        Task { [weak self] in self?.permissions = await .probe() }
+        for problem in [permissions.menuWarning, hotkeyProblem, ledgerStatus.problem]
+            .compactMap({ $0 }) {
             let item = menu.addItem(withTitle: problem, action: nil, keyEquivalent: "")
             item.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Problem")
         }
@@ -264,6 +309,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         item.submenu = submenu
         return item
+    }
+
+    @objc private func showSettings() {
+        settings.show()
     }
 
     @objc private func toggleHistory() {

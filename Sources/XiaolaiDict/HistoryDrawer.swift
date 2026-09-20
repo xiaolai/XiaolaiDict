@@ -102,7 +102,7 @@ final class HistoryDrawerController {
     private let load: @MainActor () async -> HistoryReading
     /// The displays, and where the pointer is. Injected for the same reason.
     private let screens: @MainActor () -> [ScreenMetrics]
-    private let pointer: @MainActor () -> CGPoint
+    private let pointer: @MainActor () -> UpPoint
     private let clock: @MainActor () -> Date
 
     /// Fires for clicks delivered to *other* applications. Clicks inside the drawer are local
@@ -131,7 +131,7 @@ final class HistoryDrawerController {
         layout: DrawerLayout = DrawerLayout(thickness: 380, edge: .right),
         hotkeys: HotkeyCenter = .shared,
         screens: @escaping @MainActor () -> [ScreenMetrics] = { NSScreen.screens.map(ScreenMetrics.init) },
-        pointer: @escaping @MainActor () -> CGPoint = { NSEvent.mouseLocation },
+        pointer: @escaping @MainActor () -> UpPoint = { UpPoint(NSEvent.mouseLocation) },
         clock: @escaping @MainActor () -> Date = { .now },
         load: @escaping @MainActor () async -> HistoryReading
     ) {
@@ -247,7 +247,7 @@ final class HistoryDrawerController {
         guard let screen = activeScreen else { return }
         let geometry = DrawerGeometry.make(layout, on: screen)
         model.geometry = geometry
-        panel.setFrame(geometry.windowRect, display: false)
+        panel.setFrame(geometry.windowRect.cg, display: false)
     }
 
     /// Also called by the screen-parameters notification. Internal so the unplug path can be
@@ -294,6 +294,6 @@ final class HistoryDrawerController {
 extension ScreenMetrics {
     /// The AppKit screen as the drawer's geometry needs it.
     init(_ screen: NSScreen) {
-        self.init(frame: screen.frame, visibleFrame: screen.visibleFrame)
+        self.init(frame: UpRect(screen.frame), visibleFrame: UpRect(screen.visibleFrame))
     }
 }

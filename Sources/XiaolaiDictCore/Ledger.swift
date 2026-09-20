@@ -494,6 +494,13 @@ public final class Ledger {
                         dictionary_id TEXT NOT NULL,
                         dictionary_name TEXT NOT NULL,
                         dictionary_version TEXT,
+                        -- `DictionaryEntry.entryKey`, not the raw `d:entry` id: for a bundle
+                        -- whose ids are regenerated on import, a marked headword. Rows written
+                        -- before that distinction existed hold a converter id for those
+                        -- dictionaries and will not match new ones. They are left as they are —
+                        -- the headword they would need is not recorded, and inventing one would
+                        -- be a guess dressed as history. Those keys were never stable anyway,
+                        -- which is the defect this note is the tail of.
                         entry_id TEXT NOT NULL,
                         sense_key TEXT,
                         sense_key_kind TEXT NOT NULL,

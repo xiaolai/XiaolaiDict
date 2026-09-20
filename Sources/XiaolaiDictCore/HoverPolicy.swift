@@ -82,17 +82,32 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// How long the pointer must be still. Debouncing is non-negotiable.
     public var settleMilliseconds: Int
 
-    /// Terminals and password managers, at minimum. A terminal is on the list because a popup over
-    /// a half-typed command is worse than useless, and because what is on screen there is often
-    /// not prose.
-    public static let defaultExcludedApps: Set<String> = PlacePolicy.passwordManagers.union([
+    /// **Safety, not taste.** The ledger stores the sentence a word was read in, so a lookup in a
+    /// password manager writes a secret to disk. There the whole surface is secrets, which is what
+    /// makes this a rule and not a preference — and why it is the only thing shipped excluded.
+    public static let defaultExcludedApps: Set<String> = PlacePolicy.passwordManagers
+
+    /// Terminals — a named set, and **not excluded by default**.
+    ///
+    /// They shipped excluded on the reasoning that a popup over a half-typed command is worse than
+    /// useless and that terminal content is often not prose. Both are weaker than they look. The
+    /// screen-word spike measured hover working in Ghostty (finding 12: "a terminal exposes no text
+    /// through Accessibility — OCR is the only path there"), so the exclusion removed something
+    /// demonstrated to work; and `HoverModifier` has no "none" case, so hover only fires when the
+    /// reader deliberately holds the modifier and rests. It cannot land on a half-typed command by
+    /// accident. Whether the content is prose is the reader's business, not the policy's — people
+    /// read prose in terminals.
+    ///
+    /// Kept as a set so a reader who wants the old behaviour can have it in one line rather than by
+    /// enumerating six bundle identifiers.
+    public static let terminals: Set<String> = [
         "com.apple.Terminal",
         "com.googlecode.iterm2",
         "com.mitchellh.ghostty",
         "dev.warp.Warp-Stable",
         "net.kovidgoyal.kitty",
         "co.zeit.hyper",
-    ])
+    ]
 
     public static let shipped = HoverPolicy(
         modifier: .option, excludedApps: defaultExcludedApps, excludedHosts: [], settleMilliseconds: 180)

@@ -38,7 +38,7 @@ final class PinnedNoteController {
 
     var count: Int { panels.count }
 
-    func pin(_ note: PinnedNote, near pointer: NSPoint) {
+    func pin(_ note: PinnedNote, near pointer: UpPoint) {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: NSSize(width: 320, height: 200)),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
@@ -55,6 +55,8 @@ final class PinnedNoteController {
         panel.title = note.term
         panel.contentView = NSHostingView(rootView: PinnedNoteView(note: note))
 
+        // Unwrapped once for the placement math below, which is all in AppKit's space.
+        let pointer = pointer.cg
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: panel.frame.size)
         // Offset per open note, so pinning several does not stack them exactly on top of one another.

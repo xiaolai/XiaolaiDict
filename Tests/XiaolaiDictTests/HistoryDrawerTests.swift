@@ -10,11 +10,11 @@ import Testing
 @MainActor
 struct HistoryDrawerTests {
     private let wide = ScreenMetrics(
-        frame: CGRect(x: 0, y: 0, width: 2560, height: 1440),
-        visibleFrame: CGRect(x: 0, y: 0, width: 2560, height: 1410))
+        frame: UpRect(x: 0, y: 0, width: 2560, height: 1440),
+        visibleFrame: UpRect(x: 0, y: 0, width: 2560, height: 1410))
     private let neighbour = ScreenMetrics(
-        frame: CGRect(x: 2560, y: 0, width: 2560, height: 1440),
-        visibleFrame: CGRect(x: 2560, y: 0, width: 2560, height: 1410))
+        frame: UpRect(x: 2560, y: 0, width: 2560, height: 1440),
+        visibleFrame: UpRect(x: 2560, y: 0, width: 2560, height: 1410))
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -30,7 +30,7 @@ struct HistoryDrawerTests {
     }
 
     private func controller(
-        displays: Displays, pointer: CGPoint = CGPoint(x: 100, y: 100),
+        displays: Displays, pointer: UpPoint = UpPoint(x: 100, y: 100),
         reading: @escaping @Sendable () -> HistoryReading = { .entries([]) }
     ) -> HistoryDrawerController {
         HistoryDrawerController(
@@ -50,13 +50,13 @@ struct HistoryDrawerTests {
     @Test func openingLaysTheDrawerOutOnTheDisplayThePointerIsOn() {
         let displays = Displays()
         displays.screens = [wide, neighbour]
-        let drawer = controller(displays: displays, pointer: CGPoint(x: 3000, y: 700))
+        let drawer = controller(displays: displays, pointer: UpPoint(x: 3000, y: 700))
         drawer.show()
 
         #expect(drawer.isVisible)
         let geometry = drawer.model.geometry
         #expect(geometry != nil)
-        #expect(geometry.map { neighbour.frame.union($0.windowRect) == neighbour.frame } == true)
+        #expect(geometry.map { neighbour.frame.cg.union($0.windowRect.cg) == neighbour.frame.cg } == true)
     }
 
     /// With no display there is nothing to dock to. The drawer stays shut rather than being placed
@@ -138,7 +138,7 @@ struct HistoryDrawerTests {
     @Test func unpluggingTheDisplayTheDrawerIsOnClosesIt() {
         let displays = Displays()
         displays.screens = [wide, neighbour]
-        let drawer = controller(displays: displays, pointer: CGPoint(x: 3000, y: 700))
+        let drawer = controller(displays: displays, pointer: UpPoint(x: 3000, y: 700))
         drawer.show()
         #expect(drawer.isVisible)
 
@@ -151,7 +151,7 @@ struct HistoryDrawerTests {
     @Test func rearrangingDisplaysKeepsTheDrawerOpen() {
         let displays = Displays()
         displays.screens = [wide, neighbour]
-        let drawer = controller(displays: displays, pointer: CGPoint(x: 3000, y: 700))
+        let drawer = controller(displays: displays, pointer: UpPoint(x: 3000, y: 700))
         drawer.show()
 
         displays.screens = [neighbour, wide]

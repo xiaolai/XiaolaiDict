@@ -88,10 +88,10 @@ extension PrimaryDictionary {
     /// - several entries → nothing. *fine* is four entries in NOAD and picking one would be a guess.
     func encounter(among entries: [DictionaryEntry], at when: Date) -> SenseEncounter? {
         let mine = self.entries(among: entries)
-        guard mine.count == 1, let entry = mine.first, let entryID = entry.entryID else { return nil }
+        guard mine.count == 1, let entry = mine.first, let entryKey = entry.entryKey else { return nil }
         let only = entry.senses.count == 1 ? entry.senses.first : nil
         return SenseEncounter(
-            dictionary: entry.dictionary, entryID: entryID,
+            dictionary: entry.dictionary, entryID: entryKey,
             senseKey: only?.key, senseKeyKind: only?.keyKind ?? entry.senseKeyKind,
             sensePath: only?.path, entrySenseCount: entry.senseCount, senseHash: only?.textHash,
             // A snapshot so the ledger stays readable when a dictionary is updated or removed.
@@ -166,7 +166,7 @@ struct SenseResolver {
         case .chose(let key, _):
             guard let entry = mine.first(where: { $0.senses.contains { $0.key == key } }),
                   let sense = entry.senses.first(where: { $0.key == key }),
-                  let entryID = entry.entryID
+                  let entryKey = entry.entryKey
             else {
                 // The chosen key belongs to no entry XiaolaiDict can key — nothing is claimed.
                 return SenseResolution(mark: nil, encounter: primary.encounter(among: entries, at: when))
@@ -174,7 +174,7 @@ struct SenseResolver {
             return SenseResolution(
                 mark: .chosen(key: key, by: .model),
                 encounter: SenseEncounter(
-                    dictionary: entry.dictionary, entryID: entryID, senseKey: key,
+                    dictionary: entry.dictionary, entryID: entryKey, senseKey: key,
                     senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
                     senseHash: sense.textHash, gloss: sense.label, chosenBy: .model, chosenAt: when))
         case .abstained(let why):

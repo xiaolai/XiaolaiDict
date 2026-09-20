@@ -38,7 +38,7 @@ final class LookupRunner {
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
     func run(
-        _ selection: Selection, near pointer: NSPoint, requestedAt: Date, ticket: PanelTicket
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket
     ) async -> LookupRecording? {
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         // The app, and then the most precise thing the app could say about where inside it — which

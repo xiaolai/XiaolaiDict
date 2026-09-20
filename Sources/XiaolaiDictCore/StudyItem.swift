@@ -10,6 +10,9 @@ import Foundation
 public struct StudyItem: Codable, Sendable, Equatable, Hashable {
     /// `DictionaryIdentity.key`: the bundle identifier, or the display name marked as such.
     public let dictionary: String
+    /// `DictionaryEntry.entryKey` — the publisher's entry id, or a headword marked
+    /// `headword:` where the dictionary regenerates its ids on every import. **Not** the raw
+    /// `d:entry` id, which for a sideloaded conversion changes under the reader's feet.
     public let entryID: String
     /// Nil means "this entry, sense unresolved" — the word rung, reached honestly.
     public let senseKey: String?
@@ -49,7 +52,8 @@ public enum SenseChoice: String, Codable, Sendable, CaseIterable {
 /// encounter, never a standalone fact (`dev-docs/study-unit.md` §5.2).
 public struct SenseEncounter: Sendable, Equatable {
     public let dictionary: DictionaryIdentity
-    /// Required: the entry *is* the homograph distinction.
+    /// Required: the entry *is* the homograph distinction. Holds `DictionaryEntry.entryKey`,
+    /// not the raw `d:entry` id — see `StudyItem.entryID`.
     public let entryID: String
     /// Nil means "this entry, sense unresolved".
     public let senseKey: String?

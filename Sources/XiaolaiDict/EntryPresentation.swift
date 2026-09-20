@@ -73,7 +73,7 @@ struct EntryPresentation: Equatable {
                     key: sense.key, ordinal: sense.path.ordinal, partOfSpeech: block.partOfSpeech,
                     label: sense.label, keyKind: sense.keyKind,
                     standing: Self.standing(of: sense, in: entry, mark: mark),
-                    metBefore: entry.entryID.map {
+                    metBefore: entry.entryKey.map {
                         met.contains(StudyItem(
                             dictionary: entry.dictionary.key, entryID: $0, senseKey: sense.key,
                             senseKeyKind: sense.keyKind))

@@ -132,7 +132,7 @@ private final class RecordingPanel: LookupPanelPresenting {
 
     func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
 
-    func show(_ content: PanelContent, near pointer: NSPoint, for ticket: PanelTicket) {
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) {
         guard isCurrent(ticket) else { return }
         contents.append(content)
     }

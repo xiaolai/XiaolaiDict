@@ -46,6 +46,29 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
     /// carry, so a positional claim never reads as a publisher's.
     public var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
 
+    /// What a ledger row and a study card hang on — **not** `entryID`.
+    ///
+    /// Where the dictionary's ids are the publisher's, that id is the key. Where they are generated
+    /// by whatever tool converted the bundle — every sideloaded conversion — they change on the
+    /// reader's next import, so a ledger keyed to them survives only by luck
+    /// (`dev-docs/dictionary-markup.md` §7). Those key by headword instead, marked `headword:` for
+    /// the same reason `DictionaryIdentity.key` marks a display name: a row keyed by a headword must
+    /// never be mistaken for one keyed by a publisher id, and a dictionary that later gains a bundle
+    /// identifier must not silently merge with its own older rows. The homograph joins the key where
+    /// the dictionary numbers them, because a headword alone merges *fine* the penalty with *fine*
+    /// the adjective.
+    ///
+    /// Nil only where the ids *are* stable and this entry declared none. That is a malformed entry
+    /// rather than a dictionary without ids, and the id was the thing separating the homographs —
+    /// so there is nothing to fall back to. Unknown, never guessed.
+    public var entryKey: String? {
+        guard dictionary.hasStableEntryIDs else {
+            guard let homograph, !homograph.isEmpty else { return "headword:\(headword)" }
+            return "headword:\(headword)#\(homograph)"
+        }
+        return entryID
+    }
+
     /// `term` is what was looked up; the match is worked out from it rather than asserted.
     ///
     /// `document` is `html` already parsed. It is passed in rather than parsed here because a

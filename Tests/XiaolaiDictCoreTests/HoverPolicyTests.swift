@@ -45,13 +45,35 @@ struct HoverPolicyTests {
 
     // MARK: - A3, exclusion
 
-    /// A popup in a password field or a terminal is worse than no popup, so the list ships
-    /// non-empty rather than waiting for the reader to discover the need.
-    @Test func itShipsExcludingPasswordManagersAndTerminals() {
+    /// Password managers are a **safety** exclusion and ship excluded. The ledger stores the
+    /// sentence a word was read in, so a lookup in a password manager would write a secret to disk;
+    /// there the whole surface is secrets, which is what makes it a rule rather than a preference.
+    @Test func itShipsExcludingPasswordManagers() {
         #expect(policy.excludedApps.contains("com.1password.1password"))
-        #expect(policy.excludedApps.contains("com.apple.Terminal"))
-        #expect(decide(HoverSite(bundleID: "com.apple.Terminal")) == .stayQuiet(.excludedApp))
         #expect(decide(HoverSite(bundleID: "com.1password.1password")) == .stayQuiet(.excludedApp))
+    }
+
+    /// Terminals are **not** excluded by default, and this is a reversal.
+    ///
+    /// The screen-word spike measured hover working in Ghostty — finding 12, "OCR is the only path
+    /// there" — and the exclusion, not the machinery, is what removed it. The rationale it shipped
+    /// under was that a popup over a half-typed command is worse than useless, which underweights
+    /// the gate shipping beside it: `HoverModifier` has no "none" case, so hover in a terminal only
+    /// ever fires when the reader deliberately holds the modifier and rests the pointer. It cannot
+    /// arrive over a half-typed command by accident.
+    @Test func terminalsAreReadableByDefault() {
+        #expect(!policy.excludedApps.contains("com.mitchellh.ghostty"))
+        #expect(!policy.excludedApps.contains("com.apple.Terminal"))
+        #expect(decide(HoverSite(bundleID: "com.mitchellh.ghostty")) != .stayQuiet(.excludedApp))
+    }
+
+    /// The set is still named, because a reader who wants the old behaviour should not have to
+    /// enumerate six bundle identifiers to get it.
+    @Test func terminalsRemainANamedSetAReaderCanExclude() {
+        var quiet = policy
+        quiet.excludedApps.formUnion(HoverPolicy.terminals)
+        #expect(decide(HoverSite(bundleID: "com.mitchellh.ghostty"), policy: quiet) == .stayQuiet(.excludedApp))
+        #expect(decide(HoverSite(bundleID: "net.kovidgoyal.kitty"), policy: quiet) == .stayQuiet(.excludedApp))
     }
 
     @Test func aSiteCanBeExcluded() {

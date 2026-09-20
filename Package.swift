@@ -7,8 +7,9 @@ let package = Package(
     name: "XiaolaiDict",
     platforms: [.macOS(.v26)],
     targets: [
-        // Entry models, the lookup ledger, lemmas. Pure Swift: no AppKit and no private API —
-        // the part that has to be exhaustively testable.
+        // Entry models, the lookup ledger, lemmas. No AppKit and no private API — the part that
+        // has to be exhaustively testable. Not portable, and not meant to be: it binds
+        // CoreGraphics, NaturalLanguage, CryptoKit, CoreServices and FoundationModels.
         .target(name: "XiaolaiDictCore"),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never

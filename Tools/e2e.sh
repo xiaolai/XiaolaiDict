@@ -58,7 +58,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -395,6 +395,63 @@ else
         fi
     else
         flunk "drawer: $why"
+    fi
+fi
+
+# 10. The recogniser — the one capture path nothing exercised until now.
+#
+#    Both hover stages above assert an Accessibility dialect and answer in tens of milliseconds;
+#    the OCR fallback beneath them had no stage at all. A terminal is what forces this path: it
+#    publishes no selectable text to the dialects, so reading pixels is the only way.
+#
+#    **Launched through LaunchServices, never as a plain command.** TCC refuses screen capture to
+#    any process started over SSH, whatever the app has been granted — the binary run directly here
+#    reports "XiaolaiDict needs Screen Recording" on a machine that has it, which is a fact about this
+#    harness and not about XiaolaiDict. `open --stdout` is what puts the instrument in the GUI session and
+#    still lets its answer be read.
+read_point() {  # read_point <x> <y>: the instrument's JSON on success, nothing on failure
+    local out=/tmp/xiaolaidict-read-point.json err=/tmp/xiaolaidict-read-point.err
+    rm -f "$out" "$err"
+    open -n --stdout "$out" --stderr "$err" "$app" --args --read-point "$1" "$2"
+    # Polled, not slept: a cold capture pays a system-wide warm-up that a warm one does not.
+    for _ in $(seq 1 60); do
+        [ -s "$out" ] || [ -s "$err" ] || { sleep 0.5; continue; }
+        break
+    done
+    cat "$out" 2>/dev/null
+}
+
+open -a Ghostty; sleep 3
+if ! frame=$("$helpers/window-frame" com.mitchellh.ghostty 2>&1); then
+    flunk "recogniser: no Ghostty window to read ($frame)"
+else
+    read -r wx wy _ _ <<<"$frame"
+    # A grid, because where a terminal's text sits depends on its prompt, its font and its padding.
+    reading=""
+    for dy in 98 113 83 128 68 143; do
+        for dx in 50 160 280; do
+            got=$(read_point $((wx + dx)) $((wy + dy)))
+            if printf '%s' "$got" | grep -q opticalRecognition; then reading=$got; break 2; fi
+        done
+    done
+    if [ -z "$reading" ]; then
+        flunk "recogniser: no point in the Ghostty window came back through OCR; last error: $(head -c 120 /tmp/xiaolaidict-read-point.err 2>/dev/null)"
+    else
+        if why=$(expect "$reading" captureSource=opticalRecognition bundleID=com.mitchellh.ghostty 2>&1); then
+            word=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["text"])' "$reading")
+            pass "recogniser: read '$word' from a terminal through OCR"
+        else
+            flunk "recogniser: $why"
+        fi
+        # Asserted warm. The first capture after boot pays a system-wide ScreenCaptureKit warm-up
+        # — measured once at 14.8 s against ~0.5 s for every read after — which is a fact about the
+        # machine, so a budget asserted on the first read would measure its state and not the code.
+        took=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
+        if [ "$took" -lt 5000 ]; then
+            pass "recogniser: the read cost ${took} ms, inside the 5 s capture deadline"
+        else
+            flunk "recogniser: the read took ${took} ms, past the 5 s capture deadline"
+        fi
     fi
 fi
 

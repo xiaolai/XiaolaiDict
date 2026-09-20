@@ -34,7 +34,7 @@ enum HistoryReport {
         })
 
         let screens = NSScreen.screens.map(ScreenMetrics.init)
-        let expected = DrawerPlacement.screen(under: NSEvent.mouseLocation, among: screens)
+        let expected = DrawerPlacement.screen(under: UpPoint(NSEvent.mouseLocation), among: screens)
             .map { DrawerGeometry.make(DrawerLayout(thickness: 380, edge: .right), on: $0) }
 
         drawer.show()
@@ -47,7 +47,7 @@ enum HistoryReport {
         let activatedUs = NSApp.isActive
         let claimedEscape = drawer.isEscapeClaimed
         let frame = drawer.windowFrame
-        let docked = expected.map { $0.windowRect == frame } ?? false
+        let docked = expected.map { $0.windowRect.cg == frame } ?? false
 
         drawer.hide()
         let released = await settle(until: .seconds(2)) { !drawer.isEscapeClaimed && !drawer.isOnScreen }
@@ -59,7 +59,7 @@ enum HistoryReport {
             "appeared": appeared,
             "dockedWhereAsked": docked,
             "frame": NSStringFromRect(frame),
-            "expectedFrame": expected.map { NSStringFromRect($0.windowRect) } ?? "none",
+            "expectedFrame": expected.map { NSStringFromRect($0.windowRect.cg) } ?? "none",
             // False is the passing value. True means the drawer stole focus from whatever the
             // reader was reading, which is the whole reason this report exists.
             "activatedTheApp": activatedUs,

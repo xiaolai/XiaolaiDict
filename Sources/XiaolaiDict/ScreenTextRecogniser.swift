@@ -24,6 +24,8 @@ enum RecognitionError: LocalizedError {
     /// No window under the pointer, so the capture could not be attributed to any app — and an
     /// unattributable region cannot be checked against the exclusion list.
     case unattributable
+    /// Screen Recording is off for XiaolaiDict, and asking produced no grant.
+    case screenRecordingDenied
 
     var errorDescription: String? {
         switch self {
@@ -31,11 +33,15 @@ enum RecognitionError: LocalizedError {
         // straight from a caller — `--read-point 1e100 0` passes a finite-number check.
         case .noDisplay(let point):
             "no display contains (\(String(format: "%.0f", point.x)), \(String(format: "%.0f", point.y)))"
-        case .displayNotCapturable:
-            "the screen is locked, or Screen Recording is off for XiaolaiDict"
+        // No longer "or Screen Recording is off": that is its own case now, checked before the
+        // capture, so this one means what it says.
+        case .displayNotCapturable: "the screen is locked"
         case .nothingUnderPointer: "no word under the pointer"
         case .excludedApp(let name): "XiaolaiDict does not look things up in \(name)"
         case .unattributable: "no window under the pointer"
+        case .screenRecordingDenied:
+            "XiaolaiDict needs Screen Recording to read words off the screen. Allow XiaolaiDict in "
+                + "\(PrivacySettings.screenRecordingLocation), then try again."
         }
     }
 }
@@ -60,7 +66,20 @@ final class ScreenTextRecogniser: Sendable {
     /// `excluding` is checked against the window's owner **before any pixel is captured**. The
     /// Accessibility path cannot vet an app that exposes no element, and that is exactly the case
     /// this path serves — so the exclusion has to be enforced here too, not only afterwards.
+    /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system` asks
+    /// CoreGraphics.
+    let access: ScreenRecordingAccess
+
+    init(access: ScreenRecordingAccess = .system) {
+        self.access = access
+    }
+
     func read(at point: CGPoint, excluding: Set<String> = []) async throws -> Recognition {
+        // Asked before anything is attempted. `SCShareableContent` needs this permission too, so
+        // without it every call below fails with a message about capture rather than about consent
+        // — which is exactly how a machine with Accessibility granted and Screen Recording not
+        // reported "no word under the pointer" and hid the real answer.
+        guard access.ensure() else { throw RecognitionError.screenRecordingDenied }
         let target = try await target(at: point)
         // An owner XiaolaiDict cannot name cannot be checked against the exclusion list, and a region it
         // cannot attribute is a region it must not read: a display-scoped capture could contain a
@@ -188,11 +207,20 @@ final class ScreenTextRecogniser: Sendable {
             && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
     }
 
-    /// The window and display list, cached briefly — fetching it costs ~200 ms, as much as the
-    /// capture and the recognition together, and caching it is what makes this path affordable.
+    /// The window and display list, cached briefly. Fetching it is the dominant cost of this whole
+    /// path and — unlike the capture and the recognition — it never gets cheaper with use.
+    ///
+    /// Measured on this machine, three passes: every window, on screen or not, is 402 windows and
+    /// 436-566 ms. **On-screen only is 37 windows and 60-85 ms** — six to seven times faster, every
+    /// time, warm or cold. The comment this replaces estimated 200 ms, which was optimistic by half.
+    ///
+    /// On-screen only is not merely faster, it is the right question. The candidate window is found
+    /// by `CGWindowListCopyWindowInfo` with `.optionOnScreenOnly` and is then looked up here by id,
+    /// so a window this call adds beyond that list can never match. A window under the pointer is
+    /// on screen by definition.
     private func shareableContent(refresh: Bool = false) async throws -> SCShareableContent {
         if !refresh, let cached = cache.current(newerThan: .seconds(3)) { return cached }
-        let fresh = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        let fresh = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         cache.store(fresh)
         return fresh
     }

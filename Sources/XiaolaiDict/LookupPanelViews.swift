@@ -83,12 +83,12 @@ private struct OutcomeView: View {
     /// The encounter a tap on `senseKey` amounts to. Nil when there is nothing to key it to — an
     /// entry with no id, or a dictionary whose senses carry none.
     static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
-        guard let entryID = entry.entryID,
+        guard let entryKey = entry.entryKey,
               let sense = entry.senses.first(where: { $0.key == senseKey }),
               sense.keyKind != SenseKeyKind.none
         else { return nil }
         return SenseEncounter(
-            dictionary: entry.dictionary, entryID: entryID, senseKey: sense.key,
+            dictionary: entry.dictionary, entryID: entryKey, senseKey: sense.key,
             senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
             senseHash: sense.textHash, gloss: sense.label, chosenBy: .reader, chosenAt: .now)
     }

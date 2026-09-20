@@ -77,7 +77,7 @@ enum PanelContent {
 protocol LookupPanelPresenting: AnyObject {
     func newRequest() -> PanelTicket
     func isCurrent(_ ticket: PanelTicket) -> Bool
-    func show(_ content: PanelContent, near pointer: NSPoint, for ticket: PanelTicket)
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket)
     /// Replaces a shown panel's content without moving or resizing it. A panel the reader has
     /// dragged somewhere must not jump when its entry arrives.
     func update(_ content: PanelContent, for ticket: PanelTicket)
@@ -105,7 +105,7 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     private let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
-    private var lastPointer: NSPoint = .zero
+    private var lastPointer = UpPoint(.zero)
 
     init(hotkeys: HotkeyCenter = .shared) {
         escape = EscapeKey(hotkeys: hotkeys)
@@ -128,7 +128,7 @@ final class LookupPanelController: LookupPanelPresenting {
 
     func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
 
-    func show(_ content: PanelContent, near pointer: NSPoint, for ticket: PanelTicket) {
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) {
         guard isCurrent(ticket) else { return }
         lastPointer = pointer
         let panel = self.panel ?? makePanel()
@@ -136,8 +136,8 @@ final class LookupPanelController: LookupPanelPresenting {
         let kind = content.kind
         panel.contentView = NSHostingView(rootView: view(content))
         panel.contentMinSize = kind.minimumSize
-        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize)
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
+        let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize))
         let size = chosenSizes[kind] ?? kind.defaultSize
         panel.setFrame(PanelPlacement.frame(for: size, near: pointer, within: visible), display: true)
         shownKind = kind
@@ -240,7 +240,10 @@ final class EscapeKey {
 enum PanelPlacement {
     static let margin: CGFloat = 8
 
-    static func frame(for size: NSSize, near pointer: NSPoint, within visible: NSRect) -> NSRect {
+    /// Answers a bare `NSRect` because its one caller hands it straight to `NSPanel.setFrame`.
+    static func frame(for size: NSSize, near pointer: UpPoint, within visible: UpRect) -> NSRect {
+        let pointer = pointer.cg
+        let visible = visible.cg
         let size = NSSize(
             width: max(0, min(size.width, visible.width - 2 * margin)),
             height: max(0, min(size.height, visible.height - 2 * margin)))

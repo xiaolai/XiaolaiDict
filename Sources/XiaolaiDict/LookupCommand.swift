@@ -65,7 +65,10 @@ enum LookupCommand {
     @MainActor
     static func readPoint(x: Double, y: Double) async -> CommandStatus {
         let started = ContinuousClock.now
-        let reader = HoverReader(policy: { .shipped })
+        // A generous deadline on purpose: this is the instrument, not the product. The shipped 5 s
+        // protects a reader from a wedged capture; here it only hid how long the path actually
+        // takes, reporting "deadline exceeded" for a read that was seconds from finishing.
+        let reader = HoverReader(policy: { .shipped }, captureDeadline: .seconds(30))
         let outcome = await reader.read(
             at: CGPoint(x: x, y: y), modifiersHeld: [HoverPolicy.shipped.modifier],
             pointerStillFor: .seconds(1))

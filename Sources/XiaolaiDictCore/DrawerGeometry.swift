@@ -5,16 +5,17 @@ import Foundation
 /// drawer has to survive — a notch, a second display, one narrower than the drawer — can be written
 /// down in a test instead of waiting for the hardware that exhibits it.
 ///
-/// **These are AppKit screen coordinates: origin bottom-left, y up.** `CaptureGeometry` in this same
-/// module works in the opposite convention, because the Accessibility and CGEvent space is
-/// top-left. The two must not be mixed, and neither converts for the other.
+/// The rects are `UpRect`, so they carry their convention in the type: origin bottom-left, y up.
+/// `CaptureGeometry` in this same module works in the opposite one, because the Accessibility and
+/// CGEvent space is top-left. The two must not be mixed, and neither converts for the other — which
+/// is now the compiler's job rather than this comment's.
 public struct ScreenMetrics: Equatable, Sendable {
     /// The whole display.
-    public let frame: CGRect
+    public let frame: UpRect
     /// The display minus the menu bar — including the notch, where there is one — and the Dock.
-    public let visibleFrame: CGRect
+    public let visibleFrame: UpRect
 
-    public init(frame: CGRect, visibleFrame: CGRect) {
+    public init(frame: UpRect, visibleFrame: UpRect) {
         self.frame = frame
         self.visibleFrame = visibleFrame
     }
@@ -68,7 +69,7 @@ public struct DrawerLayout: Equatable, Sendable {
 /// and the reason this type exposes a parked offset at all.
 public struct DrawerGeometry: Equatable, Sendable {
     /// The panel's frame, in AppKit screen coordinates.
-    public let windowRect: CGRect
+    public let windowRect: UpRect
     /// The drawer itself, in points.
     public let contentSize: CGSize
     /// The drawer's top-left corner within the window, in SwiftUI coordinates — y down.
@@ -100,7 +101,8 @@ public struct DrawerGeometry: Equatable, Sendable {
     }
 
     public static func make(_ layout: DrawerLayout, on screen: ScreenMetrics) -> DrawerGeometry {
-        let visible = screen.visibleFrame
+        // Unwrapped once here; the arithmetic below is all within the one space.
+        let visible = screen.visibleFrame.cg
 
         // An inset may not eat the drawer, and a negative one is a caller's slip rather than a
         // request to overhang the screen.
@@ -138,7 +140,7 @@ public struct DrawerGeometry: Equatable, Sendable {
         // visible frame — but a caller can hand over metrics where it does, and a null frame would
         // reach AppKit as a window nobody can see rather than as an error.
         let grown = content.insetBy(dx: -DrawerLayout.shadowMargin, dy: -DrawerLayout.shadowMargin)
-        let clipped = grown.intersection(screen.frame)
+        let clipped = grown.intersection(screen.frame.cg)
         let window = clipped.isNull ? content : clipped
 
         let originX = content.minX - window.minX
@@ -154,7 +156,7 @@ public struct DrawerGeometry: Equatable, Sendable {
         }
 
         return DrawerGeometry(
-            windowRect: window,
+            windowRect: UpRect(window),
             contentSize: content.size,
             contentOrigin: CGPoint(x: originX, y: originY),
             hiddenOffset: hidden,
@@ -171,7 +173,7 @@ public enum DrawerPlacement {
     ///
     /// Resolved once, when the drawer opens, and held until it closes: re-resolving on every
     /// relayout would make the drawer hop displays because the pointer moved.
-    public static func screen(under pointer: CGPoint, among screens: [ScreenMetrics]) -> ScreenMetrics? {
+    public static func screen(under pointer: UpPoint, among screens: [ScreenMetrics]) -> ScreenMetrics? {
         screens.first { $0.frame.contains(pointer) } ?? screens.first
     }
 
