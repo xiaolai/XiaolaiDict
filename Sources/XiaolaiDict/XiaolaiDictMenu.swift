@@ -19,7 +19,11 @@ struct XiaolaiDictMenu: View {
         Button("Change Shortcut…") { app.changeShortcut() }
 
         // Read from the watcher, not from the setting: if starting it failed, the menu says off.
-        Toggle("Hover Lookup    hold \u{2325}", isOn: Binding(
+        // The modifier is named from the policy, never as a literal. "hold ⌥" was hardcoded here
+        // while `HoverModifier` had four cases, which was correct only for as long as the reader
+        // could not change it — and a menu naming the wrong key is worse than naming none, since
+        // the reader holds it and nothing happens.
+        Toggle("Hover Lookup    hold \(app.hoverPolicy.modifier.symbol)", isOn: Binding(
             get: { app.hoverIsWatching }, set: { _ in app.toggleHover() }))
 
         // The pause switch (A5). It was specified, modelled, given three lengths and a label —

@@ -24,7 +24,7 @@ final class HoverReader {
 
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "hover")
     private let recogniser = ScreenTextRecogniser()
-    private let policy: () -> HoverPolicy
+    private let policy: @MainActor () -> HoverPolicy
     private let pause: @MainActor () -> HoverPause
 
     /// Held while a capture is running. A second hover is refused rather than started.
@@ -52,7 +52,7 @@ final class HoverReader {
     private var lastLookedUp: String?
 
     init(
-        policy: @escaping () -> HoverPolicy = { .shipped },
+        policy: @escaping @MainActor () -> HoverPolicy = { .shipped },
         pause: @escaping @MainActor () -> HoverPause = { HoverPause() },
         captureDeadline: Duration = HoverReader.captureDeadline
     ) {

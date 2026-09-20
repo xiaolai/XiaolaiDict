@@ -28,6 +28,43 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// written for did not exist. The model was complete and unreachable.
     private(set) var hoverPause = HoverPause()
 
+    /// The reader's hover policy, **held in memory and observed**, with the store behind it.
+    ///
+    /// Read rather than loaded on each use on purpose: `HoverWatcher` asks for the policy on every
+    /// pointer change to get `settleMilliseconds`, so decoding it there would put a JSON decode on
+    /// the mouse-move path. One decode at launch, one write when the reader changes something.
+    @ObservationIgnored private let hoverPolicyStore: HoverPolicyStore
+    private(set) var hoverPolicy: HoverPolicy
+
+    /// **`init()` must exist, and must be written out.** `@NSApplicationDelegateAdaptor`
+    /// instantiates the delegate through the Objective-C runtime, which looks for `init` and finds
+    /// `NSObject`'s — not a Swift designated initializer that happens to have a default argument
+    /// for every parameter. Declaring `init(defaults:)` alone therefore suppressed the inherited
+    /// `init()` and every launch died with "Use of unimplemented initializer", while the unit
+    /// suite stayed green because tests call the initializer Swift can see.
+    override convenience init() { self.init(defaults: .standard) }
+
+    /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
+    /// anything about the reader's settings means writing to the real ones — a test suite that
+    /// changes the machine it runs on, which is the same objection the project makes to driving
+    /// the GUI on the building Mac.
+    init(defaults: UserDefaults) {
+        // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
+        // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
+        // this property exists to avoid.
+        let store = HoverPolicyStore(defaults: defaults)
+        hoverPolicyStore = store
+        hoverPolicy = store.load()
+        super.init()
+    }
+
+    /// Changing it saves it and takes effect immediately — the watcher reads this property, so
+    /// there is nothing to restart and no second copy to keep in step.
+    func setHoverPolicy(_ policy: HoverPolicy) {
+        hoverPolicy = policy
+        hoverPolicyStore.save(policy)
+    }
+
     /// What the pause control says. Observed, so pausing redraws the menu without being told to.
     var hoverPauseLabel: String { hoverPause.label(at: .now) }
     var hoverIsPaused: Bool { hoverPause.isPaused(at: .now) }
@@ -38,7 +75,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private func makeHover() -> HoverWatcher {
         // `self` is read at decision time, not captured by value — a copy taken here would be the
         // same never-changing pause this replaces.
-        HoverWatcher(pause: { [weak self] in self?.hoverPause ?? HoverPause() })
+        HoverWatcher(
+            policy: { [weak self] in self?.hoverPolicy ?? .shipped },
+            pause: { [weak self] in self?.hoverPause ?? HoverPause() })
     }
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.

@@ -24,7 +24,7 @@ final class HoverWatcher {
     /// hand the reader the gate's inputs, and "it was handed them" is exactly what went untested
     /// while the pause was dropped on the floor.
     let reader: HoverReader
-    private let policy: () -> HoverPolicy
+    private let policy: @MainActor () -> HoverPolicy
     private let screens: () -> [ScreenMetrics]
 
     private var monitors: [Any] = []
@@ -39,7 +39,7 @@ final class HoverWatcher {
     var onWord: (@MainActor (Selection, UpPoint) -> Void)?
 
     init(
-        policy: @escaping () -> HoverPolicy = { .shipped },
+        policy: @escaping @MainActor () -> HoverPolicy = { .shipped },
         pause: @escaping @MainActor () -> HoverPause = { HoverPause() },
         screens: @escaping () -> [ScreenMetrics] = { NSScreen.screens.map(ScreenMetrics.init) }
     ) {

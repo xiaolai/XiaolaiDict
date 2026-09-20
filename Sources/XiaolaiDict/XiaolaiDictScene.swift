@@ -96,10 +96,37 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(frame.origin, size: frame.size)
         }
 
-        Settings {
-            SettingsView(appearance: delegate.appearance)
-                .xiaolaiDictAppearance(delegate.appearance)
-        }
+        Settings { XiaolaiDictSettings(app: delegate) }
+    }
+}
+
+/// XiaolaiDict's settings window, as a **view** rather than as scene-body code.
+///
+/// **Reading observable state in an `App`'s `body` invalidates every scene in it.** Built inline
+/// in the `Settings` scene, this read `delegate.dictionaries` and `delegate.hoverPolicy` — and
+/// `dictionaries` arrives asynchronously, when the XPC probe answers. That one late write
+/// re-evaluated `XiaolaiDictScene.body`, and the shortcut recorder's `Window` went with it: the menu item
+/// was clicked, no window ever appeared, and the end-to-end recorder assertions failed while the
+/// drawer and this window passed. Verified against `main`, which has none of these reads and
+/// passes.
+///
+/// It is the same rule `Scale.swift` records for `xiaolaiDictAppearance`: observation belongs in a view's
+/// body. A view invalidates itself; an `App` invalidates the whole window list.
+struct XiaolaiDictSettings: View {
+    let app: XiaolaiDictApp
+
+    var body: some View {
+        // Everything the window can change is handed in, because `XiaolaiDictUI` reaches neither the XPC
+        // dictionary service nor the preferences the app owns — and the hover policy has to be
+        // written through `setHoverPolicy`, so the watcher and the store cannot drift apart.
+        SettingsView(
+            appearance: app.appearance,
+            hover: Binding(get: { app.hoverPolicy }, set: { app.setHoverPolicy($0) }),
+            dictionary: DictionaryChoice(
+                available: app.dictionaries,
+                chosen: app.chosenDictionary,
+                choose: { app.choosePrimaryDictionary($0) }))
+        .xiaolaiDictAppearance(app.appearance)
     }
 }
 
