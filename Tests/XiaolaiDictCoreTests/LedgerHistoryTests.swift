@@ -20,12 +20,22 @@ struct LedgerHistoryTests {
         _ lemma: String, at when: Date, result: LookupResult = .found,
         context: String = "A sentence.", range: NSRange? = NSRange(location: 2, length: 8),
         place: ReadingPlace = ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"),
-        quality: CaptureQuality? = nil
+        quality: CaptureQuality? = nil, partOfSpeech: String? = nil
     ) -> LookupRecord {
         LookupRecord(
             surface: lemma, lemma: lemma, context: context, lemmaBasis: .tagger, language: "en",
-            contextRange: range, place: place, lookedUpAt: when, result: result,
-            answeredBy: .dictionaryService, quality: quality)
+            contextRange: range, partOfSpeech: partOfSpeech, place: place, lookedUpAt: when,
+            result: result, answeredBy: .dictionaryService, quality: quality)
+    }
+
+    private func encounter(
+        gloss: String?, ordinal: Int?, outOf: Int, chosenBy: SenseChoice?
+    ) -> SenseEncounter {
+        SenseEncounter(
+            dictionary: DictionaryIdentity(name: "NOAD"), entryID: "headword:temper",
+            senseKey: "m_en_us1294316.004", senseKeyKind: .publisher,
+            sensePath: ordinal.map { SensePath(block: 1, ordinal: $0) }, entrySenseCount: outOf,
+            senseHash: nil, gloss: gloss, chosenBy: chosenBy, chosenAt: nil)
     }
 
     private func withLedger(_ body: (Ledger) throws -> Void) throws {
@@ -189,6 +199,108 @@ struct LedgerHistoryTests {
             _ = try ledger.record(record("hold", at: noon, quality: nil))
             let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
             #expect(entry.quality == nil)
+        }
+    }
+
+    // MARK: - How the word was being used
+
+    /// Recorded from schema 5 on, because the selector already knew it. Every card before that had
+    /// to guess from the sentence.
+    @Test func aRecordedPartOfSpeechComesBackAsRecorded() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record(
+                "hold", at: noon, context: "Hold the line.", partOfSpeech: "verb"))
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.partOfSpeech == "verb")
+        }
+    }
+
+    /// The rows written before schema 5 — most of them, for a long time. A hole on the card would
+    /// be a worse answer than one read off the reader's own sentence.
+    @Test func aRowWithoutOneIsTaggedFromTheSentence() throws {
+        try withLedger { ledger in
+            // A range that actually covers the word: the capture's own answer to where it is, and
+            // what the tagger is handed. The default fixture range points elsewhere in the
+            // sentence, which is a fine way to test that the range is honoured and a poor way to
+            // test the tagging.
+            _ = try ledger.record(record(
+                "hold", at: noon, context: "The ship's hold was full.",
+                range: ("The ship's hold was full." as NSString).range(of: "hold"),
+                partOfSpeech: nil))
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.partOfSpeech == "noun")
+        }
+    }
+
+    /// What was stored wins over what could be guessed: the selector saw the entry, the tagger
+    /// only sees the grammar.
+    @Test func whatWasStoredIsNotOverriddenByTheGuess() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record(
+                "hold", at: noon, context: "The ship's hold was full.",
+                range: ("The ship's hold was full." as NSString).range(of: "hold"),
+                partOfSpeech: "verb"))
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.partOfSpeech == "verb", "the stored answer was thrown away for a guess")
+        }
+    }
+
+    // MARK: - Which sense was met
+
+    @Test func theSenseTheReaderMetReachesTheCard() throws {
+        try withLedger { ledger in
+            let id = try ledger.record(record("temper", at: noon))
+            try ledger.record(
+                encounter(gloss: "a neutralizing force", ordinal: 4, outOf: 12, chosenBy: .reader),
+                for: id)
+
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let sense = try #require(entry.sense)
+            #expect(sense.dictionary == "NOAD")
+            #expect(sense.ordinal == 4)
+            #expect(sense.outOf == 12)
+            #expect(sense.gloss == "a neutralizing force")
+            #expect(sense.isConfirmed)
+        }
+    }
+
+    /// The gloss travels with the card so the reader can ask for it. It is the *view* that keeps it
+    /// hidden until they do — carrying it is not showing it.
+    @Test func aModelsGuessArrivesMarkedAsAGuess() throws {
+        try withLedger { ledger in
+            let id = try ledger.record(record("temper", at: noon))
+            try ledger.record(
+                encounter(gloss: "a guess", ordinal: 2, outOf: 12, chosenBy: .model), for: id)
+
+            let sense = try #require(
+                try ledger.recentLookups(since: .distantPast, limit: 50).first?.sense)
+            #expect(sense.isConfirmed == false)
+            #expect(sense.canReveal)
+        }
+    }
+
+    /// A lookup that never resolved a sense — the ordinary case for an entry-level encounter, and
+    /// for every row written before schema 4.
+    @Test func aLookupWithNoSenseHasNoSenseNote() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record("temper", at: noon))
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.sense == nil)
+        }
+    }
+
+    /// Only the primary dictionary is recorded, so there should be at most one encounter per
+    /// lookup. "Should be" is not a thing to build a join on: two must still yield one card.
+    @Test func aLookupWithTwoEncountersIsStillOneCard() throws {
+        try withLedger { ledger in
+            let id = try ledger.record(record("temper", at: noon))
+            try ledger.record(encounter(gloss: "first", ordinal: 1, outOf: 12, chosenBy: .model), for: id)
+            try ledger.record(encounter(gloss: "second", ordinal: 2, outOf: 12, chosenBy: .reader), for: id)
+
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            #expect(found.count == 1, "the join multiplied the card")
+            // The later one: a reader's tap arrives after the model's guess and replaces it.
+            #expect(found.first?.sense?.gloss == "second")
         }
     }
 }

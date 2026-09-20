@@ -35,8 +35,63 @@ struct LedgerSchema4Tests {
             quality: .accessibility(.accessibilityTextMarkers, context: .complete))
     }
 
-    @Test func theSchemaIsFour() {
-        #expect(Ledger.schemaVersion == 4)
+    /// The part of speech has to survive `history()`, not only `recentLookups()`.
+    ///
+    /// It did not: the read was added and the column was never put in the projection, so
+    /// `row.optionalText(20)` indexed past the end of the row. SQLite answers an out-of-range read
+    /// with NULL, which cannot be told from a column that is genuinely empty — so every record
+    /// came back with a nil part of speech and every test still passed. `Row.inRange` now traps on
+    /// the index; this is what would have caught the projection.
+    @Test func aRecordedPartOfSpeechSurvivesHistoryToo() throws {
+        let ledger = try Ledger(path: ":memory:")
+        _ = try ledger.record(LookupRecord(
+            surface: "hold", lemma: "hold", context: "Hold the line.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, partOfSpeech: "verb", place: ReadingPlace(),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+
+        let record = try #require(try ledger.history(of: "hold").first)
+        #expect(record.partOfSpeech == "verb")
+    }
+
+    /// Two senses whose key strings match under **different kinds** are two senses.
+    ///
+    /// `StudyItem` is keyed by kind as well as key, and `newlyMetSenses` has to agree. A first fix
+    /// here used `SELECT DISTINCT`, which dedupes the projected row rather than the identity — and
+    /// since the kind is not projected, it silently collapsed exactly this pair into one.
+    @Test func twoSensesSharingAKeyUnderDifferentKindsAreBothNew() throws {
+        let ledger = try Ledger(path: ":memory:")
+        _ = try ledger.record(record(lemma: "hold", context: "An earlier lookup."))
+        let latest = try ledger.record(record(lemma: "hold", context: "The newest lookup."))
+        for kind in [SenseKeyKind.publisher, .position] {
+            try ledger.record(SenseEncounter(
+                dictionary: noad, entryID: "e", senseKey: "shared", senseKeyKind: kind,
+                sensePath: nil, entrySenseCount: 2, senseHash: nil, gloss: "g",
+                chosenBy: .reader, chosenAt: now), for: latest)
+        }
+        #expect(try ledger.newlyMetSenses(limit: 10).count == 2)
+    }
+
+    /// One sense met twice in one lookup — the selector's guess, then the reader's tap, which the
+    /// ledger keeps apart on purpose — is still one newly met sense. Different glosses and a nil
+    /// gloss must not make it two, which is what deduping the row rather than the identity did.
+    @Test func oneSenseMetTwiceInALookupIsStillOneNewSense() throws {
+        let ledger = try Ledger(path: ":memory:")
+        _ = try ledger.record(record(lemma: "hold", context: "An earlier lookup."))
+        let latest = try ledger.record(record(lemma: "hold", context: "The newest lookup."))
+        for (gloss, by) in [(nil, SenseChoice.model), ("the reader's own", .reader)] {
+            try ledger.record(SenseEncounter(
+                dictionary: noad, entryID: "e", senseKey: "k", senseKeyKind: .publisher,
+                sensePath: nil, entrySenseCount: 2, senseHash: nil, gloss: gloss,
+                chosenBy: by, chosenAt: now), for: latest)
+        }
+        let met = try ledger.newlyMetSenses(limit: 10)
+        #expect(met.count == 1)
+        // The newest encounter wins, so the reader's tap is what the strip reports.
+        #expect(met.first?.gloss == "the reader's own")
+    }
+
+    @Test func theSchemaIsFive() {
+        #expect(Ledger.schemaVersion == 5)
     }
 
     /// Everything captured now survives the boundary, and reads back as it went in.
@@ -280,12 +335,16 @@ struct LedgerSchema4Tests {
         #expect(try ledger.encounters(ofLookup: lookup).count == 1)
     }
 
-    /// A file written by a newer XiaolaiDict is refused, not half-read.
-    @Test func aSchema5LedgerIsRefused() throws {
+    /// A file written by a newer XiaolaiDict is refused, not half-read. Pinned one past the current
+    /// schema rather than to a literal, so this keeps testing the refusal and not the number.
+    @Test func aLedgerFromALaterXiaolaiDictIsRefused() throws {
         let path = temporaryPath()
         defer { removeDatabase(at: path) }
-        try SQLiteFile(path: path).execute("PRAGMA user_version = 5")
-        #expect(throws: LedgerError.newerSchema(found: 5, supported: 4)) { _ = try Ledger(path: path) }
+        let later = Ledger.schemaVersion + 1
+        try SQLiteFile(path: path).execute("PRAGMA user_version = \(later)")
+        #expect(throws: LedgerError.newerSchema(found: later, supported: Ledger.schemaVersion)) {
+            _ = try Ledger(path: path)
+        }
     }
 
     /// A sense encounter must point at a lookup that exists, or the ledger would hold senses

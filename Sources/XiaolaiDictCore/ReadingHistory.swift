@@ -28,12 +28,18 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     /// nothing surrounded the word, so the text cannot say whether it is a sentence the reader read
     /// or the word echoed back into the column.
     public let quality: CaptureQuality?
+    /// How the word was being used, where that is known. Recorded at lookup time from schema 5 on,
+    /// and tagged from the reader's own sentence for the rows written before that.
+    public let partOfSpeech: String?
+    /// Which sense the reader met — **never its wording, unless they ask for it**. See `SenseNote`.
+    public let sense: SenseNote?
 
     /// No default, deliberately. Every caller states how good the capture was, because the failure
     /// this replaced was a caller quietly not carrying it.
     public init(
         id: Int, lemma: String, surface: String, sentence: String, sentenceRange: NSRange?,
-        place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?
+        place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?,
+        partOfSpeech: String? = nil, sense: SenseNote? = nil
     ) {
         self.id = id
         self.lemma = lemma
@@ -44,6 +50,15 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.at = at
         self.result = result
         self.quality = quality
+        self.partOfSpeech = partOfSpeech
+        self.sense = sense
+    }
+
+    /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a
+    /// lemma's words in a sentence is lemma work, and it lives where the word boundaries and the
+    /// tagger already do.
+    public var markedRanges: [NSRange] {
+        Lemmatizer.parts(of: lemma, surface: surface, in: sentence, at: sentenceRange)
     }
 
     /// What the card may say about `sentence`.
@@ -67,6 +82,63 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
             let dictionaryForm = lemma.localizedLowercase
             return echo == word || echo == dictionaryForm ? .none : .sentence
         }
+    }
+}
+
+/// Which sense of the word the reader met, and — only when they ask for it — what it said.
+///
+/// **The gloss is carried but never shown by default.** C2 says a review surface that answers the
+/// question destroys the retrieval that makes reviewing worth anything, and that rule is intact:
+/// revealing a meaning is a deliberate act the reader performs, which is a different thing from
+/// reading it by accident on the way past. What the card shows unasked is *which* sense, not what
+/// it means.
+public struct SenseNote: Equatable, Sendable {
+    /// The dictionary that issued it. A sense id means nothing outside the dictionary that issued
+    /// it, so naming it is not decoration.
+    public let dictionary: String
+    /// Which part-of-speech block the sense sits in. Carried because **ordinals restart per
+    /// block**: without it, sense 1 of the noun block and sense 1 of the verb block are both "1",
+    /// and a card showing `1/12` for each of them claims they are the same sense.
+    public let block: Int?
+    /// Numbering restarts per block, so this is a label rather than a position — which is why it
+    /// is shown beside `outOf`, and never alone.
+    public let ordinal: Int?
+    public let outOf: Int
+    /// The sense's own words, as the ledger snapshotted them. **Local only.**
+    public let gloss: String?
+    /// A sense the selector proposed is a hypothesis; one the reader tapped is a fact. They must
+    /// never merge, and a card draws them differently — which is the only reason this is here.
+    public let chosenBy: SenseChoice?
+
+    public init(
+        dictionary: String, block: Int? = nil, ordinal: Int?, outOf: Int, gloss: String?,
+        chosenBy: SenseChoice?
+    ) {
+        self.dictionary = dictionary
+        self.block = block
+        self.ordinal = ordinal
+        self.outOf = outOf
+        self.gloss = gloss
+        self.chosenBy = chosenBy
+    }
+
+    /// Whether the card may state this as fact. A sense the model proposed is drawn as the
+    /// hypothesis it is; the reader's own tap, and an entry with only one sense, are facts.
+    public var isConfirmed: Bool { chosenBy == .reader || chosenBy == .onlySense }
+
+    /// How a card names the sense. `4/12` where the entry has one block, `2·4/12` where the
+    /// ordinal restarts and the bare number would be ambiguous between blocks.
+    public var label: String {
+        guard let ordinal else { return "\(outOf) senses" }
+        guard let block, block > 1 else { return "\(ordinal)/\(outOf)" }
+        return "\(block)·\(ordinal)/\(outOf)"
+    }
+
+    /// Nothing to reveal is not the same as a meaning withheld, and the card must not offer to
+    /// show something it does not have.
+    public var canReveal: Bool {
+        guard let gloss else { return false }
+        return !gloss.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

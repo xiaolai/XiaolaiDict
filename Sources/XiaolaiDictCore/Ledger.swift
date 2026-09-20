@@ -31,6 +31,10 @@ public struct LookupRecord: Equatable, Sendable {
     /// The language of the word. A lemma alone collides across languages: *die*, *chat*, *pain*,
     /// *gift*. Nil for rows written before schema 4.
     public let language: String?
+    /// How the word was being used, as the selector understood it at lookup time. Computed on
+    /// every lookup and, before schema 5, thrown away — which left every history card guessing
+    /// from the sentence. Nil for rows written before it, and for lookups where nothing committed.
+    public let partOfSpeech: String?
     /// Where `surface` sits in `context`, UTF-16. Required by a card that marks or blanks the word
     /// in the reader's own sentence, and unrecoverable later: "The surprise was no surprise" has
     /// two. Nil when the capture did not know, or for rows written before schema 4.
@@ -52,7 +56,8 @@ public struct LookupRecord: Equatable, Sendable {
 
     public init(
         surface: String, lemma: String, context: String, lemmaBasis: Lemma.Basis? = nil,
-        language: String? = nil, contextRange: NSRange? = nil, place: ReadingPlace = ReadingPlace(),
+        language: String? = nil, contextRange: NSRange? = nil, partOfSpeech: String? = nil,
+        place: ReadingPlace = ReadingPlace(),
         lookedUpAt: Date, result: LookupResult, answeredBy: AnswerSource?, quality: CaptureQuality?,
         legacySourceURL: String? = nil
     ) {
@@ -62,6 +67,7 @@ public struct LookupRecord: Equatable, Sendable {
         self.lemmaBasis = lemmaBasis
         self.language = language
         self.contextRange = contextRange
+        self.partOfSpeech = partOfSpeech
         self.place = place
         self.lookedUpAt = lookedUpAt
         self.result = result
@@ -111,7 +117,7 @@ public enum LedgerError: Error, Equatable {
 ///
 /// Not thread-safe: own one from a single actor.
 public final class Ledger {
-    public static let schemaVersion = 4
+    public static let schemaVersion = 5
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -165,8 +171,8 @@ public final class Ledger {
                                  result, answered_by, capture_source, capture_confidence, context_quality,
                                  lemma_basis, language, context_range_location, context_range_length,
                                  source_name, source_document, source_page, source_title, source_title_raw,
-                                 source_precision)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 source_precision, part_of_speech)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [
                 .text(record.surface), .text(record.lemma), .text(record.context),
@@ -181,6 +187,7 @@ public final class Ledger {
                 .optionalText(record.place.name), .optionalText(record.place.document),
                 .optionalText(record.place.page), .optionalText(record.place.title),
                 .optionalText(record.place.rawTitle), .text(record.place.precision.rawValue),
+                .optionalText(record.partOfSpeech),
             ]
         ) { _ in }
         return Int(sqlite3_last_insert_rowid(db))
@@ -249,10 +256,20 @@ public final class Ledger {
     /// should know this*, while an earlier gloss answers the question and destroys the retrieval
     /// (`feature-ledger-ux.md` C2). Nothing in this type carries a definition.
     public func priorEncounters(of lemma: String, before: Date, language: String? = nil) throws -> PriorEncounters {
+        // Both reads in one transaction. Apart, a write landing between them returns occasions from
+        // one snapshot and met senses from another — a strip that says "3rd lookup" beside a sense
+        // it claims is new.
+        try execute("BEGIN")
+        var committed = false
+        defer { if !committed { try? execute("ROLLBACK") } }
+
         var occasions: [PriorEncounter] = []
         try run(
             """
-            SELECT looked_up_at, source_name, source_app, source_title, source_precision
+            -- `source_precision` is deliberately not read: `ReadingPlace.precision` derives it
+            -- from the fields it describes, and a stored copy that could drift from them is the
+            -- cached second truth this project's rules ban. The column stays, for old rows.
+            SELECT looked_up_at, source_name, source_app, source_title
             FROM lookups WHERE lemma = ?1 AND looked_up_at < ?2 AND (?3 IS NULL OR language = ?3)
             ORDER BY looked_up_at DESC
             """,
@@ -278,6 +295,8 @@ public final class Ledger {
                 dictionary: try row.text(0), entryID: try row.text(1),
                 senseKey: row.optionalText(2), senseKeyKind: try row.senseKeyKind(3)))
         }
+        try execute("COMMIT")
+        committed = true
         return PriorEncounters(occasions: occasions, met: met)
     }
 
@@ -299,20 +318,46 @@ public final class Ledger {
                        ROW_NUMBER() OVER (
                            PARTITION BY lemma, language ORDER BY looked_up_at DESC, id DESC) AS rank
                 FROM lookups)
-            SELECT l.lemma, s.dictionary_id, s.entry_id, s.sense_key, s.gloss, l.looked_up_at
-            FROM newest l JOIN sense_encounters s ON s.lookup_id = l.id
-            WHERE l.rank = 1
+            -- One row per sense **identity**, newest encounter first. A lookup can hold several
+            -- encounters for one sense — the selector's guess and then the reader's tap — and both
+            -- would otherwise come back as two newly met senses, eating two places of the limit.
+            --
+            -- `SELECT DISTINCT` was tried here and was worse than the problem: it dedupes the
+            -- projected row, so two encounters of one sense with different glosses still returned
+            -- twice, and two genuinely different senses whose key strings match under different
+            -- kinds collapsed into one — because the kind is not in the projection. Identity is
+            -- four columns and the partition has to name all four.
+            , met AS (
+                SELECT l.lemma, s.dictionary_id, s.entry_id, s.sense_key, s.sense_key_kind,
+                       s.gloss, l.looked_up_at, l.id AS lookup_id, s.id AS encounter_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY s.dictionary_id, s.entry_id, s.sense_key, s.sense_key_kind
+                           ORDER BY s.id DESC) AS seen
+                FROM newest l JOIN sense_encounters s ON s.lookup_id = l.id
+                WHERE l.rank = 1)
+            SELECT m.lemma, m.dictionary_id, m.entry_id, m.sense_key, m.gloss, m.looked_up_at
+            FROM met m
+            JOIN newest l ON l.id = m.lookup_id
+            JOIN sense_encounters s ON s.id = m.encounter_id
+            WHERE m.seen = 1
               AND EXISTS (
                 SELECT 1 FROM lookups p
                 WHERE p.lemma = l.lemma AND p.language IS NOT DISTINCT FROM l.language
-                  AND p.looked_up_at < l.looked_up_at)
+                  -- By (time, id), the order `newest` itself ranks on. Comparing the timestamp
+                  -- alone leaves two lookups sharing one timestamp neither newer nor earlier than
+                  -- each other, so the lemma has no earlier lookup and reports nothing newly met.
+                  AND (p.looked_up_at, p.id) < (l.looked_up_at, l.id))
               AND NOT EXISTS (
                 SELECT 1 FROM sense_encounters q JOIN lookups p ON q.lookup_id = p.id
                 WHERE p.lemma = l.lemma AND p.language IS NOT DISTINCT FROM l.language
-                  AND p.looked_up_at < l.looked_up_at
+                  AND (p.looked_up_at, p.id) < (l.looked_up_at, l.id)
                   AND q.dictionary_id = s.dictionary_id AND q.entry_id = s.entry_id
-                  AND q.sense_key IS NOT DISTINCT FROM s.sense_key)
-            ORDER BY l.looked_up_at DESC, s.id DESC LIMIT ?
+                  AND q.sense_key IS NOT DISTINCT FROM s.sense_key
+                  -- A `StudyItem` is keyed by its kind as well as its key, so two senses whose key
+                  -- strings match under different kinds are two senses. Omitting this reported the
+                  -- second of them as already met.
+                  AND q.sense_key_kind = s.sense_key_kind)
+            ORDER BY m.looked_up_at DESC, m.encounter_id DESC LIMIT ?
             """,
             bind: [.integer(limit)]
         ) { row in
@@ -357,7 +402,8 @@ public final class Ledger {
             SELECT surface, lemma, context, source_app, source_url, looked_up_at,
                    result, answered_by, capture_source, capture_confidence, context_quality,
                    lemma_basis, language, context_range_location, context_range_length,
-                   source_name, source_document, source_page, source_title, source_title_raw
+                   source_name, source_document, source_page, source_title, source_title_raw,
+                   part_of_speech
             -- Numbered, not bare: a bare `?` is parameter 1, so `?1` beside it would alias the
             -- lemma rather than the language.
             FROM lookups WHERE lemma = ?1 AND (?2 IS NULL OR language = ?2)
@@ -370,6 +416,7 @@ public final class Ledger {
             records.append(LookupRecord(
                 surface: try row.text(0), lemma: try row.text(1), context: try row.text(2),
                 lemmaBasis: try row.lemmaBasis(11), language: row.optionalText(12), contextRange: range,
+                partOfSpeech: row.optionalText(20),
                 place: ReadingPlace(
                     bundleID: row.optionalText(3), name: row.optionalText(15),
                     document: row.optionalText(16), page: row.optionalText(17),
@@ -383,10 +430,11 @@ public final class Ledger {
 
     /// What the history drawer reads: lookups since `since`, newest first, at most `limit` of them.
     ///
-    /// It joins nothing that could supply a definition. `ReadingEntry` has no field to put one in,
-    /// and this query has no column to fill it from — the C2 rule against answering the question in
-    /// a review surface is enforced twice, in the type and in the SQL, rather than by the caller
-    /// remembering not to show something it was handed.
+    /// **It does join the gloss, and that changed on 2026-09-20.** This comment used to say the
+    /// query had no column to supply a definition, which was the second half of C2's enforcement —
+    /// and it stayed here, false, after `se.gloss` was added below. The rule is intact but it is
+    /// held elsewhere now: the card carries the gloss and shows it only when the reader asks, and
+    /// `HiddenGlossTests` fails if a card's height ever depends on the length of one.
     ///
     /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
     /// selection, and telling that from a real gap is the reason the row was recorded at all.
@@ -394,40 +442,67 @@ public final class Ledger {
     /// It does carry `capture_quality`, which is not a definition but a warning label: it is what
     /// lets a card tell a sentence from the word echoed back into the context column.
     public func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
-        // A limit of none asks for nothing. Passing a non-positive limit to SQLite means *no
-        // limit*, so the guard is what stops `limit: 0` returning a ledger years deep.
+        // A limit of none asks for nothing. SQLite reads a *negative* LIMIT as no limit at all,
+        // so this guard is what stops `limit: -1` returning a ledger years deep. (`LIMIT 0`
+        // genuinely returns nothing; an earlier version of this comment claimed otherwise.)
         guard limit > 0 else { return [] }
 
         var entries: [ReadingEntry] = []
+        // One tagger for the batch: building an `NLTagger` is the expensive part, and every row
+        // written before schema 5 needs one.
+        let tagging = Lemmatizer.Pass()
         try run(
             """
-            SELECT id, surface, lemma, context, looked_up_at, result,
-                   context_range_location, context_range_length,
-                   source_app, source_name, source_document, source_page, source_title, source_title_raw,
+            SELECT l.id, l.surface, l.lemma, l.context, l.looked_up_at, l.result,
+                   l.context_range_location, l.context_range_length,
+                   l.source_app, l.source_name, l.source_document, l.source_page,
+                   l.source_title, l.source_title_raw,
                    -- How good the capture was. A card cannot honour "a degraded capture never
                    -- renders as confidently as a clean one" without it, and `context` alone cannot
                    -- be read for it: the selection itself is stored there when nothing surrounded
                    -- the word, which is indistinguishable from a one-word sentence.
-                   capture_source, capture_confidence, context_quality
-            FROM lookups WHERE looked_up_at >= ?1
+                   l.capture_source, l.capture_confidence, l.context_quality,
+                   l.part_of_speech,
+                   -- Which sense was met, and what it said. The gloss comes along because the
+                   -- reader can ask for it; it is not shown unless they do, which is what keeps
+                   -- C2 intact. What the card shows unasked is *which* sense, never its wording.
+                   se.dictionary_name, se.sense_block, se.sense_ordinal, se.entry_sense_count,
+                   se.gloss, se.chosen_by
+            FROM lookups l
+            -- By id rather than by lookup_id, so a lookup with more than one encounter contributes
+            -- one row and not several. Only the primary dictionary is recorded, so there should be
+            -- at most one — "should be" is not a thing to build a join on.
+            LEFT JOIN sense_encounters se ON se.id = (
+                SELECT id FROM sense_encounters WHERE lookup_id = l.id ORDER BY id DESC LIMIT 1
+            )
+            WHERE l.looked_up_at >= ?1
             -- The row id breaks a tie, so two lookups sharing a timestamp keep their order between
             -- one reading of the drawer and the next.
-            ORDER BY looked_up_at DESC, id DESC
+            ORDER BY l.looked_up_at DESC, l.id DESC
             LIMIT ?2
             """,
             bind: [.real(since.timeIntervalSince1970), .integer(limit)]
         ) { row in
             let range: NSRange? = sqlite3_column_type(row.statement, 6) == SQLITE_NULL
                 ? nil : NSRange(location: row.integer(6), length: row.integer(7))
+            let surface = try row.text(1)
+            let context = try row.text(3)
+            // Stored where schema 5 recorded it; tagged from the reader's own sentence where it
+            // did not. `??` rather than a branch, because "recorded" and "derived" are the same
+            // answer to the card — the difference is in how much evidence stands behind it, and
+            // that is not a difference a part-of-speech label asks anyone to act on.
+            let partOfSpeech = row.optionalText(17)
+                ?? tagging.partOfSpeech(of: surface, in: context, at: range)
             entries.append(ReadingEntry(
-                id: row.integer(0), lemma: try row.text(2), surface: try row.text(1),
-                sentence: try row.text(3), sentenceRange: range,
+                id: row.integer(0), lemma: try row.text(2), surface: surface,
+                sentence: context, sentenceRange: range,
                 place: ReadingPlace(
                     bundleID: row.optionalText(8), name: row.optionalText(9),
                     document: row.optionalText(10), page: row.optionalText(11),
                     title: row.optionalText(12), rawTitle: row.optionalText(13)),
                 at: Date(timeIntervalSince1970: row.real(4)),
-                result: try row.result(5), quality: try row.quality(14)))
+                result: try row.result(5), quality: try row.quality(14),
+                partOfSpeech: partOfSpeech, sense: try row.senseNote(18)))
         }
         return entries
     }
@@ -525,6 +600,13 @@ public final class Ledger {
                         ON sense_encounters (dictionary_id, entry_id, sense_key);
                     """)
             }
+            if found < 5 {
+                // Computed at every lookup since the selector existed, and thrown away here. Rows
+                // written before this get NULL, and the history drawer tags them from the reader's
+                // own sentence rather than showing a hole — a guess that says so, never a stored
+                // value that cannot be told from a recorded one.
+                try execute("ALTER TABLE lookups ADD COLUMN part_of_speech TEXT;")
+            }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")
         } catch {
@@ -608,8 +690,21 @@ public final class Ledger {
     struct Row {
         let statement: OpaquePointer
 
+        /// An index past the end of the projection is a **mistake in the query, not a NULL**.
+        /// SQLite answers out-of-range reads with NULL, which cannot be told from a column that is
+        /// genuinely empty — that is how `history()` came to read a `part_of_speech` its SELECT
+        /// never projected, return nil for every row, and pass every test. Loud here, once, rather
+        /// than a wrong answer everywhere.
+        private func inRange(_ column: Int32) -> Int32 {
+            let count = sqlite3_column_count(statement)
+            precondition(
+                column >= 0 && column < count,
+                "column \(column) is outside this query's \(count) columns")
+            return column
+        }
+
         func optionalText(_ column: Int32) -> String? {
-            guard let bytes = sqlite3_column_text(statement, column) else { return nil }
+            guard let bytes = sqlite3_column_text(statement, inRange(column)) else { return nil }
             // By the stored length, so an embedded NUL does not end the string early.
             let count = Int(sqlite3_column_bytes(statement, column))
             return String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
@@ -620,8 +715,13 @@ public final class Ledger {
             return text
         }
 
-        func integer(_ column: Int32) -> Int { Int(sqlite3_column_int64(statement, column)) }
-        func real(_ column: Int32) -> Double { sqlite3_column_double(statement, column) }
+        func integer(_ column: Int32) -> Int { Int(sqlite3_column_int64(statement, inRange(column))) }
+        func real(_ column: Int32) -> Double { sqlite3_column_double(statement, inRange(column)) }
+        /// Out-of-range here reads as SQLITE_NULL, which is how a projection short by one column
+        /// turns into "this row has no capture quality" instead of into an error.
+        func isNull(_ column: Int32) -> Bool {
+            sqlite3_column_type(statement, inRange(column)) == SQLITE_NULL
+        }
 
         func result(_ column: Int32) throws -> LookupResult {
             let raw = try text(column)
@@ -653,10 +753,27 @@ public final class Ledger {
             return source
         }
 
+        /// Six columns: dictionary, block, ordinal, count, gloss, chosen_by. A lookup with no sense
+        /// encounter joins to all-NULL, which is "no sense recorded" rather than a broken row —
+        /// the ordinary case for an entry-level lookup, and for every row written before schema 4.
+        func senseNote(_ first: Int32) throws -> SenseNote? {
+            guard let dictionary = optionalText(first) else { return nil }
+            func optionalInteger(_ column: Int32) -> Int? {
+                isNull(column) ? nil : integer(column)
+            }
+            return SenseNote(
+                dictionary: dictionary,
+                block: optionalInteger(first + 1),
+                ordinal: optionalInteger(first + 2),
+                outOf: integer(first + 3),
+                gloss: optionalText(first + 4),
+                chosenBy: try senseChoice(first + 5))
+        }
+
         /// Three columns: source, confidence, context. All NULL is a schema-1 row; anything else
         /// must be a complete, valid quality.
         func quality(_ first: Int32) throws -> CaptureQuality? {
-            let isNull = (first..<first + 3).map { sqlite3_column_type(statement, $0) == SQLITE_NULL }
+            let isNull = (first..<first + 3).map { self.isNull($0) }
             if isNull.allSatisfy({ $0 }) { return nil }
             guard !isNull.contains(true),
                   let source = CaptureQuality.Source(rawValue: try text(first)),

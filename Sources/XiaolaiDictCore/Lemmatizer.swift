@@ -4,7 +4,7 @@ import NaturalLanguage
 /// A dictionary form, and what it rests on.
 public struct Lemma: Equatable, Sendable {
     /// From most to least certain. A phrase takes its least certain word's basis.
-    public enum Basis: Int, Comparable, Sendable {
+    public enum Basis: Int, Comparable, CaseIterable, Sendable {
         /// NLTagger's lemma.
         case tagger
         /// An irregular form NLTagger leaves unchanged — "saw", "found" — resolved from the grammar
@@ -34,8 +34,6 @@ public struct Lemma: Equatable, Sendable {
             guard let match = Basis.allCases.first(where: { $0.name == name }) else { return nil }
             self = match
         }
-
-        static var allCases: [Basis] { [.tagger, .inferred, .ambiguous, .surface] }
     }
 
     /// Lowercased, NFC, single-spaced: one spelling per ledger entry.
@@ -57,17 +55,40 @@ public enum Lemmatizer {
     /// Reported in the dictionaries' own vocabulary — "noun", "verb", "adjective", "adverb" — so it
     /// can be compared against a part-of-speech block's `d:pos` without a mapping table.
     public static func partOfSpeech(of word: String, in sentence: String?, at range: NSRange?) -> String? {
-        guard let sentence, !sentence.isEmpty else { return nil }
-        let tagger = NLTagger(tagSchemes: [.lexicalClass])
-        tagger.string = sentence
-        let target: Range<String.Index>
-        if let range, let converted = Range(range, in: sentence) {
-            target = converted
-        } else if let found = sentence.range(of: word) {
-            target = found
-        } else {
-            return nil
+        Pass().partOfSpeech(of: word, in: sentence, at: range)
+    }
+
+    /// One pass over many words, reusing the tagger they all need.
+    ///
+    /// `NLTagger` is expensive to build and the drawer asks for a part of speech once per card, so
+    /// the one-shot call above is the wrong shape for a batch. Same answers, one tagger: the
+    /// convenience form is this with a pass of its own.
+    public struct Pass {
+        private let tagger = NLTagger(tagSchemes: [.lexicalClass])
+
+        public init() {}
+
+        public func partOfSpeech(of word: String, in sentence: String?, at range: NSRange?) -> String? {
+            Lemmatizer.partOfSpeech(of: word, in: sentence, at: range, using: tagger)
         }
+    }
+
+    private static func partOfSpeech(
+        of word: String, in sentence: String?, at range: NSRange?, using tagger: NLTagger
+    ) -> String? {
+        // A word with no sentence around it is still a word. The ledger stores the selection
+        // itself as the context where nothing surrounded it, and those rows still want an answer.
+        let text = (sentence?.isEmpty == false ? sentence : nil) ?? word
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let sentence = text
+        tagger.string = sentence
+        // `occurrence(of:in:at:)`, not a second search written here. This had its own weaker
+        // rules: it took any supplied range without checking it held the word, and fell back to a
+        // bare substring search — so `art` matched inside `Start` and a repeated word silently took
+        // its first occurrence, in both cases tagging a different word than the one looked up.
+        // `occurrence` checks word boundaries, and answers nil where the sentence is ambiguous,
+        // which is what this function's own comment already promised.
+        guard let target = occurrence(of: word, in: sentence, at: range) else { return nil }
         let tag = tagger.tag(at: target.lowerBound, unit: .word, scheme: .lexicalClass).0
         switch tag {
         case .noun, .personalName, .placeName, .organizationName: return "noun"
@@ -144,6 +165,70 @@ public enum Lemmatizer {
             from = sentence.index(after: span.lowerBound)
         }
         return found.count == 1 ? found[0] : nil
+    }
+
+    /// **Every part of the looked-up term inside the sentence it was read in** — plural, because a
+    /// lemma can be a phrase.
+    ///
+    /// Two problems, one answer. The captured range covers the surface as it was found, which is
+    /// not always a whole word: *temper* captured in "Justice tempered with mercy" is a range over
+    /// `temper`, and emphasising exactly that draws **temper**ed — the word broken in half, the
+    /// shape the eye is worst at reading. And a phrasal verb is not contiguous: *take over* read in
+    /// "He took it over" is two pieces with a word between them, which one range can only either
+    /// clip or swallow the pronoun to cover.
+    ///
+    /// Word boundaries come from `NLTokenizer`, the same source `occurrence(of:in:at:)` uses. A
+    /// walk outward through `Character.isLetter` was written first and was wrong for Chinese: Han
+    /// characters are all letters and the script has no spaces, so it grew from 屹立 across
+    /// 他屹立在山顶上 and stopped only at the full stop.
+    ///
+    /// The rest of a phrase is matched on the token's own text, not on its lemma. A phrasal verb's
+    /// particle — *over*, *up*, *off* — does not inflect, so this is right for the cases that exist
+    /// and costs no tagger. Where it fails it marks the anchor and stops: a partly marked phrase is
+    /// honest, a wrongly marked one is not.
+    ///
+    /// **The case it gives up on**, named so nobody has to rediscover it: a lemma whose later words
+    /// inflect. Lemma *prepare mind* read as "prepared minds" marks `prepared` and leaves `minds`,
+    /// because `mind` and `minds` are different spellings. Lemmatising each candidate token would
+    /// catch it, at a tagger per card for a shape English phrasal verbs do not have.
+    public static func parts(
+        of lemma: String, surface: String, in sentence: String, at range: NSRange?
+    ) -> [NSRange] {
+        guard let range, let captured = Range(range, in: sentence) else { return [] }
+        let tokens = wordRanges(in: sentence)
+        guard let anchor = tokens.firstIndex(where: { $0.overlaps(captured) }) else {
+            // No word boundary to grow to — punctuation, or a script the tokenizer declined. The
+            // captured range is still the truth about what was looked up.
+            return [range]
+        }
+
+        var marked = [tokens[anchor]]
+        var searchFrom = anchor + 1
+        for part in words(of: lemma, or: surface).dropFirst() {
+            let window = tokens[searchFrom...].prefix(phraseLookahead)
+            guard let hit = window.firstIndex(where: {
+                sentence[$0].compare(part, options: .caseInsensitive) == .orderedSame
+            }) else { break }
+            marked.append(tokens[hit])
+            searchFrom = hit + 1
+        }
+        return marked.map { NSRange($0, in: sentence) }
+    }
+
+    /// How far past the anchor the rest of a phrase may sit. "He took the whole thing over" is
+    /// four; beyond that a matching word is more likely to be a different word that happens to
+    /// spell the same.
+    private static let phraseLookahead = 4
+
+    /// The words a looked-up term is made of. The lemma is the canonical form — *take over* — and
+    /// the surface is what was on screen, which for a selection may be the longer of the two.
+    static func words(of lemma: String, or surface: String) -> [String] {
+        let fromLemma = lemma.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard fromLemma.count > 1 else {
+            let fromSurface = surface.split(whereSeparator: \.isWhitespace).map(String.init)
+            return fromSurface.count > 1 ? fromSurface : fromLemma
+        }
+        return fromLemma
     }
 
     private static func wordRanges(in text: String) -> [Range<String.Index>] {

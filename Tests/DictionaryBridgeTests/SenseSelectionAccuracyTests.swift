@@ -154,11 +154,22 @@ struct SenseSelectionAccuracyTests {
         try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1b.txt", atomically: true, encoding: .utf8)
         #expect(score.right + score.wrong + score.abstained == Self.hardCases.count, "a case was not scored")
         // Pinned as measured, in the same spirit as rung 1's. It fixed *rein* — the case that
-        // prompted it — and turned *sanction* from a safe abstention into a confident error, at a
-        // margin of 0.0401. So it buys accuracy with abstentions, not with correctness.
+        // prompted it — and it no longer costs *sanction*.
+        //
+        // **Re-measured 2026-09-20, and the trade got better.** `Lemmatizer.partOfSpeech` used to
+        // run its own word search: any supplied range taken on trust, and a bare substring
+        // fallback that matched inside longer words and silently took the first of a repeated
+        // word. It now asks `occurrence(of:in:at:)`, which checks word boundaries and answers nil
+        // where the sentence is ambiguous — which is what this function's own contract already
+        // promised. *sanction* tags as `[?]` under it and abstains, where the loose match had
+        // given it a part of speech confident enough to be wrong with.
+        //
+        // Confidently wrong 2 → 1 (33% → 17%) at unchanged accuracy. The abstention it buys that
+        // back with is the cheap half of the trade: this project's rule is that a wrong mark is
+        // worse than no mark.
         #expect(score.right == 3, "top-1 accuracy moved")
-        #expect(score.wrong == 2, "the confidently-wrong rate moved")
-        #expect(score.abstained == 1, "the abstention rate moved")
+        #expect(score.wrong == 1, "the confidently-wrong rate moved")
+        #expect(score.abstained == 2, "the abstention rate moved")
     }
 
     /// The D6 comparison itself, run rather than asserted in prose: a rung ships only if it gains

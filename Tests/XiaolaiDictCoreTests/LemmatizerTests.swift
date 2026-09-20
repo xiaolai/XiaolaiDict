@@ -214,3 +214,170 @@ struct LemmatizerTests {
         #expect(Lemmatizer.lemma(of: "saw it", in: "I saw it coming.") == Lemma(text: "see it", basis: .inferred))
     }
 }
+
+/// How a word is being used in the sentence it was read in.
+///
+/// The same answers whether asked one at a time or in a pass — the pass exists only to reuse the
+/// tagger, and a pass that answered differently would be a second implementation wearing the
+/// first one's name.
+struct LemmatizerPartOfSpeechTests {
+    private let pass = Lemmatizer.Pass()
+
+    private func tag(_ word: String, in sentence: String) -> String? {
+        let one = Lemmatizer.partOfSpeech(of: word, in: sentence, at: nil)
+        let batched = pass.partOfSpeech(of: word, in: sentence, at: nil)
+        #expect(one == batched, "the pass and the one-shot disagree about \(word)")
+        return batched
+    }
+
+    /// The reason to tag the *sentence* rather than the word: "tempered" alone could be an
+    /// adjective, and only *Justice tempered with mercy* settles it.
+    @Test func theSentenceSettlesWhatTheWordIsDoing() {
+        #expect(tag("tempered", in: "Justice tempered with mercy.") == "verb")
+        #expect(tag("hold", in: "The ship's hold was full.") == "noun")
+        #expect(tag("hold", in: "Hold the line.") == "verb")
+    }
+
+    /// An older row's context is the selection itself, so there is no sentence to read. The word
+    /// on its own is less evidence and still an answer.
+    @Test func aWordWithNoSentenceIsStillTagged() {
+        #expect(tag("running", in: "running") != nil)
+    }
+
+    /// Only the four classes a dictionary blocks its senses by, in the dictionaries' own words so
+    /// they compare against `d:pos` without a mapping table. Everything else is nil: "determiner"
+    /// on a card would be noise, and a guessed part of speech rules out the right sense as
+    /// confidently as the wrong ones.
+    @Test func onlyTheClassesADictionaryUsesComeBack() {
+        #expect(tag("the", in: "the ship was full") == nil)
+        #expect(tag("7", in: "there were 7 of them") == nil)
+        #expect(Lemmatizer.partOfSpeech(of: "", in: "a sentence", at: nil) == nil)
+        #expect(Lemmatizer.partOfSpeech(of: "   ", in: "a sentence", at: nil) == nil)
+    }
+
+    /// The word as it was on screen is capitalised at the start of a sentence, and the stored
+    /// surface keeps that. It must still find itself.
+    @Test func capitalisationDoesNotHideTheWordFromTheTagger() {
+        #expect(tag("Justice", in: "Justice tempered with mercy.") == "noun")
+        #expect(tag("justice", in: "Justice tempered with mercy.") == "noun")
+    }
+
+    /// One pass covers a whole drawer's worth of cards, so it has to keep answering.
+    @Test func onePassAnswersForEveryCardInTheDrawer() {
+        for _ in 0..<5 {
+            #expect(pass.partOfSpeech(of: "hold", in: "The ship's hold was full.", at: nil) == "noun")
+        }
+    }
+}
+
+/// Which parts of a sentence are the looked-up term.
+///
+/// Against `Lemmatizer.parts` directly rather than through a `ReadingEntry`: this is string work,
+/// and building a whole ledger row with an id, a place and a capture quality to test it would say
+/// the test was about a card when it is about a phrase.
+struct LemmaPartsTests {
+    /// `anchor` is what the capture found on screen; `lemma` is the dictionary form, which for a
+    /// phrasal verb is the whole phrase even when only part of it was under the pointer.
+    private func marked(_ anchor: String, in sentence: String, lemma: String? = nil) -> [String] {
+        let found = (sentence as NSString).range(of: anchor)
+        let ranges = Lemmatizer.parts(
+            of: lemma ?? anchor, surface: anchor, in: sentence,
+            at: found.location == NSNotFound ? nil : found)
+        return ranges.map { (sentence as NSString).substring(with: $0) }
+    }
+
+    /// The defect this exists for: the captured range covers `temper`, and the card drew the word
+    /// broken in half.
+    @Test func anInflectedWordIsMarkedWhole() {
+        #expect(marked("temper", in: "Justice tempered with mercy.") == ["tempered"])
+        #expect(marked("hold", in: "The ship's holds were full.") == ["holds"])
+        #expect(marked("run", in: "She was running late.") == ["running"])
+    }
+
+    /// Growing backwards matters too: a captured range can start mid-word.
+    @Test func aRangeThatStartsInsideAWordGrowsBothWays() {
+        #expect(marked("emper", in: "Justice tempered with mercy.") == ["tempered"])
+    }
+
+    /// Where the word ends is the system's answer, not a rule invented here. English word
+    /// breaking keeps a possessive together and splits a hyphenated pair — both are what a reader
+    /// would do, and neither is something this code should be deciding on its own.
+    @Test func theWordEndsWhereTheSystemSaysItDoes() {
+        #expect(marked("ship", in: "The ship's hold was full.") == ["ship's"])
+        #expect(marked("known", in: "a well-known problem") == ["known"])
+    }
+
+    @Test func aWholeWordIsLeftAloneAndAMissingRangeMarksNothing() {
+        #expect(marked("hold", in: "The hold was full.") == ["hold"])
+        #expect(marked("absent", in: "No such word here.").isEmpty)
+    }
+
+    /// The word can sit at either end of the sentence without walking off it.
+    @Test func aWordAtTheEdgeOfTheSentenceDoesNotRunPastIt() {
+        #expect(marked("Hold", in: "Hold the line") == ["Hold"])
+        #expect(marked("line", in: "Hold the line") == ["line"])
+    }
+
+    /// Chinese has no letter boundaries of the kind this grows through — it must not swallow the
+    /// rest of the sentence.
+    @Test func aWordInAScriptWithoutInflectionIsLeftAsItIs() {
+        let sentence = "他屹立在山顶上。"
+        #expect(marked("屹立", in: sentence) == ["屹立"])
+    }
+
+    // MARK: - Phrases
+
+    /// The case one range cannot express: a phrasal verb split around its object. Marking the
+    /// span would swallow the pronoun; marking the anchor alone would say the lookup was *take*.
+    @Test func aPhrasalVerbIsMarkedInBothOfItsParts() {
+        // The anchor is what was on screen — "took" — and the lemma is the phrase it belongs to.
+        #expect(marked("took", in: "He took it over.", lemma: "take over") == ["took", "over"])
+        #expect(marked("put", in: "She put the meeting off.", lemma: "put off") == ["put", "off"])
+    }
+
+    /// The same phrase said together. Two ranges rather than one, which the card draws identically
+    /// — and which keeps the rule one rule instead of two.
+    @Test func aPhraseSaidTogetherIsStillMarkedPartByPart() {
+        #expect(marked("took", in: "He took over the company.", lemma: "take over")
+                == ["took", "over"])
+    }
+
+    /// Beyond a short window a matching word is more likely to be a different word that happens to
+    /// spell the same. The anchor is marked and the search stops — a partly marked phrase is
+    /// honest, a wrongly marked one is not.
+    @Test func aParticleTooFarAwayIsNotClaimed() {
+        #expect(marked("took", in: "He took the whole entire wretched thing over.", lemma: "take over")
+                == ["took"])
+    }
+
+    @Test func aParticleThatIsNotThereIsNotInvented() {
+        #expect(marked("took", in: "He took it.", lemma: "take over") == ["took"])
+    }
+
+    /// Where the lemma is one word but what was captured is several — a selection rather than a
+    /// hover — the surface is what the phrase is made of.
+    @Test func aMultiWordSelectionIsMarkedFromTheSurface() {
+        let sentence = "He took it over."
+        let parts = Lemmatizer.parts(
+            of: "take", surface: "took it over", in: sentence,
+            at: (sentence as NSString).range(of: "took"))
+        #expect(parts.map { (sentence as NSString).substring(with: $0) } == ["took", "it", "over"])
+    }
+
+    /// `ReadingEntry.markedRanges` is an adapter and nothing more. This is what says so.
+    @Test func aCardAsksTheLemmatizerRatherThanRepeatingIt() {
+        let sentence = "He took it over."
+        let entry = ReadingEntry(
+            id: 1, lemma: "take over", surface: "took", sentence: sentence,
+            sentenceRange: (sentence as NSString).range(of: "took"),
+            place: ReadingPlace(name: "TextEdit"), at: .distantPast, result: .found, quality: nil)
+        #expect(entry.markedRanges == Lemmatizer.parts(
+            of: "take over", surface: "took", in: sentence,
+            at: (sentence as NSString).range(of: "took")))
+    }
+
+    /// One word looked up in a sentence that happens to contain a phrase is still one word.
+    @Test func aSingleWordLookupDoesNotGrowIntoAPhrase() {
+        #expect(marked("took", in: "He took it over.", lemma: "take") == ["took"])
+    }
+}
