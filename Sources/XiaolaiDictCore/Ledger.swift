@@ -390,6 +390,9 @@ public final class Ledger {
     ///
     /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
     /// selection, and telling that from a real gap is the reason the row was recorded at all.
+    ///
+    /// It does carry `capture_quality`, which is not a definition but a warning label: it is what
+    /// lets a card tell a sentence from the word echoed back into the context column.
     public func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
         // A limit of none asks for nothing. Passing a non-positive limit to SQLite means *no
         // limit*, so the guard is what stops `limit: 0` returning a ledger years deep.
@@ -400,7 +403,12 @@ public final class Ledger {
             """
             SELECT id, surface, lemma, context, looked_up_at, result,
                    context_range_location, context_range_length,
-                   source_app, source_name, source_document, source_page, source_title, source_title_raw
+                   source_app, source_name, source_document, source_page, source_title, source_title_raw,
+                   -- How good the capture was. A card cannot honour "a degraded capture never
+                   -- renders as confidently as a clean one" without it, and `context` alone cannot
+                   -- be read for it: the selection itself is stored there when nothing surrounded
+                   -- the word, which is indistinguishable from a one-word sentence.
+                   capture_source, capture_confidence, context_quality
             FROM lookups WHERE looked_up_at >= ?1
             -- The row id breaks a tie, so two lookups sharing a timestamp keep their order between
             -- one reading of the drawer and the next.
@@ -419,7 +427,7 @@ public final class Ledger {
                     document: row.optionalText(10), page: row.optionalText(11),
                     title: row.optionalText(12), rawTitle: row.optionalText(13)),
                 at: Date(timeIntervalSince1970: row.real(4)),
-                result: try row.result(5)))
+                result: try row.result(5), quality: try row.quality(14)))
         }
         return entries
     }

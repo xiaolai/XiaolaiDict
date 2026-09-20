@@ -26,6 +26,7 @@ public final class SettingsModel {
 }
 
 public struct SettingsView: View {
+    @Environment(\.scale) private var scale
     @State private var model: SettingsModel
 
     public init(model: SettingsModel = SettingsModel()) {
@@ -34,20 +35,20 @@ public struct SettingsView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: scale.space.section) {
                 header
                 ForEach(model.report.states) { PermissionRow(state: $0) }
             }
-            .padding(20)
+            .padding(scale.space.pad)
         }
-        .frame(minWidth: 420, minHeight: 320)
+        .frame(minWidth: Token.Panel.settingsMinWidth, minHeight: Token.Panel.settingsMinHeight)
         // macOS posts nothing when a permission changes, and the reader grants them in another app
         // and comes back. Polling is the only way to notice, and `.task` stops it when the window
         // goes away — which the hand-rolled controller had to remember to do itself.
         .task {
             while !Task.isCancelled {
                 await model.refresh()
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: Token.Timing.permissionPoll)
             }
         }
     }
@@ -60,13 +61,13 @@ public struct SettingsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: scale.space.line) {
             Text("Permissions")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: scale.text.display, weight: .semibold))
             // A verdict, not a list to add up. Both granted is the common case and deserves a
             // sentence rather than two ticks the reader has to interpret.
             Text(verdict)
-                .font(.system(size: 11.5))
+                .font(.system(size: scale.text.body))
                 .foregroundStyle(model.hasAsked && !model.report.allGranted
                                  ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .fixedSize(horizontal: false, vertical: true)
@@ -75,31 +76,32 @@ public struct SettingsView: View {
 }
 
 private struct PermissionRow: View {
+    @Environment(\.scale) private var scale
     let state: PermissionState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space.stack) {
+            HStack(spacing: scale.space.inline) {
                 Image(systemName: state.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(state.isGranted ? AnyShapeStyle(.green) : AnyShapeStyle(.orange))
-                Text(state.permission.name).font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 6)
+                Text(state.permission.name).font(.system(size: scale.text.heading, weight: .medium))
+                Spacer(minLength: scale.space.inline)
                 Text(state.isGranted ? "On" : "Off")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: scale.text.body, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
             Text(state.permission.blocks)
-                .font(.system(size: 11))
+                .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if !state.isGranted {
                 Text(state.permission.location)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: scale.text.label))
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
-                HStack(spacing: 8) {
+                HStack(spacing: scale.space.stack) {
                     // Asks macOS to prompt. It will do so only the first time ever, which is why
                     // the button beside it exists and why the list is named above.
                     Button("Ask macOS…") { state.permission.request() }
@@ -110,11 +112,11 @@ private struct PermissionRow: View {
                 .controlSize(.small)
             }
         }
-        .padding(12)
+        .padding(scale.space.pad)
         .frame(maxWidth: .infinity, alignment: .leading)
         // Glass, which on macOS 26 and later is what a raised surface is made of — the rounded
         // rectangle with a hand-drawn hairline it replaces was the pre-26 idiom.
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous))
     }
 }
 

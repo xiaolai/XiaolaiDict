@@ -9,7 +9,7 @@ import SwiftUI
 /// `GeometryReader` round-trip. The arithmetic lives in `CardPile`, where it can be tested.
 struct CardStackLayout: Layout {
     var progress: Double
-    var pile = CardPile()
+    var pile: CardPile
 
     var animatableData: Double {
         get { progress }
@@ -58,7 +58,7 @@ public struct HistoryDrawerRootView: View {
                         x: geometry.contentOrigin.x + offset.width,
                         y: geometry.contentOrigin.y + offset.height)
                     .opacity(model.revealed ? 1 : 0)
-                    .animation(.easeOut(duration: 0.16), value: model.revealed)
+                    .animation(.easeOut(duration: Token.Motion.reveal), value: model.revealed)
             }
             .frame(
                 width: geometry.windowRect.size.width, height: geometry.windowRect.size.height,
@@ -70,20 +70,21 @@ public struct HistoryDrawerRootView: View {
 }
 
 struct HistoryDrawerSurface: View {
+    @Environment(\.scale) private var scale
     @Bindable var model: HistoryDrawerModel
     let geometry: DrawerGeometry
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().opacity(0.4)
+            Divider().opacity(Token.Opacity.divider)
             contents
         }
         // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
         // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
         // is glass, and it brings its own edge treatment, so the hand-drawn border is gone with it.
         .glassEffect(.regular, in: shape)
-        .shadow(color: .black.opacity(0.22), radius: 20)
+        .shadow(color: .black.opacity(Token.Opacity.drawerShadow), radius: scale.shadow.drawerRadius)
     }
 
     /// The corners touching the screen edge stay square, the way system panels do. Which pair that
@@ -115,24 +116,23 @@ struct HistoryDrawerSurface: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: scale.space.stack) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: scale.text.heading, weight: .medium))
                 .foregroundStyle(.tint)
             Text("Read recently")
-                .font(.system(size: 13, weight: .semibold))
-            Spacer(minLength: 8)
+                .font(.system(size: scale.text.heading, weight: .semibold))
+            Spacer(minLength: scale.space.stack)
             if model.isLoading {
                 ProgressView().controlSize(.small)
             } else if model.totalEntries > 0 {
                 Text("^[\(model.totalEntries) word](inflect: true) · ^[\(model.days.count) day](inflect: true)")
-                    .font(.system(size: 11))
+                    .font(.system(size: scale.text.body))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(scale.space.pad)
     }
 
     @ViewBuilder
@@ -147,7 +147,7 @@ struct HistoryDrawerSurface: View {
                 detail: "Words you look up appear here, grouped by the day you met them.")
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: scale.space.section) {
                     ForEach(model.days) { day in
                         if day.isPiled {
                             DayPileView(
@@ -160,8 +160,7 @@ struct HistoryDrawerSurface: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
+                .padding(scale.space.pad)
             }
             .scrollContentBackground(.hidden)
             .frame(maxHeight: .infinity)
@@ -169,28 +168,31 @@ struct HistoryDrawerSurface: View {
     }
 
     private func notice(icon: String, title: String, detail: String) -> some View {
-        VStack(spacing: 7) {
-            Image(systemName: icon).font(.system(size: 22)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 12.5, weight: .semibold))
+        VStack(spacing: scale.space.stack) {
+            Image(systemName: icon)
+                .font(.system(size: scale.text.icon))
+                .foregroundStyle(.secondary)
+            Text(title).font(.system(size: scale.text.strong, weight: .semibold))
             Text(detail)
-                .font(.system(size: 11))
+                .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(24)
+        .padding(scale.space.pad)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 /// Today is never piled — it is the part the reader came to read.
 struct TodayView: View {
+    @Environment(\.scale) private var scale
     let day: ReadingDay
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space.stack) {
             DayHeader(day: day, count: day.entries.count, isToday: true)
-            VStack(spacing: 8) {
+            VStack(spacing: scale.space.stack) {
                 ForEach(day.entries) { ReadingCardView(entry: $0) }
             }
         }
@@ -202,14 +204,29 @@ struct DayPileView: View {
     let day: ReadingDay
     @Binding var expanded: Bool
 
-    /// Piled, only the cards that show are built. Rendering fifty views to display three would cost
-    /// fifty measurements in `placeSubviews` for nothing visible.
-    private var rendered: [ReadingEntry] {
-        expanded ? day.entries : Array(day.entries.prefix(CardPile().maxVisibleDepth + 1))
+    @Environment(\.scale) private var scale
+    @State private var hovering = false
+
+    /// The same pile the layout places with, so the number of cards built and the number of
+    /// positions placed cannot drift apart.
+    private var pile: CardPile { CardPile(scale) }
+
+    private struct PiledCard: Identifiable {
+        let entry: ReadingEntry
+        let layer: CardLayer
+        var id: Int { entry.id }
+    }
+
+    /// Which cards to build and how each is drawn. `zip` truncates to the layers, so a closed pile
+    /// builds only the few that show — rendering fifty views to display three would cost fifty
+    /// measurements in `placeSubviews` for nothing visible.
+    private var cards: [PiledCard] {
+        zip(day.entries, pile.layers(count: day.entries.count, expanded: expanded))
+            .map { PiledCard(entry: $0, layer: $1) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: scale.space.stack) {
             Button(action: toggle) {
                 DayHeader(
                     day: day, count: day.entries.count, isToday: false,
@@ -217,53 +234,68 @@ struct DayPileView: View {
             }
             .buttonStyle(.plain)
 
-            CardStackLayout(progress: expanded ? 1 : 0) {
+            CardStackLayout(progress: expanded ? 1 : 0, pile: pile) {
                 // Reversed so the deepest card is drawn first and the newest sits on top.
-                ForEach(Array(rendered.enumerated()).reversed(), id: \.element.id) { position, entry in
-                    ReadingCardView(entry: entry, contentOpacity: (expanded || position == 0) ? 1 : 0)
-                        .transition(.opacity)
+                ForEach(cards.reversed()) { card in
+                    ReadingCardView(entry: card.entry, layer: card.layer)
                 }
             }
             // Piled, the whole pile is one target. Fanned out, clicks belong to the cards.
-            .overlay {
-                if !expanded {
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { toggle() }
-                }
-            }
+            .overlay { if !expanded { pileButton } }
+            // A closed pile is one object, so it answers the pointer as one. The overlay swallows
+            // the cards' own hover, so without this the pile was perfectly clickable and completely
+            // inert under the cursor.
+            .scaleEffect(hovering && !expanded ? Token.Motion.lift : 1, anchor: .top)
+            .animation(.easeOut(duration: Token.Motion.hover), value: hovering)
         }
     }
 
+    /// A `Button`, never an `onTapGesture`: a bare gesture is reachable by the mouse and by nothing
+    /// else, so the pile was invisible to VoiceOver and to the keyboard while looking clickable.
+    private var pileButton: some View {
+        Button(action: toggle) {
+            Rectangle().fill(.clear).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(Text("^[Show all \(day.entries.count) word](inflect: true)"))
+    }
+
     private func toggle() {
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { expanded.toggle() }
+        // The pointer is about to be over a fanned list rather than a pile, and the lift belongs to
+        // the pile. Left set, it would scale the list the next time the pile closed.
+        hovering = false
+        withAnimation(.spring(
+            response: Token.Motion.fanResponse,
+            dampingFraction: Token.Motion.fanDamping)) { expanded.toggle() }
     }
 }
 
 private struct DayHeader: View {
+    @Environment(\.scale) private var scale
     let day: ReadingDay
     let count: Int
     let isToday: Bool
     var trailing: String?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: scale.space.inline) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: scale.text.body, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("\(count)")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: scale.text.small, weight: .medium))
                 .monospacedDigit()
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(Capsule().fill(
-                    isToday ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.08)))
+                .padding(.horizontal, scale.space.inline)
+                .padding(.vertical, scale.space.tight)
+                .background(Capsule().fill(isToday
+                    ? Color.accentColor.opacity(Token.Opacity.countToday)
+                    : Color.primary.opacity(Token.Opacity.count)))
                 .foregroundStyle(isToday ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-            Spacer(minLength: 4)
+            Spacer(minLength: scale.space.inline)
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: scale.text.label, weight: .medium))
                     .foregroundStyle(.tint)
             }
         }
@@ -288,92 +320,117 @@ private struct DayHeader: View {
 /// that keeps a gloss off `PriorEncounter`. `ReadingEntry` has nowhere to put one, so this is
 /// enforced by the type rather than by the view remembering.
 struct ReadingCardView: View {
+    @Environment(\.scale) private var scale
     let entry: ReadingEntry
-    /// 0 renders a blank plate. Buried cards show no content, the way Notification Center does it:
-    /// it stops text reading through from behind, and a fifty-card pile only ever draws one card.
-    var contentOpacity: Double = 1
+    /// Buried cards are drawn as a bare plate and nothing else — see `CardLayer`.
+    var layer: CardLayer = .front
+
+    @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 10, style: .continuous) }
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: scale.radius.card, style: .continuous)
+    }
 
     var body: some View {
-        HStack(spacing: 11) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(entry.lemma)
-                        .font(.system(size: 12.5, weight: .semibold))
-                    if entry.result != .found {
-                        // A miss is recorded on purpose, and shown as one. It is usually a typo or
-                        // a stray selection, and telling that from a real gap is the point.
-                        Text("not found")
-                            .font(.system(size: 9.5, weight: .medium))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                            .foregroundStyle(.secondary)
+        details
+            // The content fades rather than leaving the hierarchy, so a buried card still measures
+            // its real height and the fan does not jump when the pile opens.
+            .opacity(layer.showsContent ? 1 : 0)
+            .padding(scale.space.pad)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Opaque, and deliberately not another material: the drawer around it is already
+            // glass, and layering glass inside glass muddies both.
+            .background(shape.fill(CardSurface.fill(
+                for: scheme, hovering: hovering && layer.showsContent)))
+            // The whole edge carries the word's colour — `strokeBorder`, never `stroke`, so all of
+            // it lands inside the card. A stroke centres on its path and would hang half its width
+            // over the edge: measured at x=85–90 against a fill that began at 91.
+            .overlay(shape.strokeBorder(
+                CardSurface.border(for: entry, layer: layer, in: scheme),
+                lineWidth: Token.Stroke.hairline))
+            // Grouped first, so the card casts one shadow rather than the plate and the border
+            // each casting their own.
+            .compositingGroup()
+            .shadow(
+                color: .black.opacity(Token.Opacity.cardShadow),
+                radius: scale.shadow.cardRadius, y: scale.shadow.cardOffset)
+            .contentShape(shape)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: Token.Motion.hover), value: hovering)
+            .accessibilityElement(children: .combine)
+            // A buried card is the same lookup as one the reader will see when the pile opens.
+            // Read out twice, it would be two words rather than one shown two ways.
+            .accessibilityHidden(!layer.showsContent)
+    }
+
+    private var details: some View {
+        // Baseline-aligned: centred, the time floated against the middle of a three-line card
+        // instead of sitting on the word's own line.
+        HStack(alignment: .firstTextBaseline, spacing: scale.space.column) {
+            // Two groups, not three stacked lines. The word and the sentence belong together — the
+            // word is *in* the sentence — and where it was read is a different kind of fact. Given
+            // one gap they read as a single block, which is what `Space.line` was doing here: that
+            // token is for lines inside one piece of text, and these are three pieces.
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                VStack(alignment: .leading, spacing: scale.space.inline) {
+                    HStack(spacing: scale.space.inline) {
+                        Text(entry.lemma)
+                            .font(.system(size: scale.text.strong, weight: .semibold))
+                        if entry.result != .found { missBadge }
                     }
-                }
-                if !entry.sentence.isEmpty {
-                    Text(sentence)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Only where there is one. The ledger stores the selection itself when nothing
+                    // surrounded the word, and printing that under the word is the same word twice
+                    // with the second copy marked up as though it were evidence.
+                    if entry.cue != .none {
+                        Text(sentence)
+                            .font(.system(size: scale.text.body))
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(scale.text.leading)
+                            .lineLimit(Token.Limit.wrapLines)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 if let where_ = place {
                     Text(where_)
-                        .font(.system(size: 10))
+                        .font(.system(size: scale.text.small))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
             }
 
-            Spacer(minLength: 6)
+            Spacer(minLength: scale.space.inline)
 
             Text(entry.at.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 10))
+                .font(.system(size: scale.text.small))
                 .monospacedDigit()
                 .foregroundStyle(.tertiary)
         }
-        .opacity(contentOpacity)
-        .padding(11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // A plain tinted surface, deliberately not another material: the drawer around it is
-        // already glass, and layering glass inside glass muddies both.
-        .background(shape.fill(Color.primary.opacity(hovering ? 0.12 : 0.06)))
-        .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-        // The word's colour lives on the card's own leading edge, following the corner radius,
-        // rather than on a separate bar floating inside it.
-        .overlay(LeadingEdge(cornerRadius: 10).stroke(accent, style: .init(lineWidth: 2.5, lineCap: .round)))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 
-    /// The word's own colour, and the same one every time the drawer opens.
-    ///
-    /// Derived from the lemma with a fixed hash rather than `Hasher`, whose seed changes per
-    /// process — that would give each word a new colour on every launch, which reads as a bug.
-    /// A miss keeps its grey: the colour is for telling words apart, not for decorating a failure.
-    private var accent: Color {
-        guard entry.result == .found else { return .secondary.opacity(0.5) }
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in entry.lemma.lowercased().utf8 {
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return Color(hue: Double(hash % 360) / 360, saturation: 0.62, brightness: 0.82)
+    /// A miss is recorded on purpose, and shown as one. It is usually a typo or a stray selection,
+    /// and telling that from a real gap is the point.
+    private var missBadge: some View {
+        Text("not found")
+            .font(.system(size: scale.text.micro, weight: .medium))
+            .padding(.horizontal, scale.space.inline)
+            .padding(.vertical, scale.space.tight)
+            .background(Capsule().fill(Color.secondary.opacity(Token.Opacity.missBadge)))
+            .foregroundStyle(.secondary)
     }
 
     /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
-    /// is rather than as a line of prose.
+    /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
+    /// an ellipsis saying so rather than an ending the reader never read.
     private var sentence: AttributedString {
         var text = AttributedString(entry.sentence)
-        guard let range = entry.sentenceRange,
-              let swiftRange = Range(range, in: entry.sentence),
-              let marked = Range(swiftRange, in: text)
-        else { return text }
-        text[marked].font = .system(size: 11, weight: .semibold)
-        text[marked].foregroundColor = .primary
+        if let range = entry.sentenceRange,
+           let swiftRange = Range(range, in: entry.sentence),
+           let marked = Range(swiftRange, in: text) {
+            text[marked].font = .system(size: scale.text.body, weight: .semibold)
+            text[marked].foregroundColor = .primary
+        }
+        if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }
         return text
     }
 
@@ -386,28 +443,6 @@ struct ReadingCardView: View {
 }
 
 
-/// The leading side of a rounded rectangle: down the left edge and around both corners it meets.
-///
-/// A `Shape` rather than a masked full border, so the colour stops exactly where the straight edge
-/// ends and the corner turns — a gradient fade would blur the one thing the edge is for.
-struct LeadingEdge: Shape {
-    var cornerRadius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let radius = min(cornerRadius, min(rect.width, rect.height) / 2)
-        path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-        path.addArc(
-            center: CGPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius,
-            startAngle: .degrees(-90), endAngle: .degrees(180), clockwise: true)
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
-        path.addArc(
-            center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius,
-            startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
-        return path
-    }
-}
-
 // MARK: - Previews
 
 // Sample data, so the drawer can be looked at and changed in Xcode's canvas without launching
@@ -416,30 +451,43 @@ struct LeadingEdge: Shape {
 #if DEBUG
 private extension ReadingEntry {
     /// One card's worth, with the word marked in its sentence the way a real one arrives.
+    ///
+    /// `context` is not decoration here: a sample that always passes `.complete` would make every
+    /// preview card look like the best case, which is the one case that never needed checking.
     static func sample(
         _ lemma: String, _ sentence: String, place: String = "Safari",
-        result: LookupResult = .found, minutesAgo: Int = 0
+        result: LookupResult = .found, context: CaptureQuality.Context = .complete,
+        minutesAgo: Int = 0, id: Int
     ) -> ReadingEntry {
         let range = (sentence as NSString).range(of: lemma)
         return ReadingEntry(
-            id: abs(lemma.hashValue), lemma: lemma, surface: lemma, sentence: sentence,
+            id: id, lemma: lemma, surface: lemma, sentence: sentence,
             sentenceRange: range.location == NSNotFound ? nil : range,
             place: ReadingPlace(name: place, title: place == "Safari" ? "A page" : nil),
-            at: Date().addingTimeInterval(TimeInterval(-60 * minutesAgo)), result: result)
+            at: Date().addingTimeInterval(TimeInterval(-60 * minutesAgo)), result: result,
+            quality: .accessibility(.accessibilityTextRange, context: context))
     }
 }
 
 private let sampleDays: [ReadingDay] = [
     ReadingDay(id: "2026-09-20", date: .now, label: .today, entries: [
-        .sample("ephemeral", "The ephemeral beauty of morning frost.", minutesAgo: 4),
-        .sample("hold", "The ship's hold was full.", place: "Ghostty", minutesAgo: 30),
-        .sample("qqqq", "qqqq", place: "Ghostty", result: .notFound, minutesAgo: 44),
+        .sample("ephemeral", "The ephemeral beauty of morning frost.", minutesAgo: 4, id: 1),
+        .sample("hold", "The ship's hold was full.", place: "Ghostty", minutesAgo: 30, id: 2),
+        // The app could read no text around the selection, so the ledger stored the selection
+        // itself. The card shows the word once and says nothing it cannot back up.
+        .sample(
+            "qqqq", "qqqq", place: "Ghostty", result: .notFound, context: .missing,
+            minutesAgo: 44, id: 3),
+        // Captured up to the edge of what could be read. Shown, and shown to be incomplete.
+        .sample(
+            "ballast", "in ballast and rode high in the", place: "Preview",
+            context: .mayBeCut, minutesAgo: 51, id: 4),
     ]),
     ReadingDay(id: "2026-09-19", date: .now.addingTimeInterval(-86400), label: .yesterday, entries: [
-        .sample("temper", "Justice tempered with mercy.", minutesAgo: 1500),
-        .sample("rein", "He kept a tight rein on the budget.", place: "TextEdit", minutesAgo: 1600),
-        .sample("sanction", "The sanctions were lifted.", minutesAgo: 1700),
-        .sample("table", "They tabled the motion.", place: "TextEdit", minutesAgo: 1800),
+        .sample("temper", "Justice tempered with mercy.", minutesAgo: 1500, id: 5),
+        .sample("rein", "He kept a tight rein on the budget.", place: "TextEdit", minutesAgo: 1600, id: 6),
+        .sample("sanction", "The sanctions were lifted.", minutesAgo: 1700, id: 7),
+        .sample("table", "They tabled the motion.", place: "TextEdit", minutesAgo: 1800, id: 8),
     ]),
 ]
 
@@ -465,6 +513,20 @@ private let sampleDays: [ReadingDay] = [
     .padding(12)
     .frame(width: 380)
     .background(.background)
+}
+
+/// The same cards dark. The accent carries a second shade for exactly this, and the card's surface
+/// is opaque in both — checking one appearance would only ever prove half of it.
+#Preview("Cards, dark") {
+    VStack(spacing: 8) {
+        ForEach(sampleDays[0].entries + sampleDays[1].entries.prefix(2)) { entry in
+            ReadingCardView(entry: entry)
+        }
+    }
+    .padding(12)
+    .frame(width: 380)
+    .background(.background)
+    .preferredColorScheme(.dark)
 }
 
 /// A day's pile, both ways, since the fanned and piled states look nothing alike.

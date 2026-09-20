@@ -20,10 +20,20 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     public let place: ReadingPlace
     public let at: Date
     public let result: LookupResult
+    /// How the capture went — the same kind of signal `ReadingPlace.precision` carries about
+    /// *where*, for the same reason. Nil only for rows written before schema 4, which is an
+    /// absence of evidence and never to be filled in with a guess.
+    ///
+    /// **A card reads this, never `sentence` alone.** The ledger stores the selection itself when
+    /// nothing surrounded the word, so the text cannot say whether it is a sentence the reader read
+    /// or the word echoed back into the column.
+    public let quality: CaptureQuality?
 
+    /// No default, deliberately. Every caller states how good the capture was, because the failure
+    /// this replaced was a caller quietly not carrying it.
     public init(
         id: Int, lemma: String, surface: String, sentence: String, sentenceRange: NSRange?,
-        place: ReadingPlace, at: Date, result: LookupResult
+        place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?
     ) {
         self.id = id
         self.lemma = lemma
@@ -33,7 +43,47 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.place = place
         self.at = at
         self.result = result
+        self.quality = quality
     }
+
+    /// What the card may say about `sentence`.
+    ///
+    /// Derived, never stored twice — the same rule as `ReadingPlace.precision`. A cue that could
+    /// drift from the quality it describes would be exactly the stale second copy this project's
+    /// memory rules ban.
+    public var cue: SentenceCue {
+        let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .none }
+        switch quality?.context {
+        case .complete: return .sentence
+        case .mayBeCut: return .truncatedSentence
+        case .missing: return .none
+        // Written before the quality column existed, so the only evidence left is the text itself:
+        // a context that is just the word again is the echo, whatever wrote it. This guesses, and
+        // it guesses in the direction that shows less rather than claims more.
+        case nil:
+            let echo = trimmed.localizedLowercase
+            let word = surface.localizedLowercase
+            let dictionaryForm = lemma.localizedLowercase
+            return echo == word || echo == dictionaryForm ? .none : .sentence
+        }
+    }
+}
+
+/// What a card may say about the context stored beside a word.
+///
+/// Three cases because there are three things that can have happened, and a review surface that
+/// renders the worst of them like the best is the failure `CaptureQuality` exists to prevent.
+public enum SentenceCue: Equatable, Sendable {
+    /// Nothing to show. The app exposed no text around the word, so the ledger stored the
+    /// selection itself — and a word printed under itself is not a cue, it is the same word twice
+    /// with the second copy dressed up as evidence.
+    case none
+    /// A sentence the reader read the word in.
+    case sentence
+    /// A sentence whose end was never captured. Shown, because a partial cue is still a cue, and
+    /// marked, because it is not a whole one.
+    case truncatedSentence
 }
 
 /// How a day is named. A classification rather than a string: the drawer renders it in the reader's

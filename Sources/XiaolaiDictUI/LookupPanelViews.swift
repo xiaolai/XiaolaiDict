@@ -4,6 +4,7 @@ import SwiftUI
 import WebKit
 
 public struct PanelView: View {
+    @Environment(\.scale) private var scale
     public let content: PanelContent
 
     public init(content: PanelContent) {
@@ -13,11 +14,11 @@ public struct PanelView: View {
     public var body: some View {
         switch content {
         case .message(let title, let detail):
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space.stack) {
                 Text(title).font(.headline)
                 Text(detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(20)
+            .padding(scale.space.pad)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .lookup(let presentation):
             VStack(alignment: .leading, spacing: 0) {
@@ -44,47 +45,50 @@ public struct PanelView: View {
 /// Waiting for the dictionaries, saying so. Never a blank pane: the invariant that a failure must
 /// not render as confidently as a success applies just as much to a result that has not arrived.
 private struct WaitingView: View {
+    @Environment(\.scale) private var scale
     public let detail: String?
 
     public var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: scale.space.column) {
             ProgressView().controlSize(.small)
             Text(detail ?? "Looking up…").foregroundStyle(.secondary)
         }
-        .padding(18)
+        .padding(scale.space.pad)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
 private struct Header: View {
+    @Environment(\.scale) private var scale
     public let term: String
     public let lemma: Lemma
     public let source: String?
     public let capture: CaptureQuality
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space.column) {
             Text(term).font(.title2.weight(.semibold))
             if lemma.text != Lemmatizer.canonical(term) {
                 // A dictionary form read from the grammar around the word is a judgement; says so.
                 Text(lemma.basis == .inferred ? "→ \(lemma.text) (from context)" : "→ \(lemma.text)")
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 2) {
+            Spacer(minLength: scale.space.column)
+            VStack(alignment: .trailing, spacing: scale.space.line) {
                 if let source { Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 // What is recorded with the word says what it is; a partial sentence is not passed
                 // off as the whole one.
                 if let caveat = capture.context.caveat { Text(caveat).font(.caption).foregroundStyle(.orange) }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 28)  // clear of the transparent title bar's controls
-        .padding(.bottom, 12)
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.top, Token.Panel.titleBarClearance)  // clear of the transparent title bar's controls
+        .padding(.bottom, scale.space.column)
     }
 }
 
 private struct OutcomeView: View {
+    @Environment(\.scale) private var scale
     /// The encounter a tap on `senseKey` amounts to. Nil when there is nothing to key it to — an
     /// entry with no id, or a dictionary whose senses carry none.
     public static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
@@ -126,7 +130,7 @@ private struct OutcomeView: View {
                 HStack(spacing: 0) {
                     OutlineSidebar(
                         outline: EntryOutline(entries: Array(entries)), selected: $selected, mark: sense)
-                        .frame(width: 260)
+                        .frame(width: Token.Panel.dictionaryList)
                     Divider()
                     // `entries` is never empty, and the index is clamped into it. Selecting a sense
                     // still renders its whole entry: decision D2 is to mark a sense, never to jump
@@ -153,15 +157,15 @@ private struct OutcomeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Notice(text: "The dictionary service could not answer, so this is the plain-text definition. (\(failure))")
                 ScrollView {
-                    Text(text).textSelection(.enabled).padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(text).textSelection(.enabled).padding(scale.space.pad).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         case .notFound(let failure):
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: scale.space.column) {
                 Text("No entry for “\(term)” in your dictionaries.").font(.headline)
                 if let failure { Notice(text: "The dictionary service could not be asked: \(failure)") }
             }
-            .padding(18)
+            .padding(scale.space.pad)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
@@ -186,7 +190,7 @@ private struct OutlineSidebar: View {
                         }
                     }
                 } header: {
-                    Text(dictionary.name).lineLimit(2)
+                    Text(dictionary.name).lineLimit(Token.Limit.wrapLines)
                 }
             }
         }
@@ -198,12 +202,13 @@ private struct OutlineSidebar: View {
 /// answered. A dictionary that cannot key senses says so here, once, rather than showing rows it
 /// cannot stand behind.
 private struct EntryRow: View {
+    @Environment(\.scale) private var scale
     public let entry: EntryNode
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: scale.space.line) {
             Text(entry.label).lineLimit(1)
-            if let note = entry.note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            if let note = entry.note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(Token.Limit.wrapLines) }
             if entry.senseKeyKind == SenseKeyKind.none {
                 Text("senses not marked in this dictionary").font(.caption).foregroundStyle(.tertiary)
             }
@@ -214,6 +219,7 @@ private struct EntryRow: View {
 /// One sense under its entry. A sense addressed only by where it sits is a weaker claim than one
 /// carrying the publisher's id, and reads as one.
 private struct SenseRow: View {
+    @Environment(\.scale) private var scale
     public let sense: SenseNode
     public let mark: SenseMark?
 
@@ -223,12 +229,12 @@ private struct SenseRow: View {
     private var isMarked: Bool { mark?.key == sense.sense.key }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
             Text("\(sense.sense.path.ordinal)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
-                .frame(minWidth: 16, alignment: .trailing)
-            Text(sense.label).font(.callout).lineLimit(2)
+                .frame(minWidth: scale.space.ordinal, alignment: .trailing)
+            Text(sense.label).font(.callout).lineLimit(Token.Limit.wrapLines)
             if sense.keyKind == .position {
                 Image(systemName: "questionmark.circle")
                     .font(.caption2)
@@ -236,7 +242,7 @@ private struct SenseRow: View {
                     .help("This dictionary does not number its senses, so this one is identified by its position.")
             }
             if isMarked, let mark {
-                Spacer(minLength: 4)
+                Spacer(minLength: scale.space.line)
                 // A sense XiaolaiDict guessed and one the reader chose must never read alike.
                 Image(systemName: mark.isHypothesis ? "sparkle" : "checkmark.circle.fill")
                     .font(.caption)
@@ -246,12 +252,13 @@ private struct SenseRow: View {
                         : "The only sense in this entry.")
             }
         }
-        .padding(.leading, 14)
+        .padding(.leading, scale.space.indent)
     }
 }
 
 /// A result that is less than it looks must say so, in the result.
 public struct Notice: View {
+    @Environment(\.scale) private var scale
     public let text: String
     public var symbol = "exclamationmark.triangle"
 
@@ -259,9 +266,9 @@ public struct Notice: View {
         Label(text, systemImage: symbol)
             .font(.callout)
             .foregroundStyle(.orange)
-            .padding(12)
+            .padding(scale.space.pad)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.orange.opacity(0.08))
+            .background(.orange.opacity(Token.Opacity.caveatWash))
     }
 }
 
@@ -269,12 +276,13 @@ public struct Notice: View {
 /// says what the word meant last time: an earlier encounter says *you should know this*, while an
 /// earlier gloss answers the question and destroys the retrieval (`feature-ledger-ux.md` C2).
 private struct MemoryStripView: View {
+    @Environment(\.scale) private var scale
     public let memory: MemoryStrip
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space.column) {
             Text(memory.headline).font(.callout.weight(.medium))
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: scale.space.tight) {
                 ForEach(memory.lines, id: \.self) { line in
                     Text(line).font(.caption).foregroundStyle(.secondary)
                 }
@@ -284,10 +292,10 @@ private struct MemoryStripView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.vertical, scale.space.stack)
         // The honey accent only where XiaolaiDict owns the meaning — memory and study (J2).
-        .background(Color.accentColor.opacity(0.07))
+        .background(Color.accentColor.opacity(Token.Opacity.memoryWash))
     }
 }
 
@@ -330,6 +338,7 @@ private struct EntryPane: View {
 
 /// Entry heading · part of speech · IPA · speak · copy · pin.
 private struct EntryChrome: View {
+    @Environment(\.scale) private var scale
     public let popup: EntryPresentation
     public let selected: SensePresentation?
     public let term: String
@@ -352,13 +361,13 @@ private struct EntryChrome: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: scale.space.stack) {
             Text(popup.heading).font(.title3.weight(.semibold))
             if !popup.partsOfSpeech.isEmpty {
                 Text(popup.partsOfSpeech.joined(separator: " · "))
                     .font(.caption).italic().foregroundStyle(.secondary)
             }
-            ForEach(popup.pronunciations.prefix(2), id: \.self) { pronunciation in
+            ForEach(popup.pronunciations.prefix(Token.Limit.pronunciations), id: \.self) { pronunciation in
                 Text(pronunciation).font(.caption).foregroundStyle(.secondary)
             }
             if !popup.canKeySenses {
@@ -366,7 +375,7 @@ private struct EntryChrome: View {
                     .font(.caption2).foregroundStyle(.tertiary)
                     .help("This dictionary marks its senses with nothing XiaolaiDict can key a card to.")
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: scale.space.stack)
 
             Button {
                 Speech.say(spokenText)
@@ -417,30 +426,31 @@ private struct EntryChrome: View {
             .help("Pin this as a note that stays until you close it")
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.vertical, scale.space.stack)
     }
 }
 
 /// What the on-device model made of the reader's sentence — or why it could not. Never a blank
 /// pane: a model that declined says so.
 private struct SentencePaneView: View {
+    @Environment(\.scale) private var scale
     public let explanation: SentenceExplanation
 
     public var body: some View {
         switch explanation {
         case .explained(let text, let tier):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: scale.space.line) {
                 Text(text).font(.callout).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 // Which tier answered, so "this stayed on my Mac" is visible rather than promised.
                 Text(tier == .onDevice ? "on this Mac" : "sent to a remote service")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            .padding(.horizontal, scale.space.padAcross)
+            .padding(.vertical, scale.space.column)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.05))
+            .background(Color.accentColor.opacity(Token.Opacity.senseWash))
         case .unavailable(let why):
             Notice(text: why, symbol: "text.bubble")
         }
@@ -493,9 +503,7 @@ private struct EntryView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
-        /// A local document of a few kilobytes renders in milliseconds; one still loading after this
-        /// is stuck, and says so rather than staying a blank pane.
-        static let loadLimit: Duration = .seconds(5)
+        static let loadLimit = Token.Timing.entryLoad
 
         private let onFailure: (String) -> Void
         private var requested: String?

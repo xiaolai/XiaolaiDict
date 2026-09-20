@@ -1,4 +1,4 @@
-import CoreGraphics
+import SwiftUI
 
 /// The arithmetic of a Notification Center style pile: cards stacked with the newest in front,
 /// fanning out into a list as `progress` runs 0 to 1.
@@ -10,15 +10,33 @@ import CoreGraphics
 /// **Card 0 is the deepest, the last card is on top.** Draw order in a `Layout` follows subview
 /// order, so reversing the data is what puts the newest card at the front of the pile.
 struct CardPile: Equatable {
-    /// Gap between cards once fanned out.
-    var spacing: CGFloat = 8
+    /// Gap between cards once fanned out — the same gap as between any two siblings.
+    var spacing: CGFloat
     /// How far each buried card peeks below the one in front of it.
-    var peek: CGFloat = 7
+    var peek: CGFloat
     /// How much narrower each buried card is, per side.
-    var sideInset: CGFloat = 9
+    var sideInset: CGFloat
     /// Cards deeper than this hide exactly behind the last visible one, so a fifty-card pile is no
     /// taller than a three-card one.
-    var maxVisibleDepth: Int = 2
+    var maxVisibleDepth: Int
+
+    init(
+        spacing: CGFloat, peek: CGFloat, sideInset: CGFloat,
+        maxVisibleDepth: Int = Token.Limit.pileDepth
+    ) {
+        self.spacing = spacing
+        self.peek = peek
+        self.sideInset = sideInset
+        self.maxVisibleDepth = maxVisibleDepth
+    }
+
+    /// Built from the reader's own scale, so the offsets that say "these are stacked" stay in
+    /// proportion to the cards being stacked. Taken as an argument rather than read from the
+    /// environment because this is arithmetic, not a view — which is what makes it testable.
+    init(_ scale: Scale) {
+        self.init(
+            spacing: scale.space.stack, peek: scale.space.peek, sideInset: scale.space.sideInset)
+    }
 
     struct Placement: Equatable {
         var origin: CGPoint
@@ -76,5 +94,35 @@ struct CardPile: Equatable {
 
     private static func lerp(_ from: CGFloat, _ to: CGFloat, _ t: Double) -> CGFloat {
         from + (to - from) * CGFloat(t)
+    }
+}
+
+/// How one card in a pile is drawn.
+///
+/// **A buried card is a plate and nothing else** — no words, no accent edge, nothing for VoiceOver
+/// to read out. It is the shoulder the front card rests on, and the front card hides all of it but
+/// the sliver that peeks. Before this existed, a buried card drew its own coloured edge at full
+/// strength straight through the card in front: a closed pile of three showed orange, blue *and*
+/// purple at once on a card labelled with one word, with two of the arcs crossing that card's text.
+enum CardLayer: Equatable, Sendable {
+    case front
+    case buried
+
+    var showsContent: Bool { self == .front }
+    var showsAccent: Bool { self == .front }
+}
+
+extension CardPile {
+    /// How each of a day's cards is drawn, newest first — and, by its length, which of them are
+    /// built at all.
+    ///
+    /// Closed, only `maxVisibleDepth + 1` are returned: rendering fifty views to display three
+    /// would cost fifty measurements in `placeSubviews` for nothing visible. The count and the
+    /// layering come from here together so the view cannot render a different number of cards
+    /// than the layout is placing.
+    func layers(count: Int, expanded: Bool) -> [CardLayer] {
+        guard count > 0 else { return [] }
+        guard !expanded else { return Array(repeating: .front, count: count) }
+        return (0..<min(count, maxVisibleDepth + 1)).map { $0 == 0 ? .front : .buried }
     }
 }

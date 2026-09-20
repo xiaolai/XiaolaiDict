@@ -26,7 +26,8 @@ struct HistoryDrawerTests {
     private func entry(_ lemma: String, _ when: Date) -> ReadingEntry {
         ReadingEntry(
             id: 1, lemma: lemma, surface: lemma, sentence: "A sentence.", sentenceRange: nil,
-            place: ReadingPlace(name: "TextEdit"), at: when, result: .found)
+            place: ReadingPlace(name: "TextEdit"), at: when, result: .found,
+            quality: .accessibility(.accessibilityTextRange, context: .complete))
     }
 
     private func controller(

@@ -22,7 +22,8 @@ private func at(_ text: String, _ zone: String = "UTC") -> Date {
 private func entry(_ lemma: String, _ when: Date, id: Int = 0) -> ReadingEntry {
     ReadingEntry(
         id: id, lemma: lemma, surface: lemma, sentence: "A sentence with \(lemma) in it.",
-        sentenceRange: nil, place: ReadingPlace(name: "TextEdit"), at: when, result: .found)
+        sentenceRange: nil, place: ReadingPlace(name: "TextEdit"), at: when, result: .found,
+        quality: .accessibility(.accessibilityTextRange, context: .complete))
 }
 
 struct ReadingDayGroupingTests {

@@ -38,6 +38,7 @@ public struct PinnedNote: Equatable, Identifiable {
 /// here and looked up by id, because a scene is handed a value and not an object.
 
 public struct PinnedNoteView: View {
+    @Environment(\.scale) private var scale
     public let note: PinnedNote
 
     public init(note: PinnedNote) {
@@ -46,8 +47,8 @@ public struct PinnedNoteView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                HStack(alignment: .firstTextBaseline, spacing: scale.space.stack) {
                     Text(note.heading).font(.title3.weight(.semibold))
                     if let partOfSpeech = note.partOfSpeech {
                         Text(partOfSpeech).font(.caption).italic().foregroundStyle(.secondary)
@@ -58,14 +59,14 @@ public struct PinnedNoteView: View {
                 }
                 Text(note.text).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
+                Spacer(minLength: scale.space.line)
                 // What it is a copy of, and from when. A note that outlives its dictionary can
                 // still say where it came from.
                 Text(note.provenance).font(.caption2).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 28)
-            .padding(.bottom, 14)
+            .padding(.horizontal, scale.space.padAcross)
+            .padding(.top, Token.Panel.titleBarClearance)
+            .padding(.bottom, scale.space.padDown)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

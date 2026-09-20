@@ -62,15 +62,15 @@ public enum PanelContent {
         /// Exhaustive, so a new kind of content cannot quietly get another kind's size.
         public var defaultSize: NSSize {
             switch self {
-            case .lookup: NSSize(width: 760, height: 520)
-            case .message: NSSize(width: 420, height: 150)
+            case .lookup: NSSize(width: Token.Panel.lookupWidth, height: Token.Panel.lookupHeight)
+            case .message: NSSize(width: Token.Panel.messageWidth, height: Token.Panel.messageHeight)
             }
         }
 
         public var minimumSize: NSSize {
             switch self {
-            case .lookup: NSSize(width: 480, height: 300)
-            case .message: NSSize(width: 320, height: 120)
+            case .lookup: NSSize(width: Token.Panel.lookupMinWidth, height: Token.Panel.lookupMinHeight)
+            case .message: NSSize(width: Token.Panel.messageMinWidth, height: Token.Panel.messageMinHeight)
             }
         }
     }

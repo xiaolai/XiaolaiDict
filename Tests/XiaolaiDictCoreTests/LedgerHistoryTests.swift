@@ -19,12 +19,13 @@ struct LedgerHistoryTests {
     private func record(
         _ lemma: String, at when: Date, result: LookupResult = .found,
         context: String = "A sentence.", range: NSRange? = NSRange(location: 2, length: 8),
-        place: ReadingPlace = ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit")
+        place: ReadingPlace = ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"),
+        quality: CaptureQuality? = nil
     ) -> LookupRecord {
         LookupRecord(
             surface: lemma, lemma: lemma, context: context, lemmaBasis: .tagger, language: "en",
             contextRange: range, place: place, lookedUpAt: when, result: result,
-            answeredBy: .dictionaryService, quality: nil)
+            answeredBy: .dictionaryService, quality: quality)
     }
 
     private func withLedger(_ body: (Ledger) throws -> Void) throws {
@@ -132,6 +133,62 @@ struct LedgerHistoryTests {
 
             let found = try ledger.recentLookups(since: .distantPast, limit: 50)
             #expect(found.map(\.id) == [second, first])
+        }
+    }
+
+    // MARK: - How good the capture was
+
+    /// The drawer cannot honour "a degraded capture never renders as confidently as a clean one"
+    /// unless the query hands it the quality. It was selecting every other column and not this one,
+    /// so a card had no way to tell a sentence from the selection echoed back into the column.
+    @Test func howGoodTheCaptureWasReachesTheDrawer() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record(
+                "qqqq", at: noon, context: "qqqq", range: nil,
+                quality: .accessibility(.accessibilityTextRange, context: .missing)))
+
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let entry = try #require(found.first)
+            #expect(entry.quality?.context == .missing)
+            // And the card built from it says nothing rather than printing the word twice.
+            #expect(entry.cue == .none)
+        }
+    }
+
+    @Test func aCutSentenceComesBackKnownToBeCut() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record(
+                "hold", at: noon, context: "The ship's hold was",
+                quality: .accessibility(.accessibilityTextMarkers, context: .mayBeCut)))
+
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.quality?.context == .mayBeCut)
+            #expect(entry.cue == .truncatedSentence)
+        }
+    }
+
+    /// Recognised text is the one source that can be *wrong* rather than absent, so its confidence
+    /// has to survive the trip as well as its context.
+    @Test func theRecognisersOwnConfidenceSurvives() throws {
+        try withLedger { ledger in
+            let read = try #require(CaptureQuality(
+                source: .opticalRecognition, confidence: 0.62, context: .complete))
+            _ = try ledger.record(record("hold", at: noon, quality: read))
+
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.quality?.source == .opticalRecognition)
+            #expect(entry.quality?.confidence == 0.62)
+        }
+    }
+
+    /// Rows written before schema 4 have no quality at all. They must come back without one rather
+    /// than with a made-up one — an invented `.complete` would be the drawer claiming a context
+    /// nothing ever captured.
+    @Test func aRowWrittenBeforeTheQualityColumnComesBackWithoutOne() throws {
+        try withLedger { ledger in
+            _ = try ledger.record(record("hold", at: noon, quality: nil))
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            #expect(entry.quality == nil)
         }
     }
 }
