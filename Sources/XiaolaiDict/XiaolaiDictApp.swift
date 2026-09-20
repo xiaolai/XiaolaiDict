@@ -1,20 +1,21 @@
 import AppKit
 import XiaolaiDictCore
+import Observation
 import os
 
 /// The menu-bar app: a shortcut on a selection opens the lookup panel and records the lookup.
+@Observable
 @MainActor
-final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
     private let panel = LookupPanelController()
     private let client = DictionaryClient()
     private let primaryDictionary = PrimaryDictionaryStore()
-    private lazy var runner = makeRunner()
-    private lazy var drawer = makeDrawer()
+    @ObservationIgnored private lazy var runner = makeRunner()
+    @ObservationIgnored private lazy var drawer = makeDrawer()
     /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
     /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
     private let hover = HoverWatcher()
-    private let settings = SettingsWindowController()
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
@@ -46,10 +47,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
     /// the menu says it does not know rather than showing a list it made up.
-    private var dictionaries: [DictionaryCapability]?
+    var dictionaries: [DictionaryCapability]?
     private let recorder = ShortcutRecorder()
     private let shortcuts = ShortcutStore(defaults: .standard)
-    private var statusItem: NSStatusItem?
     private var hotkey: Hotkey?
     /// Opened on a background task at launch: file and database work — a migration, on the first
     /// launch after an update — must not hold up the menu bar.
@@ -68,8 +68,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// was recorded has nothing to attach to, and writes nothing.
     private var lastLookup: Int?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside
+        // the bundle behaves the same. Before *did* finish, so no window can flash as an ordinary
+        // app's would.
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = makeStatusItem()
         panel.onStudySense = { [weak self] encounter in self?.study(encounter) }
         let opening = Task { try await LedgerStore.openDefault() }
         ledger = opening
@@ -83,9 +89,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 log.error("ledger unavailable: \(String(describing: error), privacy: .public)")
             }
         }
-        drawer.statusItemFrame = { [weak self] in
-            guard let button = self?.statusItem?.button, let window = button.window else { return nil }
-            return window.convertToScreen(button.convert(button.bounds, to: nil))
+        // Where the menu-bar item is, so a click on it is left for the menu rather than taken by
+        // the drawer's click-away dismissal. `MenuBarExtra` exposes no frame, so it is found by its
+        // window: a miss costs the guard, which is visible (the drawer reopens) and not silent.
+        drawer.statusItemFrame = {
+            NSApp.windows.first { $0.className.contains("StatusBar") }?.frame
         }
         Task { [weak self] in self?.permissions = await .probe() }
         hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
@@ -98,7 +106,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Looking up
 
-    @objc private func lookUpSelection() {
+    func lookUpSelection() {
         let pointer = UpPoint(NSEvent.mouseLocation)
         let requestedAt = Date.now
         let ticket = panel.newRequest()
@@ -149,7 +157,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue, forKey: Self.hoverEnabledKey) }
     }
 
-    @objc private func toggleHover() {
+    func toggleHover() {
         hoverEnabled.toggle()
         if hoverEnabled { hover.start() } else { hover.stop() }
     }
@@ -203,7 +211,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func changeShortcut() {
+    func changeShortcut() {
         let previous = hotkey?.shortcut ?? shortcuts.load()
         // Released while recording: pressed, it would look something up instead of being recorded.
         hotkey = nil
@@ -231,102 +239,39 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Menu
 
-    private func makeStatusItem() -> NSStatusItem {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let image = Self.menuBarImage() {
-            item.button?.image = image
-        } else {
-            item.button?.title = "XiaolaiDict"  // no image at all is still no reason to crash
-        }
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
-        return item
+    // MARK: - What the menu reads
+
+    /// The shortcut as the reader set it, or nil while there is none.
+    var shortcutLabel: String? { hotkey?.shortcut.label() }
+    var hoverIsWatching: Bool { hover.isWatching }
+    var drawerIsVisible: Bool { drawer.isVisible }
+    var chosenDictionary: String? { primaryDictionary.load().chosen }
+
+    /// Everything the reader should be told, in the place they already look.
+    var problems: [String] {
+        [permissions.menuWarning, hotkeyProblem, ledgerStatus.problem].compactMap { $0 }
     }
 
-    /// Rebuilt on every open, so a problem that appeared since launch is shown.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let lookUp = menu.addItem(withTitle: "Look Up Selection", action: #selector(lookUpSelection), keyEquivalent: "")
-        lookUp.target = self
-        if let hotkey { lookUp.title = "Look Up Selection    \(hotkey.shortcut.label())" }
-        menu.addItem(withTitle: "Change Shortcut…", action: #selector(changeShortcut), keyEquivalent: "").target = self
-        let hoverItem = menu.addItem(
-            withTitle: "Hover Lookup    hold \u{2325}", action: #selector(toggleHover), keyEquivalent: "")
-        hoverItem.target = self
-        // Read from the watcher, not from the setting: if starting it failed, the menu says off.
-        hoverItem.state = hover.isWatching ? .on : .off
-        let history = menu.addItem(
-            withTitle: drawer.isVisible ? "Hide Reading History" : "Reading History",
-            action: #selector(toggleHistory), keyEquivalent: "")
-        history.target = self
-        menu.addItem(primaryDictionaryItem())
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
-        Task { [weak self] in self?.permissions = await .probe() }
-        for problem in [permissions.menuWarning, hotkeyProblem, ledgerStatus.problem]
-            .compactMap({ $0 }) {
-            let item = menu.addItem(withTitle: problem, action: nil, keyEquivalent: "")
-            item.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Problem")
-        }
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit XiaolaiDict", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
+    /// menu is opened rather than at launch, and only once.
+    func askForDictionaries() async {
+        permissions = await .probe()
+        guard dictionaries == nil else { return }
+        dictionaries = await client.dictionaries()
     }
 
-    /// Which dictionary XiaolaiDict studies from (decision D7), and what choosing each one can key: a
-    /// dictionary that marks senses with nothing a parser can read will only ever give whole-entry
-    /// cards, and the reader should see that before choosing it, not afterwards.
-    private func primaryDictionaryItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Study From", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        let chosen = primaryDictionary.load().chosen
-
-        let automatic = submenu.addItem(
-            withTitle: "First that marks senses", action: #selector(choosePrimaryDictionary(_:)), keyEquivalent: "")
-        automatic.target = self
-        automatic.representedObject = nil as String?
-        automatic.state = chosen == nil ? .on : .off
-        submenu.addItem(.separator())
-
-        if let dictionaries {
-            for capability in dictionaries {
-                let entry = submenu.addItem(
-                    withTitle: "\(capability.identity.name)    · \(capability.note)",
-                    action: #selector(choosePrimaryDictionary(_:)), keyEquivalent: "")
-                entry.target = self
-                entry.representedObject = capability.identity.key
-                entry.state = chosen == capability.identity.key ? .on : .off
-            }
-        } else {
-            submenu.addItem(withTitle: "Asking the dictionary service…", action: nil, keyEquivalent: "")
-            // Asked when the menu opens rather than at launch: it probes real entries, and Longman's
-            // *hold* alone is 625 KB to parse.
-            Task { [weak self] in
-                guard let self else { return }
-                let found = await client.dictionaries()
-                self.dictionaries = found
-            }
-        }
-        item.submenu = submenu
-        return item
-    }
-
-    @objc private func showSettings() {
-        settings.show()
-    }
-
-    @objc private func toggleHistory() {
+    func toggleHistory() {
         drawer.toggle()
     }
 
-    @objc private func choosePrimaryDictionary(_ sender: NSMenuItem) {
-        primaryDictionary.save(sender.representedObject as? String)
+    func choosePrimaryDictionary(_ key: String?) {
+        primaryDictionary.save(key)
     }
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's
     /// own colour; only its alpha is read. Outside the bundle (`swift run`) there is no resource,
     /// and a symbol beats an empty slot.
-    private static func menuBarImage() -> NSImage? {
+    static func menuBarImage() -> NSImage? {
         guard let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "svg"),
               let image = NSImage(contentsOf: url)
         else { return NSImage(systemSymbolName: "character.book.closed", accessibilityDescription: "XiaolaiDict") }

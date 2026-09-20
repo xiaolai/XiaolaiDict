@@ -294,10 +294,6 @@ struct ReadingCardView: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(entry.result == .found ? Color.accentColor : Color.secondary)
-                .frame(width: 3)
-
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(entry.lemma)
@@ -342,9 +338,26 @@ struct ReadingCardView: View {
         // already glass, and layering glass inside glass muddies both.
         .background(shape.fill(Color.primary.opacity(hovering ? 0.12 : 0.06)))
         .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        // The word's colour lives on the card's own leading edge, following the corner radius,
+        // rather than on a separate bar floating inside it.
+        .overlay(LeadingEdge(cornerRadius: 10).stroke(accent, style: .init(lineWidth: 2.5, lineCap: .round)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    /// The word's own colour, and the same one every time the drawer opens.
+    ///
+    /// Derived from the lemma with a fixed hash rather than `Hasher`, whose seed changes per
+    /// process — that would give each word a new colour on every launch, which reads as a bug.
+    /// A miss keeps its grey: the colour is for telling words apart, not for decorating a failure.
+    private var accent: Color {
+        guard entry.result == .found else { return .secondary.opacity(0.5) }
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in entry.lemma.lowercased().utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+        }
+        return Color(hue: Double(hash % 360) / 360, saturation: 0.62, brightness: 0.82)
     }
 
     /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
@@ -365,5 +378,28 @@ struct ReadingCardView: View {
     private var place: String? {
         if let label = entry.place.label { return label }
         return entry.place.name
+    }
+}
+
+
+/// The leading side of a rounded rectangle: down the left edge and around both corners it meets.
+///
+/// A `Shape` rather than a masked full border, so the colour stops exactly where the straight edge
+/// ends and the corner turns — a gradient fade would blur the one thing the edge is for.
+struct LeadingEdge: Shape {
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let radius = min(cornerRadius, min(rect.width, rect.height) / 2)
+        path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+        path.addArc(
+            center: CGPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius,
+            startAngle: .degrees(-90), endAngle: .degrees(180), clockwise: true)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+        path.addArc(
+            center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius,
+            startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
+        return path
     }
 }

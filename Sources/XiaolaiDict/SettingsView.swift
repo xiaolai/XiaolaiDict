@@ -16,65 +16,8 @@ final class SettingsModel {
     }
 }
 
-/// XiaolaiDict's settings window, whose first job is to make the permissions visible.
-///
-/// **This window activates XiaolaiDict, and the panel rule does not apply to it.** A panel must never take
-/// focus because it arrives while the reader is mid-sentence in another app; this window arrives
-/// only because the reader chose it from the menu, and a settings window that cannot be typed in or
-/// clicked into would be useless.
-@MainActor
-final class SettingsWindowController: NSObject, NSWindowDelegate {
-    private var window: NSWindow?
-    private let model = SettingsModel()
-    private var watching: Task<Void, Never>?
-
-    /// macOS posts nothing when a permission changes, and the reader grants them in another app and
-    /// comes back — so the window asks again while it is open. Polling is the only way to notice,
-    /// and it stops the moment the window closes.
-    static let refreshInterval: Duration = .seconds(1)
-
-    func show() {
-        let window = self.window ?? makeWindow()
-        self.window = window
-        // Accessory apps have no Dock icon and do not come forward on their own.
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-        Task { await model.refresh() }
-        startWatching()
-    }
-
-    private func makeWindow() -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 400),
-            styleMask: [.titled, .closable, .fullSizeContentView],
-            backing: .buffered, defer: false)
-        window.title = "XiaolaiDict Settings"
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: SettingsView(model: model))
-        window.center()
-        return window
-    }
-
-    private func startWatching() {
-        watching?.cancel()
-        watching = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.refreshInterval)
-                guard let self, self.window?.isVisible == true else { return }
-                await self.model.refresh()
-            }
-        }
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        watching?.cancel()
-        watching = nil
-    }
-}
-
 struct SettingsView: View {
-    @Bindable var model: SettingsModel
+    @State private var model = SettingsModel()
 
     var body: some View {
         ScrollView {
@@ -85,6 +28,15 @@ struct SettingsView: View {
             .padding(20)
         }
         .frame(minWidth: 420, minHeight: 320)
+        // macOS posts nothing when a permission changes, and the reader grants them in another app
+        // and comes back. Polling is the only way to notice, and `.task` stops it when the window
+        // goes away — which the hand-rolled controller had to remember to do itself.
+        .task {
+            while !Task.isCancelled {
+                await model.refresh()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     /// Asking costs a ScreenCaptureKit round trip, so there is a moment before the answer. Saying

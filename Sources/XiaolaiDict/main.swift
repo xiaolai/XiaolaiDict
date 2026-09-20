@@ -56,12 +56,8 @@ case .success(.historyReport):
     Task { @MainActor in exit(await HistoryReport.run().rawValue) }
     reporter.run()
 
+// Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
+// modes above must be able to run without a scene at all.
 case .success(.app):
-    let app = NSApplication.shared
-    let delegate = XiaolaiDictApp()
-    app.delegate = delegate
-    // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside the
-    // bundle behaves the same.
-    app.setActivationPolicy(.accessory)
-    app.run()
+    XiaolaiDictScene.main()
 }
