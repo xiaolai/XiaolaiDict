@@ -4,7 +4,15 @@
 # surviving that service's death. Which machine, and why it is set up as it is, is in the
 # developer's private notes; this script only takes its SSH name.
 #
-#   e2e.sh <ssh-host>     ship .build/XiaolaiDict.app to the host and run every stage there
+#   e2e.sh <ssh-host> [stage...]   ship .build/XiaolaiDict.app to the host and run stages there
+#
+# With no stage names every stage runs. With them, only those — a full run costs minutes and most
+# changes touch one or two. Names: launch lookup crash accessibility selection shortcut deadline
+# hover drawer recogniser scenes.
+#
+# Each result is recorded in .build/e2e-status.tsv against the build it ran on. A pass is only a
+# fact about that build, so one carried over from an older build is shown as stale rather than as a
+# pass: a green mark that outlives what it tested is worse than no mark.
 #
 # Each stage asserts what it saw, including that the thing it tested happened at all: a test that
 # silently did nothing must not look like one that passed.
@@ -12,7 +20,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-host=${1:?usage: e2e.sh <ssh-host>}
+host=${1:?usage: e2e.sh <ssh-host> [stage...]}
+shift
+STAGES="$*"
+readonly STATUS=.build/e2e-status.tsv
 readonly APP=.build/XiaolaiDict.app
 readonly REMOTE_DIR=XiaolaiDictE2E
 fail() { echo "e2e: FAIL: $*" >&2; exit 1; }
@@ -73,14 +84,28 @@ echo "build $remote_version installed and verified"
 
 # ---------------------------------------------------------------------------------------------
 # The remaining stages run there, in one session, and report each result as one line.
-stage "run"
-ssh_e2e bash -s -- "$REMOTE_DIR" <<'SH'
+stage "run${STAGES:+: $STAGES}"
+RUN_LOG=$(mktemp)
+trap 'rm -f "$RUN_LOG"' EXIT
+set +e
+ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <<'SH' | tee "$RUN_LOG" | grep -v "^RESULT	"
 set -euo pipefail
 app="$HOME/$1/XiaolaiDict.app"; exe="$app/Contents/MacOS/XiaolaiDict"
 service="$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService"
 failures=0
-pass() { echo "PASS  $*"; }
-flunk() { echo "FAIL  $*"; failures=$((failures + 1)); }
+# The stages asked for; none means all of them.
+WANTED=(${2:-})
+STAGE=""
+want() {  # want <name>: is this stage wanted? Also names it, for the result lines.
+    STAGE=$1
+    [ ${#WANTED[@]} -eq 0 ] && return 0
+    local w
+    for w in "${WANTED[@]}"; do [ "$w" = "$1" ] && return 0; done
+    return 1
+}
+# RESULT lines are for the caller to record; PASS/FAIL lines are for a person to read.
+pass() { echo "PASS  $*"; printf 'RESULT\t%s\tpass\n' "$STAGE"; }
+flunk() { echo "FAIL  $*"; failures=$((failures + 1)); printf 'RESULT\t%s\tfail\n' "$STAGE"; }
 pids() {
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
     while read -r pid path; do [ "$path" != "$1" ] || echo "$pid"; done <<<"$table"
@@ -122,19 +147,38 @@ select_then_read() {
     if why=$(expect "$reading" "$@" 2>&1); then pass "$label"; else flunk "$label: $why"; fi
 }
 
+# Shared by several stages, so it is defined once and before any of them. Written inside the
+# stage that first needed it, selecting stages turned this into an unbound variable.
+helpers="$HOME/$1/e2e"
+ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
+rows() { sqlite3 -readonly "$ledger" "select count(*) from lookups" 2>/dev/null || echo 0; }
+
+# Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
+# asserts that it starts and stays up, which is a different claim and stays a stage of its own.
+# Without this, selecting a later stage failed for want of something an earlier one happened to do.
+if [ -z "$(pids "$exe")" ]; then
+    open "$app"
+    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+fi
+
+if want launch; then
 # 1. LaunchServices starts it, and it stays up.
 open "$app"
 for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
 sleep 1
 if [ -n "$(pids "$exe")" ]; then pass "launch: running, and still running after 1 s"; else flunk "launch: not running"; fi
+fi
 
+if want lookup; then
 # 2. A lookup through the real XPC path answers with entries.
 if lookup=$("$exe" --lookup ephemeral 2>&1) && [ "$(printf '%s\n' "$lookup" | outcomes)" = entries ]; then
     pass "lookup: entries through the dictionary service"
 else
     flunk "lookup: $lookup"
 fi
+fi
 
+if want crash; then
 # 3. The service dies mid-run: the next lookups fall back, saying why, and later ones recover.
 out=$(mktemp)
 "$exe" --lookup ephemeral --repeat 4 --interval 4 >"$out" 2>&1 &
@@ -156,7 +200,9 @@ else
     flunk "crash recovery: expected entries, then a fallback, then entries again — got: $seq"
 fi
 rm -f "$out"
+fi
 
+if want accessibility; then
 # 4. Accessibility, which the selection tests need: said plainly either way.
 reading=$("$exe" --read-selection com.apple.finder 2>&1 || true)
 if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off"; then
@@ -164,7 +210,9 @@ if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off
     echo; echo "$((failures)) stage(s) failed"; exit 1
 fi
 pass "accessibility: readable"
+fi
 
+if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
 #    Automation prompt can block the screen. They need an unlocked screen: while it is locked,
 #    Accessibility reports each app's only window, and its focused element, as the app itself.
@@ -173,7 +221,6 @@ if [ "$locked" = true ]; then
     flunk "selection: the screen is locked, so Accessibility shows no windows — unlock it and run again"
     echo; echo "$failures stage(s) failed"; exit 1
 fi
-helpers="$HOME/$1/e2e"
 open -a TextEdit "$helpers/notes.txt"; sleep 2
 select_then_read "TextEdit: the second of two words is the one read (range dialect)" com.apple.TextEdit \
     "$helpers/select-text" com.apple.TextEdit meeting 2 -- \
@@ -190,11 +237,11 @@ select_then_read "Safari: wrapping punctuation is not part of the term" com.appl
 select_then_read "Safari: a past form NLTagger leaves alone is read from its grammar" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari saw -- \
     text=saw lemma=see lemmaBasis=inferred
+fi
 
+if want shortcut; then
 # 6. The reader's own path: a selection, the shortcut, the panel, the ledger, and Escape.
 #    The shortcut is XiaolaiDict's default, Control-Option-D; a machine where it was changed fails here.
-ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
-rows() { sqlite3 -readonly "$ledger" "select count(*) from lookups" 2>/dev/null || echo 0; }
 before=$(rows)
 open -a TextEdit "$helpers/notes.txt"; sleep 1.5
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
@@ -255,7 +302,9 @@ PY
         flunk "ledger: $before rows before, $after after; last row: ${why:-$row}"
     fi
 fi
+fi
 
+if want deadline; then
 # 7. The 1 s promise, against a service that is hung rather than dead. SIGSTOP is the only way to
 #    get a genuinely unresponsive service from outside: a killed one fails fast, which is the easy
 #    case and proves nothing. With the panel shown before the lookup is asked, it must appear at
@@ -310,7 +359,9 @@ else
         "$helpers/keys" 53; sleep 0.5
     fi
 fi
+fi
 
+if want hover; then
 # 8. Hover: the word under a *point*, through the three Accessibility dialects and, where no app
 #    exposes its text, the recogniser. Ported from the screen-word spike, and only meaningful
 #    inside the signed bundle: a bare binary inherits the terminal's grants and has none of its
@@ -360,7 +411,9 @@ open -a TextEdit "$helpers/notes.txt"; sleep 2
 hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
 open -a Safari "$helpers/page.html"; sleep 3
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers
+fi
 
+if want drawer; then
 # 9. The history drawer: it appears, docked where the geometry said, and **without activating
 #    XiaolaiDict**. The last part is the whole reason this runs here. The spike this drawer came from
 #    activated the app and made its panel key; a unit test can prove the code does not call
@@ -397,7 +450,9 @@ else
         flunk "drawer: $why"
     fi
 fi
+fi
 
+if want recogniser; then
 # 10. The recogniser — the one capture path nothing exercised until now.
 #
 #    Both hover stages above assert an Accessibility dialect and answer in tens of milliseconds;
@@ -454,7 +509,9 @@ else
         fi
     fi
 fi
+fi
 
+if want scenes; then
 # 11. The windows that are now SwiftUI scenes, driven the way a reader drives them.
 #
 #    With a real click, not `AXPress`: pressing a menu through Accessibility opens it *without
@@ -463,8 +520,12 @@ fi
 if ! "$helpers/menu-click" com.xiaolaidict "Change Shortcut…" >/dev/null 2>&1; then
     flunk "recorder: could not reach Change Shortcut… in the menu"
 else
-    sleep 1
-    before=$("$helpers/panel" com.xiaolaidict)
+    # Polled, not slept: the window is opened by a scene and arrives when it arrives.
+    for _ in $(seq 1 40); do
+        before=$("$helpers/panel" com.xiaolaidict)
+        printf '%s' "$before" | grep -q '"windows":\[\]' || break
+        sleep 0.25
+    done
     # A key with no modifier is refused with a hint rather than accepted — a shortcut without one
     # would fire while the reader was typing. The hint changing is the proof the window has the
     # keyboard at all.
@@ -476,12 +537,18 @@ else
     else
         flunk "recorder: the window never saw the key press (before: $(printf '%s' "$before" | head -c 80))"
     fi
-    "$helpers/keys" 53
-    sleep 1
-    if "$helpers/panel" com.xiaolaidict | grep -q '"windows":\[\]'; then
-        pass "recorder: Escape cancels and closes it"
+    # Only meaningful if something was open: Escape "closing" a window that never appeared is a
+    # pass that proves nothing, which is how this read before.
+    if printf '%s' "$before" | grep -q '"windows":\[\]'; then
+        flunk "recorder: nothing was open for Escape to close"
     else
-        flunk "recorder: Escape did not close it"
+        "$helpers/keys" 53
+        sleep 1
+        if "$helpers/panel" com.xiaolaidict | grep -q '"windows":\[\]'; then
+            pass "recorder: Escape cancels and closes it"
+        else
+            flunk "recorder: Escape did not close it"
+        fi
     fi
 fi
 
@@ -502,7 +569,39 @@ for surface in "Reading History" "Settings…"; do
     "$helpers/keys" 53 2>/dev/null || true
     sleep 1
 done
+fi
 
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
 SH
+remote_status=${PIPESTATUS[0]}
+set -e
+
+# Recorded against the build it ran on. Without that a pass says only "it worked once", which is
+# not a claim anyone can act on — and a green mark that outlives what it tested is worse than none.
+build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo unknown)
+mkdir -p "$(dirname "$STATUS")"
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# A stage passes only if every assertion in it passed. Taking the last result per stage recorded
+# a stage as green when one of its checks had failed — the same hollow mark this file exists to
+# prevent. awk rather than an associative array: macOS ships bash 3.2, which has none.
+while IFS=$'\t' read -r name result; do
+    [ -n "${name:-}" ] || continue
+    if [ -f "$STATUS" ]; then grep -v "^$name	" "$STATUS" > "$STATUS.new" || true; else : > "$STATUS.new"; fi
+    printf '%s\t%s\t%s\t%s\n' "$name" "$result" "$build" "$now" >> "$STATUS.new"
+    mv "$STATUS.new" "$STATUS"
+done < <(grep "^RESULT	" "$RUN_LOG" | awk -F'\t' '
+    { if ($3 == "fail") seen[$2] = "fail"; else if (!($2 in seen)) seen[$2] = "pass" }
+    END { for (n in seen) print n "\t" seen[n] }' || true)
+
+echo
+echo "== recorded against build $build"
+[ -f "$STATUS" ] && sort "$STATUS" | while IFS=$'\t' read -r name result ran when; do
+    if [ "$ran" != "$build" ]; then
+        printf '  %-14s %-4s stale (ran on %s)\n' "$name" "$result" "$ran"
+    else
+        printf '  %-14s %-4s\n' "$name" "$result"
+    fi
+done
+echo "  $STATUS"
+exit "$remote_status"

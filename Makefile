@@ -5,7 +5,10 @@
 #   make run      the same, then quit the running copy, open the new one and check it answers
 #   make test     swift test, and the icon generator's tests
 #   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from design/icon
-#   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST)
+#   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST).
+#                 STAGES="drawer recogniser" runs only those; with none, all of them. A full run
+#                 costs minutes and most changes touch one or two.
+#   make e2e-status  what each stage last did, and on which build
 #   make clean    remove the bundle and staging (not SwiftPM's build cache)
 #
 # Nothing here is decided by timestamps: the script rebuilds when a digest of the inputs' names and
@@ -17,7 +20,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-icon icon e2e clean
+.PHONY: all run test test-swift test-icon icon e2e e2e-status clean
 
 # A Developer ID, never ad hoc, for two reasons:
 #   - macOS keys Accessibility and Screen Recording grants on the signing identity. An ad-hoc
@@ -58,7 +61,22 @@ icon:
 	@Tools/build-bundle.sh icon
 
 e2e: all
-	@Tools/e2e.sh "$(E2E_HOST)"
+	@Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
+
+# Reads the record rather than running anything. A stage whose build no longer matches the one on
+# disk is shown as stale: a pass is a fact about the build it ran on and expires with it.
+e2e-status:
+	@build=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" .build/XiaolaiDict.app/Contents/Info.plist 2>/dev/null || echo none); \
+	echo "bundle on disk: $$build"; \
+	if [ -f .build/e2e-status.tsv ]; then \
+		sort .build/e2e-status.tsv | while IFS=$$'\t' read -r name result ran when; do \
+			if [ "$$ran" != "$$build" ]; then \
+				printf '  %-14s %-4s stale (ran on %s, %s)\n' "$$name" "$$result" "$$ran" "$$when"; \
+			else \
+				printf '  %-14s %-4s %s\n' "$$name" "$$result" "$$when"; \
+			fi; \
+		done; \
+	else echo "  nothing recorded yet"; fi
 
 clean:
 	@Tools/build-bundle.sh clean
