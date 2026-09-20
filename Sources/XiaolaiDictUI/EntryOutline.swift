@@ -7,10 +7,10 @@ import XiaolaiDictCore
 /// 牛津英汉汉英's *hold*, where 货舱 is the 47th. The flat list the lookup carries is the truth; this
 /// is the shape the reader reads it in, and every node keeps the flat index it came from so
 /// selecting a row still names exactly one entry to render.
-struct EntryOutline: Equatable {
-    let dictionaries: [DictionaryNode]
+public struct EntryOutline: Equatable {
+    public let dictionaries: [DictionaryNode]
 
-    init(entries: [DictionaryEntry]) {
+    public init(entries: [DictionaryEntry]) {
         var groups: [DictionaryNode] = []
         for (index, entry) in entries.enumerated() {
             let node = EntryNode(
@@ -32,39 +32,39 @@ struct EntryOutline: Equatable {
 }
 
 /// One dictionary and the entries it answered with.
-struct DictionaryNode: Equatable, Identifiable {
-    let identity: DictionaryIdentity
-    var entries: [EntryNode]
+public struct DictionaryNode: Equatable, Identifiable {
+    public let identity: DictionaryIdentity
+    public var entries: [EntryNode]
 
-    var name: String { identity.name }
+    public var name: String { identity.name }
 
     /// The first entry's place in the flat list. A name would collide if a dictionary appeared
     /// twice; an index cannot.
-    var id: Int { entries.first?.index ?? -1 }
+    public var id: Int { entries.first?.index ?? -1 }
 }
 
 /// One entry — one record — under its dictionary.
-struct EntryNode: Equatable, Identifiable {
+public struct EntryNode: Equatable, Identifiable {
     /// Where this entry sits in the flat list the lookup carries.
-    let index: Int
-    let headword: String
+    public let index: Int
+    public let headword: String
     /// NOAD's *fine¹ fine² fine³ fine⁴*, where the dictionary numbers its homographs.
-    let homograph: String?
+    public let homograph: String?
     /// When this entry is not headed by the term itself. It belongs to the entry rather than to the
     /// dictionary: with several entries per dictionary, "its dictionary form" is a fact about one.
-    let note: String?
+    public let note: String?
     /// How precisely this entry's senses can be addressed. `.none` means the dictionary marks
     /// senses with nothing a parser can key to, and the sidebar shows no sense rows rather than
     /// inventing them.
-    let senseKeyKind: SenseKeyKind
-    let senses: [SenseNode]
+    public let senseKeyKind: SenseKeyKind
+    public let senses: [SenseNode]
 
-    var id: Int { index }
+    public var id: Int { index }
 
     /// The headword, with its homograph number raised the way the dictionary prints it. A marker
     /// that is not a plain number is shown as it is rather than mangled into a superscript that
     /// silently drops the characters it has no glyph for.
-    var label: String {
+    public var label: String {
         guard let homograph else { return headword }
         guard let raised = Self.raised(homograph) else { return "\(headword) (\(homograph))" }
         return headword + raised
@@ -86,30 +86,30 @@ struct EntryNode: Equatable, Identifiable {
 }
 
 /// One sense under its entry — the rung a study card stands on when the dictionary has one.
-struct SenseNode: Equatable, Identifiable {
-    let entryIndex: Int
-    let sense: DictionarySense
+public struct SenseNode: Equatable, Identifiable {
+    public let entryIndex: Int
+    public let sense: DictionarySense
 
-    var id: OutlineSelection { .sense(entry: entryIndex, key: sense.key ?? "\(sense.path.block).\(sense.path.ordinal)") }
-    var label: String { sense.label }
+    public var id: OutlineSelection { .sense(entry: entryIndex, key: sense.key ?? "\(sense.path.block).\(sense.path.ordinal)") }
+    public var label: String { sense.label }
     /// A position key is a weaker claim than a publisher's and has to read as one.
-    var keyKind: SenseKeyKind { sense.keyKind }
+    public var keyKind: SenseKeyKind { sense.keyKind }
 }
 
 /// What the reader has selected in the sidebar. A sense selection still names its entry, because
 /// the pane always renders a whole entry — decision D2 is to *mark* a sense, never to jump to it.
-enum OutlineSelection: Hashable {
+public enum OutlineSelection: Hashable {
     case entry(Int)
     case sense(entry: Int, key: String)
 
-    var entryIndex: Int {
+    public var entryIndex: Int {
         switch self {
         case .entry(let index): index
         case .sense(let index, _): index
         }
     }
 
-    var senseKey: String? {
+    public var senseKey: String? {
         switch self {
         case .entry: nil
         case .sense(_, let key): key

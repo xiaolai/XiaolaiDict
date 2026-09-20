@@ -1,11 +1,16 @@
+
 import XiaolaiDictCore
 import SwiftUI
 import WebKit
 
-struct PanelView: View {
-    let content: PanelContent
+public struct PanelView: View {
+    public let content: PanelContent
 
-    var body: some View {
+    public init(content: PanelContent) {
+        self.content = content
+    }
+
+    public var body: some View {
         switch content {
         case .message(let title, let detail):
             VStack(alignment: .leading, spacing: 8) {
@@ -39,9 +44,9 @@ struct PanelView: View {
 /// Waiting for the dictionaries, saying so. Never a blank pane: the invariant that a failure must
 /// not render as confidently as a success applies just as much to a result that has not arrived.
 private struct WaitingView: View {
-    let detail: String?
+    public let detail: String?
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: 10) {
             ProgressView().controlSize(.small)
             Text(detail ?? "Looking up…").foregroundStyle(.secondary)
@@ -52,12 +57,12 @@ private struct WaitingView: View {
 }
 
 private struct Header: View {
-    let term: String
-    let lemma: Lemma
-    let source: String?
-    let capture: CaptureQuality
+    public let term: String
+    public let lemma: Lemma
+    public let source: String?
+    public let capture: CaptureQuality
 
-    var body: some View {
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(term).font(.title2.weight(.semibold))
             if lemma.text != Lemmatizer.canonical(term) {
@@ -82,7 +87,7 @@ private struct Header: View {
 private struct OutcomeView: View {
     /// The encounter a tap on `senseKey` amounts to. Nil when there is nothing to key it to — an
     /// entry with no id, or a dictionary whose senses carry none.
-    static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
+    public static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
         guard let entryKey = entry.entryKey,
               let sense = entry.senses.first(where: { $0.key == senseKey }),
               sense.keyKind != SenseKeyKind.none
@@ -93,19 +98,19 @@ private struct OutcomeView: View {
             senseHash: sense.textHash, gloss: sense.label, chosenBy: .reader, chosenAt: .now)
     }
 
-    let term: String
-    let outcome: LookupOutcome
+    public let term: String
+    public let outcome: LookupOutcome
     /// Nil while the selector is still deciding. The entry does not wait for it.
-    let sense: SenseMark?
-    let met: Set<StudyItem>
+    public let sense: SenseMark?
+    public let met: Set<StudyItem>
     /// The reader's own sentence, where one was captured.
-    let sentence: String?
+    public let sentence: String?
     /// Nil until the reader picks a row: the first entry is shown, but nothing is *claimed* to be
     /// the sense they read.
     @State private var selected: OutlineSelection?
     @Environment(\.studySense) private var studySense
 
-    var body: some View {
+    public var body: some View {
         switch outcome {
         case .entries(let entries, let unreadable):
             VStack(alignment: .leading, spacing: 0) {
@@ -166,11 +171,11 @@ private struct OutcomeView: View {
 /// collapse. `NavigationSplitView` is unusable in a hosted window — measured in the ledger-ux
 /// spike, which saw it lay out 1284 pt inside a 640 pt frame — so this is a plain `List`.
 private struct OutlineSidebar: View {
-    let outline: EntryOutline
+    public let outline: EntryOutline
     @Binding var selected: OutlineSelection?
-    let mark: SenseMark?
+    public let mark: SenseMark?
 
-    var body: some View {
+    public var body: some View {
         List(selection: $selected) {
             ForEach(outline.dictionaries) { dictionary in
                 Section {
@@ -193,9 +198,9 @@ private struct OutlineSidebar: View {
 /// answered. A dictionary that cannot key senses says so here, once, rather than showing rows it
 /// cannot stand behind.
 private struct EntryRow: View {
-    let entry: EntryNode
+    public let entry: EntryNode
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(entry.label).lineLimit(1)
             if let note = entry.note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
@@ -209,15 +214,15 @@ private struct EntryRow: View {
 /// One sense under its entry. A sense addressed only by where it sits is a weaker claim than one
 /// carrying the publisher's id, and reads as one.
 private struct SenseRow: View {
-    let sense: SenseNode
-    let mark: SenseMark?
+    public let sense: SenseNode
+    public let mark: SenseMark?
 
     /// Marked, never jumped to (decision D2): a wrong jump hides the right sense, a wrong mark is
     /// visible and recoverable — which matters, because the selector's measured confidently-wrong
     /// rate is not small.
     private var isMarked: Bool { mark?.key == sense.sense.key }
 
-    var body: some View {
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("\(sense.sense.path.ordinal)")
                 .font(.caption.monospacedDigit())
@@ -246,11 +251,11 @@ private struct SenseRow: View {
 }
 
 /// A result that is less than it looks must say so, in the result.
-struct Notice: View {
-    let text: String
-    var symbol = "exclamationmark.triangle"
+public struct Notice: View {
+    public let text: String
+    public var symbol = "exclamationmark.triangle"
 
-    var body: some View {
+    public var body: some View {
         Label(text, systemImage: symbol)
             .font(.callout)
             .foregroundStyle(.orange)
@@ -264,9 +269,9 @@ struct Notice: View {
 /// says what the word meant last time: an earlier encounter says *you should know this*, while an
 /// earlier gloss answers the question and destroys the retrieval (`feature-ledger-ux.md` C2).
 private struct MemoryStripView: View {
-    let memory: MemoryStrip
+    public let memory: MemoryStrip
 
-    var body: some View {
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(memory.headline).font(.callout.weight(.medium))
             VStack(alignment: .leading, spacing: 1) {
@@ -290,13 +295,13 @@ private struct MemoryStripView: View {
 /// publisher's own rendering sits the chrome XiaolaiDict draws: what this entry is, how it sounds, and
 /// what can be done with it.
 private struct EntryPane: View {
-    let entry: DictionaryEntry
-    let term: String
-    let popup: EntryPresentation
+    public let entry: DictionaryEntry
+    public let term: String
+    public let popup: EntryPresentation
     /// The sense row the reader selected in the sidebar, if any — what pin and speak act on.
-    let chosenSense: String?
+    public let chosenSense: String?
     /// The reader's own sentence, for the pane that explains it.
-    let sentence: String?
+    public let sentence: String?
     @State private var failure: String?
     @State private var explanation: SentenceExplanation?
 
@@ -304,7 +309,7 @@ private struct EntryPane: View {
         popup.senses.first { $0.key != nil && $0.key == chosenSense }
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             EntryChrome(
                 popup: popup, selected: selected, term: term, sentence: sentence,
@@ -325,11 +330,11 @@ private struct EntryPane: View {
 
 /// Entry heading · part of speech · IPA · speak · copy · pin.
 private struct EntryChrome: View {
-    let popup: EntryPresentation
-    let selected: SensePresentation?
-    let term: String
+    public let popup: EntryPresentation
+    public let selected: SensePresentation?
+    public let term: String
     /// The reader's own sentence, when one was captured.
-    let sentence: String?
+    public let sentence: String?
     @Environment(\.pinNote) private var pin
     @State private var copied = false
     @State private var explaining = false
@@ -346,7 +351,7 @@ private struct EntryChrome: View {
             sentence: sentence, term: term, senseText: selected?.label ?? popup.senses.first?.label))
     }
 
-    var body: some View {
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(popup.heading).font(.title3.weight(.semibold))
             if !popup.partsOfSpeech.isEmpty {
@@ -420,9 +425,9 @@ private struct EntryChrome: View {
 /// What the on-device model made of the reader's sentence — or why it could not. Never a blank
 /// pane: a model that declined says so.
 private struct SentencePaneView: View {
-    let explanation: SentenceExplanation
+    public let explanation: SentenceExplanation
 
-    var body: some View {
+    public var body: some View {
         switch explanation {
         case .explained(let text, let tier):
             VStack(alignment: .leading, spacing: 4) {
@@ -444,22 +449,22 @@ private struct SentencePaneView: View {
 
 /// Pinning is the app's job, not the view's; the panel is handed a way to do it.
 private struct PinNoteKey: EnvironmentKey {
-    static let defaultValue: @MainActor (PinnedNote) -> Void = { _ in }
+    public static let defaultValue: @MainActor (PinnedNote) -> Void = { _ in }
 }
 
 /// So is writing to the ledger. Decision D8: an auxiliary dictionary's sense becomes a study item
 /// only when the reader asks for one, and it is recorded as theirs.
 private struct StudySenseKey: EnvironmentKey {
-    static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
+    public static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
 }
 
 extension EnvironmentValues {
-    var pinNote: @MainActor (PinnedNote) -> Void {
+    public var pinNote: @MainActor (PinnedNote) -> Void {
         get { self[PinNoteKey.self] }
         set { self[PinNoteKey.self] = newValue }
     }
 
-    var studySense: @MainActor (SenseEncounter) -> Void {
+    public var studySense: @MainActor (SenseEncounter) -> Void {
         get { self[StudySenseKey.self] }
         set { self[StudySenseKey.self] = newValue }
     }
@@ -468,12 +473,12 @@ extension EnvironmentValues {
 /// One dictionary entry, rendered from the document the service returned. A document, not a page:
 /// no JavaScript, nothing fetched, nothing followed, nothing kept.
 private struct EntryView: NSViewRepresentable {
-    let html: String
-    let onFailure: (String) -> Void
+    public let html: String
+    public let onFailure: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onFailure: onFailure) }
+    public func makeCoordinator() -> Coordinator { Coordinator(onFailure: onFailure) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    public func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
         configuration.websiteDataStore = .nonPersistent()
@@ -482,7 +487,7 @@ private struct EntryView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {
+    public func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.load(html, into: view)
     }
 
@@ -572,10 +577,10 @@ private struct EntryView: NSViewRepresentable {
 /// Which navigations an entry may make: exactly one — XiaolaiDict's own load of the document, in the main
 /// frame. Links, redirects, refreshes and frames are all refused. (`.other` alone would admit
 /// redirects and meta refreshes too.)
-enum EntryNavigationPolicy {
-    static let documentURL = URL(string: "about:blank")!
+public enum EntryNavigationPolicy {
+    public static let documentURL = URL(string: "about:blank")!
 
-    static func allows(url: URL?, isMainFrame: Bool, expectingLoad: Bool) -> Bool {
+    public static func allows(url: URL?, isMainFrame: Bool, expectingLoad: Bool) -> Bool {
         expectingLoad && isMainFrame && url == documentURL
     }
 }
@@ -583,9 +588,9 @@ enum EntryNavigationPolicy {
 /// Blocks every resource an entry's document could fetch — images, stylesheets, fonts, media,
 /// anything over any scheme. Entries are self-contained (their stylesheet is inlined), so a fetch
 /// is either broken or a request to someone's server; navigation policy does not cover these.
-enum EntryContentRules {
-    static let identifier = "\(XiaolaiDictIdentity.app).entry-resources"
-    static let json = """
+public enum EntryContentRules {
+    public static let identifier = "\(XiaolaiDictIdentity.app).entry-resources"
+    public static let json = """
         [{"trigger": {"url-filter": ".*", "resource-type": ["image", "style-sheet", "script", "font", "raw", \
         "svg-document", "media", "popup", "ping", "fetch", "websocket", "other"]}, "action": {"type": "block"}}]
         """
@@ -594,7 +599,7 @@ enum EntryContentRules {
 
     /// Compiled once per launch; a failed compile is retried next time rather than cached.
     @MainActor
-    static func compiled() async throws -> WKContentRuleList {
+    public static func compiled() async throws -> WKContentRuleList {
         if let compiling { return try await compiling.value }
         let task = Task { () async throws -> WKContentRuleList in
             guard let store = WKContentRuleListStore.default() else {
@@ -615,7 +620,7 @@ enum EntryContentRules {
     }
 }
 
-extension CaptureQuality.Context {
+public extension CaptureQuality.Context {
     /// What the panel says about the sentence recorded with the word, when it is less than whole.
     var caveat: String? {
         switch self {
@@ -628,7 +633,7 @@ extension CaptureQuality.Context {
 
 extension DictionaryEntry {
     /// Under the dictionary's name in the sidebar, when its entry is not headed by the term itself.
-    var matchNote: String? {
+    public var matchNote: String? {
         switch match {
         case .exact: nil
         case .dictionaryForm: "entry for “\(headword)”, its dictionary form"
@@ -637,3 +642,42 @@ extension DictionaryEntry {
         }
     }
 }
+
+// MARK: - Previews
+
+// The panel's states that need no dictionary behind them. The *waiting* state matters most: the
+// panel is a container that fills in, not a payload that is awaited, and how it reads before the
+// dictionaries answer is a design decision rather than a loading spinner.
+#if DEBUG
+// A function, not a global: `LookupPresentation` is not Sendable, and a shared mutable global
+// would be a concurrency error rather than a convenience.
+private func sampleWaiting() -> LookupPresentation {
+    LookupPresentation(
+        term: "ephemeral",
+        lemma: Lemma(text: "ephemeral", basis: .tagger),
+        source: "Safari · A page",
+        capture: .accessibility(.accessibilityTextMarkers, context: .complete),
+        sentence: "The ephemeral beauty of morning frost.",
+        outcome: nil)
+}
+
+#Preview("Waiting for the dictionaries") {
+    PanelView(content: .lookup(sampleWaiting()))
+        .frame(width: 760, height: 520)
+}
+
+#Preview("Nothing to look up") {
+    PanelView(content: .message(
+        title: "Nothing to look up",
+        detail: "The frontmost app could not be identified, so its selection cannot be read."))
+        .frame(width: 420, height: 150)
+}
+
+#Preview("Accessibility is off") {
+    PanelView(content: .message(
+        title: "XiaolaiDict needs Accessibility access",
+        detail: "It reads your selection through Accessibility. Allow XiaolaiDict in "
+            + "\(PrivacySettings.accessibilityLocation), then press the shortcut again."))
+        .frame(width: 420, height: 180)
+}
+#endif

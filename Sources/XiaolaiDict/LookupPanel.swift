@@ -1,73 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
 import XiaolaiDictCore
-import os
+import XiaolaiDictUI
 import SwiftUI
-
-/// One lookup, as the panel shows it — a container that fills in rather than a payload that is
-/// awaited. Everything known the moment the reader pressed the shortcut is here at once; what the
-/// dictionaries say arrives later, in the same panel.
-struct LookupPresentation: Equatable {
-    let term: String
-    let lemma: Lemma
-    /// The app, and the site, the word was read in.
-    let source: String?
-    let capture: CaptureQuality
-    /// The reader's own sentence, where one was captured. The sentence pane explains this, and it
-    /// is the only text the remote tier would ever be allowed to see.
-    var sentence: String?
-    /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
-    /// empty pane that reads like an entry.
-    var outcome: LookupOutcome?
-    /// Nil while the selector is still deciding. The entry is readable with all of its senses long
-    /// before this arrives — the mark is late, the entry is not.
-    var sense: SenseMark?
-    /// Nil on a first lookup, and until the ledger has been read. Prior encounters, never prior
-    /// meanings.
-    var memory: MemoryStrip?
-    /// The study items the reader has already met, so a sense read before can be marked (C3).
-    var met: Set<StudyItem> = []
-}
-
-/// What the panel shows.
-enum PanelContent {
-    case lookup(LookupPresentation)
-    /// Something the reader needs to know instead of an entry: no selection, no permission.
-    case message(title: String, detail: String)
-
-    /// What this panel is waiting for, in words, or nil when it is waiting for nothing.
-    var waitingDescription: String? {
-        guard case .lookup(let presentation) = self, presentation.outcome == nil else { return nil }
-        return "Looking up “\(presentation.term)” in your dictionaries…"
-    }
-
-    enum Kind: Hashable {
-        case lookup
-        case message
-
-        /// Exhaustive, so a new kind of content cannot quietly get another kind's size.
-        var defaultSize: NSSize {
-            switch self {
-            case .lookup: NSSize(width: 760, height: 520)
-            case .message: NSSize(width: 420, height: 150)
-            }
-        }
-
-        var minimumSize: NSSize {
-            switch self {
-            case .lookup: NSSize(width: 480, height: 300)
-            case .message: NSSize(width: 320, height: 120)
-            }
-        }
-    }
-
-    var kind: Kind {
-        switch self {
-        case .lookup: .lookup
-        case .message: .message
-        }
-    }
-}
+import os
 
 /// What a lookup needs of the panel: present it, fill it in, and say whether this lookup is still
 /// the one the reader is waiting on. `LookupPanelController` is it in the app; a test puts a

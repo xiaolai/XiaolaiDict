@@ -1,5 +1,6 @@
 import AppKit
 import XiaolaiDictCore
+import XiaolaiDictUI
 
 /// One lookup, from selection to panel to ledger row.
 ///

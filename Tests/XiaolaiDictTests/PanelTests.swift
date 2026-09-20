@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 import XiaolaiDictCore
 import Testing
 import WebKit

@@ -1,5 +1,6 @@
 import AVFoundation
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 import Testing
 
 /// Stage 6, as Spike S1 left it: use the system's voices, take the best one installed, and say so

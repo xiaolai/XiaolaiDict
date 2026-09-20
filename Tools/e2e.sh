@@ -94,7 +94,10 @@ app="$HOME/$1/XiaolaiDict.app"; exe="$app/Contents/MacOS/XiaolaiDict"
 service="$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService"
 failures=0
 # The stages asked for; none means all of them.
-WANTED=(${2:-})
+# `${@:2}`, not `$2`: ssh rejoins its arguments into one command line and the remote shell splits
+# them again, so a quoted "a b c" arrives as three separate arguments. Reading only $2 ran the
+# first stage named and silently skipped the rest.
+WANTED=("${@:2}")
 STAGE=""
 want() {  # want <name>: is this stage wanted? Also names it, for the result lines.
     STAGE=$1

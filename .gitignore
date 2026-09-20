@@ -19,7 +19,14 @@
 
 # Swift build output. Slash-free for the same reason as above: a worktree's symlink must match too.
 /.build
-/.swiftpm
+# `.swiftpm` is Xcode's per-user state, except for `xcshareddata` — which is the part Xcode
+# separates out precisely so it can be committed. The shared XiaolaiDictUI scheme lives there, and
+# previews do not work without it: ignoring the whole directory meant a fresh clone opened
+# Package.swift and found nothing to preview.
+/.swiftpm/*
+!/.swiftpm/xcode
+/.swiftpm/xcode/*
+!/.swiftpm/xcode/xcshareddata
 # Python's bytecode cache, written when the icon generator's tests import it.
 __pycache__
 

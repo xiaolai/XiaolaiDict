@@ -3,7 +3,7 @@ import XiaolaiDictCore
 
 /// How far a sense is claimed to be the one the reader read. The whole point of the type is that
 /// the three are not interchangeable, and that the weakest is the default.
-enum SenseStanding: Equatable {
+public enum SenseStanding: Equatable {
     /// A fact: the reader tapped it, or the entry has exactly one sense so nothing was chosen.
     case confirmed(SenseChoice)
     /// A hypothesis: XiaolaiDict's selector proposed it. It is drawn differently and recorded separately,
@@ -12,52 +12,52 @@ enum SenseStanding: Equatable {
     /// Nothing is claimed about this sense.
     case unclaimed
 
-    var isConfirmed: Bool {
+    public var isConfirmed: Bool {
         guard case .confirmed = self else { return false }
         return true
     }
 }
 
 /// One sense, as the popup presents it.
-struct SensePresentation: Equatable, Identifiable {
-    let key: String?
-    let ordinal: Int
-    let partOfSpeech: String?
-    let label: String
-    let keyKind: SenseKeyKind
-    let standing: SenseStanding
+public struct SensePresentation: Equatable, Identifiable {
+    public let key: String?
+    public let ordinal: Int
+    public let partOfSpeech: String?
+    public let label: String
+    public let keyKind: SenseKeyKind
+    public let standing: SenseStanding
     /// The reader has been on this sense before (`feature-ledger-ux.md` C3) — which no surveyed
     /// dictionary shows. It is *whether*, never *what*: the earlier gloss is not carried here.
-    let metBefore: Bool
+    public let metBefore: Bool
 
-    var id: String { key ?? "\(ordinal)" }
+    public var id: String { key ?? "\(ordinal)" }
 
     /// A position key is a weaker claim than a publisher's and must read as one (I4).
-    var isPositional: Bool { keyKind == .position }
+    public var isPositional: Bool { keyKind == .position }
 }
 
 /// One entry, as the popup presents it: the heading, what it is, how it sounds, and its senses.
 ///
 /// The entry's *body* is still rendered from the dictionary's own document — the entry is the
 /// publisher's, not XiaolaiDict's (B7). This is the chrome XiaolaiDict draws around it.
-struct EntryPresentation: Equatable {
-    let dictionary: DictionaryIdentity
+public struct EntryPresentation: Equatable {
+    public let dictionary: DictionaryIdentity
     /// The headword with its homograph number raised: *fine²*.
-    let heading: String
+    public let heading: String
     /// The parts of speech this entry has blocks for, in order, without repeats.
-    let partsOfSpeech: [String]
+    public let partsOfSpeech: [String]
     /// What the entry prints for pronunciation (`d:prn`).
-    let pronunciations: [String]
-    let senses: [SensePresentation]
+    public let pronunciations: [String]
+    public let senses: [SensePresentation]
     /// The finest rung this entry's senses can be addressed at.
-    let senseKeyKind: SenseKeyKind
+    public let senseKeyKind: SenseKeyKind
 
     /// Whether this entry can be studied at sense level at all. A dictionary that marks senses with
     /// nothing a parser can key to cannot, and the popup says so rather than offering sense rows it
     /// cannot stand behind.
-    var canKeySenses: Bool { senseKeyKind != SenseKeyKind.none }
+    public var canKeySenses: Bool { senseKeyKind != SenseKeyKind.none }
 
-    init(entry: DictionaryEntry, mark: SenseMark?, met: Set<StudyItem>) {
+    public init(entry: DictionaryEntry, mark: SenseMark?, met: Set<StudyItem>) {
         dictionary = entry.dictionary
         heading = EntryNode(
             index: 0, headword: entry.headword, homograph: entry.homograph, note: nil,
@@ -99,28 +99,28 @@ struct EntryPresentation: Equatable {
 /// It costs nothing, because the ledger already has it, and it lands at the moment of a naturally
 /// occurring failed recall (`feature-ledger-ux.md` C1). It is absent on a first lookup: no empty
 /// state, no "0 previous" (C4).
-struct MemoryStrip: Equatable {
+public struct MemoryStrip: Equatable {
     /// 2 on a second lookup. The strip does not exist below that.
-    let occasion: Int
-    let earlier: [PriorEncounter]
+    public let occasion: Int
+    public let earlier: [PriorEncounter]
 
     /// Nil on a first lookup, so there is nothing to render rather than an empty box.
-    init?(_ prior: PriorEncounters) {
+    public init?(_ prior: PriorEncounters) {
         guard prior.isWorthShowing else { return nil }
         occasion = prior.occasion
         earlier = prior.occasions
     }
 
     /// "3rd lookup".
-    var headline: String {
+    public var headline: String {
         "\(occasion)\(Self.ordinalSuffix(occasion)) lookup"
     }
 
     /// Where and when the earlier ones were — the most recent first, and never more than this many,
     /// because a strip that grows without bound stops being a strip.
-    static let shown = 3
+    public static let shown = 3
 
-    var lines: [String] {
+    public var lines: [String] {
         // Built per call rather than held in a static: `RelativeDateTimeFormatter` is not Sendable,
         // and a shared one would be mutable state reachable from any actor.
         let relative = RelativeDateTimeFormatter()
@@ -133,7 +133,7 @@ struct MemoryStrip: Equatable {
     }
 
     /// How many earlier encounters are not listed, so the count is never silently truncated.
-    var more: Int { max(0, earlier.count - Self.shown) }
+    public var more: Int { max(0, earlier.count - Self.shown) }
 
     private static func ordinalSuffix(_ number: Int) -> String {
         switch (number % 100, number % 10) {

@@ -18,7 +18,7 @@ import os
 /// what it found is only a compact one. A compact voice is noticeably worse, and a reader who does
 /// not know better ones exist will conclude that XiaolaiDict sounds bad.
 @MainActor
-enum Speech {
+public enum Speech {
     private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "speech")
     private static let synthesizer = AVSpeechSynthesizer()
 
@@ -33,7 +33,7 @@ enum Speech {
     private static var cachedVoices: [AVSpeechSynthesisVoice]?
     private static var cachedCaveats: [String: String?] = [:]
 
-    static var installedVoices: [AVSpeechSynthesisVoice] {
+    public static var installedVoices: [AVSpeechSynthesisVoice] {
         if let cachedVoices { return cachedVoices }
         let voices = AVSpeechSynthesisVoice.speechVoices()
         cachedVoices = voices
@@ -42,7 +42,7 @@ enum Speech {
 
     /// The best voice installed for `language`, preferring premium, then enhanced, then compact.
     /// Nil when the reader has no voice for that language at all.
-    static func bestVoice(
+    public static func bestVoice(
         for language: String, among voices: [AVSpeechSynthesisVoice]? = nil
     ) -> AVSpeechSynthesisVoice? {
         let voices = voices ?? installedVoices
@@ -58,7 +58,7 @@ enum Speech {
 
     /// What the reader can be told about the voice that will be used. Nil when there is nothing
     /// worth saying — a premium or enhanced voice speaks for itself.
-    static func caveat(
+    public static func caveat(
         for language: String, among voices: [AVSpeechSynthesisVoice]? = nil
     ) -> String? {
         // Memoised per language: the panel asks for this from a view body.
@@ -84,7 +84,7 @@ enum Speech {
     /// Says `text` in the language it appears to be in. Silence is reported to the log rather than
     /// to the reader: a word that will not speak is a small failure, and interrupting a lookup to
     /// say so would be a larger one.
-    static func say(_ text: String) {
+    public static func say(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
