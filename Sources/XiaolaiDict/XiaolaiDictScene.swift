@@ -17,17 +17,32 @@ import SwiftUI
 /// `main()` is called from `main.swift` rather than `@main`, because XiaolaiDict's other launch modes —
 /// the lookup, the reports, the instruments — must be able to run without a scene at all.
 struct XiaolaiDictScene: App {
+    static let drawerID = "reading-history"
+
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
     var body: some Scene {
         MenuBarExtra {
             XiaolaiDictMenu(app: delegate)
         } label: {
-            if let icon = XiaolaiDictApp.menuBarImage() {
-                Image(nsImage: icon)
-            } else {
-                Text("XiaolaiDict")   // no image at all is still no reason to show nothing
-            }
+            MenuBarLabel()
+        }
+
+        // A `Window`, deliberately not a `UtilityWindow`. Measured in this bundle, same content
+        // and same action, only the scene type differing: a `UtilityWindow` is created and reports
+        // `isVisible`, but the compositor never lists it and Accessibility never sees it — so it is
+        // drawn nowhere and readable by nothing. A `Window` is composited, is listed by
+        // Accessibility, and still does not activate the app.
+        Window("Reading History", id: Self.drawerID) {
+            HistoryDrawerRootView(model: delegate.drawerModel)
+                .xiaolaiDictPanelBehaviour()
+        }
+        .windowStyle(.plain)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .defaultWindowPlacement { _, _ in
+            let rect = delegate.drawerPlacement ?? .zero
+            return WindowPlacement(rect.origin, size: rect.size)
         }
 
         Settings {

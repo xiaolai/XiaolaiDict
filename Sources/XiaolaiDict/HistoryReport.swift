@@ -14,48 +14,32 @@ enum HistoryReport {
     /// How long the instrument will wait for the drawer to appear before calling it a failure.
     static let appearance: Duration = .seconds(3)
 
-    static func run() async -> CommandStatus {
-        let ledger: LedgerStore?
-        do {
-            ledger = try await LedgerStore.openDefault()
-        } catch {
-            ledger = nil
-        }
+    /// Set before the scene starts, so the delegate knows to measure instead of just running.
+    nonisolated(unsafe) static var isWanted = false
 
-        let drawer = HistoryDrawerController(load: { [ledger] in
-            guard let ledger else { return .unavailable("the ledger would not open") }
-            do {
-                let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
-                return .entries(try await ledger.recentLookups(
-                    since: since, limit: HistoryDrawerController.cardLimit))
-            } catch {
-                return .unavailable("\(error)")
-            }
-        })
-
+    /// Measures **the running app**, not a controller built for the occasion. It has to: a scene
+    /// exists only inside the app that declares it. It is a better instrument for it — what it
+    /// measures is what the reader gets.
+    static func run(in app: XiaolaiDictApp) async -> CommandStatus {
         let screens = NSScreen.screens.map(ScreenMetrics.init)
         let expected = DrawerPlacement.screen(under: UpPoint(NSEvent.mouseLocation), among: screens)
             .map { DrawerGeometry.make(DrawerLayout(thickness: 380, edge: .right), on: $0) }
 
-        drawer.show()
-        // Polled, not slept: the instrument waits for the thing it is measuring and gives up after
-        // a deadline, rather than guessing how long a spring takes on an unloaded machine.
+        app.toggleHistory()
         // Asks the compositor, not the controller. The controller's own answer is what once
         // reported a drawer that had never been drawn.
-        let appeared = await settle(until: appearance) { drawer.isDrawnOnScreen && drawer.model.revealed }
-        await drawer.reload?.value
+        let appeared = await settle(until: appearance) { app.drawerIsDrawn && app.drawerModel.revealed }
+        await app.drawerReload?.value
 
-        // Read while the drawer shows, because that is the only moment they can be true.
-        // Read while it shows, like everything else here: after `hide()` the honest answer is
-        // false, which would look like a failure and is only bad timing.
-        let drawn = drawer.isDrawnOnScreen
+        // Read while it shows, because that is the only moment they can be true.
+        let drawn = app.drawerIsDrawn
         let activatedUs = NSApp.isActive
-        let claimedEscape = drawer.isEscapeClaimed
-        let frame = drawer.windowFrame
+        let claimedEscape = app.drawerHoldsEscape
+        let frame = app.drawerWindowFrame
         let docked = expected.map { $0.windowRect.cg == frame } ?? false
 
-        drawer.hide()
-        let released = await settle(until: .seconds(2)) { !drawer.isEscapeClaimed && !drawer.isOnScreen }
+        app.toggleHistory()
+        let released = await settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
 
         let report: [String: Any] = [
             "bundle": Bundle.main.bundleIdentifier ?? "none",
@@ -71,18 +55,15 @@ enum HistoryReport {
             "activatedTheApp": activatedUs,
             "claimedEscapeWhileShown": claimedEscape,
             "releasedEscapeAfterClosing": released,
-            "days": drawer.model.days.count,
-            "entries": drawer.model.totalEntries,
-            "problem": drawer.model.problem ?? "none",
+            "days": app.drawerModel.days.count,
+            "entries": app.drawerModel.totalEntries,
+            "problem": app.drawerModel.problem ?? "none",
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
             return .internalError
         }
         LookupCommand.writeLine(String(decoding: data, as: UTF8.self))
-
-        // A drawer that never appeared, or one that appeared by stealing focus, is a failed
-        // measurement and says so in its exit status rather than only in its text.
-        return appeared && !activatedUs && claimedEscape && released ? .success : .failure
+        return appeared && drawn && docked && !activatedUs && claimedEscape && released ? .success : .failure
     }
 
     /// Waits for `condition`, checking each runloop turn, and reports whether it came true.

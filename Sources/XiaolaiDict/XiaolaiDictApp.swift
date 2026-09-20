@@ -93,7 +93,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // the drawer's click-away dismissal. `MenuBarExtra` exposes no frame, so it is found by its
         // window: a miss costs the guard, which is visible (the drawer reopens) and not silent.
         drawer.statusItemFrame = {
-            NSApp.windows.first { $0.className.contains("StatusBar") }?.frame
+            NSApplication.shared.windows.first { $0.className.contains("StatusBar") }?.frame
         }
         Task { [weak self] in self?.permissions = await .probe() }
         hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
@@ -102,6 +102,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         if hoverEnabled { hover.start() }
         registerShortcut(shortcuts.load())
         quitOnTerminationSignal()
+        if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
     }
 
     // MARK: - Looking up
@@ -238,6 +239,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Menu
+
+    // MARK: - What the scenes read
+
+    var drawerModel: HistoryDrawerModel { drawer.model }
+    var drawerPlacement: CGRect? { drawer.placement }
+    var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }
+    var drawerWindowFrame: CGRect { drawer.windowFrame }
+    var drawerReload: Task<Void, Never>? { drawer.reload }
+    var drawerHoldsEscape: Bool { drawer.isEscapeClaimed }
 
     // MARK: - What the menu reads
 
