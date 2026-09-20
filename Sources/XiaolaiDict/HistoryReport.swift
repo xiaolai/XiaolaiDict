@@ -40,10 +40,15 @@ enum HistoryReport {
         drawer.show()
         // Polled, not slept: the instrument waits for the thing it is measuring and gives up after
         // a deadline, rather than guessing how long a spring takes on an unloaded machine.
-        let appeared = await settle(until: appearance) { drawer.isOnScreen && drawer.model.revealed }
+        // Asks the compositor, not the controller. The controller's own answer is what once
+        // reported a drawer that had never been drawn.
+        let appeared = await settle(until: appearance) { drawer.isDrawnOnScreen && drawer.model.revealed }
         await drawer.reload?.value
 
         // Read while the drawer shows, because that is the only moment they can be true.
+        // Read while it shows, like everything else here: after `hide()` the honest answer is
+        // false, which would look like a failure and is only bad timing.
+        let drawn = drawer.isDrawnOnScreen
         let activatedUs = NSApp.isActive
         let claimedEscape = drawer.isEscapeClaimed
         let frame = drawer.windowFrame
@@ -57,6 +62,7 @@ enum HistoryReport {
             "insideBundle": Bundle.main.bundleIdentifier != nil,
             "screens": screens.count,
             "appeared": appeared,
+            "drawnOnScreen": drawn,
             "dockedWhereAsked": docked,
             "frame": NSStringFromRect(frame),
             "expectedFrame": expected.map { NSStringFromRect($0.windowRect.cg) } ?? "none",

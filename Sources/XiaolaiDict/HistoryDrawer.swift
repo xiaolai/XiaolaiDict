@@ -210,6 +210,22 @@ final class HistoryDrawerController {
 
     /// Whether the panel is actually on screen — not whether the controller thinks it should be.
     var isOnScreen: Bool { panel.isVisible }
+
+    /// Whether the **compositor** has this window on screen — not the controller's bookkeeping,
+    /// and not AppKit's `isVisible` either.
+    ///
+    /// This exists because of a specific failure. When the drawer was briefly a SwiftUI scene,
+    /// every check in `--history-report` read controller state: `appeared` asked whether the
+    /// controller thought it had opened, and `dockedWhereAsked` compared the rect it had asked for
+    /// with itself. Both passed, the end-to-end stages passed, and no drawer was ever drawn. A
+    /// window the compositor does not list is not on screen, whatever anything else claims.
+    var isDrawnOnScreen: Bool {
+        let listed = (CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        return listed.contains {
+            ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == Int(panel.windowNumber)
+        }
+    }
     /// The panel's frame as AppKit has it, so a report can compare it with the geometry it asked for.
     var windowFrame: CGRect { panel.frame }
     /// Whether Escape is currently XiaolaiDict's. It must be claimed only while the drawer shows.
