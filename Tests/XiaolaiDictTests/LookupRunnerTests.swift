@@ -28,14 +28,17 @@ struct LookupRunnerTests {
         let started = ContinuousClock.now
         let lookup = Task { await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket) }
         try await panel.waitForShow()
-        let shown = ContinuousClock.now - started
 
-        // Bounded by the content deadline, not by the 1 s product promise. If the panel waited
-        // for the dictionaries, `shown` would be the full deadline; anything under it means it
-        // did not. The 1 s promise is a statement about a real machine and is measured on one —
-        // e2e.sh stage 7 exists for exactly that. Asserting it here measures how many other tests
-        // the runner happens to be executing in parallel, which is what made this fail.
-        #expect(shown < DictionaryClient.defaultDeadline, "the panel waited for the dictionaries: \(shown)")
+        // **Counted, not timed.** This used to also assert the elapsed time was under the content
+        // deadline, and it failed under a full parallel run — an upper bound on wall clock measures
+        // how many other tests the runner happens to be executing, which is what this project's
+        // test rules say not to do. It was also redundant: against a service that never replies,
+        // a panel holding a waiting lookup with no updates *is* a panel that did not wait for the
+        // dictionaries, however long the machine took to get there. The 1 s product promise is a
+        // statement about a real machine and is measured on one — e2e.sh stage 7 exists for that.
+        //
+        // The clock is still read below, for the *lower* bound on the whole lookup. A floor is
+        // safe where a ceiling is not: a loaded machine can only ever take longer.
         #expect(panel.contents.count == 1)
         #expect(panel.contents[0].isWaitingLookup, "the first thing shown already had an outcome")
         // Still waiting: the content cannot have arrived, because the service never answers.
