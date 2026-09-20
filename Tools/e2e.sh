@@ -164,6 +164,22 @@ if [ -z "$(pids "$exe")" ]; then
     for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
 fi
 
+# **And wait for the menu, which is not the same as waiting for the process.** Install quits the
+# running copy, so every run starts cold; immediately after the pid appears the menu-bar item is
+# not in the Accessibility tree yet — measured deterministically, 3 restarts out of 3. Waiting on
+# the pid and then driving the menu made whichever menu-driven assertion ran first fail, and which
+# one that was moved between runs. That reads like a flaky app; it was the harness using a surface
+# it had never established was there.
+menu_ready=""
+for _ in $(seq 1 200); do
+    if "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1; then menu_ready=yes; break; fi
+    sleep 0.1
+done
+if [ -z "$menu_ready" ]; then
+    echo "FAIL  setup: the menu-bar item never appeared — every menu-driven stage below is void"
+    failures=$((failures + 1))
+fi
+
 if want launch; then
 # 1. LaunchServices starts it, and it stays up.
 open "$app"
