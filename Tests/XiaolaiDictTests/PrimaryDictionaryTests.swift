@@ -141,6 +141,20 @@ struct SenseResolverTests {
             definition: "meaning \(ordinal)", text: "meaning \(ordinal)")
     }
 
+    /// A sense addressed by where it sits. Its key is `"block.ordinal"` and carries nothing about
+    /// which entry it came from, which is the whole reason the resolver needs the entry as well.
+    private static func positional(_ ordinal: Int, in block: Int = 1) -> DictionarySense {
+        DictionarySense(
+            path: SensePath(block: block, ordinal: ordinal), key: "\(block).\(ordinal)",
+            keyKind: .position, definition: "meaning \(ordinal)", text: "meaning \(ordinal)")
+    }
+
+    private static func unkeyable() -> DictionarySense {
+        DictionarySense(
+            path: SensePath(block: 1, ordinal: 1), key: nil, keyKind: SenseKeyKind.none,
+            definition: "meaning", text: "meaning")
+    }
+
     /// A selector that always says the same thing, so the resolver is what is under test.
     private struct Fixed: SenseSelecting {
         let answer: SenseSelection
@@ -165,6 +179,83 @@ struct SenseResolverTests {
         let resolution = await resolve([single], .chose(key: "wrong", margin: 9))
         #expect(resolution.mark == .chosen(key: "e1.001", by: .onlySense))
         #expect(resolution.encounter?.chosenBy == .onlySense)
+    }
+
+    /// **Two entries, one key.** A positional key is literally `"\(block).\(ordinal)"` — no entry
+    /// id, no hash — so every entry in a dictionary has a sense keyed `"1.1"`. Resolving a choice
+    /// by key alone took the first entry that happened to contain one, which is the right sense of
+    /// the wrong word, written into the study ledger as a fact.
+    @Test func aPositionalKeyIsResolvedInTheEntryItWasChosenFrom() async throws {
+        let first = Self.entry(
+            "NOAD", identifier: "n", entryID: "first",
+            senses: [Self.positional(1)])
+        let second = Self.entry(
+            "NOAD", identifier: "n", entryID: "second",
+            senses: [Self.positional(1)])
+
+        let resolution = await resolve(
+            [first, second], .chose(key: "1.1", margin: 9, entryID: "second"))
+        let encounter = try #require(resolution.encounter)
+        // `entryKey` is the entry's own id where it has one, so it names which of the two.
+        #expect(encounter.entryID == "second",
+                "resolved to \(encounter.entryID) — the first entry that happened to match")
+    }
+
+    /// Where the selector did not say which entry, the old behaviour stands rather than the
+    /// resolution failing: an answer from a selector that predates the field is still an answer.
+    @Test func aChoiceWithNoEntryStillResolves() async throws {
+        let entry = Self.entry(
+            "NOAD", identifier: "n", entryID: "only",
+            senses: [Self.positional(1), Self.positional(2)])
+        let resolution = await resolve([entry], .chose(key: "1.2", margin: 9))
+        #expect(resolution.mark == .chosen(key: "1.2", by: .model))
+    }
+
+    /// **An unkeyable sense is never presented as confirmed, however it was marked.** It reaches
+    /// the resolver with an empty key, and `.onlySense` is the most confirmed mark there is —
+    /// writing one would have put the id of a sense nothing can point at again into the ledger.
+    @Test func theOnlySenseOfAnUnkeyableEntryIsNotConfirmed() async throws {
+        let unkeyable = Self.entry(
+            "Collins", identifier: "c", entryID: "e1",
+            senses: [Self.unkeyable()])
+        let resolution = await resolve([unkeyable], .abstained(.noCandidates))
+        #expect(resolution.mark?.key == nil, "an unkeyable sense was marked as chosen")
+        if case .chosen(_, let by) = resolution.mark {
+            Issue.record("marked \(by) for a sense the dictionary cannot key")
+        }
+        // **And the encounter, not only the mark.** The guard was on the mark alone, so the
+        // abstention fallback wrote `.onlySense` — the most confirmed provenance there is — into
+        // the ledger for the same sense the panel had just refused to confirm. Checking the mark
+        // here and stopping is what let that live: the two paths have to agree.
+        //
+        // The entry is still recorded, because it is still a fact that the reader met it. What
+        // must be empty is every field that would claim a *sense*: asserting only that `chosenBy`
+        // is not `.onlySense` would pass on an encounter that named the unkeyable sense and merely
+        // attributed it differently.
+        let encounter = try #require(resolution.encounter, "the entry the reader met was dropped")
+        #expect(encounter.chosenBy == nil, "the ledger confirmed a sense the dictionary cannot key")
+        #expect(encounter.chosenAt == nil)
+        #expect(encounter.senseKey == nil)
+        #expect(encounter.senseHash == nil)
+        #expect(encounter.gloss == nil)
+    }
+
+    /// **A key alone does not name an entry, so an ambiguous one is refused rather than guessed
+    /// at.** Positional keys are literally `"block.ordinal"`, so every entry for a headword has a
+    /// `"1.1"`. Taking the first match picks by document order — the right sense of the wrong
+    /// entry, written to the ledger as a fact. Where the selector named no entry and more than one
+    /// holds the key, nothing is claimed: no mark and no encounter. Not the mark without the
+    /// encounter — a mark is a highlight drawn in an entry, and which entry is exactly what is
+    /// unknown here.
+    @Test func anAmbiguousKeyWithNoEntryResolvesToNothing() async throws {
+        let first = Self.entry(
+            "NOAD", identifier: "n", entryID: "first", senses: [Self.positional(1)])
+        let second = Self.entry(
+            "NOAD", identifier: "n", entryID: "second", senses: [Self.positional(1)])
+        let resolution = await resolve([first, second], .chose(key: "1.1", margin: 9))
+        #expect(resolution.encounter == nil,
+                "resolved \(resolution.encounter?.entryID ?? "?") from a key both entries hold")
+        #expect(resolution.mark == nil, "marked a sense in an entry it could not identify")
     }
 
     /// A sense the selector picked is a hypothesis, and is recorded as one.

@@ -304,3 +304,66 @@ struct LedgerHistoryTests {
         }
     }
 }
+
+/// Removing a lookup the reader did not mean to make.
+struct LedgerDeletionTests {
+    private let noon = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func record(_ lemma: String, at when: Date) -> LookupRecord {
+        LookupRecord(
+            surface: lemma, lemma: lemma, context: "A sentence with \(lemma) in it.",
+            lemmaBasis: .tagger, language: "en", contextRange: nil, place: ReadingPlace(),
+            lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil)
+    }
+
+    private func encounter() -> SenseEncounter {
+        SenseEncounter(
+            dictionary: DictionaryIdentity(name: "NOAD"), entryID: "headword:fine",
+            senseKey: "k", senseKeyKind: .publisher, sensePath: nil, entrySenseCount: 3,
+            senseHash: nil, gloss: "of high quality", chosenBy: .reader, chosenAt: nil)
+    }
+
+    @Test func aDeletedLookupIsGoneFromTheHistory() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let stray = try ledger.record(record("qqqq", at: noon))
+        _ = try ledger.record(record("fine", at: noon.addingTimeInterval(1)))
+
+        try ledger.delete(lookup: stray)
+        #expect(try ledger.recentLookups(since: .distantPast, limit: 50).map(\.lemma) == ["fine"])
+    }
+
+    /// **The cascade is the point.** A sense met only in a lookup that never happened was never
+    /// met, and leaving the encounter behind would leave the study list claiming otherwise.
+    @Test func theSensesMetInItGoWithIt() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let stray = try ledger.record(record("qqqq", at: noon))
+        try ledger.record(encounter(), for: stray)
+        #expect(try ledger.encounters(ofLookup: stray).count == 1)
+
+        try ledger.delete(lookup: stray)
+        #expect(try ledger.encounters(ofLookup: stray).isEmpty)
+    }
+
+    /// Another lookup's senses are not collateral.
+    @Test func anotherLookupsSensesSurvive() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let stray = try ledger.record(record("qqqq", at: noon))
+        let kept = try ledger.record(record("fine", at: noon.addingTimeInterval(1)))
+        try ledger.record(encounter(), for: stray)
+        try ledger.record(encounter(), for: kept)
+
+        try ledger.delete(lookup: stray)
+        #expect(try ledger.encounters(ofLookup: kept).count == 1)
+    }
+
+    /// Two drawers on one ledger, or a click arriving after a reload. The row is gone either way,
+    /// which is what the caller asked for.
+    @Test func deletingWhatIsNotThereIsNotAnError() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let stray = try ledger.record(record("qqqq", at: noon))
+        try ledger.delete(lookup: stray)
+        try ledger.delete(lookup: stray)
+        try ledger.delete(lookup: 9_999)
+        #expect(try ledger.recentLookups(since: .distantPast, limit: 50).isEmpty)
+    }
+}

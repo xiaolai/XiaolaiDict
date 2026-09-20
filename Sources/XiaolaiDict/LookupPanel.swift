@@ -47,6 +47,9 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Sizes the reader chose by resizing, per kind of content; kept for the next panel of that kind.
     private var chosenSizes: [PanelContent.Kind: NSSize] = [:]
     private let escape: EscapeKey
+    /// Held only while the panel is on screen — a monitor that outlived it would dismiss a panel
+    /// that is not there and keep a closure alive for every lookup the reader ever made.
+    private var clickAway: Any?
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
@@ -105,6 +108,7 @@ final class LookupPanelController: LookupPanelPresenting {
         // A scene already on screen is not re-placed, so a panel being reused is moved by hand.
         if let window, window.isVisible { window.setFrame(placement, display: true) }
         escape.claim { [weak self] in self?.close() }
+        watchForClicksAway()
     }
 
     /// Fills in a panel already on screen. Same kind, so the size and the minimum stay as they
@@ -128,6 +132,36 @@ final class LookupPanelController: LookupPanelPresenting {
         closed()
     }
 
+    /// Dismisses when the reader clicks anywhere else.
+    ///
+    /// A card goes away when you look away, and this is the "look away". A **global** monitor,
+    /// because the panel never becomes key — a local one only fires while the app is active,
+    /// which for this panel is never. Mouse events need no Accessibility grant; only keys do,
+    /// which is why Escape is a claimed hot key instead.
+    ///
+    /// The click that *opened* the panel must not close it, and a click inside it belongs to the
+    /// card — so the panel's own frame is hit-tested rather than starting a cooldown. The drawer
+    /// spike learned that one: a timer to outrun a race leaves the race there.
+    private func watchForClicksAway() {
+        stopWatchingForClicksAway()
+        clickAway = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window, window.isVisible else { return }
+                // `NSEvent.mouseLocation` rather than the event's own: a global monitor's event
+                // carries coordinates in the window it landed in, which is not this one.
+                guard !window.frame.contains(NSEvent.mouseLocation) else { return }
+                self.close()
+            }
+        }
+    }
+
+    private func stopWatchingForClicksAway() {
+        if let clickAway { NSEvent.removeMonitor(clickAway) }
+        clickAway = nil
+    }
+
     /// Everything still running for the panel is now stale. Also called when the reader closes the
     /// window themselves, which the scene reports through `onDisappear`.
     func closed() {
@@ -136,6 +170,7 @@ final class LookupPanelController: LookupPanelPresenting {
         model.content = nil
         current += 1
         escape.release()
+        stopWatchingForClicksAway()
     }
 
     /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
@@ -163,8 +198,13 @@ struct LookupPanelSceneView: View {
                     }
             }
         }
-        .frame(minWidth: model.minimumSize.width, minHeight: model.minimumSize.height)
+        .frame(minWidth: model.minimumSize.width)
         .xiaolaiDictPanelBehaviour(transient: true) { window in
+            // No chrome and no background of its own: the rounded card is the whole thing the
+            // reader sees, and the shadow needs somewhere to fall.
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
             NotificationCenter.default.addObserver(
                 forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
             ) { [controller] _ in

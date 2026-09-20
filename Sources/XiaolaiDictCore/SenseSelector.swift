@@ -50,22 +50,66 @@ public enum Abstention: String, Sendable, CaseIterable, Codable {
     }
 }
 
+/// The sense the selector *nearly* chose, kept when it declined to choose at all.
+///
+/// **Only `.tooClose` has one**, and the distinction is the whole design. `.tooClose` means
+/// several senses scored well and one was narrowly ahead — there is a real favourite, and saying
+/// "several fit equally well" and nothing else throws away the most useful thing the selector
+/// knows. `.nothingFits` means the best was still too far away; offering it would be inventing an
+/// answer, which is what abstention exists to prevent.
+///
+/// It is not a choice and must never be drawn as one. A card built on this says *ambiguous* and
+/// puts the alternatives in front of the reader rather than behind a disclosure.
+public struct NearMiss: Sendable, Equatable {
+    public let key: String
+    /// How far ahead of the runner-up it was — below the margin the selector needs to commit,
+    /// which is why this is a near miss and not a choice.
+    public let margin: Double
+    /// How many senses were in the running, so the card can say what the reader is choosing among.
+    public let among: Int
+
+    public init(key: String, margin: Double, among: Int) {
+        self.key = key
+        self.margin = margin
+        self.among = among
+    }
+}
+
 /// What the selector decided.
 public enum SenseSelection: Sendable, Equatable {
     /// `key` is always one of the candidates it was given — the output is a choice from a closed
     /// set, never generated, so the worst failure is a *wrong existing* sense, not an invented one.
     /// `margin` is how far ahead of the runner-up it was.
-    case chose(key: String, margin: Double)
-    case abstained(Abstention)
+    ///
+    /// **`entryID` is what makes the key mean something.** A positional key is literally
+    /// `"\(block).\(ordinal)"` — no entry id, no hash — so every entry in a dictionary has a sense
+    /// keyed `"1.1"`. A caller resolving a choice by key alone takes the first entry that happens
+    /// to contain one, which is the right sense of the wrong word often enough to matter, and it
+    /// writes that into the study ledger. Nil only where the selector did not know it.
+    case chose(key: String, margin: Double, entryID: String? = nil)
+    /// `nearest` is set only for `.tooClose`; see `NearMiss`.
+    case abstained(Abstention, nearest: NearMiss? = nil)
 
     public var key: String? {
-        guard case .chose(let key, _) = self else { return nil }
+        guard case .chose(let key, _, _) = self else { return nil }
         return key
     }
 
+    /// Which entry the chosen sense belongs to, where the selector knew.
+    public var entryID: String? {
+        guard case .chose(_, _, let entryID) = self else { return nil }
+        return entryID
+    }
+
     public var abstention: Abstention? {
-        guard case .abstained(let why) = self else { return nil }
+        guard case .abstained(let why, _) = self else { return nil }
         return why
+    }
+
+    /// The sense it nearly chose, where there was one.
+    public var nearest: NearMiss? {
+        guard case .abstained(_, let nearest) = self else { return nil }
+        return nearest
     }
 }
 
@@ -154,7 +198,9 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         if matchesPartOfSpeech { keyable = PartOfSpeechFilter.narrow(keyable, to: partOfSpeech) }
         // One sense is not a choice. It is answered by `onlySense` before any selector runs, and if
         // it reaches here it is still not something a model got right.
-        guard keyable.count > 1 else { return .chose(key: keyable[0].key, margin: .infinity) }
+        guard keyable.count > 1 else {
+            return .chose(key: keyable[0].key, margin: .infinity, entryID: keyable[0].entryID)
+        }
 
         guard context == .complete, let sentence, !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return .abstained(.noContext) }
@@ -163,22 +209,29 @@ public struct EmbeddingSenseSelector: SenseSelecting {
               let space = embedding(language)
         else { return .abstained(.unavailable) }
 
-        var scored: [(key: String, distance: Double)] = []
+        var scored: [(key: String, entryID: String, distance: Double)] = []
         for candidate in keyable {
             let distance = space.distance(between: sentence, and: candidate.text)
             // `distance` answers a finite number even for text it cannot place; an infinite or NaN
             // reading is the model declining, and is dropped rather than sorted as "very far".
             guard distance.isFinite else { continue }
-            scored.append((candidate.key, distance))
+            scored.append((candidate.key, candidate.entryID, distance))
         }
         guard let best = scored.min(by: { $0.distance < $1.distance }) else { return .abstained(.unavailable) }
         guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
 
         let runnerUp = scored.filter { $0.key != best.key }.map(\.distance).min()
-        guard let runnerUp else { return .chose(key: best.key, margin: .infinity) }
+        guard let runnerUp else {
+            return .chose(key: best.key, margin: .infinity, entryID: best.entryID)
+        }
         let margin = runnerUp - best.distance
-        guard margin >= minimumMargin else { return .abstained(.tooClose) }
-        return .chose(key: best.key, margin: margin)
+        guard margin >= minimumMargin else {
+            // The favourite is kept rather than discarded. It is not a choice — the margin says
+            // so — but it is the most useful thing known about a sentence that does not settle.
+            return .abstained(
+                .tooClose, nearest: NearMiss(key: best.key, margin: margin, among: scored.count))
+        }
+        return .chose(key: best.key, margin: margin, entryID: best.entryID)
     }
 }
 

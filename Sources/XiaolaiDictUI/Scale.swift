@@ -77,9 +77,15 @@ struct Scale: Equatable, Sendable {
     /// Type, as ratios of the em. A short scale on purpose: every extra step is one more
     /// near-identical choice at a call site, and a surface this small cannot show the difference.
     ///
-    /// Only where a size is set explicitly. The lookup panel and the pinned note use the
-    /// platform's own semantic fonts — `.title2`, `.callout`, `.caption` — and replacing those
-    /// with points would be a downgrade dressed as tidying.
+    /// Only where a size is set explicitly. The **pinned note** uses the platform's own semantic
+    /// fonts — `.title3`, `.body`, `.caption` — and replacing those with points would be a
+    /// downgrade dressed as tidying.
+    ///
+    /// The lookup panel was in that sentence and no longer is. `LookupCardView` sets every size
+    /// from here, because the card's width is `space.cardWidth` and a measure only holds if the
+    /// type it measures is the type this scale describes: semantic fonts would size themselves
+    /// against the system while the card sized itself against the em, and the line length the
+    /// width exists to protect would drift away from the text in it.
     struct Text: Equatable, Sendable {
         /// A window's own title.
         let display: CGFloat
@@ -146,6 +152,17 @@ struct Scale: Equatable, Sendable {
         let padDown: CGFloat
         let pad: EdgeInsets
 
+        /// **The lookup card's width, in ems — so the measure survives a change of text size.**
+        ///
+        /// It was a fixed 400 pt, which is the right line length at exactly one size: the same
+        /// 400 pt holds about sixty characters at `standard` and about forty-five at `large`, and
+        /// a definition set that narrow breaks into slivers. A line wants roughly 55–70
+        /// characters, a character at body size averages about half an em, and the card spends
+        /// 3 em on padding — so ~33 em is sixty characters at any size the reader picks.
+        let cardWidth: CGFloat
+        let cardMinWidth: CGFloat
+        let cardMaxWidth: CGFloat
+
         /// How a pile of cards is offset behind its front card. Smaller than `stack`: these are
         /// the same cards shown stacked rather than listed, so the gap has to read as depth
         /// rather than as separation.
@@ -163,8 +180,14 @@ struct Scale: Equatable, Sendable {
             ordinal = em * 1.50
             padAcross = em * 1.50
             padDown = em * 1.25
+            // From the scalars, never from the multipliers again: written out twice, retuning
+            // `padAcross` alone left whole-surface padding disagreeing with edge-specific padding
+            // on the same card — a difference nobody would go looking for.
             pad = EdgeInsets(
-                top: em * 1.25, leading: em * 1.50, bottom: em * 1.25, trailing: em * 1.50)
+                top: padDown, leading: padAcross, bottom: padDown, trailing: padAcross)
+            cardWidth = em * 33
+            cardMinWidth = em * 26
+            cardMaxWidth = em * 46
             peek = em * 0.625
             sideInset = em * 0.80
         }
@@ -190,10 +213,44 @@ struct Scale: Equatable, Sendable {
         let cardOffset: CGFloat
         let drawerRadius: CGFloat
 
+        /// **The lookup card's own shadow — small, because the card is.** Kept apart from the
+        /// drawer's: that is a docked panel the width of a sidebar and needs a shadow to match,
+        /// while this appears beside a word and goes away again. Sharing one radius gave the card
+        /// the drawer's, a 22 pt blur under a 270 pt card — a cast shadow rather than a lift.
+        let panelRadius: CGFloat
+        /// The colour, a little wider than the depth so it reads as light at the edge rather than
+        /// as a second outline. Only a little.
+        let glowRadius: CGFloat
+
+        /// **How far they fall, across and down.** Light comes from the top left, so a shadow
+        /// belongs at the bottom right — and that means offsetting by most of the blur radius
+        /// rather than by a nudge. A blur of radius *r* spreads *r* in every direction before the
+        /// offset moves it, so at `y = r * 0.1` the halo above the card is nearly as wide as the
+        /// shadow below: a glow on four sides, which is what it was.
+        ///
+        /// Short of the radius on purpose. At exactly *r* the shadow separates from the card and
+        /// reads as a second shape behind it; the remainder is what keeps it attached.
+        let panelOffset: CGFloat
+        let glowOffset: CGFloat
+        /// What the card is padded by so its shadows have somewhere to fall: almost nothing above
+        /// and to the left, the whole spread below and to the right. Uniform padding would leave
+        /// dead space on two sides of a window sized to its content.
+        let glowBefore: CGFloat
+        let glowAfter: CGFloat
+
         init(em: CGFloat) {
             cardRadius = em * 0.25
             cardOffset = em * 0.10
             drawerRadius = em * 1.80
+            panelRadius = em * 0.50
+            glowRadius = em * 0.85
+            panelOffset = em * 0.35
+            glowOffset = em * 0.60
+            // From the shadow, not from its multipliers. Repeated, a retuned glow kept the old
+            // reserved space — so the shadow would either be clipped by the window or float in a
+            // margin sized for a shadow that no longer exists.
+            glowBefore = max(0, glowRadius - glowOffset)
+            glowAfter = glowRadius + glowOffset
         }
     }
 }
@@ -272,8 +329,11 @@ public struct TextSizeStore {
     /// `object(forKey:)` rather than `bool(forKey:)`: the latter answers false for a key that was
     /// never set, which is indistinguishable from a reader who turned it off. Here the two happen
     /// to agree, and relying on that would be the kind of accident that breaks the next default.
+    /// The fallbacks are `CardOptions`' own, never a second copy of them. Written out here, a
+    /// changed default would apply to a view drawn without an injected appearance and not to a
+    /// fresh install — the same app disagreeing with itself about what "default" means.
     func loadShowsTime() -> Bool {
-        defaults.object(forKey: Self.showsTimeKey) as? Bool ?? false
+        defaults.object(forKey: Self.showsTimeKey) as? Bool ?? CardOptions().showsTime
     }
 
     func save(showsTime: Bool) {
@@ -281,7 +341,7 @@ public struct TextSizeStore {
     }
 
     func loadShowsPlaceName() -> Bool {
-        defaults.object(forKey: Self.showsPlaceNameKey) as? Bool ?? false
+        defaults.object(forKey: Self.showsPlaceNameKey) as? Bool ?? CardOptions().showsPlaceName
     }
 
     func save(showsPlaceName: Bool) {
@@ -289,7 +349,8 @@ public struct TextSizeStore {
     }
 
     func loadEmphasis() -> WordEmphasis {
-        defaults.string(forKey: Self.emphasisKey).flatMap(WordEmphasis.init(rawValue:)) ?? .italic
+        defaults.string(forKey: Self.emphasisKey).flatMap(WordEmphasis.init(rawValue:))
+            ?? CardOptions().emphasis
     }
 
     func save(_ emphasis: WordEmphasis) {

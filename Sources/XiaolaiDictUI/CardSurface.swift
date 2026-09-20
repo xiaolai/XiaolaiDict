@@ -40,6 +40,15 @@ enum CardSurface {
     /// A card is always **lighter** than the drawer it sits on, in both appearances — raised, never
     /// a recessed patch. The wash this replaced was darker than the drawer, which is what made it
     /// read as a stain rather than as a surface.
+    /// The lookup panel's own surface — **paper, not material.** `.regularMaterial` takes its
+    /// colour from whatever happens to be behind the window, so the card is a different shade over
+    /// a photograph than over an editor, and the word's coloured shadow has nothing steady to sit
+    /// on. Near-white rather than white so the hairline and the shadow have something to be
+    /// against.
+    static func panel(for scheme: ColorScheme) -> Color {
+        Color(white: scheme == .dark ? Shade.darkResting.rawValue : 0.985)
+    }
+
     enum Shade: Double {
         case lightResting = 1.0
         case lightHovered = 0.945

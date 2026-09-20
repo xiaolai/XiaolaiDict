@@ -67,9 +67,25 @@ struct SenseSelectionAccuracyTests {
     }
 
     /// The three numbers, for one selector, over the labelled set.
+    /// **Four buckets, not three.** A sense shown under an *ambiguous* badge is not a confident
+    /// answer and must not be scored as one: the whole point of that badge is that the card is
+    /// telling the reader it does not know, with the alternatives already open in front of them.
+    /// Folding those into `wrong` would make the number that decides honesty say something it
+    /// does not mean; folding them into `right` would be worse.
+    ///
+    /// `abstained` now means *said nothing at all*. What used to live there — every `.tooClose`
+    /// in this suite — is `ambiguous`, and the invariant that matters is unchanged: **`wrong`
+    /// must not rise.** `ambiguous` is tracked beside it so a rung that buys accuracy by hedging
+    /// shows up as hedging rather than as an improvement.
     struct Score: Equatable {
         var right = 0, wrong = 0, abstained = 0
+        /// Shown with its uncertainty on the card. Split by whether the sense it led with was in
+        /// fact the right one, because a hedge that is usually right and one that is usually
+        /// wrong are different things to ship.
+        var ambiguousRight = 0, ambiguousWrong = 0
         var report = ""
+
+        var ambiguous: Int { ambiguousRight + ambiguousWrong }
     }
 
     static func score(_ selector: some SenseSelecting, named: String) async throws -> Score {
@@ -82,15 +98,26 @@ struct SenseSelectionAccuracyTests {
             let choice = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
             switch choice {
-            case .chose(let key, let margin):
+            case .chose(let key, let margin, _):
                 let right = key == labelled.correct
                 right ? (score.right += 1) : (score.wrong += 1)
                 let text = candidates.first { $0.key == key }?.text.prefix(46) ?? ""
                 score.report += "  \(right ? "✓" : "✗") \(labelled.word.padded(10))"
                     + " [\(partOfSpeech ?? "?")] \(key)  margin \(String(format: "%.4f", margin))  \(text)\n"
-            case .abstained(let why):
-                score.abstained += 1
-                score.report += "  — \(labelled.word.padded(10)) [\(partOfSpeech ?? "?")] abstained: \(why.rawValue)\n"
+            case .abstained(let why, let nearest):
+                if let nearest {
+                    // It declined to choose and kept a favourite. The card shows that favourite
+                    // under an ambiguous badge, so the score has to grade what the reader sees.
+                    let right = nearest.key == labelled.correct
+                    right ? (score.ambiguousRight += 1) : (score.ambiguousWrong += 1)
+                    let text = candidates.first { $0.key == nearest.key }?.text.prefix(40) ?? ""
+                    score.report += "  ? \(labelled.word.padded(10))"
+                        + " [\(partOfSpeech ?? "?")] \(right ? "led right" : "led wrong")"
+                        + "  margin \(String(format: "%.4f", nearest.margin))  \(text)\n"
+                } else {
+                    score.abstained += 1
+                    score.report += "  — \(labelled.word.padded(10)) [\(partOfSpeech ?? "?")] said nothing: \(why.rawValue)\n"
+                }
             }
             // Whatever it says, it can only say one of the things it was given.
             if let key = choice.key { #expect(candidates.map(\.key).contains(key)) }
@@ -98,7 +125,8 @@ struct SenseSelectionAccuracyTests {
         let total = Double(hardCases.count)
         score.report += """
               top-1 accuracy       \(String(format: "%.0f%%", Double(score.right) / total * 100))  (\(score.right)/\(hardCases.count))
-              abstention rate      \(String(format: "%.0f%%", Double(score.abstained) / total * 100))  (\(score.abstained)/\(hardCases.count))
+              ambiguous            \(String(format: "%.0f%%", Double(score.ambiguous) / total * 100))  (\(score.ambiguous)/\(hardCases.count)) — led right \(score.ambiguousRight), led wrong \(score.ambiguousWrong)
+              said nothing         \(String(format: "%.0f%%", Double(score.abstained) / total * 100))  (\(score.abstained)/\(hardCases.count))
               confidently wrong    \(String(format: "%.0f%%", Double(score.wrong) / total * 100))  (\(score.wrong)/\(hardCases.count))
 
             """
@@ -134,10 +162,16 @@ struct SenseSelectionAccuracyTests {
             EmbeddingSenseSelector(matchesPartOfSpeech: false), named: "rung 1 — NLEmbedding alone")
         print(score.report)
         try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1.txt", atomically: true, encoding: .utf8)
-        #expect(score.right + score.wrong + score.abstained == Self.hardCases.count, "a case was not scored")
+        #expect(
+            score.right + score.wrong + score.abstained + score.ambiguous == Self.hardCases.count,
+            "a case was not scored")
         #expect(score.right == 2, "top-1 accuracy moved")
         #expect(score.wrong == 2, "the confidently-wrong rate moved — the number that decides honesty")
-        #expect(score.abstained == 2, "the abstention rate moved")
+        // Both of its abstentions kept a favourite, so both are now shown under an ambiguous
+        // badge rather than as silence. **Neither favourite was the right sense.**
+        #expect(score.abstained == 0, "it said nothing at all, which it did not used to do")
+        #expect(score.ambiguousRight == 0, "the hedge started leading right")
+        #expect(score.ambiguousWrong == 2, "the hedge stopped leading wrong")
     }
 
     /// Rung 1 with the part-of-speech constraint the entries already carry.
@@ -152,7 +186,9 @@ struct SenseSelectionAccuracyTests {
             EmbeddingSenseSelector(), named: "rung 1b — NLEmbedding + part of speech")
         print(score.report)
         try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1b.txt", atomically: true, encoding: .utf8)
-        #expect(score.right + score.wrong + score.abstained == Self.hardCases.count, "a case was not scored")
+        #expect(
+            score.right + score.wrong + score.abstained + score.ambiguous == Self.hardCases.count,
+            "a case was not scored")
         // Pinned as measured, in the same spirit as rung 1's. It fixed *rein* — the case that
         // prompted it — and it no longer costs *sanction*.
         //
@@ -169,7 +205,15 @@ struct SenseSelectionAccuracyTests {
         // worse than no mark.
         #expect(score.right == 3, "top-1 accuracy moved")
         #expect(score.wrong == 1, "the confidently-wrong rate moved")
-        #expect(score.abstained == 2, "the abstention rate moved")
+        #expect(score.abstained == 0, "it said nothing at all, which it did not used to do")
+        // **The finding that matters about leading with a near miss.** Both of this rung's
+        // abstentions kept a favourite, and both favourites were the wrong sense — at margins of
+        // 0.0103 and 0.0015, which is noise rather than a preference. Showing them is defensible
+        // only because the card badges them and opens the alternatives; on this evidence the
+        // favourite itself carries no signal, and that is pinned here so it is impossible to
+        // believe otherwise without re-measuring.
+        #expect(score.ambiguousRight == 0, "the hedge started leading right — re-read the trade")
+        #expect(score.ambiguousWrong == 2, "the hedge stopped leading wrong")
     }
 
     /// The D6 comparison itself, run rather than asserted in prose: a rung ships only if it gains
@@ -195,7 +239,7 @@ struct SenseSelectionAccuracyTests {
         for labelled in Self.hardCases {
             let candidates = try Self.candidates(for: labelled.word)
             let partOfSpeech = Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
-            guard case .chose(let key, let margin) = await selector.choose(
+            guard case .chose(let key, let margin, _) = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
             else { continue }
             if key == labelled.correct { rightMargins.append(margin) } else { wrongMargins.append(margin) }

@@ -4,6 +4,7 @@ import XiaolaiDictCore
 import Testing
 
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 
 /// The drawer's own wiring. The geometry, the day grouping and the pile arithmetic are tested
 /// where they live; what is left here is the part that can only go wrong in the controller.
@@ -167,5 +168,87 @@ struct HistoryDrawerTests {
         displays.screens = []
         drawer.screensChanged()
         #expect(!drawer.isVisible)
+    }
+}
+
+/// Removing a lookup the reader did not mean to make.
+///
+/// The card leaves the drawer at once and the ledger is not touched until the grace window runs
+/// out, so undo is a cancellation rather than a restore — a `ReadingEntry` is not the whole row,
+/// and putting one back would return a poorer record than the one it replaced.
+@MainActor
+struct HistoryRemovalTests {
+    private func entry(_ lemma: String, id: Int) -> ReadingEntry {
+        ReadingEntry(
+            id: id, lemma: lemma, surface: lemma, sentence: "A sentence.", sentenceRange: nil,
+            place: ReadingPlace(name: "TextEdit"), at: .distantPast, result: .found,
+            quality: .accessibility(.accessibilityTextRange, context: .complete))
+    }
+
+    private func model(_ lemmas: [String]) -> HistoryDrawerModel {
+        let model = HistoryDrawerModel()
+        model.days = [ReadingDay(
+            id: "d", date: .distantPast, label: .today,
+            entries: lemmas.enumerated().map { entry($1, id: $0 + 1) })]
+        return model
+    }
+
+    @Test func aRemovedCardLeavesTheDrawerAtOnce() {
+        let model = model(["qqqq", "fine"])
+        model.remove(entry("qqqq", id: 1))
+        #expect(model.removing.contains(1))
+        // Still in `days`, so the row keeps its place and the list does not jump while the
+        // reader may be reaching back for it.
+        #expect(model.days[0].entries.count == 2)
+    }
+
+    /// The ledger must not be asked until the reader is out of time.
+    @Test func theLedgerIsNotToldWhileUndoIsStillOffered() {
+        let model = model(["qqqq"])
+        var deleted: [Int] = []
+        model.delete = { deleted.append($0.id) }
+        model.remove(entry("qqqq", id: 1))
+        #expect(deleted.isEmpty, "the row was deleted before the reader could undo")
+    }
+
+    @Test func undoPutsTheCardBackAndNeverTouchesTheLedger() {
+        let model = model(["qqqq"])
+        var deleted: [Int] = []
+        model.delete = { deleted.append($0.id) }
+        model.remove(entry("qqqq", id: 1))
+        model.keep(entry("qqqq", id: 1))
+        #expect(model.removing.isEmpty)
+        #expect(deleted.isEmpty)
+    }
+
+    /// Closing the drawer is the reader moving on, not changing their mind.
+    @Test func closingTheDrawerFinishesWhatWasRemoved() {
+        let model = model(["qqqq", "fine"])
+        var deleted: [Int] = []
+        model.delete = { deleted.append($0.id) }
+        model.remove(entry("qqqq", id: 1))
+        model.commitRemovals()
+        #expect(deleted == [1])
+        #expect(model.days[0].entries.map(\.lemma) == ["fine"])
+    }
+
+    /// A header over no cards reads as a drawer that is broken, not as an empty day.
+    @Test func aDayWithNothingLeftInItGoesToo() {
+        let model = model(["qqqq"])
+        model.delete = { _ in }
+        model.remove(entry("qqqq", id: 1))
+        model.commitRemovals()
+        #expect(model.days.isEmpty)
+    }
+
+    /// Two clicks on the same card is one removal, not two deletions.
+    @Test func removingTwiceIsRemovingOnce() {
+        let model = model(["qqqq"])
+        var deleted: [Int] = []
+        model.delete = { deleted.append($0.id) }
+        model.remove(entry("qqqq", id: 1))
+        model.remove(entry("qqqq", id: 1))
+        model.commitRemovals()
+        #expect(deleted == [1])
     }
 }

@@ -176,3 +176,42 @@ struct ScaledRenderTests {
         #expect(growing, "the sizes do not each grow on the last: \(heights)")
     }
 }
+
+/// The lookup card's width, which has to grow with the text or stop being the right measure.
+struct CardWidthTests {
+    /// A fixed 400 pt is the right line length at one text size and too narrow at every larger
+    /// one: the same width holds about sixty characters at `standard` and about forty-five at
+    /// `large`. In ems the measure is the same at all four.
+    @Test func theMeasureIsTheSameAtEverySize() {
+        for size in TextSize.allCases {
+            let space = Scale(size).space
+            #expect(abs(space.cardWidth / Scale(size).em - 33) < 0.0001)
+        }
+    }
+
+    @Test func aLargerTextSizeIsAWiderCard() {
+        #expect(Scale(.large).space.cardWidth > Scale(.compact).space.cardWidth)
+        #expect(Scale(.large).space.cardMinWidth > Scale(.compact).space.cardMinWidth)
+    }
+
+    /// The bounds have to stay in order, or a card can be asked to be wider than its own maximum.
+    @Test func theBoundsStayInOrderAtEverySize() {
+        for size in TextSize.allCases {
+            let space = Scale(size).space
+            #expect(space.cardMinWidth < space.cardWidth)
+            #expect(space.cardWidth < space.cardMaxWidth)
+        }
+    }
+
+    /// Wide enough for the sentence to be a cue rather than a column of single words, narrow
+    /// enough that the eye finds the start of the next line.
+    @Test func everySizeIsAReadableLineLength() {
+        for size in TextSize.allCases {
+            let space = Scale(size).space
+            // Roughly characters, at about half an em each, less the card's own padding.
+            let characters = (space.cardWidth - space.padAcross * 2) / (Scale(size).em * 0.5)
+            #expect(characters >= 50, "\(size) sets too narrow a line: \(Int(characters)) chars")
+            #expect(characters <= 75, "\(size) sets too wide a line: \(Int(characters)) chars")
+        }
+    }
+}

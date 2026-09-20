@@ -197,4 +197,53 @@ struct HoverAuditTests {
         #expect(!guardOne.isHeld)
         #expect(guardOne.claim())
     }
+
+    // MARK: - The rows the sidebar draws
+
+    /// **One element, one row.** The sidebar is a `List` with `.sidebar` style, which on macOS is
+    /// an `NSOutlineView`; a `ForEach` body that emitted an entry *and* its senses trapped
+    /// SwiftUI's outline coordinator in `ViewListTree.visitItem` every time the list was rendered.
+    /// The flattening is the fix, so the count is what has to hold.
+    @Test func everyEntryAndEverySenseIsExactlyOneRow() {
+        let outline = EntryOutline(entries: [sampleEntry("NOAD"), sampleEntry("Thesaurus")])
+        for dictionary in outline.dictionaries {
+            let senses = dictionary.entries.reduce(0) { $0 + $1.senses.count }
+            #expect(dictionary.rows.count == dictionary.entries.count + senses)
+        }
+    }
+
+    /// An entry is followed by its own senses, not by another entry's.
+    @Test func eachEntryIsFollowedByItsOwnSenses() throws {
+        let outline = EntryOutline(entries: [sampleEntry("NOAD")])
+        let rows = try #require(outline.dictionaries.first).rows
+        guard case .entry(let first) = rows.first else {
+            Issue.record("the first row is not an entry")
+            return
+        }
+        let following = rows.dropFirst().prefix { if case .sense = $0 { true } else { false } }
+        #expect(following.count == first.senses.count)
+        for (row, sense) in zip(following, first.senses) {
+            #expect(row.id == sense.id)
+        }
+    }
+
+    /// A duplicate id in a `List` is its own crash. Two dictionaries answering with the same entry
+    /// — the same publisher ids, the same sense keys — is the ordinary case, not a contrived one.
+    @Test func noTwoRowsInTheWholeOutlineShareAnID() {
+        let outline = EntryOutline(entries: [sampleEntry("NOAD"), sampleEntry("Thesaurus")])
+        let ids = outline.dictionaries.flatMap { $0.rows.map(\.id) }
+        #expect(Set(ids).count == ids.count, "the sidebar has duplicate row identities")
+    }
+
+    /// The row's identity is what `List` selects by, now that the explicit tags are gone. If it
+    /// stopped matching, selection would silently stop working rather than fail.
+    @Test func aRowsIdentityIsTheSelectionItStandsFor() throws {
+        let outline = EntryOutline(entries: [sampleEntry("NOAD")])
+        let rows = try #require(outline.dictionaries.first).rows
+        guard case .entry(let entry) = rows.first else {
+            Issue.record("the first row is not an entry")
+            return
+        }
+        #expect(rows[0].id == OutlineSelection.entry(entry.index))
+    }
 }

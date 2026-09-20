@@ -93,6 +93,29 @@ public struct SenseEncounter: Sendable, Equatable {
         self.chosenAt = chosenAt
     }
 
+    /// The encounter a sense of `entry` amounts to, or nil where nothing can be keyed.
+    ///
+    /// **One builder, because there were two and their guards disagreed.** The reader-tap path in
+    /// the panel refused a sense whose dictionary cannot key it; the selector path in the resolver
+    /// did not, so the same sense was refused when tapped and recorded when guessed. This keeps
+    /// the stricter guard, which is the documented one: *a sense a dictionary cannot key is never
+    /// presented as confirmed, however it was marked.*
+    public static func of(
+        _ entry: DictionaryEntry, senseKey: String, chosenBy: SenseChoice?, at when: Date?
+    ) -> SenseEncounter? {
+        guard let entryKey = entry.entryKey,
+              let sense = entry.senses.first(where: { $0.key == senseKey }),
+              sense.keyKind != SenseKeyKind.none
+        else { return nil }
+        return SenseEncounter(
+            dictionary: entry.dictionary, entryID: entryKey, senseKey: sense.key,
+            senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
+            senseHash: sense.textHash,
+            // A snapshot so the ledger stays readable when a dictionary is updated or removed.
+            // Local only — never shipped, published, or sent to a remote service.
+            gloss: sense.label, chosenBy: chosenBy, chosenAt: when)
+    }
+
     /// The study item this encounter is a meeting with.
     public var studyItem: StudyItem {
         StudyItem(dictionary: dictionary.key, entryID: entryID, senseKey: senseKey, senseKeyKind: senseKeyKind)

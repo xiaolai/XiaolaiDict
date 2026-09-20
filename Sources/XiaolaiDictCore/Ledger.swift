@@ -507,6 +507,21 @@ public final class Ledger {
         return entries
     }
 
+    /// Removes one lookup, and with it every sense encounter hung off it.
+    ///
+    /// **A real delete, not a hidden row.** The reader's reason for reaching for this is a word
+    /// they did not mean to look up — a stray selection, a mistyped hotkey — and a history that
+    /// only *pretends* to forget is worse than one that cannot: it keeps the noise and lies about
+    /// it. The encounters go too, by `ON DELETE CASCADE` and the `foreign_keys` pragma this ledger
+    /// opens with; a sense met only in a lookup that never happened was never met.
+    ///
+    /// Silent about an id that is not there. Two drawers open on the same ledger, or a click that
+    /// arrives after a reload, must not be an error — the row is gone either way, which is what
+    /// the caller asked for.
+    public func delete(lookup id: Int) throws {
+        try run("DELETE FROM lookups WHERE id = ?1", bind: [.integer(id)]) { _ in }
+    }
+
     // MARK: - Schema
 
     /// One transaction, taken before the version is read: two processes opening an old file at

@@ -21,30 +21,14 @@ public struct PanelView: View {
             .padding(scale.space.pad)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .lookup(let presentation):
-            VStack(alignment: .leading, spacing: 0) {
-                Header(
-                    term: presentation.term, lemma: presentation.lemma,
-                    source: presentation.source, capture: presentation.capture)
-                Divider()
-                // The panel is a container that fills in: the heading is there from the first
-                // frame, and what the dictionaries say replaces the waiting line when it arrives.
-                // Prior encounters, never prior meanings — and absent entirely on a first lookup.
-                if let memory = presentation.memory { MemoryStripView(memory: memory) }
-                if let outcome = presentation.outcome {
-                    OutcomeView(
-                        term: presentation.term, outcome: outcome, sense: presentation.sense,
-                        met: presentation.met, sentence: presentation.sentence)
-                } else {
-                    WaitingView(detail: content.waitingDescription)
-                }
-            }
+            LookupPanelContent(presentation: presentation, waiting: content.waitingDescription)
         }
     }
 }
 
 /// Waiting for the dictionaries, saying so. Never a blank pane: the invariant that a failure must
 /// not render as confidently as a success applies just as much to a result that has not arrived.
-private struct WaitingView: View {
+struct WaitingView: View {
     @Environment(\.scale) private var scale
     public let detail: String?
 
@@ -87,19 +71,12 @@ private struct Header: View {
     }
 }
 
-private struct OutcomeView: View {
+struct OutcomeView: View {
     @Environment(\.scale) private var scale
     /// The encounter a tap on `senseKey` amounts to. Nil when there is nothing to key it to — an
     /// entry with no id, or a dictionary whose senses carry none.
     public static func encounter(from entry: DictionaryEntry, senseKey: String) -> SenseEncounter? {
-        guard let entryKey = entry.entryKey,
-              let sense = entry.senses.first(where: { $0.key == senseKey }),
-              sense.keyKind != SenseKeyKind.none
-        else { return nil }
-        return SenseEncounter(
-            dictionary: entry.dictionary, entryID: entryKey, senseKey: sense.key,
-            senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
-            senseHash: sense.textHash, gloss: sense.label, chosenBy: .reader, chosenAt: .now)
+        SenseEncounter.of(entry, senseKey: senseKey, chosenBy: .reader, at: .now)
     }
 
     public let term: String
@@ -123,7 +100,7 @@ private struct OutcomeView: View {
                     // "an entry": claiming all of them, or only one, would both be guesses.
                     Notice(text: "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it.")
                 }
-                if case .couldNot(let why) = sense {
+                if case .couldNot(let why, _) = sense {
                     // The other half of marking a sense: saying why it did not.
                     Notice(text: why.reason, symbol: "questionmark.circle")
                 }
@@ -183,10 +160,12 @@ private struct OutlineSidebar: View {
         List(selection: $selected) {
             ForEach(outline.dictionaries) { dictionary in
                 Section {
-                    ForEach(dictionary.entries) { entry in
-                        EntryRow(entry: entry).tag(OutlineSelection.entry(entry.index))
-                        ForEach(entry.senses) { sense in
-                            SenseRow(sense: sense, mark: mark).tag(sense.id)
+                    // One row per element. A `ForEach` body that emits an entry *and* its senses
+                    // traps SwiftUI's outline coordinator — see `DictionaryNode.rows`.
+                    ForEach(dictionary.rows) { row in
+                        switch row {
+                        case .entry(let entry): EntryRow(entry: entry)
+                        case .sense(let sense): SenseRow(sense: sense, mark: mark)
                         }
                     }
                 } header: {
@@ -275,7 +254,7 @@ public struct Notice: View {
 /// The strip that says the reader has been here before — how many times, when, and where. It never
 /// says what the word meant last time: an earlier encounter says *you should know this*, while an
 /// earlier gloss answers the question and destroys the retrieval (`feature-ledger-ux.md` C2).
-private struct MemoryStripView: View {
+struct MemoryStripView: View {
     @Environment(\.scale) private var scale
     public let memory: MemoryStrip
 
@@ -433,7 +412,7 @@ private struct EntryChrome: View {
 
 /// What the on-device model made of the reader's sentence — or why it could not. Never a blank
 /// pane: a model that declined says so.
-private struct SentencePaneView: View {
+struct SentencePaneView: View {
     @Environment(\.scale) private var scale
     public let explanation: SentenceExplanation
 
@@ -659,7 +638,7 @@ extension DictionaryEntry {
 #if DEBUG
 // A function, not a global: `LookupPresentation` is not Sendable, and a shared mutable global
 // would be a concurrency error rather than a convenience.
-private func sampleWaiting() -> LookupPresentation {
+func sampleWaiting() -> LookupPresentation {
     LookupPresentation(
         term: "ephemeral",
         lemma: Lemma(text: "ephemeral", basis: .tagger),
@@ -671,6 +650,97 @@ private func sampleWaiting() -> LookupPresentation {
 
 #Preview("Waiting for the dictionaries") {
     PanelView(content: .lookup(sampleWaiting()))
+        .frame(width: 760, height: 520)
+}
+
+// MARK: - A word actually looked up
+//
+// The state the panel exists for, and the one that had no preview: an entry, its senses in the
+// sidebar, a sense marked, the memory strip and the reader's own sentence. It needs no dictionary
+// installed — `DictionaryEntry` takes the markup as a string, so the markup is here, and
+// `EntryDocument.parse` reads it exactly as it reads Apple's. That is the point of building the
+// sample this way rather than hand-assembling senses: a preview that bypassed the parser could
+// look right while the parser was wrong.
+
+/// Apple's own shape: `d:entry` with an id, a headword, a respelling, and `x_xd0` blocks holding
+/// `x_xd1` senses that carry publisher ids. Trimmed from the fixture `SenseParsingTests` uses.
+func sampleMarkup(_ style: String = sampleStyle) -> String {
+    """
+    <html xmlns="http://www.w3.org/1999/xhtml"     xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng">    <head><style>\(style)</style></head><body>    <d:entry id="m_en_gbus0362750">    <span class="hg x_xh0"><span homograph="1" class="hw">fine</span>    <span d:prn="US" class="ph t_respell">fīn<d:prn></d:prn></span></span>    <span id="m_en_gbus0362750.004" class="se1 x_xd0">    <span class="posg x_xdh"><span d:pos="1" class="pos">adjective<d:pos></d:pos></span></span>    <span id="m_en_gbus0362750.005" class="se2 x_xd1 hasSn">    <span d:def="1" class="df">of high quality<d:def></d:def></span>    <span class="eg"><span class="ex">a fine piece of filmmaking</span></span></span>    <span id="m_en_gbus0362750.020" class="se2 x_xd1 hasSn">    <span d:def="1" class="df">in good health and feeling well</span>    <span class="eg"><span class="ex">&#8220;How are you?&#8221; &#8220;Fine, thanks.&#8221;</span></span></span>    <span id="m_en_gbus0362750.024" class="se2 x_xd1 hasSn">    <span d:def="1" class="df">(of weather) bright and clear</span></span></span>    <span id="m_en_gbus0362750.029" class="se1 x_xd0">    <span class="posg x_xdh"><span d:pos="2" class="pos">adverb<d:pos></d:pos></span></span>    <span id="m_en_gbus0362750.030" class="msDict x_xd1 t_core">    <span d:def="1" class="df">in a satisfactory or pleasing manner</span></span></span>    </d:entry></body></html>
+    """
+}
+
+/// Enough CSS that the pane reads as an entry rather than as a run-on line. Apple ships its own
+/// with each dictionary; this stands in for it so the preview shows the shape the reader sees.
+let sampleStyle = """
+    body { font: -apple-system-body; margin: 14px 16px; color: -apple-system-label; }
+    .hw { font-size: 1.5em; font-weight: 600; }
+    .ph { color: -apple-system-secondary-label; margin-left: .4em; }
+    .pos { font-style: italic; color: -apple-system-secondary-label; }
+    .x_xd0 { display: block; margin-top: .9em; }
+    .x_xd1 { display: block; margin: .35em 0 0 1.1em; text-indent: -1.1em; }
+    .ex { color: -apple-system-secondary-label; font-style: italic; }
+    .eg { display: block; margin-left: 1.1em; }
+    """
+
+func sampleEntry(_ name: String, style: String = sampleStyle) -> DictionaryEntry {
+    let markup = sampleMarkup(style)
+    return DictionaryEntry(
+        dictionary: DictionaryIdentity(name: name, identifier: name, version: "2.3.1"),
+        headword: "fine", lookedUp: "fine", html: markup,
+        document: EntryDocument.parse(markup))
+}
+
+/// The reader has been here twice before, so the strip has something to say. Below two occasions
+/// it stays away entirely, which is the state the other previews already cover.
+private func sampleMemory() -> MemoryStrip? {
+    MemoryStrip(PriorEncounters(occasions: [
+        PriorEncounter(at: .now.addingTimeInterval(-7_200), where: "Safari", title: "A page"),
+        PriorEncounter(at: .now.addingTimeInterval(-259_200), where: "Preview", title: "Ishiguro.pdf"),
+    ]))
+}
+
+func sampleLookup(_ mark: SenseMark?) -> LookupPresentation {
+    // Built from `fine`, not from `sampleWaiting()`. Starting from the waiting sample was the
+    // first version and it was wrong in a way a preview is meant to catch: the header read
+    // "ephemeral" above an entry for "fine", which is a panel showing one word and defining
+    // another. What the reader looked up and what the entry is have to be the same word.
+    //
+    // Force-unwrapped: the list is two literal entries, so nil here would be this preview being
+    // wrong about its own sample rather than anything the app could hit.
+    let entries = NonEmpty([
+        sampleEntry("New Oxford American Dictionary"), sampleEntry("Oxford Thesaurus"),
+    ])!
+    return LookupPresentation(
+        term: "fine",
+        lemma: Lemma(text: "fine", basis: .tagger),
+        source: "Safari · A page",
+        capture: .accessibility(.accessibilityTextMarkers, context: .complete),
+        sentence: "It was a fine piece of filmmaking, and the weather held.",
+        outcome: .entries(entries, unreadable: []),
+        sense: mark,
+        memory: sampleMemory())
+}
+
+/// The ordinary success: the reader's own tap, which is a fact and is drawn as one.
+#Preview("An entry, sense chosen by the reader") {
+    PanelView(content: .lookup(sampleLookup(
+        .chosen(key: "m_en_gbus0362750.005", by: .reader))))
+        .frame(width: 760, height: 520)
+}
+
+/// The selector's guess. The same mark, drawn as the hypothesis it is — the difference between
+/// these two previews is the whole of `chosen_by`, and it should be visible at a glance.
+#Preview("An entry, sense guessed by XiaolaiDict") {
+    PanelView(content: .lookup(sampleLookup(
+        .chosen(key: "m_en_gbus0362750.020", by: .model))))
+        .frame(width: 760, height: 520)
+}
+
+/// Marked nothing, and saying why. The other half of "the panel can mark a sense, and can say why
+/// it did not" — and the state a screenshot of a good lookup never catches.
+#Preview("An entry, nothing marked") {
+    PanelView(content: .lookup(sampleLookup(.couldNot(.tooClose))))
         .frame(width: 760, height: 520)
 }
 

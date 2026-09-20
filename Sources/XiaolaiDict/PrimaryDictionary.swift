@@ -89,15 +89,22 @@ extension PrimaryDictionary {
     func encounter(among entries: [DictionaryEntry], at when: Date) -> SenseEncounter? {
         let mine = self.entries(among: entries)
         guard mine.count == 1, let entry = mine.first, let entryKey = entry.entryKey else { return nil }
-        let only = entry.senses.count == 1 ? entry.senses.first : nil
+        // One sense, and it can be keyed → the shared builder, the same call the resolver and the
+        // reader's tap make. **Not a guard that matches theirs — their guard.** An entry with one
+        // unkeyable sense used to come back `.onlySense` here, the most confirmed provenance there
+        // is, for a sense nothing can point at again: the mark was guarded and the encounter was
+        // not. Two guards that agree today is the arrangement that produced that, so there is one.
+        if entry.senses.count == 1, let key = entry.senses.first?.key,
+           let only = SenseEncounter.of(entry, senseKey: key, chosenBy: .onlySense, at: when) {
+            return only
+        }
+        // Otherwise the entry alone, with no sense key and no `chosenBy` — which reads as "this
+        // entry, sense unresolved" rather than as a claim about any sense in it. A separate record
+        // from the one above, not a lesser-filled version of it.
         return SenseEncounter(
-            dictionary: entry.dictionary, entryID: entryKey,
-            senseKey: only?.key, senseKeyKind: only?.keyKind ?? entry.senseKeyKind,
-            sensePath: only?.path, entrySenseCount: entry.senseCount, senseHash: only?.textHash,
-            // A snapshot so the ledger stays readable when a dictionary is updated or removed.
-            // Local only — never shipped, published, or sent to a remote service.
-            gloss: only?.label, chosenBy: only == nil ? nil : .onlySense,
-            chosenAt: only == nil ? nil : when)
+            dictionary: entry.dictionary, entryID: entryKey, senseKey: nil,
+            senseKeyKind: entry.senseKeyKind, sensePath: nil, entrySenseCount: entry.senseCount,
+            senseHash: nil, gloss: nil, chosenBy: nil, chosenAt: nil)
     }
 }
 
@@ -115,14 +122,18 @@ struct SenseResolver {
     let primary: PrimaryDictionary
     let selector: any SenseSelecting
 
-    func resolve(
-        entries: [DictionaryEntry], sentence: String?, context: CaptureQuality.Context,
-        partOfSpeech: String?, at when: Date
-    ) async -> SenseResolution {
-        let mine = primary.entries(among: entries)
-        guard !mine.isEmpty else { return SenseResolution(mark: nil, encounter: nil) }
-
-        let candidates = mine.flatMap { entry in
+    /// Every sense of every entry, flattened into what the selector takes.
+    ///
+    /// Lifted out because it is the one part of `resolve` that decides nothing: a pure transform
+    /// from entries to candidates, with no view on which of them is right. The rest of `resolve`
+    /// is a single decision told in order — rung 0, then the selector, then what its answer is
+    /// worth — and splitting *that* across methods to make each one shorter would hide the
+    /// sequence the reader needs, which is the only reason the method is long.
+    ///
+    /// The part of speech comes from the block rather than the sense: it is a property of the
+    /// entry's grammatical division, and the selector matches on it.
+    static func candidates(in entries: [DictionaryEntry]) -> [SenseCandidate] {
+        entries.flatMap { entry in
             entry.blocks.flatMap { block in
                 block.senses.map {
                     SenseCandidate(
@@ -131,11 +142,26 @@ struct SenseResolver {
                 }
             }
         }
+    }
+
+    func resolve(
+        entries: [DictionaryEntry], sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?, at when: Date
+    ) async -> SenseResolution {
+        let mine = primary.entries(among: entries)
+        guard !mine.isEmpty else { return SenseResolution(mark: nil, encounter: nil) }
+
+        let candidates = Self.candidates(in: mine)
 
         // Rung 0: one entry with one sense. Nothing was chosen, so nothing can be wrong, and no
         // selector runs — which is why model invocation correlates with ambiguity, where the hard
         // cases are anyway.
-        if mine.count == 1, candidates.count == 1, let only = candidates.first {
+        // Keyable, or nothing is claimed. "A sense a dictionary cannot key is never presented as
+        // confirmed, however it was marked" — and `.onlySense` is the most confirmed mark there
+        // is. An unkeyable sense reaches here with `key: ""`, which would have been written to the
+        // ledger as the id of a sense nothing can point at again.
+        if mine.count == 1, candidates.count == 1, let only = candidates.first,
+           only.keyKind != SenseKeyKind.none, !only.key.isEmpty {
             return SenseResolution(
                 mark: .chosen(key: only.key, by: .onlySense),
                 encounter: primary.encounter(among: entries, at: when))
@@ -144,25 +170,34 @@ struct SenseResolver {
         let choice = await selector.choose(
             from: candidates, reading: sentence, context: context, partOfSpeech: partOfSpeech)
         switch choice {
-        case .chose(let key, _):
-            guard let entry = mine.first(where: { $0.senses.contains { $0.key == key } }),
-                  let sense = entry.senses.first(where: { $0.key == key }),
-                  let entryKey = entry.entryKey
+        case .chose(let key, _, let entryID):
+            // By entry *and* key. A positional key is `"\(block).\(ordinal)"`, so every entry in
+            // this dictionary has a sense keyed `"1.1"` — matching on the key alone took the first
+            // entry containing one, which is the right sense of the wrong word, recorded as fact.
+            // Where the answer named its entry, that entry. Where it did not, the key has to
+            // identify one on its own — and a positional key cannot, so two entries holding
+            // `"1.1"` is refused rather than resolved by position. Guessing here writes the right
+            // sense of the wrong word into the ledger as a fact.
+            let holders = mine.filter { candidate in
+                guard entryID == nil || candidate.entryID == entryID else { return false }
+                return candidate.senses.contains { $0.key == key }
+            }
+            guard holders.count == 1, let entry = holders.first,
+                  // `SenseEncounter.of` is the panel's builder too, and it refuses a sense whose
+                  // dictionary cannot key it. That guard used to be on the reader's tap alone, so
+                  // the same sense was refused when tapped and recorded when guessed.
+                  let encounter = SenseEncounter.of(entry, senseKey: key, chosenBy: .model, at: when)
             else {
                 // The chosen key belongs to no entry XiaolaiDict can key — nothing is claimed.
                 return SenseResolution(mark: nil, encounter: primary.encounter(among: entries, at: when))
             }
-            return SenseResolution(
-                mark: .chosen(key: key, by: .model),
-                encounter: SenseEncounter(
-                    dictionary: entry.dictionary, entryID: entryKey, senseKey: key,
-                    senseKeyKind: sense.keyKind, sensePath: sense.path, entrySenseCount: entry.senseCount,
-                    senseHash: sense.textHash, gloss: sense.label, chosenBy: .model, chosenAt: when))
-        case .abstained(let why):
+            return SenseResolution(mark: .chosen(key: key, by: .model), encounter: encounter)
+        case .abstained(let why, let nearest):
             // It says why it did not choose, and falls back to whatever *is* a fact — the entry,
             // when the primary answered with exactly one.
             return SenseResolution(
-                mark: .couldNot(why), encounter: primary.encounter(among: entries, at: when))
+                mark: .couldNot(why, nearest: nearest),
+                encounter: primary.encounter(among: entries, at: when))
         }
     }
 }
