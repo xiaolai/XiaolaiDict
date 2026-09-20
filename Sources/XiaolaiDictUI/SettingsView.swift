@@ -28,15 +28,20 @@ public final class SettingsModel {
 public struct SettingsView: View {
     @Environment(\.scale) private var scale
     @State private var model: SettingsModel
+    /// Optional so a preview can show the window without one. The picker is the only thing that
+    /// needs it, and a preview of the permission rows should not have to build an `Appearance`.
+    private var appearance: Appearance?
 
-    public init(model: SettingsModel = SettingsModel()) {
+    public init(model: SettingsModel = SettingsModel(), appearance: Appearance? = nil) {
         _model = State(initialValue: model)
+        self.appearance = appearance
     }
 
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: scale.space.section) {
                 header
+                if let appearance { TextSizeRow(appearance: appearance) }
                 ForEach(model.report.states) { PermissionRow(state: $0) }
             }
             .padding(scale.space.pad)
@@ -72,6 +77,44 @@ public struct SettingsView: View {
                                  ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Where the reader chooses how large XiaolaiDict's text is.
+///
+/// macOS has no system-wide UI text size, so without this there is no way to change it at all —
+/// and XiaolaiDict's surfaces are prose the reader is trying to recall from, not chrome. A segmented
+/// picker rather than a slider: every step is a size the drawer has been looked at, and a free
+/// number would let the reader build a layout nobody designed.
+private struct TextSizeRow: View {
+    @Environment(\.scale) private var scale
+    @Bindable var appearance: Appearance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: scale.space.stack) {
+            HStack(spacing: scale.space.inline) {
+                Image(systemName: "textformat.size").foregroundStyle(.secondary)
+                Text("Text size").font(.system(size: scale.text.heading, weight: .medium))
+            }
+
+            Picker("Text size", selection: $appearance.textSize) {
+                ForEach(TextSize.allCases, id: \.self) { size in
+                    Text(size.label).tag(size)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // Set in the chosen size, so the control shows what it does rather than describing it.
+            Text("The quick brown fox jumps over the lazy dog.")
+                .font(.system(size: appearance.scale.text.body))
+                .foregroundStyle(.secondary)
+                .lineSpacing(appearance.scale.text.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(scale.space.pad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous))
     }
 }
 

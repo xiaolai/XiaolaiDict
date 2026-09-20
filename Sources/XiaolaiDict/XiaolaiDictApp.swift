@@ -246,6 +246,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var panelController: LookupPanelController { panel }
     var panelModel: LookupPanelModel { panel.model }
     var drawerModel: HistoryDrawerModel { drawer.model }
+
+    /// The reader's text size, and the scale every surface is drawn from. Owned here because it
+    /// outlives any one window: the drawer, the panel and a pinned note all read the same one, and
+    /// changing it has to move all of them at once.
+    let appearance = Appearance()
     var drawerPlacement: CGRect? { drawer.placement }
     var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }
     var drawerWindowFrame: CGRect { drawer.windowFrame }
