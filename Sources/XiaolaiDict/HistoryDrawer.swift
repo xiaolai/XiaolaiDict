@@ -1,35 +1,9 @@
 import AppKit
 import XiaolaiDictCore
+import XiaolaiDictUI
 import Observation
 import SwiftUI
 import os
-
-/// What the drawer is showing, and how much of it is fanned open.
-@Observable
-@MainActor
-final class HistoryDrawerModel {
-    /// Nil until the drawer has been laid out for a display. The root view draws nothing rather
-    /// than guessing a size — a sentinel rect would reach AppKit as a window nobody can see.
-    var geometry: DrawerGeometry?
-    /// Drives the slide. **The window never moves while this animates.**
-    var revealed = false
-    var days: [ReadingDay] = []
-    /// Day ids whose pile is fanned open. Today is never in here; it is never piled.
-    var expandedDays: Set<String> = []
-    /// Set while the ledger is being read, so the drawer can say so instead of looking empty.
-    var isLoading = false
-    /// A ledger that could not be read. Shown, never swallowed — an empty drawer and a broken one
-    /// must not look the same.
-    var problem: String?
-
-    var totalEntries: Int { days.reduce(0) { $0 + $1.entries.count } }
-
-    func isExpanded(_ day: ReadingDay) -> Bool { expandedDays.contains(day.id) }
-
-    func setExpanded(_ expanded: Bool, for day: ReadingDay) {
-        if expanded { expandedDays.insert(day.id) } else { expandedDays.remove(day.id) }
-    }
-}
 
 /// What a read of the reading history produced.
 ///

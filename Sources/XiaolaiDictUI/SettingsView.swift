@@ -4,33 +4,35 @@ import SwiftUI
 
 @Observable
 @MainActor
-final class SettingsModel {
+public final class SettingsModel {
     /// Empty until the first probe answers. A window that said "everything is fine" before it had
     /// asked would be the same false green tick this whole probe exists to remove.
     var report = PermissionsReport(states: [])
     private(set) var hasAsked = false
 
-    func refresh() async {
+    public init() {}
+
+    public func refresh() async {
         show(await .probe())
     }
 
     /// Takes a report from wherever it came. Previews use it to show a state this machine is not
     /// in — a permission being *off* is what the window has to be designed around, and asking the
     /// system can only ever show how this Mac happens to be set up.
-    func show(_ report: PermissionsReport) {
+    public func show(_ report: PermissionsReport) {
         self.report = report
         hasAsked = true
     }
 }
 
-struct SettingsView: View {
+public struct SettingsView: View {
     @State private var model: SettingsModel
 
-    init(model: SettingsModel = SettingsModel()) {
+    public init(model: SettingsModel = SettingsModel()) {
         _model = State(initialValue: model)
     }
 
-    var body: some View {
+    public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header

@@ -39,10 +39,14 @@ struct CardStackLayout: Layout {
 }
 
 /// The panel's content. The window is already at its final docked rect; only this moves.
-struct HistoryDrawerRootView: View {
+public struct HistoryDrawerRootView: View {
     @Bindable var model: HistoryDrawerModel
 
-    var body: some View {
+    public init(model: HistoryDrawerModel) {
+        self.model = model
+    }
+
+    public var body: some View {
         // No geometry yet means the drawer has not been laid out for a display. Drawing nothing is
         // right: a guessed size would be a window the reader can see and cannot explain.
         if let geometry = model.geometry {

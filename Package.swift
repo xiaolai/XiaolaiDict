@@ -18,10 +18,15 @@ let package = Package(
         .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictCore"]),
 
         .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictCore", "DictionaryBridge"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictCore"]),
+        // The view layer as its own library, not because the app needs the boundary but because
+        // Xcode cannot preview an executable target: "Previewing in executable targets now
+        // requires a new build layout… or break out your preview code into a separate framework."
+        // Nothing here knows about windows, XPC or the ledger.
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictCore", "XiaolaiDictUI"]),
 
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictCore"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDict"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDict", "XiaolaiDictUI"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         .testTarget(name: "DictionaryBridgeTests", dependencies: ["DictionaryBridge"]),
     ]

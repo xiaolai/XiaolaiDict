@@ -1,6 +1,7 @@
 import Testing
 
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 
 /// What XiaolaiDict needs from the system, and whether it has it.
 ///

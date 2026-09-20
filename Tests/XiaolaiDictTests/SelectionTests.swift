@@ -1,6 +1,7 @@
 import ApplicationServices
 import Foundation
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 import XiaolaiDictCore
 import Testing
 

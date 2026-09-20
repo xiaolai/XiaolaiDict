@@ -1,5 +1,6 @@
 import AppKit
 import XiaolaiDictCore
+import XiaolaiDictUI
 
 /// Whether the history drawer actually appears, docked where it asked to be, **without taking
 /// focus** — measured inside the running bundle rather than asserted from the source.

@@ -2,6 +2,7 @@ import CoreGraphics
 import Testing
 
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 
 /// The pile's arithmetic, checked without rendering anything. Separating it from the `Layout` is
 /// what makes that possible: `Subviews` cannot be fabricated in a test, so any maths left inside

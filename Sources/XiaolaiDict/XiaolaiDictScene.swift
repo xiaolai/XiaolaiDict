@@ -1,4 +1,5 @@
 import AppKit
+import XiaolaiDictUI
 import SwiftUI
 
 /// XiaolaiDict as a SwiftUI app.

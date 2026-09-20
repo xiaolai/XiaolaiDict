@@ -1,6 +1,7 @@
 import Testing
 
 @testable import XiaolaiDict
+@testable import XiaolaiDictUI
 
 /// Asking for Screen Recording, which XiaolaiDict never did.
 ///

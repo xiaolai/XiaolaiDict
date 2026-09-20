@@ -1,8 +1,9 @@
 import AppKit
 import ApplicationServices
 import XiaolaiDictCore
-import os
+import XiaolaiDictUI
 import Synchronization
+import os
 
 /// The app a selection is read from, captured on the main actor before the Accessibility work
 /// moves off it.
