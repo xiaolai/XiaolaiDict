@@ -93,9 +93,18 @@ struct PanelTicket: Equatable {
 /// The lookup panel: floats over the app being read — in its Space, even full screen — without
 /// activating XiaolaiDict or taking keyboard focus, so typing stays where the reader left it. A click in
 /// the panel focuses it; Escape closes it either way.
+/// What the panel is showing. A scene's content reads this; nothing hands a window a view.
+@Observable
+@MainActor
+final class LookupPanelModel {
+    var content: PanelContent?
+    /// Per kind, so a panel of one kind does not inherit the minimum of another.
+    var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize
+}
+
 @MainActor
 final class LookupPanelController: LookupPanelPresenting {
-    private var panel: LookupWindow?
+    let model = LookupPanelModel()
     private var current = 0
     private var shownKind: PanelContent.Kind?
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
@@ -103,9 +112,12 @@ final class LookupPanelController: LookupPanelPresenting {
     private var chosenSizes: [PanelContent.Kind: NSSize] = [:]
     private let escape: EscapeKey
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
-    private let notes = PinnedNoteController()
+    let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
-    private var lastPointer = UpPoint(.zero)
+    private(set) var lastPointer = UpPoint(.zero)
+    /// Where the scene should be placed, worked out before it opens. A scene cannot be handed a
+    /// frame, so `defaultWindowPlacement` reads this back.
+    private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize)
 
     init(hotkeys: HotkeyCenter = .shared) {
         escape = EscapeKey(hotkeys: hotkeys)
@@ -114,11 +126,22 @@ final class LookupPanelController: LookupPanelPresenting {
     /// What the reader asked to study, as they ask for it. Set by the app, which owns the ledger.
     var onStudySense: (@MainActor (SenseEncounter) -> Void)?
 
-    /// The panel's view, with the app's own capabilities handed to it.
-    private func view(_ content: PanelContent) -> some View {
-        PanelView(content: content)
-            .environment(\.pinNote) { [notes, lastPointer] note in notes.pin(note, near: lastPointer) }
-            .environment(\.studySense) { [weak self] encounter in self?.onStudySense?(encounter) }
+    /// The window SwiftUI made for the panel's scene, or nil when it is not up.
+    ///
+    /// `NSApplication.shared`, never `NSApp`: the latter is implicitly unwrapped and nil in a
+    /// process that has not made one, where it traps instead of answering "no window".
+    private var window: NSWindow? {
+        NSApplication.shared.windows.first { $0.identifier?.rawValue.contains(XiaolaiDictScene.lookupID) == true }
+            ?? NSApplication.shared.windows.first { $0.title == XiaolaiDictScene.lookupTitle }
+    }
+
+    /// Whether the **compositor** has it on screen — not the controller's bookkeeping, and not
+    /// AppKit's `isVisible`. A window the compositor does not list is not on screen.
+    var isDrawnOnScreen: Bool {
+        guard let number = window?.windowNumber else { return false }
+        let listed = (CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        return listed.contains { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == Int(number) }
     }
 
     func newRequest() -> PanelTicket {
@@ -131,24 +154,29 @@ final class LookupPanelController: LookupPanelPresenting {
     func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) {
         guard isCurrent(ticket) else { return }
         lastPointer = pointer
-        let panel = self.panel ?? makePanel()
-        self.panel = panel
         let kind = content.kind
-        panel.contentView = NSHostingView(rootView: view(content))
-        panel.contentMinSize = kind.minimumSize
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
         let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize))
-        let size = chosenSizes[kind] ?? kind.defaultSize
-        panel.setFrame(PanelPlacement.frame(for: size, near: pointer, within: visible), display: true)
+        placement = PanelPlacement.frame(
+            for: chosenSizes[kind] ?? kind.defaultSize, near: pointer, within: visible)
+
+        model.minimumSize = kind.minimumSize
+        model.content = content
         shownKind = kind
-        panel.orderFrontRegardless()
-        escape.claim { [weak self] in self?.panel?.close() }
+        // The environment's real action, captured from the menu-bar label. An `EnvironmentValues()`
+        // built on the spot is wired to nothing and silently opens no window at all.
+        WindowActions.shared.open?(id: XiaolaiDictScene.lookupID)
+        // A scene already on screen is not re-placed, so a panel being reused is moved by hand.
+        if let window, window.isVisible { window.setFrame(placement, display: true) }
+        escape.claim { [weak self] in self?.close() }
     }
 
     /// Fills in a panel already on screen. Same kind, so the size and the minimum stay as they
-    /// were, and the frame is not touched: the reader may have moved or resized it while waiting.
+    /// were, and **the placement is not touched**: the reader may have moved or resized it while
+    /// waiting. Setting the content is all it takes — a scene is not re-placed because its content
+    /// changed, which the hand-built panel had to be careful to preserve.
     func update(_ content: PanelContent, for ticket: PanelTicket) {
-        guard isCurrent(ticket), let panel, shownKind == content.kind else {
+        guard isCurrent(ticket), shownKind == content.kind else {
             // A kind that changed mid-lookup is a mistake in the caller, not something to paper
             // over by silently resizing the panel under the reader.
             if isCurrent(ticket), let shownKind, shownKind != content.kind {
@@ -156,55 +184,62 @@ final class LookupPanelController: LookupPanelPresenting {
             }
             return
         }
-        panel.contentView = NSHostingView(rootView: view(content))
+        model.content = content
     }
 
-    private func makePanel() -> LookupWindow {
-        let panel = LookupWindow(
-            contentRect: .zero,
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered, defer: false)
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        // Over a full-screen app and in whichever Space the reader is in; not a window to cycle to.
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        // Key only when the reader clicks into it — never just because it appeared.
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.hidesOnDeactivate = false
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
-        panel.isReleasedWhenClosed = false
-        panel.onClose = { [weak self] in self?.closed() }
-        // Only a size the reader chose by dragging is remembered — not one the panel was given, or
-        // shrunk to, to fit a smaller screen.
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didEndLiveResizeNotification, object: panel, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.rememberChosenSize() }
-        }
-        return panel
+    func close() {
+        WindowActions.shared.dismiss?(id: XiaolaiDictScene.lookupID)
+        closed()
     }
 
-    /// Everything still running for the panel is now stale.
-    private func closed() {
+    /// Everything still running for the panel is now stale. Also called when the reader closes the
+    /// window themselves, which the scene reports through `onDisappear`.
+    func closed() {
+        guard shownKind != nil else { return }
         shownKind = nil
+        model.content = nil
         current += 1
         escape.release()
     }
 
-    private func rememberChosenSize() {
-        guard let panel, let shownKind else { return }
-        chosenSizes[shownKind] = panel.frame.size
+    /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
+    /// shrunk to, to fit a smaller screen.
+    func rememberChosenSize(_ size: NSSize) {
+        guard let shownKind else { return }
+        chosenSizes[shownKind] = size
     }
-
 }
 
-/// Escape, for as long as the panel shows. The panel is not key — it must not take focus from the
-/// app being read — so Escape would go to that app. Taken as a hot key instead, it comes to XiaolaiDict
-/// without XiaolaiDict being active, needs no permission, and is consumed: the app being read never sees
-/// an Escape meant for the panel. Released the moment the panel closes, so Escape is the app's
-/// again. (A global event monitor would do neither: it cannot consume the key, and without
+/// The lookup panel's scene content.
+struct LookupPanelSceneView: View {
+    let controller: LookupPanelController
+    @Bindable var model: LookupPanelModel
+
+    var body: some View {
+        Group {
+            if let content = model.content {
+                PanelView(content: content)
+                    .environment(\.pinNote) { [controller] note in
+                        controller.notes.pin(note, near: controller.lastPointer)
+                    }
+                    .environment(\.studySense) { [controller] encounter in
+                        controller.onStudySense?(encounter)
+                    }
+            }
+        }
+        .frame(minWidth: model.minimumSize.width, minHeight: model.minimumSize.height)
+        .xiaolaiDictPanelBehaviour(transient: true) { window in
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+            ) { [controller] _ in
+                MainActor.assumeIsolated { controller.rememberChosenSize(window.frame.size) }
+            }
+        }
+        // The reader closing the window is as final as Escape: whatever is still arriving for this
+        // lookup is stale.
+        .onDisappear { controller.closed() }
+    }
+}
 /// Accessibility it never hears it.)
 @MainActor
 final class EscapeKey {
@@ -256,17 +291,5 @@ enum PanelPlacement {
     /// Bounds in the wrong order — a screen narrower than its margins — pin to the lower one.
     private static func clamp(_ value: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
         min(max(value, lower), max(lower, upper))
-    }
-}
-
-final class LookupWindow: NSPanel {
-    var onClose: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { close() }
-
-    override func close() {
-        onClose?()
-        super.close()
     }
 }

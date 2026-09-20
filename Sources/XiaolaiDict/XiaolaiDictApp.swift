@@ -242,6 +242,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the scenes read
 
+    var panelController: LookupPanelController { panel }
+    var panelModel: LookupPanelModel { panel.model }
     var drawerModel: HistoryDrawerModel { drawer.model }
     var drawerPlacement: CGRect? { drawer.placement }
     var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }

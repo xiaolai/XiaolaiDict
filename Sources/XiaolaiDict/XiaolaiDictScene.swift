@@ -3,21 +3,23 @@ import SwiftUI
 
 /// XiaolaiDict as a SwiftUI app.
 ///
-/// Every window XiaolaiDict shows is a SwiftUI `Scene`. That is possible because a `UtilityWindow` scene
-/// is backed by an `AppKitPanel` that comes up **without activating the app** — measured, not
-/// assumed: opened at launch and on demand, `NSApp.isActive` stayed false, the panel was visible
-/// and not key, and the frontmost app never changed. `isFloatingPanel` and
-/// `becomesKeyOnlyIfNeeded` are already set the way XiaolaiDict's panel rule requires.
+/// Every window XiaolaiDict shows is a SwiftUI `Scene`, and every one of them is a `Window` — never a
+/// `UtilityWindow`. Measured in this bundle with the same content and the same action, only the
+/// scene type differing: a `UtilityWindow` is created and reports `isVisible`, but the compositor
+/// never lists it and Accessibility never sees it, so it is drawn nowhere and readable by nothing.
+/// A `Window` is composited, is listed by Accessibility, and still does not activate the app.
 ///
-/// The one thing SwiftUI does not expose is `collectionBehavior`, and its default —
-/// `fullScreenNone + primary` — is the opposite of what XiaolaiDict needs. `WindowAccessor` sets it on the
-/// panel underneath, which is the only AppKit left in the window layer and is there for a reason
-/// that was measured rather than guessed.
+/// What a `Window` lacks is panel behaviour — floating level, `becomesKeyOnlyIfNeeded`,
+/// `collectionBehavior` — and SwiftUI exposes none of it. `WindowAccessor` sets it on the window
+/// SwiftUI made. That is the only AppKit left in this layer, and it is there for reasons that were
+/// measured rather than guessed.
 ///
 /// `main()` is called from `main.swift` rather than `@main`, because XiaolaiDict's other launch modes —
 /// the lookup, the reports, the instruments — must be able to run without a scene at all.
 struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
+    static let lookupID = "lookup"
+    static let lookupTitle = "XiaolaiDict"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -26,6 +28,19 @@ struct XiaolaiDictScene: App {
             XiaolaiDictMenu(app: delegate)
         } label: {
             MenuBarLabel()
+        }
+
+        Window(Self.lookupTitle, id: Self.lookupID) {
+            LookupPanelSceneView(controller: delegate.panelController, model: delegate.panelModel)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        // Below and to the right of the pointer, worked out before the scene opens.
+        .defaultWindowPlacement { _, _ in
+            let frame = delegate.panelController.placement
+            return WindowPlacement(frame.origin, size: frame.size)
         }
 
         // A `Window`, deliberately not a `UtilityWindow`. Measured in this bundle, same content
@@ -78,9 +93,24 @@ struct WindowAccessor: NSViewRepresentable {
 extension View {
     /// The collection behaviour every XiaolaiDict panel needs: in whichever Space the reader is in, over a
     /// full-screen app, and not a window to cycle to.
-    func xiaolaiDictPanelBehaviour() -> some View {
+    /// `transient` for the lookup panel, which goes away with the Space it was summoned in;
+    /// `stationary` for the drawer, which is docked and stays put.
+    func xiaolaiDictPanelBehaviour(
+        transient: Bool = false, then extra: @escaping (NSWindow) -> Void = { _ in }
+    ) -> some View {
         background(WindowAccessor { window in
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            window.collectionBehavior = [
+                .canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle,
+                transient ? .transient : .stationary,
+            ]
+            // The panel behaviour a `Window` scene does not have, applied to the window it made.
+            // `UtilityWindow` has it built in and is unusable — it is never composited and never
+            // reaches Accessibility — so this is the trade: a scene that is actually drawn, made to
+            // behave like a panel.
+            window.level = .floating
+            window.hidesOnDeactivate = false
+            if let panel = window as? NSPanel { panel.becomesKeyOnlyIfNeeded = true }
+            extra(window)
         })
     }
 }
