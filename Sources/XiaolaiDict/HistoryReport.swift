@@ -14,43 +14,31 @@ enum HistoryReport {
     /// How long the instrument will wait for the drawer to appear before calling it a failure.
     static let appearance: Duration = .seconds(3)
 
-    static func run() async -> CommandStatus {
-        let ledger: LedgerStore?
-        do {
-            ledger = try await LedgerStore.openDefault()
-        } catch {
-            ledger = nil
-        }
+    /// Set before the scene starts, so the delegate knows to measure instead of just running.
+    nonisolated(unsafe) static var isWanted = false
 
-        let drawer = HistoryDrawerController(load: { [ledger] in
-            guard let ledger else { return .unavailable("the ledger would not open") }
-            do {
-                let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
-                return .entries(try await ledger.recentLookups(
-                    since: since, limit: HistoryDrawerController.cardLimit))
-            } catch {
-                return .unavailable("\(error)")
-            }
-        })
-
+    /// Measures **the running app**, not a controller built for the occasion.
+    ///
+    /// It has to. The drawer is a SwiftUI scene now, and a scene exists only inside the `App` that
+    /// declares it — a controller constructed in a report process would have no window to open.
+    /// That is a better instrument anyway: what it measures is the thing the reader gets.
+    static func run(in app: XiaolaiDictApp) async -> CommandStatus {
         let screens = NSScreen.screens.map(ScreenMetrics.init)
         let expected = DrawerPlacement.screen(under: UpPoint(NSEvent.mouseLocation), among: screens)
             .map { DrawerGeometry.make(DrawerLayout(thickness: 380, edge: .right), on: $0) }
 
-        drawer.show()
-        // Polled, not slept: the instrument waits for the thing it is measuring and gives up after
-        // a deadline, rather than guessing how long a spring takes on an unloaded machine.
-        let appeared = await settle(until: appearance) { drawer.isOnScreen && drawer.model.revealed }
-        await drawer.reload?.value
+        app.toggleHistory()
+        let appeared = await settle(until: appearance) { app.drawerIsVisible && app.drawerModel.revealed }
+        await app.drawerReload?.value
 
         // Read while the drawer shows, because that is the only moment they can be true.
         let activatedUs = NSApp.isActive
-        let claimedEscape = drawer.isEscapeClaimed
-        let frame = drawer.windowFrame
+        let claimedEscape = app.drawerHoldsEscape
+        let frame = app.drawerPlacement ?? .zero
         let docked = expected.map { $0.windowRect.cg == frame } ?? false
 
-        drawer.hide()
-        let released = await settle(until: .seconds(2)) { !drawer.isEscapeClaimed && !drawer.isOnScreen }
+        app.toggleHistory()
+        let released = await settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsVisible }
 
         let report: [String: Any] = [
             "bundle": Bundle.main.bundleIdentifier ?? "none",
@@ -65,17 +53,15 @@ enum HistoryReport {
             "activatedTheApp": activatedUs,
             "claimedEscapeWhileShown": claimedEscape,
             "releasedEscapeAfterClosing": released,
-            "days": drawer.model.days.count,
-            "entries": drawer.model.totalEntries,
-            "problem": drawer.model.problem ?? "none",
+            "days": app.drawerModel.days.count,
+            "entries": app.drawerModel.totalEntries,
+            "problem": app.drawerModel.problem ?? "none",
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
             return .internalError
         }
         LookupCommand.writeLine(String(decoding: data, as: UTF8.self))
 
-        // A drawer that never appeared, or one that appeared by stealing focus, is a failed
-        // measurement and says so in its exit status rather than only in its text.
         return appeared && !activatedUs && claimedEscape && released ? .success : .failure
     }
 
