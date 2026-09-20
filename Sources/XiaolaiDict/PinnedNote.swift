@@ -30,53 +30,63 @@ struct PinnedNote: Equatable, Identifiable {
     static func == (a: PinnedNote, b: PinnedNote) -> Bool { a.id == b.id }
 }
 
-/// The pinned notes on screen. Each is its own always-on-top panel, closed by its own button — a
+/// The pinned notes on screen. Each is its own always-on-top window, closed by its own button — a
 /// new lookup never touches them, which is the whole point of pinning one.
+///
+/// A `WindowGroup(for:)` scene rather than an `NSPanel` per note: SwiftUI opens one window per
+/// value, which is exactly the shape of "several notes, each independent". The note itself is held
+/// here and looked up by id, because a scene is handed a value and not an object.
 @MainActor
 final class PinnedNoteController {
-    private var panels: [UUID: NSPanel] = [:]
+    private var notes: [UUID: PinnedNote] = [:]
+    /// Where the next note should be placed, read back by `defaultWindowPlacement`.
+    private(set) var placement = NSRect(origin: .zero, size: NSSize(width: 320, height: 200))
 
-    var count: Int { panels.count }
+    var count: Int { notes.count }
+
+    func note(_ id: UUID) -> PinnedNote? { notes[id] }
+
+    /// The reader dismissed one. Reported by the scene's `onDisappear`, since SwiftUI owns the
+    /// window and there is no `willClose` to observe.
+    func dismissed(_ id: UUID) { notes[id] = nil }
 
     func pin(_ note: PinnedNote, near pointer: UpPoint) {
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: NSSize(width: 320, height: 200)),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered, defer: false)
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.hidesOnDeactivate = false
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
-        panel.isReleasedWhenClosed = false
-        panel.title = note.term
-        panel.contentView = NSHostingView(rootView: PinnedNoteView(note: note))
-
         // Unwrapped once for the placement math below, which is all in AppKit's space.
         let pointer = pointer.cg
+        let size = placement.size
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: panel.frame.size)
+        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
         // Offset per open note, so pinning several does not stack them exactly on top of one another.
-        let offset = CGFloat(panels.count % 8) * 24
-        let origin = NSPoint(
-            x: min(pointer.x + 24 + offset, visible.maxX - panel.frame.width - 8),
-            y: max(pointer.y - 24 - panel.frame.height - offset, visible.minY + 8))
-        panel.setFrameOrigin(origin)
-        panels[note.id] = panel
+        let offset = CGFloat(notes.count % 8) * 24
+        placement = NSRect(
+            origin: NSPoint(
+                x: min(pointer.x + 24 + offset, visible.maxX - size.width - 8),
+                y: max(pointer.y - 24 - size.height - offset, visible.minY + 8)),
+            size: size)
 
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: panel, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.panels[note.id] = nil }
-        }
-        panel.orderFrontRegardless()
+        notes[note.id] = note
+        WindowActions.shared.open?(value: note.id)
     }
 }
 
-private struct PinnedNoteView: View {
+/// One pinned note's scene content.
+struct PinnedNoteSceneView: View {
+    let controller: PinnedNoteController
+    let id: UUID
+
+    var body: some View {
+        Group {
+            if let note = controller.note(id) {
+                PinnedNoteView(note: note)
+            }
+        }
+        .frame(minWidth: 240, minHeight: 140)
+        .xiaolaiDictPanelBehaviour(transient: true)
+        .onDisappear { controller.dismissed(id) }
+    }
+}
+
+struct PinnedNoteView: View {
     let note: PinnedNote
 
     var body: some View {

@@ -48,7 +48,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
     /// the menu says it does not know rather than showing a list it made up.
     var dictionaries: [DictionaryCapability]?
-    private let recorder = ShortcutRecorder()
+    let recorder = ShortcutRecorder()
     private let shortcuts = ShortcutStore(defaults: .standard)
     private var hotkey: Hotkey?
     /// Opened on a background task at launch: file and database work — a migration, on the first

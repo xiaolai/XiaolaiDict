@@ -20,6 +20,7 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
+    static let shortcutID = "change-shortcut"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -58,6 +59,31 @@ struct XiaolaiDictScene: App {
         .defaultWindowPlacement { _, _ in
             let rect = delegate.drawerPlacement ?? .zero
             return WindowPlacement(rect.origin, size: rect.size)
+        }
+
+        // The one window that *should* take focus: the reader asked for it from the menu and is
+        // about to type into it.
+        Window("Change Shortcut", id: Self.shortcutID) {
+            ShortcutRecorderView(recorder: delegate.recorder, model: delegate.recorder.model)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        // One window per pinned note. `WindowGroup(for:)` opens one per value, which is the shape
+        // of "several notes, each independent" — the hand-built version kept a dictionary of
+        // panels to do the same thing.
+        WindowGroup(for: UUID.self) { $id in
+            if let id {
+                PinnedNoteSceneView(controller: delegate.panelController.notes, id: id)
+            }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .defaultWindowPlacement { _, _ in
+            let frame = delegate.panelController.notes.placement
+            return WindowPlacement(frame.origin, size: frame.size)
         }
 
         Settings {

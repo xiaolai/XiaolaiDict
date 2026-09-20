@@ -58,7 +58,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -454,6 +454,54 @@ else
         fi
     fi
 fi
+
+# 11. The windows that are now SwiftUI scenes, driven the way a reader drives them.
+#
+#    With a real click, not `AXPress`: pressing a menu through Accessibility opens it *without
+#    activating the app*, so a window opened from it never becomes key and never sees a key press.
+#    A working recorder looks broken that way, and a broken one would look working.
+if ! "$helpers/menu-click" com.xiaolaidict "Change Shortcut…" >/dev/null 2>&1; then
+    flunk "recorder: could not reach Change Shortcut… in the menu"
+else
+    sleep 1
+    before=$("$helpers/panel" com.xiaolaidict)
+    # A key with no modifier is refused with a hint rather than accepted — a shortcut without one
+    # would fire while the reader was typing. The hint changing is the proof the window has the
+    # keyboard at all.
+    "$helpers/keys" 40
+    sleep 1
+    after=$("$helpers/panel" com.xiaolaidict)
+    if printf '%s' "$after" | grep -q "needs"; then
+        pass "recorder: takes the keyboard, and refuses a shortcut with no modifier"
+    else
+        flunk "recorder: the window never saw the key press (before: $(printf '%s' "$before" | head -c 80))"
+    fi
+    "$helpers/keys" 53
+    sleep 1
+    if "$helpers/panel" com.xiaolaidict | grep -q '"windows":\[\]'; then
+        pass "recorder: Escape cancels and closes it"
+    else
+        flunk "recorder: Escape did not close it"
+    fi
+fi
+
+# The drawer and the settings window, opened the same way, and read through Accessibility — which
+# is what a screen reader uses, and what a SwiftUI `UtilityWindow` is invisible to.
+for surface in "Reading History" "Settings…"; do
+    if ! "$helpers/menu-click" com.xiaolaidict "$surface" >/dev/null 2>&1; then
+        flunk "scenes: could not reach $surface in the menu"
+        continue
+    fi
+    sleep 2
+    seen=$("$helpers/panel" com.xiaolaidict)
+    if printf '%s' "$seen" | grep -q '"windows":\[\]'; then
+        flunk "scenes: $surface opened no window Accessibility can see"
+    else
+        pass "scenes: $surface is open and readable through Accessibility"
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    sleep 1
+done
 
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
