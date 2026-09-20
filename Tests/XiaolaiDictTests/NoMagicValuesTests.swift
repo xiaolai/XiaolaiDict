@@ -19,6 +19,7 @@ import Testing
 /// | `CardPile.swift` | Arithmetic. What is left is structural — an off-by-one, a half, a both-sides — and its two design values, the pile's depth and its offsets, come from tokens. |
 /// | `EntryPresentation.swift` | A formatting model with no SwiftUI in it at all. Its numbers are English grammar: `11...13` take "th", and no token will ever change that. |
 /// | `PrivacySettings.swift` | `majorVersion >= 27` is a fact about macOS. |
+/// | `AppIcons.swift` | A bitmap format. `bitsPerSample: 8, samplesPerPixel: 4` is RGBA, and no token will ever change that. Its one design value, the raster size, is in `Token.Panel`. |
 struct NoMagicValuesTests {
     /// 0 and 1 stay legal: they are identities, not measurements. `opacity(… ? 1 : 0)` and
     /// `progress: expanded ? 1 : 0` are saying "all" and "none", and a token for either would be
@@ -73,7 +74,7 @@ struct NoMagicValuesTests {
 
     private static let exempt: Set<String> = [
         "DesignTokens.swift", "Scale.swift", "CardSurface.swift", "ReadingAccent.swift",
-        "CardPile.swift", "EntryPresentation.swift", "PrivacySettings.swift",
+        "CardPile.swift", "EntryPresentation.swift", "PrivacySettings.swift", "AppIcons.swift",
     ]
 
     private var viewLayer: URL {

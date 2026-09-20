@@ -325,8 +325,13 @@ struct ReadingCardView: View {
     /// Buried cards are drawn as a bare plate and nothing else — see `CardLayer`.
     var layer: CardLayer = .front
 
+    @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
+    /// Per card, and deliberately not remembered. Revealing a meaning is an act the reader
+    /// performs when they want it; a drawer that reopened with every answer already showing would
+    /// be the C2 failure arrived at by a slower route.
+    @State private var revealed = false
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: scale.radius.card, style: .continuous)
@@ -365,46 +370,150 @@ struct ReadingCardView: View {
     }
 
     private var details: some View {
-        // Baseline-aligned: centred, the time floated against the middle of a three-line card
-        // instead of sitting on the word's own line.
-        HStack(alignment: .firstTextBaseline, spacing: scale.space.column) {
-            // Two groups, not three stacked lines. The word and the sentence belong together — the
-            // word is *in* the sentence — and where it was read is a different kind of fact. Given
-            // one gap they read as a single block, which is what `Space.line` was doing here: that
-            // token is for lines inside one piece of text, and these are three pieces.
-            VStack(alignment: .leading, spacing: scale.space.stack) {
-                VStack(alignment: .leading, spacing: scale.space.inline) {
-                    HStack(spacing: scale.space.inline) {
-                        Text(entry.lemma)
-                            .font(.system(size: scale.text.strong, weight: .semibold))
-                        if entry.result != .found { missBadge }
-                    }
-                    // Only where there is one. The ledger stores the selection itself when nothing
-                    // surrounded the word, and printing that under the word is the same word twice
-                    // with the second copy marked up as though it were evidence.
-                    if entry.cue != .none {
-                        Text(sentence)
-                            .font(.system(size: scale.text.body))
-                            .foregroundStyle(.secondary)
-                            .lineSpacing(scale.text.leading)
-                            .lineLimit(Token.Limit.wrapLines)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if let where_ = place {
-                    Text(where_)
-                        .font(.system(size: scale.text.small))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
+        VStack(alignment: .leading, spacing: scale.space.stack) {
+            VStack(alignment: .leading, spacing: scale.space.inline) {
+                headline
+                if entry.cue != .none { sentenceLine }
+                if revealed, let gloss = entry.sense?.gloss { meaning(gloss) }
             }
+            footnote
+        }
+    }
 
-            Spacer(minLength: scale.space.inline)
+    /// The word, what it was doing, which sense it was — and the two things the reader can do with
+    /// it. The dictionary sits at the far end because it leaves the card; the rest belong to it.
+    private var headline: some View {
+        VStack(alignment: .leading, spacing: scale.space.line) {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                Text(entry.lemma)
+                    .font(.system(size: scale.text.strong, weight: .semibold))
+                if entry.result != .found { missBadge }
+                Spacer(minLength: scale.space.inline)
+                dictionaryButton
+            }
+            HStack(spacing: scale.space.inline) {
+                if let partOfSpeech = PartOfSpeechLabel.reader(entry.partOfSpeech) {
+                    Text(partOfSpeech)
+                        .font(.system(size: scale.text.small).italic())
+                        .foregroundStyle(.secondary)
+                }
+                speakButton
+                if revealAvailable { revealButton }
+                // The sense sits at the far end: it is the one thing on the line that is a label
+                // rather than something to do, and the two buttons belong beside the word they act on.
+                Spacer(minLength: scale.space.inline)
+                if let sense = entry.sense { senseMark(sense) }
+            }
+        }
+    }
 
-            Text(entry.at.formatted(date: .omitted, time: .shortened))
+    /// **Which** sense, never what it says. A sense the selector proposed is drawn as the
+    /// hypothesis it is — the reader has to be able to tell a guess from their own tap, and a
+    /// marker that looked the same either way would be the ledger's distinction thrown away at
+    /// the last step.
+    private func senseMark(_ sense: SenseNote) -> some View {
+        let ordinal = sense.label
+        return Text(sense.isConfirmed ? "\(sense.dictionary) \(ordinal)" : "\(sense.dictionary) \(ordinal)?")
+            .font(.system(size: scale.text.micro, weight: .medium))
+            .monospacedDigit()
+            .padding(.horizontal, scale.space.inline)
+            .padding(.vertical, scale.space.tight)
+            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
+            .foregroundStyle(sense.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+            .help(sense.isConfirmed
+                  ? Text("The sense you chose")
+                  : Text("The sense XiaolaiDict guessed — not confirmed"))
+    }
+
+    private var revealAvailable: Bool { entry.sense?.canReveal == true }
+
+    private var revealButton: some View {
+        Button {
+            withAnimation(.easeOut(duration: Token.Motion.hover)) { revealed.toggle() }
+        } label: {
+            Label(
+                revealed ? "Hide meaning" : "Reveal meaning",
+                systemImage: revealed ? "eye.slash" : "eye")
+                .labelStyle(.iconOnly)
                 .font(.system(size: scale.text.small))
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tertiary)
+        .help(revealed ? Text("Hide the meaning") : Text("Reveal the meaning"))
+    }
+
+    private var speakButton: some View {
+        Button { Speech.say(entry.surface) } label: {
+            Image(systemName: "speaker.wave.2")
+                .font(.system(size: scale.text.small))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tertiary)
+        .help(Text("Say it aloud"))
+    }
+
+    private var dictionaryButton: some View {
+        Button { SystemDictionary.open(entry.lemma) } label: {
+            Image(systemName: "character.book.closed")
+                .font(.system(size: scale.text.small))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tertiary)
+        .help(Text("Open in Dictionary"))
+    }
+
+    private var sentenceLine: some View {
+        Text(sentence)
+            .font(.system(size: scale.text.body))
+            .foregroundStyle(.secondary)
+            .lineSpacing(scale.text.leading)
+            .lineLimit(Token.Limit.wrapLines)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Shown only because the reader asked. Set apart from the sentence so it cannot be mistaken
+    /// for it — the sentence is theirs, this is the dictionary's.
+    private func meaning(_ gloss: String) -> some View {
+        Text(gloss)
+            .font(.system(size: scale.text.small))
+            .foregroundStyle(.secondary)
+            .lineSpacing(scale.text.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, scale.space.inline)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.primary.opacity(Token.Opacity.border))
+                    .frame(width: Token.Stroke.hairline)
+            }
+            .transition(.opacity)
+    }
+
+    /// Where it was read, and — only if the reader asked for it — when. Parked at the trailing
+    /// edge because it is provenance: true, and never the thing being reviewed.
+    private var footnote: some View {
+        HStack(spacing: scale.space.inline) {
+            Spacer(minLength: 0)
+            if let icon = AppIcons.icon(for: entry.place.bundleID) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: scale.text.small, height: scale.text.small)
+                    // Named even when the name is hidden: the icon is the only thing saying where
+                    // this was read, and a reader who cannot see it is owed the same fact.
+                    .accessibilityLabel(Text(place ?? ""))
+                    .help(Text(place ?? ""))
+            }
+            if options.showsPlaceName, let where_ = place {
+                Text(where_)
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            if options.showsTime {
+                Text(entry.at.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: scale.text.small))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -424,11 +533,17 @@ struct ReadingCardView: View {
     /// an ellipsis saying so rather than an ending the reader never read.
     private var sentence: AttributedString {
         var text = AttributedString(entry.sentence)
-        if let range = entry.sentenceRange,
-           let swiftRange = Range(range, in: entry.sentence),
-           let marked = Range(swiftRange, in: text) {
-            text[marked].font = .system(size: scale.text.body, weight: .semibold)
-            text[marked].foregroundColor = .primary
+        // `markedRanges`, never `sentenceRange`: the captured range covers the surface as it was
+        // found, so emphasising it drew **temper**ed — the word broken in half — and a phrasal
+        // verb read as "took it over" needs two marks rather than one span over the pronoun.
+        var font = Font.system(size: scale.text.body, weight: options.emphasis.weight)
+        if options.emphasis.isItalic { font = font.italic() }
+        let colour = ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary
+        for range in entry.markedRanges {
+            guard let swiftRange = Range(range, in: entry.sentence),
+                  let marked = Range(swiftRange, in: text) else { continue }
+            text[marked].font = font
+            text[marked].foregroundColor = colour
         }
         if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }
         return text
@@ -457,22 +572,37 @@ private extension ReadingEntry {
     static func sample(
         _ lemma: String, _ sentence: String, place: String = "Safari",
         result: LookupResult = .found, context: CaptureQuality.Context = .complete,
+        partOfSpeech: String? = nil, sense: SenseNote? = nil,
         minutesAgo: Int = 0, id: Int
     ) -> ReadingEntry {
         let range = (sentence as NSString).range(of: lemma)
         return ReadingEntry(
             id: id, lemma: lemma, surface: lemma, sentence: sentence,
             sentenceRange: range.location == NSNotFound ? nil : range,
-            place: ReadingPlace(name: place, title: place == "Safari" ? "A page" : nil),
+            place: ReadingPlace(
+                bundleID: place == "Safari" ? "com.apple.Safari" : "com.apple.Terminal",
+                name: place, title: place == "Safari" ? "A page" : nil),
             at: Date().addingTimeInterval(TimeInterval(-60 * minutesAgo)), result: result,
-            quality: .accessibility(.accessibilityTextRange, context: context))
+            quality: .accessibility(.accessibilityTextRange, context: context),
+            partOfSpeech: partOfSpeech, sense: sense)
     }
 }
 
 private let sampleDays: [ReadingDay] = [
     ReadingDay(id: "2026-09-20", date: .now, label: .today, entries: [
-        .sample("ephemeral", "The ephemeral beauty of morning frost.", minutesAgo: 4, id: 1),
-        .sample("hold", "The ship's hold was full.", place: "Ghostty", minutesAgo: 30, id: 2),
+        .sample(
+            "ephemeral", "The ephemeral beauty of morning frost.", partOfSpeech: "adjective",
+            sense: SenseNote(
+                dictionary: "NOAD", ordinal: 1, outOf: 2,
+                gloss: "lasting for a very short time", chosenBy: .reader),
+            minutesAgo: 4, id: 1),
+        // The selector's guess, drawn as the hypothesis it is rather than as the reader's own.
+        .sample(
+            "hold", "The ship's hold was full.", place: "Ghostty", partOfSpeech: "noun",
+            sense: SenseNote(
+                dictionary: "NOAD", ordinal: 3, outOf: 21,
+                gloss: "a large compartment in the lower part of a ship", chosenBy: .model),
+            minutesAgo: 30, id: 2),
         // The app could read no text around the selection, so the ledger stored the selection
         // itself. The card shows the word once and says nothing it cannot back up.
         .sample(
@@ -484,7 +614,12 @@ private let sampleDays: [ReadingDay] = [
             context: .mayBeCut, minutesAgo: 51, id: 4),
     ]),
     ReadingDay(id: "2026-09-19", date: .now.addingTimeInterval(-86400), label: .yesterday, entries: [
-        .sample("temper", "Justice tempered with mercy.", minutesAgo: 1500, id: 5),
+        .sample(
+            "temper", "Justice tempered with mercy.", partOfSpeech: "verb",
+            sense: SenseNote(
+                dictionary: "NOAD", ordinal: 4, outOf: 12,
+                gloss: "serve as a neutralizing or counterbalancing force to", chosenBy: .reader),
+            minutesAgo: 1500, id: 5),
         .sample("rein", "He kept a tight rein on the budget.", place: "TextEdit", minutesAgo: 1600, id: 6),
         .sample("sanction", "The sanctions were lifted.", minutesAgo: 1700, id: 7),
         .sample("table", "They tabled the motion.", place: "TextEdit", minutesAgo: 1800, id: 8),

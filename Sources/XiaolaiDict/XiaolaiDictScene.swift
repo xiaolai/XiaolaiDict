@@ -34,7 +34,7 @@ struct XiaolaiDictScene: App {
 
         Window(Self.lookupTitle, id: Self.lookupID) {
             LookupPanelSceneView(controller: delegate.panelController, model: delegate.panelModel)
-                .xiaolaiDictTextSize(delegate.appearance)
+                .xiaolaiDictAppearance(delegate.appearance)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
@@ -53,7 +53,7 @@ struct XiaolaiDictScene: App {
         // Accessibility, and still does not activate the app.
         Window("Reading History", id: Self.drawerID) {
             HistoryDrawerRootView(model: delegate.drawerModel)
-                .xiaolaiDictTextSize(delegate.appearance)
+                .xiaolaiDictAppearance(delegate.appearance)
                 .xiaolaiDictPanelBehaviour()
         }
         .windowStyle(.plain)
@@ -68,7 +68,7 @@ struct XiaolaiDictScene: App {
         // about to type into it.
         Window("Change Shortcut", id: Self.shortcutID) {
             ShortcutRecorderView(recorder: delegate.recorder, model: delegate.recorder.model)
-                .xiaolaiDictTextSize(delegate.appearance)
+                .xiaolaiDictAppearance(delegate.appearance)
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
@@ -80,7 +80,7 @@ struct XiaolaiDictScene: App {
         WindowGroup(for: UUID.self) { $id in
             if let id {
                 PinnedNoteSceneView(controller: delegate.panelController.notes, id: id)
-                    .xiaolaiDictTextSize(delegate.appearance)
+                    .xiaolaiDictAppearance(delegate.appearance)
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -93,7 +93,7 @@ struct XiaolaiDictScene: App {
 
         Settings {
             SettingsView(appearance: delegate.appearance)
-                .xiaolaiDictTextSize(delegate.appearance)
+                .xiaolaiDictAppearance(delegate.appearance)
         }
     }
 }

@@ -212,10 +212,22 @@ extension EnvironmentValues {
 @MainActor
 public final class Appearance {
     public var textSize: TextSize {
-        didSet {
-            guard textSize != oldValue else { return }
-            store.save(textSize)
-        }
+        didSet { if textSize != oldValue { store.save(textSize) } }
+    }
+
+    /// Whether a card shows the minute a word was looked up. Off unless the reader turns it on.
+    public var showsTime: Bool {
+        didSet { if showsTime != oldValue { store.save(showsTime: showsTime) } }
+    }
+
+    /// Whether a card spells out the app a word was read in, beside its icon.
+    public var showsPlaceName: Bool {
+        didSet { if showsPlaceName != oldValue { store.save(showsPlaceName: showsPlaceName) } }
+    }
+
+    /// How the word is picked out of the reader's own sentence.
+    public var emphasis: WordEmphasis {
+        didSet { if emphasis != oldValue { store.save(emphasis) } }
     }
 
     private let store: TextSizeStore
@@ -223,14 +235,23 @@ public final class Appearance {
     public init(store: TextSizeStore = TextSizeStore()) {
         self.store = store
         textSize = store.load()
+        showsTime = store.loadShowsTime()
+        showsPlaceName = store.loadShowsPlaceName()
+        emphasis = store.loadEmphasis()
     }
 
     var scale: Scale { Scale(textSize) }
+    var cardOptions: CardOptions {
+        CardOptions(showsTime: showsTime, showsPlaceName: showsPlaceName, emphasis: emphasis)
+    }
 }
 
-/// The reader's text size, kept across launches.
+/// The reader's appearance choices, kept across launches.
 public struct TextSizeStore {
     static let defaultsKey = "TextSize"
+    static let showsTimeKey = "CardShowsTime"
+    static let showsPlaceNameKey = "CardShowsPlaceName"
+    static let emphasisKey = "WordEmphasis"
 
     private let defaults: UserDefaults
 
@@ -247,14 +268,41 @@ public struct TextSizeStore {
     func save(_ size: TextSize) {
         defaults.set(size.rawValue, forKey: Self.defaultsKey)
     }
+
+    /// `object(forKey:)` rather than `bool(forKey:)`: the latter answers false for a key that was
+    /// never set, which is indistinguishable from a reader who turned it off. Here the two happen
+    /// to agree, and relying on that would be the kind of accident that breaks the next default.
+    func loadShowsTime() -> Bool {
+        defaults.object(forKey: Self.showsTimeKey) as? Bool ?? false
+    }
+
+    func save(showsTime: Bool) {
+        defaults.set(showsTime, forKey: Self.showsTimeKey)
+    }
+
+    func loadShowsPlaceName() -> Bool {
+        defaults.object(forKey: Self.showsPlaceNameKey) as? Bool ?? false
+    }
+
+    func save(showsPlaceName: Bool) {
+        defaults.set(showsPlaceName, forKey: Self.showsPlaceNameKey)
+    }
+
+    func loadEmphasis() -> WordEmphasis {
+        defaults.string(forKey: Self.emphasisKey).flatMap(WordEmphasis.init(rawValue:)) ?? .italic
+    }
+
+    func save(_ emphasis: WordEmphasis) {
+        defaults.set(emphasis.rawValue, forKey: Self.emphasisKey)
+    }
 }
 
-/// Draws a view — and everything inside it — at the reader's chosen text size.
+/// Draws a view — and everything inside it — the way the reader has asked for.
 ///
-/// A modifier rather than a public environment key, so the app target cannot inject a scale of its
-/// own: there is one text size, it belongs to the reader, and `Appearance` is where it lives.
+/// A modifier rather than public environment keys, so the app target cannot inject choices of its
+/// own: there is one set of them, they belong to the reader, and `Appearance` is where they live.
 public extension View {
-    func xiaolaiDictTextSize(_ appearance: Appearance) -> some View {
+    func xiaolaiDictAppearance(_ appearance: Appearance) -> some View {
         ScaledContent(appearance: appearance, content: self)
     }
 }
@@ -268,6 +316,8 @@ private struct ScaledContent<Content: View>: View {
     let content: Content
 
     var body: some View {
-        content.environment(\.scale, appearance.scale)
+        content
+            .environment(\.scale, appearance.scale)
+            .environment(\.cardOptions, appearance.cardOptions)
     }
 }

@@ -41,7 +41,7 @@ public struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: scale.space.section) {
                 header
-                if let appearance { TextSizeRow(appearance: appearance) }
+                if let appearance { ReadingRow(appearance: appearance) }
                 ForEach(model.report.states) { PermissionRow(state: $0) }
             }
             .padding(scale.space.pad)
@@ -80,13 +80,13 @@ public struct SettingsView: View {
     }
 }
 
-/// Where the reader chooses how large XiaolaiDict's text is.
+/// Where the reader chooses how XiaolaiDict's surfaces read.
 ///
 /// macOS has no system-wide UI text size, so without this there is no way to change it at all —
-/// and XiaolaiDict's surfaces are prose the reader is trying to recall from, not chrome. A segmented
-/// picker rather than a slider: every step is a size the drawer has been looked at, and a free
-/// number would let the reader build a layout nobody designed.
-private struct TextSizeRow: View {
+/// and XiaolaiDict's surfaces are prose someone is trying to recall from, not chrome. The other two are
+/// here for the same reason: what a card shows, and how it marks the word, are reading decisions
+/// rather than implementation ones.
+private struct ReadingRow: View {
     @Environment(\.scale) private var scale
     @Bindable var appearance: Appearance
 
@@ -94,27 +94,54 @@ private struct TextSizeRow: View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             HStack(spacing: scale.space.inline) {
                 Image(systemName: "textformat.size").foregroundStyle(.secondary)
-                Text("Text size").font(.system(size: scale.text.heading, weight: .medium))
+                Text("Reading").font(.system(size: scale.text.heading, weight: .medium))
             }
 
+            // A segmented picker rather than a slider: every step is a size the drawer has been
+            // looked at, and a free number would let the reader build a layout nobody designed.
             Picker("Text size", selection: $appearance.textSize) {
-                ForEach(TextSize.allCases, id: \.self) { size in
-                    Text(size.label).tag(size)
-                }
+                ForEach(TextSize.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            // Set in the chosen size, so the control shows what it does rather than describing it.
-            Text("The quick brown fox jumps over the lazy dog.")
-                .font(.system(size: appearance.scale.text.body))
+            Picker("Mark the word", selection: $appearance.emphasis) {
+                ForEach(WordEmphasis.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // Set in the chosen size and marked the chosen way, so the controls show what they do
+            // rather than describing it.
+            Text(specimenText)
                 .foregroundStyle(.secondary)
                 .lineSpacing(appearance.scale.text.leading)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Name the app a word was read in", isOn: $appearance.showsPlaceName)
+                .font(.system(size: scale.text.label))
+                .toggleStyle(.checkbox)
+
+            Toggle("Show the time a word was looked up", isOn: $appearance.showsTime)
+                .font(.system(size: scale.text.label))
+                .toggleStyle(.checkbox)
         }
         .padding(scale.space.pad)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous))
+    }
+
+    private var specimenText: AttributedString {
+        var text = AttributedString("The quick brown fox jumps over the lazy dog.")
+        if let marked = text.range(of: "jumps") {
+            let chosen = appearance.emphasis
+            var font = Font.system(size: appearance.scale.text.body, weight: chosen.weight)
+            if chosen.isItalic { font = font.italic() }
+            text[marked].font = font
+            text[marked].foregroundColor = ReadingPalette.accents[
+                ReadingPalette.index(for: "jumps")].color(in: .light)
+        }
+        return text
     }
 }
 

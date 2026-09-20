@@ -53,6 +53,9 @@ enum Token {
         /// The dictionary list beside an entry: wide enough for the longest dictionary name
         /// without taking room the entry needs.
         static let dictionaryList: CGFloat = 260
+        /// How large an app icon is rasterised and cached at. Fixed rather than scaled: it is the
+        /// source bitmap the card downscales from, and one raster has to serve every text size.
+        static let appIconRaster: CGFloat = 32
         /// Clears a transparent title bar's own controls. A structural offset, not a padding, and
         /// not scaled: the traffic lights are where they are whatever size the reader's text is.
         static let titleBarClearance: CGFloat = 28
