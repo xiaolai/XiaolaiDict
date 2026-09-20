@@ -16,7 +16,30 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     @ObservationIgnored private lazy var drawer = makeDrawer()
     /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
     /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
-    private let hover = HoverWatcher()
+    ///
+    /// Lazy so it can be handed a closure onto `hoverPause` below — a stored property cannot read
+    /// `self`, which is the mechanical reason the pause was never connected to anything.
+    @ObservationIgnored private(set) lazy var hover = makeHover()
+
+    /// **The pause the menu offers and the gate reads — one value, held here.** There was no such
+    /// value: `HoverReader`'s default built a fresh `HoverPause` on every call, so the gate asked
+    /// "is XiaolaiDict paused" of an object that had just been born and always answered no. Nothing in
+    /// the app or the suite ever supplied one, and the menu item `HoverPause.label(at:)` was
+    /// written for did not exist. The model was complete and unreachable.
+    private(set) var hoverPause = HoverPause()
+
+    /// What the pause control says. Observed, so pausing redraws the menu without being told to.
+    var hoverPauseLabel: String { hoverPause.label(at: .now) }
+    var hoverIsPaused: Bool { hoverPause.isPaused(at: .now) }
+
+    func pauseHover(for duration: Duration) { hoverPause.pause(for: duration, from: .now) }
+    func resumeHover() { hoverPause.resume() }
+
+    private func makeHover() -> HoverWatcher {
+        // `self` is read at decision time, not captured by value — a copy taken here would be the
+        // same never-changing pause this replaces.
+        HoverWatcher(pause: { [weak self] in self?.hoverPause ?? HoverPause() })
+    }
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])

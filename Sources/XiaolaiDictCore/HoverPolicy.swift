@@ -165,6 +165,19 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
 public struct HoverPause: Sendable, Equatable {
     public static let durations: [Duration] = [.seconds(900), .seconds(3_600), .seconds(28_800)]
 
+    /// How long a pause lasts, said in words. The menu offers three lengths and a row reading
+    /// "900 seconds" is not an offer anyone can act on — `durations` shipped as a list with
+    /// nothing to render it, which is part of why the switch it was written for never appeared.
+    ///
+    /// Localised, because it is read by the reader; the locale is a parameter so a test can pin
+    /// one rather than assert this machine's.
+    public static func name(of duration: Duration, in locale: Locale = .current) -> String {
+        duration.formatted(
+            .units(allowed: [.hours, .minutes], width: .wide, maximumUnitCount: 1,
+                   zeroValueUnits: .hide)
+            .locale(locale))
+    }
+
     public var until: Date?
 
     public init(until: Date? = nil) {

@@ -198,4 +198,12 @@ struct HoverHostMatchingTests {
         #expect(!excluded("example.com", by: [""]))
         #expect(!excluded("", by: ["example.com"]))
     }
+
+    /// **Each pause length has to say how long it is**, because the menu offers three and a row
+    /// reading "900 seconds" is not an offer anyone can act on. `HoverPause.durations` shipped as
+    /// a list with nothing to render it, which is part of why the switch was never built.
+    @Test func eachPauseLengthNamesItself() {
+        let named = HoverPause.durations.map { HoverPause.name(of: $0, in: Locale(identifier: "en_US")) }
+        #expect(named == ["15 minutes", "1 hour", "8 hours"], "the menu would read \(named)")
+    }
 }

@@ -22,6 +22,20 @@ struct XiaolaiDictMenu: View {
         Toggle("Hover Lookup    hold \u{2325}", isOn: Binding(
             get: { app.hoverIsWatching }, set: { _ in app.toggleHover() }))
 
+        // The pause switch (A5). It was specified, modelled, given three lengths and a label —
+        // and never drawn, so `HoverPause.label(at:)`'s "what the menu says" described a menu that
+        // did not exist. Resuming is one click; pausing picks a length, which is what having three
+        // of them is for.
+        if app.hoverIsPaused {
+            Button(app.hoverPauseLabel) { app.resumeHover() }
+        } else {
+            Menu(app.hoverPauseLabel) {
+                ForEach(HoverPause.durations, id: \.self) { duration in
+                    Button(HoverPause.name(of: duration)) { app.pauseHover(for: duration) }
+                }
+            }
+        }
+
         Button(app.drawerIsVisible ? "Hide Reading History" : "Reading History") { app.toggleHistory() }
 
         studyFrom

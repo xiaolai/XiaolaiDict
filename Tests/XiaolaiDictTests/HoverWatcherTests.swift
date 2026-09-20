@@ -81,6 +81,31 @@ struct HoverWatcherTests {
         #expect(HoverWatcher.primaryHeight(among: []) == nil)
     }
 
+    // MARK: - Pause
+
+    /// **The watcher hands its pause to the reader**, and until now it did not.
+    ///
+    /// `HoverWatcher` took a policy and built `HoverReader(policy:)`, leaving the reader's `pause`
+    /// on its default — `{ HoverPause() }`, a fresh never-paused value constructed on every call.
+    /// Nothing in `Sources` or `Tests` ever passed one, so `.paused` was a gate that could not
+    /// fire however long the reader paused for. `HoverPolicyTests` stayed green throughout,
+    /// because it hands `decide` a `pausedUntil` directly: the model was right and nothing was
+    /// connected to it. This asserts the connection, which is the part that was missing.
+    ///
+    /// It also proves the refusal is *cheap*: paused is decided before any Accessibility call or
+    /// capture, which is why this can run in a unit test at all.
+    @Test @MainActor func aPausedXiaolaiDictRefusesBeforeItReadsAnything() async {
+        var paused = HoverPause()
+        paused.pause(for: .seconds(600), from: .now)
+        let watcher = HoverWatcher(pause: { paused })
+        let outcome = await watcher.reader.read(
+            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], pointerStillFor: .seconds(10))
+        guard case .quiet(.paused) = outcome else {
+            Issue.record("a paused XiaolaiDict answered \(outcome) — the pause never reached the reader")
+            return
+        }
+    }
+
     /// The whole point of the conversion: the pointer arrives y up and the reader works y down.
     @Test func aPointerNearTheTopOfTheScreenReadsNearZeroGoingDown() {
         let screens = [ScreenMetrics(
