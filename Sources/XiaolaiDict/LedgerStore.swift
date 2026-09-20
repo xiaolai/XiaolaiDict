@@ -49,4 +49,9 @@ actor LedgerStore {
     func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
         try ledger.recentLookups(since: since, limit: limit)
     }
+
+    /// A lookup the reader did not mean to make. The senses met in it go with it.
+    func delete(lookup id: Int) throws {
+        try ledger.delete(lookup: id)
+    }
 }

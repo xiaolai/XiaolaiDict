@@ -59,17 +59,20 @@ public enum PanelContent {
         case lookup
         case message
 
+        /// A starting size, not a fixed one — the lookup window hugs its content, so this is what
+        /// it opens at before the card has laid itself out.
+        ///
         /// Exhaustive, so a new kind of content cannot quietly get another kind's size.
         public var defaultSize: NSSize {
             switch self {
-            case .lookup: NSSize(width: Token.Panel.lookupWidth, height: Token.Panel.lookupHeight)
+            case .lookup: NSSize(width: Token.Panel.cardOpeningWidth, height: Token.Panel.cardOpeningHeight)
             case .message: NSSize(width: Token.Panel.messageWidth, height: Token.Panel.messageHeight)
             }
         }
 
         public var minimumSize: NSSize {
             switch self {
-            case .lookup: NSSize(width: Token.Panel.lookupMinWidth, height: Token.Panel.lookupMinHeight)
+            case .lookup: NSSize(width: Scale.standard.space.cardMinWidth, height: Token.Panel.messageMinHeight)
             case .message: NSSize(width: Token.Panel.messageMinWidth, height: Token.Panel.messageMinHeight)
             }
         }

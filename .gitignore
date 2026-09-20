@@ -31,7 +31,7 @@
 __pycache__
 
 # >>> cc-suite >>>
-# cc-suite-schema: 7
+# cc-suite-schema: 8
 # AI assistant local state
 .claude/settings.local.json
 .claude/CLAUDE.local.md

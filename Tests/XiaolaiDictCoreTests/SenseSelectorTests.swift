@@ -52,7 +52,35 @@ struct SenseSelectorTests {
     @Test func sensesTooCloseToSeparateAreNotSeparated() async {
         let twins = [Self.candidate("e.1", "a warm drink"), Self.candidate("e.2", "a warm drink")]
         let choice = await selector.choose(from: twins, reading: "She made a warm drink.", context: .complete)
-        #expect(choice == .abstained(.tooClose))
+        #expect(choice.abstention == .tooClose)
+        #expect(choice.key == nil, "a near miss is not a choice and must not answer as one")
+    }
+
+    /// **The favourite is kept, not chosen.** Declining to choose used to throw away the sense the
+    /// selector was a hair from picking, and the panel could then say nothing but "several senses
+    /// fit this sentence equally well" — a non-answer to a reader who had just pointed at a word.
+    /// The near miss is what lets the card lead with something and badge it as unsure.
+    @Test func decliningBecauseSeveralFitKeepsTheOneItNearlyPicked() async throws {
+        let twins = [Self.candidate("e.1", "a warm drink"), Self.candidate("e.2", "a warm drink")]
+        let choice = await selector.choose(from: twins, reading: "She made a warm drink.", context: .complete)
+        let nearest = try #require(choice.nearest, "the favourite was discarded")
+        #expect(twins.map(\.key).contains(nearest.key), "the near miss is not one of the candidates")
+        #expect(nearest.among == twins.count)
+        // Below the margin it needs to commit — which is exactly why it is a near miss.
+        #expect(nearest.margin < 1)
+    }
+
+    /// **Only `.tooClose` has one.** Nothing fitting is not a narrow decision, and offering the
+    /// least-bad candidate there would be inventing an answer rather than hedging one.
+    @Test func theOtherAbstentionsKeepNothing() async {
+        let unrelated = [Self.candidate("e.1", "a kind of igneous rock")]
+        let nothingFits = await selector.choose(
+            from: unrelated, reading: "She made a warm drink.", context: .complete)
+        if nothingFits.abstention == .nothingFits { #expect(nothingFits.nearest == nil) }
+
+        let noContext = await selector.choose(from: Self.senses, reading: nil, context: .complete)
+        #expect(noContext.abstention == .noContext)
+        #expect(noContext.nearest == nil)
     }
 
     /// A dictionary whose senses cannot be keyed can never yield a sense-level choice, however

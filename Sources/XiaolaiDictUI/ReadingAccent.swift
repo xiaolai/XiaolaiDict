@@ -73,6 +73,13 @@ enum ReadingPalette {
     /// rather than being handed a colour that says "this is a word like the others".
     static func accent(for entry: ReadingEntry) -> ReadingAccent? {
         guard entry.result == .found else { return nil }
-        return accents[index(for: entry.lemma)]
+        return accent(for: entry.lemma)
+    }
+
+    /// The colour of a word with no ledger row behind it — the lookup panel, which is showing a
+    /// word it has just this moment looked up. The same word gets the same colour in both
+    /// surfaces, which is the whole point of the hash being stable.
+    static func accent(for word: String) -> ReadingAccent {
+        accents[index(for: word)]
     }
 }

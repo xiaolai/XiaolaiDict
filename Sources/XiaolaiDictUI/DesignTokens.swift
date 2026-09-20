@@ -40,10 +40,16 @@ enum Token {
     /// the screen and against what has to fit side by side in it, not against its own type. Forcing
     /// 760 into "63.3 em" would be arithmetic pretending to be a reason.
     enum Panel {
-        static let lookupWidth: CGFloat = 760
-        static let lookupHeight: CGFloat = 520
-        static let lookupMinWidth: CGFloat = 480
-        static let lookupMinHeight: CGFloat = 300
+        /// What the lookup window **opens** at, before the card has laid itself out — the scene
+        /// is `.contentSize`, so the card's own width and its content decide the rest.
+        ///
+        /// The widths live in `Scale`, not here, because they grow with the reader's text: a fixed
+        /// 400 pt is the right measure at one size and too narrow at every larger one. This is
+        /// `Scale.standard`'s, which is what a reader who has never changed the setting gets.
+        static let cardOpeningWidth = Scale.standard.space.cardWidth
+        /// A two-line answer with its sentence, roughly. Wrong for a long one and wrong for a
+        /// short one — which is why the window hugs its content rather than trusting this.
+        static let cardOpeningHeight: CGFloat = 240
         static let messageWidth: CGFloat = 420
         static let messageHeight: CGFloat = 150
         static let messageMinWidth: CGFloat = 320
@@ -65,6 +71,10 @@ enum Token {
         /// One point. Not derived from the em: a hairline is a property of the display, and a
         /// border that grew with the type would stop being a hairline.
         static let hairline: CGFloat = 1
+        /// The outline of a place where something used to be — a removed card, until the reader
+        /// runs out of time to take it back. Dashed because a solid border draws a thing, and the
+        /// point of that row is that the thing is gone.
+        static let absent: [CGFloat] = [4, 3]
     }
 
     /// Counts, not lengths. How many of a thing is shown does not change with how large it is.
@@ -75,6 +85,9 @@ enum Token {
         /// How many pronunciations a heading carries. A word with five is telling the reader about
         /// the dictionary rather than about the word.
         static let pronunciations = 2
+        /// A dictionary that answers in prose rather than in senses. Enough to be the answer,
+        /// capped because the card is not the entry.
+        static let proseLines = 6
         /// Cards deeper than this hide exactly behind the last visible one, so a fifty-card pile is
         /// no taller — and no more work to draw — than a three-card one.
         static let pileDepth = 2
@@ -101,6 +114,19 @@ enum Token {
         static let count = 0.08
         /// The capsule behind "not found".
         static let missBadge = 0.15
+        /// The lookup card's lift. Lower than the drawer's: the drawer is docked against a screen
+        /// edge and has to separate from a whole desktop, the card sits beside a word for a few
+        /// seconds.
+        static let cardLift = 0.13
+        /// The word's colour, thrown under its own card. Two shadows rather than one: a neutral
+        /// dark one carries the depth, and this carries the colour — a single coloured shadow dark
+        /// enough to lift the card reads as a stain, and one light enough to read as colour does
+        /// not lift it at all. Subtle on purpose; the card is white and the colour is a hint of
+        /// where it came from, not a theme.
+        static let accentShadow = 0.20
+        /// A capsule tinted with a word's own colour. Low, because the digit on top of it is at
+        /// full strength and the pair has to read as one small mark rather than as two.
+        static let badgeWash = 0.18
         /// A pane tinted to say what it is: a warning, a memory strip, a sense the reader kept.
         /// Three steps because they stack — a wash that reads as emphasis on its own reads as
         /// noise next to two others.
@@ -121,6 +147,10 @@ enum Token {
         /// A local document of a few kilobytes renders in milliseconds; one still loading after
         /// this is stuck, and says so rather than staying a blank pane.
         static let entryLoad: Duration = .seconds(5)
+        /// How long a removed card can still be brought back. Long enough for the reader to see
+        /// the row and reach it, short enough that a drawer left open all afternoon is not still
+        /// holding a deletion the reader considers done.
+        static let undoGrace: Duration = .seconds(6)
     }
 
     enum Motion {

@@ -24,7 +24,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The history drawer reads the ledger itself, bounded in both directions, and reports a
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
-        HistoryDrawerController { [weak self] in
+        let drawer = HistoryDrawerController { [weak self] in
             guard let opening = self?.ledger else { return .unavailable("The ledger is not open yet.") }
             do {
                 let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
@@ -34,6 +34,18 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
                 return .unavailable("\(error)")
             }
         }
+        // Only reached once the reader's grace period has run out, so by the time this fires they
+        // have had their chance to take it back.
+        drawer.model.delete = { [weak self] entry in
+            guard let self, let opening = self.ledger else { return }
+            Task {
+                do { try await opening.value.delete(lookup: entry.id) }
+                // Logged, not surfaced: the card is already gone from a drawer the reader has
+                // moved on from, and an alert about a history row is worse than the row.
+                catch { self.log.error("could not remove lookup \(entry.id): \(error)") }
+            }
+        }
+        return drawer
     }
 
     private func makeRunner() -> LookupRunner {

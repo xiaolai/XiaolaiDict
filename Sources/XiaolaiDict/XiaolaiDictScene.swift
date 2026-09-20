@@ -36,8 +36,13 @@ struct XiaolaiDictScene: App {
             LookupPanelSceneView(controller: delegate.panelController, model: delegate.panelModel)
                 .xiaolaiDictAppearance(delegate.appearance)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
+        // `.plain`, not `.hiddenTitleBar`. A reader pointing at a word asked a question; they did
+        // not open a document. Traffic lights and a title bar say "this is yours to manage now",
+        // and the panel answered by padding 28 pt off the top to dodge controls it never wanted —
+        // `Token.Panel.titleBarClearance` existed for that and the lookup path no longer needs it.
+        .windowStyle(.plain)
+        // Hugs the card. The card is as tall as what it has to say, so the window has to be too.
+        .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
         // Below and to the right of the pointer, worked out before the scene opens.

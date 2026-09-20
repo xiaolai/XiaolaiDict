@@ -38,7 +38,9 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
         var keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
         guard !keyable.isEmpty else { return .abstained(.noCandidates) }
         if matchesPartOfSpeech { keyable = PartOfSpeechFilter.narrow(keyable, to: partOfSpeech) }
-        guard keyable.count > 1 else { return .chose(key: keyable[0].key, margin: .infinity) }
+        guard keyable.count > 1 else {
+            return .chose(key: keyable[0].key, margin: .infinity, entryID: keyable[0].entryID)
+        }
         guard context == .complete, let sentence,
               !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return .abstained(.noContext) }
@@ -55,7 +57,8 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
             // never a nearest match.
             let number = answer.content.senseNumber
             guard number >= 1, number <= keyable.count else { return .abstained(.tooClose) }
-            return .chose(key: keyable[number - 1].key, margin: 1)
+            return .chose(
+                key: keyable[number - 1].key, margin: 1, entryID: keyable[number - 1].entryID)
         } catch {
             // A refusal, a context overflow, or the model going away mid-answer. None of them is a
             // reason to pick something.

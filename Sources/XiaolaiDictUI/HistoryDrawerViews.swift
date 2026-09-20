@@ -156,7 +156,7 @@ struct HistoryDrawerSurface: View {
                                     get: { model.isExpanded(day) },
                                     set: { model.setExpanded($0, for: day) }))
                         } else {
-                            TodayView(day: day)
+                            TodayView(day: day, model: model)
                         }
                     }
                 }
@@ -185,15 +185,58 @@ struct HistoryDrawerSurface: View {
 }
 
 /// Today is never piled — it is the part the reader came to read.
+/// A card the reader removed, for as long as they can still change their mind.
+///
+/// It stands in the card's place rather than collapsing it away, so the list does not jump under
+/// the pointer at the moment the reader may be reaching back for it.
+struct RemovedCardView: View {
+    @Environment(\.scale) private var scale
+    let entry: ReadingEntry
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(spacing: scale.space.inline) {
+            Text("Removed “\(entry.lemma)”")
+                .font(.system(size: scale.text.body))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: scale.space.inline)
+            Button("Undo", action: undo)
+                .buttonStyle(.plain)
+                .font(.system(size: scale.text.label, weight: .medium))
+                .foregroundStyle(.tint)
+        }
+        .padding(scale.space.pad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Dashed and unfilled: the space a card used to occupy, not a card. A solid plate here
+        // would read as a new kind of row rather than as an absence with a way back.
+        .overlay(
+            RoundedRectangle(cornerRadius: scale.radius.card, style: .continuous)
+                .strokeBorder(
+                    Color.primary.opacity(Token.Opacity.border),
+                    style: StrokeStyle(lineWidth: Token.Stroke.hairline, dash: Token.Stroke.absent)))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct TodayView: View {
     @Environment(\.scale) private var scale
     let day: ReadingDay
+    /// Nil in the previews that show cards alone; removing needs somewhere to report to.
+    var model: HistoryDrawerModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             DayHeader(day: day, count: day.entries.count, isToday: true)
             VStack(spacing: scale.space.stack) {
-                ForEach(day.entries) { ReadingCardView(entry: $0) }
+                ForEach(day.entries) { entry in
+                    if let model, model.removing.contains(entry.id) {
+                        RemovedCardView(entry: entry) { model.keep(entry) }
+                    } else {
+                        ReadingCardView(
+                            entry: entry, onRemove: model.map { m in { m.remove(entry) } })
+                    }
+                }
             }
         }
     }
@@ -324,6 +367,8 @@ struct ReadingCardView: View {
     let entry: ReadingEntry
     /// Buried cards are drawn as a bare plate and nothing else — see `CardLayer`.
     var layer: CardLayer = .front
+    /// Nil where removing is not offered — a buried card, or a preview of a card on its own.
+    var onRemove: (() -> Void)?
 
     @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
@@ -389,6 +434,13 @@ struct ReadingCardView: View {
                     .font(.system(size: scale.text.strong, weight: .semibold))
                 if entry.result != .found { missBadge }
                 Spacer(minLength: scale.space.inline)
+                // Revealed on hover: it is the one control here that destroys something, and a
+                // row of cards each showing a trash can reads as a list of things to delete.
+                if let onRemove, layer.showsContent {
+                    removeButton(onRemove)
+                        .opacity(hovering ? 1 : 0)
+                        .accessibilityHidden(!hovering)
+                }
                 dictionaryButton
             }
             HStack(spacing: scale.space.inline) {
@@ -450,6 +502,18 @@ struct ReadingCardView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
         .help(Text("Say it aloud"))
+    }
+
+    /// No confirmation dialog. The reason a reader reaches for this is a word they did not mean
+    /// to look up — noticed at once, worth nothing — so a dialog would put friction on the common
+    /// case and still not catch a misclick. The undo row that replaces the card catches that.
+    private func removeButton(_ remove: @escaping () -> Void) -> some View {
+        Button(action: remove) {
+            Image(systemName: "trash").font(.system(size: scale.text.small))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tertiary)
+        .help(Text("Remove from history"))
     }
 
     private var dictionaryButton: some View {
@@ -532,19 +596,14 @@ struct ReadingCardView: View {
     /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
     /// an ellipsis saying so rather than an ending the reader never read.
     private var sentence: AttributedString {
-        var text = AttributedString(entry.sentence)
         // `markedRanges`, never `sentenceRange`: the captured range covers the surface as it was
         // found, so emphasising it drew **temper**ed — the word broken in half — and a phrasal
         // verb read as "took it over" needs two marks rather than one span over the pronoun.
-        var font = Font.system(size: scale.text.body, weight: options.emphasis.weight)
-        if options.emphasis.isItalic { font = font.italic() }
-        let colour = ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary
-        for range in entry.markedRanges {
-            guard let swiftRange = Range(range, in: entry.sentence),
-                  let marked = Range(swiftRange, in: text) else { continue }
-            text[marked].font = font
-            text[marked].foregroundColor = colour
-        }
+        // How a marked word *looks* is `MarkedSentence`'s, shared with the lookup card.
+        var text = MarkedSentence.text(
+            entry.sentence, marking: entry.markedRanges, size: scale.text.body,
+            emphasis: options.emphasis,
+            accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary)
         if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }
         return text
     }

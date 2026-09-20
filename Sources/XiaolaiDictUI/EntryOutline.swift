@@ -41,6 +41,34 @@ public struct DictionaryNode: Equatable, Identifiable {
     /// The first entry's place in the flat list. A name would collide if a dictionary appeared
     /// twice; an index cannot.
     public var id: Int { entries.first?.index ?? -1 }
+
+    /// **The rows the sidebar draws, one per element.**
+    ///
+    /// The sidebar is a `List` with `.sidebar` style, which on macOS is backed by an
+    /// `NSOutlineView`. Its `ForEach` used to emit *several* rows per element — an entry, and then
+    /// a nested `ForEach` of that entry's senses — and SwiftUI's outline coordinator cannot walk
+    /// the tree that makes: it trapped in `ViewListTree.visitItem` while `NSOutlineView` expanded
+    /// an item, twelve identical crash reports deep, the first time this list was ever rendered.
+    ///
+    /// Flattened here rather than in the view because the shape is the fix: one element, one row,
+    /// and a list that cannot go back to emitting two without changing this type.
+    public var rows: [OutlineRow] {
+        entries.flatMap { [OutlineRow.entry($0)] + $0.senses.map(OutlineRow.sense) }
+    }
+}
+
+/// One row of the sidebar: an entry, or a sense under it.
+public enum OutlineRow: Equatable, Identifiable {
+    case entry(EntryNode)
+    case sense(SenseNode)
+
+    /// The same value the row is tagged with, so selection and identity cannot drift apart.
+    public var id: OutlineSelection {
+        switch self {
+        case .entry(let entry): .entry(entry.index)
+        case .sense(let sense): sense.id
+        }
+    }
 }
 
 /// One entry — one record — under its dictionary.
