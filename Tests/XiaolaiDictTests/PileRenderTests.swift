@@ -267,4 +267,30 @@ struct PileRenderTests {
         #expect(abs(first - second) <= 1,
                 "the plates peek unevenly: \(first) px then \(second) px")
     }
+
+    /// **The other direction — the one the running drawer actually had.** The first version of this
+    /// test gave the front card the *longer* sentence, so every plate behind it was shorter and only
+    /// had to grow; the fix that passed it could grow a plate but never shrink one. In the reader's
+    /// real pile the front card, "beauty", is one line and the two behind it are two: measured on
+    /// screen, the first plate peeked 25 pt and the second 7.5 pt. The preview's sample pile never
+    /// has a short card in front, which is why Xcode looked right while the app did not.
+    @Test func everyPlatePeeksByTheSameAmountWhenTheFrontIsShorter() throws {
+        let long = "Justice tempered with mercy, and tempered again by a much longer sentence "
+            + "that is certain to wrap onto a second line."
+        let stacked = ReadingDay(
+            id: "2026-09-19", date: .distantPast, label: .yesterday,
+            entries: [entry("beauty", "The beauty of frost.", id: 1),
+                      entry("temper", long, id: 2), entry("tempered", long, id: 3)])
+        let image = try render(
+            DayPileView(day: stacked, expanded: .constant(false)).padding(12),
+            height: 260, scheme: .light)
+        let tones = try column(image, x: image.width / 2)
+        let drops = (1..<tones.count).filter { tones[$0 - 1] - tones[$0] >= 12 }
+        #expect(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
+        let bottoms = Array(drops.suffix(3))
+        let first = bottoms[1] - bottoms[0]
+        let second = bottoms[2] - bottoms[1]
+        #expect(abs(first - second) <= 1,
+                "the plates peek unevenly: \(first) px then \(second) px")
+    }
 }

@@ -397,11 +397,21 @@ struct ReadingCardView: View {
             // was right the whole time and `CardPileTests` passed the whole time; nothing checked
             // that the view honoured it.
             //
+            // **Both bounds, never just the upper one.** SwiftUI's frame rule: with only a maximum,
+            // a frame grows to a larger proposal but keeps its child's size when the proposal is
+            // smaller — so a plate could stretch up to the front card's height and never shrink to
+            // it. That passed a test whose front card was the tallest, and on screen, with a
+            // one-line "beauty" in front of two-line cards, the first plate peeked 25 pt against
+            // 7.5. With a minimum as well, the frame "unconditionally adopts the size proposed for
+            // it": the front card's height, in both directions. What overflows is the buried
+            // card's own content, which is already invisible.
+            //
             // Only when buried. A front card is proposed its own height and must never stretch to
             // fill whatever frame it happens to be put in — a preview or a test hands it a tall
             // one, and a card that grew to fill it would be measuring the container.
             .frame(
                 maxWidth: .infinity,
+                minHeight: layer == .buried ? 0 : nil,
                 maxHeight: layer == .buried ? .infinity : nil,
                 alignment: .topLeading)
             // Opaque, and deliberately not another material: the drawer around it is already
