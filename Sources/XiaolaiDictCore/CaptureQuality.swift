@@ -9,7 +9,7 @@ public struct CaptureQuality: Sendable, Equatable {
         /// `AXBoundsForRange` per word of the element under the pointer — the third dialect, and
         /// the only one Chromium answers. It answers neither `AXRangeForPosition` (unsupported)
         /// nor `AXTextMarkerForPosition` (advertised, returns nil), so scanning bounds took Chrome
-        /// from **0 of 64 probes to 62 of 64** (`spikes/screen-word/README.md`, finding 2).
+        /// from **0 of 64 probes to 62 of 64** (the screen-word spike, finding 2).
         case accessibilityBoundsScan
         /// Read off the pixels with Vision, where no app exposes its text at all — a terminal, a
         /// canvas, an image. Costs 250–570 ms warm against 1–9 ms for Accessibility, and unlike

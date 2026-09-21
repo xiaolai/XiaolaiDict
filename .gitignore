@@ -9,13 +9,11 @@
 /.claude-english-buddy.json
 /dev-docs
 
-# Spikes — throwaway investigations, not code XiaolaiDict ships. Slash-free trailing for
-# the same reason as above. Note this does NOT untrack spikes/screen-word, which
-# was committed before this rule: git ignores ignore-rules for tracked files, and
-# AGENTS.md cites its README as the evidence for the capture-quality invariant.
+# Spikes — throwaway investigations, not code XiaolaiDict ships. Slash-free for the same
+# reason as above. They live on the machine that ran them and nowhere else: none is
+# tracked and none is in the history, so code that learned something from one says
+# which spike and which finding, never a path into this repository.
 /spikes
-
-
 
 # Swift build output. Slash-free for the same reason as above: a worktree's symlink must match too.
 /.build
@@ -29,6 +27,15 @@
 !/.swiftpm/xcode/xcshareddata
 # Python's bytecode cache, written when the icon generator's tests import it.
 __pycache__
+# Ruff's cache, written wherever it is run. Unanchored and slash-free like `__pycache__`.
+.ruff_cache
+
+# Secrets. Unanchored on purpose, unlike the build directories above: a `.env` is dangerous
+# wherever it lands — inside a spike or a tool's folder as much as at the root — and a rule
+# that matched only at the root would miss exactly the one that leaks. `.env.*` also covers
+# `.env.example`; if a checked-in template is ever wanted, add `!.env.example` after these.
+.env
+.env.*
 
 # >>> cc-suite >>>
 # cc-suite-schema: 8
