@@ -9,6 +9,11 @@
 #                 STAGES="drawer recogniser" runs only those; with none, all of them. A full run
 #                 costs minutes and most changes touch one or two.
 #   make e2e-status  what each stage last did, and on which build
+#   make release BUILD_NUMBER=<n>
+#                 swift test, then sign with a secure timestamp, notarise and staple the app, and
+#                 package it as a signed, notarised, stapled .dmg in .build/release — failing unless
+#                 Gatekeeper accepts both as "Notarized Developer ID". Needs network, and the shared
+#                 notarytool keychain profile (NOTARY_PROFILE, chase-notary)
 #   make clean    remove the bundle and staging (not SwiftPM's build cache)
 #
 # Nothing here is decided by timestamps: the script rebuilds when a digest of the inputs' names and
@@ -20,7 +25,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-icon icon e2e e2e-status clean
+.PHONY: all run test test-swift test-icon icon e2e e2e-status release clean
 
 # A Developer ID, never ad hoc, for two reasons:
 #   - macOS keys Accessibility and Screen Recording grants on the signing identity. An ad-hoc
@@ -38,6 +43,12 @@ E2E_HOST ?= mbp16
 # where a quote in the identity would become code.
 export XIAOLAIDICT_SIGN_ID := $(SIGN_ID)
 export XIAOLAIDICT_BUILD_NUMBER := $(BUILD_NUMBER)
+# The notarytool keychain profile a release notarises with. A name and nothing more: the
+# credentials live in the login keychain, never in this file or in a build's environment. Shared
+# with this developer's other projects rather than made per repository — it authenticates the
+# account, not the app, and a second copy of one password is a second thing to rotate.
+NOTARY_PROFILE ?= chase-notary
+export XIAOLAIDICT_NOTARY_PROFILE := $(NOTARY_PROFILE)
 
 # No bundle is published over failing tests. The Swift tests cover what the bundle is compiled
 # from. The icon generator reaches the bundle only by regenerating Resources/, and the script runs
@@ -77,6 +88,11 @@ e2e-status:
 			fi; \
 		done; \
 	else echo "  nothing recorded yet"; fi
+
+# Tests first, as for every bundle: nothing is published over a failing suite, and a notarised
+# one least of all, since it is the build other people download.
+release: test-swift
+	@Tools/release.sh
 
 clean:
 	@Tools/build-bundle.sh clean
