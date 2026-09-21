@@ -4,7 +4,7 @@
 #   make          swift test, then bring .build/XiaolaiDict.app up to date
 #   make run      the same, then quit the running copy, open the new one and check it answers
 #   make test     swift test, and the icon generator's tests
-#   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from design/icon
+#   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST).
 #                 STAGES="drawer recogniser" runs only those; with none, all of them. A full run
 #                 costs minutes and most changes touch one or two.

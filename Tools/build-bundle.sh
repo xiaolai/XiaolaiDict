@@ -5,7 +5,7 @@
 #
 #   build-bundle.sh build    bring .build/XiaolaiDict.app up to date
 #   build-bundle.sh run      build, quit the running copy, publish, open it, and check it came up
-#   build-bundle.sh icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from design/icon
+#   build-bundle.sh icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   build-bundle.sh clean    remove the bundle, staging and records (not SwiftPM's build cache)
 #
 # Environment:
@@ -74,8 +74,16 @@ bundle_inputs_digest() {
 }
 
 icon_inputs_digest() {
+    # Every input has to exist. `find` is run with stderr discarded, so a path that moved — as
+    # design/icon did when it became Tools/icon — would drop silently out of the digest and the
+    # icon would simply stop being rebuilt when its art changed. A missing input is a broken
+    # script, not a smaller digest.
+    local input
+    for input in Tools/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg; do
+        [ -e "$input" ] || fail "icon digest input is missing: $input"
+    done
     # The outputs are inputs too: a hand-edited generated file is regenerated, not shipped.
-    find design/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg -type f -print0 2>/dev/null \
+    find Tools/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg -type f -print0 2>/dev/null \
         | { cat; [ ! -d Tools/makeicon ] || find Tools/makeicon -name '*.py' -type f -print0; } \
         | digest_files | shasum -a 256 | cut -d' ' -f1
 }
@@ -135,8 +143,8 @@ PY
 # published: a failure stops the build before a bundle is assembled, and with no digest recorded
 # the next build regenerates and tests again.
 generate_icon() {
-    note "regenerating the icon from design/icon"
-    python3 Tools/make-icon.py design/icon Resources
+    note "regenerating the icon from Tools/icon"
+    python3 Tools/make-icon.py Tools/icon Resources
     python3 -m unittest discover -s Tools/tests >/dev/null 2>.build/icon-tests.log \
         || { cat .build/icon-tests.log; fail "the icon generator's tests fail"; }
     icon_inputs_digest > "$ICON_DIGEST"
