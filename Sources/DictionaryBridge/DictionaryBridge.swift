@@ -22,7 +22,13 @@ public enum DictionaryBridgeError: Error, Equatable {
 /// What the dictionaries had for a term.
 public struct DictionaryLookup: Sendable, Equatable {
     /// Every entry every dictionary had for the term, grouped under its dictionary, in the
-    /// reader's dictionary order. A dictionary contributes as many as it has records.
+    /// reader's dictionary order. A dictionary contributes as many as it answered with.
+    ///
+    /// **Whether one entry can appear twice is the answering function's promise, not this type's.**
+    /// `entries(for:)` collapses the copies a dictionary returns when it indexes a single entry
+    /// under several headwords; `records(for:)`, which it is built from, hands them over as the
+    /// framework gave them. Stating "never twice" here would have made the type claim something
+    /// one of its two producers does not do.
     public let entries: [DictionaryEntry]
     /// Dictionaries that had the term but at least one of whose entries could not be read. Named
     /// once each, however many of their records failed.
@@ -142,7 +148,23 @@ public enum DictionaryBridge {
     /// Every record, not the first: NOAD files *fine* as four entries and *hold* as two, and the
     /// one the reader needed — the penalty, the ship's hold — is never the first
     /// (`dev-docs/study-unit.md` §2).
+    /// Collapsing the copies is the last step, and it is a step rather than part of the walk so
+    /// that `records(for:)` below stays available to say what the framework actually answered —
+    /// which is what `recordsSharingAnEntryIDAreOneEntry` checks the collapse is entitled to
+    /// assume.
     public static func entries(for term: String) throws(DictionaryBridgeError) -> DictionaryLookup {
+        let answered = try records(for: term)
+        return DictionaryLookup(
+            entries: DictionaryEntry.collapsingRepeatedRecords(answered.entries),
+            unreadable: answered.unreadable)
+    }
+
+    /// Every record every dictionary answered with, as the framework gave them — **including the
+    /// several a dictionary returns for one entry** when it indexes that entry under several
+    /// headwords, which is the one thing `entries(for:)` exists to take away. So this is not an
+    /// answer to give a reader: it is what the collapse is measured against, and the only callers
+    /// are `entries(for:)` and the test that checks those copies really are one entry.
+    static func records(for term: String) throws(DictionaryBridgeError) -> DictionaryLookup {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw .blankTerm }
         // The service is the boundary: `XiaolaiDict --lookup`, and any future caller, bypass the app's

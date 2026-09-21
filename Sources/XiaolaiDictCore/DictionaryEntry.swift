@@ -89,6 +89,69 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
         self.pronunciations = document?.pronunciations ?? []
     }
 
+    /// One entry per entry id, in the order the records arrived.
+    ///
+    /// A dictionary indexes one entry under several headwords, and
+    /// `DCSCopyRecordsForSearchString` answers with a record for each — NOAD gives *cougher* two
+    /// records, both `m_en_gbus0224890`, headed *cough* and *cougher*; the Writer's Thesaurus
+    /// gives *run* two, both `t_en_gb0012791`, headed *run* and *-run*; 譯典通 gives 的 three,
+    /// all `z_id009726`, one per reading. The documents are the same entry: for 的 byte-identical,
+    /// for the others differing only in the `aria-label` naming the index form that matched.
+    ///
+    /// **Measured 2026-09-21 across a 300-word sweep: 14 of the 219 words that had entries.** This
+    /// is not the several-records case the service exists to preserve — *fine* really is four
+    /// entries in NOAD, each with its own id, and every one of them still reaches the reader. It
+    /// is one entry arriving more than once, which every reader of an entry id reads as ambiguity:
+    /// the panel drew the entry twice, `SenseResolver` refused a chosen sense whose key "two"
+    /// entries held, and `PrimaryDictionary.encounter` recorded nothing because the primary had
+    /// answered with more than one entry. A reader whose primary is the thesaurus got no mark and
+    /// no ledger row for *run*, with no reason shown.
+    ///
+    /// The copy kept is the one whose headword best answers the term, not the first: NOAD lists
+    /// *cough* before *cougher*, and titling the panel *cough* names a word the reader did not
+    /// read. It keeps the position of the first copy, so a dictionary's entries stay contiguous
+    /// and in the reader's order. An entry that declared no id is unknown rather than equal to
+    /// every other unknown, and is never merged.
+    public static func collapsingRepeatedRecords(_ entries: [DictionaryEntry]) -> [DictionaryEntry] {
+        var kept: [DictionaryEntry] = []
+        var placeOf: [RecordIdentity: Int] = [:]
+        for entry in entries {
+            guard let id = entry.entryID else {
+                kept.append(entry)
+                continue
+            }
+            let identity = RecordIdentity(dictionary: entry.dictionary, entryID: id)
+            guard let place = placeOf[identity] else {
+                placeOf[identity] = kept.count
+                kept.append(entry)
+                continue
+            }
+            if entry.answersTheTerm < kept[place].answersTheTerm { kept[place] = entry }
+        }
+        return kept
+    }
+
+    /// Which entry a record is a copy of. The whole `DictionaryIdentity`, not its `key`: an id is
+    /// only an identity inside one version of one dictionary, and two records that reach this from
+    /// different versions are not copies of each other. A typed key rather than the two fields
+    /// joined by a separator, so no id containing that separator can collide with another pair.
+    private struct RecordIdentity: Hashable {
+        let dictionary: DictionaryIdentity
+        let entryID: String
+    }
+
+    /// How well this record's headword answers the term that was looked up, smallest best. Used
+    /// only to choose between records of one entry, where the content is the same and the headword
+    /// is the whole difference.
+    private var answersTheTerm: Int {
+        switch match {
+        case .exact: 0
+        case .dictionaryForm: 1
+        case .otherHeadword: 2
+        case .headwordUnknown: 3
+        }
+    }
+
     private static func match(of headword: String?, for term: String) -> Match {
         guard let headword else { return .headwordUnknown }
         if term.lowercased() == headword.lowercased() { return .exact }
