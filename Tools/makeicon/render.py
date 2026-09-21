@@ -163,7 +163,7 @@ def tray_svg(tray: Tray) -> str:
     holes = " ".join(rounded_rect_path(*s) for s in tray.slots)
     return (
         f'<svg xmlns="{SVG_NS}" width="{TRAY}" height="{TRAY}" viewBox="0 0 {TRAY} {TRAY}">\n'
-        f"  <!-- Generated from design/icon/xiaolaidict-tray-slots-Template.svg: the same shape, without its\n"
+        f"  <!-- Generated from Tools/icon/xiaolaidict-tray-slots-Template.svg: the same shape, without its\n"
         f"       <mask>, which CoreSVG rasterises at 1x and blurs on Retina menu bars. Template image:\n"
         f"       only alpha is read. -->\n"
         f'  <path d="{tray.d}" fill="none" stroke="#000" stroke-width="{tray.stroke_width}" '

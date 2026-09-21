@@ -5,7 +5,7 @@
 #
 #   build-bundle.sh build    bring .build/XiaolaiDict.app up to date
 #   build-bundle.sh run      build, quit the running copy, publish, open it, and check it came up
-#   build-bundle.sh icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from design/icon
+#   build-bundle.sh icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   build-bundle.sh clean    remove the bundle, staging and records (not SwiftPM's build cache)
 #
 # Environment:
@@ -74,8 +74,16 @@ bundle_inputs_digest() {
 }
 
 icon_inputs_digest() {
+    # Every input has to exist. `find` is run with stderr discarded, so a path that moved — as
+    # design/icon did when it became Tools/icon — would drop silently out of the digest and the
+    # icon would simply stop being rebuilt when its art changed. A missing input is a broken
+    # script, not a smaller digest.
+    local input
+    for input in Tools/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg; do
+        [ -e "$input" ] || fail "icon digest input is missing: $input"
+    done
     # The outputs are inputs too: a hand-edited generated file is regenerated, not shipped.
-    find design/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg -type f -print0 2>/dev/null \
+    find Tools/icon Tools/make-icon.py Resources/XiaolaiDict.icon Resources/MenuBarIcon.svg -type f -print0 2>/dev/null \
         | { cat; [ ! -d Tools/makeicon ] || find Tools/makeicon -name '*.py' -type f -print0; } \
         | digest_files | shasum -a 256 | cut -d' ' -f1
 }
@@ -135,8 +143,8 @@ PY
 # published: a failure stops the build before a bundle is assembled, and with no digest recorded
 # the next build regenerates and tests again.
 generate_icon() {
-    note "regenerating the icon from design/icon"
-    python3 Tools/make-icon.py design/icon Resources
+    note "regenerating the icon from Tools/icon"
+    python3 Tools/make-icon.py Tools/icon Resources
     python3 -m unittest discover -s Tools/tests >/dev/null 2>.build/icon-tests.log \
         || { cat .build/icon-tests.log; fail "the icon generator's tests fail"; }
     icon_inputs_digest > "$ICON_DIGEST"
@@ -159,7 +167,15 @@ build_number() {
             || fail "XIAOLAIDICT_BUILD_NUMBER must be a positive integer from the release counter, not '$XIAOLAIDICT_BUILD_NUMBER'"
         # Checked against a published release build only: that is the one this machine can
         # compare. Across machines, counting up is the release counter's job.
-        if [[ "$previous" =~ ^[0-9]+$ ]] && ! version_newer "$XIAOLAIDICT_BUILD_NUMBER" "$previous"; then
+        #
+        # The same number twice is refused because it would name two different builds — **unless
+        # the inputs are the same too**, in which case it is one release being put back together.
+        # That happens whenever a published release fails verification and is rebuilt: a damaged
+        # file, a signature without its timestamp. Refusing it left a release that could be
+        # neither reused nor rebuilt under its own number. The recorded digest is what tells the
+        # two apart, and it is only consulted when the numbers are equal.
+        if [[ "$previous" =~ ^[0-9]+$ ]] && ! version_newer "$XIAOLAIDICT_BUILD_NUMBER" "$previous" \
+           && ! same_release_again "$previous"; then
             fail "XIAOLAIDICT_BUILD_NUMBER $XIAOLAIDICT_BUILD_NUMBER is not above the published release build's $previous"
         fi
         echo "$XIAOLAIDICT_BUILD_NUMBER"
@@ -176,6 +192,12 @@ build_number() {
         fi
         echo "$candidate"
     fi
+}
+
+same_release_again() {  # $1: the published build number; whether this rebuilds that very release
+    [ "$XIAOLAIDICT_BUILD_NUMBER" = "$1" ] \
+        && [ -f "$BUNDLE_DIGEST" ] \
+        && [ "$(cat "$BUNDLE_DIGEST")" = "$(bundle_inputs_digest)" ]
 }
 
 version_newer() {  # whether $1 is newer than $2: dot-separated integers, field by field, missing = 0
@@ -233,7 +255,23 @@ verify_bundle() {
     service_team=$(codesign -dv "$bundle/$XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
     [ -n "$app_team" ] && [ "$app_team" = "$service_team" ] \
         || { echo "app ($app_team) and service ($service_team) are not signed by one team"; return 1; }
+    # **A release must carry a secure timestamp, and this is where that is enforced.** The
+    # up-to-date check compares input digests, and the signing mode is not an input — so without
+    # this a release could reuse a bundle signed with `--timestamp=none`, and notarisation would
+    # reject it after the upload. `Signed Time=` is the local clock; only `Timestamp=` is Apple's.
+    # Output captured, then matched, for the SIGPIPE reason given in `assemble`.
+    if is_release; then
+        local part info
+        for part in "$bundle" "$bundle/$XPC_PATH"; do
+            info=$(codesign -dvvv "$part" 2>&1)
+            grep -q '^Timestamp=' <<<"$info" || { echo "a release is signed without a secure timestamp: $part"; return 1; }
+        done
+    fi
 }
+
+# A release is a build numbered by the release counter. Everything that differs for one — the
+# timestamp, and what the verifier demands — asks this, so the two cannot disagree.
+is_release() { [ -n "${XIAOLAIDICT_BUILD_NUMBER:-}" ]; }
 
 # ---------------------------------------------------------------------------------------------
 # Assembly, in the stage.
@@ -275,10 +313,13 @@ assemble() {
 
     # Inside out: the service first, then the app that seals it. `--options runtime` because that
     # is how XiaolaiDict ships, and a hardened-runtime problem is cheaper found now than at notarisation.
-    # `--timestamp=none` because a secure timestamp needs Apple's server — required to notarise,
-    # pointless for a local build. stdout silenced, stderr kept, so a failure says why.
-    codesign --force --options runtime --timestamp=none --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
-    codesign --force --options runtime --timestamp=none --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
+    # A secure timestamp needs Apple's server: required to notarise, pointless for a local build
+    # that would then fail to sign offline. So a release gets one and a development build does
+    # not. stdout silenced, stderr kept, so a failure says why.
+    local stamp=--timestamp=none
+    ! is_release || stamp=--timestamp
+    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
+    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
 
     verify_bundle "$STAGE" || fail "the staged bundle failed verification"
     note "assembled $STAGE (build $number)"

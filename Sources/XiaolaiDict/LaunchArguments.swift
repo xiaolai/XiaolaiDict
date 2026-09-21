@@ -24,6 +24,11 @@ enum LaunchMode: Equatable {
     /// Whether the history drawer appears, docked as asked, without activating the app. Only a
     /// running bundle can answer the last part.
     case historyReport
+
+    /// `--settings-report`: whether the settings window is the size of the pane it shows, and
+    /// moves between the sizes rather than jumping. A resize can only be watched where one
+    /// happens, which is inside a running app.
+    case settingsReport
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -41,6 +46,7 @@ enum LaunchArguments {
                XiaolaiDict --speech-report
                XiaolaiDict --translation-report
                XiaolaiDict --history-report
+               XiaolaiDict --settings-report
         """
 
     static let repeatRange = 1...1_000
@@ -55,12 +61,10 @@ enum LaunchArguments {
         case "--lookup": lookup(Array(arguments.dropFirst()))
         case "--read-selection": readSelection(Array(arguments.dropFirst()))
         case "--read-point": readPoint(Array(arguments.dropFirst()))
-        case "--speech-report":
-            arguments.count == 1 ? .success(.speechReport) : fail("unexpected \(arguments[1]) after --speech-report")
-        case "--translation-report":
-            arguments.count == 1 ? .success(.translationReport) : fail("unexpected \(arguments[1]) after --translation-report")
-        case "--history-report":
-            arguments.count == 1 ? .success(.historyReport) : fail("unexpected \(arguments[1]) after --history-report")
+        case "--speech-report": alone(arguments, is: .speechReport)
+        case "--translation-report": alone(arguments, is: .translationReport)
+        case "--history-report": alone(arguments, is: .historyReport)
+        case "--settings-report": alone(arguments, is: .settingsReport)
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }
@@ -108,6 +112,12 @@ enum LaunchArguments {
         else { return fail("--read-selection needs a BUNDLE_ID") }
         guard arguments.count == 1 else { return fail("unexpected \(arguments[1]) after the BUNDLE_ID") }
         return .success(.readSelection(bundleID: bundleID))
+    }
+
+    /// A command that takes nothing after it. One copy of the check, where there were four — each
+    /// naming its own command in its own error message, one typo away from naming another's.
+    private static func alone(_ arguments: [String], is mode: LaunchMode) -> Result<LaunchMode, UsageError> {
+        arguments.count == 1 ? .success(mode) : fail("unexpected \(arguments[1]) after \(arguments[0])")
     }
 
     private static func fail(_ reason: String) -> Result<LaunchMode, UsageError> {

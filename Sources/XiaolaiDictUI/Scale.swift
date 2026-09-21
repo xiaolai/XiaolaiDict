@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// How large the reader has asked XiaolaiDict's text to be.
@@ -107,6 +108,17 @@ struct Scale: Equatable, Sendable {
         /// dense chrome; this is prose the reader is trying to recall from.
         let leading: CGFloat
 
+        /// The tallest a passage in `body` may be and still be `lines` lines: one point short of
+        /// the height of one line more. So a candidate that is `lines` lines fits and one that is
+        /// `lines + 1` does not, with most of a line to spare against rounding either way. From
+        /// the system font's own metrics — ascender, descender and leading — which is what `Text`
+        /// sets a line with.
+        func height(ofLines lines: Int) -> CGFloat {
+            let font = NSFont.systemFont(ofSize: body)
+            let line = font.ascender - font.descender + font.leading
+            return line * CGFloat(lines + 1) + leading * CGFloat(lines) - 1
+        }
+
         init(em: CGFloat) {
             display = em * 1.36
             heading = em * 1.18
@@ -189,7 +201,12 @@ struct Scale: Equatable, Sendable {
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
             peek = em * 0.625
-            sideInset = em * 0.80
+            // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
+            // side step was larger than the vertical one, so the second plate gave up 19.2 pt of
+            // width per side while gaining 15 pt of visible height — which reads as three cards of
+            // three different sizes rather than as one card with two behind it. Depth is announced
+            // by the peek; the inset only has to hint that the edges are not the same edge.
+            sideInset = em * 0.40
         }
     }
 
@@ -287,6 +304,11 @@ public final class Appearance {
         didSet { if emphasis != oldValue { store.save(emphasis) } }
     }
 
+    /// How much of what is behind the history drawer shows through it.
+    public var drawerGlass: DrawerGlass {
+        didSet { if drawerGlass != oldValue { store.save(drawerGlass) } }
+    }
+
     private let store: TextSizeStore
 
     public init(store: TextSizeStore = TextSizeStore()) {
@@ -295,6 +317,7 @@ public final class Appearance {
         showsTime = store.loadShowsTime()
         showsPlaceName = store.loadShowsPlaceName()
         emphasis = store.loadEmphasis()
+        drawerGlass = store.loadDrawerGlass()
     }
 
     var scale: Scale { Scale(textSize) }
@@ -309,6 +332,7 @@ public struct TextSizeStore {
     static let showsTimeKey = "CardShowsTime"
     static let showsPlaceNameKey = "CardShowsPlaceName"
     static let emphasisKey = "WordEmphasis"
+    static let drawerGlassKey = "DrawerGlass"
 
     private let defaults: UserDefaults
 
@@ -356,6 +380,15 @@ public struct TextSizeStore {
     func save(_ emphasis: WordEmphasis) {
         defaults.set(emphasis.rawValue, forKey: Self.emphasisKey)
     }
+
+    /// Unrecognised is the default, never a failure — the same rule as the text size.
+    func loadDrawerGlass() -> DrawerGlass {
+        defaults.string(forKey: Self.drawerGlassKey).flatMap(DrawerGlass.init(rawValue:)) ?? .standard
+    }
+
+    func save(_ glass: DrawerGlass) {
+        defaults.set(glass.rawValue, forKey: Self.drawerGlassKey)
+    }
 }
 
 /// Draws a view — and everything inside it — the way the reader has asked for.
@@ -380,5 +413,6 @@ private struct ScaledContent<Content: View>: View {
         content
             .environment(\.scale, appearance.scale)
             .environment(\.cardOptions, appearance.cardOptions)
+            .environment(\.drawerGlass, appearance.drawerGlass)
     }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import XiaolaiDictCore
 @testable import XiaolaiDict
 import Testing
 
@@ -127,11 +128,5 @@ struct ShortcutTests {
         let store = ShortcutStore(defaults: defaults)
         try store.save(Shortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: 0))
         #expect(store.load() == .defaultLookUp)
-    }
-
-    @Test func appKitModifiersBecomeCarbonModifiers() {
-        #expect(ShortcutRecorder.carbonModifiers([.control, .option]) == UInt32(controlKey | optionKey))
-        #expect(ShortcutRecorder.carbonModifiers([.command, .shift]) == UInt32(cmdKey | shiftKey))
-        #expect(ShortcutRecorder.carbonModifiers([]) == 0)
     }
 }

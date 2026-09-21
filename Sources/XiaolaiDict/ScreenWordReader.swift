@@ -8,7 +8,7 @@ import Synchronization
 ///
 /// Apps expose text in one of three dialects, and three is a floor rather than a ceiling: each new
 /// app family may add one, and the OCR fallback is what keeps that from being a correctness
-/// problem (`spikes/screen-word/README.md`).
+/// problem (measured in the screen-word spike).
 ///
 /// | Dialect | Where | Warm cost |
 /// |---|---|---|

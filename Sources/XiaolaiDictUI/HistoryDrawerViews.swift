@@ -71,6 +71,7 @@ public struct HistoryDrawerRootView: View {
 
 struct HistoryDrawerSurface: View {
     @Environment(\.scale) private var scale
+    @Environment(\.drawerGlass) private var drawerGlass
     @Bindable var model: HistoryDrawerModel
     let geometry: DrawerGeometry
 
@@ -83,7 +84,9 @@ struct HistoryDrawerSurface: View {
         // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
         // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
         // is glass, and it brings its own edge treatment, so the hand-drawn border is gone with it.
-        .glassEffect(.regular, in: shape)
+        // Which glass is the reader's: frosted reads as a flat grey over a dark terminal, where
+        // clear lets the terminal through.
+        .glassEffect(drawerGlass.glass, in: shape)
         .shadow(color: .black.opacity(Token.Opacity.drawerShadow), radius: scale.shadow.drawerRadius)
     }
 
@@ -388,7 +391,32 @@ struct ReadingCardView: View {
             // its real height and the fan does not jump when the pile opens.
             .opacity(layer.showsContent ? 1 : 0)
             .padding(scale.space.pad)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // **A buried card takes the height the layout gives it.** `CardPile` places every
+            // plate at the front card's height so the slivers peeking below line up evenly — but
+            // a proposed height is only a proposal, and this view had no height constraint, so
+            // each plate sized itself to its own content and poked out by however tall its own
+            // word happened to make it. Measured in the closed pile: the first plate peeked 2.5 pt
+            // and the second 7.5 pt, against a design that says both are `peek`. The arithmetic
+            // was right the whole time and `CardPileTests` passed the whole time; nothing checked
+            // that the view honoured it.
+            //
+            // **Both bounds, never just the upper one.** SwiftUI's frame rule: with only a maximum,
+            // a frame grows to a larger proposal but keeps its child's size when the proposal is
+            // smaller — so a plate could stretch up to the front card's height and never shrink to
+            // it. That passed a test whose front card was the tallest, and on screen, with a
+            // one-line "beauty" in front of two-line cards, the first plate peeked 25 pt against
+            // 7.5. With a minimum as well, the frame "unconditionally adopts the size proposed for
+            // it": the front card's height, in both directions. What overflows is the buried
+            // card's own content, which is already invisible.
+            //
+            // Only when buried. A front card is proposed its own height and must never stretch to
+            // fill whatever frame it happens to be put in — a preview or a test hands it a tall
+            // one, and a card that grew to fill it would be measuring the container.
+            .frame(
+                maxWidth: .infinity,
+                minHeight: layer == .buried ? 0 : nil,
+                maxHeight: layer == .buried ? .infinity : nil,
+                alignment: .topLeading)
             // Opaque, and deliberately not another material: the drawer around it is already
             // glass, and layering glass inside glass muddies both.
             .background(shape.fill(CardSurface.fill(
@@ -418,10 +446,28 @@ struct ReadingCardView: View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             VStack(alignment: .leading, spacing: scale.space.inline) {
                 headline
-                if entry.cue != .none { sentenceLine }
+                // **The provenance rides the sentence's last line.** On a row of its own it was a
+                // single 11 pt icon alone under a full-width card, and the card read as one that
+                // had forgotten to finish. `lastTextBaseline` is what makes it land in the bottom
+                // corner of the text rather than beside its first line — with a sentence that
+                // wraps, aligning to the first line would leave the gap exactly where it was.
+                if entry.cue != .none {
+                    HStack(alignment: .lastTextBaseline, spacing: scale.space.inline) {
+                        sentenceLine
+                        Spacer(minLength: scale.space.inline)
+                        footnote
+                    }
+                }
                 if revealed, let gloss = entry.sense?.gloss { meaning(gloss) }
             }
-            footnote
+            // No sentence to ride — a lookup with no context still has to say where it came from,
+            // so there it keeps a row of its own.
+            if entry.cue == .none {
+                HStack(spacing: scale.space.inline) {
+                    Spacer(minLength: 0)
+                    footnote
+                }
+            }
         }
     }
 
@@ -463,18 +509,21 @@ struct ReadingCardView: View {
     /// hypothesis it is — the reader has to be able to tell a guess from their own tap, and a
     /// marker that looked the same either way would be the ledger's distinction thrown away at
     /// the last step.
+    ///
+    /// Three standings, not two. This drew every unconfirmed sense as a guess, so an entry where
+    /// no sense was settled at all read "9 senses?" and "the sense XiaolaiDict guessed" — a claim the
+    /// ledger never made. The badge and its words now come from `SenseStanding`, the same source
+    /// the lookup card draws from, so one lookup cannot be described two ways.
     private func senseMark(_ sense: SenseNote) -> some View {
-        let ordinal = sense.label
-        return Text(sense.isConfirmed ? "\(sense.dictionary) \(ordinal)" : "\(sense.dictionary) \(ordinal)?")
+        let standing = sense.standing
+        return Text(sense.badge)
             .font(.system(size: scale.text.micro, weight: .medium))
             .monospacedDigit()
             .padding(.horizontal, scale.space.inline)
             .padding(.vertical, scale.space.tight)
             .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
-            .foregroundStyle(sense.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-            .help(sense.isConfirmed
-                  ? Text("The sense you chose")
-                  : Text("The sense XiaolaiDict guessed — not confirmed"))
+            .foregroundStyle(standing.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+            .help(Text(standing.explanation))
     }
 
     private var revealAvailable: Bool { entry.sense?.canReveal == true }
@@ -526,12 +575,15 @@ struct ReadingCardView: View {
         .help(Text("Open in Dictionary"))
     }
 
+    /// The sentence, whole when it fits the card's lines and cut to a window around the word when
+    /// it does not — the first that fits, chosen at the card's width. Where a window cut the start
+    /// off, the whole sentence is one hover away: it is still the reader's own, and never a gloss.
     private var sentenceLine: some View {
-        Text(sentence)
-            .font(.system(size: scale.text.body))
+        SentenceWindowText(
+            windows: SentenceExcerpt.windows(sentence: entry.sentence, marks: entry.markedRanges),
+            fullSentence: entry.sentence,
+            style: sentence(in:))
             .foregroundStyle(.secondary)
-            .lineSpacing(scale.text.leading)
-            .lineLimit(Token.Limit.wrapLines)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -552,11 +604,12 @@ struct ReadingCardView: View {
             .transition(.opacity)
     }
 
-    /// Where it was read, and — only if the reader asked for it — when. Parked at the trailing
-    /// edge because it is provenance: true, and never the thing being reviewed.
+    /// Where it was read, and — only if the reader asked for it — when. It is provenance: true,
+    /// and never the thing being reviewed, so it sits at the trailing edge of whatever row it is
+    /// given. **The caller places it**, because where that is depends on whether there is a
+    /// sentence for it to ride.
     private var footnote: some View {
         HStack(spacing: scale.space.inline) {
-            Spacer(minLength: 0)
             if let icon = AppIcons.icon(for: entry.place.bundleID) {
                 Image(nsImage: icon)
                     .resizable()
@@ -595,13 +648,18 @@ struct ReadingCardView: View {
     /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
     /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
     /// an ellipsis saying so rather than an ending the reader never read.
-    private var sentence: AttributedString {
+    private func sentence(in window: SentenceExcerpt) -> AttributedString {
         // `markedRanges`, never `sentenceRange`: the captured range covers the surface as it was
         // found, so emphasising it drew **temper**ed — the word broken in half — and a phrasal
         // verb read as "took it over" needs two marks rather than one span over the pronoun.
         // How a marked word *looks* is `MarkedSentence`'s, shared with the lookup card.
+        //
+        // **A window that contains the word, never the sentence's opening.** The line limit cuts
+        // from the end, so a long sentence with its word late showed two lines of the reader's
+        // text without the word they looked up. `SentenceWindowText` shows the tightest window it
+        // needs to, and no tighter.
         var text = MarkedSentence.text(
-            entry.sentence, marking: entry.markedRanges, size: scale.text.body,
+            window.text, marking: window.marks, size: scale.text.body,
             emphasis: options.emphasis,
             accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary)
         if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }

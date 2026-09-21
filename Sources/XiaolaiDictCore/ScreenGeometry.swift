@@ -8,7 +8,7 @@ import Foundation
 /// OCR — disagree by a point or two at the edges. With a tolerance per path, the same pointer
 /// position hit or missed depending on which path happened to answer, which the reader experiences
 /// as the app being unreliable rather than as two paths disagreeing
-/// (`spikes/screen-word/README.md`, finding 7).
+/// (the screen-word spike, finding 7).
 public enum HitTolerance {
     public static let horizontal: CGFloat = 3
     public static let vertical: CGFloat = 2

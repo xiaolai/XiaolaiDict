@@ -18,7 +18,12 @@
 # silently did nothing must not look like one that passed.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# Resolved before the `cd`: "$0" is relative to wherever the script was started, and the parse guard
+# below reads the script by it. After the `cd`, a run started as ./e2e.sh from Tools/ read a file
+# that does not exist.
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+readonly SELF
+cd "$(dirname "$SELF")/.."
 
 host=${1:?usage: e2e.sh <ssh-host> [stage...]}
 shift
@@ -31,6 +36,31 @@ stage() { echo; echo "== $*"; }
 
 [ -d "$APP" ] || fail "$APP does not exist; run make first"
 ssh_e2e() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$host" "$@"; }
+
+# **The scripts sent to the E2E machine are parsed here, before anything is shipped.** They are
+# quoted heredocs, so `bash -n` on this file skips straight over them and nothing reads them until
+# the far machine does — after the bundle has been built and copied. An apostrophe inside a `sed`
+# bracket expression closed its quote and ended a run that way, at stage 11 of 11, with nothing
+# measured. Parsing costs milliseconds; not parsing cost the run.
+heredocs=$(mktemp -d)
+# Removed however this section ends — `fail` exits, and would leave the directory behind.
+trap 'rm -rf "$heredocs"' EXIT
+awk -v dir="$heredocs" '
+    /<<'"'"'SH'"'"'/ { inside = 1; n++; file = dir "/remote-" n ".sh"; next }
+    inside && /^SH$/ { inside = 0; close(file); next }
+    inside { print > file }
+' "$SELF"
+checked=0
+for script in "$heredocs"/remote-*.sh; do
+    [ -f "$script" ] || continue
+    bash -n "$script" 2>"$heredocs/why" \
+        || fail "the remote script $(basename "$script") does not parse: $(cat "$heredocs/why")"
+    checked=$((checked + 1))
+done
+rm -rf "$heredocs"
+trap - EXIT
+# At least one, or the extraction matched nothing and every script "passed" by not existing.
+[ "$checked" -gt 0 ] || fail "found no remote scripts to check — the heredoc marker has changed"
 
 # ---------------------------------------------------------------------------------------------
 stage "machine"
@@ -69,7 +99,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -109,6 +139,36 @@ want() {  # want <name>: is this stage wanted? Also names it, for the result lin
 # RESULT lines are for the caller to record; PASS/FAIL lines are for a person to read.
 pass() { echo "PASS  $*"; printf 'RESULT\t%s\tpass\n' "$STAGE"; }
 flunk() { echo "FAIL  $*"; failures=$((failures + 1)); printf 'RESULT\t%s\tfail\n' "$STAGE"; }
+
+# **A stage that dies part-way is a failed stage, and says where it died.** `set -e` ends this
+# script at the first unguarded failure, silently, and every assertion after it simply never runs
+# — which a per-stage record reads as "no failures". Measured: a helper that exits 1 by design,
+# inside an unguarded `$(…)`, ended the scenes stage after its first four checks. Those four
+# happened to include a failure; had they all passed, the stage would have been recorded green with
+# half of it never run. `-E` so the line is known even when the death is inside a function.
+set -E
+finished=false
+died_at=""
+trap 'died_at=$LINENO' ERR
+# A function, run from the one EXIT trap. A stage with cleanup of its own registers it with
+# `at_exit` rather than setting a trap — `trap cleanup EXIT` alone *replaces* this, and the deadline
+# stage once did exactly that: every stage after it lost the detector.
+# Cleanup a stage needs however the script ends — resuming a stopped service, putting back a
+# setting it changed. Registered, run in order by `on_exit`, and each tolerated to fail: a stage
+# used to install its own EXIT trap, which *replaced* whatever was there, so every stage after it
+# lost the check below.
+cleanups=()
+at_exit() { cleanups+=("$1"); }
+on_exit() {
+    local cleanup
+    for cleanup in ${cleanups[@]+"${cleanups[@]}"}; do "$cleanup" || true; done
+    if [ "$finished" != true ]; then
+        echo "FAIL  ${STAGE:-setup}: the script stopped at line ${died_at:-?} before the stage finished"
+        printf "RESULT\t%s\tfail\n" "${STAGE:-setup}"
+    fi
+}
+trap on_exit EXIT
+
 pids() {
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
     while read -r pid path; do [ "$path" != "$1" ] || echo "$pid"; done <<<"$table"
@@ -156,12 +216,71 @@ helpers="$HOME/$1/e2e"
 ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
 rows() { sqlite3 -readonly "$ledger" "select count(*) from lookups" 2>/dev/null || echo 0; }
 
+# **One way to run an in-bundle report**, with its budget and its cleanup — defined here, before
+# every stage, because more than one stage uses it: defined inside the first that did, a run of
+# the other stage alone died on `run_report: command not found`. Each report used to
+# carry its own copy of this, and the history report's gave up after 60 s against an instrument
+# whose own deadlines allow nearly 100: three captures of 30 s each, plus settling, appearing and
+# closing. A report past the harness's patience was declared silent and left running — still able
+# to capture the screen during whatever stage came next.
+run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
+    local flag=$1 budget=$2 name=${1#--}
+    local out="/tmp/xiaolaidict-$name.json" err="/tmp/xiaolaidict-$name.err"
+    rm -f "$out" "$err"
+    open -n --stdout "$out" --stderr "$err" "$app" --args "$flag"
+    local waited=0
+    while [ ! -s "$out" ] && [ "$waited" -lt $((budget * 2)) ]; do sleep 0.5; waited=$((waited + 1)); done
+    # Past its budget it is stopped; within it, it exits by itself once it has written. Waited for
+    # either way, so no report outlives its stage.
+    [ -s "$out" ] || pkill -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
+    for _ in $(seq 1 40); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
+    # And if it ignored that, it is killed: a report still running can still capture the screen,
+    # and two captures at once deadlock.
+    if pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null; then
+        pkill -9 -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
+        for _ in $(seq 1 20); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
+        # Said out loud if it is still there: a report that survives its own killing can still
+        # capture the screen, and the next stage would be measuring against it.
+        pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null \
+            && echo "note: $flag would not die; the stage after this one is running beside it"
+    fi
+    true
+    cat "$out" 2>/dev/null || true
+}
 # Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
 # asserts that it starts and stays up, which is a different claim and stays a stage of its own.
 # Without this, selecting a later stage failed for want of something an earlier one happened to do.
 if [ -z "$(pids "$exe")" ]; then
     open "$app"
     for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+fi
+
+# **A locked screen voids every stage that looks at it or types into it — so it is checked, not
+# assumed.** The test Mac locks itself when idle, whatever its screen-lock setting reports, and a
+# lock does not stop XiaolaiDict's windows being drawn: the window list still has them, so every "is it
+# on screen" check passes. It covers them. Measured on 2026-09-21: a capture of the drawer came
+# back as the lock screen's aerial image and read as "the glass does not work", and keystrokes for
+# the shortcut recorder went to the password field with `loginwindow` in front. A run against a
+# locked screen is refused here, in one line, rather than reported as a list of XiaolaiDict's defects.
+if ! lock_state=$("$helpers/screen-state" 2>&1); then
+    echo "FAIL  setup: the screen is ${lock_state:-locked} — unlock the test Mac and run again; nothing below would be testing XiaolaiDict"
+    exit 1
+fi
+
+# **And wait for the menu, which is not the same as waiting for the process.** Install quits the
+# running copy, so every run starts cold; immediately after the pid appears the menu-bar item is
+# not in the Accessibility tree yet — measured deterministically, 3 restarts out of 3. Waiting on
+# the pid and then driving the menu made whichever menu-driven assertion ran first fail, and which
+# one that was moved between runs. That reads like a flaky app; it was the harness using a surface
+# it had never established was there.
+menu_ready=""
+for _ in $(seq 1 200); do
+    if "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1; then menu_ready=yes; break; fi
+    sleep 0.1
+done
+if [ -z "$menu_ready" ]; then
+    echo "FAIL  setup: the menu-bar item never appeared — every menu-driven stage below is void"
+    failures=$((failures + 1))
 fi
 
 if want launch; then
@@ -262,8 +381,9 @@ else
         view=$("$helpers/panel" com.xiaolaidict)
         printf '%s' "$view" | python3 -c '
 import json, sys
-panels = [w for w in json.load(sys.stdin)["windows"] if "→ meet" in w["texts"]]
-sys.exit(0 if panels and panels[0].get("webTexts") else 1)
+failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
+panels = [w for w in json.load(sys.stdin)["windows"] if "meeting" in w["texts"] and not any(m in t for t in w["texts"] for m in failed)]
+sys.exit(0 if panels else 1)
 ' && break
         sleep 0.1
     done
@@ -271,17 +391,25 @@ sys.exit(0 if panels and panels[0].get("webTexts") else 1)
     if why=$(python3 - "$view" 2>&1 <<'PY'
 import json, sys
 view = json.loads(sys.argv[1])
-panels = [w for w in view["windows"] if "→ meet" in w["texts"]]
+# The answer card, headed by the word itself — an exact text element, so the waiting view's
+# "Looking up “meeting” in your dictionaries…" cannot pass for it. The old panel was asserted by
+# its lemma row and its WebKit page; the card that replaced it has neither, and both checks went
+# on failing a panel that had answered.
+# Not merely the heading: a card that says "No entry for “meeting”" carries the word too, and a
+# check for the heading alone passed one. So an answer is the word's card with no failure on it.
+failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
+panels = [w for w in view["windows"] if "meeting" in w["texts"]
+          and not any(m in t for t in w["texts"] for m in failed)]
 problems = []
 if view["frontmost"] != "com.apple.TextEdit": problems.append(f"focus moved to {view['frontmost']}")
-if not panels: sys.exit(f"no panel with the entry: {view}")
-page = panels[0].get("webTexts")
-if page is None: problems.append("no rendered entry in the panel")
-elif len(page) < 3 or any("@namespace" in t or "@charset" in t for t in page):
-    problems.append(f"the entry is not laid out as a page ({len(page)} text runs, first: {page[0][:60]!r})")
+if not panels: sys.exit(f"no answer card for the word: {view}")
+# The evidence: the reader's own sentence, which is what makes a wrong answer visible rather than
+# authoritative. A card without it is claiming more than it can show.
+if not any("stopped meeting at noon" in t for t in panels[0]["texts"]):
+    problems.append(f"the card does not carry the sentence it was read in: {panels[0]['texts'][:12]}")
 sys.exit("; ".join(problems) if problems else 0)
 PY
-    ); then pass "shortcut: the panel shows the rendered entry, and TextEdit keeps focus"; else flunk "shortcut: $why"; fi
+    ); then pass "shortcut: the card answers with the reader's sentence, and TextEdit keeps focus"; else flunk "shortcut: $why"; fi
 
     held=$("$helpers/claim-escape" || true)
     "$helpers/keys" 53
@@ -315,7 +443,7 @@ if want deadline; then
 #    public fallback answers. Before this was so, there was no panel at all until then.
 stopped=""
 resume() { [ -z "$stopped" ] || kill -CONT $stopped 2>/dev/null || true; stopped=""; }
-trap resume EXIT
+at_exit resume
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "waiting panel: could not select ($why)"
 else
@@ -349,7 +477,8 @@ else
         filled=""
         for _ in $(seq 1 100); do
             view=$("$helpers/panel" com.xiaolaidict)
-            if printf '%s' "$view" | grep -q '→ meet' && ! printf '%s' "$view" | grep -q 'Looking up'; then
+            # The word's card, and no failure on it — "No entry for" carries the word too.
+            if printf '%s' "$view" | grep -q '"meeting"' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not be asked'; then
                 filled=$view; break
             fi
             sleep 0.1
@@ -422,9 +551,51 @@ if want drawer; then
 #    activated the app and made its panel key; a unit test can prove the code does not call
 #    `activate`, but only a running bundle can prove nothing else did it either. Safari is left
 #    frontmost by the stage above, so there is a real app with focus to steal.
-drawer=$("$exe" --history-report 2>&1) && drawer_status=0 || drawer_status=$?
-if [ "$drawer_status" -ne 0 ] && ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
-    flunk "drawer: --history-report did not report ($drawer)"
+#
+#    Launched through LaunchServices, not run directly: the report now captures the screen to see
+#    whether the drawer lets what is behind it through, and TCC refuses screen capture to any
+#    process started over SSH, whatever XiaolaiDict has been granted. `open --stdout` puts it in the GUI
+#    session and still lets its answer be read — the same reason `read_point` exists.
+# 150 s: the history report's worst case is three 30 s captures — the first after boot is measured
+# at nearly 15 s — plus about 7 s of appearing, settling and closing, with launch on top.
+history_report() { run_report --history-report 150; }
+# **The machine's glass setting is put back exactly as it was** — the value, or its absence — and
+# however the script ends. It used to be deleted afterwards, which lost a reader's own choice on
+# this machine, and a failure in between left the forced value behind.
+# Whether the key was there at all is kept apart from its value: a preference set to an empty
+# string is not an absent one, and restoring by "is the value empty" would delete it.
+if original_glass=$(defaults read com.xiaolaidict DrawerGlass 2>/dev/null); then
+    had_glass=yes
+else
+    had_glass=no
+    original_glass=""
+fi
+restore_glass() {
+    if [ "$had_glass" = yes ]; then defaults write com.xiaolaidict DrawerGlass "$original_glass"
+    else defaults delete com.xiaolaidict DrawerGlass 2>/dev/null || true; fi
+}
+at_exit restore_glass
+# The stripes image, kept beside the report under the glass it was taken in. Missing is a note, not
+# an abort: an unguarded copy under `set -e` ended the whole run when a capture failed, before its
+# report — which says why — was read. The report clears the old image first, so one that is here
+# is this run's.
+keep_stripes() {
+    rm -f "/tmp/xiaolaidict-backdrop-stripes-$1.png"
+    if [ -f /tmp/xiaolaidict-backdrop-stripes.png ]; then
+        # Guarded: a copy that fails is a note, never the end of the run — the report it would have
+        # accompanied has not been read yet.
+        cp /tmp/xiaolaidict-backdrop-stripes.png "/tmp/xiaolaidict-backdrop-stripes-$1.png" \
+            || echo "note: could not keep the $1 stripes image"
+    else
+        echo "note: no stripes image under $1 glass — see the report's stripesProblem and evidenceProblem"
+    fi
+}
+# Frosted first, set explicitly: a machine left on Clear would otherwise flip the comparison below.
+defaults write com.xiaolaidict DrawerGlass frosted
+drawer=$(history_report)
+keep_stripes frosted
+if ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
+    flunk "drawer: --history-report did not report ($(head -c 160 /tmp/xiaolaidict-history-report.err 2>/dev/null))"
 else
     if why=$(expect "$drawer" insideBundle=True appeared=True activatedTheApp=False \
                     claimedEscapeWhileShown=True releasedEscapeAfterClosing=True 2>&1); then
@@ -451,6 +622,60 @@ else
         fi
     else
         flunk "drawer: $why"
+    fi
+    # The captures the reading rests on were written where they can be looked at. A measurement
+    # whose evidence is missing can only be believed.
+    if why=$(expect "$drawer" evidenceProblem=none 2>&1); then
+        pass "drawer: the captures behind the reading were kept to be looked at"
+    else
+        flunk "drawer: $why"
+    fi
+    # **Glass is a property of what shows through, so that is what is measured.** The drawer is
+    # `glassEffect`; the Xcode canvas draws glass flat grey by design, and a comment said to judge
+    # it in the running app, which nothing did — every check above would pass for a flat grey
+    # panel. The report puts black and then white directly behind the drawer and counts how much
+    # of it changes. Measured passing: 133 grey over black, 240 over white. A drawer that *looks*
+    # flat on a reader's screen is usually sitting over something uniformly dark — a terminal.
+    fraction=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backdropChangedFraction", -1))' "$drawer")
+    if why=$(expect "$drawer" backdropShowsThrough=True 2>&1); then
+        pass "drawer: lets what is behind it show through ($fraction of it changes with the backdrop)"
+    else
+        problem=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backdropProblem", "?"))' "$drawer")
+        flunk "drawer: does not let what is behind it through — $fraction of it changes with the backdrop (problem: $problem)"
+    fi
+    # **The glass setting reaches the screen.** Settings offers Frosted and Clear, and a setting
+    # the drawer never reads would pass every unit test of the setting — the way the pause switch
+    # did. So the same drawer is measured with each. The deciding number is the glass over black,
+    # because a dark window behind the drawer is where the two differ and the case that made
+    # frosted look broken: measured 133 for frosted and 71 for clear. The bar is a 20-point gap —
+    # a third of that, far above the zero an unwired setting would give. The stripes' colour is
+    # reported alongside, and both stripes images are kept beside the report's own.
+    defaults write com.xiaolaidict DrawerGlass clear
+    clear_report=$(history_report)
+    keep_stripes clear
+    # The machine's own setting is not the test's to keep.
+    restore_glass
+    # stderr as well: `sys.exit(message)` writes the reason there, and a failure read from stdout
+    # alone reported "drawer: " with nothing after it.
+    if verdict=$(python3 - "$drawer" "$clear_report" 2>&1 <<'PYCHECK'
+import json, sys
+frosted, clear = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+fg, cg = frosted.get("drawerGlass"), clear.get("drawerGlass")
+fb, cb = frosted.get("glassOverBlack", -1), clear.get("glassOverBlack", -1)
+fc, cc = frosted.get("stripesColour", -1), clear.get("stripesColour", -1)
+summary = f"over black frosted {fb}, clear {cb}; stripes' colour frosted {fc:.0f}, clear {cc:.0f}"
+if (fg, cg) != ("frosted", "clear"):
+    sys.exit(f"the report ran with {fg} then {cg}, not frosted then clear ({summary})")
+if fb < 0 or cb < 0:
+    sys.exit(f"the glass over black did not measure ({summary})")
+if fb - cb < 20:
+    sys.exit(f"Clear is not darker than Frosted over a dark window — {summary}")
+print(summary)
+PYCHECK
+    ); then
+        pass "drawer: the Clear setting reaches the screen ($verdict)"
+    else
+        flunk "drawer: $verdict"
     fi
 fi
 fi
@@ -519,45 +744,211 @@ if want scenes; then
 #
 #    With a real click, not `AXPress`: pressing a menu through Accessibility opens it *without
 #    activating the app*, so a window opened from it never becomes key and never sees a key press.
-#    A working recorder looks broken that way, and a broken one would look working.
-if ! "$helpers/menu-click" com.xiaolaidict "Change Shortcut…" >/dev/null 2>&1; then
-    flunk "recorder: could not reach Change Shortcut… in the menu"
+#    A working control looks broken that way, and a broken one would look working.
+
+# **The settings window is the size of the pane it is showing, and moves between the sizes.**
+#
+# Measured from inside the bundle, because a resize only happens in a running app and a window that
+# snaps ends at exactly the same height as one that animates. What separates them is whether the
+# window was ever seen part-way, which is what `stepsInBiggestChange` counts.
+# 90 s: opening, the dictionary probe, and six pane changes of at most about 4 s each.
+settings_report() { run_report --settings-report 90; }
+report=$(settings_report)
+if [ -z "$report" ]; then
+    flunk "settings: --settings-report printed nothing ($(head -c 160 /tmp/xiaolaidict-settings-report.err 2>/dev/null))"
 else
-    # Polled, not slept: the window is opened by a scene and arrives when it arrives.
-    for _ in $(seq 1 40); do
-        before=$("$helpers/panel" com.xiaolaidict)
-        printf '%s' "$before" | grep -q '"windows":\[\]' || break
-        sleep 0.25
+    # **One pass over the report**, where each assertion used to start Python again to read one
+    # field. Emits a PASS or FAIL line per claim and DONE last: a validator that died part-way
+    # must not read as having found nothing wrong, so no DONE is itself a failure.
+    verdicts=$(python3 - "$report" 2>&1 <<'PYCHECK' || true
+import json, sys
+r = json.loads(sys.argv[1])
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+if not r.get("appeared"):
+    say(False, "", f"settings: the window never came up ({r.get('problem', '?')})")
+else:
+    panes = r["panes"]
+    say(r["oneWidth"] and r["width"] == r["expectedWidth"],
+        f"settings: every pane is drawn at the panes' width ({r['width']:g} pt)",
+        f"settings: the window is {r['width']:g} pt wide against the panes' {r['expectedWidth']:g} (one width: {r['oneWidth']})")
+    # Each pane's window is that pane plus the same title bar and tabs. A window fitted to the
+    # wrong thing still has five different heights, which is why that check alone is not this.
+    c = r["chromes"]
+    say(bool(c) and max(c) - min(c) <= 1,
+        f"settings: every pane's window is exactly its content, plus {int(c[0]) if c else '?'} pt of title bar and tabs",
+        f"settings: the windows are not their panes plus one chrome: {c} across {[p['pane'] for p in panes]}")
+    # The window is the size of its pane: two panes at one height would mean a fixed frame is
+    # still deciding — the state this stage was written for, 420 x 320 for all five.
+    say(r["distinctHeights"] >= 3,
+        f"settings: the window fits each pane ({r['shortest']:g}–{r['tallest']:g} pt over {r['distinctHeights']} heights)",
+        f"settings: only {r['distinctHeights']} distinct heights across five panes — the window is not sizing to its content")
+    # And moves between them. Zero steps is a jump, however large the change.
+    say(r["stepsInBiggestChange"] >= 3,
+        f"settings: the {r['biggestChange']:g} pt change to {r['biggestChangePane']} took {r['stepsInBiggestChange']} steps",
+        f"settings: the {r['biggestChange']:g} pt change to {r['biggestChangePane']} was a jump ({r['stepsInBiggestChange']} steps)")
+    # **And one way.** Steps count positions and cannot see a window that went down, back up and
+    # down again — the shudder a reader saw while every check above passed.
+    say(r["reversals"] == 0 and r["worstOvershoot"] < 1,
+        "settings: every pane change moves the bottom edge one way, without overshoot",
+        f"settings: the window shuddered — {r['reversals']} reversal(s), {r['worstOvershoot']:g} pt past its target "
+        f"({[(p['pane'], p['path']) for p in panes if p['reversals'] or p['overshoot']]})")
+    # The Dictionary pane was the reader's, not its loading placeholder: the service answered
+    # before anything was measured.
+    say(r["dictionariesKnown"], "settings: the dictionary service answered before the panes were measured",
+        "settings: the Dictionary pane was measured while it still said 'Asking the dictionary service…'")
+    # **A recording does not outlive the pane it is on.** Checked in the running app because two
+    # fixes for it passed their unit tests and did nothing here: a hidden pane's views are kept
+    # alive and not re-evaluated, so the field never learned it had been left.
+    say(r["recordingListensOnItsOwnPane"] and r["recordingEndsWithItsPane"],
+        "settings: a shortcut recording ends when the reader leaves its pane",
+        f"settings: a shortcut recording outlives its pane (listening on it: {r['recordingListensOnItsOwnPane']}, "
+        f"ended with it: {r['recordingEndsWithItsPane']})")
+    # An endpoint read while the window was still moving is a height nothing settled at.
+    say(r["openedAtRest"] and r["settledEveryPane"],
+        "settings: the window came to rest after opening and after every pane change",
+        f"settings: the window did not come to rest (opened: {r['openedAtRest']}, "
+        f"panes: {[p['pane'] for p in panes if not p['settled']]})")
+    # The pane decides the height, so the reader cannot drag it: an edge that could be pulled
+    # would be a second answer to how tall the pane is.
+    say(not r["resizable"], "settings: the window's height is the pane's, not a drag handle",
+        "settings: the window can be resized by hand")
+    # The top edge stays put: a settings window grows downward from its title bar. Two points of
+    # tolerance, because a half-point frame lands on either side of a pixel.
+    drift = round(r["topEdgeDrift"])
+    say(drift <= 2, f"settings: the title bar stays where it is ({drift} pt)",
+        f"settings: the window walked {drift} pt up or down the screen while resizing")
+print("DONE")
+PYCHECK
+)
+    while IFS=$'\t' read -r verdict message; do
+        case "$verdict" in
+            PASS) pass "$message" ;;
+            FAIL) flunk "$message" ;;
+        esac
+    done <<<"$verdicts"
+    printf '%s' "$verdicts" | grep -qx DONE \
+        || flunk "settings: the report's validator stopped before it finished: $(printf '%s' "$verdicts" | tail -3)"
+fi
+
+# **The shortcut is a control in Settings, and it takes the keyboard.**
+#
+# It used to be a window of its own, which activated XiaolaiDict to open and left XiaolaiDict active with nothing
+# on screen when it closed — which is how the settings window came to appear by itself. What has to
+# hold now is that the control on the Lookup pane is reachable and live: a field that drew the
+# right combination and never saw a key press would look exactly like a working one.
+# The field is armed by clicking the combination it shows, which the menu names too — read
+# **before** Settings opens. Dumping the menu in between opened and dismissed XiaolaiDict's menu, which
+# handed focus back to the app behind it (Ghostty, in a full run), so the click meant to arm the
+# field only brought an inactive window forward. `|| true` inside the pipe because asking for an
+# item that is not there is how the menu is dumped — it exits 1 on purpose — and `q` in `sed`
+# rather than `| head`, which can close the pipe under `sed` and fail the pipeline for succeeding.
+current=$({ "$helpers/menu-click" com.xiaolaidict "ZZZ-dump-the-menu" 2>&1 || true; } \
+    | sed -n 's/.*Look Up Selection  *\([^"]*\)".*/\1/p;/Look Up Selection  *[^"]/q')
+"$helpers/keys" 53 2>/dev/null || true
+sleep 0.5
+if ! "$helpers/menu-click" com.xiaolaidict "Settings…" >/dev/null 2>&1; then
+    flunk "shortcut: could not reach Settings… in the menu"
+else
+    # **Waited for, not slept for.** A click lands on whatever is in front, and the first click on
+    # an inactive window only activates it — so a settings window that is still coming forward
+    # swallows the click that should have armed the field. Measured: after the report instance
+    # quit, Ghostty was frontmost two seconds after Settings was chosen, and the field never armed.
+    front=""
+    for _ in $(seq 1 30); do
+        front=$("$helpers/panel" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+        [ "$front" = com.xiaolaidict ] && break
+        sleep 0.2
     done
-    # A key with no modifier is refused with a hint rather than accepted — a shortcut without one
-    # would fire while the reader was typing. The hint changing is the proof the window has the
-    # keyboard at all.
-    "$helpers/keys" 40
-    sleep 1
-    after=$("$helpers/panel" com.xiaolaidict)
-    if printf '%s' "$after" | grep -q "needs"; then
-        pass "recorder: takes the keyboard, and refuses a shortcut with no modifier"
+    if [ "$front" != com.xiaolaidict ]; then
+        flunk "shortcut: Settings never came forward — $front is in front"
+    elif ! "$helpers/click-element" com.xiaolaidict Lookup >/dev/null 2>&1; then
+        flunk "shortcut: no Lookup pane in the settings window"
     else
-        flunk "recorder: the window never saw the key press (before: $(printf '%s' "$before" | head -c 80))"
-    fi
-    # Only meaningful if something was open: Escape "closing" a window that never appeared is a
-    # pass that proves nothing, which is how this read before.
-    if printf '%s' "$before" | grep -q '"windows":\[\]'; then
-        flunk "recorder: nothing was open for Escape to close"
-    else
-        "$helpers/keys" 53
-        sleep 1
-        if "$helpers/panel" com.xiaolaidict | grep -q '"windows":\[\]'; then
-            pass "recorder: Escape cancels and closes it"
+        if [ -z "$current" ] || ! "$helpers/click-element" com.xiaolaidict "$current" >/dev/null 2>&1; then
+            flunk "shortcut: nothing on the Lookup pane showing '$current' to arm"
         else
-            flunk "recorder: Escape did not close it"
+            # Two separate claims, read separately, so a failure says which half broke: the click
+            # armed the field, and the armed field hears the keyboard.
+            sleep 1
+            armed=$("$helpers/panel" com.xiaolaidict)
+            if ! printf '%s' "$armed" | grep -q "Press a shortcut"; then
+                flunk "shortcut: clicking '$current' did not arm the field (saw: $(printf '%s' "$armed" | head -c 200))"
+            else
+                pass "shortcut: clicking the combination arms the field"
+                # A bare key is refused with a hint rather than accepted — a shortcut with no
+                # modifier would fire while the reader was typing. The hint appearing is the proof
+                # the field has the keyboard at all.
+                "$helpers/keys" 40
+                sleep 1
+                if "$helpers/panel" com.xiaolaidict | grep -q "needs"; then
+                    pass "shortcut: the armed field takes the keyboard, and refuses a key with no modifier"
+                else
+                    flunk "shortcut: the field was armed and never saw the key press (front: $(printf '%s' "$armed" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p'))"
+                fi
+                # **Escape disarms it — read passively, before anything else moves focus.** Opening
+                # the menu to check the shortcut would itself end the recording (the window resigns
+                # key), so a broken Escape would be covered for by the check that followed it.
+                "$helpers/keys" 53
+                sleep 0.5
+                if "$helpers/panel" com.xiaolaidict | grep -q "Press a shortcut"; then
+                    flunk "shortcut: Escape did not disarm the field"
+                else
+                    pass "shortcut: Escape disarms the field"
+                fi
+            fi
+            # **Leaving the pane ends the recording — checked in the bundle, not by clicking.**
+            # The rule matters: a recording's key monitor listens to the whole app, so one that
+            # outlives its pane takes a combination pressed on another pane as the reader's new
+            # shortcut. Driving it from here meant clicking a tab while the field was armed, and
+            # that click was measured not to land often enough to trust — the pane stayed where it
+            # was, and the check then failed the app for its own miss. `--settings-report` arms the
+            # recorder and changes the pane inside the running app instead, which is where two
+            # earlier fixes for this passed their unit tests and did nothing.
         fi
+    fi
+    # Closed by the title it has — the settings window is titled by its pane, not "XiaolaiDict Settings",
+    # which is what an earlier line here asked for and, being `|| true`, silently never closed.
+    pane=$("$helpers/panel" com.xiaolaidict | python3 -c '
+import json, sys
+names = {"Reading", "Lookup", "Dictionary", "Permissions", "About"}
+print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] if t in names), ""))')
+    if ! why=$("$helpers/close-window" "${pane:-Lookup}" 2>&1); then
+        flunk "shortcut: could not close the settings window afterwards ($why)"
+    fi
+    sleep 1
+    # **However that went, the reader's shortcut must be registered again, and be theirs.** The
+    # menu is the witness: it names the combination it answers to, and nothing when there is none.
+    # Arming the field stands the hot key down on purpose, and a path that forgets to put it back
+    # leaves the reader's shortcut quietly dead until XiaolaiDict is relaunched.
+    after=$({ "$helpers/menu-click" com.xiaolaidict "ZZZ-dump-the-menu" 2>&1 || true; } \
+        | sed -n 's/.*Look Up Selection  *\([^"]*\)".*/\1/p;/Look Up Selection  *[^"]/q')
+    "$helpers/keys" 53 2>/dev/null || true
+    if [ -z "$after" ]; then
+        flunk "shortcut: after the field was used, no shortcut is registered"
+    elif [ "$after" != "$current" ]; then
+        flunk "shortcut: the reader's shortcut was not put back — $after where it was $current"
+    else
+        pass "shortcut: registered, and back to $current, after the field was used"
     fi
 fi
 
 # The drawer and the settings window, opened the same way, and read through Accessibility — which
 # is what a screen reader uses, and what a SwiftUI `UtilityWindow` is invisible to.
+#
+# **And whether each comes forward**, which is the half that was never asked. Reading a window
+# through Accessibility says it exists, not that the reader can see it: measured, choosing Settings
+# from the menu left the window on screen at 900×450 with the terminal still frontmost, so nothing
+# appeared to happen — and it surfaced later when the shortcut recorder activated XiaolaiDict, which read
+# as Settings opening by itself. The two surfaces want opposite answers, so they are asked
+# separately: Settings is a window the reader chose and must come forward; the drawer must never
+# take the reader out of what they were reading.
 for surface in "Reading History" "Settings…"; do
+    # **A known app in front first**, so "did not take focus" is checked against something: the
+    # drawer passed merely for XiaolaiDict not being frontmost afterwards, whatever had been before —
+    # which a Settings window left open earlier could turn into a pass or a failure on its own.
+    osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
+    sleep 1
+    before_front=$("$helpers/panel" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
     if ! "$helpers/menu-click" com.xiaolaidict "$surface" >/dev/null 2>&1; then
         flunk "scenes: could not reach $surface in the menu"
         continue
@@ -569,11 +960,29 @@ for surface in "Reading History" "Settings…"; do
     else
         pass "scenes: $surface is open and readable through Accessibility"
     fi
+    front=$(printf '%s' "$seen" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+    case "$surface" in
+        "Settings…")
+            if [ "$front" = com.xiaolaidict ]; then
+                pass "scenes: Settings comes forward when the reader asks for it"
+            else
+                flunk "scenes: Settings opened behind $front — the reader sees nothing happen"
+            fi ;;
+        *)
+            if [ "$before_front" != com.apple.finder ]; then
+                flunk "scenes: could not put Finder in front to test $surface against ($before_front was)"
+            elif [ "$front" != "$before_front" ]; then
+                flunk "scenes: $surface took the reader out of $before_front ($front is in front now)"
+            else
+                pass "scenes: $surface leaves $before_front in front"
+            fi ;;
+    esac
     "$helpers/keys" 53 2>/dev/null || true
     sleep 1
 done
 fi
 
+finished=true
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
 SH

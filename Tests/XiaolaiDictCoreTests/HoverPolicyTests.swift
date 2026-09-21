@@ -198,4 +198,62 @@ struct HoverHostMatchingTests {
         #expect(!excluded("example.com", by: [""]))
         #expect(!excluded("", by: ["example.com"]))
     }
+
+    /// **Each pause length has to say how long it is**, because the menu offers three and a row
+    /// reading "900 seconds" is not an offer anyone can act on. `HoverPause.durations` shipped as
+    /// a list with nothing to render it, which is part of why the switch was never built.
+    @Test func eachPauseLengthNamesItself() {
+        let named = HoverPause.durations.map { HoverPause.name(of: $0, in: Locale(identifier: "en_US")) }
+        #expect(named == ["15 minutes", "1 hour", "8 hours"], "the menu would read \(named)")
+    }
+
+    // MARK: - Naming the modifier
+
+    /// **The modifier has to name itself, because two surfaces show it and one of them lied.**
+    /// The menu read "Hover Lookup    hold ⌥" as a literal while `HoverModifier` had four cases,
+    /// so the label was correct only for as long as the modifier could not be changed. Making it
+    /// changeable without this would have shipped a menu that confidently names the wrong key.
+    @Test func everyModifierCarriesItsKeySymbol() {
+        #expect(HoverModifier.option.symbol == "\u{2325}")
+        #expect(HoverModifier.control.symbol == "\u{2303}")
+        #expect(HoverModifier.command.symbol == "\u{2318}")
+        #expect(HoverModifier.shift.symbol == "\u{21E7}")
+    }
+
+    /// And a written name, for a picker where a lone symbol is a guessing game.
+    @Test func everyModifierCarriesAWrittenName() {
+        #expect(HoverModifier.allCases.map(\.name) == ["Option", "Control", "Command", "Shift"])
+    }
+
+    /// No case may be left out of either, which a `switch` guarantees and a dictionary does not.
+    @Test func noModifierIsMissingEitherForm() {
+        for modifier in HoverModifier.allCases {
+            #expect(!modifier.symbol.isEmpty, "\(modifier) has no symbol")
+            #expect(!modifier.name.isEmpty, "\(modifier) has no name")
+        }
+    }
+
+    // MARK: - The rest the reader can choose
+
+    /// **The shipped rest must be one the picker can show.** A `Picker` whose selection matches no
+    /// tag renders with nothing selected — the reader opens Settings, sees an empty control, picks
+    /// something to fill it, and has silently changed a setting they only meant to look at. It
+    /// costs one comparison to make that unrepresentable.
+    @Test func theShippedRestIsOneOfTheOfferedOnes() {
+        #expect(HoverPolicy.settleChoices.map(\.milliseconds).contains(HoverPolicy.shipped.settleMilliseconds),
+                "the picker would open with nothing selected")
+    }
+
+    @Test func theOfferedRestsAreDistinctAndInOrder() {
+        let values = HoverPolicy.settleChoices.map(\.milliseconds)
+        #expect(values == values.sorted(), "the picker would read out of order")
+        #expect(Set(values).count == values.count, "two choices share a value, so one cannot be picked")
+    }
+
+    /// Every one names itself, because "180" is not a choice anyone can make.
+    @Test func everyRestIsNamed() {
+        for choice in HoverPolicy.settleChoices {
+            #expect(!choice.name.isEmpty, "\(choice.milliseconds) ms has no name")
+        }
+    }
 }

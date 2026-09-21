@@ -16,7 +16,75 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     @ObservationIgnored private lazy var drawer = makeDrawer()
     /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
     /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
-    private let hover = HoverWatcher()
+    ///
+    /// Lazy so it can be handed a closure onto `hoverPause` below — a stored property cannot read
+    /// `self`, which is the mechanical reason the pause was never connected to anything.
+    @ObservationIgnored private(set) lazy var hover = makeHover()
+
+    /// **The pause the menu offers and the gate reads — one value, held here.** There was no such
+    /// value: `HoverReader`'s default built a fresh `HoverPause` on every call, so the gate asked
+    /// "is XiaolaiDict paused" of an object that had just been born and always answered no. Nothing in
+    /// the app or the suite ever supplied one, and the menu item `HoverPause.label(at:)` was
+    /// written for did not exist. The model was complete and unreachable.
+    private(set) var hoverPause = HoverPause()
+
+    /// The reader's hover policy, **held in memory and observed**, with the store behind it.
+    ///
+    /// Read rather than loaded on each use on purpose: `HoverWatcher` asks for the policy on every
+    /// pointer change to get `settleMilliseconds`, so decoding it there would put a JSON decode on
+    /// the mouse-move path. One decode at launch, one write when the reader changes something.
+    @ObservationIgnored private let hoverPolicyStore: HoverPolicyStore
+    private(set) var hoverPolicy: HoverPolicy
+
+    /// **`init()` must exist, and must be written out.** `@NSApplicationDelegateAdaptor`
+    /// instantiates the delegate through the Objective-C runtime, which looks for `init` and finds
+    /// `NSObject`'s — not a Swift designated initializer that happens to have a default argument
+    /// for every parameter. Declaring `init(defaults:)` alone therefore suppressed the inherited
+    /// `init()` and every launch died with "Use of unimplemented initializer", while the unit
+    /// suite stayed green because tests call the initializer Swift can see.
+    override convenience init() { self.init(defaults: .standard) }
+
+    /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
+    /// anything about the reader's settings means writing to the real ones — a test suite that
+    /// changes the machine it runs on, which is the same objection the project makes to driving
+    /// the GUI on the building Mac.
+    init(defaults: UserDefaults, hotkeys: HotkeyCenter = .shared) {
+        // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
+        // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
+        // this property exists to avoid.
+        let store = HoverPolicyStore(defaults: defaults)
+        hoverPolicyStore = store
+        hoverPolicy = store.load()
+        // **The suite the app was given, not `.standard`.** Built inline against the real
+        // preferences while `init(defaults:)` existed for exactly this reason, so every test that
+        // touched the shortcut rewrote the reader's own — the objection this project makes to
+        // driving the GUI on the building Mac, in a unit test.
+        shortcuts = ShortcutStore(defaults: defaults)
+        self.hotkeys = hotkeys
+        super.init()
+    }
+
+    /// Changing it saves it and takes effect immediately — the watcher reads this property, so
+    /// there is nothing to restart and no second copy to keep in step.
+    func setHoverPolicy(_ policy: HoverPolicy) {
+        hoverPolicy = policy
+        hoverPolicyStore.save(policy)
+    }
+
+    /// What the pause control says. Observed, so pausing redraws the menu without being told to.
+    var hoverPauseLabel: String { hoverPause.label(at: .now) }
+    var hoverIsPaused: Bool { hoverPause.isPaused(at: .now) }
+
+    func pauseHover(for duration: Duration) { hoverPause.pause(for: duration, from: .now) }
+    func resumeHover() { hoverPause.resume() }
+
+    private func makeHover() -> HoverWatcher {
+        // `self` is read at decision time, not captured by value — a copy taken here would be the
+        // same never-changing pause this replaces.
+        HoverWatcher(
+            policy: { [weak self] in self?.hoverPolicy ?? .shipped },
+            pause: { [weak self] in self?.hoverPause ?? HoverPause() })
+    }
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
@@ -61,8 +129,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
     /// the menu says it does not know rather than showing a list it made up.
     var dictionaries: [DictionaryCapability]?
-    let recorder = ShortcutRecorder()
-    private let shortcuts = ShortcutStore(defaults: .standard)
+    @ObservationIgnored private let shortcuts: ShortcutStore
+    /// Carbon's hot-key plumbing, injected so a test never registers a real global shortcut —
+    /// which would take it from the reader for as long as the suite ran.
+    @ObservationIgnored private let hotkeys: HotkeyCenter
     private var hotkey: Hotkey?
     /// Opened on a background task at launch: file and database work — a migration, on the first
     /// launch after an update — must not hold up the menu bar.
@@ -112,10 +182,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
         // Watching the pointer is something the reader must be able to stop, so it is a setting
         // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
-        if hoverEnabled { hover.start() }
+        // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
+        // fired meanwhile would capture too — two captures at once deadlock, measured six trials
+        // of six. An instrument measures the app; it has no reader whose pointer needs watching.
+        if hoverEnabled, !HistoryReport.isWanted, !SettingsReport.isWanted { hover.start() }
         registerShortcut(shortcuts.load())
         quitOnTerminationSignal()
         if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
+        if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
     }
 
     // MARK: - Looking up
@@ -211,44 +285,98 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - Shortcut
 
+    /// Nil when the shortcut is registered; otherwise why it could not be.
     @discardableResult
-    private func registerShortcut(_ shortcut: Shortcut) -> Bool {
+    private func registerShortcut(_ shortcut: Shortcut) -> Hotkey.RegistrationFailed? {
         hotkey = nil  // released first: registration is exclusive, and would collide with itself
         do {
-            hotkey = try HotkeyCenter.shared.register(shortcut) { [weak self] in self?.lookUpSelection() }
+            hotkey = try hotkeys.register(shortcut) { [weak self] in self?.lookUpSelection() }
             hotkeyProblem = nil
-            return true
+            return nil
         } catch {
             hotkeyProblem = "\(shortcut.label()) is unavailable: \(error)"
             log.error("hotkey unavailable: \(String(describing: error), privacy: .public)")
-            return false
+            return error
         }
     }
 
-    func changeShortcut() {
-        let previous = hotkey?.shortcut ?? shortcuts.load()
-        // Released while recording: pressed, it would look something up instead of being recorded.
-        hotkey = nil
-        recorder.record(current: previous) { [weak self] chosen in
-            guard let self else { return }
-            guard let chosen, chosen != previous else {
-                registerShortcut(previous)
-                return
-            }
-            guard registerShortcut(chosen) else {
-                // Keep the problem with the new one in view, and the old one working.
-                let problem = hotkeyProblem
-                registerShortcut(previous)
-                hotkeyProblem = problem.map { "\($0) — still using \(previous.label())" }
-                return
-            }
-            do {
-                try shortcuts.save(chosen)
-            } catch {
-                log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
-                hotkeyProblem = "\(chosen.label()) works now but was not saved: \(error)"
-            }
+    /// Opens Settings **and brings XiaolaiDict forward with it.**
+    ///
+    /// `SettingsLink` opens the window and leaves the app where it was, which for an accessory app
+    /// means behind whatever the reader is using: measured — after choosing Settings from the menu,
+    /// the window was on screen at 900×450 and the frontmost app was still the terminal. The reader
+    /// sees nothing happen, and the window then surfaces later when something else activates XiaolaiDict,
+    /// which is how closing the shortcut recorder came to summon Settings "out of nowhere".
+    ///
+    /// Activating here does not contradict "no panel may activate XiaolaiDict": that is about the panels
+    /// the reader did not ask for, mid-sentence in another app. This is a window they chose from a
+    /// menu, and they are about to type into it — the shortcut field takes key presses.
+    func showSettings() {
+        NSApplication.shared.activate()
+        WindowActions.shared.settings?()
+    }
+
+    /// The shortcut as it stands: the one registered, or — while the field in Settings is armed
+    /// and nothing is registered — the one on disk.
+    var currentShortcut: Shortcut { hotkey?.shortcut ?? shortcuts.load() }
+
+    /// Whether XiaolaiDict is answering its shortcut. Read by the wiring tests, because "the field drew
+    /// the right combination" and "the combination works" are different claims.
+    var shortcutIsRegistered: Bool { hotkey != nil }
+
+    /// Settings' shortcut control, as `XiaolaiDictUI` needs it.
+    ///
+    /// Handed over rather than reached for: registering a combination with the system is Carbon,
+    /// which lives here, and `XiaolaiDictUI` draws rather than registers.
+    var shortcutChoice: ShortcutChoice {
+        ShortcutChoice(
+            shortcut: currentShortcut,
+            choose: { [weak self] shortcut in
+                // An app that is gone registered nothing, and must not be reported as having done so.
+                guard let self else { return String(localized: "XiaolaiDict is not running") }
+                return chooseShortcut(shortcut)?.description
+            },
+            suspend: { [weak self] in self?.suspendShortcut($0) })
+    }
+
+    /// Stands the hot key down while the field is armed, and puts it back after.
+    ///
+    /// **Without this the one combination a reader most wants to change is the one they cannot.**
+    /// A registered hot key is handled below the Cocoa event stream, so pressing the shortcut
+    /// currently in use fires a lookup instead of reaching the field.
+    ///
+    /// Putting it back is conditional on nothing being registered, which makes it idempotent — the
+    /// field disarms after a successful choice, and a `suspend(false)` that re-registered whatever
+    /// was on disk would undo the choice a moment after the reader made it.
+    func suspendShortcut(_ suspended: Bool) {
+        if suspended {
+            hotkey = nil
+        } else if hotkey == nil {
+            registerShortcut(shortcuts.load())
         }
+    }
+
+    /// Takes the reader's new shortcut: registers it, and saves it if it held. Nil means it held;
+    /// otherwise the refusal says why — another app holds it, XiaolaiDict holds it for something else, or
+    /// Carbon answered with a status — and the one that worked is left working.
+    @discardableResult
+    func chooseShortcut(_ chosen: Shortcut) -> Hotkey.RegistrationFailed? {
+        let previous = currentShortcut
+        guard chosen != previous || hotkey == nil else { return nil }
+        if let refusal = registerShortcut(chosen) {
+            // Keep the problem with the new one in view, and the old one working.
+            let problem = hotkeyProblem
+            registerShortcut(previous)
+            hotkeyProblem = problem.map { "\($0) — still using \(previous.label())" }
+            return refusal
+        }
+        do {
+            try shortcuts.save(chosen)
+        } catch {
+            log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
+            hotkeyProblem = "\(chosen.label()) works now but was not saved: \(error)"
+        }
+        return nil
     }
 
     // MARK: - Menu
@@ -259,6 +387,16 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var panelModel: LookupPanelModel { panel.model }
     var drawerModel: HistoryDrawerModel { drawer.model }
 
+    /// What the settings window is showing — which pane, and the permission probe's last answer.
+    /// Owned here rather than inside the window so `--settings-report` can select a pane from
+    /// outside and measure what the window does about it.
+    let settings = SettingsModel()
+
+    /// The settings window, taken from the view inside it rather than searched for among
+    /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
+    /// it is measuring — and on a bad day it measures the menu bar's.
+    @ObservationIgnored weak var settingsWindow: NSWindow?
+
     /// The reader's text size, and the scale every surface is drawn from. Owned here because it
     /// outlives any one window: the drawer, the panel and a pinned note all read the same one, and
     /// changing it has to move all of them at once.
@@ -266,6 +404,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var drawerPlacement: CGRect? { drawer.placement }
     var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }
     var drawerWindowFrame: CGRect { drawer.windowFrame }
+    var drawerWindowLevel: Int { drawer.windowLevel }
     var drawerReload: Task<Void, Never>? { drawer.reload }
     var drawerHoldsEscape: Bool { drawer.isEscapeClaimed }
 

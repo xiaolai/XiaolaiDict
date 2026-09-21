@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate XiaolaiDict's app icon and menu-bar icon from the designer's art in design/icon/.
+"""Generate XiaolaiDict's app icon and menu-bar icon from the designer's art in Tools/icon/.
 
 Writes two things into <Resources dir>:
   XiaolaiDict.icon/        the Icon Composer document the Makefile compiles with actool
@@ -22,7 +22,7 @@ were, and a run killed in the middle of replacing them is finished or undone by 
 
 The stages live in the makeicon package beside this file; its __init__ lists them. Standard library
 only, and runs on macOS's own python3 (3.9) as well as newer ones.
-Usage: Tools/make-icon.py <design/icon dir> <Resources dir>  (or `make icon`)
+Usage: Tools/make-icon.py <Tools/icon dir> <Resources dir>  (or `make icon`)
 Tests: python3 -m unittest discover -s Tools/tests
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ from makeicon.sources import parse_sources  # noqa: E402
 
 def main(argv: list[str]) -> None:
     if len(argv) != 2:
-        fail(f"usage: {PROG} <design/icon dir> <Resources dir>")
+        fail(f"usage: {PROG} <Tools/icon dir> <Resources dir>")
     src, resources = Path(argv[0]), Path(argv[1])
     if not resources.is_dir():
         fail(f"no such directory {resources}")

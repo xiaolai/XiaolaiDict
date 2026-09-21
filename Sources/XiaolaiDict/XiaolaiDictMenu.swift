@@ -6,9 +6,10 @@ import SwiftUI
 ///
 /// The `NSMenu` it replaces had to be torn down and reassembled in `menuNeedsUpdate` so a problem
 /// that appeared since launch would show. A view re-reads its state whenever that state changes,
-/// which is the same guarantee without the ceremony — and `SettingsLink` is the supported way into
-/// the `Settings` scene, which an accessory app cannot reach through `showSettingsWindow:` because
-/// it has no main menu for the action to route through.
+/// which is the same guarantee without the ceremony. Settings is opened through the environment's
+/// `openSettings`, not `SettingsLink`: an accessory app cannot reach the scene through
+/// `showSettingsWindow:` at all, and `SettingsLink` opens the window without bringing XiaolaiDict
+/// forward, which leaves it behind the app the reader is using.
 struct XiaolaiDictMenu: View {
     let app: XiaolaiDictApp
 
@@ -16,18 +17,35 @@ struct XiaolaiDictMenu: View {
         Button(app.shortcutLabel.map { "Look Up Selection    \($0)" } ?? "Look Up Selection") {
             app.lookUpSelection()
         }
-        Button("Change Shortcut…") { app.changeShortcut() }
 
         // Read from the watcher, not from the setting: if starting it failed, the menu says off.
-        Toggle("Hover Lookup    hold \u{2325}", isOn: Binding(
+        // The modifier is named from the policy, never as a literal. "hold ⌥" was hardcoded here
+        // while `HoverModifier` had four cases, which was correct only for as long as the reader
+        // could not change it — and a menu naming the wrong key is worse than naming none, since
+        // the reader holds it and nothing happens.
+        Toggle("Hover Lookup    hold \(app.hoverPolicy.modifier.symbol)", isOn: Binding(
             get: { app.hoverIsWatching }, set: { _ in app.toggleHover() }))
+
+        // The pause switch (A5). It was specified, modelled, given three lengths and a label —
+        // and never drawn, so `HoverPause.label(at:)`'s "what the menu says" described a menu that
+        // did not exist. Resuming is one click; pausing picks a length, which is what having three
+        // of them is for.
+        if app.hoverIsPaused {
+            Button(app.hoverPauseLabel) { app.resumeHover() }
+        } else {
+            Menu(app.hoverPauseLabel) {
+                ForEach(HoverPause.durations, id: \.self) { duration in
+                    Button(HoverPause.name(of: duration)) { app.pauseHover(for: duration) }
+                }
+            }
+        }
 
         Button(app.drawerIsVisible ? "Hide Reading History" : "Reading History") { app.toggleHistory() }
 
         studyFrom
 
         Divider()
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") { app.showSettings() }
 
         // Problems the reader should see, in the place they already look.
         ForEach(app.problems, id: \.self) { problem in

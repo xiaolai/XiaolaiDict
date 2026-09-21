@@ -152,7 +152,7 @@ class RejectsWhatItCannotReproduce(unittest.TestCase):
         self.assert_refused(run(ws.src, ws.resources), "missing source file")
 
     def test_usage_names_this_script(self) -> None:
-        self.assert_refused(run(), f"usage: {SCRIPT.name} <design/icon dir> <Resources dir>")
+        self.assert_refused(run(), f"usage: {SCRIPT.name} <Tools/icon dir> <Resources dir>")
 
     def test_missing_resources_dir(self) -> None:
         ws = Workspace(self)

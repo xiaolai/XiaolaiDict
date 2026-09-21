@@ -46,6 +46,16 @@ guard let extras = value(ax, "AXExtrasMenuBar"),
       let item = children(extras as! AXUIElement).first,
       let itemCentre = centre(of: item)
 else { FileHandle.standardError.write(Data("no menu-bar item\n".utf8)); exit(1) }
+
+// `--ready`: is the menu-bar item there *yet*, without clicking it.
+//
+// The process existing is not the menu existing. `e2e.sh` waited for the pid and then drove the
+// menu, and immediately after a restart the status item is not in the Accessibility tree yet —
+// measured, 3 restarts out of 3. That made whichever menu-driven assertion ran first fail, and
+// the failure moved between stages from run to run, which reads like a flaky product rather than
+// a harness that never checked its own precondition.
+if wanted == "--ready" { print("menu-bar item present"); exit(0) }
+
 click(itemCentre)
 usleep(700_000)
 

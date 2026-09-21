@@ -20,8 +20,11 @@ final class HoverWatcher {
     nonisolated static let restTolerance: CGFloat = 2
 
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "hover")
-    private let reader: HoverReader
-    private let policy: () -> HoverPolicy
+    /// Not private, so a test can ask the reader what it decided. The watcher's job here is to
+    /// hand the reader the gate's inputs, and "it was handed them" is exactly what went untested
+    /// while the pause was dropped on the floor.
+    let reader: HoverReader
+    private let policy: @MainActor () -> HoverPolicy
     private let screens: () -> [ScreenMetrics]
 
     private var monitors: [Any] = []
@@ -36,12 +39,17 @@ final class HoverWatcher {
     var onWord: (@MainActor (Selection, UpPoint) -> Void)?
 
     init(
-        policy: @escaping () -> HoverPolicy = { .shipped },
+        policy: @escaping @MainActor () -> HoverPolicy = { .shipped },
+        pause: @escaping @MainActor () -> HoverPause = { HoverPause() },
         screens: @escaping () -> [ScreenMetrics] = { NSScreen.screens.map(ScreenMetrics.init) }
     ) {
         self.policy = policy
         self.screens = screens
-        self.reader = HoverReader(policy: policy)
+        // **Forwarded, not defaulted.** This built `HoverReader(policy:)` and left the reader's
+        // pause on its own default — `{ HoverPause() }`, a fresh never-paused value per call — so
+        // `.paused` could not fire however long the reader paused for. The gate was written, the
+        // model was tested, and nothing was connected to either.
+        self.reader = HoverReader(policy: policy, pause: pause)
     }
 
     var isWatching: Bool { !monitors.isEmpty }

@@ -4,7 +4,7 @@ Run the tests from the repository root:
 
     python3 -m unittest discover -s Tools/tests
 
-Fixtures copy design/icon into a temporary directory and mutate the copy. design/icon and
+Fixtures copy Tools/icon into a temporary directory and mutate the copy. Tools/icon and
 Resources/ are only ever read: Resources/ is the golden output the real sources must reproduce.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 SCRIPT = TOOLS / "make-icon.py"
-DESIGN = REPO / "design" / "icon"
+DESIGN = REPO / "Tools" / "icon"
 GOLDEN = REPO / "Resources"
 OUTPUTS = ["XiaolaiDict.icon", "MenuBarIcon.svg"]
 # Outputs to publish where their content does not matter, only that they are a distinct pair.
@@ -80,7 +80,7 @@ def failing_on_call(n: int, error: BaseException, real, calls: list):
 
 
 class Workspace:
-    """A private copy of design/icon to mutate, and an empty Resources dir to write into."""
+    """A private copy of Tools/icon to mutate, and an empty Resources dir to write into."""
 
     def __init__(self, test: unittest.TestCase) -> None:
         tmp = tempfile.TemporaryDirectory()

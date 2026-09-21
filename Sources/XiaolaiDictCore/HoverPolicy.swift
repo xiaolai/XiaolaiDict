@@ -11,6 +11,31 @@ public enum HoverModifier: String, Codable, Sendable, CaseIterable {
     case control
     case command
     case shift
+
+    /// The key's own symbol, for a label that sits beside a shortcut. `XiaolaiDictMenu` carried "⌥" as a
+    /// literal, which was right only while the modifier could not be changed — a label that names
+    /// the wrong key is worse than no label, because the reader holds it and nothing happens.
+    ///
+    /// A `switch` rather than a dictionary: a case added later fails to compile here instead of
+    /// silently returning an empty string into the menu.
+    public var symbol: String {
+        switch self {
+        case .option: "\u{2325}"
+        case .control: "\u{2303}"
+        case .command: "\u{2318}"
+        case .shift: "\u{21E7}"
+        }
+    }
+
+    /// The written name, for a picker where a lone symbol is a guessing game.
+    public var name: String {
+        switch self {
+        case .option: "Option"
+        case .control: "Control"
+        case .command: "Command"
+        case .shift: "Shift"
+        }
+    }
 }
 
 /// Why a hover did not fire. Every refusal is nameable, because "the popup did not appear" with no
@@ -82,6 +107,29 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// How long the pointer must be still. Debouncing is non-negotiable.
     public var settleMilliseconds: Int
 
+    /// The rests the reader can choose between, named.
+    ///
+    /// A named list rather than a free slider, for the reason the text-size picker is one: every
+    /// value here is a rest the hover path has been used at, and a free number lets a reader set
+    /// 20 ms and conclude XiaolaiDict is broken when it fires at every word they pass over.
+    public struct Settle: Sendable, Equatable, Identifiable, Codable {
+        public let milliseconds: Int
+        public let name: String
+        public var id: Int { milliseconds }
+
+        public init(milliseconds: Int, name: String) {
+            self.milliseconds = milliseconds
+            self.name = name
+        }
+    }
+
+    public static let settleChoices: [Settle] = [
+        Settle(milliseconds: 120, name: "Quick"),
+        Settle(milliseconds: 180, name: "Standard"),
+        Settle(milliseconds: 300, name: "Relaxed"),
+        Settle(milliseconds: 500, name: "Patient"),
+    ]
+
     /// **Safety, not taste.** The ledger stores the sentence a word was read in, so a lookup in a
     /// password manager writes a secret to disk. There the whole surface is secrets, which is what
     /// makes this a rule and not a preference — and why it is the only thing shipped excluded.
@@ -141,7 +189,7 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// Host names are case-insensitive and may carry a trailing root dot, so `EXAMPLE.COM.` and
     /// `example.com` are the same site. Compared without normalising, an exclusion the reader set
     /// is bypassed by the capitalisation of a link they clicked — which is not an exclusion.
-    static func normalisedHost(_ host: String) -> String {
+    public static func normalisedHost(_ host: String) -> String {
         var normalised = host.trimmingCharacters(in: .whitespaces).lowercased()
         while normalised.hasSuffix(".") { normalised.removeLast() }
         return normalised
@@ -164,6 +212,19 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
 /// dictionary has one, and the reader sometimes wants to read without being helped.
 public struct HoverPause: Sendable, Equatable {
     public static let durations: [Duration] = [.seconds(900), .seconds(3_600), .seconds(28_800)]
+
+    /// How long a pause lasts, said in words. The menu offers three lengths and a row reading
+    /// "900 seconds" is not an offer anyone can act on — `durations` shipped as a list with
+    /// nothing to render it, which is part of why the switch it was written for never appeared.
+    ///
+    /// Localised, because it is read by the reader; the locale is a parameter so a test can pin
+    /// one rather than assert this machine's.
+    public static func name(of duration: Duration, in locale: Locale = .current) -> String {
+        duration.formatted(
+            .units(allowed: [.hours, .minutes], width: .wide, maximumUnitCount: 1,
+                   zeroValueUnits: .hide)
+            .locale(locale))
+    }
 
     public var until: Date?
 

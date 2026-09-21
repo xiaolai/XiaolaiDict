@@ -14,10 +14,15 @@ final class WindowActions {
 
     private(set) var open: OpenWindowAction?
     private(set) var dismiss: DismissWindowAction?
+    /// Opening Settings, for the same reason: `SettingsLink` opens the window but cannot bring
+    /// XiaolaiDict forward with it, and an accessory app's window opened behind the app the reader is
+    /// using is a window they never see.
+    private(set) var settings: OpenSettingsAction?
 
-    func capture(open: OpenWindowAction, dismiss: DismissWindowAction) {
+    func capture(open: OpenWindowAction, dismiss: DismissWindowAction, settings: OpenSettingsAction) {
         self.open = open
         self.dismiss = dismiss
+        self.settings = settings
     }
 }
 
@@ -25,6 +30,7 @@ final class WindowActions {
 struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Group {
@@ -34,6 +40,9 @@ struct MenuBarLabel: View {
                 Text("XiaolaiDict")   // no image at all is still no reason to show nothing
             }
         }
-        .task { WindowActions.shared.capture(open: openWindow, dismiss: dismissWindow) }
+        .task {
+            WindowActions.shared.capture(
+                open: openWindow, dismiss: dismissWindow, settings: openSettings)
+        }
     }
 }
