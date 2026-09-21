@@ -241,7 +241,23 @@ verify_bundle() {
     service_team=$(codesign -dv "$bundle/$XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
     [ -n "$app_team" ] && [ "$app_team" = "$service_team" ] \
         || { echo "app ($app_team) and service ($service_team) are not signed by one team"; return 1; }
+    # **A release must carry a secure timestamp, and this is where that is enforced.** The
+    # up-to-date check compares input digests, and the signing mode is not an input — so without
+    # this a release could reuse a bundle signed with `--timestamp=none`, and notarisation would
+    # reject it after the upload. `Signed Time=` is the local clock; only `Timestamp=` is Apple's.
+    # Output captured, then matched, for the SIGPIPE reason given in `assemble`.
+    if is_release; then
+        local part info
+        for part in "$bundle" "$bundle/$XPC_PATH"; do
+            info=$(codesign -dvvv "$part" 2>&1)
+            grep -q '^Timestamp=' <<<"$info" || { echo "a release is signed without a secure timestamp: $part"; return 1; }
+        done
+    fi
 }
+
+# A release is a build numbered by the release counter. Everything that differs for one — the
+# timestamp, and what the verifier demands — asks this, so the two cannot disagree.
+is_release() { [ -n "${XIAOLAIDICT_BUILD_NUMBER:-}" ]; }
 
 # ---------------------------------------------------------------------------------------------
 # Assembly, in the stage.
@@ -283,10 +299,13 @@ assemble() {
 
     # Inside out: the service first, then the app that seals it. `--options runtime` because that
     # is how XiaolaiDict ships, and a hardened-runtime problem is cheaper found now than at notarisation.
-    # `--timestamp=none` because a secure timestamp needs Apple's server — required to notarise,
-    # pointless for a local build. stdout silenced, stderr kept, so a failure says why.
-    codesign --force --options runtime --timestamp=none --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
-    codesign --force --options runtime --timestamp=none --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
+    # A secure timestamp needs Apple's server: required to notarise, pointless for a local build
+    # that would then fail to sign offline. So a release gets one and a development build does
+    # not. stdout silenced, stderr kept, so a failure says why.
+    local stamp=--timestamp=none
+    ! is_release || stamp=--timestamp
+    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
+    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
 
     verify_bundle "$STAGE" || fail "the staged bundle failed verification"
     note "assembled $STAGE (build $number)"
