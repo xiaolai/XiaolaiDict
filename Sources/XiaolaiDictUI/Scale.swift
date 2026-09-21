@@ -304,6 +304,11 @@ public final class Appearance {
         didSet { if emphasis != oldValue { store.save(emphasis) } }
     }
 
+    /// How much of what is behind the history drawer shows through it.
+    public var drawerGlass: DrawerGlass {
+        didSet { if drawerGlass != oldValue { store.save(drawerGlass) } }
+    }
+
     private let store: TextSizeStore
 
     public init(store: TextSizeStore = TextSizeStore()) {
@@ -312,6 +317,7 @@ public final class Appearance {
         showsTime = store.loadShowsTime()
         showsPlaceName = store.loadShowsPlaceName()
         emphasis = store.loadEmphasis()
+        drawerGlass = store.loadDrawerGlass()
     }
 
     var scale: Scale { Scale(textSize) }
@@ -326,6 +332,7 @@ public struct TextSizeStore {
     static let showsTimeKey = "CardShowsTime"
     static let showsPlaceNameKey = "CardShowsPlaceName"
     static let emphasisKey = "WordEmphasis"
+    static let drawerGlassKey = "DrawerGlass"
 
     private let defaults: UserDefaults
 
@@ -373,6 +380,15 @@ public struct TextSizeStore {
     func save(_ emphasis: WordEmphasis) {
         defaults.set(emphasis.rawValue, forKey: Self.emphasisKey)
     }
+
+    /// Unrecognised is the default, never a failure — the same rule as the text size.
+    func loadDrawerGlass() -> DrawerGlass {
+        defaults.string(forKey: Self.drawerGlassKey).flatMap(DrawerGlass.init(rawValue:)) ?? .standard
+    }
+
+    func save(_ glass: DrawerGlass) {
+        defaults.set(glass.rawValue, forKey: Self.drawerGlassKey)
+    }
 }
 
 /// Draws a view — and everything inside it — the way the reader has asked for.
@@ -397,5 +413,6 @@ private struct ScaledContent<Content: View>: View {
         content
             .environment(\.scale, appearance.scale)
             .environment(\.cardOptions, appearance.cardOptions)
+            .environment(\.drawerGlass, appearance.drawerGlass)
     }
 }

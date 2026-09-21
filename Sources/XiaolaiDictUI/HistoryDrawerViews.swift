@@ -71,6 +71,7 @@ public struct HistoryDrawerRootView: View {
 
 struct HistoryDrawerSurface: View {
     @Environment(\.scale) private var scale
+    @Environment(\.drawerGlass) private var drawerGlass
     @Bindable var model: HistoryDrawerModel
     let geometry: DrawerGeometry
 
@@ -83,7 +84,9 @@ struct HistoryDrawerSurface: View {
         // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
         // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
         // is glass, and it brings its own edge treatment, so the hand-drawn border is gone with it.
-        .glassEffect(.regular, in: shape)
+        // Which glass is the reader's: frosted reads as a flat grey over a dark terminal, where
+        // clear lets the terminal through.
+        .glassEffect(drawerGlass.glass, in: shape)
         .shadow(color: .black.opacity(Token.Opacity.drawerShadow), radius: scale.shadow.drawerRadius)
     }
 

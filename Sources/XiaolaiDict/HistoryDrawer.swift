@@ -160,18 +160,13 @@ final class HistoryDrawerController {
     /// controller thought it had opened, and `dockedWhereAsked` compared the rect it had asked for
     /// with itself. Both passed, the end-to-end stages passed, and no drawer was ever drawn. A
     /// window the compositor does not list is not on screen, whatever anything else claims.
-    var isDrawnOnScreen: Bool {
-        let listed = (CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
-        guard let number = window?.windowNumber else { return false }
-        return listed.contains {
-            ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == Int(number)
-        }
-    }
+    var isDrawnOnScreen: Bool { Instrument.isOnScreen(window) }
     /// The panel's frame as AppKit has it, so a report can compare it with the geometry it asked for.
     /// The frame AppKit actually gave the window, **not** the rect that was asked for. Comparing
     /// the request with itself is an assertion that cannot fail, which is what this once became.
     var windowFrame: CGRect { window?.frame ?? .zero }
+    /// The level AppKit gave the drawer's window, or -1 when it is not up. For the report only.
+    var windowLevel: Int { window?.level.rawValue ?? -1 }
     /// Whether Escape is currently XiaolaiDict's. It must be claimed only while the drawer shows.
     var isEscapeClaimed: Bool { escape.isHeld }
 
