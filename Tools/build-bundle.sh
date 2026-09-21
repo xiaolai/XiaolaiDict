@@ -167,7 +167,15 @@ build_number() {
             || fail "XIAOLAIDICT_BUILD_NUMBER must be a positive integer from the release counter, not '$XIAOLAIDICT_BUILD_NUMBER'"
         # Checked against a published release build only: that is the one this machine can
         # compare. Across machines, counting up is the release counter's job.
-        if [[ "$previous" =~ ^[0-9]+$ ]] && ! version_newer "$XIAOLAIDICT_BUILD_NUMBER" "$previous"; then
+        #
+        # The same number twice is refused because it would name two different builds — **unless
+        # the inputs are the same too**, in which case it is one release being put back together.
+        # That happens whenever a published release fails verification and is rebuilt: a damaged
+        # file, a signature without its timestamp. Refusing it left a release that could be
+        # neither reused nor rebuilt under its own number. The recorded digest is what tells the
+        # two apart, and it is only consulted when the numbers are equal.
+        if [[ "$previous" =~ ^[0-9]+$ ]] && ! version_newer "$XIAOLAIDICT_BUILD_NUMBER" "$previous" \
+           && ! same_release_again "$previous"; then
             fail "XIAOLAIDICT_BUILD_NUMBER $XIAOLAIDICT_BUILD_NUMBER is not above the published release build's $previous"
         fi
         echo "$XIAOLAIDICT_BUILD_NUMBER"
@@ -184,6 +192,12 @@ build_number() {
         fi
         echo "$candidate"
     fi
+}
+
+same_release_again() {  # $1: the published build number; whether this rebuilds that very release
+    [ "$XIAOLAIDICT_BUILD_NUMBER" = "$1" ] \
+        && [ -f "$BUNDLE_DIGEST" ] \
+        && [ "$(cat "$BUNDLE_DIGEST")" = "$(bundle_inputs_digest)" ]
 }
 
 version_newer() {  # whether $1 is newer than $2: dot-separated integers, field by field, missing = 0
