@@ -214,7 +214,35 @@ select_then_read() {
 # stage that first needed it, selecting stages turned this into an unbound variable.
 helpers="$HOME/$1/e2e"
 ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
-rows() { sqlite3 -readonly "$ledger" "select count(*) from lookups" 2>/dev/null || echo 0; }
+
+newest_row_id() { sqlite3 -readonly "$ledger" "select coalesce(max(id), 0) from lookups" 2>/dev/null || echo 0; }
+# Rows for one lookup: newer than id $1, of the word $2, read in the app $3. Both halves narrow it
+# — the ledger holds other lookups of the same word from earlier runs and other stages, and the
+# deadline stage looks up this very word. Quotes in the word are doubled rather than trusted: the
+# callers pass literals this script chose, and a helper that is only safe while that stays true is
+# a trap for whoever passes something else.
+sql_text() { printf "%s" "${1//\'/\'\'}"; }
+rows_of() { sqlite3 -readonly "$ledger" "select count(*) from lookups where id > $1 and surface = '$(sql_text "$2")' and source_app = '$(sql_text "$3")'" 2>/dev/null || echo 0; }
+row_id_of() { sqlite3 -readonly "$ledger" "select coalesce(min(id), 0) from lookups where id > $1 and surface = '$(sql_text "$2")' and source_app = '$(sql_text "$3")'" 2>/dev/null || echo 0; }
+
+# **The ledger row is written after the panel closes, not before it.** `LookupRunner.run` returns
+# the row only once the sense resolver has answered, and that can be a model round trip — so a
+# count read the instant the panel goes away is reading before the write, not instead of it.
+# Measured 2026-09-21: the row landed after the assertion twice in a row, and the run that followed
+# each time found it already there — 97, then 98, then 99, one per run, every one correct, every
+# one counted a run too late. Waits for **this lookup's** row, and prints how long it waited so the
+# number stays visible rather than becoming a bound nobody reads. Fails by timing out, so a row
+# that is never written is still a failure.
+#
+# It waits for the word, not for the count and not for the newest id: either of those is satisfied
+# by *any* row landing in the meantime, and the assertion that follows would then read somebody
+# else's lookup — failing the stage for something the app got right. What is asserted afterwards is
+# this lookup's own row, and that there is exactly one of it.
+row_after() {
+    local baseline=$1 surface=$2 app=$3 waited=0
+    while [ "$(rows_of "$baseline" "$surface" "$app")" -eq 0 ] && [ "$waited" -lt 100 ]; do sleep 0.1; waited=$((waited + 1)); done
+    printf '%s' "$((waited / 10)).$((waited % 10))"
+}
 
 # **One way to run an in-bundle report**, with its budget and its cleanup — defined here, before
 # every stage, because more than one stage uses it: defined inside the first that did, a run of
@@ -364,7 +392,7 @@ fi
 if want shortcut; then
 # 6. The reader's own path: a selection, the shortcut, the panel, the ledger, and Escape.
 #    The shortcut is XiaolaiDict's default, Control-Option-D; a machine where it was changed fails here.
-before=$(rows)
+baseline=$(newest_row_id)
 open -a TextEdit "$helpers/notes.txt"; sleep 1.5
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "shortcut: could not select ($why)"
@@ -422,15 +450,17 @@ PY
         flunk "escape: while shown '$held', after '$free', panel after Escape: $closed"
     fi
 
-    after=$(rows)
-    row=$(sqlite3 -readonly -json "$ledger" "select surface, lemma, context, source_app, result, answered_by, capture_source, context_quality from lookups order by id desc limit 1" 2>&1)
-    if [ "$after" -eq $((before + 1)) ] && why=$(expect "$(printf '%s' "$row" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)[0]))')" \
+    waited=$(row_after "$baseline" meeting com.apple.TextEdit)
+    recorded=$(rows_of "$baseline" meeting com.apple.TextEdit)
+    id=$(row_id_of "$baseline" meeting com.apple.TextEdit)
+    row=$(sqlite3 -readonly -json "$ledger" "select surface, lemma, context, source_app, result, answered_by, capture_source, context_quality from lookups where id = $id" 2>&1)
+    if [ "$recorded" -eq 1 ] && why=$(expect "$(printf '%s' "$row" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)[0]))')" \
             surface=meeting lemma=meet "context=The meeting ended after we stopped meeting at noon." \
             source_app=com.apple.TextEdit result=found answered_by=dictionaryService \
             capture_source=accessibilityTextRange context_quality=complete 2>&1); then
-        pass "ledger: the lookup is recorded, with its capture quality"
+        pass "ledger: the lookup is recorded ${waited}s after the panel closed, with its capture quality"
     else
-        flunk "ledger: $before rows before, $after after; last row: ${why:-$row}"
+        flunk "ledger: $recorded row(s) for this lookup after id $baseline, ${waited}s later; row: ${why:-$row}"
     fi
 fi
 fi

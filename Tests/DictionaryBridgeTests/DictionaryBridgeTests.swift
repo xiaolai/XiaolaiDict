@@ -71,8 +71,17 @@ struct DictionaryBridgeTests {
 
     /// Within one dictionary an entry id is the row's identity; two rows sharing one would merge
     /// two meanings into a single card.
-    @Test func entryIDsAreUniqueWithinADictionary() throws {
-        let entries = try DictionaryBridge.entries(for: "fine").entries
+    ///
+    /// **The words are the measurement.** This test covered *fine* alone and passed for a year
+    /// while the rule it asserts was false: a dictionary indexes one entry under several headwords
+    /// — NOAD files *cougher* under *cough*, the Writer's Thesaurus files *-run* under *run*,
+    /// 譯典通 files 的 under three readings — and `DCSCopyRecordsForSearchString` answers with one
+    /// record for each, all carrying the same `d:entry` id. Measured 2026-09-21 over a 300-word
+    /// sweep: 14 of the 219 words that had entries, 6.4%.
+    @Test(arguments: ["fine", "run", "cougher", "pellucidly", "的", "了", "中"])
+    func entryIDsAreUniqueWithinADictionary(term: String) throws {
+        let entries = try DictionaryBridge.entries(for: term).entries
+        try #require(!entries.isEmpty, "no dictionary on this Mac has \(term)")
         let keys = entries.map { "\($0.dictionary.key)\u{1F}\($0.entryID ?? "")" }
         #expect(Set(keys).count == keys.count, "duplicate entry id: \(keys)")
     }
@@ -360,5 +369,41 @@ struct DictionaryCapabilityTests {
         // arrive and in whatever order — which a delta cannot express and timing cannot see.
         #expect(runs == 1, "the probe ran \(runs) times in this process")
         #expect(first == second)
+    }
+}
+
+/// What the collapse in `entries(for:)` is entitled to assume, checked against the framework
+/// rather than reasoned about.
+///
+/// Several records sharing one `d:entry` id are one entry reached through several index forms, so
+/// keeping one of them loses nothing. If a dictionary ever filed two *different* entries under one
+/// id, that would stop being true and the reader would silently lose a meaning — this is what
+/// would say so. The documents may differ in the `aria-label` naming the index form the search
+/// matched, and in nothing else.
+struct RepeatedRecordPremiseTests {
+    @Test(arguments: ["run", "cougher", "pellucidly", "的", "了", "中"])
+    func recordsSharingAnEntryIDAreOneEntry(term: String) throws {
+        let records = try DictionaryBridge.records(for: term).entries
+        let groups = Dictionary(grouping: records.filter { $0.entryID != nil }) {
+            "\($0.dictionary.key)\u{1F}\($0.entryID ?? "")"
+        }
+        let repeated = groups.filter { $0.value.count > 1 }
+        try #require(!repeated.isEmpty, "no dictionary on this Mac repeats an entry for \(term)")
+        for (id, copies) in repeated {
+            let first = copies[0]
+            for copy in copies.dropFirst() {
+                #expect(copy.senseCount == first.senseCount, "\(id) differs in sense count")
+                #expect(copy.senses.map(\.key) == first.senses.map(\.key), "\(id) differs in its senses")
+                #expect(withoutIndexForm(copy.html) == withoutIndexForm(first.html),
+                        "\(id): the documents differ by more than the index form that matched")
+            }
+        }
+    }
+
+    /// The one attribute two records of an entry are allowed to differ in: the headword the search
+    /// matched, which DictionaryServices writes into the document it hands back.
+    private func withoutIndexForm(_ html: String) -> String {
+        html.replacingOccurrences(
+            of: #"aria-label="[^"]*""#, with: "", options: .regularExpression)
     }
 }

@@ -146,10 +146,28 @@ public extension SenseSelecting {
 /// It only ever narrows: if the tagger did not commit, or nothing matches — a dictionary that
 /// labels its blocks in another vocabulary, or a tagger that read the word wrongly — the full set
 /// is kept. A filter that can empty the field would turn one wrong reading into a wrong answer.
+///
+/// **A label is matched by word, never by prefix and never by substring.** A dictionary qualifies
+/// the part of speech: 牛津英汉汉英 prints `plural noun`, `transitive verb`, `impersonal verb`,
+/// `adverb phrase`, and a `plural noun` sense is a noun sense. Matched by prefix, the tagger's
+/// "noun" kept 牛津's `noun` block and dropped its `plural noun` one — which is where *sanction*'s
+/// commonest reading lives ("sanctions against the regime"), and *water*'s "the waters",
+/// *content*'s "contents", *rain*'s "the rains". Measured 2026-09-21: six of twenty-six words
+/// narrowed to a subset missing senses of the very part of speech asked for. By substring it would
+/// be wrong the other way — `adverb` contains `verb` — which is the same reason the entry parser
+/// matches classes by token.
+///
+/// It stays inert where the vocabulary is not English words at all: 譯典通 labels its blocks `n.`
+/// and `vt.`, nothing matches, and the whole entry goes to the selector.
 public enum PartOfSpeechFilter {
     public static func narrow(_ candidates: [SenseCandidate], to partOfSpeech: String?) -> [SenseCandidate] {
         guard let partOfSpeech, !partOfSpeech.isEmpty else { return candidates }
-        let matching = candidates.filter { $0.partOfSpeech?.lowercased().hasPrefix(partOfSpeech) ?? false }
+        let wanted = partOfSpeech.lowercased()
+        let matching = candidates.filter { candidate in
+            candidate.partOfSpeech?.lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .contains(Substring(wanted)) ?? false
+        }
         return matching.isEmpty ? candidates : matching
     }
 }
