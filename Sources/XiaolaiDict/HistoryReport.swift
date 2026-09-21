@@ -1,6 +1,7 @@
 import AppKit
 import XiaolaiDictCore
 import XiaolaiDictUI
+import ScreenCaptureKit
 
 /// Whether the history drawer actually appears, docked where it asked to be, **without taking
 /// focus** — measured inside the running bundle rather than asserted from the source.
@@ -29,8 +30,12 @@ enum HistoryReport {
         app.toggleHistory()
         // Asks the compositor, not the controller. The controller's own answer is what once
         // reported a drawer that had never been drawn.
-        let appeared = await settle(until: appearance) { app.drawerIsDrawn && app.drawerModel.revealed }
-        await app.drawerReload?.value
+        let appeared = await Instrument.settle(until: appearance) { app.drawerIsDrawn && app.drawerModel.revealed }
+        // Bounded, like every other wait here: a ledger read that never answers would otherwise
+        // hold the whole report past any deadline the harness allows it.
+        if let reload = app.drawerReload {
+            _ = try? await withDeadline(.seconds(10)) { await reload.value }
+        }
 
         // Read while it shows, because that is the only moment they can be true.
         let drawn = app.drawerIsDrawn
@@ -38,9 +43,24 @@ enum HistoryReport {
         let claimedEscape = app.drawerHoldsEscape
         let frame = app.drawerWindowFrame
         let docked = expected.map { $0.windowRect.cg == frame } ?? false
+        // After the focus reading, so nothing this does can be mistaken for the drawer's doing.
+        // Read through the drawer's own rectangle, from the geometry it was actually placed with.
+        let backdrop: BackdropOutcome
+        if !drawn {
+            backdrop = .unmeasured(([ "the drawer was not drawn" ] + evidenceProblems).joined(separator: "; "))
+        } else if let geometry = app.drawerModel.geometry {
+            backdrop = await measureBackdrop(
+                behind: frame, through: glassRegion(window: frame, geometry: geometry),
+                carrying: evidenceProblems)
+        } else {
+            backdrop = .unmeasured("the drawer is drawn but has no geometry to read it through")
+        }
+        // What the backdrop measurement depends on: the drawer above an ordinary window. Reported
+        // so a reading can be checked against the stacking it assumed.
+        let drawerLevel = app.drawerWindowLevel
 
         app.toggleHistory()
-        let released = await settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
+        let released = await Instrument.settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
 
         let report: [String: Any] = [
             "bundle": Bundle.main.bundleIdentifier ?? "none",
