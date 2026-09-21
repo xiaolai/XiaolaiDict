@@ -25,7 +25,11 @@ REPO = TOOLS.parent
 SCRIPT = TOOLS / "make-icon.py"
 DESIGN = REPO / "Tools" / "icon"
 GOLDEN = REPO / "Resources"
-OUTPUTS = ["XiaolaiDict.icon", "MenuBarIcon.svg"]
+# Sorted, because `Workspace.listing` is sorted and every test compares the two directly.
+# Held in declaration order this matched only by luck of the name: the icon's old name sorted
+# before "MenuBarIcon.svg" and "XiaolaiDict.icon" sorts after it, so renaming the app failed 25
+# tests that were never about order at all.
+OUTPUTS = sorted(["XiaolaiDict.icon", "MenuBarIcon.svg"])
 # Outputs to publish where their content does not matter, only that they are a distinct pair.
 SYNTHETIC = {
     "XiaolaiDict.icon/icon.json": b'{"synthetic": true}\n',

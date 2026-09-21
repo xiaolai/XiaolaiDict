@@ -59,7 +59,8 @@ protocol HotkeyBackend {
 @MainActor
 final class HotkeyCenter {
     static let shared = HotkeyCenter(backend: CarbonHotkeyBackend())
-    /// "XLDT": marks XiaolaiDict's registrations among every hot key the process sees.
+    /// "XLDT": marks XiaolaiDict's registrations among every hot key the process sees. A Carbon
+    /// signature is four characters, so it is an abbreviation rather than the name.
     static let signature = OSType(0x584C_4454)
 
     private let backend: any HotkeyBackend
