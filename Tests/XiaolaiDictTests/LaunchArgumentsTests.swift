@@ -119,3 +119,63 @@ struct ReadPointArgumentTests {
         #expect(throws: (any Error).self) { try LaunchArguments.parse(arguments).get() }
     }
 }
+
+/// **Every command XiaolaiDict answers to is in the usage text, and every command in the usage text
+/// works.** Two halves of one rule, asserted mechanically rather than by remembering.
+///
+/// Written when `--settings-report` was added, because the three instruments before it went in
+/// with no coverage of this shape at all — a command wired but undocumented is one nobody can find,
+/// and a command documented but unwired sends a reader to "unknown command". Both had to be caught
+/// by reading the file, which is exactly the check a test can do every time instead.
+struct CommandCoverageTests {
+    /// The parser's own source, which is where the truth about what it accepts lives.
+    private var parserSource: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDict/LaunchArguments.swift")
+    }
+
+    /// The double-dash words in the usage text, excluding the bracketed options of a command.
+    private var documented: Set<String> {
+        Set(LaunchArguments.usage
+            .split(separator: "\n")
+            .compactMap { line in
+                line.split(separator: " ").first { $0.hasPrefix("--") }.map(String.init)
+            })
+    }
+
+    @Test func everyDocumentedCommandIsAccepted() throws {
+        let commands = documented
+        // A pattern that matched nothing would pass every assertion below on an empty set, which
+        // is the vacuous green this project has been bitten by before.
+        #expect(commands.count >= 6, "the usage text parsed as \(commands.sorted())")
+        for command in commands {
+            // Some need arguments; what must never happen is the parser not knowing the word.
+            if case .failure(let error) = LaunchArguments.parse([command]) {
+                #expect(!error.description.contains("unknown command"),
+                        "\(command) is in the usage text and the parser does not know it")
+            }
+        }
+    }
+
+    @Test func everyAcceptedCommandIsDocumented() throws {
+        let source = try String(contentsOf: parserSource, encoding: .utf8)
+        // The command switch alone. Scanning the whole file also found `--repeat` and `--interval`
+        // — options of `--lookup`, which are documented inside its own usage line and are not
+        // commands. A scanner that cannot tell those apart reports a gap that is not there.
+        let start = try #require(source.range(of: "switch arguments.first {"))
+        let end = try #require(source.range(of: "default: .success(.app)"))
+        let commandSwitch = source[start.upperBound..<end.lowerBound]
+        let cases = commandSwitch.split(separator: "\n")
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("case \"--") else { return nil }
+                return trimmed.split(separator: "\"").dropFirst().first.map(String.init)
+            }
+        #expect(cases.count >= 6, "the parser's cases read as \(cases.sorted())")
+        let documented = documented
+        for command in cases {
+            #expect(documented.contains(command), "\(command) is a command and the usage text omits it")
+        }
+    }
+}
