@@ -333,3 +333,105 @@ struct PermissionRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+// MARK: - About
+
+/// Which build of XiaolaiDict this is.
+///
+/// **Read from the bundle, never written here.** The version is declared in `Resources/Info.plist`
+/// and `Resources/DictionaryService-Info.plist`, and `build-bundle.sh` fails the build when those
+/// two disagree. A number typed into a view would be a third declaration with nothing checking it,
+/// and it would be the one the reader sees.
+public struct AppRelease: Equatable, Sendable {
+    /// `CFBundleShortVersionString` — what a release is called.
+    public let version: String
+    /// `CFBundleVersion` — which build it is. Development builds number themselves from the clock,
+    /// so this is what tells two otherwise identical-looking builds apart.
+    public let build: String
+
+    public init(version: String, build: String) {
+        self.version = version
+        self.build = build
+    }
+
+    /// From a bundle's own dictionary, or nil where it declares no version.
+    ///
+    /// Taking the dictionary rather than the `Bundle` is what makes this testable: a test cannot
+    /// fabricate a bundle, and asserting against whichever bundle happens to be running would
+    /// measure the test runner.
+    public init?(infoDictionary: [String: Any]?) {
+        guard let version = infoDictionary?["CFBundleShortVersionString"] as? String,
+              let build = infoDictionary?["CFBundleVersion"] as? String,
+              !version.isEmpty, !build.isEmpty
+        else { return nil }
+        self.init(version: version, build: build)
+    }
+
+    public init?(_ bundle: Bundle) {
+        self.init(infoDictionary: bundle.infoDictionary)
+    }
+
+    /// The build is in brackets because it is not the name of anything — two builds of 0.0.2 are
+    /// both 0.0.2, and the bracketed number is the only thing that separates them.
+    public var label: String { "Version \(version) (\(build))" }
+}
+
+/// Who made this, and which build it is.
+///
+/// A window rather than an App menu item because XiaolaiDict has no App menu: it is an accessory app, so
+/// the menu-bar extra is the whole of its menu and Settings is the only window a reader can reach
+/// from it.
+struct AboutPane: View {
+    @Environment(\.scale) private var scale
+    var release: AppRelease?
+
+    /// Built once and checked, rather than force-unwrapped at the call site. A link that is nil is
+    /// a link that is not drawn — never a crash on a settings pane.
+    private static let site = URL(string: "https://lixiaolai.com")
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: scale.space.column) {
+                    if let icon = NSImage(named: NSImage.applicationIconName) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: Token.Panel.aboutIcon, height: Token.Panel.aboutIcon)
+                            .accessibilityHidden(true)
+                    }
+                    VStack(alignment: .leading, spacing: scale.space.line) {
+                        Text("XiaolaiDict")
+                            .font(.system(size: scale.text.display, weight: .semibold))
+                        Text("A menu-bar dictionary for macOS.")
+                            .foregroundStyle(.secondary)
+                        // Nothing is invented where the bundle says nothing: a pane that printed
+                        // "unknown" would be claiming to have looked and found that answer.
+                        if let release {
+                            Text(release.label)
+                                .font(.system(size: scale.text.label))
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .padding(.vertical, scale.space.stack)
+            }
+
+            Section {
+                LabeledContent("Author") {
+                    if let site = Self.site {
+                        Link("@xiaolai", destination: site)
+                    } else {
+                        Text("@xiaolai")
+                    }
+                }
+                if let site = Self.site {
+                    LabeledContent("Website") {
+                        Link(site.host() ?? site.absoluteString, destination: site)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}

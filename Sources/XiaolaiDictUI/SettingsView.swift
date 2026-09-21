@@ -75,6 +75,12 @@ public struct SettingsView: View {
             Tab("Permissions", systemImage: "lock.shield") {
                 PermissionsPane(model: model)
             }
+            Tab("About", systemImage: "info.circle") {
+                // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is
+                // not, which is why `AppRelease` is nil-able rather than invented: a pane that
+                // printed a version it could not read would be worse than one that prints none.
+                AboutPane(release: AppRelease(Bundle.main))
+            }
         }
         .frame(minWidth: Token.Panel.settingsMinWidth, minHeight: Token.Panel.settingsMinHeight)
         // macOS posts nothing when a permission changes, and the reader grants them in another app
@@ -124,5 +130,16 @@ public struct SettingsView: View {
 /// switching costs them their study state.
 #Preview("Dictionary, still asking") {
     SettingsView(dictionary: DictionaryChoice(available: nil, chosen: nil, choose: { _ in }))
+}
+
+/// About, with a release handed in rather than read: `Bundle.main` in a preview is Xcode's own
+/// agent, so the canvas would otherwise show Xcode's version number.
+#Preview("About") {
+    AboutPane(release: AppRelease(version: "0.0.2", build: "2026.921.101500"))
+}
+
+/// And the same pane where the bundle declares nothing — the line is absent, not "unknown".
+#Preview("About, no version") {
+    AboutPane(release: nil)
 }
 #endif
