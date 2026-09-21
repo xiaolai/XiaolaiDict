@@ -6,6 +6,7 @@ import Testing
 
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// What a card shows, and how it marks the word.
 struct CardOptionsTests {
@@ -30,7 +31,7 @@ struct CardOptionsTests {
     }
 
     private func scratchDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "xiaolaidict-tests-\(UUID().uuidString)")!
+        TemporaryDefaults.suite()
     }
 
     @Test func bothChoicesSurviveTheNextLaunch() {

@@ -2,6 +2,7 @@ import Carbon.HIToolbox
 import Foundation
 import XiaolaiDictCore
 import Testing
+import XiaolaiDictTestSupport
 
 /// The shortcut as data: what can be saved, loaded and labelled without trapping.
 struct ShortcutTests {
@@ -16,7 +17,7 @@ struct ShortcutTests {
     }
 
     @Test func aCorruptSavedKeyCodeFallsBackToTheDefault() throws {
-        let defaults = try #require(UserDefaults(suiteName: "com.xiaolaidict.core.tests.\(UUID().uuidString)"))
+        let defaults = TemporaryDefaults.suite()
         let corrupt = try JSONEncoder().encode(Shortcut(keyCode: 70_000, modifiers: UInt32(cmdKey)))
         defaults.set(corrupt, forKey: ShortcutStore.key)
         #expect(ShortcutStore(defaults: defaults).load() == .defaultLookUp)

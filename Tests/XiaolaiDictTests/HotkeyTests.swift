@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import XiaolaiDictCore
 @testable import XiaolaiDict
 import Testing
+import XiaolaiDictTestSupport
 
 /// Hot keys are routed by the ID each press carries, registered exclusively, and cleaned up with
 /// their status checked. Carbon is faked: registering real global shortcuts from a test would take
@@ -114,7 +115,7 @@ struct ShortcutTests {
     }
 
     @Test func aChosenShortcutIsKept() throws {
-        let defaults = try #require(UserDefaults(suiteName: "com.xiaolaidict.tests.\(UUID().uuidString)"))
+        let defaults = TemporaryDefaults.suite()
         let store = ShortcutStore(defaults: defaults)
         #expect(store.load() == .defaultLookUp)
         let chosen = Shortcut(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(cmdKey | optionKey))
@@ -124,7 +125,7 @@ struct ShortcutTests {
 
     /// An unusable saved shortcut — edited by hand, or from a bug — is not registered.
     @Test func anUnusableSavedShortcutFallsBackToTheDefault() throws {
-        let defaults = try #require(UserDefaults(suiteName: "com.xiaolaidict.tests.\(UUID().uuidString)"))
+        let defaults = TemporaryDefaults.suite()
         let store = ShortcutStore(defaults: defaults)
         try store.save(Shortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: 0))
         #expect(store.load() == .defaultLookUp)

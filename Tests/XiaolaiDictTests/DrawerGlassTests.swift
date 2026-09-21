@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// How much of what is behind the history drawer comes through it — the reader's choice.
 ///
@@ -13,7 +14,7 @@ import Testing
 @MainActor
 struct DrawerGlassTests {
     private func scratch() -> UserDefaults {
-        UserDefaults(suiteName: "xiaolaidict.glass.test.\(UUID().uuidString)")!
+        TemporaryDefaults.suite()
     }
 
     /// The drawer as it shipped, for everyone who has not chosen.

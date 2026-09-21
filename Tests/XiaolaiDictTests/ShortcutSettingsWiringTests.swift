@@ -5,6 +5,7 @@ import XiaolaiDictUI
 import Testing
 
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **The shortcut is a setting, and these test the wire rather than the model.**
 ///
@@ -21,7 +22,7 @@ import Testing
 
     private func app(_ backend: FakeBackend, defaults: UserDefaults? = nil) -> XiaolaiDictApp {
         XiaolaiDictApp(
-            defaults: defaults ?? UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!,
+            defaults: defaults ?? TemporaryDefaults.suite(),
             hotkeys: HotkeyCenter(backend: backend))
     }
 
@@ -63,7 +64,7 @@ import Testing
 
     /// What the reader chose is there next launch.
     @Test func theChosenShortcutSurvivesALaunch() {
-        let suite = UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!
+        let suite = TemporaryDefaults.suite()
         #expect(app(FakeBackend(), defaults: suite).chooseShortcut(Self.other) == nil)
         #expect(app(FakeBackend(), defaults: suite).currentShortcut == Self.other)
     }
@@ -73,7 +74,7 @@ import Testing
     /// existed precisely so a test could be given a suite of its own — so every test that touched
     /// the shortcut changed the machine it ran on.
     @Test func theShortcutIsSavedInTheSuiteTheAppWasGiven() {
-        let suite = UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!
+        let suite = TemporaryDefaults.suite()
         #expect(app(FakeBackend(), defaults: suite).chooseShortcut(Self.other) == nil)
         #expect(ShortcutStore(defaults: suite).load() == Self.other)
     }
@@ -82,7 +83,7 @@ import Testing
     /// registered, and still the one on disk. Refusing *and* leaving them with nothing would be
     /// the worse half of the same failure.
     @Test func aRefusedShortcutLeavesTheOldOneWorking() {
-        let suite = UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!
+        let suite = TemporaryDefaults.suite()
         let backend = FakeBackend()
         let app = app(backend, defaults: suite)
         #expect(app.chooseShortcut(.defaultLookUp) == nil)

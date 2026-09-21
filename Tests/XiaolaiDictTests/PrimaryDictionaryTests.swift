@@ -2,6 +2,7 @@ import Foundation
 @testable import XiaolaiDict
 import XiaolaiDictCore
 import Testing
+import XiaolaiDictTestSupport
 
 /// Decision D7: the reader studies from one dictionary, and the others are there to consult.
 struct PrimaryDictionaryTests {
@@ -107,8 +108,7 @@ struct PrimaryDictionaryTests {
     }
 
     @Test func theChoiceSurvivesALaunch() {
-        let defaults = try! #require(UserDefaults(suiteName: "xiaolaidict-primary-\(UUID().uuidString)"))
-        defer { defaults.removePersistentDomain(forName: defaults.dictionaryRepresentation().description) }
+        let defaults = TemporaryDefaults.suite()
         let store = PrimaryDictionaryStore(defaults: defaults)
         #expect(store.load().chosen == nil)
         store.save("com.apple.dictionary.NOAD")

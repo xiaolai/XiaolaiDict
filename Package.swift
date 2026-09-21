@@ -25,8 +25,11 @@ let package = Package(
         .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictCore"]),
         .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictCore", "XiaolaiDictUI"]),
 
-        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictCore"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDict", "XiaolaiDictUI"]),
+        // What the test targets share, and nothing ships: a defaults suite a test can make and
+        // forget, because it is removed — file and all — when the test process ends.
+        .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),
+        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictCore", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         .testTarget(name: "DictionaryBridgeTests", dependencies: ["DictionaryBridge"]),
     ]

@@ -1,6 +1,7 @@
 import Foundation
 import XiaolaiDictCore
 import Testing
+import XiaolaiDictTestSupport
 
 /// The hover policy, kept across launches.
 ///
@@ -12,8 +13,7 @@ import Testing
 struct HoverPolicyStoreTests {
     private func store() -> (HoverPolicyStore, UserDefaults) {
         // A suite of its own, so a test can never read or write the reader's real preferences.
-        let name = "xiaolaidict.hover.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
+        let defaults = TemporaryDefaults.suite()
         return (HoverPolicyStore(defaults: defaults), defaults)
     }
 

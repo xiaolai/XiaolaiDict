@@ -6,6 +6,7 @@ import Testing
 
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// The reader's text size, the scale it produces, and — the part that is easy to get wrong — that
 /// the views actually read it.
@@ -69,7 +70,7 @@ struct TextSizeTests {
     // MARK: - Remembering it
 
     private func scratchDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "xiaolaidict-tests-\(UUID().uuidString)")!
+        TemporaryDefaults.suite()
     }
 
     @Test func aReaderWhoHasNeverChosenGetsTheDefault() {

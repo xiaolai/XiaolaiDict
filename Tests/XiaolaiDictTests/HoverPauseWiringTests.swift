@@ -3,6 +3,7 @@ import XiaolaiDictCore
 import Testing
 
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **The pause reaches the gate from the menu it is offered in.**
 ///
@@ -17,7 +18,7 @@ import Testing
 @MainActor struct HoverPauseWiringTests {
     /// Its own preferences suite, so no test can read or write the reader's real settings.
     private func app() -> XiaolaiDictApp {
-        XiaolaiDictApp(defaults: UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!)
+        XiaolaiDictApp(defaults: TemporaryDefaults.suite())
     }
 
     /// A reader who pauses XiaolaiDict from the menu is not looked up for, through the app's own watcher
@@ -83,7 +84,7 @@ import Testing
 
     /// What the reader chooses is still there next launch, through the app rather than the store.
     @Test func theChosenPolicySurvivesALaunch() {
-        let suite = UserDefaults(suiteName: "xiaolaidict.app.test.\(UUID().uuidString)")!
+        let suite = TemporaryDefaults.suite()
         var chosen = HoverPolicy.shipped
         chosen.modifier = .command
         XiaolaiDictApp(defaults: suite).setHoverPolicy(chosen)
