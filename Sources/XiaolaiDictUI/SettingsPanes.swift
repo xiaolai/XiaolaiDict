@@ -77,6 +77,24 @@ struct ReadingPane: View {
             } header: {
                 Text("On a card")
             }
+
+            // Which glass is right depends on what is usually behind the drawer, and only the
+            // reader knows that. Frosted over a black terminal is flat grey — working glass that
+            // looks broken — which is why this is a choice rather than a constant.
+            Section {
+                Picker("Glass", selection: $appearance.drawerGlass) {
+                    ForEach(DrawerGlass.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Reading history drawer")
+            } footer: {
+                Text("Frosted keeps cards and headings easy to read over any window. Clear shows "
+                     + "more of what is behind the drawer — over a dark terminal it stays dark "
+                     + "instead of turning grey.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
 
         private var specimen: AttributedString {
