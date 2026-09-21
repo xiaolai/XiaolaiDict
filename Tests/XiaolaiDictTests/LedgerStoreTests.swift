@@ -34,4 +34,20 @@ struct LedgerStoreTests {
     @Test func anUnopenableLedgerIsAnError() {
         #expect(throws: LedgerError.self) { try LedgerStore(path: "/nonexistent-directory/ledger.sqlite") }
     }
+
+    /// A first-ever launch gets a working ledger, **at the path every earlier launch used**.
+    /// Literals, not `LedgerStore.directoryName`: the point is that the location cannot change
+    /// without this failing, because a moved ledger is one the reader's history is not in.
+    @Test func openDefaultCreatesTheLedgerWhereTheReadersHistoryLives() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-open-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = try await LedgerStore.openDefault(applicationSupport: root)
+
+        #expect(try await store.recentLookups(since: Date(timeIntervalSince1970: 1_800_000_000), limit: 10).isEmpty)
+        let ledger = root.appendingPathComponent("XiaolaiDict/ledger.sqlite").path
+        #expect(FileManager.default.fileExists(atPath: ledger), "the ledger is not where the reader's history is")
+    }
 }

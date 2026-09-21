@@ -11,28 +11,23 @@ actor LedgerStore {
         ledger = try Ledger(path: path)
     }
 
+    /// The support directory the ledger lives in, and the file inside it. **Changing either
+    /// orphans every reader's history**: the app would open an empty ledger beside the full one,
+    /// and an empty ledger is indistinguishable from a working one. `LedgerStoreTests` pins both
+    /// as literals so a rename cannot move them quietly.
+    static let directoryName = "XiaolaiDict"
+    static let fileName = "ledger.sqlite"
+
     /// `~/Library/Application Support/XiaolaiDict/ledger.sqlite`, created on first use, opened on a
-    /// background task whoever calls it.
-    ///
-    /// **Migrates before it creates.** The app kept this directory under its old name, so the
-    /// first launch after the rename would otherwise create an empty ledger beside a full one and
-    /// show the reader a history that had simply vanished. The order matters: creating the
-    /// directory first would make the move refuse, every time, for the rest of the app's life.
-    ///
-    /// `applicationSupport` is a parameter so that order can be tested against a temporary
-    /// directory instead of the reader's own.
+    /// background task whoever calls it. `applicationSupport` is a parameter so it can be opened
+    /// against a temporary directory instead of the reader's own.
     static func openDefault(applicationSupport: URL? = nil) async throws -> LedgerStore {
         try await Task.detached(priority: .utility) {
             let root = try applicationSupport ?? FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let directory = root.appendingPathComponent(
-                StateMigration.directoryName, isDirectory: true)
-            try StateMigration.migrateLedgerDirectory(
-                from: root.appendingPathComponent(StateMigration.legacyDirectoryName, isDirectory: true),
-                to: directory)
+            let directory = root.appendingPathComponent(directoryName, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            return try LedgerStore(
-                path: directory.appendingPathComponent(StateMigration.ledgerFileName).path)
+            return try LedgerStore(path: directory.appendingPathComponent(fileName).path)
         }.value
     }
 

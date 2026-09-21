@@ -42,35 +42,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// for every parameter. Declaring `init(defaults:)` alone therefore suppressed the inherited
     /// `init()` and every launch died with "Use of unimplemented initializer", while the unit
     /// suite stayed green because tests call the initializer Swift can see.
-    ///
-    /// This is also where the reader's settings are carried across from the old bundle
-    /// identifier, because this is the only initialiser that knows the destination is the real
-    /// one. `init(defaults:migratingFrom:)` takes the source as a parameter and defaults it to
-    /// nothing, so a test is never handed the reader's own values — which also means **this one
-    /// line is the whole wire**, and the suite cannot see it. It is deliberately a single call
-    /// with named constants for that reason.
     override convenience init() {
-        self.init(defaults: .standard, migratingFrom: StateMigration.legacyDefaultsDomain)
+        self.init(defaults: .standard)
     }
 
     /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
     /// anything about the reader's settings means writing to the real ones — a test suite that
     /// changes the machine it runs on, which is the same objection the project makes to driving
     /// the GUI on the building Mac.
-    /// `migratingFrom` names a defaults domain to carry values out of before anything reads them,
-    /// or nil for none. **Nil by default on purpose**: the shipped legacy domain exists on this
-    /// developer's Mac, so a default of `com.xiaolaidict` would pour the reader's real shortcut
-    /// into every throwaway suite the tests create, and those tests assert on defaults.
-    init(
-        defaults: UserDefaults, hotkeys: HotkeyCenter = .shared,
-        migratingFrom legacyDomain: String? = nil, into currentDomain: String = XiaolaiDictIdentity.app
-    ) {
-        // Before the stores below, never after: they read at construction, and a value migrated
-        // afterwards would not be seen until the next launch. `currentDomain` is named rather than
-        // asked of `defaults`, which cannot report which domain it is.
-        if let legacyDomain {
-            StateMigration.migrateDefaults(from: legacyDomain, to: currentDomain)
-        }
+    init(defaults: UserDefaults, hotkeys: HotkeyCenter = .shared) {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
