@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// How large the reader has asked XiaolaiDict's text to be.
@@ -106,6 +107,17 @@ struct Scale: Equatable, Sendable {
         /// Extra air between the wrapped lines of a sentence. SwiftUI's default leading is set for
         /// dense chrome; this is prose the reader is trying to recall from.
         let leading: CGFloat
+
+        /// The tallest a passage in `body` may be and still be `lines` lines: one point short of
+        /// the height of one line more. So a candidate that is `lines` lines fits and one that is
+        /// `lines + 1` does not, with most of a line to spare against rounding either way. From
+        /// the system font's own metrics — ascender, descender and leading — which is what `Text`
+        /// sets a line with.
+        func height(ofLines lines: Int) -> CGFloat {
+            let font = NSFont.systemFont(ofSize: body)
+            let line = font.ascender - font.descender + font.leading
+            return line * CGFloat(lines + 1) + leading * CGFloat(lines) - 1
+        }
 
         init(em: CGFloat) {
             display = em * 1.36

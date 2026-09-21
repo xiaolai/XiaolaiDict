@@ -559,12 +559,15 @@ struct ReadingCardView: View {
         .help(Text("Open in Dictionary"))
     }
 
+    /// The sentence, whole when it fits the card's lines and cut to a window around the word when
+    /// it does not — the first that fits, chosen at the card's width. Where a window cut the start
+    /// off, the whole sentence is one hover away: it is still the reader's own, and never a gloss.
     private var sentenceLine: some View {
-        Text(sentence)
-            .font(.system(size: scale.text.body))
+        SentenceWindowText(
+            windows: SentenceExcerpt.windows(sentence: entry.sentence, marks: entry.markedRanges),
+            fullSentence: entry.sentence,
+            style: sentence(in:))
             .foregroundStyle(.secondary)
-            .lineSpacing(scale.text.leading)
-            .lineLimit(Token.Limit.wrapLines)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -629,13 +632,18 @@ struct ReadingCardView: View {
     /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
     /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
     /// an ellipsis saying so rather than an ending the reader never read.
-    private var sentence: AttributedString {
+    private func sentence(in window: SentenceExcerpt) -> AttributedString {
         // `markedRanges`, never `sentenceRange`: the captured range covers the surface as it was
         // found, so emphasising it drew **temper**ed — the word broken in half — and a phrasal
         // verb read as "took it over" needs two marks rather than one span over the pronoun.
         // How a marked word *looks* is `MarkedSentence`'s, shared with the lookup card.
+        //
+        // **A window that contains the word, never the sentence's opening.** The line limit cuts
+        // from the end, so a long sentence with its word late showed two lines of the reader's
+        // text without the word they looked up. `SentenceWindowText` shows the tightest window it
+        // needs to, and no tighter.
         var text = MarkedSentence.text(
-            entry.sentence, marking: entry.markedRanges, size: scale.text.body,
+            window.text, marking: window.marks, size: scale.text.body,
             emphasis: options.emphasis,
             accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary)
         if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }
