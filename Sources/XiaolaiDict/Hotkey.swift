@@ -10,7 +10,8 @@ final class Hotkey {
         enum Reason: Equatable {
             /// XiaolaiDict itself already holds this combination.
             case heldByXiaolaiDict
-            /// XiaolaiDict once held it and Carbon would not release it; it is free again once XiaolaiDict quits.
+            /// XiaolaiDict once held it and Carbon would not release it; it is free again
+            /// once the app quits.
             case unreleasedByXiaolaiDict
             case status(OSStatus)
         }
@@ -22,7 +23,7 @@ final class Hotkey {
         var description: String {
             switch reason {
             case .heldByXiaolaiDict: "XiaolaiDict already uses this shortcut for something else"
-            case .unreleasedByXiaolaiDict: "XiaolaiDict could not release this shortcut earlier; quit and reopen XiaolaiDict to free it"
+            case .unreleasedByXiaolaiDict: "XiaolaiDict could not release this shortcut earlier; quit and reopen the app to free it"
             case .status(let status) where status == eventHotKeyExistsErr: "another app has claimed this shortcut"
             case .status(let status): "the shortcut could not be registered (OSStatus \(status))"
             }

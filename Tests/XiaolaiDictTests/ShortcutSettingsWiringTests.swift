@@ -97,10 +97,10 @@ import Testing
     }
 
     /// **A refusal says why.** The field said "is already taken" for every refusal, while the hot-key
-    /// layer tells four apart — another app holds it, XiaolaiDict holds it for something else, XiaolaiDict could
-    /// not release it earlier, or Carbon answered with a status. Only the first is "taken", and a
-    /// reader told so about the others would try combination after combination against a cause
-    /// no combination fixes.
+    /// layer tells four apart — another app holds it, XiaolaiDict holds it for something else,
+    /// it could not release the shortcut earlier, or Carbon answered with a status. Only the
+    /// first is "taken", and a reader told so about the others would try combination after
+    /// combination against a cause no combination fixes.
     @Test func aRefusalSaysWhy() {
         let backend = FakeBackend()
         let app = app(backend)

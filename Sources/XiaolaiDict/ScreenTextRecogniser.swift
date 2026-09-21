@@ -41,7 +41,7 @@ enum RecognitionError: LocalizedError {
         case .excludedApp(let name): "XiaolaiDict does not look things up in \(name)"
         case .unattributable: "no window under the pointer"
         case .screenRecordingDenied:
-            "XiaolaiDict needs Screen Recording to read words off the screen. Allow XiaolaiDict in "
+            "XiaolaiDict needs Screen Recording to read words off the screen. Allow it in "
                 + "\(PrivacySettings.screenRecordingLocation), then try again."
         }
     }

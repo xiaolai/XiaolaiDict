@@ -355,7 +355,7 @@ enum SelectionReader {
         case .deadlineExceeded:
             "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so XiaolaiDict stopped."
         case .accessibilityDisabled:
-            "Accessibility access for XiaolaiDict is off. Allow XiaolaiDict in \(PrivacySettings.accessibilityLocation)."
+            "Accessibility access for XiaolaiDict is off. Allow it in \(PrivacySettings.accessibilityLocation)."
         case .appUnavailable: "\(app) quit, or stopped answering Accessibility requests."
         case .accessibilityRefused: "\(app) refused Accessibility requests — is the screen locked?"
         case .cancelled: "A newer lookup replaced this one."

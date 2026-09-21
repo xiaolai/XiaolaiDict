@@ -486,8 +486,8 @@ private struct EntryView: NSViewRepresentable {
 
         private let onFailure: (String) -> Void
         private var requested: String?
-        /// Set while XiaolaiDict's own load of the document is on its way, so that load — and only it — is
-        /// let through the navigation policy.
+        /// Set while XiaolaiDict's own load of the document is on its way, so that load —
+        /// and only it — is let through the navigation policy.
         private var expectingLoad = false
         private var rulesInstalled = false
         /// Pending until WebKit reports the document finished; fails the pane if it never does.

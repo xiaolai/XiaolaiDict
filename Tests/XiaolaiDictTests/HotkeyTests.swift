@@ -66,8 +66,8 @@ struct HotkeyTests {
         withExtendedLifetime(held) {}
     }
 
-    /// Found by the verifier: after a failed release, XiaolaiDict forgot the shortcut while Carbon kept it —
-    /// and registering it again blamed another app. XiaolaiDict now says it is its own.
+    /// Found by the verifier: after a failed release, XiaolaiDict forgot the shortcut while
+    /// Carbon kept it — and registering it again blamed another app. It now says it is its own.
     @Test func aShortcutCarbonWouldNotReleaseIsStillXiaolaiDicts() throws {
         let backend = FakeBackend()
         backend.unregisterStatus = OSStatus(eventHotKeyInvalidErr)

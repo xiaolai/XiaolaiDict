@@ -24,8 +24,8 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     }
 
     /// What stops working without it. A request that does not say what it buys is one a reader is
-    /// right to refuse, so this is stated in terms of what XiaolaiDict can no longer do — never "XiaolaiDict
-    /// requires this permission".
+    /// right to refuse, so this is stated in terms of what XiaolaiDict can no longer do —
+    /// never "XiaolaiDict requires this permission".
     public var blocks: String {
         switch self {
         case .accessibility:
