@@ -178,27 +178,7 @@ struct HiddenGlossTests {
     }
 
     private func height(gloss: String?) throws -> Int {
-        let renderer = ImageRenderer(content:
-            card(gloss: gloss)
-                .frame(width: 360, height: 320, alignment: .top)
-                .background(Color(white: 0.90))
-                .environment(\.colorScheme, ColorScheme.light))
-        renderer.scale = 2
-        let image = try #require(renderer.cgImage)
-        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
-        let context = try #require(CGContext(
-            data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
-            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        var rows = 0
-        for y in 0..<image.height {
-            for x in 0..<image.width where Int(pixels[(y * image.width + x) * 4]) > 250 {
-                rows += 1
-                break
-            }
-        }
-        return rows
+        try cardRows(card(gloss: gloss))
     }
 
     /// A gloss long enough to add several lines, against one short enough to add one. If either
@@ -213,6 +193,81 @@ struct HiddenGlossTests {
     /// reserved for it either, which would be the answer leaking as a layout hint.
     @Test func acardWithNothingToRevealIsNotShorter() throws {
         #expect(try height(gloss: nil) == (try height(gloss: "a force")))
+    }
+}
+
+/// How many pixel rows a card occupies, measured rather than asked for.
+///
+/// Shared, because two different rules are checked by comparing one card's height against
+/// another's: that a gloss is not drawn unasked, and that the provenance does not take a row of
+/// its own. A card is drawn on a grey field and its own near-white fill is what gets counted.
+@MainActor
+func cardRows(_ card: some View) throws -> Int {
+    let renderer = ImageRenderer(content:
+        card
+            .frame(width: 360, height: 320, alignment: .top)
+            .background(Color(white: 0.90))
+            .environment(\.colorScheme, ColorScheme.light))
+    renderer.scale = 2
+    let image = try #require(renderer.cgImage)
+    var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    let context = try #require(CGContext(
+        data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
+        bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    var rows = 0
+    for y in 0..<image.height {
+        for x in 0..<image.width where Int(pixels[(y * image.width + x) * 4]) > 250 {
+            rows += 1
+            break
+        }
+    }
+    return rows
+}
+
+/// That saying where a word was read costs the card no height.
+///
+/// The provenance — the source app's icon, and the place and time when the reader asks for them —
+/// used to be a row of its own at the bottom of the card. With the name and the time both off,
+/// which is the default, that row held one 11 pt icon under a full-width card and the bottom of
+/// every card was empty. It now rides the last line of the reader's own sentence.
+///
+/// **Checked by height, because that is the thing that regresses.** Moving it back into its own
+/// row would not break a single assertion about what the card contains; it would just quietly make
+/// every card taller again.
+@MainActor
+struct ProvenanceRowTests {
+    private func card(bundleID: String?, options: CardOptions = CardOptions()) -> some View {
+        let sentence = "Justice tempered with mercy."
+        return ReadingCardView(entry: ReadingEntry(
+            id: 1, lemma: "temper", surface: "temper", sentence: sentence,
+            sentenceRange: (sentence as NSString).range(of: "temper"),
+            place: ReadingPlace(bundleID: bundleID, name: "Safari"), at: .distantPast,
+            result: .found,
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            partOfSpeech: "verb",
+            sense: SenseNote(
+                dictionary: "NOAD", ordinal: 4, outOf: 12, gloss: nil, chosenBy: .reader)))
+        .environment(\.cardOptions, options)
+    }
+
+    /// An icon and no icon come to the same height: the icon is sitting on a line that already
+    /// existed rather than adding one.
+    @Test func showingWhereAWordWasReadAddsNoRow() throws {
+        let withIcon = try cardRows(card(bundleID: "com.apple.Safari"))
+        let without = try cardRows(card(bundleID: nil))
+        #expect(withIcon == without,
+                "provenance is taking a row of its own again: \(withIcon) vs \(without) rows")
+    }
+
+    /// And so do the place and the time the reader can switch on — they join the same line.
+    @Test func theNameAndTimeJoinThatLineToo() throws {
+        let bare = try cardRows(card(bundleID: "com.apple.Safari"))
+        let verbose = try cardRows(card(
+            bundleID: "com.apple.Safari",
+            options: CardOptions(showsTime: true, showsPlaceName: true)))
+        #expect(bare == verbose, "the name and time added a row: \(bare) vs \(verbose) rows")
     }
 }
 

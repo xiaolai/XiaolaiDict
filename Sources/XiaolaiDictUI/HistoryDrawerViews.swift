@@ -388,7 +388,22 @@ struct ReadingCardView: View {
             // its real height and the fan does not jump when the pile opens.
             .opacity(layer.showsContent ? 1 : 0)
             .padding(scale.space.pad)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // **A buried card takes the height the layout gives it.** `CardPile` places every
+            // plate at the front card's height so the slivers peeking below line up evenly — but
+            // a proposed height is only a proposal, and this view had no height constraint, so
+            // each plate sized itself to its own content and poked out by however tall its own
+            // word happened to make it. Measured in the closed pile: the first plate peeked 2.5 pt
+            // and the second 7.5 pt, against a design that says both are `peek`. The arithmetic
+            // was right the whole time and `CardPileTests` passed the whole time; nothing checked
+            // that the view honoured it.
+            //
+            // Only when buried. A front card is proposed its own height and must never stretch to
+            // fill whatever frame it happens to be put in — a preview or a test hands it a tall
+            // one, and a card that grew to fill it would be measuring the container.
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: layer == .buried ? .infinity : nil,
+                alignment: .topLeading)
             // Opaque, and deliberately not another material: the drawer around it is already
             // glass, and layering glass inside glass muddies both.
             .background(shape.fill(CardSurface.fill(
@@ -418,10 +433,28 @@ struct ReadingCardView: View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             VStack(alignment: .leading, spacing: scale.space.inline) {
                 headline
-                if entry.cue != .none { sentenceLine }
+                // **The provenance rides the sentence's last line.** On a row of its own it was a
+                // single 11 pt icon alone under a full-width card, and the card read as one that
+                // had forgotten to finish. `lastTextBaseline` is what makes it land in the bottom
+                // corner of the text rather than beside its first line — with a sentence that
+                // wraps, aligning to the first line would leave the gap exactly where it was.
+                if entry.cue != .none {
+                    HStack(alignment: .lastTextBaseline, spacing: scale.space.inline) {
+                        sentenceLine
+                        Spacer(minLength: scale.space.inline)
+                        footnote
+                    }
+                }
                 if revealed, let gloss = entry.sense?.gloss { meaning(gloss) }
             }
-            footnote
+            // No sentence to ride — a lookup with no context still has to say where it came from,
+            // so there it keeps a row of its own.
+            if entry.cue == .none {
+                HStack(spacing: scale.space.inline) {
+                    Spacer(minLength: 0)
+                    footnote
+                }
+            }
         }
     }
 
@@ -552,11 +585,12 @@ struct ReadingCardView: View {
             .transition(.opacity)
     }
 
-    /// Where it was read, and — only if the reader asked for it — when. Parked at the trailing
-    /// edge because it is provenance: true, and never the thing being reviewed.
+    /// Where it was read, and — only if the reader asked for it — when. It is provenance: true,
+    /// and never the thing being reviewed, so it sits at the trailing edge of whatever row it is
+    /// given. **The caller places it**, because where that is depends on whether there is a
+    /// sentence for it to ride.
     private var footnote: some View {
         HStack(spacing: scale.space.inline) {
-            Spacer(minLength: 0)
             if let icon = AppIcons.icon(for: entry.place.bundleID) {
                 Image(nsImage: icon)
                     .resizable()

@@ -213,4 +213,58 @@ struct PileRenderTests {
         }
         return counts.max { $0.value < $1.value }?.key ?? 0
     }
+
+    /// Grey values down one column, 0...255, in the image's own pixels.
+    private func column(_ image: CGImage, x: Int) throws -> [Int] {
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try #require(CGContext(
+            data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return (0..<image.height).map { Int(pixels[($0 * image.width + x) * 4]) }
+    }
+
+    /// **Every plate peeks by the same amount — which the arithmetic could not guarantee on its
+    /// own.**
+    ///
+    /// `CardPile` places each buried plate at the *front* card's height precisely so the slivers
+    /// below line up evenly, and `CardPileTests` has always confirmed that it does. But a proposed
+    /// height is only a proposal: `ReadingCardView` carried no height constraint, so each plate
+    /// drew at its own content's height and peeked by however tall its own word happened to make
+    /// it. Measured in the closed pile with a front card one line taller than the two behind it:
+    /// the first plate peeked 2.5 pt and the second 7.5 pt, three times the difference, while
+    /// every unit test passed.
+    ///
+    /// The front card is deliberately given a sentence that wraps and the buried ones sentences
+    /// that do not. With three equal-height cards the defect cannot appear at all, which is why it
+    /// survived the pile's other render tests.
+    ///
+    /// Read in a column inside the card's own padding, where no text can fall: each card's bottom
+    /// border is a drop in brightness, and the gaps between those drops are the peeks.
+    @Test func everyPlatePeeksByTheSameAmount() throws {
+        let wrapping = entry(
+            "temper", "Justice tempered with mercy, and tempered again by a much longer "
+                + "sentence that is certain to wrap onto a second line.", id: 1)
+        let stacked = ReadingDay(
+            id: "2026-09-19", date: .distantPast, label: .yesterday,
+            entries: [wrapping, entry("rein", "A tight rein.", id: 2),
+                      entry("table", "They tabled it.", id: 3)])
+        let image = try render(
+            DayPileView(day: stacked, expanded: .constant(false)).padding(12),
+            height: 260, scheme: .light)
+
+        // Down the middle, not near an edge: a column close to the deepest plate's side lands on
+        // its rounded corner, where a bottom edge is a curve rather than a row and the gaps read
+        // 15 px then 13 px on a pile that is actually even.
+        let tones = try column(image, x: image.width / 2)
+        let drops = (1..<tones.count).filter { tones[$0 - 1] - tones[$0] >= 12 }
+        // The front card's bottom edge, then each plate's.
+        #expect(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
+        let bottoms = Array(drops.suffix(3))
+        let first = bottoms[1] - bottoms[0]
+        let second = bottoms[2] - bottoms[1]
+        #expect(abs(first - second) <= 1,
+                "the plates peek unevenly: \(first) px then \(second) px")
+    }
 }

@@ -189,7 +189,12 @@ struct Scale: Equatable, Sendable {
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
             peek = em * 0.625
-            sideInset = em * 0.80
+            // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
+            // side step was larger than the vertical one, so the second plate gave up 19.2 pt of
+            // width per side while gaining 15 pt of visible height — which reads as three cards of
+            // three different sizes rather than as one card with two behind it. Depth is announced
+            // by the peek; the inset only has to hint that the edges are not the same edge.
+            sideInset = em * 0.40
         }
     }
 
