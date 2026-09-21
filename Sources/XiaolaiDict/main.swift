@@ -54,6 +54,11 @@ case .success(.historyReport):
     HistoryReport.isWanted = true
     XiaolaiDictScene.main()
 
+// Shows a window too, so the same rule applies: AppKit's runloop, and `.accessory`.
+case .success(.settingsReport):
+    SettingsReport.isWanted = true
+    XiaolaiDictScene.main()
+
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.
 case .success(.app):
