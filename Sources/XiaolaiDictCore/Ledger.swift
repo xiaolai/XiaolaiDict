@@ -390,6 +390,17 @@ public final class Ledger {
         return list
     }
 
+    /// How many lookups this ledger holds, found or not.
+    ///
+    /// Exists so a migration can prove the rows arrived rather than that a file was moved: a
+    /// destination that opens cleanly and holds nothing is what losing a reader's history
+    /// actually looks like.
+    public func lookupCount() throws -> Int {
+        var count = 0
+        try run("SELECT COUNT(*) FROM lookups", bind: []) { count = $0.integer(0) }
+        return count
+    }
+
     /// Every lookup of `lemma`, found or not, newest first.
     ///
     /// `language` nil means every language — which is what a caller asking "have I ever looked this

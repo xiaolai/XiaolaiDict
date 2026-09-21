@@ -13,13 +13,26 @@ actor LedgerStore {
 
     /// `~/Library/Application Support/XiaolaiDict/ledger.sqlite`, created on first use, opened on a
     /// background task whoever calls it.
-    static func openDefault() async throws -> LedgerStore {
+    ///
+    /// **Migrates before it creates.** The app kept this directory under its old name, so the
+    /// first launch after the rename would otherwise create an empty ledger beside a full one and
+    /// show the reader a history that had simply vanished. The order matters: creating the
+    /// directory first would make the move refuse, every time, for the rest of the app's life.
+    ///
+    /// `applicationSupport` is a parameter so that order can be tested against a temporary
+    /// directory instead of the reader's own.
+    static func openDefault(applicationSupport: URL? = nil) async throws -> LedgerStore {
         try await Task.detached(priority: .utility) {
-            let directory = try FileManager.default
+            let root = try applicationSupport ?? FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                .appendingPathComponent("XiaolaiDict", isDirectory: true)
+            let directory = root.appendingPathComponent(
+                StateMigration.directoryName, isDirectory: true)
+            try StateMigration.migrateLedgerDirectory(
+                from: root.appendingPathComponent(StateMigration.legacyDirectoryName, isDirectory: true),
+                to: directory)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            return try LedgerStore(path: directory.appendingPathComponent("ledger.sqlite").path)
+            return try LedgerStore(
+                path: directory.appendingPathComponent(StateMigration.ledgerFileName).path)
         }.value
     }
 
