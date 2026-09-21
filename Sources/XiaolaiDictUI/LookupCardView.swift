@@ -197,7 +197,7 @@ public struct LookupCardView: View {
         if case .sense(let sense) = card.answer {
             // The ambiguous card says so in its own badge; repeating it here would be the same
             // admission twice on one card.
-            Text(label(for: sense.standing))
+            Text(sense.standing.explanation)
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(card.isHypothesis ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
         }
@@ -216,16 +216,6 @@ public struct LookupCardView: View {
         .padding(.vertical, scale.space.tight)
         .background(Capsule().fill(Color.orange.opacity(Token.Opacity.badgeWash)))
         .foregroundStyle(.orange)
-    }
-
-    private func label(for standing: SenseStanding) -> String {
-        switch standing {
-        case .confirmed(.reader): return String(localized: "You chose this sense")
-        case .confirmed(.onlySense): return String(localized: "The only sense in this entry")
-        case .confirmed: return String(localized: "Confirmed")
-        case .proposed: return String(localized: "XiaolaiDict's guess — not confirmed")
-        case .unclaimed: return String(localized: "Shown without a claim")
-        }
     }
 
     /// The same marking the history card uses, down to the reader's emphasis setting — which this

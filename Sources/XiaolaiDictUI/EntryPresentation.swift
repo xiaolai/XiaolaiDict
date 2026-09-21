@@ -16,6 +16,44 @@ public enum SenseStanding: Equatable {
         guard case .confirmed = self else { return false }
         return true
     }
+
+    /// What the standing means, in the reader's words. **One wording for both surfaces** — the
+    /// lookup card had these privately and the drawer had its own, and the two described the same
+    /// lookup differently: the drawer called an entry with no sense settled "the sense XiaolaiDict
+    /// guessed".
+    public var explanation: String {
+        switch self {
+        case .confirmed(.reader): String(localized: "You chose this sense")
+        case .confirmed(.onlySense): String(localized: "The only sense in this entry")
+        case .confirmed: String(localized: "Confirmed")
+        case .proposed: String(localized: "XiaolaiDict's guess — not confirmed")
+        case .unclaimed: String(localized: "Shown without a claim")
+        }
+    }
+}
+
+public extension SenseNote {
+    /// How far the ledger claims this sense — the lookup card's three standings, not a yes/no.
+    ///
+    /// The drawer used `isConfirmed` alone and drew everything else as a guess, so an entry where
+    /// no sense was settled at all wore a `?` and "the sense XiaolaiDict guessed". Nothing was guessed.
+    /// A recorded sense with no provenance is unclaimed too, never promoted to a proposal: the
+    /// weakest standing is the default.
+    var standing: SenseStanding {
+        guard ordinal != nil else { return .unclaimed }
+        switch chosenBy {
+        case .reader: return .confirmed(.reader)
+        case .onlySense: return .confirmed(.onlySense)
+        case .model: return .proposed
+        case nil: return .unclaimed
+        }
+    }
+
+    /// Which dictionary and which sense — never what it says (C2) — with `?` on the selector's
+    /// proposal and on nothing else.
+    var badge: String {
+        standing == .proposed ? "\(dictionary) \(label)?" : "\(dictionary) \(label)"
+    }
 }
 
 /// One sense, as the popup presents it.

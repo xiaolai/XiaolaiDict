@@ -506,18 +506,21 @@ struct ReadingCardView: View {
     /// hypothesis it is — the reader has to be able to tell a guess from their own tap, and a
     /// marker that looked the same either way would be the ledger's distinction thrown away at
     /// the last step.
+    ///
+    /// Three standings, not two. This drew every unconfirmed sense as a guess, so an entry where
+    /// no sense was settled at all read "9 senses?" and "the sense XiaolaiDict guessed" — a claim the
+    /// ledger never made. The badge and its words now come from `SenseStanding`, the same source
+    /// the lookup card draws from, so one lookup cannot be described two ways.
     private func senseMark(_ sense: SenseNote) -> some View {
-        let ordinal = sense.label
-        return Text(sense.isConfirmed ? "\(sense.dictionary) \(ordinal)" : "\(sense.dictionary) \(ordinal)?")
+        let standing = sense.standing
+        return Text(sense.badge)
             .font(.system(size: scale.text.micro, weight: .medium))
             .monospacedDigit()
             .padding(.horizontal, scale.space.inline)
             .padding(.vertical, scale.space.tight)
             .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
-            .foregroundStyle(sense.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-            .help(sense.isConfirmed
-                  ? Text("The sense you chose")
-                  : Text("The sense XiaolaiDict guessed — not confirmed"))
+            .foregroundStyle(standing.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+            .help(Text(standing.explanation))
     }
 
     private var revealAvailable: Bool { entry.sense?.canReveal == true }
