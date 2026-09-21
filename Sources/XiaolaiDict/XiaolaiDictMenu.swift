@@ -6,9 +6,10 @@ import SwiftUI
 ///
 /// The `NSMenu` it replaces had to be torn down and reassembled in `menuNeedsUpdate` so a problem
 /// that appeared since launch would show. A view re-reads its state whenever that state changes,
-/// which is the same guarantee without the ceremony — and `SettingsLink` is the supported way into
-/// the `Settings` scene, which an accessory app cannot reach through `showSettingsWindow:` because
-/// it has no main menu for the action to route through.
+/// which is the same guarantee without the ceremony. Settings is opened through the environment's
+/// `openSettings`, not `SettingsLink`: an accessory app cannot reach the scene through
+/// `showSettingsWindow:` at all, and `SettingsLink` opens the window without bringing XiaolaiDict
+/// forward, which leaves it behind the app the reader is using.
 struct XiaolaiDictMenu: View {
     let app: XiaolaiDictApp
 
@@ -16,7 +17,6 @@ struct XiaolaiDictMenu: View {
         Button(app.shortcutLabel.map { "Look Up Selection    \($0)" } ?? "Look Up Selection") {
             app.lookUpSelection()
         }
-        Button("Change Shortcut…") { app.changeShortcut() }
 
         // Read from the watcher, not from the setting: if starting it failed, the menu says off.
         // The modifier is named from the policy, never as a literal. "hold ⌥" was hardcoded here
@@ -45,7 +45,7 @@ struct XiaolaiDictMenu: View {
         studyFrom
 
         Divider()
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") { app.showSettings() }
 
         // Problems the reader should see, in the place they already look.
         ForEach(app.problems, id: \.self) { problem in

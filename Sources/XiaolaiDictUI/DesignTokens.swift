@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 
 /// The drawer's design tokens.
@@ -54,8 +55,25 @@ enum Token {
         static let messageHeight: CGFloat = 150
         static let messageMinWidth: CGFloat = 320
         static let messageMinHeight: CGFloat = 120
-        static let settingsMinWidth: CGFloat = 420
-        static let settingsMinHeight: CGFloat = 320
+        /// **One width, every pane** — measured against the content rather than derived from the
+        /// em, which is why it is a number with a reason instead of a ratio. Asked for their own
+        /// ideal width the panes answer 744, 714 and 131 points, so letting each one decide would
+        /// make the window jump sideways on every click. A grouped `Form` at the old 420 put the
+        /// segmented pickers and their footers into a column narrower than any settings window on
+        /// the system, which is most of why this one did not look like one.
+        static let settingsWidth: CGFloat = 580
+        /// The floor a pane is padded up to, so a two-row pane is still a window rather than a
+        /// strip. About and Dictionary are the short ones.
+        static let settingsMinHeight: CGFloat = 260
+        /// And the ceiling, past which a pane scrolls rather than growing. Measured against the
+        /// smallest display XiaolaiDict runs on — an M1 MacBook Air at its default scaling, 900 points
+        /// tall: less its 24-point menu bar, a Dock along the bottom at about 70, and this window's
+        /// own title bar and tabs, measured at 88, leaves 718 for the pane. 700 keeps the window
+        /// off both edges. Needed rather than hypothetical: before its password managers were
+        /// folded into one row, the Lookup pane measured 1,184 points and would have run off that
+        /// screen — and at 680 it clipped the 697-point pane it became by 17, which scrolls just
+        /// enough to look like a mistake.
+        static let settingsMaxHeight: CGFloat = 700
         /// The dictionary list beside an entry: wide enough for the longest dictionary name
         /// without taking room the entry needs.
         static let dictionaryList: CGFloat = 260
@@ -169,5 +187,15 @@ enum Token {
         /// How far a closed pile rises under the pointer. Small on purpose — it says "one object,
         /// clickable", and anything larger says "this is about to move".
         static let lift = 1.012
+        /// The settings window finding the height of the pane just chosen. Measured in TYPE, where
+        /// the same window moves the same way: 0.3 s reads as one movement rather than a jump.
+        /// Seconds rather than an `Animation`, because the window is moved by AppKit — SwiftUI
+        /// moving it was measured to overshoot and correct itself.
+        static let paneResize: TimeInterval = 0.3
+        /// Prompt at the start, unhurried at the end. `easeInOut` eases *into* the movement as
+        /// well, which on a height change reads as hesitation before anything happens.
+        static var paneResizeCurve: CAMediaTimingFunction {
+            CAMediaTimingFunction(controlPoints: 0.3, 0, 0.2, 1)
+        }
     }
 }

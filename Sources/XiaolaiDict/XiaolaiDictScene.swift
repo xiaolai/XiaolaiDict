@@ -21,7 +21,6 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
-    static let shortcutID = "change-shortcut"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -69,16 +68,6 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(rect.origin, size: rect.size)
         }
 
-        // The one window that *should* take focus: the reader asked for it from the menu and is
-        // about to type into it.
-        Window("Change Shortcut", id: Self.shortcutID) {
-            ShortcutRecorderView(recorder: delegate.recorder, model: delegate.recorder.model)
-                .xiaolaiDictAppearance(delegate.appearance)
-        }
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
         // One window per pinned note. `WindowGroup(for:)` opens one per value, which is the shape
         // of "several notes, each independent" — the hand-built version kept a dictionary of
         // panels to do the same thing.
@@ -96,7 +85,12 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(frame.origin, size: frame.size)
         }
 
+        // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
+        // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it
+        // from the content — a second mover, measured to overshoot by the height of the title bar
+        // and tabs and then correct itself, which the reader saw as the bottom edge shuddering.
         Settings { XiaolaiDictSettings(app: delegate) }
+            .windowResizability(.contentMinSize)
     }
 }
 
@@ -105,10 +99,9 @@ struct XiaolaiDictScene: App {
 /// **Reading observable state in an `App`'s `body` invalidates every scene in it.** Built inline
 /// in the `Settings` scene, this read `delegate.dictionaries` and `delegate.hoverPolicy` — and
 /// `dictionaries` arrives asynchronously, when the XPC probe answers. That one late write
-/// re-evaluated `XiaolaiDictScene.body`, and the shortcut recorder's `Window` went with it: the menu item
-/// was clicked, no window ever appeared, and the end-to-end recorder assertions failed while the
-/// drawer and this window passed. Verified against `main`, which has none of these reads and
-/// passes.
+/// re-evaluated `XiaolaiDictScene.body`, and a sibling `Window` scene went with it: its menu item was
+/// clicked, no window ever appeared, and the end-to-end assertions for it failed while the drawer
+/// and this window passed. Verified against `main`, which has none of these reads and passes.
 ///
 /// It is the same rule `Scale.swift` records for `xiaolaiDictAppearance`: observation belongs in a view's
 /// body. A view invalidates itself; an `App` invalidates the whole window list.
@@ -120,13 +113,17 @@ struct XiaolaiDictSettings: View {
         // dictionary service nor the preferences the app owns — and the hover policy has to be
         // written through `setHoverPolicy`, so the watcher and the store cannot drift apart.
         SettingsView(
+            model: app.settings,
             appearance: app.appearance,
             hover: Binding(get: { app.hoverPolicy }, set: { app.setHoverPolicy($0) }),
             dictionary: DictionaryChoice(
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
-                choose: { app.choosePrimaryDictionary($0) }))
+                choose: { app.choosePrimaryDictionary($0) }),
+            shortcut: app.shortcutChoice)
         .xiaolaiDictAppearance(app.appearance)
+        // Identified from inside, for `--settings-report` to measure.
+        .background(WindowAccessor { app.settingsWindow = $0 })
     }
 }
 

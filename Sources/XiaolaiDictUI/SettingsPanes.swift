@@ -111,90 +111,153 @@ struct ReadingPane: View {
     }
 }
 
-// MARK: - Hover
+// MARK: - Lookup
 
-/// The hover gate, made settable.
+/// How a lookup starts: the shortcut, and the hover gate.
 ///
 /// Every control here edits a field `HoverPolicy` has had since it was written and that nothing
 /// could reach: the only policy that existed was the hardcoded `.shipped`. The exception is the
 /// password-manager list, which is a rule rather than a preference and so is shown and not
 /// offered — the ledger stores the sentence a word was read in, and in a password manager the
 /// whole surface is secrets.
-struct HoverPane: View {
+struct LookupPane: View {
     @Environment(\.scale) private var scale
     @Binding var policy: HoverPolicy
+    var shortcut: ShortcutChoice?
+    /// The shortcut field's recorder. Held by the settings model, because ending it belongs to
+    /// whoever knows the reader has left this pane — which this pane cannot see.
+    var capture = ShortcutCapture()
     @State private var host = ""
 
     var body: some View {
         Form {
-            Section {
-                Picker("Hold", selection: $policy.modifier) {
-                    ForEach(HoverModifier.allCases, id: \.self) { modifier in
-                        Text("\(modifier.name)  \(modifier.symbol)").tag(modifier)
-                    }
-                }
-
-                Picker("Rest the pointer", selection: $policy.settleMilliseconds) {
-                    ForEach(HoverPolicy.settleChoices) { Text($0.name).tag($0.milliseconds) }
-                }
-                .pickerStyle(.segmented)
-            } header: {
-                Text("The gate")
-            } footer: {
-                Text("A hover only fires while the key is held and the pointer has stopped. "
-                     + "There is no setting for holding nothing.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Section {
-                ForEach(policy.excludedApps.sorted(), id: \.self) { app in
-                    HStack {
-                        Text(app)
-                        Spacer(minLength: scale.space.inline)
-                        if HoverPolicy.defaultExcludedApps.contains(app) {
-                            Text("always").foregroundStyle(.secondary)
-                        } else {
-                            Button("Remove") { policy.excludedApps.remove(app) }
-                                .buttonStyle(.link)
-                        }
-                    }
-                }
-                Button("Add an app…") { addApp() }
-            } header: {
-                Text("Never look up in these apps")
-            } footer: {
-                Text("Password managers cannot be removed. XiaolaiDict records the sentence a word was "
-                     + "read in, and there every sentence is a secret.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Section {
-                ForEach(policy.excludedHosts.sorted(), id: \.self) { site in
-                    HStack {
-                        Text(site)
-                        Spacer(minLength: scale.space.inline)
-                        Button("Remove") { policy.excludedHosts.remove(site) }
-                            .buttonStyle(.link)
-                    }
-                }
-                HStack {
-                    TextField("example.com", text: $host)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(addHost)
-                    Button("Add", action: addHost)
-                        .disabled(HoverPolicy.normalisedHost(host).isEmpty)
-                }
-            } header: {
-                Text("Never look up on these sites")
-            } footer: {
-                Text("Subdomains are covered too, so example.com also excludes docs.example.com.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            shortcutSection
+            gateSection
+            appsSection
+            sitesSection
         }
         .formStyle(.grouped)
+    }
+
+    /// The lookup shortcut, as a setting rather than a window of its own.
+    private var shortcutSection: some View {
+        // The shortcut was a window of its own, which activated XiaolaiDict to open and left it
+        // active with nothing on screen when it closed. It is a setting; it lives here.
+        Section {
+            if let shortcut {
+                ShortcutField(choice: shortcut, capture: capture)
+            } else {
+                Text("This pane is not connected to the shortcut.").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Shortcut")
+        } footer: {
+            Text("XiaolaiDict looks up whatever is selected, wherever you are.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What must be true before a hover looks anything up.
+    private var gateSection: some View {
+        Section {
+            Picker("Hold", selection: $policy.modifier) {
+                ForEach(HoverModifier.allCases, id: \.self) { modifier in
+                    Text("\(modifier.name)  \(modifier.symbol)").tag(modifier)
+                }
+            }
+
+            Picker("Rest the pointer", selection: $policy.settleMilliseconds) {
+                ForEach(HoverPolicy.settleChoices) { Text($0.name).tag($0.milliseconds) }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("The gate")
+        } footer: {
+            Text("A hover only fires while the key is held and the pointer has stopped. "
+                 + "There is no setting for holding nothing.")
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Apps XiaolaiDict never looks up in: the password managers by rule, and the reader's own.
+    private var appsSection: some View {
+        Section {
+            // **The rule as one row, with what it covers a click away.** Every password manager
+            // was a row of its own, by bundle identifier — twelve of them, `com.agilebits.
+            // onepassword7` and its kind, each marked "always". It made this the tallest pane
+            // in the window, measured at 1,184 points and taller than a MacBook's screen, and
+            // told the reader nothing they could act on: none of those rows had a control.
+            DisclosureGroup {
+                ForEach(Self.passwordManagers, id: \.self) { AppRow(bundleID: $0) }
+            } label: {
+                LabeledContent(String(localized: "Password managers")) {
+                    Text("Always").foregroundStyle(.secondary)
+                }
+            }
+            ForEach(readersOwn, id: \.self) { app in
+                HStack {
+                    AppRow(bundleID: app)
+                    Spacer(minLength: scale.space.inline)
+                    Button("Remove") { policy.excludedApps.remove(app) }
+                        .buttonStyle(.link)
+                }
+            }
+            Button("Add an app…") { addApp() }
+        } header: {
+            Text("Never look up in these apps")
+        } footer: {
+            Text("Password managers cannot be removed. XiaolaiDict records the sentence a word was "
+                 + "read in, and there every sentence is a secret.")
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Sites XiaolaiDict never looks up on.
+    private var sitesSection: some View {
+        Section {
+            ForEach(policy.excludedHosts.sorted(), id: \.self) { site in
+                HStack {
+                    Text(site)
+                    Spacer(minLength: scale.space.inline)
+                    Button("Remove") { policy.excludedHosts.remove(site) }
+                        .buttonStyle(.link)
+                }
+            }
+            HStack {
+                TextField("example.com", text: $host)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addHost)
+                Button("Add", action: addHost)
+                    .disabled(HoverPolicy.normalisedHost(host).isEmpty)
+            }
+        } header: {
+            Text("Never look up on these sites")
+        } footer: {
+            Text("Subdomains are covered too, so example.com also excludes docs.example.com.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The apps the reader added, which are the only ones they can take away again.
+    private var readersOwn: [String] {
+        policy.excludedApps.subtracting(HoverPolicy.defaultExcludedApps).sorted()
+    }
+
+    /// Installed ones first, by name, so the password manager the reader actually uses is at the
+    /// top of the list rather than somewhere among identifiers for apps they have never had.
+    @MainActor private static var passwordManagers: [String] {
+        HoverPolicy.defaultExcludedApps.sorted { left, right in
+            switch (AppNames.name(for: left), AppNames.name(for: right)) {
+            case let (l?, r?): l.localizedStandardCompare(r) == .orderedAscending
+            case (.some, .none): true
+            case (.none, .some): false
+            case (.none, .none): left < right
+            }
+        }
     }
 
     /// Normalised on the way in, for the reason `HoverPolicy` normalises on the way out: an
@@ -218,6 +281,36 @@ struct HoverPane: View {
               let identifier = Bundle(url: url)?.bundleIdentifier
         else { return }
         policy.excludedApps.insert(identifier)
+    }
+}
+
+/// An app as a reader knows it: its icon and its name. **The identifier only when that is all there
+/// is** — an app that is not installed has no name to give, and is shown as what it is rather than
+/// dressed as something the system said. The identifier is always a hover away, because it is what
+/// the rule actually matches on.
+private struct AppRow: View {
+    @Environment(\.scale) private var scale
+    let bundleID: String
+
+    var body: some View {
+        HStack(spacing: scale.space.inline) {
+            if let icon = AppIcons.icon(for: bundleID) {
+                // Sized to the name beside it, as a card sizes the icon of the app a word was read
+                // in: a glyph standing with its text, not a picture beside it.
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: scale.text.body, height: scale.text.body)
+                    .accessibilityHidden(true)
+            }
+            if let name = AppNames.name(for: bundleID) {
+                Text(name)
+            } else {
+                Text(bundleID)
+                    .font(.system(size: scale.text.label).monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .help(bundleID)
     }
 }
 
