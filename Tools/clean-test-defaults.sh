@@ -21,16 +21,25 @@ abandoned() {
     done
 }
 
-sleep 1   # the last test process's own writes, still in flight
+# cfprefsd can land a dead process's last writes a moment after it exits, so one pass is not
+# enough: measured, a run failed with suites back after a single delete and passed on every run
+# since. Delete, let anything in flight land, and go again until a pass finds nothing.
 removed=0
-while IFS= read -r file; do rm -f -- "$file"; removed=$((removed + 1)); done < <(abandoned)
+rounds=0
+for rounds in 1 2 3 4 5; do
+    sleep 1
+    found=0
+    while IFS= read -r file; do rm -f -- "$file"; found=$((found + 1)); done < <(abandoned)
+    removed=$((removed + found))
+    (( found == 0 )) && break
+done
 
 # The deletion is only final if nothing puts the files back; that is the premise, so check it.
 sleep 3
 back=$(abandoned | wc -l | tr -d ' ')
 if (( back > 0 )); then
-    echo "error: $back defaults suite(s) came back after the test processes had exited:" >&2
+    echo "error: $back defaults suite(s) kept coming back after the test processes had exited:" >&2
     abandoned | head -5 | sed 's/^/  /' >&2
     exit 1
 fi
-echo "test defaults: removed $removed suite(s) the test processes left, none came back"
+echo "test defaults: removed $removed suite(s) the test processes left, in $rounds pass(es); none came back"
