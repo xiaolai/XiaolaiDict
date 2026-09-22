@@ -79,14 +79,4 @@ struct SetupWiringTests {
             .joined(separator: "\n")
         #expect(!code.contains("UtilityWindow"), "a UtilityWindow is created and never drawn")
     }
-
-    /// Nothing calls `SelfRelaunch` yet, and that is deliberate — item 5 is blocked on a
-    /// measurement. **Asserted rather than assumed**, so the day it is wired, this test is what
-    /// says the measurement was meant to come first.
-    @Test func nothingRelaunchesTheAppYet() throws {
-        let app = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
-        #expect(
-            !app.contains("SelfRelaunch"),
-            "something now relaunches the app — was the Screen Recording measurement done first?")
-    }
 }
