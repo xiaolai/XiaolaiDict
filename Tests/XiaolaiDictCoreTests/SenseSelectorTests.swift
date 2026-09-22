@@ -1,3 +1,4 @@
+import Synchronization
 import XiaolaiDictCore
 import Testing
 
@@ -167,5 +168,89 @@ struct LadderSenseSelectorTests {
     @Test func everyRungAbsentIsUnavailable() async {
         #expect(await choose([Fixed(answer: .abstained(.unavailable))]) == .abstained(.unavailable))
         #expect(await choose([]) == .abstained(.unavailable))
+    }
+}
+
+/// The cascade: rank with the cheap instrument, decide with the expensive one.
+struct ShortlistSenseSelectorTests {
+    /// Records what it was handed, so the shortlist itself can be asserted rather than inferred
+    /// from the answer.
+    private final class Spy: SenseSelecting, @unchecked Sendable {
+        let saw = Mutex<[SenseCandidate]>([])
+        let sawPartOfSpeech = Mutex<String??>(nil)
+        func choose(
+            from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+            partOfSpeech: String?
+        ) async -> SenseSelection {
+            saw.withLock { $0 = candidates }
+            sawPartOfSpeech.withLock { $0 = partOfSpeech }
+            return .chose(key: candidates[0].key, margin: 1, entryID: candidates[0].entryID)
+        }
+    }
+
+    private static func sense(_ key: String, _ text: String, pos: String? = nil) -> SenseCandidate {
+        SenseCandidate(entryID: "e", key: key, keyKind: .publisher, text: text, partOfSpeech: pos)
+    }
+
+    private static let many = (1...9).map { sense("e.\($0)", "sense number \($0)") }
+
+    @Test func itHandsTheDeciderOnlyTheShortlist() async {
+        let spy = Spy()
+        _ = await ShortlistSenseSelector(shortlist: 3, decider: spy).choose(
+            from: Self.many, reading: "a sentence about number four", context: .complete)
+        #expect(spy.saw.withLock { $0.count } == 3)
+    }
+
+    /// **The rule that keeps the cascade from being worse than the rung it wraps.** Where the
+    /// embedding cannot run — every `zh-Hant`, `ja` and `ko` sentence, measured 2026-09-22 — the
+    /// decider must still see everything. Abstaining here would take the only rung those readers
+    /// have and hand them nothing.
+    @Test func aShortlistItCouldNotBuildHandsTheDeciderEverything() async {
+        let spy = Spy()
+        let cascade = ShortlistSenseSelector(
+            shortlist: 3, decider: spy, ranker: EmbeddingSenseSelector(embedding: { _ in nil }))
+        let choice = await cascade.choose(
+            from: Self.many, reading: "a sentence", context: .complete)
+        #expect(spy.saw.withLock { $0.count } == Self.many.count, "the decider was starved")
+        #expect(choice.abstention == nil, "an unrankable sentence became an abstention")
+    }
+
+    /// Narrowing happens once, here, so the decider is never asked to narrow a different set —
+    /// otherwise the comparison between configurations would be reading the narrowing.
+    @Test func itNarrowsByPartOfSpeechBeforeRanking() async {
+        let spy = Spy()
+        let mixed = [
+            Self.sense("e.1", "to do something", pos: "verb"),
+            Self.sense("e.2", "a thing", pos: "noun"),
+            Self.sense("e.3", "another thing", pos: "noun"),
+        ]
+        _ = await ShortlistSenseSelector(shortlist: 9, decider: spy).choose(
+            from: mixed, reading: "a sentence", context: .complete, partOfSpeech: "noun")
+        #expect(spy.saw.withLock { $0.map(\.key) } == ["e.2", "e.3"])
+        // Passed on regardless: the decider may want it for its prompt, and narrowing an
+        // already-narrowed set is a no-op.
+        #expect(spy.sawPartOfSpeech.withLock { $0 } == "noun")
+    }
+
+    /// A shortlist longer than the field is the field, and the cascade degenerates to the decider
+    /// alone rather than doing something clever.
+    @Test func aShortlistLongerThanTheFieldIsTheField() async {
+        let spy = Spy()
+        _ = await ShortlistSenseSelector(shortlist: 99, decider: spy).choose(
+            from: Self.many, reading: "a sentence", context: .complete)
+        #expect(spy.saw.withLock { $0.count } == Self.many.count)
+    }
+
+    /// The pre-rung refusals belong to the cascade, not to the decider: a model must not be woken
+    /// up to be told there was nothing to choose between.
+    @Test func itRefusesBeforeWakingTheDecider() async {
+        let spy = Spy()
+        let cascade = ShortlistSenseSelector(shortlist: 3, decider: spy)
+        #expect(await cascade.choose(from: Self.many, reading: nil, context: .missing)
+            == .abstained(.noContext))
+        let unkeyable = [SenseCandidate(entryID: "e", key: "", keyKind: .none, text: "a sense")]
+        #expect(await cascade.choose(from: unkeyable, reading: "a sentence", context: .complete)
+            == .abstained(.noCandidates))
+        #expect(spy.saw.withLock { $0.isEmpty }, "the decider was woken for a refusal")
     }
 }

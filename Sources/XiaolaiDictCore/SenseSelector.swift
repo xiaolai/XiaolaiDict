@@ -164,6 +164,22 @@ public enum PartOfSpeechFilter {
     }
 }
 
+/// The candidates a rung will actually consider, before any scoring.
+///
+/// Shared by every rung deliberately: two rungs that narrowed differently would be compared on
+/// different fields, and the measurement would be reading the narrowing rather than the rungs. It
+/// drops the senses the dictionary cannot key — a choice among those could never be recorded
+/// anywhere — then narrows to the part of speech the word actually carries, which only ever
+/// narrows and never empties.
+public enum SenseCandidates {
+    public static func considered(
+        _ candidates: [SenseCandidate], matching partOfSpeech: String?
+    ) -> [SenseCandidate] {
+        let keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
+        return PartOfSpeechFilter.narrow(keyable, to: partOfSpeech)
+    }
+}
+
 /// Rung 1: `NLEmbedding` cosine distance between the reader's sentence and each sense's text.
 ///
 /// It costs nothing — `NaturalLanguage` is already linked for `NLTagger`, it is offline,
@@ -199,13 +215,12 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         partOfSpeech: String?
     ) async -> SenseSelection {
         // A dictionary that cannot key its senses offers nothing to choose between, so this can
-        // never yield a sense-level choice for one.
-        var keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
+        // never yield a sense-level choice for one. And, measured: "kept a tight rein on spending"
+        // drew the *verb* "to hold something back" over the noun "the power to steer or restrain"
+        // — the meaning right, the grammar wrong.
+        let keyable = SenseCandidates.considered(
+            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil)
         guard !keyable.isEmpty else { return .abstained(.noCandidates) }
-
-        // Measured: "kept a tight rein on spending" drew the *verb* "to hold something back"
-        // over the noun "the power to steer or restrain" — the meaning right, the grammar wrong.
-        if matchesPartOfSpeech { keyable = PartOfSpeechFilter.narrow(keyable, to: partOfSpeech) }
         // One sense is not a choice. It is answered by `onlySense` before any selector runs, and if
         // it reaches here it is still not something a model got right.
         guard keyable.count > 1 else {
@@ -215,33 +230,62 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         guard context == .complete, let sentence, !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return .abstained(.noContext) }
 
-        guard let language = NLLanguageRecognizer.dominantLanguage(for: sentence),
-              let space = embedding(language)
-        else { return .abstained(.unavailable) }
-
-        var scored: [(key: String, entryID: String, distance: Double)] = []
-        for candidate in keyable {
-            let distance = space.distance(between: sentence, and: candidate.text)
-            // `distance` answers a finite number even for text it cannot place; an infinite or NaN
-            // reading is the model declining, and is dropped rather than sorted as "very far".
-            guard distance.isFinite else { continue }
-            scored.append((candidate.key, candidate.entryID, distance))
-        }
-        guard let best = scored.min(by: { $0.distance < $1.distance }) else { return .abstained(.unavailable) }
+        let scored = rank(keyable, reading: sentence)
+        guard let best = scored.first else { return .abstained(.unavailable) }
         guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
 
-        let runnerUp = scored.filter { $0.key != best.key }.map(\.distance).min()
+        // The list is in distance order, so the first entry holding a *different* key is the
+        // runner-up. Keys repeat across entries: a positional key is literally
+        // "\(block).\(ordinal)", so a margin measured against a second copy of the favourite's
+        // own key would be zero, and a set with no real rival in it would abstain as "too close".
+        let runnerUp = scored.first { $0.candidate.key != best.candidate.key }?.distance
         guard let runnerUp else {
-            return .chose(key: best.key, margin: .infinity, entryID: best.entryID)
+            return .chose(key: best.candidate.key, margin: .infinity, entryID: best.candidate.entryID)
         }
         let margin = runnerUp - best.distance
         guard margin >= minimumMargin else {
             // The favourite is kept rather than discarded. It is not a choice — the margin says
             // so — but it is the most useful thing known about a sentence that does not settle.
             return .abstained(
-                .tooClose, nearest: NearMiss(key: best.key, margin: margin, among: scored.count))
+                .tooClose,
+                nearest: NearMiss(key: best.candidate.key, margin: margin, among: scored.count))
         }
-        return .chose(key: best.key, margin: margin, entryID: best.entryID)
+        return .chose(key: best.candidate.key, margin: margin, entryID: best.candidate.entryID)
+    }
+
+    /// The candidates in distance order, nearest first — the scoring half of `choose`, with none
+    /// of its thresholds.
+    ///
+    /// Separate because three callers want the *ordering* rather than the decision: `choose`
+    /// itself, the recall@K measurement, and `ShortlistSenseSelector`, which hands the top of this
+    /// list to a model. Empty where the space cannot run — no dominant language, no embedding for
+    /// it, or nothing that scored a finite distance — which every caller reads as `.unavailable`.
+    ///
+    /// **It filters nothing.** The keyable and part-of-speech narrowing belong to the caller and
+    /// are applied once, so a shortlist and a direct choice are ranked over exactly the same set
+    /// and the comparison between them stays like for like.
+    public func rank(
+        _ candidates: [SenseCandidate], reading sentence: String
+    ) -> [(candidate: SenseCandidate, distance: Double)] {
+        guard let language = NLLanguageRecognizer.dominantLanguage(for: sentence),
+              let space = embedding(language)
+        else { return [] }
+
+        var scored: [(candidate: SenseCandidate, distance: Double)] = []
+        for candidate in candidates {
+            let distance = space.distance(between: sentence, and: candidate.text)
+            // `distance` answers a finite number even for text it cannot place; an infinite or NaN
+            // reading is the model declining, and is dropped rather than sorted as "very far".
+            guard distance.isFinite else { continue }
+            scored.append((candidate, distance))
+        }
+        // Ordered with the original position as the tiebreak, because **Swift's sort is not
+        // stable**: two senses at an identical distance would otherwise be free to change places
+        // between runs, and which one became "the favourite" would be luck.
+        return scored.indices
+            .sorted { scored[$0].distance == scored[$1].distance
+                ? $0 < $1 : scored[$0].distance < scored[$1].distance }
+            .map { scored[$0] }
     }
 }
 
@@ -275,5 +319,77 @@ public struct LadderSenseSelector: SenseSelecting {
             guard last.abstention == .unavailable else { return last }
         }
         return last
+    }
+}
+
+/// Configuration 3: the embedding **shortlists**, and a stronger rung decides among the shortlist.
+///
+/// The reason to want it is prompt size, not accuracy. Apple's on-device model is prefill-bound and
+/// measured at 0.8–2.4 s against a 1 s panel budget. Measured 2026-09-22 on NOAD's *run*: 27
+/// keyable senses, 13 once narrowed to the verb, which is a 2,952-character prompt against 1,211
+/// for the best five — **59% less prompt, not the order of magnitude an earlier note implied.**
+/// That note's "73 senses" was the part-of-speech filter failing to narrow at all, which was fixed
+/// on 2026-09-21; the number to argue from is 13, and whether 59% is worth a rung is what the
+/// latency measurement has to say.
+///
+/// Its accuracy is **capped by the embedding's recall@K** — a sense the shortlist dropped is one
+/// the decider can never recover — so `theEmbeddingsRecallAtKIsMeasured` is the measurement that
+/// says whether any given K is safe. Measured 2026-09-22 on the labelled set: recall@5 is 6/6 with
+/// the part-of-speech filter and without it, against a top-1 of 3/6 and 2/6. The ranking is far
+/// better at *not losing* the answer than at *finding* it, which is exactly the property a
+/// shortlist needs and the property top-1 accuracy hides.
+/// **Not in the default ladder, on purpose.** Measured on the E2E machine 2026-09-22
+/// (`plan-sense-popup.md`): on the labelled set, whose words offer 2–5 candidates once narrowed,
+/// it is the embedding's 40 ms added to an unchanged model call and is *slower* than the model
+/// alone — 480 ms against 445. On NOAD's *run* it is 737 ms against 112. So it pays only where the
+/// shortlist removes something, and where that threshold sits is a decision six English cases
+/// cannot make. This type exists so the next measurement has something to measure; it is wired to
+/// nothing until the labelled set can say when to use it.
+public struct ShortlistSenseSelector: SenseSelecting {
+    public let shortlist: Int
+    /// Only `rank` is used, so this instance's own part-of-speech setting is irrelevant — the
+    /// narrowing happens once here, before ranking.
+    private let ranker: EmbeddingSenseSelector
+    private let decider: any SenseSelecting
+    private let matchesPartOfSpeech: Bool
+
+    public init(
+        shortlist: Int, decider: any SenseSelecting,
+        ranker: EmbeddingSenseSelector = EmbeddingSenseSelector(),
+        matchesPartOfSpeech: Bool = true
+    ) {
+        self.shortlist = max(1, shortlist)
+        self.decider = decider
+        self.ranker = ranker
+        self.matchesPartOfSpeech = matchesPartOfSpeech
+    }
+
+    public func choose(
+        from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?
+    ) async -> SenseSelection {
+        let considered = SenseCandidates.considered(
+            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil)
+        guard !considered.isEmpty else { return .abstained(.noCandidates) }
+        guard considered.count > 1 else {
+            return .chose(key: considered[0].key, margin: .infinity, entryID: considered[0].entryID)
+        }
+        guard context == .complete, let sentence,
+              !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return .abstained(.noContext) }
+
+        let ranked = ranker.rank(considered, reading: sentence)
+        // **A shortlist it could not build is not an abstention.** Where the embedding cannot run
+        // — which is every Traditional Chinese, Japanese and Korean sentence, measured — the
+        // decider is handed everything instead. Abstaining here would make this arrangement
+        // strictly worse than the decider alone for exactly the readers who have no other rung.
+        let shortlisted = ranked.isEmpty
+            ? considered
+            : ranked.prefix(shortlist).map(\.candidate)
+
+        // The part of speech is passed on although the narrowing is already done: the decider may
+        // put it in its prompt, and narrowing an already-narrowed set is a no-op.
+        return await decider.choose(
+            from: shortlisted, reading: sentence, context: context, partOfSpeech: partOfSpeech)
     }
 }

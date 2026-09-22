@@ -35,9 +35,9 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        var keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
+        let keyable = SenseCandidates.considered(
+            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil)
         guard !keyable.isEmpty else { return .abstained(.noCandidates) }
-        if matchesPartOfSpeech { keyable = PartOfSpeechFilter.narrow(keyable, to: partOfSpeech) }
         guard keyable.count > 1 else {
             return .chose(key: keyable[0].key, margin: .infinity, entryID: keyable[0].entryID)
         }

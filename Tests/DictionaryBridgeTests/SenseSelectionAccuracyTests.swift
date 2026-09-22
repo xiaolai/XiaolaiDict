@@ -1,6 +1,7 @@
 @testable import DictionaryBridge
 import Foundation
-import XiaolaiDictCore
+import Synchronization
+@testable import XiaolaiDictCore
 import Testing
 
 /// One labelled case: a sentence the reader might be reading, and the sense of it NOAD actually
@@ -282,6 +283,47 @@ struct SenseSelectionAccuracyTests {
         #expect(await selector.choose(
             from: unkeyable, reading: "He paid the fine.", context: .complete).abstention == .noCandidates)
     }
+
+    /// **The ceiling on any cascade**, measured before one is built.
+    ///
+    /// A shortlist hands the model the top K and nothing else, so a sense the shortlist dropped can
+    /// never be recovered — the arrangement's accuracy is capped by this number. If recall@5 does
+    /// not clear what the model scores unaided, a cascade is a way of making the good instrument
+    /// worse, and the right move is not to build it.
+    ///
+    /// Reported, **not pinned**: six cases cannot carry a pinned expectation for a new
+    /// measurement. One number here is worth reading closely though — `recall@all` below 6/6 means
+    /// the part-of-speech filter dropped the labelled sense before anything was ranked, which
+    /// would be a finding about the filter rather than about the ranking.
+    @Test func theEmbeddingsRecallAtKIsMeasured() async throws {
+        let selector = EmbeddingSenseSelector()
+        var report = "\nembedding recall@K — on \(Self.hardCases.count) hard cases\n"
+        for narrowing in [false, true] {
+            var placings: [(word: String, place: Int?, among: Int)] = []
+            for labelled in Self.hardCases {
+                let partOfSpeech = narrowing
+                    ? Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
+                    : nil
+                let considered = SenseCandidates.considered(
+                    try Self.candidates(for: labelled.word), matching: partOfSpeech)
+                let ranked = selector.rank(considered, reading: labelled.sentence)
+                let place = ranked.firstIndex { $0.candidate.key == labelled.correct }.map { $0 + 1 }
+                placings.append((labelled.word, place, ranked.count))
+            }
+            report += "  \(narrowing ? "with" : "without") the part-of-speech filter\n"
+            for placing in placings {
+                let where_ = placing.place.map { "rank \($0)" } ?? "NOT RANKED"
+                report += "    \(placing.word.padded(10)) \(where_.padded(12)) of \(placing.among)\n"
+            }
+            for k in [1, 3, 5, 10] {
+                let hit = placings.filter { ($0.place ?? .max) <= k }.count
+                report += "    \("recall@\(k)".padded(12)) \(hit)/\(placings.count)\n"
+            }
+            report += "    \("recall@all".padded(12)) \(placings.filter { $0.place != nil }.count)/\(placings.count)\n"
+        }
+        print(report)
+        try? report.write(toFile: "/tmp/xiaolaidict-probe/recall.txt", atomically: true, encoding: .utf8)
+    }
 }
 
 private extension String {
@@ -352,5 +394,154 @@ struct FoundationModelsRungTests {
             from: candidates, reading: nil, context: .missing, partOfSpeech: nil).abstention == .noContext)
         #expect(await selector.choose(
             from: candidates, reading: "He paid the", context: .mayBeCut, partOfSpeech: nil).abstention == .noContext)
+    }
+}
+
+
+/// **The three arrangements, measured against each other on one machine.**
+///
+/// 1 · the on-device model alone · 2 · `NLEmbedding` alone · 3 · the embedding shortlists and the
+/// model decides among the shortlist.
+///
+/// Runs only where Apple Intelligence is available — `deviceNotEligible` on the development Mac,
+/// `available` on the E2E machine — so on the build Mac this reports that it did not happen rather
+/// than reporting a row of abstentions as a score.
+///
+/// **What this set can and cannot settle.** Configuration 1 already scores 6/6 on it, so the set is
+/// saturated: no arrangement can win on accuracy here, and the only accuracy claim available is
+/// *did 3 hold what 1 had*. One case is 17 points, so nothing smaller than a case is a difference.
+/// The candidate sets are also small — 4 to 13 senses — while a shortlist is meant for a big
+/// entry; NOAD's *run* is 27 keyable senses, 13 once narrowed to the verb, which is what
+/// `thePromptShrinksOnAnEntryBigEnoughToShowIt` measures instead.
+///
+/// **`.serialized` because both tests here time the same on-device model.** Run in parallel they
+/// contend for it and each reports the other's load: measured, configuration 1 came back at
+/// ~1,020 ms beside a second model test and ~450 ms alone — a 2× error produced entirely by the
+/// runner. This project's rules already say a wall-clock number measures how many other tests
+/// are executing; that applies to a number *reported* as much as to one asserted.
+@Suite(.serialized)
+struct SelectorConfigurationTests {
+    /// Wraps a selector and keeps how long each call took, so latency is measured around the thing
+    /// under test rather than around the harness.
+    private final class Timed: SenseSelecting, @unchecked Sendable {
+        let inner: any SenseSelecting
+        let calls = Mutex<[Duration]>([])
+        init(_ inner: any SenseSelecting) { self.inner = inner }
+
+        func choose(
+            from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+            partOfSpeech: String?
+        ) async -> SenseSelection {
+            let started = ContinuousClock.now
+            let answer = await inner.choose(
+                from: candidates, reading: sentence, context: context, partOfSpeech: partOfSpeech)
+            calls.withLock { $0.append(ContinuousClock.now - started) }
+            return answer
+        }
+
+        /// Median and worst, in milliseconds. A mean would be led by one cold first call.
+        var summary: String {
+            let sorted = calls.withLock { $0 }.sorted()
+            guard !sorted.isEmpty else { return "not called" }
+            let ms = { (d: Duration) in Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000 }
+            return String(format: "median %.0f ms, worst %.0f ms", ms(sorted[sorted.count / 2]), ms(sorted[sorted.count - 1]))
+        }
+    }
+
+    /// One probe, so an unavailable machine says so instead of scoring six abstentions.
+    private static func modelRunsHere() async throws -> Bool {
+        let probe = await FoundationModelsSenseSelector().choose(
+            from: try SenseSelectionAccuracyTests.candidates(for: "hold"),
+            reading: "It was stowed forward in the ship's hold.", context: .complete, partOfSpeech: "noun")
+        return probe.abstention != .unavailable
+    }
+
+    @Test func theThreeConfigurationsAreMeasuredWhereTheModelCanRun() async throws {
+        guard try await Self.modelRunsHere() else {
+            print("\nselector configurations: Apple Intelligence UNAVAILABLE on this Mac, not measured\n")
+            return
+        }
+        var report = "\nselector configurations — on \(SenseSelectionAccuracyTests.hardCases.count) hard cases\n"
+        let model = FoundationModelsSenseSelector()
+        let configurations: [(String, any SenseSelecting)] = [
+            ("1 · model alone", model),
+            ("2 · embedding alone", EmbeddingSenseSelector()),
+            ("3 · shortlist 3 → model", ShortlistSenseSelector(shortlist: 3, decider: model)),
+            ("3 · shortlist 5 → model", ShortlistSenseSelector(shortlist: 5, decider: model)),
+        ]
+        let warmUp = try SenseSelectionAccuracyTests.candidates(for: "hold")
+        for (name, selector) in configurations {
+            // **Discarded.** The first call against a cold model pays to load it: measured 1230 ms
+            // on the first arrangement of a session against 446 ms once warm, which made whichever
+            // configuration happened to run first look 3× slower than the rest. That is a fact
+            // about the machine, not about the arrangement — the same trap this project already
+            // records for the first screen capture after boot.
+            _ = await selector.choose(
+                from: warmUp, reading: "It was stowed forward in the ship's hold.",
+                context: .complete, partOfSpeech: "noun")
+            let timed = Timed(selector)
+            let score = try await SenseSelectionAccuracyTests.score(timed, named: name)
+            report += score.report + "      latency             \(timed.summary)\n"
+        }
+        print(report)
+        try? report.write(
+            toFile: "/tmp/xiaolaidict-probe/configurations.txt", atomically: true, encoding: .utf8)
+    }
+
+    /// The labelled set's entries are too small to show what a shortlist is *for*, so this measures
+    /// the prompt on one that is not: *run* is the 73-sense case the shortlist exists for.
+    ///
+    /// No labels and no accuracy claim — it reports prompt size and latency, which is the whole
+    /// argument for configuration 3.
+    @Test func thePromptShrinksOnAnEntryBigEnoughToShowIt() async throws {
+        let sentence = "She decided to run for office in the spring election."
+        let partOfSpeech = Lemmatizer.partOfSpeech(of: "run", in: sentence, at: nil)
+        let considered = SenseCandidates.considered(
+            try SenseSelectionAccuracyTests.candidates(for: "run"), matching: partOfSpeech)
+        let shortlisted = EmbeddingSenseSelector()
+            .rank(considered, reading: sentence).prefix(5).map(\.candidate)
+        let whole = FoundationModelsSenseSelector.prompt(
+            for: considered, sentence: sentence, partOfSpeech: partOfSpeech)
+        let short = FoundationModelsSenseSelector.prompt(
+            for: Array(shortlisted), sentence: sentence, partOfSpeech: partOfSpeech)
+
+        let everything = SenseCandidates.considered(
+            try SenseSelectionAccuracyTests.candidates(for: "run"), matching: nil)
+        var report = """
+
+            prompt size — run [\(partOfSpeech ?? "?")]
+              keyable senses      \(everything.count)
+              narrowed to \(partOfSpeech ?? "?")     \(considered.count) senses, \(whole.count) characters
+              shortlist 5         \(shortlisted.count) senses, \(short.count) characters
+
+            """
+        guard try await Self.modelRunsHere() else {
+            report += "  latency: Apple Intelligence UNAVAILABLE on this Mac, not measured\n"
+            print(report)
+            return
+        }
+        // **Interleaved, after a discarded warm-up.** Run one arrangement to completion and then
+        // the other and the second one inherits a warmer model, which is how a 730 ms / 113 ms
+        // "prompt size wins" reading was produced from the order alone. Alternating spreads any
+        // drift across both.
+        let arrangements = [("all senses", considered), ("shortlist 5", Array(shortlisted))]
+        let timers = [Timed(FoundationModelsSenseSelector(matchesPartOfSpeech: false)),
+                      Timed(FoundationModelsSenseSelector(matchesPartOfSpeech: false))]
+        for (timer, arrangement) in zip(timers, arrangements) {
+            _ = await timer.inner.choose(
+                from: arrangement.1, reading: sentence, context: .complete, partOfSpeech: partOfSpeech)
+        }
+        for _ in 0..<5 {
+            for (timer, arrangement) in zip(timers, arrangements) {
+                _ = await timer.choose(
+                    from: arrangement.1, reading: sentence, context: .complete,
+                    partOfSpeech: partOfSpeech)
+            }
+        }
+        for (timer, arrangement) in zip(timers, arrangements) {
+            report += "  \(arrangement.0.padded(20))\(timer.summary)\n"
+        }
+        print(report)
+        try? report.write(toFile: "/tmp/xiaolaidict-probe/prompt-size.txt", atomically: true, encoding: .utf8)
     }
 }
