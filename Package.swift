@@ -5,7 +5,7 @@ import PackageDescription
 // `swift test` runs the tests; `make` assembles, signs and embeds everything into XiaolaiDict.app.
 let package = Package(
     name: "XiaolaiDict",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS("27.0")],
     targets: [
         // Entry models, the lookup ledger, lemmas. No AppKit and no private API — the part that
         // has to be exhaustively testable. Not portable, and not meant to be: it binds
