@@ -358,6 +358,7 @@ public struct LookupPanelContent: View {
     @Environment(\.scale) private var scale
     @Environment(\.pinNote) private var pin
     @Environment(\.studySense) private var studySense
+    @Environment(\.translation) private var translator
     @Environment(\.colorScheme) private var scheme
     public let presentation: LookupPresentation
     /// What it is waiting for, in words. Nil once the dictionaries have answered.
@@ -366,7 +367,14 @@ public struct LookupPanelContent: View {
     /// reader asking — which is what makes an auxiliary sense studiable under D8.
     @State private var showing = 0
     @State private var explanation: SentenceExplanation?
-    @State private var explaining = false
+    /// The explanation in flight — **held, like the translation, rather than started and
+    /// forgotten**. A bare task outlives the card that started it: the reader closes the panel and
+    /// an on-device generation goes on running for a sentence nobody will see.
+    @State private var explaining: Task<Void, Never>?
+    @State private var translation: TranslationPane?
+    /// The one translation in flight. Replacing it cancels the one before, so two clicks cannot
+    /// finish out of order, and it is cancelled when the card goes away.
+    @State private var translating: Task<Void, Never>?
     @State private var copied = false
 
     public init(presentation: LookupPresentation, waiting: String? = nil) {
@@ -423,6 +431,9 @@ public struct LookupPanelContent: View {
         .padding(.leading, scale.shadow.glowBefore)
         .padding(.bottom, scale.shadow.glowAfter)
         .padding(.trailing, scale.shadow.glowAfter)
+        // The panel has gone: nothing is waiting for this answer, and a generation running for a
+        // closed panel is one the reader is paying for twice.
+        .onDisappear { translating?.cancel(); explaining?.cancel() }
     }
 
     private var shape: RoundedRectangle {
@@ -447,6 +458,21 @@ public struct LookupPanelContent: View {
                         Notice(text: "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it.")
                     }
                     LookupCardView(card: card(for: entry), onChoose: { choose($0, in: entry) })
+                        // A different dictionary is a different card: what was translated for the
+                        // last one is neither shown nor still being worked on.
+                        .onChange(of: showing) {
+                            translating?.cancel()
+                            translating = nil
+                            translation = nil
+                            explaining?.cancel()
+                            explaining = nil
+                            explanation = nil
+                        }
+                    // Only beside the card it was made for. A different dictionary, or a sense that
+                    // arrived after it was asked, is a different card.
+                    if let translation, translation.of == translationKey(for: entry) {
+                        TranslationPaneView(pane: translation)
+                    }
                     if let explanation { SentencePaneView(explanation: explanation) }
                     footer(entry)
                 }
@@ -493,7 +519,10 @@ public struct LookupPanelContent: View {
         HStack(spacing: scale.space.inline) {
             if entries.count > 1 { dictionaries }
             Spacer(minLength: scale.space.inline)
-            if presentation.sentence?.isEmpty == false { explainButton }
+            if presentation.sentence?.isEmpty == false {
+                translateButton
+                explainButton
+            }
             copyButton(entry)
             pinButton(entry)
         }
@@ -522,26 +551,66 @@ public struct LookupPanelContent: View {
         }
     }
 
-    private var explainButton: some View {
-        Button {
-            explaining = true
-            Task {
-                let sense: String? = {
-                    guard let entry, case .sense(let shown) = card(for: entry).answer else { return nil }
-                    return shown.label
-                }()
-                explanation = await OnDeviceSentenceExplainer().explain(SentenceQuestion(
-                    sentence: presentation.sentence ?? "", term: presentation.term,
-                    senseText: sense))
-                explaining = false
-            }
-        } label: {
-            Image(systemName: explaining ? "ellipsis" : "text.bubble")
+    /// The reader's sentence in their own language — on request, because translation is a reveal,
+    /// and fed the sense the card is leading with.
+    /// A footer action that runs something and waits for it: the same symbol swap, the same
+    /// disabling, the same help. Two of them had grown their own copies, and their behaviour under
+    /// a second click had already diverged.
+    private func footerAction(
+        _ symbol: String, running: Bool, help: LocalizedStringKey, act: @escaping () -> Void
+    ) -> some View {
+        Button(action: act) {
+            Image(systemName: running ? "ellipsis" : symbol)
                 .font(.system(size: scale.text.body))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help(Text("Explain this sentence"))
+        .disabled(running)
+        .help(Text(help))
+    }
+
+    private var translateButton: some View {
+        footerAction("character.bubble", running: translating != nil, help: "Translate this sentence") {
+            guard let entry, let sentence = presentation.sentence else { return }
+            let card = card(for: entry)
+            let question = TranslationQuestion.reading(card, sentence: sentence, target: translator.target)
+            let key = translationKey(for: entry)
+            let actions = translator
+            translating?.cancel()
+            translating = Task {
+                let outcome = await actions.translate(question)
+                guard !Task.isCancelled else { return }
+                translation = TranslationPane(outcome, of: key)
+                translating = nil
+            }
+        }
+    }
+
+    /// What a translation is about: the sentence, the language, the dictionary on screen and the
+    /// sense the card was leading with when it was asked.
+    private func translationKey(for entry: DictionaryEntry) -> TranslationPane.Key {
+        TranslationPane.Key(
+            sentence: presentation.sentence ?? "", target: translator.target,
+            dictionary: entry.dictionary.key,
+            sense: TranslationQuestion.metSense(of: card(for: entry))?.sense)
+    }
+
+    private var explainButton: some View {
+        footerAction("text.bubble", running: explaining != nil, help: "Explain this sentence") {
+            let sense: String? = {
+                guard let entry, case .sense(let shown) = card(for: entry).answer else { return nil }
+                return shown.label
+            }()
+            let question = SentenceQuestion(
+                sentence: presentation.sentence ?? "", term: presentation.term, senseText: sense)
+            explaining?.cancel()
+            explaining = Task {
+                let answer = await OnDeviceSentenceExplainer().explain(question)
+                guard !Task.isCancelled else { return }
+                explanation = answer
+                explaining = nil
+            }
+        }
     }
 
     private func copyButton(_ entry: DictionaryEntry) -> some View {

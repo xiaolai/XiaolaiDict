@@ -252,3 +252,63 @@ struct HistoryRemovalTests {
         #expect(deleted == [1])
     }
 }
+
+/// What a history card says at the end of its line, and why there is one place that decides it.
+@MainActor
+struct CardBadgeTests {
+    private static func entry(sense: SenseNote?, abstention: Abstention? = nil) -> ReadingEntry {
+        ReadingEntry(
+            id: 1, lemma: "charge", surface: "charge", sentence: "The police will charge him with fraud.",
+            sentenceRange: nil, place: ReadingPlace(), at: .now, result: .found, quality: nil,
+            sense: sense, senseAbstention: abstention)
+    }
+
+    private static let entryLevel = SenseNote(
+        dictionary: "NOAD", block: nil, ordinal: nil, outOf: 12, gloss: nil, chosenBy: nil)
+
+    /// **A refusal is not hidden behind a sense count.** A lookup that recorded the entry and no
+    /// sense still has a note — its badge says "12 senses" — so the refusal has to be asked about
+    /// first, or the reader is never told the model declined.
+    @Test func aRefusalIsSaidRatherThanTheEntrysSenseCount() throws {
+        let badge = try #require(CardBadge(of: Self.entry(sense: Self.entryLevel, abstention: .refused)))
+        #expect(badge.text == "declined")
+        #expect(!badge.isConfirmed)
+        #expect(badge.explanation == Abstention.refused.reason)
+    }
+
+    /// Every other abstention leaves the card as it was: "no model here" is not a fact about this
+    /// sentence, and the entry's own badge is what there is to say.
+    @Test func otherAbstentionsLeaveTheEntrysBadgeAlone() throws {
+        for why in [Abstention.unavailable, .noContext, .tooClose, .nothingFits, .noCandidates] {
+            let badge = try #require(CardBadge(of: Self.entry(sense: Self.entryLevel, abstention: why)))
+            #expect(badge.text == Self.entryLevel.badge, "\(why) changed the badge")
+        }
+    }
+
+    /// **A tap outranks the refusal that came before it.** The model declined, the reader then
+    /// chose a sense themselves, and both are on the row — a card still saying "declined" would be
+    /// telling the reader their own answer was never given.
+    @Test func aSenseTheReaderSettledOutranksAnEarlierRefusal() throws {
+        let tapped = SenseNote(
+            dictionary: "NOAD", block: 1, ordinal: 4, outOf: 12, gloss: "a price asked", chosenBy: .reader)
+        let badge = try #require(CardBadge(of: Self.entry(sense: tapped, abstention: .refused)))
+        #expect(badge.text == tapped.badge)
+        #expect(badge.isConfirmed)
+        // A sense the *model* proposed is a hypothesis, and does not outrank the refusal.
+        let proposed = SenseNote(
+            dictionary: "NOAD", block: 1, ordinal: 4, outOf: 12, gloss: "a price asked", chosenBy: .model)
+        #expect(CardBadge(of: Self.entry(sense: proposed, abstention: .refused))?.text == "declined")
+    }
+
+    /// A sense the reader tapped is a fact; a card with nothing recorded has no badge at all.
+    @Test func aRecordedSenseKeepsItsOwnBadgeAndNothingRecordedHasNone() throws {
+        let tapped = SenseNote(
+            dictionary: "NOAD", block: 1, ordinal: 4, outOf: 12, gloss: "a price asked",
+            chosenBy: .reader)
+        let badge = try #require(CardBadge(of: Self.entry(sense: tapped)))
+        #expect(badge.text == tapped.badge)
+        #expect(badge.isConfirmed)
+        #expect(CardBadge(of: Self.entry(sense: nil)) == nil)
+        #expect(CardBadge(of: Self.entry(sense: nil, abstention: .unavailable)) == nil)
+    }
+}

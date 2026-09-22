@@ -98,3 +98,26 @@ struct EntryNavigationTests {
         _ = try await EntryContentRules.compiled()
     }
 }
+
+/// **One resize watch per panel, however many times its view is updated.** The window accessor's
+/// closure runs on every update of the view it is attached to, and the panel's body reads the
+/// model download's progress — so a 3 GB download registered a fresh observer a few hundred times,
+/// each one outliving its window and firing for every resize afterwards.
+///
+/// What this can see is that one token is held and replaced. That the old one was *removed* is the
+/// line beside it; no API reports what a notification centre is observing.
+@MainActor
+struct PanelResizeWatchTests {
+    @Test func watchingAgainReplacesTheWatchRatherThanAddingOne() {
+        let panel = LookupPanelController()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: true)
+        #expect(panel.resizeObserver == nil)
+        panel.watchForResize(of: window)
+        let first = try? #require(panel.resizeObserver)
+        panel.watchForResize(of: window)
+        let second = try? #require(panel.resizeObserver)
+        #expect(first !== second, "the panel kept watching through its previous observer as well")
+    }
+}

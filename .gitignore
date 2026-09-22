@@ -85,3 +85,6 @@ CLAUDE.md
 # copyrighted dictionary text and is never committed. Slash-free for the same reason as the rules
 # above: a trailing slash matches only a directory, so a symlink to one would show as untracked.
 /Tools/corpus
+
+# macOS writes these into every directory it looks at.
+.DS_Store

@@ -5,6 +5,10 @@ import XiaolaiDictCore
 /// awaited. Everything known the moment the reader pressed the shortcut is here at once; what the
 /// dictionaries say arrives later, in the same panel.
 public struct LookupPresentation: Equatable {
+    /// Which request this is. The panel's content view is identified by it, so what a reader revealed
+    /// for one lookup — a translation, an explanation — never appears under the next word, and an
+    /// answer still arriving for an old lookup lands in a view that is already gone.
+    public let request: Int
     public let term: String
     public let lemma: Lemma
     /// The app, and the site, the word was read in.
@@ -25,11 +29,16 @@ public struct LookupPresentation: Equatable {
     /// The study items the reader has already met, so a sense read before can be marked (C3).
     public var met: Set<StudyItem> = []
 
+    /// **`request` has no default**, because a default is what makes two lookups share an identity.
+    /// The panel resets a card's own state — a revealed gloss, a translation, an explanation — when
+    /// this number changes, so two presentations built without one are the same lookup as far as
+    /// SwiftUI is concerned, and the previous reader's answers stay on screen under the next word.
     public init(
-        term: String, lemma: Lemma, source: String?, capture: CaptureQuality,
+        request: Int, term: String, lemma: Lemma, source: String?, capture: CaptureQuality,
         sentence: String? = nil, outcome: LookupOutcome? = nil, sense: SenseMark? = nil,
         memory: MemoryStrip? = nil, met: Set<StudyItem> = []
     ) {
+        self.request = request
         self.term = term
         self.lemma = lemma
         self.source = source

@@ -29,6 +29,15 @@ enum LaunchMode: Equatable {
     /// moves between the sizes rather than jumping. A resize can only be watched where one
     /// happens, which is inside a running app.
     case settingsReport
+
+    /// `--model-status`: whether the bundled model service runs, and whether it can run MLX — one op
+    /// evaluated on its GPU. Only the signed bundle can answer.
+    case modelStatus
+    /// `--model-report`: the local model end to end — downloaded from ModelScope into the store if
+    /// it is not there, then a sense answer and a translation through the service.
+    case modelReport
+    /// `--sense-report`: every rung of the sense ladder scored on the labelled set, in the bundle.
+    case senseReport
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -47,6 +56,9 @@ enum LaunchArguments {
                XiaolaiDict --translation-report
                XiaolaiDict --history-report
                XiaolaiDict --settings-report
+               XiaolaiDict --model-status
+               XiaolaiDict --model-report
+               XiaolaiDict --sense-report
         """
 
     static let repeatRange = 1...1_000
@@ -65,6 +77,9 @@ enum LaunchArguments {
         case "--translation-report": alone(arguments, is: .translationReport)
         case "--history-report": alone(arguments, is: .historyReport)
         case "--settings-report": alone(arguments, is: .settingsReport)
+        case "--model-status": alone(arguments, is: .modelStatus)
+        case "--model-report": alone(arguments, is: .modelReport)
+        case "--sense-report": alone(arguments, is: .senseReport)
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }

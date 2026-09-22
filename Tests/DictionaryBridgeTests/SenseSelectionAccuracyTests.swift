@@ -4,16 +4,6 @@ import Synchronization
 @testable import XiaolaiDictCore
 import Testing
 
-/// One labelled case: a sentence the reader might be reading, and the sense of it NOAD actually
-/// means. The keys are NOAD's own, read out of the live entries.
-struct LabelledCase: Sendable {
-    let word: String
-    let sentence: String
-    /// The correct sense key, or nil when the right answer is to abstain.
-    let correct: String?
-    let why: String
-}
-
 /// Rung 1 against the hard cases, scored on the three numbers the plan requires — **top-1
 /// accuracy, abstention rate, and confidently-wrong rate**. The third is the one that decides
 /// whether marking a sense is honest at all.
@@ -22,39 +12,17 @@ struct LabelledCase: Sendable {
 /// **different entry** from the one the old `.first` code showed at all, so this set cannot be
 /// passed without Stage 0.
 struct SenseSelectionAccuracyTests {
-    static let hardCases: [LabelledCase] = [
-        LabelledCase(
-            word: "fine", sentence: "He was ordered to pay a heavy fine for speeding.",
-            correct: "m_en_gbus0362760.005",
-            why: "the penalty is homograph 2; homograph 1 owns “made or done very well”"),
-        LabelledCase(
-            word: "hold",
-            sentence: "It was stowed forward in the ship's hold, where the rats had got at the biscuit.",
-            correct: "m_en_gbus0472980.005",
-            why: "the ship's hold is homograph 2, one sense against homograph 1's eleven"),
-        LabelledCase(
-            word: "sanction", sentence: "The committee sanctioned the plan after months of debate.",
-            correct: "m_en_gbus0897260.018",
-            why: "a contronym: the neighbouring verb sense is “impose a penalty on”"),
-        LabelledCase(
-            word: "table", sentence: "The committee voted to table the motion until the next session.",
-            correct: "m_en_gbus1025140.042",
-            why: "the neighbouring verb sense is its near-opposite"),
-        LabelledCase(
-            word: "rein", sentence: "The government kept a tight rein on public spending.",
-            correct: "m_en_gbus0858530.009",
-            why: "figurative, against a literal horse strap in the same block"),
-        LabelledCase(
-            word: "temper", sentence: "He tempered his criticism with praise.",
-            correct: "m_en_gbus1038310.022",
-            why: "the verb “moderate”, against “harden steel” and “tune a piano”"),
-    ]
+    /// In `XiaolaiDictCore`, because `--sense-report` scores the same six inside the signed bundle —
+    /// the only place the local model's rung runs through the real path.
+    static let hardCases = LabelledSenses.hardCases
 
     /// Every sense NOAD has for `word`, across all of its entries — which is what the primary
     /// dictionary offers the selector.
     static func candidates(for word: String) throws -> [SenseCandidate] {
+        // By identifier, never by display name: a name is localized, and a Chinese interface would
+        // have this suite report NOAD as disabled on a Mac where it is enabled.
         let entries = try DictionaryBridge.entries(for: word).entries
-            .filter { $0.dictionary.name.contains("New Oxford American") }
+            .filter { $0.dictionary.identifier == DictionaryIdentity.noad }
         try #require(!entries.isEmpty, "NOAD is not enabled in Dictionary.app on this Mac")
         return entries.flatMap { entry in
             entry.blocks.flatMap { block in
@@ -98,9 +66,10 @@ struct SenseSelectionAccuracyTests {
                 of: labelled.word, in: labelled.sentence, at: nil)
             let choice = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
+            let bucket = LabelledSenses.bucket(choice, correct: labelled.correct)
             switch choice {
             case .chose(let key, let margin, _):
-                let right = key == labelled.correct
+                let right = bucket == .right
                 right ? (score.right += 1) : (score.wrong += 1)
                 let text = candidates.first { $0.key == key }?.text.prefix(46) ?? ""
                 score.report += "  \(right ? "✓" : "✗") \(labelled.word.padded(10))"
@@ -109,7 +78,7 @@ struct SenseSelectionAccuracyTests {
                 if let nearest {
                     // It declined to choose and kept a favourite. The card shows that favourite
                     // under an ambiguous badge, so the score has to grade what the reader sees.
-                    let right = nearest.key == labelled.correct
+                    let right = bucket == .ambiguousRight
                     right ? (score.ambiguousRight += 1) : (score.ambiguousWrong += 1)
                     let text = candidates.first { $0.key == nearest.key }?.text.prefix(40) ?? ""
                     score.report += "  ? \(labelled.word.padded(10))"
@@ -500,10 +469,11 @@ struct SelectorConfigurationTests {
             try SenseSelectionAccuracyTests.candidates(for: "run"), matching: partOfSpeech)
         let shortlisted = EmbeddingSenseSelector()
             .rank(considered, reading: sentence).prefix(5).map(\.candidate)
-        let whole = FoundationModelsSenseSelector.prompt(
-            for: considered, sentence: sentence, partOfSpeech: partOfSpeech)
-        let short = FoundationModelsSenseSelector.prompt(
-            for: Array(shortlisted), sentence: sentence, partOfSpeech: partOfSpeech)
+        // The prompt both model rungs send, from the one place it is written.
+        let whole = ModelPrompt.sense(SenseQuestion(
+            sentence: sentence, partOfSpeech: partOfSpeech, senses: considered.map(\.text)))
+        let short = ModelPrompt.sense(SenseQuestion(
+            sentence: sentence, partOfSpeech: partOfSpeech, senses: shortlisted.map(\.text)))
 
         let everything = SenseCandidates.considered(
             try SenseSelectionAccuracyTests.candidates(for: "run"), matching: nil)

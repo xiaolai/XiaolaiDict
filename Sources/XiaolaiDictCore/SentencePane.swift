@@ -1,6 +1,4 @@
-#if canImport(FoundationModels)
 import FoundationModels
-#endif
 import Foundation
 
 /// Who is allowed to see what, when XiaolaiDict explains a sentence.
@@ -84,8 +82,6 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
         guard !question.sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .unavailable("There is no sentence to explain.")
         }
-        #if canImport(FoundationModels)
-        guard #available(macOS 26.0, *) else { return .unavailable("This macOS has no on-device model.") }
         switch SystemLanguageModel.default.availability {
         case .available: break
         case .unavailable(let reason):
@@ -98,15 +94,26 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
         do {
             let session = LanguageModelSession(instructions: Self.instructions)
             let answer = try await session.respond(to: question.prompt(for: tier))
-            return .explained(answer.content, tier: tier)
+            // **A blank answer is not an explanation.** `.explained` promises the pane has
+            // something to show; handed an empty string it drew an empty pane, which reads as the
+            // model having nothing to say about the sentence rather than as nothing arriving.
+            let text = answer.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return .unavailable("The on-device model answered with nothing.") }
+            return .explained(text, tier: tier)
+        } catch is CancellationError {
+            // The reader closed the panel. Nothing to report about the model.
+            return .unavailable("The explanation was stopped.")
         } catch {
+            // **A refusal is the model declining this sentence; anything else is a failure.** Every
+            // error reported as "declined" told the reader their sentence had been refused when the
+            // session had in fact failed to load or the generation had broken off.
+            guard ModelRefusal.isRefusal(error) else {
+                return .unavailable("The on-device model could not answer.")
+            }
             // A guardrail refusal on adult reading material lands here, and is reported as a
             // refusal rather than retried against a tier that may send the text off the Mac.
             return .unavailable("The on-device model declined to answer.")
         }
-        #else
-        return .unavailable("This build has no on-device model.")
-        #endif
     }
 
     static let instructions = """

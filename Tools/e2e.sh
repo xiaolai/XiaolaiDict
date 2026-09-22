@@ -8,7 +8,7 @@
 #
 # With no stage names every stage runs. With them, only those — a full run costs minutes and most
 # changes touch one or two. Names: launch lookup crash accessibility selection shortcut deadline
-# hover drawer recogniser scenes.
+# hover drawer recogniser setup scenes model.
 #
 # Each result is recorded in .build/e2e-status.tsv against the build it ran on. A pass is only a
 # fact about that build, so one carried over from an older build is shown as stale rather than as a
@@ -87,7 +87,8 @@ pids() {  # processes started from exactly this executable path
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
     while read -r pid exe; do [ "$exe" != "$1" ] || echo "$pid"; done <<<"$table"
 }
-for exe in "$app/Contents/MacOS/XiaolaiDict" "$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService"; do
+for exe in "$app/Contents/MacOS/XiaolaiDict" "$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService" \
+           "$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"; do
     running=$(pids "$exe" | tr '\n' ' ')
     [ -z "$running" ] || kill -TERM $running
     for _ in $(seq 1 50); do [ -n "$(pids "$exe")" ] || continue 2; sleep 0.1; done
@@ -251,6 +252,37 @@ row_after() {
 # whose own deadlines allow nearly 100: three captures of 30 s each, plus settling, appearing and
 # closing. A report past the harness's patience was declared silent and left running — still able
 # to capture the screen during whatever stage came next.
+# run_bounded <flag> <out> <seconds> <label>: runs an in-bundle report directly — no window, so no
+# LaunchServices — and gives up on it at the deadline. Its stderr goes to the terminal as well as to
+# a file, so a download that takes half an hour is visible while it runs rather than afterwards.
+# Answers with the report's own exit status, and fails the stage on a non-zero one. Both of the
+# model stage's reports go through it: each had grown its own copy of the waiting, and one of them
+# had none at all.
+#
+# **The exit status is the report's verdict, and throwing it away made every finished run a pass.**
+# An instrument that writes plausible JSON and then exits non-zero — one that measured a service it
+# could not reach, or a rung that never answered — was recorded as having passed, because the only
+# thing looked at afterwards was whether some keys could be read out of its output.
+run_bounded() {
+    local flag=$1 out=$2 budget=$3 label=$4
+    : > "$out"
+    "$exe" "$flag" >"$out" 2> >(tee "/tmp/xiaolaidict-${label}.err" >&2) &
+    local pid=$! waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$budget" ]; do sleep 1; waited=$((waited + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        flunk "model: $flag did not finish within $((budget / 60)) minutes"
+        return 1
+    fi
+    local status=0
+    wait "$pid" || status=$?
+    if [ "$status" -ne 0 ]; then
+        flunk "model: $flag exited $status"
+    fi
+    return "$status"
+}
+
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
     local flag=$1 budget=$2 name=${1#--}
     local out="/tmp/xiaolaidict-$name.json" err="/tmp/xiaolaidict-$name.err"
@@ -901,13 +933,53 @@ else
     # the right tool for *text* — it is only the wrong tool for "can the reader see it".
     shown=$("$helpers/panel" com.xiaolaidict)
     missing=""
-    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Sense picking"; do
+    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Translation and sense picking"; do
         printf '%s' "$shown" | grep -q "$row" || missing="$missing $row"
     done
     if [ -z "$missing" ]; then
         pass "setup: the board shows every row"
     else
         flunk "setup: the board is missing a row —$missing"
+    fi
+
+    # **The model row, exercised rather than read.** Its heading alone would pass with no buttons,
+    # no fallback named, and a 3 GB download that started by itself. What must be true on a Mac
+    # where the model is not downloaded: it is still needed, the weaker engine is named, both
+    # choices are offered — and nothing has begun downloading.
+    if printf '%s' "$shown" | grep -q "Translation and sense picking"; then
+        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and sense picking" || true)
+        # Every state the row can be in, named — and **a download under way is a failure here**, not
+        # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
+        # the board is first opened is the regression the rule exists to catch: it used to be one of
+        # the accepted branches, two lines under a comment promising "nothing has begun downloading".
+        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
+            pass "setup: the model row says the model is ready"
+        elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
+            flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
+        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
+            # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
+            if printf '%s' "$shown" | grep -q "Without a local model"; then
+                pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
+            else
+                flunk "setup: too little memory, and the fallback still promises a model later — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "download stopped"; then
+            if printf '%s' "$shown" | grep -q "Download"; then
+                pass "setup: the model row reports a stopped download and offers to resume it"
+            else
+                flunk "setup: a stopped download with no way to resume it — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "misreads some" && printf '%s' "$shown" | grep -q "Download"; then
+            # Both choices, unless the reader already chose **Not now** — which the row remembers,
+            # and which takes its button away while leaving the download one click from here.
+            if printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
+                pass "setup: the model row offers the download and Not now, and names the weaker engine meanwhile"
+            else
+                flunk "setup: the model row offers a download with no way to decline it — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        else
+            flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
+        fi
     fi
 
     # **Waited for, not read once.** A cold XPC probe parses real entries — Longman's *hold* alone
@@ -1275,6 +1347,136 @@ for surface in "Reading History" "Settings…"; do
 done
 fi
 
+if want model; then
+# 13. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
+#     downloader, a sense answer and a translation through the model service, the service's
+#     footprint, and the service ending itself when idle — which is how the model unloads.
+#
+#     Run directly rather than through LaunchServices: nothing here captures the screen, so TCC's
+#     refusal of processes launched over SSH does not apply, and a report that runs for minutes
+#     while a download finishes is simpler to bound from here.
+model_service="$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"
+# launchd starts the service with no arguments, so its idle interval comes from the app's defaults.
+# Shortened for the run so the unload is seen inside it, and put back however the run ends.
+if idle_original=$(defaults read com.xiaolaidict ModelIdleSeconds 2>/dev/null); then idle_had=yes; else idle_had=no; fi
+restore_idle() {
+    if [ "$idle_had" = yes ]; then
+        defaults write com.xiaolaidict ModelIdleSeconds -int "$idle_original"
+    else
+        defaults delete com.xiaolaidict ModelIdleSeconds 2>/dev/null || true
+    fi
+}
+at_exit restore_idle
+defaults write com.xiaolaidict ModelIdleSeconds -int 20
+# A service already running read the old interval; this run's must start fresh. Asserted, not
+# assumed: everything after this would otherwise be measuring the old process — its old interval,
+# and a model it had already loaded.
+for pid in $(pids "$model_service"); do kill -TERM "$pid" 2>/dev/null || true; done
+for _ in $(seq 1 50); do [ -z "$(pids "$model_service")" ] && break; sleep 0.1; done
+if [ -n "$(pids "$model_service")" ]; then
+    flunk "model: a model service from before the stage would not quit; every check below would measure it"
+else
+
+status=$("$exe" --model-status 2>/dev/null || true)
+if printf '%s' "$status" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("gpu") else 1)' 2>/dev/null; then
+    pass "model: the signed service evaluates an MLX op on the GPU ($(printf '%s' "$status" | sed -n 's/.*"gpu":"\([^"]*\)".*/\1/p'))"
+else
+    flunk "model: the service cannot run MLX — $status"
+fi
+
+# Bounded at 40 minutes: a first run downloads 3 GB, measured at ~10 MB/s from this network.
+report_out=/tmp/xiaolaidict-model-report.json
+run_bounded --model-report "$report_out" 2400 model-report || true
+report=$(cat "$report_out" 2>/dev/null || true)
+echo "model report: $report"
+if why=$(expect "$report" installed=True sense=2 loaded=True prewarmed=True relaunched=True 2>&1); then
+    pass "model: downloaded or found whole, a sense answer (2 of 3, the cargo space) and a translation through the service"
+else
+    flunk "model: $why"
+fi
+if printf '%s' "$report" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("translation") else 1)' 2>/dev/null; then
+    pass "model: the sentence came back translated: $(printf '%s' "$report" | sed -n 's/.*"translation":"\([^"]*\)".*/\1/p')"
+else
+    flunk "model: no translation came back"
+fi
+footprint=$(printf '%s' "$report" | sed -n 's/.*"footprintMB":\([0-9]*\).*/\1/p')
+# A service holding a 4B model and answering is gigabytes; a few megabytes means nothing was loaded.
+if [ -n "$footprint" ] && [ "$footprint" -gt 1000 ]; then
+    pass "model: the service holds the model — ${footprint} MB"
+else
+    flunk "model: the service's footprint is ${footprint:-unknown} MB — the model is not loaded"
+fi
+
+# The labelled set, every rung, in this bundle — the measurement that decides the ladder's order.
+# Bounded: its Apple rung calls the on-device model directly, and a stalled one would hang the whole
+# run with no result and no cleanup.
+sense_out=/tmp/xiaolaidict-sense-report.json
+run_bounded --sense-report "$sense_out" 600 sense-report || true
+senses=$(cat "$sense_out" 2>/dev/null || true)
+echo "sense report: $senses"
+if verdict=$(printf '%s' "$senses" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+s = d["scores"]
+def n(rung, bucket): return s.get(rung, {}).get(bucket, 0)
+cases = d["cases"]
+for rung in ("localModel", "onDevice", "embedding", "ladder"):
+    total = sum(s.get(rung, {}).values())
+    if total != cases: sys.exit(f"{rung} scored {total} of {cases} cases")
+if not d["localModelInstalled"]: sys.exit("the local model is not installed, so its rung measured nothing")
+# **The shipped ladder, in its own order.** Scoring the local model beside the ladder says nothing
+# about where the ladder puts it: reordering it to embedding-first would still pass.
+order = d.get("order")
+if order[:1] != ["localModel"]: sys.exit(f"the shipped ladder does not run the local model first: {order}")
+# And what the ladder answered is what the local model answered, on every case it decided at all --
+# **including the ones it got wrong**. Checking only its right answers let a ladder that quietly
+# dropped the top rung pass whenever that rung was mistaken, which is exactly when the difference
+# between the rungs shows.
+for row in d["answers"]:
+    local = row["localModel"]
+    if local in ("right", "wrong") and row["ladder"] != local:
+        sys.exit("the ladder did not carry the local model answer on " + row["word"] + ": "
+                 + local + " became " + row["ladder"])
+# D6: a rung above another earns its place with at least 10 points more top-1 accuracy and a
+# confidently-wrong count no higher.
+def earns(upper, lower):
+    gain = (n(upper, "right") - n(lower, "right")) / cases * 100
+    return gain >= 10 and n(upper, "wrong") <= n(lower, "wrong")
+RIGHT, WRONG = "right", "wrong"
+print("; ".join(f"{r}: {n(r, RIGHT)} right, {n(r, WRONG)} wrong" for r in ("localModel", "onDevice", "embedding")))
+# **Every step of the order is earned, not just the top one.** Apple sits above the embedding rung
+# in the shipped ladder, and nothing here asked it to deserve that: a middle rung no better than the
+# one below it, or one that refused every sentence, passed unexamined.
+#
+# Apple is skipped only where it is genuinely not on this Mac -- every case abstaining *because it
+# is unavailable*. An Apple rung that abstained for any other reason is a rung that ran, and is
+# measured like the rest.
+apple = [row.get("onDevice", "") for row in d["answers"]]
+absent = bool(apple) and all("(unavailable)" in verdict for verdict in apple)
+if absent:
+    ok = earns("localModel", "embedding")
+else:
+    ok = (earns("localModel", "onDevice") and earns("onDevice", "embedding")
+          and earns("localModel", "embedding"))
+sys.exit(0 if ok else 2)
+' 2>&1); then
+    pass "model: the shipped ladder runs the local model first, and the labelled set backs it ($verdict)"
+else
+    flunk "model: the labelled set does not put the local model first — $verdict"
+fi
+
+# Unloading is the service ending **while its client is still running** — watched by the report
+# from inside, because when a client exits launchd ends its service with it, and a watch from out
+# here once passed in 0 s on exactly that. Between the interval and 15 s past it: sooner is the
+# timer misfiring or the client-exit case again, later is the timer not firing.
+unloaded_after=$(printf '%s' "$report" | sed -n 's/.*"unloadedAfterSeconds":\([0-9.]*\).*/\1/p')
+if [ -n "$unloaded_after" ] && python3 -c 'import sys; t = float(sys.argv[1]); sys.exit(0 if 19 <= t <= 35 else 1)' "$unloaded_after"; then
+    pass "model: the service ended itself ${unloaded_after} s after the last request (idle interval 20 s), and the next question brought a fresh one"
+else
+    flunk "model: the idle unload — ${unloaded_after:-not seen} s against an interval of 20 s ($(printf '%s' "$report" | sed -n 's/.*"unload":"\([^"]*\)".*/\1/p'))"
+fi
+fi  # the old service had gone
+fi
 finished=true
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }

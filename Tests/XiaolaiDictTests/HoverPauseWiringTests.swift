@@ -18,7 +18,7 @@ import XiaolaiDictTestSupport
 @MainActor struct HoverPauseWiringTests {
     /// Its own preferences suite, so no test can read or write the reader's real settings.
     private func app() -> XiaolaiDictApp {
-        XiaolaiDictApp(defaults: TemporaryDefaults.suite())
+        { let suite = TemporaryDefaults.suite(); return XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)) }()
     }
 
     /// A reader who pauses XiaolaiDict from the menu is not looked up for, through the app's own watcher
@@ -87,8 +87,8 @@ import XiaolaiDictTestSupport
         let suite = TemporaryDefaults.suite()
         var chosen = HoverPolicy.shipped
         chosen.modifier = .command
-        XiaolaiDictApp(defaults: suite).setHoverPolicy(chosen)
-        #expect(XiaolaiDictApp(defaults: suite).hoverPolicy.modifier == .command)
+        XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).setHoverPolicy(chosen)
+        #expect(XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).hoverPolicy.modifier == .command)
     }
 
     /// **Built the way the app actually builds it**, which is not the way a test does.

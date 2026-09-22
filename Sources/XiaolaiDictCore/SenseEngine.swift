@@ -1,6 +1,4 @@
-#if canImport(FoundationModels)
 import FoundationModels
-#endif
 
 /// Why the on-device model cannot run here.
 ///
@@ -14,17 +12,18 @@ public enum SenseEngineUnavailability: String, Sendable, Equatable, Codable, Cas
     case appleIntelligenceNotEnabled
     /// Turned on, still downloading or preparing.
     case modelNotReady
-    /// Compiled without FoundationModels.
-    case notInThisBuild
     /// A reason this build does not know about.
     case unknown
 }
 
-/// What is backing sense selection right now.
+/// **Whether Apple's on-device model can back sense selection** — not which engine is in use. The
+/// top rung is the local model wherever it is downloaded, and this says nothing about it: what it
+/// answers is what the setup board's model row names as the fallback while no model is there, and
+/// what rung 2 asks before it runs.
 public enum SenseEngineStatus: Sendable, Equatable {
-    /// Apple's on-device model is available and is the top rung.
+    /// Apple's on-device model is available.
     case onDevice
-    /// It is not, so the ladder falls to `NLEmbedding`.
+    /// It is not, so with no local model downloaded the ladder falls to `NLEmbedding`.
     case unavailable(SenseEngineUnavailability)
 
     public var isOnDevice: Bool { self == .onDevice }
@@ -56,8 +55,6 @@ public enum SenseEngineStatus: Sendable, Equatable {
 /// never extracted for a translator. What the reader is told lives in `XiaolaiDictUI`.
 public enum SenseEngine {
     public static func status() -> SenseEngineStatus {
-        #if canImport(FoundationModels)
-        guard #available(macOS 26.0, *) else { return .unavailable(.notInThisBuild) }
         switch SystemLanguageModel.default.availability {
         case .available:
             return .onDevice
@@ -71,8 +68,5 @@ public enum SenseEngine {
         @unknown default:
             return .unavailable(.unknown)
         }
-        #else
-        return .unavailable(.notInThisBuild)
-        #endif
     }
 }

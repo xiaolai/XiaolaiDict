@@ -169,6 +169,24 @@ struct LadderSenseSelectorTests {
         #expect(await choose([Fixed(answer: .abstained(.unavailable))]) == .abstained(.unavailable))
         #expect(await choose([]) == .abstained(.unavailable))
     }
+
+    /// A refusal falls through — the next rung is the right answer to a model that declined — and
+    /// a lower rung's answer then stands as its own.
+    @Test func aRefusalFallsThroughToTheNextRung() async {
+        let choice = await choose([
+            Fixed(answer: .abstained(.refused)), Fixed(answer: .chose(key: "e.2", margin: 0.4)),
+        ])
+        #expect(choice == .chose(key: "e.2", margin: 0.4))
+    }
+
+    /// **"The model declined" is not "no model here".** Where nothing below a refusal can run either,
+    /// the refusal is what the lookup reports — whichever order the absence and the refusal came in.
+    @Test func aRefusalNobodyBelowCouldAnswerIsReportedAsARefusal() async {
+        #expect(await choose([Fixed(answer: .abstained(.refused)), Fixed(answer: .abstained(.unavailable))])
+            == .abstained(.refused))
+        #expect(await choose([Fixed(answer: .abstained(.unavailable)), Fixed(answer: .abstained(.refused))])
+            == .abstained(.refused))
+    }
 }
 
 /// The cascade: rank with the cheap instrument, decide with the expensive one.

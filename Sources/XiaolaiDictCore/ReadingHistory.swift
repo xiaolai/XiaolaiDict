@@ -33,13 +33,16 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     public let partOfSpeech: String?
     /// Which sense the reader met — **never its wording, unless they ask for it**. See `SenseNote`.
     public let sense: SenseNote?
+    /// Why the selector marked no sense, where it declined — from schema 6 on. What lets a card say
+    /// "the model declined this sentence" rather than showing the same nothing as "no model here".
+    public let senseAbstention: Abstention?
 
     /// No default, deliberately. Every caller states how good the capture was, because the failure
     /// this replaced was a caller quietly not carrying it.
     public init(
         id: Int, lemma: String, surface: String, sentence: String, sentenceRange: NSRange?,
         place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?,
-        partOfSpeech: String? = nil, sense: SenseNote? = nil
+        partOfSpeech: String? = nil, sense: SenseNote? = nil, senseAbstention: Abstention? = nil
     ) {
         self.id = id
         self.lemma = lemma
@@ -52,6 +55,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.quality = quality
         self.partOfSpeech = partOfSpeech
         self.sense = sense
+        self.senseAbstention = senseAbstention
     }
 
     /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a

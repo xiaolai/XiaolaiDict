@@ -84,7 +84,11 @@ struct XiaolaiDictMenu: View {
             }
         }
         // Asked when the menu is built rather than at launch: probing parses real entries, and
-        // Longman's *hold* alone is 625 KB.
-        .task { await app.askForDictionaries() }
+        // Longman's *hold* alone is 625 KB. The model is re-read here too — the other place the
+        // reader looks — rather than inside the dictionary question, which is not about the model.
+        .task {
+            app.models.refresh()
+            await app.askForDictionaries()
+        }
     }
 }

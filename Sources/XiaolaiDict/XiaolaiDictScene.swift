@@ -33,7 +33,9 @@ struct XiaolaiDictScene: App {
         }
 
         Window(Self.lookupTitle, id: Self.lookupID) {
-            LookupPanelSceneView(controller: delegate.panelController, model: delegate.panelModel)
+            LookupPanelSceneView(
+                controller: delegate.panelController, model: delegate.panelModel,
+                translation: { [delegate] in delegate.models.translationActions })
                 .xiaolaiDictAppearance(delegate.appearance)
         }
         // `.plain`, not `.hiddenTitleBar`. A reader pointing at a word asked a question; they did
@@ -134,7 +136,8 @@ struct XiaolaiDictSettings: View {
                 hasAsked: app.dictionariesAsked,
                 choose: { app.choosePrimaryDictionary($0) }),
             shortcut: app.shortcutChoice,
-            openSetup: { app.showSetup() })
+            openSetup: { app.showSetup() },
+            modelLicence: app.models.licenceURL)
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure.
         .background(WindowAccessor { app.settingsWindow = $0 })
@@ -160,6 +163,9 @@ struct XiaolaiDictSetup: View {
             // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
             // shortcut that answered nothing.
             shortcutIsRegistered: app.shortcutIsRegistered,
+            // The model row: its state from the store and the download in flight, and the
+            // download the reader can agree to or decline.
+            localModel: app.models.choice,
             // Each button opens the pane it is about. `showSettings()` alone opens whichever pane
             // was last looked at — Reading, on a fresh install — so "Choose…" under the dictionary
             // row landed the reader on text size.
@@ -171,7 +177,11 @@ struct XiaolaiDictSetup: View {
         .background(WindowAccessor { app.setupWindow = $0 })
         // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
         // would otherwise see "Asking which dictionaries are enabled…" forever.
-        .task { await app.askForDictionaries() }
+        .task {
+            // Re-read, so a model removed from Finder while the app ran is not still called ready.
+            app.models.refresh()
+            await app.askForDictionaries()
+        }
     }
 }
 

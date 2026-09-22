@@ -24,7 +24,7 @@ enum SpeechReport {
     /// A voice that never calls back is a finding, not a reason to hang.
     static let limit: Duration = .seconds(10)
 
-    static func run(write: (String) -> Void = LookupCommand.writeLine) async -> CommandStatus {
+    static func run(write: (String) -> Void = { _ = LookupCommand.writeLine($0) }) async -> CommandStatus {
         let voices = AVSpeechSynthesisVoice.speechVoices()
         var byQuality: [String: Int] = [:]
         for voice in voices { byQuality[Self.name(of: voice.quality), default: 0] += 1 }

@@ -158,6 +158,29 @@ struct CommandCoverageTests {
         }
     }
 
+    /// **Each command answers to its own name.** The two tests above ask only whether the parser
+    /// knows the word and whether the usage text lists it — `--model-status` wired to `.modelReport`
+    /// passes both, and a reader asking what is installed gets a model loaded and timed instead.
+    /// The mapping is therefore asserted one command at a time, by name.
+    ///
+    /// Every command here is a whole command: it takes no operand, so anything after it was
+    /// mistyped and is refused rather than ignored.
+    @Test(arguments: [
+        ("--speech-report", LaunchMode.speechReport),
+        ("--translation-report", LaunchMode.translationReport),
+        ("--history-report", LaunchMode.historyReport),
+        ("--settings-report", LaunchMode.settingsReport),
+        ("--model-status", LaunchMode.modelStatus),
+        ("--model-report", LaunchMode.modelReport),
+        ("--sense-report", LaunchMode.senseReport),
+    ])
+    func aCommandParsesToItsOwnModeAndTakesNothingElse(command: String, mode: LaunchMode) {
+        #expect(LaunchArguments.parse([command]) == .success(mode))
+        if case .success(let parsed) = LaunchArguments.parse([command, "extra"]) {
+            Issue.record("\(command) accepted an argument and parsed as \(parsed)")
+        }
+    }
+
     @Test func everyAcceptedCommandIsDocumented() throws {
         let source = try String(contentsOf: parserSource, encoding: .utf8)
         // The command switch alone. Scanning the whole file also found `--repeat` and `--interval`

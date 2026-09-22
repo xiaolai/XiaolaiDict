@@ -41,10 +41,13 @@ public struct SetupView: View {
     /// one in Dictionary.app, so it has to be able to notice when they come back.
     private var refreshDictionaries: (() async -> Void)?
     private var shortcutIsRegistered: Bool
+    /// The local model's row: its state, and the download the reader can agree to or decline.
+    private var localModel: LocalModelChoice?
 
     public init(
         model: SetupModel = SetupModel(), dictionary: DictionaryChoice? = nil,
         shortcut: ShortcutChoice? = nil, shortcutIsRegistered: Bool = true,
+        localModel: LocalModelChoice? = nil,
         openSettings: ((SettingsPane) -> Void)? = nil,
         refreshDictionaries: (() async -> Void)? = nil
     ) {
@@ -52,6 +55,7 @@ public struct SetupView: View {
         self.dictionary = dictionary
         self.shortcut = shortcut
         self.shortcutIsRegistered = shortcutIsRegistered
+        self.localModel = localModel
         self.openSettings = openSettings
         self.refreshDictionaries = refreshDictionaries
     }
@@ -63,6 +67,10 @@ public struct SetupView: View {
             permissions: model.permissions, available: dictionary?.available,
             chosen: dictionary?.chosen, language: ReaderLanguage.preferred,
             shortcut: shortcut?.shortcut, shortcutIsRegistered: shortcutIsRegistered,
+            // **Not known is not "not downloaded".** Defaulted, the row asked a reader for a
+            // download the board had no way to start, and `SetupBoard`'s own nil branch — written
+            // for exactly this — could never be reached.
+            model: localModel?.state, modelDeclined: localModel?.declined ?? false,
             engine: SenseEngine.status())
     }
 
@@ -107,6 +115,16 @@ public struct SetupView: View {
             Text("Some of this could not be checked.")
         } else {
             switch board.outstanding.count {
+            // **"Everything" is a claim, and a row this Mac cannot have makes it false.** Nothing is
+            // waiting on the reader either way; which of the two sentences is true depends on
+            // whether something here is simply not available.
+            case 0 where board.steps.contains(where: { !board.isAvailable($0) }):
+                Text("Everything this Mac can do is in place. Anything here can still be changed.")
+            // **A model the reader put off is not one that is in place.** Nothing is waiting on
+            // them — they answered — but saying everything needed is here would be saying they have
+            // something they declined.
+            case 0 where localModel?.declined == true && board.model?.answering == nil:
+                Text("Nothing is waiting on you. The local model is still one click away above.")
             case 0: Text("Everything needed is in place. Anything here can still be changed.")
             case 1: Text("One thing is still needed.")
             default: Text("\(board.outstanding.count) things are still needed.")
@@ -117,10 +135,8 @@ public struct SetupView: View {
     @ViewBuilder private func row(_ step: SetupBoard.Step) -> some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             HStack(spacing: scale.space.inline) {
-                Image(systemName: board.isSettled(step) ? "checkmark.circle.fill" : symbol(step))
-                    .foregroundStyle(
-                        board.isSettled(step) ? AnyShapeStyle(.green)
-                            : (step.needsReader ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)))
+                let (symbol, colour) = symbolAndColour(step)
+                Image(systemName: symbol).foregroundStyle(colour)
                 title(step).font(.system(size: scale.text.heading, weight: .medium))
                 Spacer(minLength: scale.space.inline)
                 state(step)
@@ -149,12 +165,14 @@ public struct SetupView: View {
         case .screenRecording: Text("Screen Recording")
         case .dictionary: Text("Study dictionary")
         case .shortcut: Text("Lookup shortcut")
-        case .senseEngine: Text("Sense picking")
+        case .localModel: Text("Translation and sense picking")
         }
     }
 
     @ViewBuilder private func state(_ step: SetupBoard.Step) -> some View {
-        if board.isSettled(step) {
+        if step == .localModel, let modelState = modelStateLabel {
+            modelState
+        } else if board.isSettled(step), board.isAvailable(step) {
             Text("Ready")
         } else if step.needsReader {
             Text("Needed")
@@ -169,7 +187,7 @@ public struct SetupView: View {
         case .screenRecording: Text(Permission.screenRecording.blocks)
         case .dictionary: dictionaryDetail
         case .shortcut: shortcutDetail
-        case .senseEngine: engineDetail
+        case .localModel: modelDetail
         }
     }
 
@@ -239,33 +257,113 @@ public struct SetupView: View {
         }
     }
 
-    @ViewBuilder private var engineDetail: some View {
-        switch board.engine {
-        case .onDevice:
-            // **Available, not guaranteed.** A status is not a capability — the same rule that
-            // `LanguageAvailability` reporting `.supported` for a pair that then fails, and
-            // `PrivateCloudComputeLanguageModel` reporting `available` and refusing every
-            // request, are both recorded for. A refusal or a context overflow still falls to the
-            // simpler match, so the sentence says which is tried rather than which will answer.
-            Text("""
-                 Apple's on-device model is available, and is tried first when a sense has to be                  picked. A simpler match is used whenever it declines.
-                 """)
-        case .unavailable(.appleIntelligenceNotEnabled):
-            Text("""
-                 Apple Intelligence is off, so senses are picked by a simpler match. A marked \
-                 sense is a guess until you confirm it, either way.
-                 """)
-        case .unavailable(.modelNotReady):
-            Text("""
-                 Apple's on-device model is still preparing. Senses are picked by a simpler match \
-                 until it is ready.
-                 """)
-        case .unavailable:
-            Text("""
-                 Apple's on-device model does not run here, so senses are picked by a simpler \
-                 match. A marked sense is a guess until you confirm it, either way.
-                 """)
+    /// The row's state word where "Ready" and "Needed" would say something false: a download in
+    /// flight is neither, a declined model is not ready, and a board that was never told about the
+    /// model knows nothing about it.
+    private var modelStateLabel: Text? {
+        switch board.model {
+        case .downloading: Text("Downloading")
+        case .tooLittleMemory: Text("Not available")
+        case nil: Text("Not known")
+        case .ready: nil
+        case .notDownloaded, .stopped: board.modelDeclined ? Text("Not now") : nil
         }
+    }
+
+    /// The tick, the warning, or neither. **A step this Mac cannot have gets no tick**: a green
+    /// check over "Not available" would claim the reader had received something they have not.
+    private func symbolAndColour(_ step: SetupBoard.Step) -> (String, AnyShapeStyle) {
+        guard board.isAvailable(step) else { return ("circle", AnyShapeStyle(.secondary)) }
+        if board.isSettled(step) { return ("checkmark.circle.fill", AnyShapeStyle(.green)) }
+        return (symbol(step), step.needsReader ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+    }
+
+    /// What the model does, what it costs, and — while it is absent — what does its jobs instead.
+    /// The fallback is named because it is measured to be worse, and a reader deciding whether a
+    /// 3 GB download is worth it deserves to know what they have without it. **It is named only
+    /// where it is what answers**: during an upgrade the model already installed goes on working,
+    /// and telling that reader their senses are picked by a simpler match would be false.
+    @ViewBuilder private var modelDetail: some View {
+        switch board.model {
+        case .ready(let size):
+            Text("\(size.displayName) translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere.")
+        case .downloading(let progress, let size, let replacing):
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                if let replacing {
+                    Text("Downloading \(size.displayName) — \(Self.bytes(progress.received)) of \(Self.bytes(progress.total)). \(replacing.displayName) goes on answering until it is here.")
+                } else {
+                    Text("Downloading \(size.displayName) — \(Self.bytes(progress.received)) of \(Self.bytes(progress.total)). It can be stopped and resumed.")
+                }
+                ProgressView(value: progress.fraction)
+                if replacing == nil { fallbackDetail() }
+            }
+        case .stopped(let reason, let size, let replacing):
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Text("The \(size.displayName) download stopped: \(reason). What arrived is kept, and it resumes from there.")
+                if replacing == nil { fallbackDetail() }
+            }
+        case .tooLittleMemory:
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Text("This Mac has too little memory for the local model.")
+                // Nothing is coming later here, so nothing is said to be.
+                fallbackDetail(untilThen: false)
+            }
+        case nil:
+            Text("This board was opened without the model's state, so it cannot say what is here.")
+        case .notDownloaded:
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                if let size = localModel?.recommended {
+                    Text("\(size.displayName) translates your sentences and picks the sense you met, on this Mac — a \(Self.bytes(size.manifest.totalBytes)) download.")
+                }
+                fallbackDetail()
+            }
+        }
+    }
+
+    /// What picks senses and translates while the model is absent — Apple's engines, which are
+    /// measured to be weaker, or the simpler match where Apple's model does not run. Every sentence
+    /// says what is *tried*, not what will answer: Apple's model refuses some sentences and falls to
+    /// the simpler match, and its translator needs a language pack that may not be installed.
+    ///
+    /// **"Until then" is a promise, and on a Mac that cannot hold the model it is a false one.** So
+    /// the permanent case has sentences of its own rather than a phrase spliced into these: a
+    /// translator is given whole sentences, which is worth more than the repetition it costs.
+    @ViewBuilder private func fallbackDetail(untilThen: Bool = true) -> some View {
+        if untilThen {
+            if board.engine.isOnDevice {
+                Text("""
+                     Until then, senses are picked by Apple's on-device model, and a simpler match \
+                     where it declines. Sentences are translated by Apple where its language pack is \
+                     installed — which cannot be told which sense you met, and misreads some.
+                     """)
+            } else {
+                Text("""
+                     Until then, senses are picked by a simpler match. Sentences are translated by \
+                     Apple where its language pack is installed — which cannot be told which sense you \
+                     met, and misreads some.
+                     """)
+            }
+        } else {
+            if board.engine.isOnDevice {
+                Text("""
+                     Without a local model, senses are picked by Apple's on-device model, and a \
+                     simpler match where it declines. Sentences are translated by Apple where its \
+                     language pack is installed — which cannot be told which sense you met, and \
+                     misreads some.
+                     """)
+            } else {
+                Text("""
+                     Without a local model, senses are picked by a simpler match. Sentences are \
+                     translated by Apple where its language pack is installed — which cannot be told \
+                     which sense you met, and misreads some.
+                     """)
+            }
+        }
+    }
+
+    /// Bytes as the reader reads them: "3.1 GB".
+    private static func bytes(_ count: Int64) -> String {
+        count.formatted(.byteCount(style: .file))
     }
 
     @ViewBuilder private var shortcutDetail: some View {
@@ -309,16 +407,51 @@ public struct SetupView: View {
             }
         case .dictionary:
             dictionaryActions
-        case .senseEngine:
-            // Nothing to offer. There is no action inside this app that changes the answer, and a
-            // button that only opened System Settings would imply one.
-            EmptyView()
+        case .localModel:
+            modelActions
         case .shortcut:
             if let openSettings {
                 Button("Change…") { openSettings(.lookup) }
                     .buttonStyle(.glass)
                     .controlSize(.small)
             }
+        }
+    }
+
+    /// **A download never starts unasked**, so it is always a button — and it stays in the row after
+    /// Not now, one click away, for as long as there is something to download.
+    @ViewBuilder private var modelActions: some View {
+        if let localModel {
+            HStack(spacing: scale.space.stack) {
+                switch localModel.state {
+                case .downloading:
+                    Button("Stop") { localModel.cancel() }
+                        .buttonStyle(.glass)
+                case .notDownloaded, .stopped:
+                    // The size a stopped download was of, so Resume finishes what is on disk rather
+                    // than starting a second model beside it.
+                    if let size = localModel.downloadable {
+                        Button(localModel.state == .notDownloaded ? "Download" : "Resume") {
+                            localModel.download(size)
+                        }
+                        .buttonStyle(.glassProminent)
+                        if !localModel.declined {
+                            Button("Not now") { localModel.decline() }
+                                .buttonStyle(.glass)
+                        }
+                    }
+                case .ready:
+                    if let larger = localModel.larger {
+                        Button("Use the larger model (\(Self.bytes(larger.manifest.totalBytes)))") {
+                            localModel.download(larger)
+                        }
+                        .buttonStyle(.glass)
+                    }
+                case .tooLittleMemory:
+                    EmptyView()
+                }
+            }
+            .controlSize(.small)
         }
     }
 

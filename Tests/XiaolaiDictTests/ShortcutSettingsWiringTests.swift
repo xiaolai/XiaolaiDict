@@ -21,9 +21,10 @@ import XiaolaiDictTestSupport
     private static let other = Shortcut(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(cmdKey | optionKey))
 
     private func app(_ backend: FakeBackend, defaults: UserDefaults? = nil) -> XiaolaiDictApp {
-        XiaolaiDictApp(
-            defaults: defaults ?? TemporaryDefaults.suite(),
-            hotkeys: HotkeyCenter(backend: backend))
+        let suite = defaults ?? TemporaryDefaults.suite()
+        return XiaolaiDictApp(
+            defaults: suite, hotkeys: HotkeyCenter(backend: backend),
+            models: .temporary(defaults: suite))
     }
 
     /// The control Settings draws is connected to the app's own hot key — asserted by *using* it,

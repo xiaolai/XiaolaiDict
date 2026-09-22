@@ -523,54 +523,109 @@ public struct AppRelease: Equatable, Sendable {
 struct AboutPane: View {
     @Environment(\.scale) private var scale
     var release: AppRelease?
+    /// The local model's licence file, where a model is downloaded. It comes with the weights —
+    /// from the upstream repository, because the MLX mirror carries none — so a reader who has the
+    /// model has the licence it was published under.
+    var modelLicence: URL?
+    /// Shown when neither the downloaded licence nor the published one would open.
+    @State private var licenceWouldNotOpen = false
 
     /// Built once and checked, rather than force-unwrapped at the call site. A link that is nil is
     /// a link that is not drawn — never a crash on a settings pane.
     private static let site = URL(string: "https://lixiaolai.com")
+    /// The licence as published. **Readable before the download, not only after it**: a reader
+    /// deciding whether to fetch 3 GB is owed the terms first, and the copy that comes with the
+    /// weights does not exist yet. Once it does, it is the one opened — same text, no network.
+    private static let licence = LocalModelAttribution.licenceURL
 
+    /// Three subjects, three sections: which app this is, who made it, and what the model it can
+    /// download is licensed under.
     var body: some View {
         Form {
-            Section {
-                HStack(spacing: scale.space.column) {
-                    if let icon = NSImage(named: NSImage.applicationIconName) {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .frame(width: Token.Panel.aboutIcon, height: Token.Panel.aboutIcon)
-                            .accessibilityHidden(true)
-                    }
-                    VStack(alignment: .leading, spacing: scale.space.line) {
-                        Text("XiaolaiDict")
-                            .font(.system(size: scale.text.display, weight: .semibold))
-                        Text("A menu-bar dictionary for macOS.")
-                            .foregroundStyle(.secondary)
-                        // Nothing is invented where the bundle says nothing: a pane that printed
-                        // "unknown" would be claiming to have looked and found that answer.
-                        if let release {
-                            Text(release.label)
-                                .font(.system(size: scale.text.label))
-                                .foregroundStyle(.tertiary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-                .padding(.vertical, scale.space.stack)
-            }
+            identity
+            author
+            localModel
+        }
+        .formStyle(.grouped)
+    }
 
-            Section {
-                LabeledContent("Author") {
-                    if let site = Self.site {
-                        Link(destination: site) { Text(verbatim: "@xiaolai") }
-                    } else {
-                        Text(verbatim: "@xiaolai")
+    /// Which app this is, and which build.
+    @ViewBuilder private var identity: some View {
+        Section {
+            HStack(spacing: scale.space.column) {
+                if let icon = NSImage(named: NSImage.applicationIconName) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: Token.Panel.aboutIcon, height: Token.Panel.aboutIcon)
+                        .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: scale.space.line) {
+                    Text("XiaolaiDict")
+                        .font(.system(size: scale.text.display, weight: .semibold))
+                    Text("A menu-bar dictionary for macOS.")
+                        .foregroundStyle(.secondary)
+                    // Nothing is invented where the bundle says nothing: a pane that printed
+                    // "unknown" would be claiming to have looked and found that answer.
+                    if let release {
+                        Text(release.label)
+                            .font(.system(size: scale.text.label))
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
                     }
                 }
+            }
+            .padding(.vertical, scale.space.stack)
+        }
+    }
+
+    /// Who made it, and where to find them.
+    @ViewBuilder private var author: some View {
+        Section {
+            LabeledContent("Author") {
                 if let site = Self.site {
-                    LabeledContent("Website") {
-                        Link(site.host() ?? site.absoluteString, destination: site)
-                    }
+                    Link(destination: site) { Text(verbatim: "@xiaolai") }
+                } else {
+                    Text(verbatim: "@xiaolai")
+                }
+            }
+            if let site = Self.site {
+                LabeledContent("Website") {
+                    Link(site.host() ?? site.absoluteString, destination: site)
                 }
             }
         }
-        .formStyle(.grouped)
+    }
+
+    /// Which model, whose, and under what terms — named whether or not it is downloaded.
+    @ViewBuilder private var localModel: some View {
+        Section("Local model") {
+            LabeledContent("Model") { Text(verbatim: LocalModelAttribution.family) }
+            LabeledContent("Made by") { Text(verbatim: LocalModelAttribution.publisher) }
+            LabeledContent("Licence") {
+                if let destination = modelLicence ?? Self.licence {
+                    Button { open(destination) } label: { Text(verbatim: LocalModelAttribution.licenceName) }
+                        .buttonStyle(.link)
+                } else {
+                    Text(verbatim: LocalModelAttribution.licenceName)
+                }
+            }
+            if licenceWouldNotOpen {
+                Text("The licence could not be opened. It is published at \(LocalModelAttribution.licenceName).")
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Opens the downloaded copy, and falls back to the published one where that will not open —
+    /// a button that silently does nothing is worse than one that shows the same text from the web.
+    /// **And says so where neither opens**, for the same reason: a link the system refuses must not
+    /// read as a button the reader failed to press.
+    private func open(_ url: URL) {
+        guard !NSWorkspace.shared.open(url) else { return }
+        guard url != Self.licence, let published = Self.licence, NSWorkspace.shared.open(published) else {
+            licenceWouldNotOpen = true
+            return
+        }
     }
 }

@@ -112,6 +112,12 @@ extension PrimaryDictionary {
 struct SenseResolution: Equatable {
     let mark: SenseMark?
     let encounter: SenseEncounter?
+
+    /// Why no sense was marked, where the selector said.
+    var abstention: Abstention? {
+        guard case .couldNot(let why, _)? = mark else { return nil }
+        return why
+    }
 }
 
 /// Deciding which sense a lookup met: rung 0 first, then the selector, then honest silence.
@@ -170,6 +176,10 @@ struct SenseResolver {
         let choice = await selector.choose(
             from: candidates, reading: sentence, context: context, partOfSpeech: partOfSpeech)
         switch choice {
+        // **`.model` covers a choice no model made**: where the part-of-speech filter leaves one
+        // sense, the rung answers without asking anything. That is still a hypothesis — the tagger
+        // can be wrong about the part of speech — and `.model` is the provenance that draws as one.
+        // `.onlySense` would be the stronger claim, and it belongs to an entry that has one sense.
         case .chose(let key, _, let entryID):
             // By entry *and* key. A positional key is `"\(block).\(ordinal)"`, so every entry in
             // this dictionary has a sense keyed `"1.1"` — matching on the key alone took the first

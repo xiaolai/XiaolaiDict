@@ -23,6 +23,16 @@ readonly APP_NAME=XiaolaiDict
 readonly BUNDLE_ID=com.xiaolaidict
 readonly SERVICE=XiaolaiDictService
 readonly SERVICE_ID=$BUNDLE_ID.DictionaryService
+# The local model's service: its own process, so a GPU fault or an out-of-memory kill takes it and
+# not the app, and so unloading is ending it.
+readonly MODEL_SERVICE=XiaolaiDictModelService
+readonly MODEL_SERVICE_ID=$BUNDLE_ID.ModelService
+# MLX's Metal shaders, as the SwiftPM resource bundle MLX looks them up in. It is named because it
+# is asserted for by name; **every** resource bundle the model product builds is carried across —
+# swift-transformers' fallback tokenizer configs are read through `Bundle.module`, whose accessor
+# traps rather than returning nil when its bundle is missing, and swift-crypto's carries a privacy
+# manifest. A service that ships one bundle of three works until the day it reaches for another.
+readonly METAL_BUNDLE=mlx-swift_Cmlx.bundle
 readonly CONFIG=release
 readonly APP=.build/$APP_NAME.app
 # Assembled here, and published by an atomic swap only when every check has passed: $APP is the
@@ -30,6 +40,12 @@ readonly APP=.build/$APP_NAME.app
 readonly STAGE_ROOT=.build/stage
 readonly STAGE=$STAGE_ROOT/$APP_NAME.app
 readonly XPC_PATH=Contents/XPCServices/$SERVICE.xpc
+readonly MODEL_XPC_PATH=Contents/XPCServices/$MODEL_SERVICE.xpc
+# Where MLX finds its shaders: the service's own Contents/Resources, which is what SwiftPM's
+# generated accessor reads (`Bundle.main.resourceURL`). One level up, in Contents/, the service
+# starts, acquires the Metal device, and dies with no message on its first array (the MLX-in-XPC
+# spike, S2) — which is why the metallib's place is asserted, not assumed.
+readonly METALLIB_PATH=$MODEL_XPC_PATH/Contents/Resources/$METAL_BUNDLE/Contents/Resources/default.metallib
 # What the published bundle was built from. Removed before publication and written after it, so a
 # build interrupted in between leaves no record — and is rebuilt — rather than a false one.
 readonly BUNDLE_DIGEST=.build/$APP_NAME.app.inputs-sha256
@@ -41,6 +57,15 @@ readonly CATALOG=Strings/Localizable.xcstrings
 
 fail() { echo "error: $*" >&2; exit 1; }
 note() { echo "$*"; }
+
+# Every resource bundle the build produced, one per line — the model service carries all of them.
+# Read from the products directory rather than listed here, because the list grows with the model
+# service's dependencies and a hand-kept copy is one that silently falls behind.
+model_resource_bundles() {
+    local products
+    products=$(swift build -c "$CONFIG" --show-bin-path) || return 1
+    find "$products" -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort
+}
 
 # ---------------------------------------------------------------------------------------------
 # One build at a time, across processes. `.NOTPARALLEL` orders recipes within one make; two makes
@@ -227,53 +252,99 @@ version_after() {  # the smallest development number after $1: its third field c
 
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null; }
 
-verify_bundle() {
-    local bundle=$1
-    local file
-    for file in Contents/MacOS/$APP_NAME Contents/Info.plist Contents/Resources/Assets.car \
-                Contents/Resources/MenuBarIcon.svg "$XPC_PATH/Contents/MacOS/$SERVICE" "$XPC_PATH/Contents/Info.plist"; do
+# Four questions, each its own function: is everything there, do the plists agree, are the parts
+# signed as one, and — for a release — stamped by Apple's server. `verify_bundle` asks them in turn.
+verify_required_files() {
+    local bundle=$1 file executable built language
+    # Executables by `-x`, not `-s`: a binary whose executable bit was lost is still a file with
+    # bytes in it, and launchd cannot run it. Everything else only has to be there and non-empty.
+    for executable in Contents/MacOS/$APP_NAME "$XPC_PATH/Contents/MacOS/$SERVICE" \
+                      "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE"; do
+        [ -x "$bundle/$executable" ] || { echo "not executable: $bundle/$executable"; return 1; }
+    done
+    for file in Contents/Info.plist Contents/Resources/Assets.car \
+                Contents/Resources/MenuBarIcon.svg "$XPC_PATH/Contents/Info.plist" \
+                "$MODEL_XPC_PATH/Contents/Info.plist" "$METALLIB_PATH"; do
         [ -s "$bundle/$file" ] || { echo "missing: $bundle/$file"; return 1; }
     done
+    # Every resource bundle the model product built has to be here, not only the one named above.
+    for built in $(model_resource_bundles); do
+        [ -d "$bundle/$MODEL_XPC_PATH/Contents/Resources/$built" ] \
+            || { echo "missing from the model service: $built"; return 1; }
+    done
     # A translation that never reached the bundle is a reader still reading English.
-    local language
     for language in $(catalog_languages); do
         [ -s "$bundle/Contents/Resources/$language.lproj/Localizable.strings" ] \
             || { echo "missing from the bundle: $language.lproj/Localizable.strings"; return 1; }
     done
+}
+
+verify_bundle_metadata() {
+    local bundle=$1
     [ "$(plist_value "$bundle/Contents/Info.plist" CFBundleIdentifier)" = "$BUNDLE_ID" ] \
         || { echo "the app's CFBundleIdentifier is not $BUNDLE_ID"; return 1; }
     [ "$(plist_value "$bundle/$XPC_PATH/Contents/Info.plist" CFBundleIdentifier)" = "$SERVICE_ID" ] \
         || { echo "the service's CFBundleIdentifier is not $SERVICE_ID"; return 1; }
+    [ "$(plist_value "$bundle/$MODEL_XPC_PATH/Contents/Info.plist" CFBundleIdentifier)" = "$MODEL_SERVICE_ID" ] \
+        || { echo "the model service's CFBundleIdentifier is not $MODEL_SERVICE_ID"; return 1; }
     [ "$(plist_value "$bundle/Contents/Info.plist" CFBundleIconName)" = "$APP_NAME" ] \
         || { echo "CFBundleIconName is not $APP_NAME"; return 1; }
-    # One version declared in two tracked plists, with nothing else holding them together: edit
-    # one and the app and its service ship different answers to "which XiaolaiDict is this?". Asserted
-    # here rather than remembered.
-    local app_version service_version
+    # One version declared in three tracked plists, with nothing else holding them together: edit
+    # one and the app and its services ship different answers to "which XiaolaiDict is this?".
+    # Asserted here rather than remembered.
+    local app_version service_version model_version
     app_version=$(plist_value "$bundle/Contents/Info.plist" CFBundleShortVersionString)
     service_version=$(plist_value "$bundle/$XPC_PATH/Contents/Info.plist" CFBundleShortVersionString)
-    [ -n "$app_version" ] && [ "$app_version" = "$service_version" ] \
-        || { echo "app ($app_version) and service ($service_version) declare different versions"; return 1; }
+    model_version=$(plist_value "$bundle/$MODEL_XPC_PATH/Contents/Info.plist" CFBundleShortVersionString)
+    [ -n "$app_version" ] && [ "$app_version" = "$service_version" ] && [ "$app_version" = "$model_version" ] \
+        || { echo "app ($app_version), service ($service_version) and model service ($model_version) declare different versions"; return 1; }
+}
+
+verify_signatures() {
+    local bundle=$1 built
     codesign --verify --strict --deep "$bundle" || { echo "the signature does not verify"; return 1; }
+    # **The resource bundles are inside the signed service, sealed by it.** One copied in after the
+    # service was signed would fail the deep check above; one signed apart from it, or left
+    # unsigned, fails this — the service's own seal must cover its shaders and its tokenizer
+    # resources, and each must itself be a signed code object ("code object is not signed at all"
+    # otherwise, S2).
+    codesign --verify --strict "$bundle/$MODEL_XPC_PATH" || { echo "the model service's signature does not cover its contents"; return 1; }
+    for built in $(model_resource_bundles); do
+        codesign --verify --strict "$bundle/$MODEL_XPC_PATH/Contents/Resources/$built" \
+            || { echo "$built is not a signed code object"; return 1; }
+    done
     # The service trusts only its own team, so a bundle whose parts disagree is one where every
     # lookup is refused at runtime. Checked here, where the cause is still visible.
-    local app_team service_team
+    local app_team service_team model_team
     app_team=$(codesign -dv "$bundle" 2>&1 | grep '^TeamIdentifier=' || true)
     service_team=$(codesign -dv "$bundle/$XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
-    [ -n "$app_team" ] && [ "$app_team" = "$service_team" ] \
-        || { echo "app ($app_team) and service ($service_team) are not signed by one team"; return 1; }
-    # **A release must carry a secure timestamp, and this is where that is enforced.** The
-    # up-to-date check compares input digests, and the signing mode is not an input — so without
-    # this a release could reuse a bundle signed with `--timestamp=none`, and notarisation would
-    # reject it after the upload. `Signed Time=` is the local clock; only `Timestamp=` is Apple's.
-    # Output captured, then matched, for the SIGPIPE reason given in `assemble`.
-    if is_release; then
-        local part info
-        for part in "$bundle" "$bundle/$XPC_PATH"; do
-            info=$(codesign -dvvv "$part" 2>&1)
-            grep -q '^Timestamp=' <<<"$info" || { echo "a release is signed without a secure timestamp: $part"; return 1; }
-        done
-    fi
+    model_team=$(codesign -dv "$bundle/$MODEL_XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
+    [ -n "$app_team" ] && [ "$app_team" = "$service_team" ] && [ "$app_team" = "$model_team" ] \
+        || { echo "app ($app_team), service ($service_team) and model service ($model_team) are not signed by one team"; return 1; }
+}
+
+# **A release must carry a secure timestamp, and this is where that is enforced.** The up-to-date
+# check compares input digests, and the signing mode is not an input — so without this a release
+# could reuse a bundle signed with `--timestamp=none`, and notarisation would reject it after the
+# upload. `Signed Time=` is the local clock; only `Timestamp=` is Apple's. Output captured, then
+# matched, for the SIGPIPE reason given in `assemble`.
+verify_release_timestamps() {
+    local bundle=$1 part info built
+    is_release || return 0
+    local parts=("$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH")
+    for built in $(model_resource_bundles); do parts+=("$bundle/$MODEL_XPC_PATH/Contents/Resources/$built"); done
+    for part in "${parts[@]}"; do
+        info=$(codesign -dvvv "$part" 2>&1)
+        grep -q '^Timestamp=' <<<"$info" || { echo "a release is signed without a secure timestamp: $part"; return 1; }
+    done
+}
+
+verify_bundle() {
+    local bundle=$1
+    verify_required_files "$bundle" || return 1
+    verify_bundle_metadata "$bundle" || return 1
+    verify_signatures "$bundle" || return 1
+    verify_release_timestamps "$bundle" || return 1
 }
 
 # A release is a build numbered by the release counter. Everything that differs for one — the
@@ -323,23 +394,39 @@ assemble() {
     swift build -c "$CONFIG"
     local products
     products=$(swift build -c "$CONFIG" --show-bin-path)
-    [ -x "$products/$APP_NAME" ] && [ -x "$products/$SERVICE" ] || fail "swift build produced no $APP_NAME or $SERVICE"
+    [ -x "$products/$APP_NAME" ] && [ -x "$products/$SERVICE" ] && [ -x "$products/$MODEL_SERVICE" ] \
+        || fail "swift build produced no $APP_NAME, $SERVICE or $MODEL_SERVICE"
+    # Beside the products, where SwiftPM puts resource bundles. Fails closed: a service shipped
+    # without its shaders loads, then dies at its first GPU op — a failure that looks like a model
+    # problem, not a packaging one.
+    [ -f "$products/$METAL_BUNDLE/Contents/Resources/default.metallib" ] \
+        || fail "$products/$METAL_BUNDLE has no default.metallib; refusing to ship a model service with no Metal shaders"
+    local bundles
+    bundles=$(model_resource_bundles)
+    grep -qx "$METAL_BUNDLE" <<<"$bundles" \
+        || fail "the build produced no $METAL_BUNDLE; refusing to ship a model service with no Metal shaders"
 
     local contents=$STAGE/Contents
     local xpc=$STAGE/$XPC_PATH
+    local model_xpc=$STAGE/$MODEL_XPC_PATH
     rm -rf "$STAGE_ROOT"
-    mkdir -p "$contents/MacOS" "$contents/Resources" "$xpc/Contents/MacOS"
+    mkdir -p "$contents/MacOS" "$contents/Resources" "$xpc/Contents/MacOS" \
+        "$model_xpc/Contents/MacOS" "$model_xpc/Contents/Resources"
     cp "$products/$APP_NAME" "$contents/MacOS/$APP_NAME"
     cp "$products/$SERVICE" "$xpc/Contents/MacOS/$SERVICE"
+    cp "$products/$MODEL_SERVICE" "$model_xpc/Contents/MacOS/$MODEL_SERVICE"
+    local resource
+    for resource in $bundles; do cp -R "$products/$resource" "$model_xpc/Contents/Resources/$resource"; done
     cp "$RESOURCES/Info.plist" "$contents/Info.plist"
     cp "$RESOURCES/DictionaryService-Info.plist" "$xpc/Contents/Info.plist"
+    cp "$RESOURCES/ModelService-Info.plist" "$model_xpc/Contents/Info.plist"
     cp "$RESOURCES/MenuBarIcon.svg" "$contents/Resources/MenuBarIcon.svg"
 
     # The build number is stamped into the copies, not the tracked files: it is a property of the
     # build. Then read back, because PlistBuddy reports success for keys it did not write.
     local number plist
     number=$(build_number)
-    for plist in "$contents/Info.plist" "$xpc/Contents/Info.plist"; do
+    for plist in "$contents/Info.plist" "$xpc/Contents/Info.plist" "$model_xpc/Contents/Info.plist"; do
         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $number" "$plist"
         [ "$(plist_value "$plist" CFBundleVersion)" = "$number" ] || fail "CFBundleVersion did not take in $plist"
     done
@@ -354,6 +441,12 @@ assemble() {
     # not. stdout silenced, stderr kept, so a failure says why.
     local stamp=--timestamp=none
     ! is_release || stamp=--timestamp
+    # Innermost first: each resource bundle is a code object of its own, and the model service cannot
+    # be signed over an unsigned one — "code object is not signed at all" (S2).
+    for resource in $bundles; do
+        codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc/Contents/Resources/$resource" >/dev/null
+    done
+    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc" >/dev/null
     codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
     codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
 
@@ -439,9 +532,12 @@ quit_running() {
     stop "$APP/Contents/MacOS/$APP_NAME" "$APP_NAME"
     # launchd ends the app's XPC service with the app, but not at once; one that outlived it would
     # serve the next build's app with the old code and protocol.
-    local service=$APP/$XPC_PATH/Contents/MacOS/$SERVICE
-    for _ in $(seq 1 30); do is_running "$service" || return 0; sleep 0.1; done
-    stop "$service" "$SERVICE"
+    local service
+    for service in "$APP/$XPC_PATH/Contents/MacOS/$SERVICE" "$APP/$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE"; do
+        local waited=0
+        while is_running "$service" && [ "$waited" -lt 30 ]; do sleep 0.1; waited=$((waited + 1)); done
+        stop "$service" "$(basename "$service")"
+    done
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -523,7 +619,10 @@ health_check() {
         fail "the lookup probe did not finish within 15 s"
     fi
     wait "$probe" || fail "the running bundle's dictionary service did not answer a lookup"
-    note "$APP_NAME is running, and its dictionary service answers"
+    # The model service evaluates one MLX op on its GPU: "it starts" is not "it can run MLX".
+    local status
+    status=$("$PWD/$executable" --model-status) || fail "the running bundle's model service cannot run MLX: $status"
+    note "$APP_NAME is running, its dictionary service answers, and its model service runs MLX ($status)"
 }
 
 case "${1:-}" in

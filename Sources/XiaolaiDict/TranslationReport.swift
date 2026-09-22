@@ -66,7 +66,7 @@ enum TranslationReport {
     /// Apple's catalogue, not this Mac — and an availability check alone would have shipped a
     /// translation feature that never translates. Before offering one, call `prepareTranslation()`
     /// so the reader is asked to download the pair, or handle `.notInstalled` where it lands.
-    static func run(write: (String) -> Void = LookupCommand.writeLine) async -> CommandStatus {
+    static func run(write: (String) -> Void = { _ = LookupCommand.writeLine($0) }) async -> CommandStatus {
         #if canImport(Translation)
         guard #available(macOS 15.0, *) else {
             write("{\"translation\":false,\"reason\":\"this macOS has no Translation framework\"}")

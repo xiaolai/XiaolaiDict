@@ -50,6 +50,11 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Held only while the panel is on screen — a monitor that outlived it would dismiss a panel
     /// that is not there and keep a closure alive for every lookup the reader ever made.
     private var clickAway: Any?
+    /// The one resize observer, kept so it can be **replaced** rather than added to. The window
+    /// accessor's closure runs on every update of the view it is attached to, and the panel's body
+    /// reads the model download's progress — so a 3 GB download registered a fresh observer a few
+    /// hundred times, each one outliving its window and calling back for every resize after.
+    private(set) var resizeObserver: (any NSObjectProtocol)?
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
@@ -173,6 +178,17 @@ final class LookupPanelController: LookupPanelPresenting {
         stopWatchingForClicksAway()
     }
 
+    /// Watches one window for the reader finishing a drag. Registering again replaces the last
+    /// watch rather than adding to it.
+    func watchForResize(of window: NSWindow) {
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rememberChosenSize(window.frame.size) }
+        }
+    }
+
     /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
     /// shrunk to, to fit a smaller screen.
     func rememberChosenSize(_ size: NSSize) {
@@ -185,6 +201,9 @@ final class LookupPanelController: LookupPanelPresenting {
 struct LookupPanelSceneView: View {
     let controller: LookupPanelController
     @Bindable var model: LookupPanelModel
+    /// Read inside this body, never the scene's: the model's download progress is observable, and
+    /// reading it in an `App`'s body would re-evaluate every scene on each update.
+    let translation: @MainActor () -> TranslationActions
 
     var body: some View {
         Group {
@@ -196,6 +215,7 @@ struct LookupPanelSceneView: View {
                     .environment(\.studySense) { [controller] encounter in
                         controller.onStudySense?(encounter)
                     }
+                    .environment(\.translation, translation())
             }
         }
         .frame(minWidth: model.minimumSize.width)
@@ -205,11 +225,7 @@ struct LookupPanelSceneView: View {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = false
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
-            ) { [controller] _ in
-                MainActor.assumeIsolated { controller.rememberChosenSize(window.frame.size) }
-            }
+            controller.watchForResize(of: window)
         }
         // The reader closing the window is as final as Escape: whatever is still arriving for this
         // lookup is stale.

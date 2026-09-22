@@ -37,15 +37,16 @@ struct SenseEngineTests {
         #expect(Set(raw).count == raw.count, "two reasons share a raw value: \(raw)")
     }
 
-    /// Every reason Apple can give has a case here, plus the two this build owns. Mapped rather
-    /// than passed through because Apple's enum is neither `Codable` nor `CaseIterable` and can
-    /// gain a case in a point release.
+    /// Every reason Apple can give has a case here, plus `unknown`, which this build owns. Mapped
+    /// rather than passed through because Apple's enum is neither `Codable` nor `CaseIterable` and
+    /// can gain a case in a point release. There is no "not in this build": FoundationModels is
+    /// imported unconditionally on a macOS 27 floor, and a state that cannot happen is one more
+    /// thing every reader of this type has to rule out.
     @Test func theReasonsCoverApplesAndThisBuildsOwn() {
         let named = Set(SenseEngineUnavailability.allCases.map(\.rawValue))
         #expect(named.isSuperset(of: [
             "deviceNotEligible", "appleIntelligenceNotEnabled", "modelNotReady",
         ]))
-        #expect(named.contains("notInThisBuild"))
         #expect(named.contains("unknown"))
     }
 }

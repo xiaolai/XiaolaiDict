@@ -22,6 +22,7 @@ public struct PanelView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .lookup(let presentation):
             LookupPanelContent(presentation: presentation, waiting: content.waitingDescription)
+                .id(presentation.request)
         }
     }
 }
@@ -640,6 +641,7 @@ extension DictionaryEntry {
 // would be a concurrency error rather than a convenience.
 func sampleWaiting() -> LookupPresentation {
     LookupPresentation(
+        request: 1,
         term: "ephemeral",
         lemma: Lemma(text: "ephemeral", basis: .tagger),
         source: "Safari · A page",
@@ -712,6 +714,7 @@ func sampleLookup(_ mark: SenseMark?) -> LookupPresentation {
         sampleEntry("New Oxford American Dictionary"), sampleEntry("Oxford Thesaurus"),
     ])!
     return LookupPresentation(
+        request: 2,
         term: "fine",
         lemma: Lemma(text: "fine", basis: .tagger),
         source: "Safari · A page",

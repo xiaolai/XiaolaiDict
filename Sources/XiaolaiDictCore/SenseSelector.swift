@@ -34,8 +34,21 @@ public enum Abstention: String, Sendable, CaseIterable, Codable {
     case tooClose
     /// Nothing is close enough to the sentence to claim.
     case nothingFits
-    /// The selector could not run at all — no embedding for this language, or a refusal.
+    /// **A model answered that the sentence does not settle the question.** Its own instructions
+    /// offer 0 for two different situations at once — "no sense clearly fits, *or* two or more fit
+    /// equally well" — so the answer cannot say which, and this claims neither. `.tooClose` and
+    /// `.nothingFits` belong to the embedding rung, where the distance to the runner-up is measured
+    /// and says which of the two it is; filing a model's 0 under `.tooClose` told the reader
+    /// "several senses fit equally well" on sentences where the model meant the opposite.
+    case undecided
+    /// The selector could not run at all — no model on this Mac, one that does not fit in memory
+    /// right now, or no embedding for this language.
     case unavailable
+    /// A model was here and **declined this sentence**. Not `.unavailable`: "no model here" and "the
+    /// model would not answer" are different facts about a lookup, and the ledger keeps them apart.
+    /// Measured: Apple's model refuses *"The police will charge him with fraud."* four runs of four,
+    /// and filed as `.unavailable` that refusal left no trace.
+    case refused
 
     // What the reader is told for each case is `Abstention.reason`, in `XiaolaiDictUI`. Display
     // text lives in the view layer because that is where the string catalog is extracted from and
@@ -178,6 +191,32 @@ public enum SenseCandidates {
         let keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
         return PartOfSpeechFilter.narrow(keyable, to: partOfSpeech)
     }
+
+    /// What a rung settles **before** asking anything: nothing to choose between, one sense, or no
+    /// sentence to choose by. Every rung answered these three the same way in its own copy of the
+    /// same eight lines — and a copy is where the answers drift apart.
+    enum Preflight {
+        /// Ask: these candidates, that sentence.
+        case ask([SenseCandidate], sentence: String)
+        /// Nothing to ask; this is the answer.
+        case settled(SenseSelection)
+    }
+
+    static func preflight(
+        _ candidates: [SenseCandidate], matching partOfSpeech: String?, reading sentence: String?,
+        context: CaptureQuality.Context
+    ) -> Preflight {
+        let considered = considered(candidates, matching: partOfSpeech)
+        guard !considered.isEmpty else { return .settled(.abstained(.noCandidates)) }
+        // One sense is not a choice. Nothing was chosen, so nothing can be wrong.
+        guard considered.count > 1 else {
+            return .settled(.chose(key: considered[0].key, margin: .infinity, entryID: considered[0].entryID))
+        }
+        guard context == .complete, let sentence,
+              !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return .settled(.abstained(.noContext)) }
+        return .ask(considered, sentence: sentence)
+    }
 }
 
 /// Rung 1: `NLEmbedding` cosine distance between the reader's sentence and each sense's text.
@@ -217,20 +256,18 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         // A dictionary that cannot key its senses offers nothing to choose between, so this can
         // never yield a sense-level choice for one. And, measured: "kept a tight rein on spending"
         // drew the *verb* "to hold something back" over the noun "the power to steer or restrain"
-        // — the meaning right, the grammar wrong.
-        let keyable = SenseCandidates.considered(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil)
-        guard !keyable.isEmpty else { return .abstained(.noCandidates) }
-        // One sense is not a choice. It is answered by `onlySense` before any selector runs, and if
-        // it reaches here it is still not something a model got right.
-        guard keyable.count > 1 else {
-            return .chose(key: keyable[0].key, margin: .infinity, entryID: keyable[0].entryID)
+        // — the meaning right, the grammar wrong. The three answers before any scoring are the
+        // shared ones, so no rung answers them differently from another.
+        let keyable: [SenseCandidate], reading: String
+        switch SenseCandidates.preflight(
+            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
+            context: context
+        ) {
+        case .settled(let answer): return answer
+        case .ask(let asking, let sentence): (keyable, reading) = (asking, sentence)
         }
 
-        guard context == .complete, let sentence, !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return .abstained(.noContext) }
-
-        let scored = rank(keyable, reading: sentence)
+        let scored = rank(keyable, reading: reading)
         guard let best = scored.first else { return .abstained(.unavailable) }
         guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
 
@@ -294,16 +331,24 @@ public struct EmbeddingSenseSelector: SenseSelecting {
 /// This is not a "try until one answers" loop, and the distinction is the whole point. A rung that
 /// **abstained** has decided, and its decision stands — falling through to a lower rung on a real
 /// abstention would rebuild exactly the thing abstention exists to prevent: a selector that always
-/// answers. Only `.unavailable` — the model is not on this Mac, or it refused — falls through.
+/// answers. Only a rung that did not get to decide falls through: `.unavailable`, the model is not
+/// here, and `.refused`, it declined the sentence — for which the next rung is the right answer and
+/// has always been.
+///
+/// **Where nothing below a refusal answers either, the refusal is what is reported**, not
+/// "unavailable": the reader's lookup met a model that declined, and that is the more specific
+/// fact. Where a lower rung does answer, its answer stands and is recorded as its own.
 ///
 /// It matters because Apple Intelligence is unavailable in mainland China, a core audience, and on
 /// plenty of Macs besides: measured `deviceNotEligible` on the development Mac and `available` on
-/// the E2E machine. The reader in Shanghai gets rung 1; the reader in Tokyo gets rung 2; neither
-/// gets a selector that guesses.
+/// the E2E machine. The local model is the top rung for every reader who has downloaded it; Apple's
+/// is the second, and runs while the download is pending, declined, or does not fit; `NLEmbedding`
+/// is the floor. None of them is a selector that guesses.
 public struct LadderSenseSelector: SenseSelecting {
     private let rungs: [any SenseSelecting]
 
-    /// Highest rung first. The default ladder is Apple's on-device model, then `NLEmbedding`.
+    /// Highest rung first. Without the model service — which only the app can reach — the default
+    /// ladder is Apple's on-device model, then `NLEmbedding`.
     public init(rungs: [any SenseSelecting] = [FoundationModelsSenseSelector(), EmbeddingSenseSelector()]) {
         self.rungs = rungs
     }
@@ -312,13 +357,24 @@ public struct LadderSenseSelector: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        var last: SenseSelection = .abstained(.unavailable)
+        var refused = false
         for rung in rungs {
-            last = await rung.choose(
+            // **A cancelled lookup asks nothing more.** The reader has moved on — every rung below
+            // would be work for an answer nobody is waiting for, and a rung that reports a
+            // cancellation as "not here" would otherwise walk the whole ladder doing it.
+            guard !Task.isCancelled else { return .abstained(refused ? .refused : .unavailable) }
+            let answer = await rung.choose(
                 from: candidates, reading: sentence, context: context, partOfSpeech: partOfSpeech)
-            guard last.abstention == .unavailable else { return last }
+            // Cancelled *while* the rung answered: the reader has moved on, and an answer nobody
+            // waited for must not be written down as a sense a model chose for them.
+            guard !Task.isCancelled else { return .abstained(refused ? .refused : .unavailable) }
+            switch answer.abstention {
+            case .unavailable: continue
+            case .refused: refused = true
+            default: return answer
+            }
         }
-        return last
+        return .abstained(refused ? .refused : .unavailable)
     }
 }
 
@@ -368,17 +424,16 @@ public struct ShortlistSenseSelector: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        let considered = SenseCandidates.considered(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil)
-        guard !considered.isEmpty else { return .abstained(.noCandidates) }
-        guard considered.count > 1 else {
-            return .chose(key: considered[0].key, margin: .infinity, entryID: considered[0].entryID)
+        let considered: [SenseCandidate], reading: String
+        switch SenseCandidates.preflight(
+            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
+            context: context
+        ) {
+        case .settled(let answer): return answer
+        case .ask(let asking, let sentence): (considered, reading) = (asking, sentence)
         }
-        guard context == .complete, let sentence,
-              !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return .abstained(.noContext) }
 
-        let ranked = ranker.rank(considered, reading: sentence)
+        let ranked = ranker.rank(considered, reading: reading)
         // **A shortlist it could not build is not an abstention.** Where the embedding cannot run
         // — which is every Traditional Chinese, Japanese and Korean sentence, measured — the
         // decider is handed everything instead. Abstaining here would make this arrangement
@@ -390,6 +445,6 @@ public struct ShortlistSenseSelector: SenseSelecting {
         // The part of speech is passed on although the narrowing is already done: the decider may
         // put it in its prompt, and narrowing an already-narrowed set is a no-op.
         return await decider.choose(
-            from: shortlisted, reading: sentence, context: context, partOfSpeech: partOfSpeech)
+            from: shortlisted, reading: reading, context: context, partOfSpeech: partOfSpeech)
     }
 }

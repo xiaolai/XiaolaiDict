@@ -26,6 +26,8 @@ struct SetupBoardTests {
         language: String = "en-US",
         shortcut: Shortcut? = combination,
         shortcutIsRegistered: Bool = true,
+        model: LocalModelState? = .ready(.standard),
+        modelDeclined: Bool = false,
         engine: SenseEngineStatus = .onDevice
     ) -> SetupBoard {
         SetupBoard(
@@ -34,7 +36,8 @@ struct SetupBoardTests {
                 PermissionState(permission: .screenRecording, isGranted: screenRecording),
             ]),
             available: available, chosen: chosen, language: language, shortcut: shortcut,
-            shortcutIsRegistered: shortcutIsRegistered, engine: engine)
+            shortcutIsRegistered: shortcutIsRegistered, model: model, modelDeclined: modelDeclined,
+            engine: engine)
     }
 
     // MARK: - Rows read live state
@@ -51,7 +54,8 @@ struct SetupBoardTests {
     @Test func aPermissionMissingFromTheReportIsNotGranted() {
         let empty = SetupBoard(
             permissions: PermissionsReport(states: []), available: nil, chosen: nil,
-            language: "en", shortcut: nil, engine: .onDevice)
+            language: "en", shortcut: nil, model: .notDownloaded, modelDeclined: false,
+            engine: .onDevice)
         #expect(!empty.isGranted(.accessibility))
         #expect(!empty.isSettled(.screenRecording))
     }
@@ -133,7 +137,8 @@ struct SetupBoardTests {
         #expect(finished.steps == SetupBoard.Step.allCases)
         #expect(finished.steps.count == 5)
 
-        let fresh = board(accessibility: false, screenRecording: false, chosen: nil, shortcut: nil)
+        let fresh = board(
+            accessibility: false, screenRecording: false, chosen: nil, shortcut: nil, model: .notDownloaded)
         #expect(!fresh.isComplete)
         #expect(fresh.steps == finished.steps, "a finished board shows the same rows as a fresh one")
     }
@@ -158,6 +163,13 @@ struct SetupBoardTests {
         #expect(asking.outstanding.isEmpty, "a saved choice still settles its own row")
         #expect(!asking.isComplete, "the board claimed completeness without a dictionary list")
         #expect(board().isComplete)
+
+        // **Nor over a model row nobody answered.** `isAvailable` leaves an unknown row out of
+        // `outstanding` — which is right for a Mac that cannot hold a model and wrong for a board
+        // that was never told, and the two are the same value here.
+        let unknown = board(model: nil)
+        #expect(unknown.outstanding.isEmpty)
+        #expect(!unknown.isComplete, "the board claimed completeness while it knew nothing about the model")
     }
 
     /// **"None declares it" is not "you have none."** Six of the seven dictionaries on the
@@ -182,24 +194,76 @@ struct SetupBoardTests {
         #expect(board().undeclaredEnglishDictionaries.isEmpty)
     }
 
-    // MARK: - The sense engine
+    // MARK: - The local model
 
-    /// Reported, never demanded. Measured 2026-09-22 over three identical runs, the
-    /// confidently-wrong rate is 17% with Apple's on-device model and 17% with the `NLEmbedding`
-    /// fallback — so an unavailable model is not a task, and counting it would leave a reader with
-    /// nothing they can act on staring at an unfinished board.
-    @Test func anUnavailableModelIsReportedAndNeverAskedFor() {
-        let without = board(engine: .unavailable(.deviceNotEligible))
-        #expect(!without.isSettled(.senseEngine))
-        #expect(!without.outstanding.contains(.senseEngine))
-        #expect(without.isComplete)
+    /// **A download the reader has not agreed to is still needed** — the row the sense engine used
+    /// to be did not ask anything, and this one does: a 3 GB download only the reader can agree to.
+    @Test func aModelNotYetDownloadedIsStillNeeded() {
+        let fresh = board(model: .notDownloaded)
+        #expect(SetupBoard.Step.localModel.needsReader)
+        #expect(!fresh.isSettled(.localModel))
+        #expect(fresh.outstanding == [.localModel])
+        #expect(!fresh.isComplete)
     }
 
-    @Test func theEngineRowFollowsWhatIsActuallyBackingSelection() {
-        #expect(board(engine: .onDevice).isSettled(.senseEngine))
-        #expect(!board(engine: .unavailable(.appleIntelligenceNotEnabled)).isSettled(.senseEngine))
+    /// Settled two ways, and both are the reader's answer: the model is here, or they said Not now.
+    @Test func downloadedOrDeclinedSettlesTheRow() {
+        #expect(board(model: .ready(.standard)).isSettled(.localModel))
+        #expect(board(model: .ready(.small)).isComplete)
+        let declined = board(model: .notDownloaded, modelDeclined: true)
+        #expect(declined.isSettled(.localModel))
+        #expect(declined.isComplete)
+        #expect(board(model: .stopped(reason: "x", size: .standard), modelDeclined: true).isSettled(.localModel))
+    }
+
+    /// A download in flight, or one that stopped, is not yet an answer.
+    @Test func aDownloadUnderWayOrStoppedIsNotSettled() {
+        let progress = ModelDownloadProgress(received: 1, total: 2)
+        #expect(!board(model: .downloading(progress, size: .standard)).isSettled(.localModel))
+        #expect(!board(model: .stopped(reason: "the connection failed", size: .standard)).isSettled(.localModel))
+    }
+
+    /// A Mac that cannot hold even 2B has nothing to ask of its reader — a row that stayed needed
+    /// there could never be settled, and the board would be unfinished forever. **But it is not
+    /// settled either**: a tick would claim the reader had got something they have not.
+    @Test func aMacWithTooLittleMemoryIsNotAskedForAnythingAndIsNotTicked() {
+        let small = board(model: .tooLittleMemory)
+        #expect(!small.isAvailable(.localModel))
+        #expect(!small.isSettled(.localModel), "a Mac that cannot run the model showed a tick for it")
+        #expect(!small.outstanding.contains(.localModel))
+        #expect(small.isComplete)
+        #expect(board().isAvailable(.localModel))
+    }
+
+    /// An upgrade keeps the row settled: the model it replaces is answering the whole time.
+    @Test func anUpgradeLeavesTheRowSettled() {
+        let progress = ModelDownloadProgress(received: 1, total: 2)
+        let upgrading = board(model: .downloading(progress, size: .large, replacing: .standard))
+        #expect(upgrading.isSettled(.localModel))
+        #expect(upgrading.isComplete)
+        #expect(board(model: .stopped(reason: "x", size: .large, replacing: .standard)).isSettled(.localModel))
+    }
+
+    /// A board built without the model's state asks the reader for nothing: it does not know.
+    @Test func aBoardWithNoModelStateAsksForNothing() {
+        let unknowing = board(model: nil)
+        #expect(!unknowing.isAvailable(.localModel))
+        #expect(!unknowing.isSettled(.localModel))
+        #expect(!unknowing.outstanding.contains(.localModel))
+    }
+
+    /// A download under way is not an answer, whatever was chosen before it started.
+    @Test func aRunningDownloadIsNeverSettled() {
+        let progress = ModelDownloadProgress(received: 1, total: 2)
+        #expect(!board(model: .downloading(progress, size: .standard), modelDeclined: true).isSettled(.localModel))
+    }
+
+    /// Apple's model is no longer a row; it is what the model row names as the fallback, so it is
+    /// still read — and still read from the one place that asks.
+    @Test func appleIntelligenceIsTheFallbackNotARow() {
+        #expect(!SetupBoard.Step.allCases.map(\.rawValue).contains("senseEngine"))
         #expect(board(engine: .unavailable(.modelNotReady)).engine.reason == .modelNotReady)
-        #expect(board(engine: .onDevice).engine.reason == nil)
+        #expect(board(engine: .onDevice).engine.isOnDevice)
     }
 
     /// The board holds no flag about having been shown. Whether the window opened by itself is

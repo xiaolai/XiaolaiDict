@@ -4,6 +4,14 @@
 /// (`dev-docs/study-unit.md` §5.2). The bundle identifier is, where there is one — and for the
 /// sideloaded conversions there is none, which is a fact about them worth carrying rather than
 /// papering over.
+public extension DictionaryIdentity {
+    /// The New Oxford American Dictionary's bundle identifier. **Dictionaries are singled out by
+    /// identifier, never by name**: a display name is localized — NOAD reads differently under a
+    /// Chinese interface — so a name match can report a dictionary as absent that is right there.
+    /// The labelled accuracy set is NOAD's, which is why this one is named here.
+    static let noad = "com.apple.dictionary.NOAD"
+}
+
 public struct DictionaryIdentity: Codable, Sendable, Equatable, Hashable {
     /// What the reader sees: "New Oxford American Dictionary", "牛津英汉汉英词典".
     public let name: String

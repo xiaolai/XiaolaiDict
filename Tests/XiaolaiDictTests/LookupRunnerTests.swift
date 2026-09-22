@@ -4,6 +4,7 @@ import AppKit
 import XiaolaiDictCore
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// The order a lookup reaches the reader in. The panel is a container that fills in, not a payload
 /// that is awaited: `feature-ledger-ux.md` B3 asks for a panel within 1 s, and the deadline that
@@ -50,9 +51,22 @@ struct LookupRunnerTests {
         #expect(ContinuousClock.now - started >= DictionaryClient.defaultDeadline, "the deadline was not the shipped one")
     }
 
+    /// The local model is loaded while the dictionaries are asked, so the sense question after them
+    /// does not pay for the load — and the lookup never waits on it.
+    @Test func theModelIsPrewarmedBesideTheLookup() async throws {
+        let prewarmed = Recorder(0)
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+            panel: RecordingPanel(), prewarm: { prewarmed.withLock { $0 += 1 } })
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: PanelTicket(number: 0))
+        for _ in 0..<200 where prewarmed.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(prewarmed.withLock { $0 } == 1)
+    }
+
     /// What it is waiting for, in words — not a blank panel that looks like an empty entry.
     @Test func theWaitingPanelSaysWhatItIsWaitingFor() {
         let waiting = PanelContent.lookup(LookupPresentation(
+            request: 1,
             term: "fine", lemma: Lemmatizer.lemma(of: "fine", in: nil), source: "Preview",
             capture: .accessibility(.accessibilityTextRange, context: .complete), outcome: nil))
         let detail = try! #require(waiting.waitingDescription)
@@ -63,6 +77,7 @@ struct LookupRunnerTests {
     /// Both states are one kind of panel, so filling it in cannot resize or reposition it.
     @Test func waitingAndAnsweredAreTheSameKindOfPanel() {
         let presentation = LookupPresentation(
+            request: 2,
             term: "fine", lemma: Lemmatizer.lemma(of: "fine", in: nil), source: nil,
             capture: .accessibility(.accessibilityTextRange, context: .complete), outcome: nil)
         var answered = presentation
@@ -84,6 +99,45 @@ struct LookupRunnerTests {
         let recording = await lookup.value
         #expect(recording == nil, "a lookup nobody saw was recorded")
         #expect(panel.updates.isEmpty, "a superseded lookup filled the newer panel")
+    }
+
+    /// **A lookup whose entry was shown is recorded, even if superseded while its sense was decided.**
+    /// The rule is "a lookup nobody saw is not recorded", and this one was seen: the entry was on
+    /// screen. What was never shown is the mark, and the mark is not what makes it the reader's.
+    @Test func aLookupSupersededWhileItsSenseIsDecidedIsStillRecorded() async throws {
+        let panel = RecordingPanel()
+        let supersede = SupersedingSelector(panel: panel)
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) }, fallback: { _ in nil }),
+            panel: panel, selector: supersede)
+        let recording = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        #expect(supersede.asked, "the selector never ran, so nothing was superseded during it")
+        #expect(recording != nil, "a lookup the reader saw was dropped from the ledger")
+        #expect(panel.updates.count == 1, "the mark was drawn into the newer panel")
+    }
+
+    /// Each lookup's panel content carries its request, which is what gives it a view of its own.
+    @Test func theShownLookupCarriesItsRequest() async throws {
+        let panel = RecordingPanel()
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(10), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+            panel: panel)
+        let ticket = panel.newRequest()
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket)
+        guard case .lookup(let presentation) = panel.contents.first else { Issue.record("nothing shown"); return }
+        #expect(presentation.request == ticket.number)
+    }
+
+    private static var twoSenses: DictionaryEntry {
+        DictionaryEntry(
+            dictionary: DictionaryIdentity(name: "New Oxford American Dictionary", identifier: "com.apple.dictionary.NOAD", version: "1.0"),
+            headword: "fine", lookedUp: "fine", html: "<p/>",
+            document: EntryDocument(
+                isStyled: true, entryID: "m1", homograph: nil,
+                blocks: [SenseBlock(number: 1, partOfSpeech: "noun", senses: [1, 2].map {
+                    DictionarySense(path: SensePath(block: 1, ordinal: $0), key: "m1.00\($0)", keyKind: .publisher,
+                                    definition: "meaning \($0)", text: "meaning \($0)")
+                })]))
     }
 
     /// The answered lookup is what gets recorded, with the sentence it was read in.
@@ -109,6 +163,44 @@ struct LookupRunnerTests {
         #expect(record.language == "en")
         #expect(record.contextRange == NSRange(location: 12, length: 4))
     }
+
+    /// **What the word cost the reader before reaches the panel.** `MemoryStrip` and the met senses
+    /// were built, tested and never wired: the runner took a ledger reader and never called it, so
+    /// every panel showed a first lookup. The same shape as the hover pause that shipped complete
+    /// and unreachable — a dependency nothing reads is invisible to every test of the value itself.
+    @Test func thePanelIsToldWhatTheReaderMetBefore() async throws {
+        let panel = RecordingPanel()
+        let met = StudyItem(
+            dictionary: "NOAD", entryID: "m_en_gbus0123456", senseKey: "4", senseKeyKind: .publisher)
+        let earlier = PriorEncounters(
+            occasions: [PriorEncounter(at: .now.addingTimeInterval(-86_400), where: "Preview", title: "paper")],
+            met: [met])
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            panel: panel, priorEncounters: { _, _ in earlier })
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+
+        let shown = try #require(panel.updates.compactMap { content -> LookupPresentation? in
+            guard case .lookup(let lookup) = content else { return nil }
+            return lookup
+        }.last)
+        #expect(shown.memory?.occasion == 2, "the memory strip never reached the panel")
+        #expect(shown.met == [met], "the senses already met never reached the panel")
+    }
+
+    /// A first lookup has nothing to remember, and an empty strip is noise on the commonest case.
+    @Test func aFirstLookupIsShownNoMemoryStrip() async throws {
+        let panel = RecordingPanel()
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            panel: panel)
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        for content in panel.contents + panel.updates {
+            guard case .lookup(let lookup) = content else { continue }
+            #expect(lookup.memory == nil)
+            #expect(lookup.met.isEmpty)
+        }
+    }
 }
 
 /// A transport that accepts the request and never answers — the hung service the deadline exists
@@ -120,6 +212,31 @@ private struct NeverReplies: DictionaryTransport {
     }
 
     func cancel(reason: String) {}
+}
+
+/// A service that answers every lookup with one entry.
+private struct AnswersWith: DictionaryTransport {
+    let entry: DictionaryEntry
+    func send(_ request: ServiceRequest) async throws -> ServiceReply {
+        .lookup(.entries(NonEmpty([entry])!, unreadable: []))
+    }
+    func cancel(reason: String) {}
+}
+
+/// A selector during which the reader presses the shortcut again.
+private final class SupersedingSelector: SenseSelecting, @unchecked Sendable {
+    let panel: RecordingPanel
+    private(set) var asked = false
+    init(panel: RecordingPanel) { self.panel = panel }
+
+    func choose(
+        from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?
+    ) async -> SenseSelection {
+        asked = true
+        await MainActor.run { _ = panel.newRequest() }
+        return .chose(key: candidates[0].key, margin: 1, entryID: candidates[0].entryID)
+    }
 }
 
 /// Stands in for the panel and remembers what it was asked to do, and in which order.

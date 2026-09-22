@@ -41,7 +41,7 @@ struct SetupWiringTests {
         let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
         let call = try callSite(scene, of: "SetupView")
         for argument in [
-            "model:", "dictionary:", "shortcut:", "shortcutIsRegistered:", "openSettings:",
+            "model:", "dictionary:", "shortcut:", "shortcutIsRegistered:", "localModel:", "openSettings:",
             "refreshDictionaries:",
         ] {
             #expect(
@@ -57,6 +57,23 @@ struct SetupWiringTests {
         #expect(
             try callSite(scene, of: "SettingsView").contains("openSetup:"),
             "the settings window cannot open the setup board")
+    }
+
+    /// The translation pane is handed its translator by the panel's scene. Unwired, the environment's
+    /// default answers "could not be translated" for every sentence and offers no download — a
+    /// feature complete and connected to nothing, the `HoverPause` shape again.
+    @Test func theLookupPanelIsHandedItsTranslator() throws {
+        let panel = try source("Sources/XiaolaiDict/LookupPanel.swift")
+        #expect(panel.contains(".environment(\\.translation, translation())"),
+                "the lookup panel never sets the translation environment")
+        let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
+        #expect(scene.contains("delegate.models.translationActions"), "the scene hands the panel no translator")
+    }
+
+    /// About names the model's licence from the file that came with the weights.
+    @Test func aboutIsHandedTheModelsLicence() throws {
+        let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
+        #expect(try callSite(scene, of: "SettingsView").contains("modelLicence:"))
     }
 
     /// And the menu, which is where a reader who is not in Settings looks.
