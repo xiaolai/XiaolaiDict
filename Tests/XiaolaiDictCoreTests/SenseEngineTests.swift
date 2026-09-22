@@ -27,10 +27,14 @@ struct SenseEngineTests {
         #expect(SenseEngine.status() == SenseEngine.status())
     }
 
-    @Test func aReasonRoundTripsThroughItsRawValue() {
-        for reason in SenseEngineUnavailability.allCases {
-            #expect(SenseEngineUnavailability(rawValue: reason.rawValue) == reason)
-        }
+    /// Every reason is its own value. A duplicated raw value would make two distinct reasons
+    /// decode as one, and the reader would be told the wrong thing about their Mac.
+    ///
+    /// The round-trip this replaces asserted only that the compiler synthesises `RawRepresentable`
+    /// correctly — it could not fail for any mistake in this file.
+    @Test func noTwoReasonsShareARawValue() {
+        let raw = SenseEngineUnavailability.allCases.map(\.rawValue)
+        #expect(Set(raw).count == raw.count, "two reasons share a raw value: \(raw)")
     }
 
     /// Every reason Apple can give has a case here, plus the two this build owns. Mapped rather

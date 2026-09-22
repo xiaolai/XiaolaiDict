@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import XiaolaiDictCore
@@ -203,7 +204,23 @@ struct SetupBoardTests {
 
     /// The board holds no flag about having been shown. Whether the window opened by itself is
     /// somebody else's question, and mixing the two is how re-running becomes impossible.
-    @Test func theBoardCarriesNothingAboutHavingBeenShown() {
-        #expect(board() == board(), "two boards from the same state must not differ by a hidden flag")
+    ///
+    /// **Read from the source, because the obvious test cannot fail.** Comparing two identically
+    /// built boards proves nothing: a completion flag added with the same default on both sides
+    /// would compare equal and the check would pass over exactly the change it exists to stop.
+    /// What can fail is the board reaching for the store at all.
+    @Test func theBoardNeverConsultsWhetherItHasBeenShown() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for file in ["Sources/XiaolaiDictUI/SetupBoard.swift", "Sources/XiaolaiDictUI/SetupView.swift"] {
+            let text = try String(contentsOf: root.appending(path: file), encoding: .utf8)
+            #expect(!text.isEmpty, "\(file) is empty, so this scanned nothing")
+            let code = text.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+            #expect(
+                !code.contains("hasOpenedBefore") && !code.contains("SetupPresentationStore"),
+                "\(file) reads the presentation flag; it must never decide what the board shows")
+        }
     }
 }

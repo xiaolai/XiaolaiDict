@@ -218,9 +218,12 @@ public struct SetupView: View {
                 // that they have no English dictionary would be false, and this is the row where
                 // the probe's answer finally earns its keep.
                 if board.undeclaredEnglishDictionaries.isEmpty {
+                    // No promise of automatic detection: nothing watches Dictionary.app, and
+                    // "this will notice" would have the reader waiting for something that never
+                    // happens. The button beside it is the answer.
                     Text("""
                          No enabled dictionary explains English in your language. Enable one in \
-                         Dictionary, under Settings, and this will notice.
+                         Dictionary, under Settings, then choose Check again.
                          """)
                 } else {
                     // "Some", not "none": a reader can have NOAD — which declares its languages
@@ -239,7 +242,14 @@ public struct SetupView: View {
     @ViewBuilder private var engineDetail: some View {
         switch board.engine {
         case .onDevice:
-            Text("Senses are picked by Apple's on-device model.")
+            // **Available, not guaranteed.** A status is not a capability — the same rule that
+            // `LanguageAvailability` reporting `.supported` for a pair that then fails, and
+            // `PrivateCloudComputeLanguageModel` reporting `available` and refusing every
+            // request, are both recorded for. A refusal or a context overflow still falls to the
+            // simpler match, so the sentence says which is tried rather than which will answer.
+            Text("""
+                 Apple's on-device model is available, and is tried first when a sense has to be                  picked. A simpler match is used whenever it declines.
+                 """)
         case .unavailable(.appleIntelligenceNotEnabled):
             Text("""
                  Apple Intelligence is off, so senses are picked by a simpler match. A marked \
@@ -265,9 +275,13 @@ public struct SetupView: View {
             // **Registered is not the same as well-formed.** Another app can hold the combination
             // exclusively, and telling the reader to press one that was refused sends them to try
             // something that cannot work and to doubt the app when it does not.
+            // **Not "another app is holding it".** That is the commonest reason and not the only
+            // one, and this surface is not told which occurred — the menu carries the registration
+            // error when there is one. Naming a cause the app has not established is how a reader
+            // goes looking for the wrong thing.
             Text("""
-                 \(shortcut.label()) could not be registered — another app is holding it. Choose \
-                 another, or look words up from the menu.
+                 \(shortcut.label()) is not registered, so it will not look anything up. Choose \
+                 another combination, or look words up from the menu.
                  """)
         } else {
             Text("No shortcut is registered, so selections can be looked up from the menu only.")

@@ -11,7 +11,7 @@
         }
       }
     },
-    "%@ could not be registered — another app is holding it. Choose another, or look words up from the menu." : {
+    "%@ is not registered, so it will not look anything up. Choose another combination, or look words up from the menu." : {
 
     },
     "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
@@ -57,6 +57,9 @@
 
     },
     "Apple's on-device model does not run here, so senses are picked by a simpler match. A marked sense is a guess until you confirm it, either way." : {
+
+    },
+    "Apple's on-device model is available, and is tried first when a sense has to be                  picked. A simpler match is used whenever it declines." : {
 
     },
     "Apple's on-device model is still preparing. Senses are picked by a simpler match until it is ready." : {
@@ -188,7 +191,7 @@
     "Never look up on these sites" : {
 
     },
-    "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, and this will notice." : {
+    "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, then choose Check again." : {
 
     },
     "No entry for “%@” in your dictionaries." : {
@@ -288,9 +291,6 @@
 
     },
     "Sense picking" : {
-
-    },
-    "Senses are picked by Apple's on-device model." : {
 
     },
     "Set Up XiaolaiDict" : {

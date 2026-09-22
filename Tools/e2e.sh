@@ -951,8 +951,13 @@ else
     # **A negative, so it is given time to fail.** Asserting "not on screen" the instant the app
     # starts would pass against a board that appears a moment later.
     sleep 3
-    board_on_screen
-    case $? in
+    # **Guarded, because the passing case is the non-zero one.** `set -e` ends the script at the
+    # first unguarded failure, so a bare call here killed the stage precisely when the board was
+    # correctly absent — and `on_exit` would have recorded a failure for the assertion that never
+    # ran. The `||` is what keeps it alive.
+    board_seen=0
+    board_on_screen || board_seen=$?
+    case $board_seen in
         0) flunk "setup: the board opened again although it had been shown once" ;;
         2) flunk "setup: window titles are not readable, so 'it did not open' cannot be claimed" ;;
         *) pass "setup: it does not open by itself a second time" ;;

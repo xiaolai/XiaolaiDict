@@ -89,10 +89,11 @@ public enum DictionaryBridge {
     /// Thesaurus carries publisher sense ids on some entries and not on others. Computed once per
     /// service process — each probe parses a real entry, and Longman's *hold* alone is 625 KB.
     public static func capabilities(reprobing: Bool = false) -> [DictionaryCapability] {
-        // Cleared before the fast path is consulted, so a reprobe cannot be answered from the very
-        // cache it was sent to discard.
-        if reprobing { probed.withLock { $0 = nil } }
-        if let known = probed.withLock({ $0 }) { return known }
+        // **A reprobe skips both fast paths rather than clearing the cache and then reading it.**
+        // Clearing outside `probing` left a window in which another caller could repopulate it
+        // before the line below looked — and the forced request would then be answered from
+        // exactly the stale answer it was sent to discard.
+        if !reprobing, let known = probed.withLock({ $0 }) { return known }
         // The *probe* is serialised, not merely its result cached. Reading the cache and then
         // probing without holding anything lets two callers both find it empty and both parse
         // every installed dictionary — 625 KB for Longman's *hold* alone — with the loser throwing
@@ -106,7 +107,9 @@ public enum DictionaryBridge {
         // `capabilities()` while holding `serial`, so the two are never taken in the other order.
         return probing.withLock { _ in
             // Another caller won the race — but not for a reprobe, which must not be satisfied by
-            // an answer that was already stale when it was asked for.
+            // an answer that was already stale when it was asked for. Cleared here, under the same
+            // lock the probe runs beneath, so nothing can slip between the clear and the re-probe.
+            if reprobing { probed.withLock { $0 = nil } }
             if !reprobing, let known = probed.withLock({ $0 }) { return known }
             let installed = (try? activeDictionaries()) ?? []
             let scripts = indexedScripts()
