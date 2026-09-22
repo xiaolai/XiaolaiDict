@@ -131,6 +131,7 @@ struct XiaolaiDictSettings: View {
             dictionary: DictionaryChoice(
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
+                hasAsked: app.dictionariesAsked,
                 choose: { app.choosePrimaryDictionary($0) }),
             shortcut: app.shortcutChoice,
             openSetup: { app.showSetup() })
@@ -152,9 +153,18 @@ struct XiaolaiDictSetup: View {
             dictionary: DictionaryChoice(
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
+                hasAsked: app.dictionariesAsked,
                 choose: { app.choosePrimaryDictionary($0) }),
             shortcut: app.shortcutChoice,
-            openSettings: { app.showSettings() })
+            // Whether the hot key actually registered, not merely whether the combination is
+            // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
+            // shortcut that answered nothing.
+            shortcutIsRegistered: app.shortcutIsRegistered,
+            // Each button opens the pane it is about. `showSettings()` alone opens whichever pane
+            // was last looked at — Reading, on a fresh install — so "Choose…" under the dictionary
+            // row landed the reader on text size.
+            openSettings: { pane in app.showSettings(on: pane) },
+            refreshDictionaries: { await app.refreshDictionaries() })
         .xiaolaiDictAppearance(app.appearance)
         // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
         // would otherwise see "Asking which dictionaries are enabled…" forever.

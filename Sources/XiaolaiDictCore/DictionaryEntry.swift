@@ -166,7 +166,13 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
 public enum ServiceRequest: Codable, Sendable, Equatable {
     case lookup(LookupRequest)
     /// Every enabled dictionary, in the reader's order, with what each can address.
-    case dictionaries
+    ///
+    /// `reprobing` discards the service's cached answer first. The probe parses real entries —
+    /// Longman's *hold* alone is 625 KB — so it runs once per service process, which is right for
+    /// a menu opening and wrong for the one case that has to see a change: the setup board tells a
+    /// reader to enable a dictionary in Dictionary.app and then promises to notice when they come
+    /// back. A cache that outlives that promise makes it false.
+    case dictionaries(reprobing: Bool = false)
 }
 
 /// What the dictionary service answers with. Typed per request, so a reply can never be read as

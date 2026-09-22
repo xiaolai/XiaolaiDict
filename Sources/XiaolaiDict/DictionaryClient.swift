@@ -78,8 +78,9 @@ actor DictionaryClient {
     ///
     /// Nil when the service could not answer: the menu then says it does not know, rather than
     /// offering a list that is missing whatever the service would have added.
-    func dictionaries() async -> [DictionaryCapability]? {
-        guard case .dictionaries(let found)? = try? await ask(.dictionaries) else { return nil }
+    func dictionaries(reprobing: Bool = false) async -> [DictionaryCapability]? {
+        guard case .dictionaries(let found)? = try? await ask(.dictionaries(reprobing: reprobing))
+        else { return nil }
         return found
     }
 

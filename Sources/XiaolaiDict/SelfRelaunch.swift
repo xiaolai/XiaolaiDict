@@ -29,12 +29,15 @@ import Foundation
 @MainActor
 final class SelfRelaunch {
     let bundleURL: () -> URL?
-    let launch: (URL) -> Void
+    /// Starts the replacement, answering whether it actually started. **The answer is the whole
+    /// point**: `openApplication` reports failure asynchronously, and a version that ignored it
+    /// quit regardless — so a launch that was refused left the reader with no app at all.
+    let launch: (URL) async -> Bool
     let quit: () -> Void
 
     init(
         bundleURL: @escaping () -> URL?,
-        launch: @escaping (URL) -> Void,
+        launch: @escaping (URL) async -> Bool,
         quit: @escaping () -> Void
     ) {
         self.bundleURL = bundleURL
@@ -50,7 +53,12 @@ final class SelfRelaunch {
             // before starting the replacement is what leaves a reader with no app at all when the
             // quit is refused.
             configuration.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            do {
+                _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                return true
+            } catch {
+                return false
+            }
         },
         quit: { NSApplication.shared.terminate(nil) })
 
@@ -61,14 +69,20 @@ final class SelfRelaunch {
     /// both would otherwise start a second copy. Returns whether this call was the one that acted,
     /// so a caller can tell "restarting" from "already restarting" rather than guess.
     @discardableResult
-    func run() -> Bool {
+    func run() async -> Bool {
         guard let url = bundleURL() else { return false }
-        // Claimed before anything happens. Claiming it after the launch leaves a window in which a
-        // second caller sees an unclaimed flag and starts a third copy.
+        // Claimed before the launch, so a second caller arriving while it is in flight cannot
+        // start a third copy.
         guard !hasStarted else { return false }
         hasStarted = true
 
-        launch(url)
+        // **Quit only once the replacement is running.** Quitting on a launch that was refused —
+        // a damaged bundle, a Gatekeeper refusal, a missing volume — is how a restart becomes a
+        // disappearance. The guard is released on failure so the reader can try again.
+        guard await launch(url) else {
+            hasStarted = false
+            return false
+        }
         quit()
         return true
     }

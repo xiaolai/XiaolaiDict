@@ -34,16 +34,26 @@ public struct SetupView: View {
     /// Optional so a preview can show the board without the app behind it.
     private var dictionary: DictionaryChoice?
     private var shortcut: ShortcutChoice?
-    private var openSettings: (() -> Void)?
+    /// Opens Settings **on a named pane**. A button under the dictionary row that landed the
+    /// reader on text size would be worse than no button.
+    private var openSettings: ((SettingsPane) -> Void)?
+    /// Asks the dictionary service again. The board tells a reader with nothing suitable to enable
+    /// one in Dictionary.app, so it has to be able to notice when they come back.
+    private var refreshDictionaries: (() async -> Void)?
+    private var shortcutIsRegistered: Bool
 
     public init(
         model: SetupModel = SetupModel(), dictionary: DictionaryChoice? = nil,
-        shortcut: ShortcutChoice? = nil, openSettings: (() -> Void)? = nil
+        shortcut: ShortcutChoice? = nil, shortcutIsRegistered: Bool = true,
+        openSettings: ((SettingsPane) -> Void)? = nil,
+        refreshDictionaries: (() async -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         self.dictionary = dictionary
         self.shortcut = shortcut
+        self.shortcutIsRegistered = shortcutIsRegistered
         self.openSettings = openSettings
+        self.refreshDictionaries = refreshDictionaries
     }
 
     /// Built fresh on every evaluation, from whatever is true now. Storing it is how a board starts
@@ -52,7 +62,8 @@ public struct SetupView: View {
         SetupBoard(
             permissions: model.permissions, available: dictionary?.available,
             chosen: dictionary?.chosen, language: ReaderLanguage.preferred,
-            shortcut: shortcut?.shortcut, engine: SenseEngine.status())
+            shortcut: shortcut?.shortcut, shortcutIsRegistered: shortcutIsRegistered,
+            engine: SenseEngine.status())
     }
 
     public var body: some View {
@@ -88,7 +99,7 @@ public struct SetupView: View {
     /// verbatim overload and the compiler extracts nothing, which is how four of the longest
     /// sentences in Settings came to be invisible to every translator.
     @ViewBuilder private var summary: some View {
-        if !model.hasAsked {
+        if !model.hasAsked || board.isAsking {
             Text("Checking…")
         } else {
             switch board.outstanding.count {
@@ -161,14 +172,28 @@ public struct SetupView: View {
     /// The only row whose text is a decision rather than a description.
     @ViewBuilder private var dictionaryDetail: some View {
         if board.chosenDictionaryIsMissing {
+            // **What actually happens, not what sounds worst.** `PrimaryDictionary.identity(among:)`
+            // falls back to the first dictionary that can key a sense, so lookups keep working and
+            // marks keep being made — against a dictionary the reader never chose. Those marks are
+            // recorded, not lost: `StudyItem` is keyed by dictionary, so they accumulate as that
+            // dictionary's study history instead of theirs. "No sense can be marked" was untrue,
+            // and so is "they will not be recorded".
             Text("""
-                 The dictionary you study from is no longer enabled in Dictionary. Until it is \
-                 back, or another is chosen, no sense can be marked.
+                 The dictionary you study from is no longer enabled in Dictionary. Senses are \
+                 being marked against whichever dictionary answers instead, and study history is \
+                 kept per dictionary — so those marks build up apart from yours.
                  """)
         } else if let chosen = board.chosenDictionary {
             Text("Studying from \(chosen.identity.name) — \(chosen.note).")
-        } else if dictionary?.available == nil {
-            Text("Asking which dictionaries are enabled…")
+        } else if board.isAsking {
+            // **Asked and failed is not still asking.** The list is fetched once, in a task that
+            // has already ended, so without this distinction a service that answered nothing left
+            // the row saying "Asking…" for the life of the window.
+            if dictionary?.hasAsked == true {
+                Text("The dictionary service did not answer, so no dictionary can be suggested.")
+            } else {
+                Text("Asking which dictionaries are enabled…")
+            }
         } else {
             switch board.proposal {
             case .propose(let one):
@@ -182,22 +207,31 @@ public struct SetupView: View {
                      study from — changing it later starts your study over.
                      """)
             case .nothingSuitable:
-                // This app cannot enable one: the dictionaries it cannot see are undownloaded
-                // system assets, and the enabled list is Dictionary.app's own preference.
-                Text("""
-                     No enabled dictionary explains English in your language. Enable one in \
-                     Dictionary, under Settings, and this will notice.
-                     """)
+                // **"None declares it" is not "you have none".** Six of the seven dictionaries on
+                // the development Mac are sideloaded conversions that declare no language at all,
+                // so the rule cannot propose one — a records probe says what a dictionary indexes
+                // and never what it explains in. Telling a reader with Longman and Collins enabled
+                // that they have no English dictionary would be false, and this is the row where
+                // the probe's answer finally earns its keep.
+                if board.undeclaredEnglishDictionaries.isEmpty {
+                    Text("""
+                         No enabled dictionary explains English in your language. Enable one in \
+                         Dictionary, under Settings, and this will notice.
+                         """)
+                } else {
+                    // "Some", not "none": a reader can have NOAD — which declares its languages
+                    // and is simply not for them — beside an undeclared conversion, and a sentence
+                    // claiming nothing declares anything would be false in front of them.
+                    Text("""
+                         Some enabled dictionaries do not say which language they explain English \
+                         in, so none can be suggested. Choose one yourself, or enable a dictionary \
+                         for your language in Dictionary.
+                         """)
+                }
             }
         }
     }
 
-    /// What backs sense picking, said without implying the reader is missing out.
-    ///
-    /// **Measured 2026-09-22 over three identical runs: the confidently-wrong rate is 17% with
-    /// Apple's on-device model and 17% with the `NLEmbedding` fallback.** So this row reports which
-    /// one is running and never suggests the other would be better — a warning here would be
-    /// manufacturing anxiety about a difference measured to be zero.
     @ViewBuilder private var engineDetail: some View {
         switch board.engine {
         case .onDevice:
@@ -255,7 +289,7 @@ public struct SetupView: View {
             EmptyView()
         case .shortcut:
             if let openSettings {
-                Button("Change…") { openSettings() }
+                Button("Change…") { openSettings(.lookup) }
                     .buttonStyle(.glass)
                     .controlSize(.small)
             }
@@ -268,13 +302,26 @@ public struct SetupView: View {
                 Button("Use \(one.identity.name)") { dictionary?.choose(one.identity.key) }
                     .buttonStyle(.glassProminent)
             }
-            if case .nothingSuitable = board.proposal, dictionary?.available != nil {
+            if case .nothingSuitable = board.proposal, !board.isAsking {
                 Button("Open Dictionary…") { openDictionaryApp() }
                     .buttonStyle(.glassProminent)
             }
-            if let openSettings, dictionary?.available != nil {
-                Button(board.chosenDictionary == nil ? "Choose…" : "Change…") { openSettings() }
-                    .buttonStyle(.glass)
+            if let openSettings, !board.isAsking {
+                Button(board.chosenDictionary == nil ? "Choose…" : "Change…") {
+                    openSettings(.dictionary)
+                }
+                .buttonStyle(.glass)
+            }
+            // **The way back from a service that never answered.** The list is fetched once, in a
+            // task that has already ended, and the permission poll does not retry it — so without
+            // this a failed or slow probe leaves the row saying "Asking…" for the life of the
+            // window. It is also how the board notices a dictionary enabled in Dictionary.app,
+            // which the "enable one" sentence above promises it will.
+            if let refreshDictionaries {
+                Button(board.isAsking ? "Try again" : "Check again") {
+                    Task { await refreshDictionaries() }
+                }
+                .buttonStyle(.glass)
             }
         }
         .controlSize(.small)

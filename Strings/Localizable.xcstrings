@@ -83,6 +83,9 @@
     "Change…" : {
 
     },
+    "Check again" : {
+
+    },
     "Checking…" : {
 
     },
@@ -311,6 +314,9 @@
     "Size" : {
 
     },
+    "Some enabled dictionaries do not say which language they explain English in, so none can be suggested. Choose one yourself, or enable a dictionary for your language in Dictionary." : {
+
+    },
     "Standard" : {
 
     },
@@ -345,7 +351,10 @@
     "The app is not running" : {
 
     },
-    "The dictionary you study from is no longer enabled in Dictionary. Until it is back, or another is chosen, no sense can be marked." : {
+    "The dictionary service did not answer, so no dictionary can be suggested." : {
+
+    },
+    "The dictionary you study from is no longer enabled in Dictionary. Senses are being marked against whichever dictionary answers instead, and study history is kept per dictionary — so those marks build up apart from yours." : {
 
     },
     "The gate" : {
@@ -382,6 +391,9 @@
       "comment" : "Shown on the lookup card when the selector could not run"
     },
     "Today" : {
+
+    },
+    "Try again" : {
 
     },
     "Undo" : {

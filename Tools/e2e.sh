@@ -275,6 +275,25 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     true
     cat "$out" 2>/dev/null || true
 }
+# **The setup flag is captured before the app is launched, not inside the stage that uses it.**
+# Launching XiaolaiDict can open the setup board by itself and write this flag — that is the whole
+# behaviour — so a backup taken later records the value the app just wrote, and "restoring" it
+# leaves the machine changed. Read here, ahead of every launch, and put back however the run ends.
+if setup_shown_original=$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null); then
+    setup_shown_had=yes
+else
+    setup_shown_had=no
+    setup_shown_original=""
+fi
+restore_setup_shown() {
+    if [ "$setup_shown_had" = yes ]; then
+        defaults write com.xiaolaidict SetupWindowShown -bool "$setup_shown_original"
+    else
+        defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+    fi
+}
+at_exit restore_setup_shown
+
 # Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
 # asserts that it starts and stays up, which is a different claim and stays a stage of its own.
 # Without this, selecting a later stage failed for want of something an earlier one happened to do.
@@ -776,21 +795,8 @@ if want setup; then
 #    *without activating the app*, so a window opened from it never comes forward and a working
 #    board would look broken.
 
-# **The flag is the reader's, so it goes back.** It decides whether the window opens by itself at
-# the next launch, and a run that failed in between used to be exactly how the drawer stage left a
-# forced value behind. Whether the key was there at all is kept apart from its value: a preference
-# set to false is not an absent one, and restoring by "is it empty" would delete it.
-if original_setup_shown=$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null); then
-    had_setup_shown=yes
-else
-    had_setup_shown=no
-    original_setup_shown=""
-fi
-restore_setup_shown() {
-    if [ "$had_setup_shown" = yes ]; then defaults write com.xiaolaidict SetupWindowShown -bool "$original_setup_shown"
-    else defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true; fi
-}
-at_exit restore_setup_shown
+# The flag was saved before the app was ever launched — see the setup section above. Saving it
+# here would record whatever the first launch wrote, which is the value this stage is about.
 
 # Opened from the menu, the way a reader reaches it after the first launch.
 if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
@@ -839,12 +845,20 @@ else
         flunk "setup: the board is missing a row —$missing"
     fi
 
-    # The dictionary service answered before anything was asserted about its row: a board still
-    # saying "Asking…" would pass a check for the row's title while telling the reader nothing.
+    # **Waited for, not read once.** A cold XPC probe parses real entries — Longman's *hold* alone
+    # is 625 KB — so a board asserted the instant it appears is being failed for the service still
+    # working, not for a defect. Bounded, so a service that never answers is still a failure.
+    dict_waited=0
+    while printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; do
+        [ "$dict_waited" -ge 100 ] && break
+        sleep 0.2
+        dict_waited=$((dict_waited + 1))
+        shown=$("$helpers/panel" com.xiaolaidict)
+    done
     if printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; then
-        flunk "setup: the dictionary row was still asking the service"
+        flunk "setup: the dictionary row was still asking the service after $((dict_waited / 5))s"
     else
-        pass "setup: the dictionary row had the service's answer"
+        pass "setup: the dictionary row had the service's answer ($((dict_waited / 5))s)"
     fi
 fi
 
@@ -872,8 +886,66 @@ else
         flunk "setup: reopening gave something other than the board ($(printf '%s' "$again" | head -c 200))"
     fi
 fi
+# **The board opens by itself on a fresh install, and only then.**
+#
+# Without this the stage would pass with the automatic open removed entirely — every assertion
+# above reaches the board through the menu. This is the half that can only be seen by restarting:
+# the flag is what decides, so it is cleared, the app is restarted, and the board must appear with
+# nobody having asked for it. Then the flag is set, the app is restarted again, and it must not.
+restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local running
+    running=$(pids "$exe" | tr '\n' ' ')
+    [ -z "$running" ] || kill -TERM $running
+    for _ in $(seq 1 100); do [ -n "$(pids "$exe")" ] || break; sleep 0.1; done
+    open "$app"
+    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+    for _ in $(seq 1 100); do
+        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    return 1
+}
+board_on_screen() {  # board_on_screen: does the compositor list a drawn Set Up window?
+    "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"hasArea":true'
+}
+
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+if ! restart_app; then
+    flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
+else
+    opened=""
+    for _ in $(seq 1 50); do board_on_screen && { opened=yes; break; }; sleep 0.2; done
+    if [ "$opened" = yes ]; then
+        pass "setup: a fresh install opens the board without being asked"
+    else
+        flunk "setup: nothing opened the board on a first launch"
+    fi
+    # And the flag it wrote is what stops it happening twice.
+    if [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null)" = 1 ]; then
+        pass "setup: opening it once is remembered"
+    else
+        flunk "setup: the first open did not record itself, so it would open again every launch"
+    fi
+fi
+
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+if ! restart_app; then
+    flunk "setup: XiaolaiDict did not come back after the second restart"
+else
+    # **A negative, so it is given time to fail.** Asserting "not on screen" the instant the app
+    # starts would pass against a board that appears a moment later.
+    sleep 3
+    if board_on_screen; then
+        flunk "setup: the board opened again although it had been shown once"
+    else
+        pass "setup: it does not open by itself a second time"
+    fi
+fi
+
 # Left as the reader found it. A board still on screen would be in front of whatever stage runs
-# next, and the scenes stage measures which app is frontmost.
+# next, and the scenes stage measures which app is frontmost. The flag itself is put back by
+# `restore_setup_shown`, registered before anything was launched.
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 fi
 

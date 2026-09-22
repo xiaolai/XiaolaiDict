@@ -44,18 +44,25 @@ public struct SetupBoard: Equatable, Sendable {
     public let language: String
     /// The lookup shortcut as the app holds it.
     public let shortcut: Shortcut?
+    /// Whether the hot key is actually registered. **Not the same as the combination being
+    /// well-formed**: `RegisterEventHotKey` fails with `eventHotKeyExistsErr` when another app
+    /// holds the combination exclusively, and the app then falls back to showing the saved one. A
+    /// row reading `isUsable` alone drew "Ready" over a shortcut that answered nothing.
+    public let shortcutIsRegistered: Bool
     /// What is backing sense selection, read from the one place that asks.
     public let engine: SenseEngineStatus
 
     public init(
         permissions: PermissionsReport, available: [DictionaryCapability]?, chosen: String?,
-        language: String, shortcut: Shortcut?, engine: SenseEngineStatus
+        language: String, shortcut: Shortcut?, shortcutIsRegistered: Bool = true,
+        engine: SenseEngineStatus
     ) {
         self.permissions = permissions
         self.available = available
         self.chosen = chosen
         self.language = language
         self.shortcut = shortcut
+        self.shortcutIsRegistered = shortcutIsRegistered
         self.engine = engine
     }
 
@@ -79,6 +86,18 @@ public struct SetupBoard: Equatable, Sendable {
         return available?.first { $0.identity.key == chosen }
     }
 
+    /// Dictionaries that declare no language but were **measured** to index English.
+    ///
+    /// This is what the script probe is for, and until now nothing read it. A sideloaded
+    /// conversion declares nothing — six of the seven on the development Mac — so the rule in
+    /// `StudyDictionaryProposal` cannot propose one: a records probe says what a dictionary indexes
+    /// and never what it explains in. But "none declares it" and "you have none" are different
+    /// sentences, and telling a reader with Longman and Collins enabled that they have no English
+    /// dictionary is simply false.
+    public var undeclaredEnglishDictionaries: [DictionaryCapability] {
+        (available ?? []).filter { $0.languages.isEmpty && $0.indexes.contains(.latin) }
+    }
+
     /// True when the reader chose a dictionary that is no longer enabled.
     public var chosenDictionaryIsMissing: Bool {
         guard chosen != nil, let available else { return false }
@@ -94,7 +113,7 @@ public struct SetupBoard: Equatable, Sendable {
         // first in Dictionary.app's order — which on the development Mac is a dictionary that
         // labels its blocks `n.`/`vt.` and narrows nothing.
         case .dictionary: chosen != nil && !chosenDictionaryIsMissing
-        case .shortcut: shortcut?.isUsable == true
+        case .shortcut: shortcut?.isUsable == true && shortcutIsRegistered
         case .senseEngine: engine.isOnDevice
         }
     }
@@ -107,5 +126,13 @@ public struct SetupBoard: Equatable, Sendable {
     public var outstanding: [Step] { steps.filter { $0.needsReader && !isSettled($0) } }
 
     /// Whether the reader has nothing left to do. Not whether every row shows a tick.
-    public var isComplete: Bool { outstanding.isEmpty }
+    ///
+    /// **Unknowable while the dictionary list has not answered.** A saved choice settles its row,
+    /// because an unanswered list is not evidence the dictionary went away — but "everything needed
+    /// is in place" is a stronger claim than that, and making it over a service that never replied
+    /// is exactly the failure rendering as confidently as a success.
+    public var isComplete: Bool { outstanding.isEmpty && available != nil }
+
+    /// Whether the board is still waiting to be able to say anything about the dictionary.
+    public var isAsking: Bool { available == nil }
 }

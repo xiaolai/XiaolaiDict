@@ -24,6 +24,7 @@ struct SetupBoardTests {
         chosen: String? = "com.apple.dictionary.NOAD",
         language: String = "en-US",
         shortcut: Shortcut? = combination,
+        shortcutIsRegistered: Bool = true,
         engine: SenseEngineStatus = .onDevice
     ) -> SetupBoard {
         SetupBoard(
@@ -32,7 +33,7 @@ struct SetupBoardTests {
                 PermissionState(permission: .screenRecording, isGranted: screenRecording),
             ]),
             available: available, chosen: chosen, language: language, shortcut: shortcut,
-            engine: engine)
+            shortcutIsRegistered: shortcutIsRegistered, engine: engine)
     }
 
     // MARK: - Rows read live state
@@ -134,6 +135,50 @@ struct SetupBoardTests {
         let fresh = board(accessibility: false, screenRecording: false, chosen: nil, shortcut: nil)
         #expect(!fresh.isComplete)
         #expect(fresh.steps == finished.steps, "a finished board shows the same rows as a fresh one")
+    }
+
+    // MARK: - Found by the audit
+
+    /// A well-formed combination is not a registered one. `RegisterEventHotKey` fails with
+    /// `eventHotKeyExistsErr` when another app holds it exclusively, and the app then falls back to
+    /// showing the saved combination — so the row drew "Ready" over a shortcut that answered
+    /// nothing.
+    @Test func aShortcutThatNeverRegisteredIsNotReady() {
+        #expect(board(shortcutIsRegistered: true).isSettled(.shortcut))
+        #expect(!board(shortcutIsRegistered: false).isSettled(.shortcut))
+    }
+
+    /// "Everything needed is in place" is a stronger claim than "this row is settled", and it
+    /// cannot be made over a dictionary service that never answered — that is a failure rendering
+    /// as confidently as a success.
+    @Test func completenessIsNotClaimedWhileTheServiceHasNotAnswered() {
+        let asking = board(available: nil)
+        #expect(asking.isAsking)
+        #expect(asking.outstanding.isEmpty, "a saved choice still settles its own row")
+        #expect(!asking.isComplete, "the board claimed completeness without a dictionary list")
+        #expect(board().isComplete)
+    }
+
+    /// **"None declares it" is not "you have none."** Six of the seven dictionaries on the
+    /// development Mac declare no language, so the rule cannot propose one — but telling a reader
+    /// with Longman enabled that they have no English dictionary would be false. This is the
+    /// consumer the script probe was missing.
+    @Test func aDictionaryThatDeclaresNothingIsStillCountedAsIndexingEnglish() {
+        let longman = DictionaryCapability(
+            identity: DictionaryIdentity(name: "Longman"), senseKeyKind: .position, probed: true,
+            languages: [], indexes: [.latin])
+        let korean = DictionaryCapability(
+            identity: DictionaryIdentity(name: "Korean"), senseKeyKind: .none, probed: true,
+            languages: [], indexes: [.hangul])
+        let board = board(available: [longman, korean], chosen: nil, language: "ko")
+
+        #expect(board.proposal == .nothingSuitable, "neither declares a language, so neither is proposed")
+        #expect(board.undeclaredEnglishDictionaries == [longman])
+        #expect(!board.undeclaredEnglishDictionaries.contains(korean))
+    }
+
+    @Test func aDictionaryThatDeclaresItsLanguagesIsNotCountedAsUndeclared() {
+        #expect(board().undeclaredEnglishDictionaries.isEmpty)
     }
 
     // MARK: - The sense engine

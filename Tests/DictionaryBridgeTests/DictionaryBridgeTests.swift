@@ -314,6 +314,12 @@ struct SenseCoverageTests {
 
 /// What the menu shows beside each dictionary when the reader chooses which one to study from
 /// (decision D7). The rung is measured from real entries rather than assumed from the name.
+///
+/// **Serialized, and the order matters.** `theProbeRunsOnce` asserts a process-wide count, and
+/// `aReprobeRunsTheProbeAgain` deliberately increases it — run the other way round, the first
+/// would find the cache already warm and its count either wrong or vacuous. Serializing makes the
+/// dependency explicit instead of leaving it to whichever test the runner happened to start.
+@Suite(.serialized)
 struct DictionaryCapabilityTests {
     @Test func everyEnabledDictionaryIsReported() throws {
         let capabilities = DictionaryBridge.capabilities()
@@ -445,6 +451,26 @@ struct DictionaryCapabilityTests {
         // arrive and in whatever order — which a delta cannot express and timing cannot see.
         #expect(runs == 1, "the probe ran \(runs) times in this process")
         #expect(first == second)
+    }
+
+    /// **And runs again when something asks it to.** Once per process is right for a menu opening
+    /// and wrong for the one case that has to see a change: the setup board tells a reader to
+    /// enable a dictionary in Dictionary.app and promises to notice when they come back, which a
+    /// cache outliving that promise makes false.
+    ///
+    /// Runs after `theProbeRunsOnce` — see the suite's note. It asserts the *count*, because the
+    /// answer is identical either way on a machine where nothing changed between the two calls:
+    /// a reprobe that quietly returned the cache would be indistinguishable from one that worked.
+    @Test func aReprobeRunsTheProbeAgain() {
+        let before = DictionaryBridge.probeRuns.withLock { $0 }
+        let cached = DictionaryBridge.capabilities()
+        #expect(DictionaryBridge.probeRuns.withLock { $0 } == before, "the premise is a warm cache")
+
+        let fresh = DictionaryBridge.capabilities(reprobing: true)
+        #expect(
+            DictionaryBridge.probeRuns.withLock { $0 } == before + 1,
+            "a reprobe was answered from the cache it was sent to discard")
+        #expect(fresh == cached, "nothing changed between the two, so the answer must not have")
     }
 }
 

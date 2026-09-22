@@ -40,7 +40,10 @@ struct SetupWiringTests {
     @Test func theAppHandsTheBoardEveryPartOfItsState() throws {
         let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
         let call = try callSite(scene, of: "SetupView")
-        for argument in ["model:", "dictionary:", "shortcut:", "openSettings:"] {
+        for argument in [
+            "model:", "dictionary:", "shortcut:", "shortcutIsRegistered:", "openSettings:",
+            "refreshDictionaries:",
+        ] {
             #expect(
                 call.contains(argument),
                 "SetupView is built without \(argument); that parameter defaults to nil, so the board would silently lose what it carries")

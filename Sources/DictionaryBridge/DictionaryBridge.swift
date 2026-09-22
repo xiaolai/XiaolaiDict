@@ -73,7 +73,7 @@ public enum DictionaryBridge {
     public static func reply(to request: ServiceRequest) -> ServiceReply {
         switch request {
         case .lookup(let lookup): .lookup(reply(to: lookup))
-        case .dictionaries: .dictionaries(capabilities())
+        case .dictionaries(let reprobing): .dictionaries(capabilities(reprobing: reprobing))
         }
     }
 
@@ -88,7 +88,10 @@ public enum DictionaryBridge {
     /// Measured rather than assumed, because the rung is a property of the entries: the Writer's
     /// Thesaurus carries publisher sense ids on some entries and not on others. Computed once per
     /// service process — each probe parses a real entry, and Longman's *hold* alone is 625 KB.
-    public static func capabilities() -> [DictionaryCapability] {
+    public static func capabilities(reprobing: Bool = false) -> [DictionaryCapability] {
+        // Cleared before the fast path is consulted, so a reprobe cannot be answered from the very
+        // cache it was sent to discard.
+        if reprobing { probed.withLock { $0 = nil } }
         if let known = probed.withLock({ $0 }) { return known }
         // The *probe* is serialised, not merely its result cached. Reading the cache and then
         // probing without holding anything lets two callers both find it empty and both parse
@@ -102,7 +105,9 @@ public enum DictionaryBridge {
         // Safe to hold across `activeDictionaries()`, which takes `serial`: nothing anywhere calls
         // `capabilities()` while holding `serial`, so the two are never taken in the other order.
         return probing.withLock { _ in
-            if let known = probed.withLock({ $0 }) { return known }   // another caller won the race
+            // Another caller won the race — but not for a reprobe, which must not be satisfied by
+            // an answer that was already stale when it was asked for.
+            if !reprobing, let known = probed.withLock({ $0 }) { return known }
             let installed = (try? activeDictionaries()) ?? []
             let scripts = indexedScripts()
             var found: [DictionaryCapability] = []
