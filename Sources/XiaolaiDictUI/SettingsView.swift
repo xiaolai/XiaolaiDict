@@ -211,9 +211,15 @@ public struct SettingsView: View {
     /// The panes' width and the tallest a pane is drawn, for `--settings-report` to hold the
     /// window against. Published rather than restated there: a report carrying its own copy of a
     /// design value checks the window against the copy.
-    public static var paneWidth: CGFloat { Token.Panel.settingsWidth }
-    public static var paneMaxHeight: CGFloat { Token.Panel.settingsMaxHeight }
-    public static var paneMinHeight: CGFloat { Token.Panel.settingsMinHeight }
+    ///
+    /// **`nonisolated` because `SettingsView` is a `View`** and so main-actor isolated, which its
+    /// statics inherit — while `--settings-report` reads them from a plain value type off the main
+    /// actor. They are pure reads of `Token`'s own `static let`s, so there is nothing to isolate;
+    /// without this the report site warns rather than the declaration, which is where it is
+    /// actually wrong.
+    public nonisolated static var paneWidth: CGFloat { Token.Panel.settingsWidth }
+    public nonisolated static var paneMaxHeight: CGFloat { Token.Panel.settingsMaxHeight }
+    public nonisolated static var paneMinHeight: CGFloat { Token.Panel.settingsMinHeight }
 
     @ViewBuilder private func content(of pane: SettingsPane) -> some View {
         switch pane {
