@@ -1,9 +1,16 @@
-"""The whitelist: what the designer's SVGs may contain.
+"""What the designer's SVGs may contain, and the one thing the generator rewrites.
 
-The generator exists to refuse art it cannot reproduce. An attribute it does not know (transform, ry,
-opacity, clip-path, style, ...) changes the designer's picture and would vanish from the generated
-layers without a word, so every attribute is checked against a list of the ones understood, and
-every element against the structure expected (sources.py). Nothing else gets through.
+The contract is narrow on purpose: **geometry is emitted verbatim, and only paint is rewritten.** A
+layer asset is the designer's own markup with its paint attributes set to white; colour then lives
+in icon.json, per appearance. Nothing re-describes the art, so there is no second description for it
+to drift from — the guarantee the old generator bought by enumerating every geometry attribute, this
+one gets by not touching them.
+
+That holds only while paint is findable. An attribute carrying colour in a form this module does not
+know — `style`, `opacity`, `fill-opacity`, a gradient `url(#...)`, `filter`, `mask`, `clip-path` —
+would ride through unrewritten and repaint a layer the system means to colour itself. So every
+element is checked against the structure expected (sources.py) and every attribute against a list
+here, and anything else stops the run rather than being quietly approximated.
 """
 from __future__ import annotations
 
@@ -26,22 +33,40 @@ class Kind:
 
 
 _NUM = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"  # as the art writes numbers: no exponent, no unit
-_POINT = rf"{_NUM}[\s,]+{_NUM}"
 NUMBER = Kind("a number", _NUM)
 LENGTH = Kind("a non-negative number", r"\+?(?:\d+(?:\.\d*)?|\.\d+)")
 COLOUR = Kind("a #RRGGBB colour", r"#[0-9A-Fa-f]{6}")
-REF = Kind("a url(#id) reference", r"url\(#[A-Za-z_][\w.-]*\)")
-PAINT = Kind("a #RRGGBB colour or url(#id)", rf"{COLOUR.pattern}|{REF.pattern}")
-ID = Kind("an id", r"[A-Za-z_][\w.-]*")
-POLYGON = Kind("an absolute M/L/Z polygon", rf"\s*M\s*{_POINT}(?:\s*L\s*{_POINT}){{2,}}\s*Z\s*")
+VIEWBOX = Kind("a viewBox at the origin, square", rf"0[\s,]+0[\s,]+({_NUM})[\s,]+\1")
+# Path data and transforms are emitted exactly as written, so neither is interpreted here. The
+# patterns refuse the characters that would make them something other than what they claim to be:
+# a `url(`, an entity, an attribute closed early. What they admit, SVG renders; what they draw is
+# the designer's business.
+PATH_DATA = Kind("SVG path data", r"[MmLlHhVvCcSsQqTtAaZz\d\s.,+-]+")
+TRANSFORM = Kind("a list of SVG transform functions",
+                 rf"\s*(?:(?:matrix|translate|scale|rotate|skewX|skewY)\(\s*{_NUM}"
+                 rf"(?:[\s,]+{_NUM})*\s*\)\s*)+")
 
-# What may be drawn. Every attribute here that is not paint (fill, stroke, fill-opacity) is geometry,
-# and GEOMETRY_ATTRS is exactly those, so two shapes with equal geometry() cover the same pixels.
-PATH_ATTRS = {"d": POLYGON, "fill": PAINT}
-STROKE_ATTRS = {"stroke": PAINT, "stroke-width": LENGTH, "stroke-linejoin": "round"}  # all or none
-LINE_ATTRS = {"x": NUMBER, "y": NUMBER, "width": LENGTH, "height": LENGTH, "rx": LENGTH}
-GROUND_ATTRS = {"width": LENGTH, "height": LENGTH, "fill": REF}  # x and y may be given, as 0
-GEOMETRY_ATTRS = ("d", "x", "y", "width", "height", "rx", "stroke-width", "stroke-linejoin")
+# The attributes rewritten, and the only ones: a layer asset is the source with these set to white.
+PAINT_ATTRS = ("fill", "stroke")
+
+SVG_ATTRS = {"width": LENGTH, "height": LENGTH, "viewBox": VIEWBOX}
+# A ground is the whole canvas, so it carries no transform: one would move it off the edge and the
+# full-canvas check below would still pass, since it reads the rect's own coordinates.
+GROUND_ATTRS = {"width": LENGTH, "height": LENGTH, "fill": COLOUR}  # x and y may be given, as 0
+GROUP_ATTRS = {"transform": TRANSFORM}
+# A mark is drawn one of two ways, and `fill="none"` is what says which. Both are here because the
+# art uses both: the contour is a stroke, the sparkle a filled shape. The pair is not interchangeable
+# — a stroked path carries its colour on `stroke` and a filled one on `fill` — so sources.py reads
+# the fill first and then knows which table applies.
+STROKED_PATH_ATTRS = {"d": PATH_DATA, "fill": "none", "stroke": COLOUR, "stroke-width": LENGTH}
+STROKED_PATH_OPTIONAL = {"stroke-linejoin": "round", "stroke-linecap": "round"}
+FILLED_PATH_ATTRS = {"d": PATH_DATA, "fill": COLOUR}
+# Only the tray. Its glyph is one path that cuts the sparkle out of the D, and a knockout needs
+# even-odd; a mark is a single shape and has no business with a fill rule, so this is not offered
+# to one — a mark that asked for even-odd would be a mark drawn as something this cannot reproduce.
+TRAY_PATH_OPTIONAL = {"fill-rule": "evenodd"}
+FILLED_RECT_ATTRS = {"x": NUMBER, "y": NUMBER, "width": LENGTH, "height": LENGTH,
+                     "rx": LENGTH, "fill": COLOUR}
 
 
 def tag(name: str, el: ET.Element) -> str:
@@ -78,11 +103,3 @@ def rgb(colour: str) -> bytes:
     if not COLOUR.ok(colour):
         fail(f"{colour!r} is not {COLOUR.what}")
     return bytes.fromhex(colour[1:])
-
-
-def polygon(d: str) -> list[tuple[float, float]]:
-    """The vertices of an absolute M/L/Z polygon, the one kind of path the whitelist admits."""
-    if not POLYGON.ok(d):
-        fail(f"path {d!r} is not {POLYGON.what}")
-    nums = [float(n) for n in re.findall(_NUM, d)]
-    return list(zip(nums[0::2], nums[1::2]))

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from fixtures import DARK_BACK, OUTPUTS, Workspace, build, failing_on_call, outputs, publish, run
+from fixtures import CONTOUR_DARK, CONTOUR_DARK_STROKE, OUTPUTS, Workspace, build, failing_on_call, outputs, publish, run
 
 
 class PublishesAllOrNothing(unittest.TestCase):
@@ -30,7 +30,7 @@ class PublishesAllOrNothing(unittest.TestCase):
         # XiaolaiDict.icon and written half of it by then.
         ws = Workspace(self)
         before = ws.seed()
-        ws.mutate("xiaolaidict-icon-dark.svg", DARK_BACK, 'fill="#GGGGGG" stroke="#GGGGGG"')
+        ws.mutate(CONTOUR_DARK, CONTOUR_DARK_STROKE, 'stroke="#GGGGGG"')
         proc = run(ws.src, ws.resources)
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)

@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from fixtures import DARK_BACK, OUTPUTS, SYNTHETIC, Workspace, build, outputs, publish, run
+from fixtures import CONTOUR_DARK, CONTOUR_DARK_STROKE, OUTPUTS, SYNTHETIC, Workspace, build, outputs, publish, run
 
 # Publishes SYNTHETIC in a separate interpreter that SIGKILLs itself on the n-th call of one file
 # operation: no handler, no finally, no rollback runs. argv: tests dir, Resources dir, operation, n.
@@ -102,7 +102,7 @@ class RecoversFromAKill(unittest.TestCase):
         mixed = outputs(ws.resources)
         self.assertEqual(mixed["MenuBarIcon.svg"], before["MenuBarIcon.svg"])
         self.assertEqual(mixed["XiaolaiDict.icon/icon.json"], SYNTHETIC["XiaolaiDict.icon/icon.json"])
-        ws.mutate("xiaolaidict-icon-dark.svg", DARK_BACK, 'fill="#GGGGGG" stroke="#GGGGGG"')
+        ws.mutate(CONTOUR_DARK, CONTOUR_DARK_STROKE, 'stroke="#GGGGGG"')
         proc = run(ws.src, ws.resources)
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn("rolled forward", proc.stderr)
@@ -154,7 +154,7 @@ class RecoversFromAKill(unittest.TestCase):
 
     def test_a_damaged_previous_copy_is_never_restored(self) -> None:
         for label, damage in (("changed", lambda old: (old / "XiaolaiDict.icon/icon.json").write_bytes(b"damaged")),
-                              ("partial", lambda old: (old / "XiaolaiDict.icon/Assets/card.svg").unlink())):
+                              ("partial", lambda old: (old / "XiaolaiDict.icon/Assets/contour.svg").unlink())):
             with self.subTest(previous=label):
                 ws = Workspace(self)
                 ws.seed()

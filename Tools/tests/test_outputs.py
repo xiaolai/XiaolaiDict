@@ -1,17 +1,20 @@
 """The real sources reproduce Resources/, byte for byte, and each output is what it claims to be."""
 from __future__ import annotations
 
-import math
+import json
+import pathlib
+import re
 import shutil
-import struct
 import subprocess
+import tempfile
 import unittest
-import zlib
+import xml.etree.ElementTree as ET
 
 from fixtures import (
     DESIGN,
     GOLDEN,
     OUTPUTS,
+    TRAY,
     Workspace,
     artwork,
     build,
@@ -20,47 +23,51 @@ from fixtures import (
     render,
     run,
     sources,
+    whitelist,
 )
 
 
-def decode_png(data: bytes) -> tuple[int, int, list[bytes]]:
-    """Width, height and unfiltered rows of an 8-bit RGBA PNG. Written independently of the
-    encoder under test, and only as general as it needs to be: filters None and Up."""
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise AssertionError("no PNG signature")
-    pos, chunks = 8, []
-    while pos < len(data):
-        (length,) = struct.unpack(">I", data[pos : pos + 4])
-        kind, body = data[pos + 4 : pos + 8], data[pos + 8 : pos + 8 + length]
-        (crc,) = struct.unpack(">I", data[pos + 8 + length : pos + 12 + length])
-        if crc != zlib.crc32(kind + body):
-            raise AssertionError(f"bad CRC on {kind!r}")
-        chunks.append((kind, body))
-        pos += 12 + length
-    if [k for k, _ in chunks] != [b"IHDR", b"IDAT", b"IEND"]:
-        raise AssertionError(f"unexpected chunks {[k for k, _ in chunks]}")
-    width, height, depth, colour_type, *_ = struct.unpack(">IIBBBBB", chunks[0][1])
-    if (depth, colour_type) != (8, 6):
-        raise AssertionError("not 8-bit RGBA")
-    raw, stride = zlib.decompress(chunks[1][1]), 4 * width
-    rows, prev = [], bytes(stride)
-    for y in range(height):
-        line = raw[y * (stride + 1) : (y + 1) * (stride + 1)]
-        if line[0] == 0:
-            row = line[1:]
-        elif line[0] == 2:
-            row = bytes((a + b) & 0xFF for a, b in zip(line[1:], prev))
-        else:
-            raise AssertionError(f"row {y}: unexpected filter {line[0]}")
-        rows.append(row)
-        prev = row
-    return width, height, rows
+def ictool() -> pathlib.Path | None:
+    """Icon Composer's renderer. `xcrun ictool` finds a different, actool-family binary that only
+    speaks plist and cannot export an image, so the path is taken from the active developer dir."""
+    found = subprocess.run(["xcode-select", "-p"], capture_output=True, text=True)
+    if found.returncode != 0:
+        return None
+    path = (pathlib.Path(found.stdout.strip()).parent
+            / "Applications/Icon Composer.app/Contents/Executables/ictool")
+    return path if path.is_file() else None
 
 
-def fade(glow, x: float, y: float) -> float:
-    """The SVG radial fade's alpha, 0..255, at canvas point (x, y): pad spread, linear in t."""
-    t = min(1.0, math.hypot(x - glow.cx, y - glow.cy) / glow.r)
-    return (glow.a0 + (glow.a1 - glow.a0) * t) * 255
+def png_pixel(data: bytes, fx: float, fy: float) -> tuple[int, int, int]:
+    """One pixel of a PNG, at a fraction of its width and height, as (r, g, b). Read through
+    ImageIO rather than decoded here: the renders are palette-free RGBA but nothing guarantees it,
+    and a hand-rolled decoder that guesses wrong reports colours that were never in the file."""
+    import plistlib
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        f.write(data)
+        path = f.name
+    size = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", path],
+                          capture_output=True, text=True).stdout
+    w = int(re.search(r"pixelWidth: (\d+)", size).group(1))
+    h = int(re.search(r"pixelHeight: (\d+)", size).group(1))
+    x, y = int(w * fx), int(h * fy)
+    # Crop one pixel and re-read it as raw RGB: sips can do both, and both are system tools.
+    one = path + ".one.png"
+    subprocess.run(["sips", "-c", "1", "1", "--cropOffset", str(y), str(x), path, "--out", one],
+                   capture_output=True, check=True)
+    raw = subprocess.run(["sips", "-s", "format", "bmp", one, "--out", one + ".bmp"],
+                         capture_output=True)
+    body = pathlib.Path(one + ".bmp").read_bytes()
+    offset = int.from_bytes(body[10:14], "little")
+    b, g, r = body[offset], body[offset + 1], body[offset + 2]
+    for f in (path, one, one + ".bmp"):
+        pathlib.Path(f).unlink(missing_ok=True)
+    return (r, g, b)
+
+
+def walk(root: ET.Element) -> list[tuple[str, dict[str, str]]]:
+    """Every element of a tree in document order, as (tag, attributes)."""
+    return [(el.tag, dict(el.attrib)) for el in root.iter()]
 
 
 class Outputs(unittest.TestCase):
@@ -87,25 +94,118 @@ class Outputs(unittest.TestCase):
         self.assertEqual(outputs(ws.resources), self.files)
         self.assertEqual(ws.listing(), OUTPUTS)
 
-    def test_glow_png_is_the_svg_fade(self) -> None:
-        glow = artwork.validate_artwork(sources.parse_sources(DESIGN)).glow
-        width, height, rows = decode_png(self.files["XiaolaiDict.icon/Assets/dark-glow.png"])
-        self.assertEqual((width, height), (1024, 1024))
-        for y in range(0, 1024, 31):
-            for x in range(0, 1024, 29):
-                self.assertEqual(rows[y][4 * x : 4 * x + 3], b"\xff\xff\xff", f"pixel ({x}, {y})")
-                self.assertEqual(rows[y][4 * x + 3], round(fade(glow, x + 0.5, y + 0.5)), f"pixel ({x}, {y})")
+    def test_layer_asset_is_the_source_but_for_its_paint(self) -> None:
+        # The claim the whole generator rests on. Not "the geometry is right" — nobody can read
+        # that off a path — but "the geometry is the designer's own bytes", which a machine can
+        # check. Every element, every attribute, in order; only a paint value may differ, and only
+        # by having become white.
+        for layer, stem in (("contour", "layer2-contour"), ("sparkle", "layer3-sparkle")):
+            with self.subTest(layer=layer):
+                source, _ = sources.load(DESIGN / f"{stem}-light.svg", sources.CANVAS)
+                asset = ET.fromstring(self.files[f"XiaolaiDict.icon/Assets/{layer}.svg"])
+                want, got = walk(source), walk(asset)
+                self.assertEqual([t for t, _ in want], [t for t, _ in got])
+                for (_, a), (tag, b) in zip(want, got):
+                    self.assertEqual(sorted(a), sorted(b), tag)
+                    for name, value in a.items():
+                        if name in whitelist.PAINT_ATTRS and value != "none":
+                            self.assertEqual(b[name], "#FFFFFF", f"{tag} {name}")
+                        else:
+                            self.assertEqual(b[name], value, f"{tag} {name}")
 
-    def test_glow_png_scales_to_any_size(self) -> None:
-        glow = sources.Radial(cx=512, cy=20, r=920, colour="#FFFFFF", a0=0.9, a1=0.0)
-        size = 64
-        width, height, rows = decode_png(render.radial_png(glow, size))
-        self.assertEqual((width, height), (size, size))
-        scale = 1024 / size
-        for y in range(size):
-            for x in range(size):
-                want = fade(glow, (x + 0.5) * scale, (y + 0.5) * scale)
-                self.assertLessEqual(abs(rows[y][4 * x + 3] - want), 1, f"pixel ({x}, {y})")
+    def test_menu_bar_template_is_the_source(self) -> None:
+        # Paint included, here: a template image's ink is never read, so there is nothing to
+        # rewrite and nothing that may differ.
+        source, _ = sources.load(DESIGN / TRAY, sources.TRAY)
+        self.assertEqual(walk(ET.fromstring(self.files["MenuBarIcon.svg"])), walk(source))
+
+    def test_document_colours_come_from_the_sources(self) -> None:
+        design = artwork.validate_artwork(sources.parse_sources(DESIGN))
+        doc = json.loads(self.files["XiaolaiDict.icon/icon.json"])
+
+        def solids(specializations: list) -> dict[str, str]:
+            return {s.get("appearance", "light"): s["value"]["solid"] for s in specializations}
+
+        # The ground carries light and dark and NOTHING else. A tinted entry here is not merely
+        # unnecessary, it is ignored: set to a garish red the ground still rendered (110, 91, 202),
+        # byte-identical to the document without it, because the system replaces the ground outright
+        # in the tinted and clear appearances. Measured 2026-09-22.
+        want = {a: render.hex_to_srgb(design.ground[a].colour) for a in ("light", "dark")}
+        self.assertEqual(solids(doc["fill-specializations"]), want)
+        for group in doc["groups"]:
+            for layer in group["layers"]:
+                mark = getattr(design, layer["name"])
+                want = {a: render.hex_to_srgb(mark[a].colour) for a in ("light", "dark")}
+                # And every mark layer carries the tinted fill the ground must not. Without it the
+                # system derives one, and derives it so dark that the mark measures 1.13:1 against
+                # its own ground in TintedDark — which is not a faint mark, it is no mark.
+                want["tinted"] = render.hex_to_srgb(render.TINTED)
+                self.assertEqual(solids(layer["fill-specializations"]), want, layer["name"])
+
+    def test_every_group_is_flat(self) -> None:
+        # The reader looked at the bevelled default and rejected it, so flatness is a decision the
+        # document has to keep making. A group added later without the treatment — or a layer added
+        # without `glass: false` — brings the chrome piping back on that layer alone, which is
+        # harder to notice than the whole icon changing.
+        doc = json.loads(self.files["XiaolaiDict.icon/icon.json"])
+        self.assertTrue(doc["groups"])
+        for group in doc["groups"]:
+            self.assertFalse(group["translucency"]["enabled"], group["name"])
+            self.assertFalse(group["specular"], group["name"])
+            self.assertEqual(group["shadow"]["kind"], "none", group["name"])
+            self.assertTrue(group["layers"])
+            for layer in group["layers"]:
+                self.assertFalse(layer["glass"], layer["name"])
+
+    def test_rendering_leaves_the_sources_as_the_designer_wrote_them(self) -> None:
+        # Nothing in the render stage may write back into the Design it was given. The tray is the
+        # case that nearly did: it is emitted unchanged, so it was the one tree handed to the
+        # serialiser without a copy, and `ET.indent` rewrites its argument in place.
+        #
+        # Comparing two renders cannot see this — `ET.indent` is idempotent, so the second render
+        # of an already-indented tree comes back byte-identical and the check passes over the bug.
+        # What the mutation actually damages is the *source*, so the source is what to look at.
+        design = artwork.validate_artwork(sources.parse_sources(DESIGN))
+        before = {name: ET.tostring(art.root)
+                  for layer in (design.ground, design.contour, design.sparkle)
+                  for name, art in layer.items()}
+        before["tray"] = ET.tostring(design.tray.root)
+        render.build_outputs(design)
+        after = {name: ET.tostring(art.root)
+                 for layer in (design.ground, design.contour, design.sparkle)
+                 for name, art in layer.items()}
+        after["tray"] = ET.tostring(design.tray.root)
+        self.assertEqual(before, after)
+
+    @unittest.skipUnless(ictool() is not None, "needs Icon Composer's ictool")
+    def test_the_mark_renders_as_an_outline_not_a_blob(self) -> None:
+        """The contour is a stroke, and a renderer that drops the stroke fills the path instead —
+        which turns this icon into a solid navy tile with the sparkle gone, silently, with no warning
+        from actool or at launch.
+
+        That is not hypothetical: it is exactly what `--design-generation 26` does with these
+        layers, measured 2026-09-22 (ink 126,860 pixels of 262,144 against 61,366 correct; the cell
+        the mark encloses comes back ink-coloured instead of ground-coloured). Shipping the SVG
+        anyway is a decision on record — see AGENTS.md — and this check is what remains available:
+        it holds the generation we support and can test to drawing an outline. If generation 27
+        ever acquires the same defect, this fails instead of the icon quietly becoming a blob.
+        """
+        ws = Workspace(self)
+        publish.publish_outputs(ws.resources, self.files)
+        out = ws.resources.parent / "render.png"
+        proc = subprocess.run(
+            [str(ictool()), str(ws.resources / "XiaolaiDict.icon"), "--export-image",
+             "--output-file", str(out), "--platform", "macOS", "--rendition", "Default",
+             "--width", "256", "--height", "256", "--scale", "1", "--design-generation", "27"],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # A point well inside the contour and clear of the sparkle's arms: a stroked contour leaves
+        # it showing the ground, a filled one floods it. The sparkle is right of centre and its
+        # west arm runs along the middle, so the upper left of the counter is the clear quarter.
+        cell = png_pixel(out.read_bytes(), 0.36, 0.33)
+        self.assertLess(cell[2] - cell[0], 30,
+                        f"the cell the mark encloses came back {cell}, which is ink, not ground — "
+                        "the contour filled instead of stroking")
 
     @unittest.skipUnless(shutil.which("xcrun") and subprocess.run(
         ["xcrun", "--find", "actool"], capture_output=True).returncode == 0, "needs Xcode's actool")

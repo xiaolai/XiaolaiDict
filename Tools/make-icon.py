@@ -2,20 +2,24 @@
 """Generate XiaolaiDict's app icon and menu-bar icon from the designer's art in Tools/icon/.
 
 Writes two things into <Resources dir>:
-  XiaolaiDict.icon/        the Icon Composer document the Makefile compiles with actool
-  MenuBarIcon.svg   the menu-bar template image
+  XiaolaiDict.icon/   the Icon Composer document the Makefile compiles with actool
+  MenuBarIcon.svg     the menu-bar template image
 
-Single source. Every coordinate and every colour is read from the designer's SVGs; nothing is
-retyped here. Geometry comes from the three layer files. Light colours come from those same files,
-dark colours from xiaolaidict-icon-dark.svg, tinted colours from xiaolaidict-icon-tinted.svg. The three flats must
-share the layers' geometry exactly (README: "One geometry across every appearance and size"), and
-this script fails loudly if they do not.
+Single source, and a narrow contract: **geometry is emitted verbatim, and only paint is rewritten.**
+A layer asset is the designer's own markup with its fill and stroke set to white; the colour then
+lives in icon.json, per appearance. Nothing re-describes the art, so there is no second description
+for it to drift from.
+
+The art is authored one file per layer per appearance — background, contour and cross, in light,
+dark and (for the two marks) mono — so a layer's geometry is written down two or three times and
+nothing in SVG makes those copies agree. This script makes them: a layer's appearances must be
+byte-identical once colour is taken out, and that check is the only witness there is, because the
+outputs are built from the light files alone.
 
 Strict on purpose: every element and attribute in the sources is either understood or refused. Art
-this script cannot reproduce faithfully stops the run; it is never quietly approximated.
-
-Each shape becomes its own WHITE-on-transparent SVG layer and its colour lives in icon.json, per
-appearance, so the system renders every appearance from the same geometry.
+this script cannot reproduce faithfully stops the run; it is never quietly approximated. The one
+thing that must not slip through is paint in a form the whitelist does not know — it would ride
+into the layer unrewritten and cover the colour the system means to assign.
 
 Both outputs are replaced together or not at all: a run that fails leaves the previous ones as they
 were, and a run killed in the middle of replacing them is finished or undone by the next one.

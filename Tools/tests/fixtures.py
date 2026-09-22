@@ -33,7 +33,7 @@ OUTPUTS = sorted(["XiaolaiDict.icon", "MenuBarIcon.svg"])
 # Outputs to publish where their content does not matter, only that they are a distinct pair.
 SYNTHETIC = {
     "XiaolaiDict.icon/icon.json": b'{"synthetic": true}\n',
-    "XiaolaiDict.icon/Assets/card.svg": b"<svg synthetic/>\n",
+    "XiaolaiDict.icon/Assets/contour.svg": b"<svg synthetic/>\n",
     "MenuBarIcon.svg": b"<svg synthetic tray/>\n",
 }
 
@@ -107,7 +107,7 @@ class Workspace:
         assets = self.resources / "XiaolaiDict.icon" / "Assets"
         assets.mkdir(parents=True)
         (self.resources / "XiaolaiDict.icon" / "icon.json").write_bytes(b'{"previous": true}\n')
-        (assets / "card.svg").write_bytes(b"<svg previous/>\n")
+        (assets / "contour.svg").write_bytes(b"<svg previous/>\n")
         (assets / "stale.svg").write_bytes(b"<svg stale/>\n")
         (self.resources / "MenuBarIcon.svg").write_bytes(b"<svg previous tray/>\n")
         return outputs(self.resources)
@@ -117,12 +117,30 @@ class Workspace:
         return sorted(os.listdir(self.resources))
 
 
-DARK_CARD = 'fill="url(#front)" stroke='
-DARK_BACK = 'fill="#2B2D32" stroke="#2B2D32"'
-DARK_BG_RECT = '<rect width="1024" height="1024" fill="url(#bg)">'
-DARK_GLOW_STOPS = ('<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"></stop>'
-                   '<stop offset="1" stop-color="#FFFFFF" stop-opacity="0"></stop>')
-LINE_1 = '<rect x="354" y="428" width="300" height="34" rx="17">'
-SLOT_1 = '<rect x="5.9" y="8.8" width="8.2" height="1.6" rx="0.8"'
-SLOT_2 = '<rect x="5.9" y="11.6" width="5.6" height="1.6" rx="0.8" fill="#000"></rect>'
-TRAY = "xiaolaidict-tray-slots-Template.svg"
+# Anchors into the designer's art, for the fixtures that mutate a copy of it. Each is the exact
+# text of one thing the sources draw; `Workspace.mutate` refuses an anchor that does not occur
+# exactly once, so an edit here that stops matching fails loudly instead of testing nothing.
+BG_LIGHT = "layer1-background-light.svg"
+BG_DARK = "layer1-background-dark.svg"
+CONTOUR_LIGHT = "layer2-contour-light.svg"
+CONTOUR_DARK = "layer2-contour-dark.svg"
+CONTOUR_MONO = "layer2-contour-mono.svg"
+SPARKLE_LIGHT = "layer3-sparkle-light.svg"
+SPARKLE_DARK = "layer3-sparkle-dark.svg"
+SPARKLE_MONO = "layer3-sparkle-mono.svg"
+TRAY = "menubarTemplate.svg"
+
+GROUND_LIGHT = '<rect width="100" height="100" fill="#FBFAF6"></rect>'
+GROUND_DARK = '<rect width="100" height="100" fill="#1B2A4A"></rect>'
+GROUP_OPEN = '<g transform="translate(50 50) scale(1.031) translate(-50 -50)">'
+CONTOUR_D = ("M18 72 V28 A10 10 0 0 1 28 18 H50 C68 18 82 32 82 50 "
+             "C82 68 68 82 50 82 H28 A10 10 0 0 1 18 72 Z")
+SPARKLE_D = ("M57 18 L59.121 47.879 L82 50 L59.121 52.121 L57 82 L54.879 52.121 "
+             "L18 50 L54.879 47.879 Z")
+CONTOUR_PATH = (f'<path d="{CONTOUR_D}" fill="none" stroke="#23407A" stroke-width="8" '
+                'stroke-linejoin="round"></path>')
+SPARKLE_PATH = f'<path d="{SPARKLE_D}" fill="#23407A"></path>'
+CONTOUR_DARK_STROKE = 'stroke="#EDF1F7"'
+TRAY_D = (f"{CONTOUR_D} M57 23 L60.536 46.464 L77 50 L60.536 53.536 L57 77 L53.464 53.536 "
+          "L24 50 L53.464 46.464 Z")
+TRAY_PATH = f'<path d="{TRAY_D}" fill="#000000" fill-rule="evenodd"></path>'

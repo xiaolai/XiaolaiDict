@@ -1,4 +1,4 @@
-"""The whitelist's value parsers, and that it leaves no geometry unchecked."""
+"""The whitelist's value parsers, and that it leaves no colour unrewritten."""
 from __future__ import annotations
 
 import unittest
@@ -7,21 +7,38 @@ from fixtures import render, whitelist
 
 
 class Parsing(unittest.TestCase):
-    def test_whitelist_leaves_no_geometry_unchecked(self) -> None:
-        # Everything a shape may carry is either compared as geometry, or is paint and checked as
-        # paint. An attribute in neither set would be accepted, differ between files, and be lost.
-        admitted = {*whitelist.PATH_ATTRS, *whitelist.STROKE_ATTRS, *whitelist.LINE_ATTRS}
-        self.assertEqual(admitted - {"fill", "stroke"}, set(whitelist.GEOMETRY_ATTRS))
+    def test_whitelist_leaves_no_colour_unrewritten(self) -> None:
+        # The generator's whole contract is that geometry is emitted verbatim and only paint is
+        # rewritten (whitelist.PAINT_ATTRS). An attribute admitted as a colour but not repainted
+        # would ride through into the layer asset and paint it, over the colour icon.json assigns
+        # per appearance — so the two sets are the same set, mechanically.
+        tables = (whitelist.SVG_ATTRS, whitelist.GROUND_ATTRS, whitelist.GROUP_ATTRS,
+                  whitelist.STROKED_PATH_ATTRS, whitelist.STROKED_PATH_OPTIONAL,
+                  whitelist.FILLED_PATH_ATTRS, whitelist.FILLED_RECT_ATTRS)
+        carries_colour = {a for table in tables
+                          for a, rule in table.items() if rule is whitelist.COLOUR}
+        self.assertEqual(carries_colour, set(whitelist.PAINT_ATTRS))
 
-    def test_polygon(self) -> None:
-        self.assertEqual(whitelist.polygon("M1 2 L3 4 L5 6 Z"), [(1, 2), (3, 4), (5, 6)])
-        self.assertEqual(whitelist.polygon("M.5 -1 L3,4 L5 6 Z"), [(0.5, -1), (3, 4), (5, 6)])
-        for bad in ("M1 2 l3 4 L5 6 Z", "M1 2 3 4 5 6 Z", "M1 2 L3 4 Z", "M1 2 L3 4 L5 6",
-                    "M1..2 L3 4 L5 6 Z"):
-            with self.subTest(d=bad):
-                with self.assertRaises(SystemExit) as cm:
-                    whitelist.polygon(bad)
-                self.assertIn("is not an absolute M/L/Z polygon", str(cm.exception))
+    def test_viewbox(self) -> None:
+        for good in ("0 0 100 100", "0 0 1024 1024", "0,0,100,100", "0 0 22 22"):
+            self.assertTrue(whitelist.VIEWBOX.ok(good), good)
+        for bad in ("0 0 100 50", "10 0 100 100", "0 0 100", "0 0 100 100 0", "0 0 1e3 1e3"):
+            self.assertFalse(whitelist.VIEWBOX.ok(bad), bad)
+
+    def test_path_data(self) -> None:
+        # Admitted as written, because it is emitted as written. What the pattern refuses is data
+        # that is not path data at all: a paint reference, an entity, an attribute closed early.
+        for good in ("M18 50 H82 M57 18 V82", "M18 72 V28 A10 10 0 0 1 28 18 Z", "m1 2 l3,4 z"):
+            self.assertTrue(whitelist.PATH_DATA.ok(good), good)
+        for bad in ("url(#g)", "M1 2 &size; Z", 'M1 2" onload="x', "M1 2 <circle/>"):
+            self.assertFalse(whitelist.PATH_DATA.ok(bad), bad)
+
+    def test_transform(self) -> None:
+        for good in ("translate(50 50) scale(1.031) translate(-50 -50)", "scale(1.14)",
+                     "matrix(1 0 0 1 0 0)", " rotate(45) "):
+            self.assertTrue(whitelist.TRANSFORM.ok(good), good)
+        for bad in ("url(#g)", "translate(50, 50) skew(2)", "scale()", "translate(a b)"):
+            self.assertFalse(whitelist.TRANSFORM.ok(bad), bad)
 
     def test_colour(self) -> None:
         self.assertEqual(render.hex_to_srgb("#FF8000"), "srgb:1.00000,0.50196,0.00000,1.00000")
