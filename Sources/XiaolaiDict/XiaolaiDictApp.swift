@@ -541,7 +541,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
     /// menu is opened rather than at launch, and only once.
     func askForDictionaries(refreshing: Bool = false) async {
-        permissions = await .probe()
+        // **Assigned only when it changed.** `@Observable` notifies on every assignment, equal or
+        // not, and this runs each time the menu opens — so it re-rendered the open menu about 70 ms
+        // later, every time, for nothing. Measured on the E2E machine 2026-09-22: a click landing
+        // while the menu re-renders is dropped — `menu-click` reported the click, the app never saw
+        // it — 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
+        let probed = await PermissionsReport.probe()
+        if probed != permissions { permissions = probed }
         // Re-read from the store, not just written to on choosing. A lookup takes the primary
         // from disk, so a change made outside this process — a second copy, a `defaults write` —
         // would otherwise leave every window naming a dictionary that is no longer the one marks
@@ -549,7 +555,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         let onDisk = primaryDictionary.load().chosen
         if onDisk != chosenDictionary { chosenDictionary = onDisk }
         guard refreshing || dictionaries == nil else { return }
-        dictionaries = await client.dictionaries(reprobing: refreshing)
+        let found = await client.dictionaries(reprobing: refreshing)
+        // Same reason. A refresh that finds the same dictionaries must not re-render an open menu.
+        if found != dictionaries { dictionaries = found }
         // Set whatever the answer was, including none. "Asked and got nothing" is a state that
         // does not resolve, and a surface that cannot tell it from "still asking" waits forever.
         dictionariesAsked = true
