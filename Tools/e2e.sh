@@ -99,7 +99,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -767,6 +767,114 @@ else
         fi
     fi
 fi
+fi
+
+if want setup; then
+# 12. The setup board: a fresh install's first window, and the same window on demand afterwards.
+#
+#    Driven with a real click, never `AXPress` — pressing a menu through Accessibility opens it
+#    *without activating the app*, so a window opened from it never comes forward and a working
+#    board would look broken.
+
+# **The flag is the reader's, so it goes back.** It decides whether the window opens by itself at
+# the next launch, and a run that failed in between used to be exactly how the drawer stage left a
+# forced value behind. Whether the key was there at all is kept apart from its value: a preference
+# set to false is not an absent one, and restoring by "is it empty" would delete it.
+if original_setup_shown=$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null); then
+    had_setup_shown=yes
+else
+    had_setup_shown=no
+    original_setup_shown=""
+fi
+restore_setup_shown() {
+    if [ "$had_setup_shown" = yes ]; then defaults write com.xiaolaidict SetupWindowShown -bool "$original_setup_shown"
+    else defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true; fi
+}
+at_exit restore_setup_shown
+
+# Opened from the menu, the way a reader reaches it after the first launch.
+if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
+    flunk "setup: could not reach Set Up… in the menu"
+else
+    # Waited for rather than slept for: the first click on an inactive app only brings it forward.
+    front=""
+    for _ in $(seq 1 30); do
+        front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+        [ "$front" = com.xiaolaidict ] && break
+        sleep 0.2
+    done
+    # **This window is meant to come forward.** "No panel may activate XiaolaiDict" governs the
+    # surfaces a reader did not ask for, mid-sentence in another app; this is one they chose.
+    if [ "$front" = com.xiaolaidict ]; then
+        pass "setup: choosing Set Up… brings XiaolaiDict forward"
+    else
+        flunk "setup: the board never came forward — $front is in front"
+    fi
+
+    # **Ask the compositor, not the controller and not Accessibility.** A window can report
+    # `isVisible`, and can be listed by Accessibility, while never being drawn: the drawer once
+    # reported `appeared: true` for a window a screenshot showed as empty desktop.
+    drawn=""
+    for _ in $(seq 1 30); do
+        drawn=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+        printf '%s' "$drawn" | grep -q '"hasArea":true' && break
+        sleep 0.2
+    done
+    if printf '%s' "$drawn" | grep -q '"hasArea":true'; then
+        pass "setup: the compositor lists the board with an area ($(printf '%s' "$drawn" | sed -n 's/.*"height":\([0-9]*\).*"width":\([0-9]*\).*/\2x\1/p' | head -1))"
+    else
+        flunk "setup: the compositor does not list a drawn Set Up window ($(printf '%s' "$drawn" | head -c 200))"
+    fi
+
+    # Every row, and the rows that report rather than demand. Read through Accessibility, which is
+    # the right tool for *text* — it is only the wrong tool for "can the reader see it".
+    shown=$("$helpers/panel" com.xiaolaidict)
+    missing=""
+    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Sense picking"; do
+        printf '%s' "$shown" | grep -q "$row" || missing="$missing $row"
+    done
+    if [ -z "$missing" ]; then
+        pass "setup: the board shows every row"
+    else
+        flunk "setup: the board is missing a row —$missing"
+    fi
+
+    # The dictionary service answered before anything was asserted about its row: a board still
+    # saying "Asking…" would pass a check for the row's title while telling the reader nothing.
+    if printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; then
+        flunk "setup: the dictionary row was still asking the service"
+    else
+        pass "setup: the dictionary row had the service's answer"
+    fi
+fi
+
+# **Reopening shows the board, not a congratulation.** The flag decides whether the window opens by
+# itself and never what it shows, so a second open is the same rows with ticks against them. This
+# is the assertion that would fail if a `hasCompletedSetup` ever started gating content.
+# `close-window` takes the window's **title**, not a bundle id. Passing the bundle id closes
+# nothing and exits non-zero, which under `|| true` would leave the board open — and the reopen
+# check below would then pass against a window that was never closed.
+if ! "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1; then
+    flunk "setup: could not close the board, so reopening cannot be tested"
+else
+    pass "setup: the board closes"
+fi
+sleep 1
+defaults write com.xiaolaidict SetupWindowShown -bool true
+if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
+    flunk "setup: could not reopen the board after it had been shown once"
+else
+    sleep 1.5
+    again=$("$helpers/panel" com.xiaolaidict)
+    if printf '%s' "$again" | grep -q "Study dictionary"; then
+        pass "setup: reopening after it has been shown gives the board again"
+    else
+        flunk "setup: reopening gave something other than the board ($(printf '%s' "$again" | head -c 200))"
+    fi
+fi
+# Left as the reader found it. A board still on screen would be in front of whatever stage runs
+# next, and the scenes stage measures which app is frontmost.
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 fi
 
 if want scenes; then
