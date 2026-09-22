@@ -33,7 +33,7 @@ struct PermissionsTests {
 
     @Test func severalMissingAreCountedRatherThanListed() {
         let warning = report(accessibility: false, screenRecording: false).menuWarning
-        #expect(warning == "2 permissions are off — XiaolaiDict cannot read selections or the screen")
+        #expect(warning == "2 permissions are off — selections and the screen cannot be read")
     }
 
     @Test func missingHoldsOnlyWhatIsActuallyMissing() {

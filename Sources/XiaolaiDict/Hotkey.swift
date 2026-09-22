@@ -22,8 +22,8 @@ final class Hotkey {
         /// registration answers "exists", another app holds the combination.
         var description: String {
             switch reason {
-            case .heldByXiaolaiDict: "XiaolaiDict already uses this shortcut for something else"
-            case .unreleasedByXiaolaiDict: "XiaolaiDict could not release this shortcut earlier; quit and reopen the app to free it"
+            case .heldByXiaolaiDict: "this shortcut is already used for something else in this app"
+            case .unreleasedByXiaolaiDict: "this shortcut could not be released earlier; quit and reopen the app to free it"
             case .status(let status) where status == eventHotKeyExistsErr: "another app has claimed this shortcut"
             case .status(let status): "the shortcut could not be registered (OSStatus \(status))"
             }

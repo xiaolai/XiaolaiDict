@@ -41,11 +41,11 @@ public enum Abstention: String, Sendable, CaseIterable, Codable {
     /// half of "the popup can mark a sense, and can say why it did not".
     public var reason: String {
         switch self {
-        case .noCandidates: "This dictionary does not mark its senses, so XiaolaiDict cannot say which one you read."
-        case .noContext: "No sentence was captured around the word, so XiaolaiDict cannot tell its senses apart."
+        case .noCandidates: "This dictionary does not mark its senses, so the one you read cannot be identified."
+        case .noContext: "No sentence was captured around the word, so its senses cannot be told apart."
         case .tooClose: "Several senses fit this sentence equally well."
         case .nothingFits: "No sense in this entry clearly fits this sentence."
-        case .unavailable: "XiaolaiDict could not compare this sentence against the senses."
+        case .unavailable: "This sentence could not be compared against the senses."
         }
     }
 }

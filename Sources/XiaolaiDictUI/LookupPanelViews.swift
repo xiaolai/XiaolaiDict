@@ -227,7 +227,7 @@ private struct SenseRow: View {
                     .font(.caption)
                     .foregroundStyle(mark.isHypothesis ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.tint))
                     .help(mark.isHypothesis
-                        ? "XiaolaiDict's guess at the sense you were reading, from your sentence. It may be wrong."
+                        ? "A guess at the sense you were reading, from your sentence. It may be wrong."
                         : "The only sense in this entry.")
             }
         }
@@ -352,7 +352,7 @@ private struct EntryChrome: View {
             if !popup.canKeySenses {
                 Text("whole entries only")
                     .font(.caption2).foregroundStyle(.tertiary)
-                    .help("This dictionary marks its senses with nothing XiaolaiDict can key a card to.")
+                    .help("This dictionary marks its senses with nothing a card can be keyed to.")
             }
             Spacer(minLength: scale.space.stack)
 

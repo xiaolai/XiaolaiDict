@@ -152,7 +152,7 @@ struct LookupPane: View {
         } header: {
             Text("Shortcut")
         } footer: {
-            Text("XiaolaiDict looks up whatever is selected, wherever you are.")
+            Text("Whatever is selected is looked up, wherever you are.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -208,8 +208,8 @@ struct LookupPane: View {
         } header: {
             Text("Never look up in these apps")
         } footer: {
-            Text("Password managers cannot be removed. XiaolaiDict records the sentence a word was "
-                 + "read in, and there every sentence is a secret.")
+            Text("Password managers cannot be removed. The sentence a word was read in is "
+                 + "recorded, and there every sentence is a secret.")
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -356,7 +356,7 @@ struct DictionaryPane: View {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
                 Text("A sense id only means anything inside the dictionary that issued it, so "
-                     + "what XiaolaiDict has learned about your senses cannot follow you to another one. "
+                     + "what has been learned about your senses cannot follow you to another one. "
                      + "Your reading history is kept either way.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -397,7 +397,7 @@ struct PermissionsPane: View {
     /// so beats showing a verdict that is merely the empty state.
     private var verdict: String {
         guard model.hasAsked else { return "Checking…" }
-        return model.report.allGranted ? "XiaolaiDict has everything it needs." : (model.report.menuWarning ?? "")
+        return model.report.allGranted ? "Everything needed has been granted." : (model.report.menuWarning ?? "")
     }
 }
 

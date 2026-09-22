@@ -26,7 +26,7 @@ public enum SenseStanding: Equatable {
         case .confirmed(.reader): String(localized: "You chose this sense")
         case .confirmed(.onlySense): String(localized: "The only sense in this entry")
         case .confirmed: String(localized: "Confirmed")
-        case .proposed: String(localized: "XiaolaiDict's guess — not confirmed")
+        case .proposed: String(localized: "A guess — not confirmed")
         case .unclaimed: String(localized: "Shown without a claim")
         }
     }

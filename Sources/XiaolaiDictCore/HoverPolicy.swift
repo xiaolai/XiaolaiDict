@@ -60,11 +60,11 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     public var reason: String {
         switch self {
         case .modifierNotHeld: "Hold the hover modifier to look up the word under the pointer."
-        case .excludedApp: "XiaolaiDict does not look things up in this app."
-        case .excludedSite: "XiaolaiDict does not look things up on this site."
-        case .paused: "XiaolaiDict is paused."
+        case .excludedApp: "Words are not looked up in this app."
+        case .excludedSite: "Words are not looked up on this site."
+        case .paused: "Lookups are paused."
         case .stillMoving: "The pointer is still moving."
-        case .samePlace: "This is the word XiaolaiDict just looked up."
+        case .samePlace: "This word was just looked up."
         case .captureInFlight: "A capture is already running."
         }
     }

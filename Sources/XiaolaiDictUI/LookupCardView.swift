@@ -153,7 +153,7 @@ public struct LookupCardView: View {
         case .undecided(let reason):
             // An abstention is the selector working, so it reads as a statement rather than as an
             // error: no warning colour, no icon, just what happened and what to do about it.
-            Text(reason ?? String(localized: "XiaolaiDict could not tell which sense you read."))
+            Text(reason ?? String(localized: "The sense you read could not be identified."))
                 .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

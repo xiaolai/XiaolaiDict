@@ -335,7 +335,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             shortcut: currentShortcut,
             choose: { [weak self] shortcut in
                 // An app that is gone registered nothing, and must not be reported as having done so.
-                guard let self else { return String(localized: "XiaolaiDict is not running") }
+                guard let self else { return String(localized: "The app is not running") }
                 return chooseShortcut(shortcut)?.description
             },
             suspend: { [weak self] in self?.suspendShortcut($0) })

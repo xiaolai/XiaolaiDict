@@ -353,7 +353,7 @@ enum SelectionReader {
         switch error {
         case .notResponding: "\(app) did not answer Accessibility in time — it may be busy. Try again in a moment."
         case .deadlineExceeded:
-            "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so XiaolaiDict stopped."
+            "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so it was stopped."
         case .accessibilityDisabled:
             "Accessibility access for XiaolaiDict is off. Allow it in \(PrivacySettings.accessibilityLocation)."
         case .appUnavailable: "\(app) quit, or stopped answering Accessibility requests."

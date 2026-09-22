@@ -38,7 +38,7 @@ enum RecognitionError: LocalizedError {
         // capture, so this one means what it says.
         case .displayNotCapturable: "the screen is locked"
         case .nothingUnderPointer: "no word under the pointer"
-        case .excludedApp(let name): "XiaolaiDict does not look things up in \(name)"
+        case .excludedApp(let name): "words are not looked up in \(name)"
         case .unattributable: "no window under the pointer"
         case .screenRecordingDenied:
             "XiaolaiDict needs Screen Recording to read words off the screen. Allow it in "

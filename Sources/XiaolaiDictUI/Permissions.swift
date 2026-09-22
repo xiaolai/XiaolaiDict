@@ -125,10 +125,10 @@ public struct PermissionsReport: Equatable, Sendable {
         case 0: nil
         case 1:
             switch missing[0].permission {
-            case .accessibility: "Accessibility is off — XiaolaiDict cannot read your selection"
+            case .accessibility: "Accessibility is off — your selection cannot be read"
             case .screenRecording: "Screen Recording is off — hover cannot read the screen"
             }
-        default: "\(missing.count) permissions are off — XiaolaiDict cannot read selections or the screen"
+        default: "\(missing.count) permissions are off — selections and the screen cannot be read"
         }
     }
 

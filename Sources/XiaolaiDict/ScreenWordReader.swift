@@ -86,7 +86,7 @@ enum ScreenWordReader {
     static func read(at point: CGPoint) -> Outcome {
         switch target(at: point) {
         case .none(let why): return .miss(why)
-        case .ourOwnWindow: return .miss("the pointer is over XiaolaiDict's own window")
+        case .ourOwnWindow: return .miss("the pointer is over the app's own window")
         case .found(let target): return read(at: point, in: target)
         }
     }
