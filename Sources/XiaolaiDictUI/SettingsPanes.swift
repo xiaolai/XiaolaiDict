@@ -89,9 +89,11 @@ struct ReadingPane: View {
             } header: {
                 Text("Reading history drawer")
             } footer: {
-                Text("Frosted keeps cards and headings easy to read over any window. Clear shows "
-                     + "more of what is behind the drawer — over a dark terminal it stays dark "
-                     + "instead of turning grey.")
+                Text("""
+                     Frosted keeps cards and headings easy to read over any window. Clear shows \
+                     more of what is behind the drawer — over a dark terminal it stays dark \
+                     instead of turning grey.
+                     """)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -174,8 +176,10 @@ struct LookupPane: View {
         } header: {
             Text("The gate")
         } footer: {
-            Text("A hover only fires while the key is held and the pointer has stopped. "
-                 + "There is no setting for holding nothing.")
+            Text("""
+                 A hover only fires while the key is held and the pointer has stopped. \
+                 There is no setting for holding nothing.
+                 """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -208,8 +212,10 @@ struct LookupPane: View {
         } header: {
             Text("Never look up in these apps")
         } footer: {
-            Text("Password managers cannot be removed. The sentence a word was read in is "
-                 + "recorded, and there every sentence is a secret.")
+            Text("""
+                 Password managers cannot be removed. The sentence a word was read in is \
+                 recorded, and there every sentence is a secret.
+                 """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -355,9 +361,11 @@ struct DictionaryPane: View {
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
-                Text("A sense id only means anything inside the dictionary that issued it, so "
-                     + "what has been learned about your senses cannot follow you to another one. "
-                     + "Your reading history is kept either way.")
+                Text("""
+                     A sense id only means anything inside the dictionary that issued it, so \
+                     what has been learned about your senses cannot follow you to another one. \
+                     Your reading history is kept either way.
+                     """)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
