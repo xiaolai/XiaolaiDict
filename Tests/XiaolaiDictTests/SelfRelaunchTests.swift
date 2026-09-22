@@ -4,8 +4,9 @@ import Testing
 @testable import XiaolaiDict
 
 /// Restarting the app in place, exactly once.
+@MainActor
 struct SelfRelaunchTests {
-    private final class Log: @unchecked Sendable {
+    private final class Log {
         private(set) var launches: [URL] = []
         private(set) var quits = 0
         func launched(_ url: URL) { launches.append(url) }

@@ -18,15 +18,20 @@ public struct SetupBoard: Equatable, Sendable {
         case screenRecording
         case dictionary
         case shortcut
+        case senseEngine
 
         public var id: String { rawValue }
 
         /// Whether an unsettled step is something the reader still has to do.
         ///
         /// The shortcut is not: it ships with a working default, and it is on the board to *teach*
-        /// the gesture rather than to ask for anything. Counting it would leave a reader with
-        /// nothing left to do looking at a permanently unfinished board.
-        public var needsReader: Bool { self != .shortcut }
+        /// the gesture rather than to ask for anything. Neither is the sense engine — there is
+        /// nothing a reader can do about it inside this app, and the measured confidently-wrong
+        /// rate is **17% with Apple's on-device model and 17% without it**, so presenting its
+        /// absence as a task would be asking for work against a difference measured to be zero.
+        /// Counting either would leave a reader with nothing left to do looking at a permanently
+        /// unfinished board.
+        public var needsReader: Bool { self != .shortcut && self != .senseEngine }
     }
 
     public let permissions: PermissionsReport
@@ -39,16 +44,19 @@ public struct SetupBoard: Equatable, Sendable {
     public let language: String
     /// The lookup shortcut as the app holds it.
     public let shortcut: Shortcut?
+    /// What is backing sense selection, read from the one place that asks.
+    public let engine: SenseEngineStatus
 
     public init(
         permissions: PermissionsReport, available: [DictionaryCapability]?, chosen: String?,
-        language: String, shortcut: Shortcut?
+        language: String, shortcut: Shortcut?, engine: SenseEngineStatus
     ) {
         self.permissions = permissions
         self.available = available
         self.chosen = chosen
         self.language = language
         self.shortcut = shortcut
+        self.engine = engine
     }
 
     /// Every step, always, in a fixed order. The board shows all of them whether or not they are
@@ -87,6 +95,7 @@ public struct SetupBoard: Equatable, Sendable {
         // labels its blocks `n.`/`vt.` and narrows nothing.
         case .dictionary: chosen != nil && !chosenDictionaryIsMissing
         case .shortcut: shortcut?.isUsable == true
+        case .senseEngine: engine.isOnDevice
         }
     }
 

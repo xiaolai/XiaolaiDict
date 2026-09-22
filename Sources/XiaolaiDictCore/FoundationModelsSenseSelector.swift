@@ -47,7 +47,11 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
 
         #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return .abstained(.unavailable) }
-        guard case .available = SystemLanguageModel.default.availability else { return .abstained(.unavailable) }
+        // Asked through `SenseEngine`, not here. This site used to match `.available` itself and
+        // drop the `.unavailable(reason)` payload, so nothing could say *why* a reader was on the
+        // fallback rung — while `OnDeviceSentenceExplainer` kept the reason and rendered it. One
+        // question, one place, and the setup board now reads the same answer this does.
+        guard SenseEngine.status().isOnDevice else { return .abstained(.unavailable) }
         do {
             let session = LanguageModelSession(instructions: Self.instructions)
             let answer = try await session.respond(

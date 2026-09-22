@@ -50,6 +50,15 @@
     "Always" : {
 
     },
+    "Apple Intelligence is off, so senses are picked by a simpler match. A marked sense is a guess until you confirm it, either way." : {
+
+    },
+    "Apple's on-device model does not run here, so senses are picked by a simpler match. A marked sense is a guess until you confirm it, either way." : {
+
+    },
+    "Apple's on-device model is still preparing. Senses are picked by a simpler match until it is ready." : {
+
+    },
     "Ask macOS…" : {
 
     },
@@ -270,6 +279,12 @@
 
     },
     "Select a word anywhere and press %@." : {
+
+    },
+    "Sense picking" : {
+
+    },
+    "Senses are picked by Apple's on-device model." : {
 
     },
     "Set Up XiaolaiDict" : {

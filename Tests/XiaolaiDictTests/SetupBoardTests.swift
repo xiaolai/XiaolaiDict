@@ -23,14 +23,16 @@ struct SetupBoardTests {
         available: [DictionaryCapability]? = [oxford, noad],
         chosen: String? = "com.apple.dictionary.NOAD",
         language: String = "en-US",
-        shortcut: Shortcut? = combination
+        shortcut: Shortcut? = combination,
+        engine: SenseEngineStatus = .onDevice
     ) -> SetupBoard {
         SetupBoard(
             permissions: PermissionsReport(states: [
                 PermissionState(permission: .accessibility, isGranted: accessibility),
                 PermissionState(permission: .screenRecording, isGranted: screenRecording),
             ]),
-            available: available, chosen: chosen, language: language, shortcut: shortcut)
+            available: available, chosen: chosen, language: language, shortcut: shortcut,
+            engine: engine)
     }
 
     // MARK: - Rows read live state
@@ -47,7 +49,7 @@ struct SetupBoardTests {
     @Test func aPermissionMissingFromTheReportIsNotGranted() {
         let empty = SetupBoard(
             permissions: PermissionsReport(states: []), available: nil, chosen: nil,
-            language: "en", shortcut: nil)
+            language: "en", shortcut: nil, engine: .onDevice)
         #expect(!empty.isGranted(.accessibility))
         #expect(!empty.isSettled(.screenRecording))
     }
@@ -127,11 +129,31 @@ struct SetupBoardTests {
         let finished = board()
         #expect(finished.isComplete)
         #expect(finished.steps == SetupBoard.Step.allCases)
-        #expect(finished.steps.count == 4)
+        #expect(finished.steps.count == 5)
 
         let fresh = board(accessibility: false, screenRecording: false, chosen: nil, shortcut: nil)
         #expect(!fresh.isComplete)
         #expect(fresh.steps == finished.steps, "a finished board shows the same rows as a fresh one")
+    }
+
+    // MARK: - The sense engine
+
+    /// Reported, never demanded. Measured 2026-09-22 over three identical runs, the
+    /// confidently-wrong rate is 17% with Apple's on-device model and 17% with the `NLEmbedding`
+    /// fallback — so an unavailable model is not a task, and counting it would leave a reader with
+    /// nothing they can act on staring at an unfinished board.
+    @Test func anUnavailableModelIsReportedAndNeverAskedFor() {
+        let without = board(engine: .unavailable(.deviceNotEligible))
+        #expect(!without.isSettled(.senseEngine))
+        #expect(!without.outstanding.contains(.senseEngine))
+        #expect(without.isComplete)
+    }
+
+    @Test func theEngineRowFollowsWhatIsActuallyBackingSelection() {
+        #expect(board(engine: .onDevice).isSettled(.senseEngine))
+        #expect(!board(engine: .unavailable(.appleIntelligenceNotEnabled)).isSettled(.senseEngine))
+        #expect(board(engine: .unavailable(.modelNotReady)).engine.reason == .modelNotReady)
+        #expect(board(engine: .onDevice).engine.reason == nil)
     }
 
     /// The board holds no flag about having been shown. Whether the window opened by itself is

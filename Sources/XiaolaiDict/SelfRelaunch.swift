@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import Synchronization
 
 /// Restarting XiaolaiDict in place, once.
 ///
@@ -22,15 +21,21 @@ import Synchronization
 /// A `final class` rather than a struct so the "already started" flag belongs to the value that
 /// owns it. A process-wide static would be shared by every test in a parallel run, and whether one
 /// passed would depend on which ran first.
-final class SelfRelaunch: Sendable {
-    let bundleURL: @Sendable () -> URL?
-    let launch: @Sendable (URL) -> Void
-    let quit: @Sendable () -> Void
+///
+/// `@MainActor` because every part of it is: `NSApplication.terminate` and `NSWorkspace.shared` are
+/// main actor-isolated, and reaching them from a `@Sendable` closure warned rather than being
+/// wrong quietly. Restarting an app is a main-thread operation, so the type says so instead of
+/// carrying a lock to pretend otherwise.
+@MainActor
+final class SelfRelaunch {
+    let bundleURL: () -> URL?
+    let launch: (URL) -> Void
+    let quit: () -> Void
 
     init(
-        bundleURL: @escaping @Sendable () -> URL?,
-        launch: @escaping @Sendable (URL) -> Void,
-        quit: @escaping @Sendable () -> Void
+        bundleURL: @escaping () -> URL?,
+        launch: @escaping (URL) -> Void,
+        quit: @escaping () -> Void
     ) {
         self.bundleURL = bundleURL
         self.launch = launch
@@ -51,20 +56,17 @@ final class SelfRelaunch: Sendable {
 
     /// Restarts the app, and does nothing at all on any later call.
     ///
-    /// **Idempotent because every way of reaching it can happen twice.** A reader can press the
-    /// button again before the app goes away, and the permission poll can answer twice in the same
-    /// second; both would otherwise launch a second copy. Returns whether this call was the one
-    /// that acted, so a caller can tell "restarting" from "already restarting" rather than guess.
+    /// **Idempotent because every route to it can happen twice.** A reader can press the button
+    /// again before the app goes away, and the permission poll can answer twice in the same second;
+    /// both would otherwise start a second copy. Returns whether this call was the one that acted,
+    /// so a caller can tell "restarting" from "already restarting" rather than guess.
     @discardableResult
     func run() -> Bool {
         guard let url = bundleURL() else { return false }
         // Claimed before anything happens. Claiming it after the launch leaves a window in which a
         // second caller sees an unclaimed flag and starts a third copy.
-        guard started.withLock({ started -> Bool in
-            guard !started else { return false }
-            started = true
-            return true
-        }) else { return false }
+        guard !hasStarted else { return false }
+        hasStarted = true
 
         launch(url)
         quit()
@@ -72,7 +74,5 @@ final class SelfRelaunch: Sendable {
     }
 
     /// Whether a relaunch has already been started by this value.
-    var hasStarted: Bool { started.withLock { $0 } }
-
-    private let started = Mutex(false)
+    private(set) var hasStarted = false
 }
