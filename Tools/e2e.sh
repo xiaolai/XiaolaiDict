@@ -789,6 +789,55 @@ fi
 fi
 
 if want setup; then
+board_drawn_now() { "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"drawn":true' && echo yes || echo no; }
+# **Settle before driving the menu after a launch.** A click that lands while the app's state changes
+# under an open menu is dropped: SwiftUI re-renders the menu and the click goes nowhere, while
+# `menu-click` still reports it. Measured 2026-09-22 — after a cold start with the board open, the
+# dictionary list arrives from the service a second or two later, and 2 clicks of 6 were lost; with
+# the click held until it had arrived, 0 of 8. The board says when it has: its dictionary row stops
+# asking. Bounded, so a service that never answers is reported by the check that needs it.
+# Defined before anything below uses them: `settle_after_launch` calls `board_on_screen`, and
+# a helper defined after its first caller is "command not found" — under `|| return 0`, silently.
+restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local running
+    running=$(pids "$exe" | tr '\n' ' ')
+    [ -z "$running" ] || kill -TERM $running
+    for _ in $(seq 1 100); do [ -n "$(pids "$exe")" ] || break; sleep 0.1; done
+    open "$app"
+    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+    for _ in $(seq 1 100); do
+        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    return 1
+}
+board_on_screen() {  # board_on_screen: 0 drawn, 1 absent, 2 exists but not drawn
+    local seen
+    seen=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    printf '%s' "$seen" | grep -q '"drawn":true' && return 0
+    # Found by title but not drawn is neither "open" nor "absent", and must not read as either.
+    printf '%s' "$seen" | grep -q '"matches":\[\]' || return 2
+    return 1
+}
+settle_after_launch() {
+    board_on_screen || return 0     # no board open by itself, so nothing was fetched early
+    local _
+    for _ in $(seq 1 50); do
+        "$helpers/panel" com.xiaolaidict | grep -q "Asking which dictionaries are enabled" || break
+        sleep 0.2
+    done
+    sleep 0.5
+}
+# Frontmost app, and whether the board is main/focused, in one line — what a failed "came forward"
+# or "was remembered" check needs to say, since the two can fail independently.
+board_state() {
+    local s; s=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    printf 'front=%s drawn=%s main=%s focused=%s' \
+        "$(printf '%s' "$s" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')" \
+        "$(printf '%s' "$s" | grep -q '"drawn":true' && echo yes || echo no)" \
+        "$(printf '%s' "$s" | grep -q '"main":true' && echo yes || echo no)" \
+        "$(printf '%s' "$s" | grep -q '"focused":true' && echo yes || echo no)"
+}
 # 12. The setup board: a fresh install's first window, and the same window on demand afterwards.
 #
 #    Driven with a real click, never `AXPress` — pressing a menu through Accessibility opens it
@@ -798,43 +847,54 @@ if want setup; then
 # The flag was saved before the app was ever launched — see the setup section above. Saving it
 # here would record whatever the first launch wrote, which is the value this stage is about.
 
-# Opened from the menu, the way a reader reaches it after the first launch.
+# Opened from the menu, the way a reader reaches it after the first launch. The app was launched
+# moments ago by the set-up above, so the menu is not driven until the launch has settled.
+settle_after_launch
 if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
     flunk "setup: could not reach Set Up… in the menu"
 else
     # Waited for rather than slept for: the first click on an inactive app only brings it forward.
     front=""
-    for _ in $(seq 1 30); do
+    front_waited=0
+    front_seen=""   # every change of frontmost app, in order — what a failure has to explain
+    front_prev=""
+    for _ in $(seq 1 50); do
         front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+        [ "$front" != "$front_prev" ] && front_seen="$front_seen → ${front#com.}@$((front_waited * 2))00ms"
+        front_prev=$front
         [ "$front" = com.xiaolaidict ] && break
         sleep 0.2
+        front_waited=$((front_waited + 1))
     done
     # **This window is meant to come forward.** "No panel may activate XiaolaiDict" governs the
-    # surfaces a reader did not ask for, mid-sentence in another app; this is one they chose.
+    # surfaces a reader did not ask for, mid-sentence in another app; this is one they chose. How
+    # long it took is printed, because the first run of this stage failed this at 6 s with Bambu
+    # Studio in front and every hand-driven repeat passed — a bound nobody reads cannot say which.
     if [ "$front" = com.xiaolaidict ]; then
-        pass "setup: choosing Set Up… brings XiaolaiDict forward"
+        pass "setup: choosing Set Up… brings XiaolaiDict forward ($((front_waited / 5)).$(( (front_waited % 5) * 2 ))s)"
     else
-        flunk "setup: the board never came forward — $front is in front"
+        flunk "setup: the board never came forward in 10 s — $front is in front (frontmost:$front_seen; $(board_state))"
     fi
 
-    # **Ask the compositor, not the controller and not Accessibility.** A window can report
+    # **Ask the compositor, not the controller and not Accessibility alone.** A window can report
     # `isVisible`, and can be listed by Accessibility, while never being drawn: the drawer once
-    # reported `appeared: true` for a window a screenshot showed as empty desktop.
+    # reported `appeared: true` for a window a screenshot showed as empty desktop. `on-screen` has
+    # Accessibility find the window by title and the compositor confirm it draws one at exactly that
+    # frame — by bounds, because the compositor's titles need Screen Recording and a helper started
+    # over SSH never has it.
     drawn=""
     for _ in $(seq 1 30); do
         drawn=$("$helpers/on-screen" com.xiaolaidict "Set Up")
-        printf '%s' "$drawn" | grep -q '"hasArea":true' && break
+        printf '%s' "$drawn" | grep -q '"drawn":true' && break
         sleep 0.2
     done
-    if printf '%s' "$drawn" | grep -q '"hasArea":true'; then
-        pass "setup: the compositor lists the board with an area ($(printf '%s' "$drawn" | sed -n 's/.*"height":\([0-9]*\).*"width":\([0-9]*\).*/\2x\1/p' | head -1))"
-    elif printf '%s' "$drawn" | grep -q '"titlesReadable":false'; then
-        # `kCGWindowName` needs Screen Recording, and this helper is launched separately from the
-        # app, so it cannot lean on the app's grant. Saying so beats reporting the board absent —
-        # that is a fact about the harness wearing the costume of a fact about the app.
-        flunk "setup: window titles are not readable here, so the board could not be identified — grant Screen Recording to the terminal running the helpers"
+    if printf '%s' "$drawn" | grep -q '"drawn":true'; then
+        pass "setup: the compositor draws the board ($(printf '%s' "$drawn" | sed -n 's/.*"height":\([0-9]*\).*"width":\([0-9]*\).*/\2x\1/p' | head -1))"
+    elif printf '%s' "$drawn" | grep -q '"matches":\[\]'; then
+        flunk "setup: Accessibility finds no window titled Set Up ($(printf '%s' "$drawn" | head -c 200))"
     else
-        flunk "setup: the compositor does not list a drawn Set Up window ($(printf '%s' "$drawn" | head -c 200))"
+        # Found by title and not drawn at its frame: the UtilityWindow failure, exactly.
+        flunk "setup: the board exists but the compositor does not draw it ($(printf '%s' "$drawn" | head -c 240))"
     fi
 
     # Every row, and the rows that report rather than demand. Read through Accessibility, which is
@@ -902,27 +962,6 @@ fi
 # above reaches the board through the menu. This is the half that can only be seen by restarting:
 # the flag is what decides, so it is cleared, the app is restarted, and the board must appear with
 # nobody having asked for it. Then the flag is set, the app is restarted again, and it must not.
-restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
-    local running
-    running=$(pids "$exe" | tr '\n' ' ')
-    [ -z "$running" ] || kill -TERM $running
-    for _ in $(seq 1 100); do [ -n "$(pids "$exe")" ] || break; sleep 0.1; done
-    open "$app"
-    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
-    for _ in $(seq 1 100); do
-        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
-        sleep 0.2
-    done
-    return 1
-}
-board_on_screen() {  # board_on_screen: does the compositor list a drawn Set Up window?
-    local seen
-    seen=$("$helpers/on-screen" com.xiaolaidict "Set Up")
-    # A negative answer is only trustworthy when titles could be read at all; otherwise the
-    # fragment never had a chance to match and "absent" would be the harness talking.
-    printf '%s' "$seen" | grep -q '"titlesReadable":false' && return 2
-    printf '%s' "$seen" | grep -q '"hasArea":true'
-}
 
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
@@ -936,11 +975,34 @@ else
     else
         flunk "setup: nothing opened the board on a first launch"
     fi
-    # And the flag it wrote is what stops it happening twice.
-    if [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null)" = 1 ]; then
-        pass "setup: opening it once is remembered"
+    # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
+    # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
+    # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
+    # app really did stay behind: when it came forward on its own, being remembered is correct.
+    launch_front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+    if [ "$launch_front" != com.xiaolaidict ]; then
+        if [ -z "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" ]; then
+            pass "setup: a board opened behind $launch_front is not counted as seen"
+        else
+            flunk "setup: a board that stayed behind $launch_front was recorded as seen"
+        fi
+    fi
+    # Brought forward the way a reader would, which is the moment it counts. After a settle, for the
+    # same reason as above — and `menu-click` failing is reported, never swallowed: under `|| true`
+    # a click that never happened read as the app failing to remember one.
+    settle_after_launch
+    if ! reach=$("$helpers/menu-click" com.xiaolaidict "Set Up…" 2>&1); then
+        flunk "setup: could not reach Set Up… after the restart ($reach)"
+    fi
+    seen=""
+    for _ in $(seq 1 50); do
+        [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" = 1 ] && { seen=yes; break; }
+        sleep 0.2
+    done
+    if [ "$seen" = yes ]; then
+        pass "setup: seeing it once is remembered"
     else
-        flunk "setup: the first open did not record itself, so it would open again every launch"
+        flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
     fi
 fi
 
@@ -959,7 +1021,7 @@ else
     board_on_screen || board_seen=$?
     case $board_seen in
         0) flunk "setup: the board opened again although it had been shown once" ;;
-        2) flunk "setup: window titles are not readable, so 'it did not open' cannot be claimed" ;;
+        2) flunk "setup: a Set Up window exists but is not drawn, so 'it did not open' cannot be claimed" ;;
         *) pass "setup: it does not open by itself a second time" ;;
     esac
 fi
