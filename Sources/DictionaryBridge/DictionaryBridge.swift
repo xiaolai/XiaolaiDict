@@ -5,6 +5,14 @@ import Synchronization
 /// A dictionary enabled in Dictionary.app's settings.
 public struct InstalledDictionary: Sendable, Equatable {
     public let identity: DictionaryIdentity
+    /// What the bundle declares about its languages — empty for every sideloaded conversion,
+    /// which is six of the seven enabled on the development Mac.
+    public let languages: [DictionaryLanguages]
+
+    public init(identity: DictionaryIdentity, languages: [DictionaryLanguages] = []) {
+        self.identity = identity
+        self.languages = languages
+    }
 
     public var name: String { identity.name }
 }
@@ -53,7 +61,9 @@ public enum DictionaryBridge {
             let api = try API.loaded.get()
             var installed: [InstalledDictionary] = []
             for dictionary in try api.dictionaries() {
-                installed.append(InstalledDictionary(identity: try api.identity(of: dictionary)))
+                installed.append(InstalledDictionary(
+                    identity: try api.identity(of: dictionary),
+                    languages: api.languages(of: dictionary)))
             }
             return installed
         }
@@ -63,7 +73,7 @@ public enum DictionaryBridge {
     public static func reply(to request: ServiceRequest) -> ServiceReply {
         switch request {
         case .lookup(let lookup): .lookup(reply(to: lookup))
-        case .dictionaries: .dictionaries(capabilities())
+        case .dictionaries(let reprobing): .dictionaries(capabilities(reprobing: reprobing))
         }
     }
 
@@ -78,8 +88,12 @@ public enum DictionaryBridge {
     /// Measured rather than assumed, because the rung is a property of the entries: the Writer's
     /// Thesaurus carries publisher sense ids on some entries and not on others. Computed once per
     /// service process — each probe parses a real entry, and Longman's *hold* alone is 625 KB.
-    public static func capabilities() -> [DictionaryCapability] {
-        if let known = probed.withLock({ $0 }) { return known }
+    public static func capabilities(reprobing: Bool = false) -> [DictionaryCapability] {
+        // **A reprobe skips both fast paths rather than clearing the cache and then reading it.**
+        // Clearing outside `probing` left a window in which another caller could repopulate it
+        // before the line below looked — and the forced request would then be answered from
+        // exactly the stale answer it was sent to discard.
+        if !reprobing, let known = probed.withLock({ $0 }) { return known }
         // The *probe* is serialised, not merely its result cached. Reading the cache and then
         // probing without holding anything lets two callers both find it empty and both parse
         // every installed dictionary — 625 KB for Longman's *hold* alone — with the loser throwing
@@ -92,10 +106,17 @@ public enum DictionaryBridge {
         // Safe to hold across `activeDictionaries()`, which takes `serial`: nothing anywhere calls
         // `capabilities()` while holding `serial`, so the two are never taken in the other order.
         return probing.withLock { _ in
-            if let known = probed.withLock({ $0 }) { return known }   // another caller won the race
+            // Another caller won the race — but not for a reprobe, which must not be satisfied by
+            // an answer that was already stale when it was asked for. Cleared here, under the same
+            // lock the probe runs beneath, so nothing can slip between the clear and the re-probe.
+            if reprobing { probed.withLock { $0 = nil } }
+            if !reprobing, let known = probed.withLock({ $0 }) { return known }
+            let installed = (try? activeDictionaries()) ?? []
+            let scripts = indexedScripts()
             var found: [DictionaryCapability] = []
-            for dictionary in (try? activeDictionaries()) ?? [] {
-                found.append(capability(of: dictionary.identity))
+            for dictionary in installed {
+                found.append(capability(
+                    of: dictionary, indexes: scripts[dictionary.identity.key] ?? []))
             }
             probeRuns.withLock { $0 += 1 }
             probed.withLock { $0 = found }
@@ -112,13 +133,74 @@ public enum DictionaryBridge {
     /// microseconds, and has checked nothing at all.
     static let probeRuns = Mutex(0)
 
-    private static func capability(of identity: DictionaryIdentity) -> DictionaryCapability {
+    private static func capability(
+        of installed: InstalledDictionary, indexes: Set<ProbeScript>
+    ) -> DictionaryCapability {
+        let identity = installed.identity
         for word in probeWords {
             let entries = ((try? entries(for: word))?.entries ?? []).filter { $0.dictionary == identity }
             guard let best = entries.map(\.senseKeyKind).max() else { continue }
-            return DictionaryCapability(identity: identity, senseKeyKind: best, probed: true)
+            return DictionaryCapability(
+                identity: identity, senseKeyKind: best, probed: true,
+                languages: installed.languages, indexes: indexes)
         }
-        return DictionaryCapability(identity: identity, senseKeyKind: SenseKeyKind.none, probed: false)
+        return DictionaryCapability(
+            identity: identity, senseKeyKind: SenseKeyKind.none, probed: false,
+            languages: installed.languages, indexes: indexes)
+    }
+
+    /// Which scripts each enabled dictionary answers in, keyed by `DictionaryIdentity.key`.
+    ///
+    /// This is the language signal that survives a bundle declaring nothing, and it is measured on
+    /// records alone — no entry is parsed, so it costs the cheap half of a lookup rather than
+    /// Longman's 625 KB *hold*. One probe per script is enough: the loop stops asking about a
+    /// script the dictionary has already answered in, so *hold* and *water* are never sent to a
+    /// dictionary that answered *fine*.
+    ///
+    /// **The headword comparison is not optional.** `DCSCopyRecordsForSearchString` matches
+    /// fuzzily — a probe for `purple passage` comes back headed `passage` — so a returned record
+    /// is a hit only when its headword *is* the word asked for. Taking non-empty records as a hit
+    /// makes every dictionary answer every script, which is the same fuzzy-match trap the
+    /// multi-word-expression probe already records.
+    /// Whether a record's headword is the probe word.
+    ///
+    /// **A CJK headword carries its reading**, measured 2026-09-22: 牛津英汉汉英词典 answers 水 with the
+    /// headword `水  shuǐ` and 譯典通 with `水  ㄕㄨㄟˇ`. Compared whole, both are misses and a
+    /// bilingual reports itself as indexing Latin script alone — which is how this was found.
+    ///
+    /// So the comparison is against the headword's first whitespace-delimited token, never a
+    /// prefix test: `hasPrefix` would accept *finest* for *fine*, which is the fuzzy match this
+    /// exists to reject. Every probe word is a single token, so a first-token comparison keeps the
+    /// rejection exact — `passage` is still not `purple passage`.
+    static func matches(_ word: String, _ headword: String?) -> Bool {
+        guard let first = headword?.components(separatedBy: .whitespacesAndNewlines)
+            .first(where: { !$0.isEmpty })
+        else { return false }
+        return first.compare(word, options: .caseInsensitive) == .orderedSame
+    }
+
+    static func indexedScripts() -> [String: Set<ProbeScript>] {
+        serial.withLock { _ in
+            guard let api = try? API.loaded.get(), let dictionaries = try? api.dictionaries() else {
+                return [:]
+            }
+            var found: [String: Set<ProbeScript>] = [:]
+            for dictionary in dictionaries {
+                guard let identity = try? api.identity(of: dictionary) else { continue }
+                var scripts: Set<ProbeScript> = []
+                for word in probeWords {
+                    guard let script = ProbeScript.of(word), !scripts.contains(script) else { continue }
+                    guard let records = try? api.records(for: word, in: dictionary),
+                          !records.isEmpty
+                    else { continue }
+                    guard records.contains(where: { matches(word, api.headword(of: $0)) })
+                    else { continue }
+                    scripts.insert(script)
+                }
+                found[identity.key] = scripts
+            }
+            return found
+        }
     }
 
     /// The service's answer to one lookup. Errors become typed `.failure` values, so the app
@@ -199,17 +281,37 @@ public enum DictionaryBridge {
 
     /// A dictionary bundle's content version, read once per bundle per process — a plist read per
     /// lookup, across seven dictionaries, would be seven file reads on a path with a 1 s budget.
-    private static let versions = Mutex<[String: String?]>([:])
+    private static let facts = Mutex<[String: BundleFacts]>([:])
 
-    static func version(ofBundleAt bundle: URL) -> String? {
-        versions.withLock { cache in
+    /// What one read of a bundle's `Info.plist` yields. Both together because it is one file: a
+    /// second read for the languages would double a cost this cache exists to pay once.
+    struct BundleFacts: Sendable, Equatable {
+        var version: String?
+        var languages: [DictionaryLanguages]
+    }
+
+    static func facts(ofBundleAt bundle: URL) -> BundleFacts {
+        facts.withLock { cache in
             if let known = cache[bundle.path] { return known }
             let plist = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist"))
-            let version = plist?["CFBundleShortVersionString"] as? String
-            cache[bundle.path] = version
-            return version
+            let declared = plist?["DCSDictionaryLanguages"] as? [[String: Any]] ?? []
+            let languages = declared.compactMap { pair -> DictionaryLanguages? in
+                // Both keys or nothing. A half-declared pair cannot answer "indexes English and
+                // explains in mine", and inventing the missing half is how a wrong dictionary
+                // becomes the confident proposal.
+                guard let index = pair["DCSDictionaryIndexLanguage"] as? String,
+                      let explains = pair["DCSDictionaryDescriptionLanguage"] as? String
+                else { return nil }
+                return DictionaryLanguages(index: index, explains: explains)
+            }
+            let read = BundleFacts(
+                version: plist?["CFBundleShortVersionString"] as? String, languages: languages)
+            cache[bundle.path] = read
+            return read
         }
     }
+
+    static func version(ofBundleAt bundle: URL) -> String? { facts(ofBundleAt: bundle).version }
 
     /// `document` with the XHTML namespace declared on its root. The dictionaries declare only
     /// their own `d:` namespace there, and parsed as XML — which the panel must do, or the `d:`
@@ -331,6 +433,14 @@ private struct API: @unchecked Sendable {
             name: name,
             identifier: identifier?.isEmpty == false ? identifier : nil,
             version: bundle.flatMap { DictionaryBridge.version(ofBundleAt: $0) })
+    }
+
+    /// What the bundle declares about its languages, through the same cached plist read the
+    /// version comes from. Empty when the bundle declares nothing, which is every sideloaded
+    /// conversion measured here.
+    func languages(of dictionary: CFTypeRef) -> [DictionaryLanguages] {
+        guard let bundle = dictionaryURL(dictionary)?.takeUnretainedValue() as URL? else { return [] }
+        return DictionaryBridge.facts(ofBundleAt: bundle).languages
     }
 
     /// Always one explicit dictionary. Passing NULL — "every dictionary" before macOS 26 — segfaults

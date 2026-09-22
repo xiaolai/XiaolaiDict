@@ -11,7 +11,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
     private let panel = LookupPanelController()
     private let client = DictionaryClient()
-    private let primaryDictionary = PrimaryDictionaryStore()
+    /// **The suite the app was given, not `.standard`** — the same reason the shortcut store takes
+    /// one. A test that chose a dictionary used to rewrite the reader's own choice, and switching
+    /// the primary starts their study over.
+    private let primaryDictionary: PrimaryDictionaryStore
+    /// Whether the setup window has opened by itself before. **The app's own suite, not
+    /// `.standard`** — a test that flipped it would change whether the reader's next launch opens
+    /// a window at them.
+    private let setupPresentation: SetupPresentationStore
     @ObservationIgnored private lazy var runner = makeRunner()
     @ObservationIgnored private lazy var drawer = makeDrawer()
     /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
@@ -62,6 +69,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // touched the shortcut rewrote the reader's own — the objection this project makes to
         // driving the GUI on the building Mac, in a unit test.
         shortcuts = ShortcutStore(defaults: defaults)
+        setupPresentation = SetupPresentationStore(defaults: defaults)
+        let primary = PrimaryDictionaryStore(defaults: defaults)
+        primaryDictionary = primary
+        chosenDictionary = primary.load().chosen
         self.hotkeys = hotkeys
         super.init()
     }
@@ -120,6 +131,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     private func makeRunner() -> LookupRunner {
         let store = primaryDictionary
+        // **The store is the truth for a lookup**, because a lookup can happen while no window is
+        // open to have observed anything. The observable copy is what the windows draw, and
+        // `askForDictionaries` re-reads it so the two cannot drift apart after a change made
+        // outside this process.
         return LookupRunner(
             client: client, panel: panel, primary: { store.load() },
             priorEncounters: { [weak self] lemma, before in
@@ -131,6 +146,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
     /// the menu says it does not know rather than showing a list it made up.
     var dictionaries: [DictionaryCapability]?
+    /// Whether the service has been asked and has finished answering — see `DictionaryChoice`.
+    private(set) var dictionariesAsked = false
     @ObservationIgnored private let shortcuts: ShortcutStore
     /// Carbon's hot-key plumbing, injected so a test never registers a real global shortcut —
     /// which would take it from the reader for as long as the suite ran.
@@ -189,6 +206,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
         if hoverEnabled, !HistoryReport.isWanted, !SettingsReport.isWanted { hover.start() }
         registerShortcut(shortcuts.load())
+        // **Not in an instrument run.** An instrument measures the app; a window opening at it
+        // unasked is a window in front of whatever it was about to capture.
+        if !HistoryReport.isWanted, !SettingsReport.isWanted { openSetupOnFirstLaunch() }
         quitOnTerminationSignal()
         if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
         if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
@@ -313,9 +333,94 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Activating here does not contradict "no panel may activate XiaolaiDict": that is about the panels
     /// the reader did not ask for, mid-sentence in another app. This is a window they chose from a
     /// menu, and they are about to type into it — the shortcut field takes key presses.
-    func showSettings() {
+    func showSettings(on pane: SettingsPane? = nil) {
+        // Selected before the window opens, so the reader never sees the pane they did not ask for
+        // and then a switch. `SettingsModel` owns the selection for exactly this reason.
+        if let pane { settings.pane = pane }
         NSApplication.shared.activate()
         WindowActions.shared.settings?()
+    }
+
+    /// Opens the setup board, bringing XiaolaiDict forward with it.
+    ///
+    /// Activating is right here for the same reason it is right for Settings, and for the opposite
+    /// reason to the panels: this is a window the reader asked for, from the menu or from Settings,
+    /// and one they are about to act in. "No panel may activate XiaolaiDict" governs the surfaces
+    /// that appear while they are mid-sentence in another app. The launch-time open does **not**
+    /// come through here — see `openSetupOnFirstLaunch` for why it must not ask to activate.
+    func showSetup() {
+        // Logged, because "the board did not come forward" has two very different causes — the
+        // request never arrived, or it arrived and activation was refused — and only the app can
+        // say which. An end-to-end run could not tell them apart from outside.
+        log.notice("setup: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
+        NSApplication.shared.activate()
+        WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
+    }
+
+    /// Opens the board unasked, once in the life of an install.
+    ///
+    /// **Waits for the window actions before opening.** They are captured by `MenuBarLabel`'s
+    /// `.task`, which has not run when the delegate finishes launching — and
+    /// `WindowActions.shared.open` being nil at that moment opens nothing, silently, which is
+    /// exactly how a drawer once reported success while never being drawn.
+    ///
+    /// **Opening is not the same as being seen, so this does not write the flag.** Measured on the
+    /// E2E machine 2026-09-22: launched with another app in front, the board was drawn — the
+    /// compositor listed it — and that app stayed frontmost, because macOS's cooperative activation
+    /// refuses focus to an app the reader did not just bring forward. Marking the flag here recorded
+    /// the board as shown to a reader who never saw it, and it never opened by itself again. The
+    /// flag is written by `setupWindow` becoming key instead, which is the reader actually having it.
+    ///
+    /// Not forcing activation is deliberate: stealing focus at launch — at login, above whatever the
+    /// reader was doing — is exactly what cooperative activation exists to stop. The board waits
+    /// behind, and it tries again at the next launch until it has been seen.
+    ///
+    /// **And it does not ask to activate.** That request is refused at launch — measured in every
+    /// E2E run, the board drawn behind the app in front — so it does nothing for the reader, and it
+    /// can do harm: in the stage, a reader's own click on Set Up… arriving just before this task ran
+    /// was intermittently left in the background, the board drawn, main and focused inside
+    /// XiaolaiDict, and the frontmost app never changing. Ten of ten clicks came forward with this
+    /// open switched off. A launch the reader started is activated by LaunchServices already, so the
+    /// window comes forward there without asking; an unasked launch has no business asking.
+    private func openSetupOnFirstLaunch() {
+        guard !setupPresentation.hasOpenedBefore() else { return }
+        Task { @MainActor [weak self] in
+            guard await Instrument.settle(until: .seconds(5), { WindowActions.shared.open != nil })
+            else { return }
+            // Opened from the menu in the meantime: the reader already has it, and ordering it again
+            // from here would only be a second, unasked request.
+            guard self?.setupWindow?.isVisible != true else { return }
+            self?.log.notice("setup: opened unasked at launch")
+            WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
+        }
+    }
+
+    /// The setup window, taken from the view inside it — the same way `settingsWindow` is.
+    ///
+    /// Held so the app can tell when the reader has actually seen the board: its becoming key is
+    /// that moment, and it is what writes `SetupPresentationStore`'s flag.
+    @ObservationIgnored weak var setupWindow: NSWindow? {
+        didSet { watchSetupWindow() }
+    }
+    @ObservationIgnored private var setupKeyObserver: NSObjectProtocol?
+
+    private func watchSetupWindow() {
+        if let setupKeyObserver { NotificationCenter.default.removeObserver(setupKeyObserver) }
+        setupKeyObserver = nil
+        guard let window = setupWindow else { return }
+        // Already key by the time the view reported its window — opened from the menu, say.
+        if window.isKeyWindow { setupWasSeen() }
+        setupKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setupWasSeen() }
+        }
+    }
+
+    /// The reader has the board in front of them. Idempotent: writing `true` twice is one fact.
+    func setupWasSeen() {
+        log.notice("setup: the board became key (app active: \(NSApp.isActive, privacy: .public))")
+        setupPresentation.markOpened()
     }
 
     /// The shortcut as it stands: the one registered, or — while the field in Settings is armed
@@ -393,6 +498,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Owned here rather than inside the window so `--settings-report` can select a pane from
     /// outside and measure what the window does about it.
     let settings = SettingsModel()
+    /// The setup board's permission state, held here so `SetupView` keeps polling across opens and
+    /// an instrument can read it back.
+    let setup = SetupModel()
 
     /// The settings window, taken from the view inside it rather than searched for among
     /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
@@ -416,7 +524,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var shortcutLabel: String? { hotkey?.shortcut.label() }
     var hoverIsWatching: Bool { hover.isWatching }
     var drawerIsVisible: Bool { drawer.isVisible }
-    var chosenDictionary: String? { primaryDictionary.load().chosen }
+    /// The primary dictionary's key, held as **stored** state rather than read from
+    /// `UserDefaults` on each access.
+    ///
+    /// `@Observable` tracks stored properties; a computed one that reaches into the defaults
+    /// registers no dependency, so a view reading it is never invalidated when it changes. The
+    /// setup board is what exposed this: pressing "Use 牛津英汉汉英词典" saved the choice and the row
+    /// went on saying the seat was empty, because nothing told the view to look again.
+    private(set) var chosenDictionary: String?
 
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
@@ -425,10 +540,44 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
     /// menu is opened rather than at launch, and only once.
-    func askForDictionaries() async {
-        permissions = await .probe()
-        guard dictionaries == nil else { return }
-        dictionaries = await client.dictionaries()
+    func askForDictionaries(refreshing: Bool = false) async {
+        // **Assigned only when it changed.** `@Observable` notifies on every assignment, equal or
+        // not, and this runs each time the menu opens — so it re-rendered the open menu about 70 ms
+        // later, every time, for nothing. Measured on the E2E machine 2026-09-22: a click landing
+        // while the menu re-renders is dropped — `menu-click` reported the click, the app never saw
+        // it — 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
+        let probed = await PermissionsReport.probe()
+        if probed != permissions { permissions = probed }
+        // Re-read from the store, not just written to on choosing. A lookup takes the primary
+        // from disk, so a change made outside this process — a second copy, a `defaults write` —
+        // would otherwise leave every window naming a dictionary that is no longer the one marks
+        // are recorded against.
+        let onDisk = primaryDictionary.load().chosen
+        if onDisk != chosenDictionary { chosenDictionary = onDisk }
+        guard refreshing || dictionaries == nil else { return }
+        let found = await client.dictionaries(reprobing: refreshing)
+        // Same reason. A refresh that finds the same dictionaries must not re-render an open menu.
+        if found != dictionaries { dictionaries = found }
+        // Set whatever the answer was, including none. "Asked and got nothing" is a state that
+        // does not resolve, and a surface that cannot tell it from "still asking" waits forever.
+        dictionariesAsked = true
+    }
+
+    /// Asks again, discarding the last answer first.
+    ///
+    /// The setup board tells a reader with no suitable dictionary to enable one in Dictionary.app,
+    /// and then has to **notice when they come back** — which the once-only ask above could never
+    /// do. Clearing first so the row says "asking" rather than showing yesterday's list while the
+    /// question is in flight.
+    ///
+    /// **It reaches the service's cache too.** The probe runs once per service process, which is
+    /// right for a menu opening and wrong here: this is the path that has to see a dictionary the
+    /// reader has just enabled, so the request carries `reprobing` and the service discards its
+    /// answer before re-probing.
+    func refreshDictionaries() async {
+        dictionaries = nil
+        dictionariesAsked = false
+        await askForDictionaries(refreshing: true)
     }
 
     func toggleHistory() {
@@ -437,6 +586,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     func choosePrimaryDictionary(_ key: String?) {
         primaryDictionary.save(key)
+        // Written to the observable copy too, or every view reading it goes on showing the old
+        // choice until something else happens to invalidate it.
+        chosenDictionary = key
     }
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's

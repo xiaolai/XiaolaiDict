@@ -166,7 +166,13 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
 public enum ServiceRequest: Codable, Sendable, Equatable {
     case lookup(LookupRequest)
     /// Every enabled dictionary, in the reader's order, with what each can address.
-    case dictionaries
+    ///
+    /// `reprobing` discards the service's cached answer first. The probe parses real entries —
+    /// Longman's *hold* alone is 625 KB — so it runs once per service process, which is right for
+    /// a menu opening and wrong for the one case that has to see a change: the setup board tells a
+    /// reader to enable a dictionary in Dictionary.app and then promises to notice when they come
+    /// back. A cache that outlives that promise makes it false.
+    case dictionaries(reprobing: Bool = false)
 }
 
 /// What the dictionary service answers with. Typed per request, so a reply can never be read as
@@ -186,11 +192,35 @@ public struct DictionaryCapability: Codable, Sendable, Equatable {
     /// False when no probe word was found in this dictionary at all, so `senseKeyKind` is a floor
     /// rather than a measurement — said plainly instead of passed off as a finding.
     public let probed: Bool
+    /// What the bundle declares about its languages, empty where it declares nothing.
+    ///
+    /// Empty is the common case rather than the edge: six of the seven dictionaries enabled on the
+    /// development Mac are sideloaded conversions and not one carries `DCSDictionaryLanguages`.
+    public let languages: [DictionaryLanguages]
+    /// The writing systems this dictionary was measured to answer in — the signal that still works
+    /// when `languages` is empty. Says what it indexes, never what it explains in.
+    public let indexes: Set<ProbeScript>
 
-    public init(identity: DictionaryIdentity, senseKeyKind: SenseKeyKind, probed: Bool) {
+    public init(
+        identity: DictionaryIdentity, senseKeyKind: SenseKeyKind, probed: Bool,
+        languages: [DictionaryLanguages] = [], indexes: Set<ProbeScript> = []
+    ) {
         self.identity = identity
         self.senseKeyKind = senseKeyKind
         self.probed = probed
+        self.languages = languages
+        self.indexes = indexes
+    }
+
+    /// Whether this dictionary is one a reader of `language` would study English from: English
+    /// headwords, explained in their own language.
+    ///
+    /// Answers from the declared languages alone. A dictionary that declares nothing answers false
+    /// however it probed, because a records probe can say a bundle indexes Latin script and cannot
+    /// say what language it explains in — and a monolingual English dictionary and an
+    /// English-Chinese one are indistinguishable by that signal.
+    public func teachesEnglish(to language: String) -> Bool {
+        languages.contains { $0.indexesEnglish(explainedIn: language) }
     }
 
     /// What the menu prints beside the dictionary's name.

@@ -1,0 +1,138 @@
+import XiaolaiDictCore
+
+/// What a fresh install still needs, read from live state every time it is asked.
+///
+/// **A board, not a script.** Each step reports what is true right now, so "set up again" is
+/// nothing more than opening the window — there is no progress to resume and no completion to
+/// remember. The one flag in this feature (`SetupPresentationStore`) decides whether the window
+/// *opens by itself* at launch and never what it shows; a `hasCompletedSetup` that gated content is
+/// how a status board rots into a wizard that can only be run once.
+///
+/// The steps are independent facts rather than stages. Nothing here is ordered, nothing waits on a
+/// Next button, and a reader who grants a permission in System Settings sees the row change without
+/// touching this window — `SettingsModel` already polls for exactly that, because macOS posts
+/// nothing when a permission changes.
+public struct SetupBoard: Equatable, Sendable {
+    public enum Step: String, CaseIterable, Sendable, Identifiable {
+        case accessibility
+        case screenRecording
+        case dictionary
+        case shortcut
+        case senseEngine
+
+        public var id: String { rawValue }
+
+        /// Whether an unsettled step is something the reader still has to do.
+        ///
+        /// The shortcut is not: it ships with a working default, and it is on the board to *teach*
+        /// the gesture rather than to ask for anything. Neither is the sense engine — there is
+        /// nothing a reader can do about it inside this app, and the measured confidently-wrong
+        /// rate is **17% with Apple's on-device model and 17% without it**, so presenting its
+        /// absence as a task would be asking for work against a difference measured to be zero.
+        /// Counting either would leave a reader with nothing left to do looking at a permanently
+        /// unfinished board.
+        public var needsReader: Bool { self != .shortcut && self != .senseEngine }
+    }
+
+    public let permissions: PermissionsReport
+    /// Every enabled dictionary, or **nil while the service has not answered**. Nil and empty are
+    /// different states and must not read the same: one is "asking", the other is "you have none".
+    public let available: [DictionaryCapability]?
+    /// The primary dictionary the reader settled on, as a `DictionaryIdentity.key`.
+    public let chosen: String?
+    /// The reader's own language, from `ReaderLanguage.preferred`.
+    public let language: String
+    /// The lookup shortcut as the app holds it.
+    public let shortcut: Shortcut?
+    /// Whether the hot key is actually registered. **Not the same as the combination being
+    /// well-formed**: `RegisterEventHotKey` fails with `eventHotKeyExistsErr` when another app
+    /// holds the combination exclusively, and the app then falls back to showing the saved one. A
+    /// row reading `isUsable` alone drew "Ready" over a shortcut that answered nothing.
+    public let shortcutIsRegistered: Bool
+    /// What is backing sense selection, read from the one place that asks.
+    public let engine: SenseEngineStatus
+
+    public init(
+        permissions: PermissionsReport, available: [DictionaryCapability]?, chosen: String?,
+        language: String, shortcut: Shortcut?, shortcutIsRegistered: Bool = true,
+        engine: SenseEngineStatus
+    ) {
+        self.permissions = permissions
+        self.available = available
+        self.chosen = chosen
+        self.language = language
+        self.shortcut = shortcut
+        self.shortcutIsRegistered = shortcutIsRegistered
+        self.engine = engine
+    }
+
+    /// Every step, always, in a fixed order. The board shows all of them whether or not they are
+    /// settled — a row that vanishes once it is done takes with it the only place the reader could
+    /// go to change their mind.
+    public var steps: [Step] { Step.allCases }
+
+    /// What to offer a reader who has not chosen. Computed rather than stored, so it cannot go
+    /// stale against the list it was derived from.
+    public var proposal: StudyDictionaryProposal {
+        .forReader(of: language, among: available ?? [])
+    }
+
+    /// The dictionary the reader chose, if it is still enabled.
+    ///
+    /// Nil with a non-nil `chosen` is a real and important state: the reader disabled their study
+    /// dictionary in Dictionary.app, and every lookup now abstains.
+    public var chosenDictionary: DictionaryCapability? {
+        guard let chosen else { return nil }
+        return available?.first { $0.identity.key == chosen }
+    }
+
+    /// Dictionaries that declare no language but were **measured** to index English.
+    ///
+    /// This is what the script probe is for, and until now nothing read it. A sideloaded
+    /// conversion declares nothing — six of the seven on the development Mac — so the rule in
+    /// `StudyDictionaryProposal` cannot propose one: a records probe says what a dictionary indexes
+    /// and never what it explains in. But "none declares it" and "you have none" are different
+    /// sentences, and telling a reader with Longman and Collins enabled that they have no English
+    /// dictionary is simply false.
+    public var undeclaredEnglishDictionaries: [DictionaryCapability] {
+        (available ?? []).filter { $0.languages.isEmpty && $0.indexes.contains(.latin) }
+    }
+
+    /// True when the reader chose a dictionary that is no longer enabled.
+    public var chosenDictionaryIsMissing: Bool {
+        guard chosen != nil, let available else { return false }
+        return !available.contains { $0.identity.key == chosen }
+    }
+
+    public func isSettled(_ step: Step) -> Bool {
+        switch step {
+        case .accessibility: isGranted(.accessibility)
+        case .screenRecording: isGranted(.screenRecording)
+        // Settled by the reader having chosen, never by a proposal being available. A proposal is
+        // an offer; until it is taken the seat is empty, and the unchosen primary is whatever comes
+        // first in Dictionary.app's order — which on the development Mac is a dictionary that
+        // labels its blocks `n.`/`vt.` and narrows nothing.
+        case .dictionary: chosen != nil && !chosenDictionaryIsMissing
+        case .shortcut: shortcut?.isUsable == true && shortcutIsRegistered
+        case .senseEngine: engine.isOnDevice
+        }
+    }
+
+    public func isGranted(_ permission: Permission) -> Bool {
+        permissions.states.first { $0.permission == permission }?.isGranted ?? false
+    }
+
+    /// The steps still waiting on the reader, in board order.
+    public var outstanding: [Step] { steps.filter { $0.needsReader && !isSettled($0) } }
+
+    /// Whether the reader has nothing left to do. Not whether every row shows a tick.
+    ///
+    /// **Unknowable while the dictionary list has not answered.** A saved choice settles its row,
+    /// because an unanswered list is not evidence the dictionary went away — but "everything needed
+    /// is in place" is a stronger claim than that, and making it over a service that never replied
+    /// is exactly the failure rendering as confidently as a success.
+    public var isComplete: Bool { outstanding.isEmpty && available != nil }
+
+    /// Whether the board is still waiting to be able to say anything about the dictionary.
+    public var isAsking: Bool { available == nil }
+}

@@ -99,7 +99,7 @@ SH
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
 rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
 cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
@@ -275,6 +275,25 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     true
     cat "$out" 2>/dev/null || true
 }
+# **The setup flag is captured before the app is launched, not inside the stage that uses it.**
+# Launching XiaolaiDict can open the setup board by itself and write this flag — that is the whole
+# behaviour — so a backup taken later records the value the app just wrote, and "restoring" it
+# leaves the machine changed. Read here, ahead of every launch, and put back however the run ends.
+if setup_shown_original=$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null); then
+    setup_shown_had=yes
+else
+    setup_shown_had=no
+    setup_shown_original=""
+fi
+restore_setup_shown() {
+    if [ "$setup_shown_had" = yes ]; then
+        defaults write com.xiaolaidict SetupWindowShown -bool "$setup_shown_original"
+    else
+        defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+    fi
+}
+at_exit restore_setup_shown
+
 # Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
 # asserts that it starts and stays up, which is a different claim and stays a stage of its own.
 # Without this, selecting a later stage failed for want of something an earlier one happened to do.
@@ -767,6 +786,250 @@ else
         fi
     fi
 fi
+fi
+
+if want setup; then
+board_drawn_now() { "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"drawn":true' && echo yes || echo no; }
+# **Settle before driving the menu after a launch.** A click that lands while the app's state changes
+# under an open menu is dropped: SwiftUI re-renders the menu and the click goes nowhere, while
+# `menu-click` still reports it. Measured 2026-09-22 — after a cold start with the board open, the
+# dictionary list arrives from the service a second or two later, and 2 clicks of 6 were lost; with
+# the click held until it had arrived, 0 of 8. The board says when it has: its dictionary row stops
+# asking. Bounded, so a service that never answers is reported by the check that needs it.
+# Defined before anything below uses them: `settle_after_launch` calls `board_on_screen`, and
+# a helper defined after its first caller is "command not found" — under `|| return 0`, silently.
+restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local running
+    running=$(pids "$exe" | tr '\n' ' ')
+    [ -z "$running" ] || kill -TERM $running
+    for _ in $(seq 1 100); do [ -n "$(pids "$exe")" ] || break; sleep 0.1; done
+    open "$app"
+    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+    for _ in $(seq 1 100); do
+        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    return 1
+}
+board_on_screen() {  # board_on_screen: 0 drawn, 1 absent, 2 exists but not drawn
+    local seen
+    seen=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    printf '%s' "$seen" | grep -q '"drawn":true' && return 0
+    # Found by title but not drawn is neither "open" nor "absent", and must not read as either.
+    printf '%s' "$seen" | grep -q '"matches":\[\]' || return 2
+    return 1
+}
+settle_after_launch() {
+    board_on_screen || return 0     # no board open by itself, so nothing was fetched early
+    local _
+    for _ in $(seq 1 50); do
+        "$helpers/panel" com.xiaolaidict | grep -q "Asking which dictionaries are enabled" || break
+        sleep 0.2
+    done
+    sleep 0.5
+}
+# Frontmost app, and whether the board is main/focused, in one line — what a failed "came forward"
+# or "was remembered" check needs to say, since the two can fail independently.
+board_state() {
+    local s; s=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    printf 'front=%s drawn=%s main=%s focused=%s' \
+        "$(printf '%s' "$s" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')" \
+        "$(printf '%s' "$s" | grep -q '"drawn":true' && echo yes || echo no)" \
+        "$(printf '%s' "$s" | grep -q '"main":true' && echo yes || echo no)" \
+        "$(printf '%s' "$s" | grep -q '"focused":true' && echo yes || echo no)"
+}
+# 12. The setup board: a fresh install's first window, and the same window on demand afterwards.
+#
+#    Driven with a real click, never `AXPress` — pressing a menu through Accessibility opens it
+#    *without activating the app*, so a window opened from it never comes forward and a working
+#    board would look broken.
+
+# The flag was saved before the app was ever launched — see the setup section above. Saving it
+# here would record whatever the first launch wrote, which is the value this stage is about.
+
+# Opened from the menu, the way a reader reaches it after the first launch. The app was launched
+# moments ago by the set-up above, so the menu is not driven until the launch has settled.
+settle_after_launch
+if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
+    flunk "setup: could not reach Set Up… in the menu"
+else
+    # Waited for rather than slept for: the first click on an inactive app only brings it forward.
+    front=""
+    front_waited=0
+    front_seen=""   # every change of frontmost app, in order — what a failure has to explain
+    front_prev=""
+    for _ in $(seq 1 50); do
+        front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+        [ "$front" != "$front_prev" ] && front_seen="$front_seen → ${front#com.}@$((front_waited * 2))00ms"
+        front_prev=$front
+        [ "$front" = com.xiaolaidict ] && break
+        sleep 0.2
+        front_waited=$((front_waited + 1))
+    done
+    # **This window is meant to come forward.** "No panel may activate XiaolaiDict" governs the
+    # surfaces a reader did not ask for, mid-sentence in another app; this is one they chose. How
+    # long it took is printed, because the first run of this stage failed this at 6 s with Bambu
+    # Studio in front and every hand-driven repeat passed — a bound nobody reads cannot say which.
+    if [ "$front" = com.xiaolaidict ]; then
+        pass "setup: choosing Set Up… brings XiaolaiDict forward ($((front_waited / 5)).$(( (front_waited % 5) * 2 ))s)"
+    else
+        flunk "setup: the board never came forward in 10 s — $front is in front (frontmost:$front_seen; $(board_state))"
+    fi
+
+    # **Ask the compositor, not the controller and not Accessibility alone.** A window can report
+    # `isVisible`, and can be listed by Accessibility, while never being drawn: the drawer once
+    # reported `appeared: true` for a window a screenshot showed as empty desktop. `on-screen` has
+    # Accessibility find the window by title and the compositor confirm it draws one at exactly that
+    # frame — by bounds, because the compositor's titles need Screen Recording and a helper started
+    # over SSH never has it.
+    drawn=""
+    for _ in $(seq 1 30); do
+        drawn=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+        printf '%s' "$drawn" | grep -q '"drawn":true' && break
+        sleep 0.2
+    done
+    if printf '%s' "$drawn" | grep -q '"drawn":true'; then
+        pass "setup: the compositor draws the board ($(printf '%s' "$drawn" | sed -n 's/.*"height":\([0-9]*\).*"width":\([0-9]*\).*/\2x\1/p' | head -1))"
+    elif printf '%s' "$drawn" | grep -q '"matches":\[\]'; then
+        flunk "setup: Accessibility finds no window titled Set Up ($(printf '%s' "$drawn" | head -c 200))"
+    else
+        # Found by title and not drawn at its frame: the UtilityWindow failure, exactly.
+        flunk "setup: the board exists but the compositor does not draw it ($(printf '%s' "$drawn" | head -c 240))"
+    fi
+
+    # Every row, and the rows that report rather than demand. Read through Accessibility, which is
+    # the right tool for *text* — it is only the wrong tool for "can the reader see it".
+    shown=$("$helpers/panel" com.xiaolaidict)
+    missing=""
+    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Sense picking"; do
+        printf '%s' "$shown" | grep -q "$row" || missing="$missing $row"
+    done
+    if [ -z "$missing" ]; then
+        pass "setup: the board shows every row"
+    else
+        flunk "setup: the board is missing a row —$missing"
+    fi
+
+    # **Waited for, not read once.** A cold XPC probe parses real entries — Longman's *hold* alone
+    # is 625 KB — so a board asserted the instant it appears is being failed for the service still
+    # working, not for a defect. Bounded, so a service that never answers is still a failure.
+    dict_waited=0
+    while printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; do
+        [ "$dict_waited" -ge 100 ] && break
+        sleep 0.2
+        dict_waited=$((dict_waited + 1))
+        shown=$("$helpers/panel" com.xiaolaidict)
+    done
+    # **Three outcomes, not two.** The row leaves "Asking…" both when the service answers and when
+    # it fails, so a loop that only waited for that phrase to go away reported a broken service as
+    # a successful one.
+    if printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; then
+        flunk "setup: the dictionary row was still asking the service after $((dict_waited / 5))s"
+    elif printf '%s' "$shown" | grep -q "did not answer"; then
+        flunk "setup: the dictionary service did not answer"
+    else
+        pass "setup: the dictionary row had the service's answer ($((dict_waited / 5))s)"
+    fi
+fi
+
+# **Reopening shows the board, not a congratulation.** The flag decides whether the window opens by
+# itself and never what it shows, so a second open is the same rows with ticks against them. This
+# is the assertion that would fail if a `hasCompletedSetup` ever started gating content.
+# `close-window` takes the window's **title**, not a bundle id. Passing the bundle id closes
+# nothing and exits non-zero, which under `|| true` would leave the board open — and the reopen
+# check below would then pass against a window that was never closed.
+if ! "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1; then
+    flunk "setup: could not close the board, so reopening cannot be tested"
+else
+    pass "setup: the board closes"
+fi
+sleep 1
+defaults write com.xiaolaidict SetupWindowShown -bool true
+if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
+    flunk "setup: could not reopen the board after it had been shown once"
+else
+    sleep 1.5
+    again=$("$helpers/panel" com.xiaolaidict)
+    if printf '%s' "$again" | grep -q "Study dictionary"; then
+        pass "setup: reopening after it has been shown gives the board again"
+    else
+        flunk "setup: reopening gave something other than the board ($(printf '%s' "$again" | head -c 200))"
+    fi
+fi
+# **The board opens by itself on a fresh install, and only then.**
+#
+# Without this the stage would pass with the automatic open removed entirely — every assertion
+# above reaches the board through the menu. This is the half that can only be seen by restarting:
+# the flag is what decides, so it is cleared, the app is restarted, and the board must appear with
+# nobody having asked for it. Then the flag is set, the app is restarted again, and it must not.
+
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+if ! restart_app; then
+    flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
+else
+    opened=""
+    for _ in $(seq 1 50); do board_on_screen && { opened=yes; break; }; sleep 0.2; done
+    if [ "$opened" = yes ]; then
+        pass "setup: a fresh install opens the board without being asked"
+    else
+        flunk "setup: nothing opened the board on a first launch"
+    fi
+    # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
+    # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
+    # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
+    # app really did stay behind: when it came forward on its own, being remembered is correct.
+    launch_front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+    if [ "$launch_front" != com.xiaolaidict ]; then
+        if [ -z "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" ]; then
+            pass "setup: a board opened behind $launch_front is not counted as seen"
+        else
+            flunk "setup: a board that stayed behind $launch_front was recorded as seen"
+        fi
+    fi
+    # Brought forward the way a reader would, which is the moment it counts. After a settle, for the
+    # same reason as above — and `menu-click` failing is reported, never swallowed: under `|| true`
+    # a click that never happened read as the app failing to remember one.
+    settle_after_launch
+    if ! reach=$("$helpers/menu-click" com.xiaolaidict "Set Up…" 2>&1); then
+        flunk "setup: could not reach Set Up… after the restart ($reach)"
+    fi
+    seen=""
+    for _ in $(seq 1 50); do
+        [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" = 1 ] && { seen=yes; break; }
+        sleep 0.2
+    done
+    if [ "$seen" = yes ]; then
+        pass "setup: seeing it once is remembered"
+    else
+        flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
+    fi
+fi
+
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+if ! restart_app; then
+    flunk "setup: XiaolaiDict did not come back after the second restart"
+else
+    # **A negative, so it is given time to fail.** Asserting "not on screen" the instant the app
+    # starts would pass against a board that appears a moment later.
+    sleep 3
+    # **Guarded, because the passing case is the non-zero one.** `set -e` ends the script at the
+    # first unguarded failure, so a bare call here killed the stage precisely when the board was
+    # correctly absent — and `on_exit` would have recorded a failure for the assertion that never
+    # ran. The `||` is what keeps it alive.
+    board_seen=0
+    board_on_screen || board_seen=$?
+    case $board_seen in
+        0) flunk "setup: the board opened again although it had been shown once" ;;
+        2) flunk "setup: a Set Up window exists but is not drawn, so 'it did not open' cannot be claimed" ;;
+        *) pass "setup: it does not open by itself a second time" ;;
+    esac
+fi
+
+# Left as the reader found it. A board still on screen would be in front of whatever stage runs
+# next, and the scenes stage measures which app is frontmost. The flag itself is put back by
+# `restore_setup_shown`, registered before anything was launched.
+"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 fi
 
 if want scenes; then

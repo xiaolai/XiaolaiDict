@@ -12,10 +12,21 @@ public struct DictionaryChoice {
     public var available: [DictionaryCapability]?
     public var chosen: String?
     public var choose: (String?) -> Void
+    /// Whether the service has been asked and has finished answering.
+    ///
+    /// `available` is nil both before the question is asked and after one that failed, and those
+    /// are different sentences: "asking…" is a state that resolves, and a service that answered
+    /// nothing is a state that does not. Without this the setup board said "asking" for the life
+    /// of the window.
+    public var hasAsked: Bool
 
-    public init(available: [DictionaryCapability]?, chosen: String?, choose: @escaping (String?) -> Void) {
+    public init(
+        available: [DictionaryCapability]?, chosen: String?, hasAsked: Bool = false,
+        choose: @escaping (String?) -> Void
+    ) {
         self.available = available
         self.chosen = chosen
+        self.hasAsked = hasAsked
         self.choose = choose
     }
 }
@@ -385,12 +396,21 @@ struct DictionaryPane: View {
 struct PermissionsPane: View {
     @Environment(\.scale) private var scale
     var model: SettingsModel
+    var openSetup: (() -> Void)?
 
     var body: some View {
         Form {
             Section {
                 Text(verdict).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // The other way into the board. This pane answers "are my permissions on"; the
+                // board answers "is any of this working", which is the question a reader who came
+                // here actually has.
+                if let openSetup {
+                    Button("Set Up…") { openSetup() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
             }
             ForEach(model.report.states) { state in
                 Section {

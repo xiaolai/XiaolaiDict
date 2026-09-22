@@ -80,7 +80,7 @@ final class ScreenTextRecogniser: Sendable {
         // without it every call below fails with a message about capture rather than about consent
         // — which is exactly how a machine with Accessibility granted and Screen Recording not
         // reported "no word under the pointer" and hid the real answer.
-        guard access.ensure() else { throw RecognitionError.screenRecordingDenied }
+        guard await access.ensure() else { throw RecognitionError.screenRecordingDenied }
         let target = try await target(at: point)
         // An owner XiaolaiDict cannot name cannot be checked against the exclusion list, and a region it
         // cannot attribute is a region it must not read: a display-scoped capture could contain a

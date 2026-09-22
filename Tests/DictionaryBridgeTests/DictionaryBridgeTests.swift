@@ -353,22 +353,114 @@ struct DictionaryCapabilityTests {
         #expect(noad.identity.version != nil, "no content version, so a sense key has no version to be valid in")
     }
 
-    /// Probed once per process: each probe parses a real entry, and Longman's *hold* is 625 KB.
+    /// What counts as the dictionary having the probe word.
     ///
-    /// Counted, not timed. The old version asserted the second call took under 5 ms, which proves
-    /// nothing twice over: the cache is process-wide, so if any other test probed first this one
-    /// measured an already-warm cache and passed without exercising anything — and on a loaded
-    /// machine a 5 ms bound measures the load instead of the cache.
-    @Test func theProbeRunsOnce() {
-        let first = DictionaryBridge.capabilities()
-        let second = DictionaryBridge.capabilities()
-        let runs = DictionaryBridge.probeRuns.withLock { $0 }
+    /// The CJK rows are the ones that were got wrong: compared whole, `水  shuǐ` is not `水`, so
+    /// 牛津英汉汉英词典 reported itself as indexing Latin script alone and the bilingual looked
+    /// monolingual. The `finest` row is why the fix is a first-token comparison and not
+    /// `hasPrefix`.
+    @Test(arguments: [
+        ("水", "水  shuǐ", true),
+        ("水", "水  ㄕㄨㄟˇ", true),
+        ("fine", "fine", true),
+        ("fine", "Fine", true),
+        ("fine", "finest", false),
+        ("purple passage", "passage", false),
+        ("fine", nil as String?, false),
+        ("fine", "", false),
+    ])
+    func aRecordCountsOnlyWhenItsHeadwordIsTheWord(word: String, headword: String?, hit: Bool) {
+        #expect(DictionaryBridge.matches(word, headword) == hit)
+    }
 
-        // Process-wide, not a delta across these two calls. Other tests probe in parallel, and the
-        // claim is exactly that the probe runs once for the whole process however many callers
-        // arrive and in whatever order — which a delta cannot express and timing cannot see.
-        #expect(runs == 1, "the probe ran \(runs) times in this process")
-        #expect(first == second)
+    /// Apple's assets declare their languages; every sideloaded conversion declares none.
+    ///
+    /// Both halves are load-bearing. If the plist read broke, the first assertion fails; if it
+    /// started inventing languages for bundles that carry none, the second does. Measured
+    /// 2026-09-22 across all seven enabled here.
+    @Test func appleAssetsDeclareTheirLanguagesAndSideloadedOnesDoNot() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        func found(_ name: String) throws -> DictionaryCapability {
+            try #require(
+                capabilities.first { $0.identity.name.contains(name) },
+                "\(name) is not enabled in Dictionary.app on this Mac")
+        }
+        #expect(try !found("New Oxford American").languages.isEmpty)
+        #expect(try !found("牛津").languages.isEmpty)
+        #expect(try found("Collins COBUILD").languages.isEmpty)
+        #expect(try found("Longman Dictionary").languages.isEmpty)
+    }
+
+    /// The rule the setup checklist asks: English headwords, explained in the reader's language.
+    ///
+    /// 牛津英汉汉英词典 declares `en → zh_CN` beside its `zh_CN → zh_CN`, and it is the second pair
+    /// that answers. NOAD explains in English, so it answers for an English reader and nobody else.
+    @Test func theBilingualIsTheOneForAReaderOfItsOwnLanguage() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        let noad = try #require(capabilities.first { $0.identity.name.contains("New Oxford American") })
+
+        #expect(oxford.teachesEnglish(to: "zh-Hans-CN"))
+        #expect(!oxford.teachesEnglish(to: "en"))
+        #expect(noad.teachesEnglish(to: "en"))
+        #expect(!noad.teachesEnglish(to: "zh-Hans-CN"))
+    }
+
+    /// A bundle that declares nothing is still classified, by what it answers.
+    ///
+    /// This is the signal that covers six of the seven dictionaries here. The second assertion is
+    /// the one that catches a broken probe: `DCSCopyRecordsForSearchString` matches fuzzily, so
+    /// without comparing headwords an English-only dictionary answers 水 too and every dictionary
+    /// reports every script.
+    @Test func aDictionaryThatDeclaresNothingIsClassifiedByWhatItAnswers() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let collins = try #require(capabilities.first { $0.identity.name.contains("Collins COBUILD") })
+        #expect(collins.languages.isEmpty, "the premise of this test is that it declares nothing")
+        #expect(collins.indexes.contains(.latin))
+        #expect(!collins.indexes.contains(.han), "an English dictionary answered a Chinese probe")
+    }
+
+    /// The bilingual answers both sides, which is what makes the probe a language signal rather
+    /// than a liveness check.
+    @Test func theProbeSeesBothHalvesOfABilingual() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        #expect(oxford.indexes.contains(.latin))
+        #expect(oxford.indexes.contains(.han))
+    }
+
+    /// Probed once per process — and again only when something asks.
+    ///
+    /// **One test, because the two claims share a process-wide counter.** They were two, ordered by
+    /// serializing the suite, and that was wrong twice over: `--filter` runs either alone, and
+    /// serialization orders execution without promising which case goes first. A test whose result
+    /// depends on what ran before it is a test that reports the runner's mood.
+    ///
+    /// It also no longer asserts an absolute "1". That claim stopped being true when reprobing was
+    /// added; what is still true, and is what the counter was introduced to catch, is that a second
+    /// unforced call does not probe again. Counted rather than timed: the second call is fast
+    /// either way, and a cache that silently re-probed would still look instant.
+    @Test func theProbeRunsOnceAndAgainOnlyWhenAsked() {
+        // Warmed here rather than assumed, so this holds whether or not another test ran first.
+        _ = DictionaryBridge.capabilities()
+        let warm = DictionaryBridge.probeRuns.withLock { $0 }
+        #expect(warm >= 1, "nothing ever probed, so nothing below is being measured")
+
+        let cached = DictionaryBridge.capabilities()
+        #expect(
+            DictionaryBridge.probeRuns.withLock { $0 } == warm,
+            "a cached call probed again — every menu opening would parse Longman's 625 KB *hold*")
+
+        // **And runs again when asked.** Once per process is right for a menu opening and wrong for
+        // the setup board, which tells a reader to enable a dictionary in Dictionary.app and
+        // promises to notice when they come back.
+        let fresh = DictionaryBridge.capabilities(reprobing: true)
+        #expect(
+            DictionaryBridge.probeRuns.withLock { $0 } == warm + 1,
+            "a reprobe was answered from the cache it was sent to discard")
+        // Asserted on the count, not the answer: nothing changed between the two calls, so a
+        // reprobe that quietly returned the cache would be indistinguishable from one that worked.
+        #expect(fresh == cached, "nothing changed between the two, so the answer must not have")
     }
 }
 

@@ -21,6 +21,7 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
+    static let setupID = "setup"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -85,6 +86,17 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(frame.origin, size: frame.size)
         }
 
+        // A `Window`, never a `UtilityWindow` — measured in this bundle: a `UtilityWindow` is
+        // created and reports `isVisible`, but the compositor never lists it and Accessibility
+        // never sees it. Suppressed at launch and opened deliberately, once per install, by
+        // `XiaolaiDictApp.openSetupOnFirstLaunch`.
+        Window("Set Up XiaolaiDict", id: Self.setupID) {
+            XiaolaiDictSetup(app: delegate)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
         // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it
         // from the content — a second mover, measured to overshoot by the height of the title bar
@@ -119,11 +131,47 @@ struct XiaolaiDictSettings: View {
             dictionary: DictionaryChoice(
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
+                hasAsked: app.dictionariesAsked,
                 choose: { app.choosePrimaryDictionary($0) }),
-            shortcut: app.shortcutChoice)
+            shortcut: app.shortcutChoice,
+            openSetup: { app.showSetup() })
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure.
         .background(WindowAccessor { app.settingsWindow = $0 })
+    }
+}
+
+/// The setup board, as a **view** rather than as scene-body code — the same rule
+/// `XiaolaiDictSettings` above records. `app.dictionaries` arrives when the XPC probe answers, and
+/// reading it in `XiaolaiDictScene.body` would re-evaluate every scene in the app.
+struct XiaolaiDictSetup: View {
+    let app: XiaolaiDictApp
+
+    var body: some View {
+        SetupView(
+            model: app.setup,
+            dictionary: DictionaryChoice(
+                available: app.dictionaries,
+                chosen: app.chosenDictionary,
+                hasAsked: app.dictionariesAsked,
+                choose: { app.choosePrimaryDictionary($0) }),
+            shortcut: app.shortcutChoice,
+            // Whether the hot key actually registered, not merely whether the combination is
+            // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
+            // shortcut that answered nothing.
+            shortcutIsRegistered: app.shortcutIsRegistered,
+            // Each button opens the pane it is about. `showSettings()` alone opens whichever pane
+            // was last looked at — Reading, on a fresh install — so "Choose…" under the dictionary
+            // row landed the reader on text size.
+            openSettings: { pane in app.showSettings(on: pane) },
+            refreshDictionaries: { await app.refreshDictionaries() })
+        .xiaolaiDictAppearance(app.appearance)
+        // Identified from inside, so the app can tell when the reader has actually seen the board
+        // — its window becoming key — rather than merely that it was opened.
+        .background(WindowAccessor { app.setupWindow = $0 })
+        // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
+        // would otherwise see "Asking which dictionaries are enabled…" forever.
+        .task { await app.askForDictionaries() }
     }
 }
 

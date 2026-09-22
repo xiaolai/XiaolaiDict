@@ -116,31 +116,51 @@ public enum LedgerError: Error, Equatable {
 /// to know a word — which ranks a study list better than anything starred by hand.
 ///
 /// Not thread-safe: own one from a single actor.
+/// An open SQLite handle and the only thing that closes it.
+///
+/// **This is the fix for a segfault that looked like a missing initialisation.** `Ledger.init` closed
+/// its handle when a later step threw — a newer schema, a failed pragma — and Swift then ran `deinit`,
+/// which closed it again. The second `sqlite3_close` writes into a connection already freed, and
+/// when malloc handed that block to another test's new connection a moment later, the stale close had
+/// zeroed it: `openDatabase` read `db->aDb` as null and stored the new B-tree through `0x8`. The
+/// crash reports named `sqlite3BtreeOpen + 3104`, which disassembles to exactly that store; the
+/// earlier explanation, a null VFS before `sqlite3_initialize` had finished, was the wrong struct.
+/// Only reachable through the tests that open a ledger meant to fail, which is why it needed the
+/// whole suite's load and came one run in nine.
+///
+/// A close owned by one object's `deinit` happens once, whatever path the ledger's initialiser takes,
+/// so the double close is no longer something the code can express.
+final class Connection {
+    let handle: OpaquePointer
+
+    init(_ handle: OpaquePointer) { self.handle = handle }
+
+    deinit { sqlite3_close(handle) }
+}
+
 public final class Ledger {
     public static let schemaVersion = 5
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
 
-    private let db: OpaquePointer
+    /// The one owner of the SQLite handle. **The ledger never closes it itself** — see `Connection`.
+    private let connection: Connection
+    private var db: OpaquePointer { connection.handle }
 
     /// SQLite's own start-up, run once and to completion before any database is opened.
     ///
-    /// `sqlite3_open_v2` calls this itself when it has not been called already, and **that implicit
-    /// call is where a segfault has been coming from**: opening two ledgers at the same instant in a
-    /// process that had not yet used SQLite crashed inside `openDatabase` with `EXC_BAD_ACCESS` at
-    /// address `0x8`. That address identifies it. `openDatabase` reads `pVfs->mxPathname` to size a
-    /// path buffer, `mxPathname` is at **offset 8** of `sqlite3_vfs` (verified against the SDK
-    /// header on this machine), and `pVfs` is null only while the default VFS is still unregistered
-    /// — the window before initialisation finishes. A `static let` is initialised exactly once under
-    /// `swift_once`, so referencing it closes that window for every caller.
+    /// **Kept, but it was not the fix it was written as.** It was added for a segfault inside
+    /// `openDatabase` — `EXC_BAD_ACCESS` at `0x8` — on the reasoning that `pVfs` was null before
+    /// initialisation finished and `mxPathname` sits at offset 8 of `sqlite3_vfs`. The crash came
+    /// back with this in place, one full run in nine, and disassembly placed it elsewhere:
+    /// `sqlite3BtreeOpen + 3104` is `str x19, [x23]`, the store of the new B-tree through
+    /// `&db->aDb[0].pBt`, which is `0x8` when `db->aDb` is null in a connection that had just set
+    /// it. That is heap corruption, and its source was a double close — see `Connection`.
     ///
-    /// Seen twice in the test bundle's own crash reports, on 2026-09-21 and 2026-09-22, both times
-    /// from `Ledger.init` while other threads were mid-WAL-commit. It is **not reproducible on
-    /// demand**: 25 runs of 400 concurrent opens and 30 runs of 600 concurrent open/write/delete
-    /// cycles never hit it, because the window is only as wide as the first initialisation. The
-    /// evidence for this fix is the faulting address and the struct layout, not a red-to-green
-    /// reproduction — so if the crash ever returns, this note is the thing to doubt first.
+    /// Calling `sqlite3_initialize` once, explicitly, is still correct and costs nothing, so it
+    /// stays; the note stays too, because an explanation that fitted the faulting address and was
+    /// wrong is worth more written down than deleted.
     private static let sqliteReady: Int32 = sqlite3_initialize()
 
     /// `path` is a file, created if absent, or ":memory:" for a ledger that lives only as long as
@@ -156,7 +176,7 @@ public final class Ledger {
             sqlite3_close(handle)
             throw LedgerError.sqlite(code: status, message: message)
         }
-        db = handle
+        connection = Connection(handle)
         do {
             guard sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds) == SQLITE_OK else { throw error() }
             // Off by default in SQLite, which would make `sense_encounters`' reference to `lookups`
@@ -167,13 +187,13 @@ public final class Ledger {
             try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
             try migrate()
         } catch {
-            sqlite3_close(db)
+            // **Not closed here.** Once `connection` is assigned the ledger is fully initialised, and
+            // Swift runs `deinit` for a fully initialised instance even when its initialiser then
+            // throws — so a close here and another at teardown closed one handle twice. Measured
+            // 2026-09-22: that pattern segfaults on the first failed open under Guard Malloc, and
+            // closing once survives 200. Released with the ledger, `Connection` closes it exactly once.
             throw error
         }
-    }
-
-    deinit {
-        sqlite3_close(db)
     }
 
     /// Returns the row's id, so a sense encounter can be hung off the lookup that produced it.
