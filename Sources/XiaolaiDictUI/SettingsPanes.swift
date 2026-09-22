@@ -385,12 +385,21 @@ struct DictionaryPane: View {
 struct PermissionsPane: View {
     @Environment(\.scale) private var scale
     var model: SettingsModel
+    var openSetup: (() -> Void)?
 
     var body: some View {
         Form {
             Section {
                 Text(verdict).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // The other way into the board. This pane answers "are my permissions on"; the
+                // board answers "is any of this working", which is the question a reader who came
+                // here actually has.
+                if let openSetup {
+                    Button("Set Up…") { openSetup() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
             }
             ForEach(model.report.states) { state in
                 Section {

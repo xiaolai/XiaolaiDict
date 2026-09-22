@@ -132,7 +132,8 @@ struct XiaolaiDictSettings: View {
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
                 choose: { app.choosePrimaryDictionary($0) }),
-            shortcut: app.shortcutChoice)
+            shortcut: app.shortcutChoice,
+            openSetup: { app.showSetup() })
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure.
         .background(WindowAccessor { app.settingsWindow = $0 })

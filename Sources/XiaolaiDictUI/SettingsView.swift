@@ -84,6 +84,9 @@ public struct SettingsView: View {
     private var hover: Binding<HoverPolicy>?
     private var dictionary: DictionaryChoice?
     private var shortcut: ShortcutChoice?
+    /// Opens the setup board. The board is reachable from the menu too; this is the other way in,
+    /// for a reader already in Settings wondering whether anything is missing.
+    private var openSetup: (() -> Void)?
 
     /// Stands in for the app's policy in a preview, so the hover pane is live rather than inert
     /// wherever it is looked at. In the app the binding is passed in and this is never read.
@@ -96,13 +99,14 @@ public struct SettingsView: View {
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
         hover: Binding<HoverPolicy>? = nil, dictionary: DictionaryChoice? = nil,
-        shortcut: ShortcutChoice? = nil
+        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         self.appearance = appearance
         self.hover = hover
         self.dictionary = dictionary
         self.shortcut = shortcut
+        self.openSetup = openSetup
     }
 
     public var body: some View {
@@ -226,7 +230,7 @@ public struct SettingsView: View {
         case .reading: ReadingPane(appearance: appearance)
         case .lookup: LookupPane(policy: hover ?? $unattached, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
-        case .permissions: PermissionsPane(model: model)
+        case .permissions: PermissionsPane(model: model, openSetup: openSetup)
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
