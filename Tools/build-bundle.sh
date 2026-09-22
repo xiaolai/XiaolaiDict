@@ -37,6 +37,7 @@ readonly ICON_DIGEST=.build/icon.inputs-sha256
 # The bundle is built from this copy of Resources/, taken under the icon generator's own lock.
 readonly RESOURCES=.build/resources
 readonly LOCK=.build/bundle.lock
+readonly CATALOG=Strings/Localizable.xcstrings
 
 fail() { echo "error: $*" >&2; exit 1; }
 note() { echo "$*"; }
@@ -68,7 +69,7 @@ bundle_inputs_digest() {
         # The development build number is a property of each build, not an input: hashing it would
         # rebuild every time. A release number is an input.
         printf '%s\0' "$CONFIG" "$BUNDLE_ID" "$XIAOLAIDICT_SIGN_ID" "${XIAOLAIDICT_BUILD_NUMBER:-}"
-        find Sources "$RESOURCES" Package.swift Makefile Tools/build-bundle.sh -type f -print0 | digest_files
+        find Sources Strings "$RESOURCES" Package.swift Makefile Tools/build-bundle.sh -type f -print0 | digest_files
         [ ! -f Package.resolved ] || printf 'Package.resolved\0' | digest_files
     } | shasum -a 256 | cut -d' ' -f1
 }
@@ -233,6 +234,12 @@ verify_bundle() {
                 Contents/Resources/MenuBarIcon.svg "$XPC_PATH/Contents/MacOS/$SERVICE" "$XPC_PATH/Contents/Info.plist"; do
         [ -s "$bundle/$file" ] || { echo "missing: $bundle/$file"; return 1; }
     done
+    # A translation that never reached the bundle is a reader still reading English.
+    local language
+    for language in $(catalog_languages); do
+        [ -s "$bundle/Contents/Resources/$language.lproj/Localizable.strings" ] \
+            || { echo "missing from the bundle: $language.lproj/Localizable.strings"; return 1; }
+    done
     [ "$(plist_value "$bundle/Contents/Info.plist" CFBundleIdentifier)" = "$BUNDLE_ID" ] \
         || { echo "the app's CFBundleIdentifier is not $BUNDLE_ID"; return 1; }
     [ "$(plist_value "$bundle/$XPC_PATH/Contents/Info.plist" CFBundleIdentifier)" = "$SERVICE_ID" ] \
@@ -276,6 +283,34 @@ is_release() { [ -n "${XIAOLAIDICT_BUILD_NUMBER:-}" ]; }
 # ---------------------------------------------------------------------------------------------
 # Assembly, in the stage.
 
+# Translations reach the bundle as compiled `.strings`, one directory per language, read through
+# `Bundle.main` — which is this bundle for every module linked into it, so no call site has to name
+# a bundle of its own. **The source language gets no file**: its key is its value and Foundation
+# falls back to the key, so this writes nothing while the catalog is English-only. That is also why
+# `verify_bundle` checks the languages the catalog carries rather than a fixed path — the check is
+# vacuous today and fails the day a translation is added and not packaged.
+compile_strings() {
+    local contents=$1
+    [ -s "$CATALOG" ] || fail "missing string catalog: $CATALOG — run make strings"
+    xcrun xcstringstool compile "$CATALOG" --output-directory "$contents/Resources" \
+        || fail "the string catalog did not compile"
+}
+
+# Every language in the catalog that has a translated string, the source language apart.
+catalog_languages() {
+    python3 - "$CATALOG" <<'CATALOG_LANGUAGES'
+import json, sys
+catalog = json.load(open(sys.argv[1]))
+source = catalog.get("sourceLanguage")
+languages = set()
+for entry in catalog.get("strings", {}).values():
+    for language, unit in entry.get("localizations", {}).items():
+        if language != source and unit.get("stringUnit", {}).get("value"):
+            languages.add(language)
+print(" ".join(sorted(languages)))
+CATALOG_LANGUAGES
+}
+
 assemble() {
     # Output captured, then matched: `producer | grep -q` fails under pipefail whenever grep stops
     # reading early and the producer dies of SIGPIPE — a false failure for a true match.
@@ -310,6 +345,7 @@ assemble() {
     done
 
     compile_icon "$contents"
+    compile_strings "$contents"
 
     # Inside out: the service first, then the app that seals it. `--options runtime` because that
     # is how XiaolaiDict ships, and a hardened-runtime problem is cheaper found now than at notarisation.
