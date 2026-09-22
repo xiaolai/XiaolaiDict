@@ -166,6 +166,9 @@ struct XiaolaiDictSetup: View {
             openSettings: { pane in app.showSettings(on: pane) },
             refreshDictionaries: { await app.refreshDictionaries() })
         .xiaolaiDictAppearance(app.appearance)
+        // Identified from inside, so the app can tell when the reader has actually seen the board
+        // — its window becoming key — rather than merely that it was opened.
+        .background(WindowAccessor { app.setupWindow = $0 })
         // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
         // would otherwise see "Asking which dictionaries are enabled…" forever.
         .task { await app.askForDictionaries() }

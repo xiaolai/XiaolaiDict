@@ -359,18 +359,50 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `WindowActions.shared.open` being nil at that moment opens nothing, silently, which is
     /// exactly how a drawer once reported success while never being drawn.
     ///
-    /// The flag is written **after** the open, and it is the only thing this feature remembers. It
-    /// decides whether the window appears by itself and never what the window shows, so a reader
-    /// who opens it again later sees the same board with ticks against it.
+    /// **Opening is not the same as being seen, so this does not write the flag.** Measured on the
+    /// E2E machine 2026-09-22: launched with another app in front, the board was drawn — the
+    /// compositor listed it — and that app stayed frontmost, because macOS's cooperative activation
+    /// refuses focus to an app the reader did not just bring forward. Marking the flag here recorded
+    /// the board as shown to a reader who never saw it, and it never opened by itself again. The
+    /// flag is written by `setupWindow` becoming key instead, which is the reader actually having it.
+    ///
+    /// Not forcing activation is deliberate: stealing focus at launch — at login, above whatever the
+    /// reader was doing — is exactly what cooperative activation exists to stop. The board waits
+    /// behind, and it tries again at the next launch until it has been seen.
     private func openSetupOnFirstLaunch() {
         guard !setupPresentation.hasOpenedBefore() else { return }
         Task { @MainActor [weak self] in
             guard await Instrument.settle(until: .seconds(5), { WindowActions.shared.open != nil })
             else { return }
-            guard let self else { return }
-            self.showSetup()
-            self.setupPresentation.markOpened()
+            self?.showSetup()
         }
+    }
+
+    /// The setup window, taken from the view inside it — the same way `settingsWindow` is.
+    ///
+    /// Held so the app can tell when the reader has actually seen the board: its becoming key is
+    /// that moment, and it is what writes `SetupPresentationStore`'s flag.
+    @ObservationIgnored weak var setupWindow: NSWindow? {
+        didSet { watchSetupWindow() }
+    }
+    @ObservationIgnored private var setupKeyObserver: NSObjectProtocol?
+
+    private func watchSetupWindow() {
+        if let setupKeyObserver { NotificationCenter.default.removeObserver(setupKeyObserver) }
+        setupKeyObserver = nil
+        guard let window = setupWindow else { return }
+        // Already key by the time the view reported its window — opened from the menu, say.
+        if window.isKeyWindow { setupWasSeen() }
+        setupKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setupWasSeen() }
+        }
+    }
+
+    /// The reader has the board in front of them. Idempotent: writing `true` twice is one fact.
+    func setupWasSeen() {
+        setupPresentation.markOpened()
     }
 
     /// The shortcut as it stands: the one registered, or — while the field in Settings is armed

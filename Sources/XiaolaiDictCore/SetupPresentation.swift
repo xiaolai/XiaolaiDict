@@ -1,6 +1,11 @@
 import Foundation
 
-/// Whether the setup window has ever opened by itself.
+/// Whether the reader has ever **seen** the setup board — which is not the same as it having opened.
+///
+/// Written when the board's window becomes key, never when it is merely opened. Measured on the E2E
+/// machine 2026-09-22: launched with another app in front, the board was drawn behind it, because
+/// macOS's cooperative activation refuses focus at launch. Written on open, this recorded the board
+/// as shown to a reader who never saw it, and it never opened by itself again.
 ///
 /// **This is the only thing in the feature that remembers anything, and it decides exactly one
 /// question: does the window open unasked at launch.** It never gates what the window shows. The
