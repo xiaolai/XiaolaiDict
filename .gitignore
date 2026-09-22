@@ -81,7 +81,7 @@ CLAUDE.md
 .mcp.json
 # <<< cc-suite <<<
 
-# Corpus extraction. The corpus is copyrighted dictionary text and is never committed — it lives
-# outside the repository by default, and these rules only catch a run that was pointed inside it.
-/Tools/corpus/.venv/
-/Tools/corpus/*.sqlite
+# Corpus extraction — the whole directory, scripts and output alike, stays local. The corpus is
+# copyrighted dictionary text and is never committed. Slash-free for the same reason as the rules
+# above: a trailing slash matches only a directory, so a symlink to one would show as untracked.
+/Tools/corpus
