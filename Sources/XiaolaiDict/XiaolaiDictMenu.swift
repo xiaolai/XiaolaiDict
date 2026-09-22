@@ -45,6 +45,9 @@ struct XiaolaiDictMenu: View {
         studyFrom
 
         Divider()
+        // Beside Settings rather than hidden in it: the board is the answer to "is this working?",
+        // and a reader asking that has no reason to look under Settings for it.
+        Button("Set Up…") { app.showSetup() }
         Button("Settings…") { app.showSettings() }
 
         // Problems the reader should see, in the place they already look.

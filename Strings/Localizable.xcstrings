@@ -11,7 +11,16 @@
         }
       }
     },
+    "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
+
+    },
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
+
+    },
+    "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
+
+    },
+    "%lld things are still needed." : {
 
     },
     "A guess at the sense you were reading, from your sentence. It may be wrong." : {
@@ -29,6 +38,9 @@
     "A sense id only means anything inside the dictionary that issued it, so what has been learned about your senses cannot follow you to another one. Your reading history is kept either way." : {
 
     },
+    "Accessibility" : {
+
+    },
     "Add" : {
 
     },
@@ -44,6 +56,9 @@
     "Asking the dictionary service…" : {
 
     },
+    "Asking which dictionaries are enabled…" : {
+
+    },
     "Author" : {
 
     },
@@ -54,6 +69,15 @@
 
     },
     "Cancel" : {
+
+    },
+    "Change…" : {
+
+    },
+    "Checking…" : {
+
+    },
+    "Choose…" : {
 
     },
     "Clear" : {
@@ -75,6 +99,9 @@
 
     },
     "Dictionary" : {
+
+    },
+    "Everything needed is in place. Anything here can still be changed." : {
 
     },
     "Explain how this word is used in your sentence — runs on this Mac" : {
@@ -128,16 +155,25 @@
     "Look up the selection" : {
 
     },
+    "Lookup shortcut" : {
+
+    },
     "Mark the word" : {
 
     },
     "Name the app a word was read in" : {
 
     },
+    "Needed" : {
+
+    },
     "Never look up in these apps" : {
 
     },
     "Never look up on these sites" : {
+
+    },
+    "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, and this will notice." : {
 
     },
     "No entry for “%@” in your dictionaries." : {
@@ -152,6 +188,12 @@
     "No sentence was captured, so there is nothing to explain." : {
 
     },
+    "No shortcut is registered, so selections can be looked up from the menu only." : {
+
+    },
+    "Not set" : {
+
+    },
     "Off" : {
 
     },
@@ -159,6 +201,12 @@
 
     },
     "On a card" : {
+
+    },
+    "One thing is still needed." : {
+
+    },
+    "Open Dictionary…" : {
 
     },
     "Open Settings…" : {
@@ -194,6 +242,9 @@
     "Reading history drawer" : {
 
     },
+    "Ready" : {
+
+    },
     "Remove" : {
 
     },
@@ -213,6 +264,18 @@
 
     },
     "Say it aloud" : {
+
+    },
+    "Screen Recording" : {
+
+    },
+    "Select a word anywhere and press %@." : {
+
+    },
+    "Set Up XiaolaiDict" : {
+
+    },
+    "Set Up…" : {
 
     },
     "Settings…" : {
@@ -239,8 +302,21 @@
     "Study From" : {
 
     },
+    "Study dictionary" : {
+
+    },
     "Study from" : {
 
+    },
+    "Studying from %@ — %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Studying from %1$@ — %2$@."
+          }
+        }
+      }
     },
     "Subdomains are covered too, so example.com also excludes docs.example.com." : {
 
@@ -252,6 +328,9 @@
 
     },
     "The app is not running" : {
+
+    },
+    "The dictionary you study from is no longer enabled in Dictionary. Until it is back, or another is chosen, no sense can be marked." : {
 
     },
     "The gate" : {
@@ -291,6 +370,9 @@
 
     },
     "Undo" : {
+
+    },
+    "Use %@" : {
 
     },
     "Website" : {

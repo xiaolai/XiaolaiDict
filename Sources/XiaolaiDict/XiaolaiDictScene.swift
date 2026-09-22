@@ -21,6 +21,7 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
+    static let setupID = "setup"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -85,6 +86,17 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(frame.origin, size: frame.size)
         }
 
+        // A `Window`, never a `UtilityWindow` — measured in this bundle: a `UtilityWindow` is
+        // created and reports `isVisible`, but the compositor never lists it and Accessibility
+        // never sees it. Suppressed at launch and opened deliberately, once per install, by
+        // `XiaolaiDictApp.openSetupOnFirstLaunch`.
+        Window("Set Up XiaolaiDict", id: Self.setupID) {
+            XiaolaiDictSetup(app: delegate)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
         // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it
         // from the content — a second mover, measured to overshoot by the height of the title bar
@@ -124,6 +136,28 @@ struct XiaolaiDictSettings: View {
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure.
         .background(WindowAccessor { app.settingsWindow = $0 })
+    }
+}
+
+/// The setup board, as a **view** rather than as scene-body code — the same rule
+/// `XiaolaiDictSettings` above records. `app.dictionaries` arrives when the XPC probe answers, and
+/// reading it in `XiaolaiDictScene.body` would re-evaluate every scene in the app.
+struct XiaolaiDictSetup: View {
+    let app: XiaolaiDictApp
+
+    var body: some View {
+        SetupView(
+            model: app.setup,
+            dictionary: DictionaryChoice(
+                available: app.dictionaries,
+                chosen: app.chosenDictionary,
+                choose: { app.choosePrimaryDictionary($0) }),
+            shortcut: app.shortcutChoice,
+            openSettings: { app.showSettings() })
+        .xiaolaiDictAppearance(app.appearance)
+        // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
+        // would otherwise see "Asking which dictionaries are enabled…" forever.
+        .task { await app.askForDictionaries() }
     }
 }
 

@@ -12,6 +12,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let panel = LookupPanelController()
     private let client = DictionaryClient()
     private let primaryDictionary = PrimaryDictionaryStore()
+    /// Whether the setup window has opened by itself before. **The app's own suite, not
+    /// `.standard`** — a test that flipped it would change whether the reader's next launch opens
+    /// a window at them.
+    private let setupPresentation: SetupPresentationStore
     @ObservationIgnored private lazy var runner = makeRunner()
     @ObservationIgnored private lazy var drawer = makeDrawer()
     /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
@@ -62,6 +66,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // touched the shortcut rewrote the reader's own — the objection this project makes to
         // driving the GUI on the building Mac, in a unit test.
         shortcuts = ShortcutStore(defaults: defaults)
+        setupPresentation = SetupPresentationStore(defaults: defaults)
         self.hotkeys = hotkeys
         super.init()
     }
@@ -189,6 +194,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
         if hoverEnabled, !HistoryReport.isWanted, !SettingsReport.isWanted { hover.start() }
         registerShortcut(shortcuts.load())
+        // **Not in an instrument run.** An instrument measures the app; a window opening at it
+        // unasked is a window in front of whatever it was about to capture.
+        if !HistoryReport.isWanted, !SettingsReport.isWanted { openSetupOnFirstLaunch() }
         quitOnTerminationSignal()
         if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
         if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
@@ -318,6 +326,38 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         WindowActions.shared.settings?()
     }
 
+    /// Opens the setup board, bringing XiaolaiDict forward with it.
+    ///
+    /// Activating is right here for the same reason it is right for Settings, and for the opposite
+    /// reason to the panels: this is a window the reader asked for — by choosing it, or by
+    /// installing the app — and one they are about to act in. "No panel may activate XiaolaiDict"
+    /// governs the surfaces that appear while they are mid-sentence in another app.
+    func showSetup() {
+        NSApplication.shared.activate()
+        WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
+    }
+
+    /// Opens the board unasked, once in the life of an install.
+    ///
+    /// **Waits for the window actions before opening.** They are captured by `MenuBarLabel`'s
+    /// `.task`, which has not run when the delegate finishes launching — and
+    /// `WindowActions.shared.open` being nil at that moment opens nothing, silently, which is
+    /// exactly how a drawer once reported success while never being drawn.
+    ///
+    /// The flag is written **after** the open, and it is the only thing this feature remembers. It
+    /// decides whether the window appears by itself and never what the window shows, so a reader
+    /// who opens it again later sees the same board with ticks against it.
+    private func openSetupOnFirstLaunch() {
+        guard !setupPresentation.hasOpenedBefore() else { return }
+        Task { @MainActor [weak self] in
+            guard await Instrument.settle(until: .seconds(5), { WindowActions.shared.open != nil })
+            else { return }
+            guard let self else { return }
+            self.showSetup()
+            self.setupPresentation.markOpened()
+        }
+    }
+
     /// The shortcut as it stands: the one registered, or — while the field in Settings is armed
     /// and nothing is registered — the one on disk.
     var currentShortcut: Shortcut { hotkey?.shortcut ?? shortcuts.load() }
@@ -393,6 +433,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Owned here rather than inside the window so `--settings-report` can select a pane from
     /// outside and measure what the window does about it.
     let settings = SettingsModel()
+    /// The setup board's permission state, held here so `SetupView` keeps polling across opens and
+    /// an instrument can read it back.
+    let setup = SetupModel()
 
     /// The settings window, taken from the view inside it rather than searched for among
     /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
