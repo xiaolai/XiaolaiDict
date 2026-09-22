@@ -35,10 +35,19 @@ else {
     exit(1)
 }
 
+// **Whether titles are readable at all, kept apart from whether one matched.**
+// `kCGWindowName` needs Screen Recording, and this helper is launched separately from the app, so
+// it cannot rely on the app's grant. Without this distinction a board that is plainly on screen
+// reports as absent whenever titles are withheld — a fact about the harness that reads exactly
+// like a fact about the app, which is the trap `--read-point` already cost an afternoon to.
+var owned = 0
+var named = 0
 var windows: [[String: Any]] = []
 for window in listed {
     guard window[kCGWindowOwnerPID as String] as? pid_t == pid else { continue }
+    owned += 1
     let name = window[kCGWindowName as String] as? String ?? ""
+    if !name.isEmpty { named += 1 }
     if !fragment.isEmpty, !name.contains(fragment) { continue }
     var entry: [String: Any] = ["name": name]
     if let bounds = window[kCGWindowBounds as String] as? [String: Any],
@@ -61,5 +70,11 @@ let report: [String: Any] = [
     "running": true,
     "frontmost": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "",
     "windows": windows,
+    // How many windows the app owns on screen, regardless of the fragment — so "none matched" and
+    // "it has no windows" are separable.
+    "owned": owned,
+    // False when the app owns windows and not one of them has a readable title: the fragment could
+    // not have matched, and a caller must say so rather than report the window absent.
+    "titlesReadable": owned == 0 || named > 0,
 ]
 print(String(decoding: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))

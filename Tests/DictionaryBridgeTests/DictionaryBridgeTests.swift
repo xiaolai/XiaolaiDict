@@ -314,12 +314,6 @@ struct SenseCoverageTests {
 
 /// What the menu shows beside each dictionary when the reader chooses which one to study from
 /// (decision D7). The rung is measured from real entries rather than assumed from the name.
-///
-/// **Serialized, and the order matters.** `theProbeRunsOnce` asserts a process-wide count, and
-/// `aReprobeRunsTheProbeAgain` deliberately increases it — run the other way round, the first
-/// would find the cache already warm and its count either wrong or vacuous. Serializing makes the
-/// dependency explicit instead of leaving it to whichever test the runner happened to start.
-@Suite(.serialized)
 struct DictionaryCapabilityTests {
     @Test func everyEnabledDictionaryIsReported() throws {
         let capabilities = DictionaryBridge.capabilities()
@@ -435,41 +429,37 @@ struct DictionaryCapabilityTests {
         #expect(oxford.indexes.contains(.han))
     }
 
-    /// Probed once per process: each probe parses a real entry, and Longman's *hold* is 625 KB.
+    /// Probed once per process — and again only when something asks.
     ///
-    /// Counted, not timed. The old version asserted the second call took under 5 ms, which proves
-    /// nothing twice over: the cache is process-wide, so if any other test probed first this one
-    /// measured an already-warm cache and passed without exercising anything — and on a loaded
-    /// machine a 5 ms bound measures the load instead of the cache.
-    @Test func theProbeRunsOnce() {
-        let first = DictionaryBridge.capabilities()
-        let second = DictionaryBridge.capabilities()
-        let runs = DictionaryBridge.probeRuns.withLock { $0 }
-
-        // Process-wide, not a delta across these two calls. Other tests probe in parallel, and the
-        // claim is exactly that the probe runs once for the whole process however many callers
-        // arrive and in whatever order — which a delta cannot express and timing cannot see.
-        #expect(runs == 1, "the probe ran \(runs) times in this process")
-        #expect(first == second)
-    }
-
-    /// **And runs again when something asks it to.** Once per process is right for a menu opening
-    /// and wrong for the one case that has to see a change: the setup board tells a reader to
-    /// enable a dictionary in Dictionary.app and promises to notice when they come back, which a
-    /// cache outliving that promise makes false.
+    /// **One test, because the two claims share a process-wide counter.** They were two, ordered by
+    /// serializing the suite, and that was wrong twice over: `--filter` runs either alone, and
+    /// serialization orders execution without promising which case goes first. A test whose result
+    /// depends on what ran before it is a test that reports the runner's mood.
     ///
-    /// Runs after `theProbeRunsOnce` — see the suite's note. It asserts the *count*, because the
-    /// answer is identical either way on a machine where nothing changed between the two calls:
-    /// a reprobe that quietly returned the cache would be indistinguishable from one that worked.
-    @Test func aReprobeRunsTheProbeAgain() {
-        let before = DictionaryBridge.probeRuns.withLock { $0 }
+    /// It also no longer asserts an absolute "1". That claim stopped being true when reprobing was
+    /// added; what is still true, and is what the counter was introduced to catch, is that a second
+    /// unforced call does not probe again. Counted rather than timed: the second call is fast
+    /// either way, and a cache that silently re-probed would still look instant.
+    @Test func theProbeRunsOnceAndAgainOnlyWhenAsked() {
+        // Warmed here rather than assumed, so this holds whether or not another test ran first.
+        _ = DictionaryBridge.capabilities()
+        let warm = DictionaryBridge.probeRuns.withLock { $0 }
+        #expect(warm >= 1, "nothing ever probed, so nothing below is being measured")
+
         let cached = DictionaryBridge.capabilities()
-        #expect(DictionaryBridge.probeRuns.withLock { $0 } == before, "the premise is a warm cache")
+        #expect(
+            DictionaryBridge.probeRuns.withLock { $0 } == warm,
+            "a cached call probed again — every menu opening would parse Longman's 625 KB *hold*")
 
+        // **And runs again when asked.** Once per process is right for a menu opening and wrong for
+        // the setup board, which tells a reader to enable a dictionary in Dictionary.app and
+        // promises to notice when they come back.
         let fresh = DictionaryBridge.capabilities(reprobing: true)
         #expect(
-            DictionaryBridge.probeRuns.withLock { $0 } == before + 1,
+            DictionaryBridge.probeRuns.withLock { $0 } == warm + 1,
             "a reprobe was answered from the cache it was sent to discard")
+        // Asserted on the count, not the answer: nothing changed between the two calls, so a
+        // reprobe that quietly returned the cache would be indistinguishable from one that worked.
         #expect(fresh == cached, "nothing changed between the two, so the answer must not have")
     }
 }

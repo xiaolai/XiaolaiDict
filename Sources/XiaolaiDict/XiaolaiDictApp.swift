@@ -131,6 +131,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     private func makeRunner() -> LookupRunner {
         let store = primaryDictionary
+        // **The store is the truth for a lookup**, because a lookup can happen while no window is
+        // open to have observed anything. The observable copy is what the windows draw, and
+        // `askForDictionaries` re-reads it so the two cannot drift apart after a change made
+        // outside this process.
         return LookupRunner(
             client: client, panel: panel, primary: { store.load() },
             priorEncounters: { [weak self] lemma, before in
@@ -488,6 +492,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// menu is opened rather than at launch, and only once.
     func askForDictionaries(refreshing: Bool = false) async {
         permissions = await .probe()
+        // Re-read from the store, not just written to on choosing. A lookup takes the primary
+        // from disk, so a change made outside this process — a second copy, a `defaults write` —
+        // would otherwise leave every window naming a dictionary that is no longer the one marks
+        // are recorded against.
+        let onDisk = primaryDictionary.load().chosen
+        if onDisk != chosenDictionary { chosenDictionary = onDisk }
         guard refreshing || dictionaries == nil else { return }
         dictionaries = await client.dictionaries(reprobing: refreshing)
         // Set whatever the answer was, including none. "Asked and got nothing" is a state that

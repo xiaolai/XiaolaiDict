@@ -11,6 +11,9 @@
         }
       }
     },
+    "%@ could not be registered — another app is holding it. Choose another, or look words up from the menu." : {
+
+    },
     "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
 
     },
@@ -315,6 +318,9 @@
 
     },
     "Some enabled dictionaries do not say which language they explain English in, so none can be suggested. Choose one yourself, or enable a dictionary for your language in Dictionary." : {
+
+    },
+    "Some of this could not be checked." : {
 
     },
     "Standard" : {

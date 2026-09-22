@@ -99,8 +99,12 @@ public struct SetupView: View {
     /// verbatim overload and the compiler extracts nothing, which is how four of the longest
     /// sentences in Settings came to be invisible to every translator.
     @ViewBuilder private var summary: some View {
-        if !model.hasAsked || board.isAsking {
+        if !model.hasAsked || (board.isAsking && dictionary?.hasAsked != true) {
             Text("Checking…")
+        } else if board.isAsking {
+            // Asked, and got nothing. The row below says so; the summary must not go on implying
+            // something is still in flight.
+            Text("Some of this could not be checked.")
         } else {
             switch board.outstanding.count {
             case 0: Text("Everything needed is in place. Anything here can still be changed.")
@@ -255,8 +259,16 @@ public struct SetupView: View {
     }
 
     @ViewBuilder private var shortcutDetail: some View {
-        if let shortcut = shortcut?.shortcut, shortcut.isUsable {
+        if let shortcut = shortcut?.shortcut, shortcut.isUsable, shortcutIsRegistered {
             Text("Select a word anywhere and press \(shortcut.label()).")
+        } else if let shortcut = shortcut?.shortcut, shortcut.isUsable {
+            // **Registered is not the same as well-formed.** Another app can hold the combination
+            // exclusively, and telling the reader to press one that was refused sends them to try
+            // something that cannot work and to doubt the app when it does not.
+            Text("""
+                 \(shortcut.label()) could not be registered — another app is holding it. Choose \
+                 another, or look words up from the menu.
+                 """)
         } else {
             Text("No shortcut is registered, so selections can be looked up from the menu only.")
         }

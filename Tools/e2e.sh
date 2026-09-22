@@ -828,6 +828,11 @@ else
     done
     if printf '%s' "$drawn" | grep -q '"hasArea":true'; then
         pass "setup: the compositor lists the board with an area ($(printf '%s' "$drawn" | sed -n 's/.*"height":\([0-9]*\).*"width":\([0-9]*\).*/\2x\1/p' | head -1))"
+    elif printf '%s' "$drawn" | grep -q '"titlesReadable":false'; then
+        # `kCGWindowName` needs Screen Recording, and this helper is launched separately from the
+        # app, so it cannot lean on the app's grant. Saying so beats reporting the board absent —
+        # that is a fact about the harness wearing the costume of a fact about the app.
+        flunk "setup: window titles are not readable here, so the board could not be identified — grant Screen Recording to the terminal running the helpers"
     else
         flunk "setup: the compositor does not list a drawn Set Up window ($(printf '%s' "$drawn" | head -c 200))"
     fi
@@ -855,8 +860,13 @@ else
         dict_waited=$((dict_waited + 1))
         shown=$("$helpers/panel" com.xiaolaidict)
     done
+    # **Three outcomes, not two.** The row leaves "Asking…" both when the service answers and when
+    # it fails, so a loop that only waited for that phrase to go away reported a broken service as
+    # a successful one.
     if printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; then
         flunk "setup: the dictionary row was still asking the service after $((dict_waited / 5))s"
+    elif printf '%s' "$shown" | grep -q "did not answer"; then
+        flunk "setup: the dictionary service did not answer"
     else
         pass "setup: the dictionary row had the service's answer ($((dict_waited / 5))s)"
     fi
@@ -906,7 +916,12 @@ restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its m
     return 1
 }
 board_on_screen() {  # board_on_screen: does the compositor list a drawn Set Up window?
-    "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"hasArea":true'
+    local seen
+    seen=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    # A negative answer is only trustworthy when titles could be read at all; otherwise the
+    # fragment never had a chance to match and "absent" would be the harness talking.
+    printf '%s' "$seen" | grep -q '"titlesReadable":false' && return 2
+    printf '%s' "$seen" | grep -q '"hasArea":true'
 }
 
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
@@ -936,11 +951,12 @@ else
     # **A negative, so it is given time to fail.** Asserting "not on screen" the instant the app
     # starts would pass against a board that appears a moment later.
     sleep 3
-    if board_on_screen; then
-        flunk "setup: the board opened again although it had been shown once"
-    else
-        pass "setup: it does not open by itself a second time"
-    fi
+    board_on_screen
+    case $? in
+        0) flunk "setup: the board opened again although it had been shown once" ;;
+        2) flunk "setup: window titles are not readable, so 'it did not open' cannot be claimed" ;;
+        *) pass "setup: it does not open by itself a second time" ;;
+    esac
 fi
 
 # Left as the reader found it. A board still on screen would be in front of whatever stage runs
