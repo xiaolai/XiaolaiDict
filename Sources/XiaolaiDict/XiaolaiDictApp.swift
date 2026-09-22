@@ -344,10 +344,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Opens the setup board, bringing XiaolaiDict forward with it.
     ///
     /// Activating is right here for the same reason it is right for Settings, and for the opposite
-    /// reason to the panels: this is a window the reader asked for — by choosing it, or by
-    /// installing the app — and one they are about to act in. "No panel may activate XiaolaiDict"
-    /// governs the surfaces that appear while they are mid-sentence in another app.
+    /// reason to the panels: this is a window the reader asked for, from the menu or from Settings,
+    /// and one they are about to act in. "No panel may activate XiaolaiDict" governs the surfaces
+    /// that appear while they are mid-sentence in another app. The launch-time open does **not**
+    /// come through here — see `openSetupOnFirstLaunch` for why it must not ask to activate.
     func showSetup() {
+        // Logged, because "the board did not come forward" has two very different causes — the
+        // request never arrived, or it arrived and activation was refused — and only the app can
+        // say which. An end-to-end run could not tell them apart from outside.
+        log.notice("setup: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
         NSApplication.shared.activate()
         WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
     }
@@ -369,12 +374,24 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Not forcing activation is deliberate: stealing focus at launch — at login, above whatever the
     /// reader was doing — is exactly what cooperative activation exists to stop. The board waits
     /// behind, and it tries again at the next launch until it has been seen.
+    ///
+    /// **And it does not ask to activate.** That request is refused at launch — measured in every
+    /// E2E run, the board drawn behind the app in front — so it does nothing for the reader, and it
+    /// can do harm: in the stage, a reader's own click on Set Up… arriving just before this task ran
+    /// was intermittently left in the background, the board drawn, main and focused inside
+    /// XiaolaiDict, and the frontmost app never changing. Ten of ten clicks came forward with this
+    /// open switched off. A launch the reader started is activated by LaunchServices already, so the
+    /// window comes forward there without asking; an unasked launch has no business asking.
     private func openSetupOnFirstLaunch() {
         guard !setupPresentation.hasOpenedBefore() else { return }
         Task { @MainActor [weak self] in
             guard await Instrument.settle(until: .seconds(5), { WindowActions.shared.open != nil })
             else { return }
-            self?.showSetup()
+            // Opened from the menu in the meantime: the reader already has it, and ordering it again
+            // from here would only be a second, unasked request.
+            guard self?.setupWindow?.isVisible != true else { return }
+            self?.log.notice("setup: opened unasked at launch")
+            WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
         }
     }
 
@@ -402,6 +419,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// The reader has the board in front of them. Idempotent: writing `true` twice is one fact.
     func setupWasSeen() {
+        log.notice("setup: the board became key (app active: \(NSApp.isActive, privacy: .public))")
         setupPresentation.markOpened()
     }
 
