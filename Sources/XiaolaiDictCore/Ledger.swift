@@ -124,9 +124,31 @@ public final class Ledger {
 
     private let db: OpaquePointer
 
+    /// SQLite's own start-up, run once and to completion before any database is opened.
+    ///
+    /// `sqlite3_open_v2` calls this itself when it has not been called already, and **that implicit
+    /// call is where a segfault has been coming from**: opening two ledgers at the same instant in a
+    /// process that had not yet used SQLite crashed inside `openDatabase` with `EXC_BAD_ACCESS` at
+    /// address `0x8`. That address identifies it. `openDatabase` reads `pVfs->mxPathname` to size a
+    /// path buffer, `mxPathname` is at **offset 8** of `sqlite3_vfs` (verified against the SDK
+    /// header on this machine), and `pVfs` is null only while the default VFS is still unregistered
+    /// — the window before initialisation finishes. A `static let` is initialised exactly once under
+    /// `swift_once`, so referencing it closes that window for every caller.
+    ///
+    /// Seen twice in the test bundle's own crash reports, on 2026-09-21 and 2026-09-22, both times
+    /// from `Ledger.init` while other threads were mid-WAL-commit. It is **not reproducible on
+    /// demand**: 25 runs of 400 concurrent opens and 30 runs of 600 concurrent open/write/delete
+    /// cycles never hit it, because the window is only as wide as the first initialisation. The
+    /// evidence for this fix is the faulting address and the struct layout, not a red-to-green
+    /// reproduction — so if the crash ever returns, this note is the thing to doubt first.
+    private static let sqliteReady: Int32 = sqlite3_initialize()
+
     /// `path` is a file, created if absent, or ":memory:" for a ledger that lives only as long as
     /// this object.
     public init(path: String) throws {
+        guard Self.sqliteReady == SQLITE_OK else {
+            throw LedgerError.sqlite(code: Self.sqliteReady, message: "SQLite failed to start")
+        }
         var handle: OpaquePointer?
         let status = sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
         guard status == SQLITE_OK, let handle else {
