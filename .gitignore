@@ -1,19 +1,16 @@
 # AI artifacts — private, never committed. The cc-suite PRIVATE block below
 # covers the bridge (AGENTS.md, CLAUDE.md, .claude/, .agents/, .codex/,
-# .mcp.json); these are the rest: plugin configs and the design notes. Kept
-# outside the cc-suite sentinels so cc-suite's own rewrites cannot drop them.
+# .mcp.json); these are the rest: plugin configs, the design notes, and the spikes kept
+# beside them in dev-docs/spikes — throwaway investigations, not code XiaolaiDict ships.
+# No spike is tracked and none is in the history, so code that learned something from one
+# says which spike and which finding, never a path into this repository. Kept outside the
+# cc-suite sentinels so cc-suite's own rewrites cannot drop them.
 # Slash-free on purpose: a trailing slash matches only a directory, so a
 # symlink to one (a git worktree linking back here) would show as untracked.
 /.cc-suite.md
 /.cc-suite
 /.claude-english-buddy.json
 /dev-docs
-
-# Spikes — throwaway investigations, not code XiaolaiDict ships. Slash-free for the same
-# reason as above. They live on the machine that ran them and nowhere else: none is
-# tracked and none is in the history, so code that learned something from one says
-# which spike and which finding, never a path into this repository.
-/spikes
 
 # Swift build output. Slash-free for the same reason as above: a worktree's symlink must match too.
 /.build
