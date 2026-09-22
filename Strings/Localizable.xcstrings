@@ -1,0 +1,383 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ can't be used: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ can't be used: %2$@."
+          }
+        }
+      }
+    },
+    "%@ needs ⌘, ⌃ or ⌥ — try another." : {
+
+    },
+    "A guess at the sense you were reading, from your sentence. It may be wrong." : {
+
+    },
+    "A guess — not confirmed" : {
+
+    },
+    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing." : {
+
+    },
+    "A menu-bar dictionary for macOS." : {
+
+    },
+    "A sense id only means anything inside the dictionary that issued it, so what has been learned about your senses cannot follow you to another one. Your reading history is kept either way." : {
+
+    },
+    "Add" : {
+
+    },
+    "Add an app…" : {
+
+    },
+    "Always" : {
+
+    },
+    "Ask macOS…" : {
+
+    },
+    "Asking the dictionary service…" : {
+
+    },
+    "Author" : {
+
+    },
+    "Bold" : {
+
+    },
+    "Bold Italic" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Clear" : {
+
+    },
+    "Comfortable" : {
+
+    },
+    "Compact" : {
+
+    },
+    "Confirmed" : {
+
+    },
+    "Copy" : {
+
+    },
+    "Copy the word and this sense" : {
+
+    },
+    "Dictionary" : {
+
+    },
+    "Explain how this word is used in your sentence — runs on this Mac" : {
+
+    },
+    "Explain this sentence" : {
+
+    },
+    "First that marks senses" : {
+
+    },
+    "Frosted" : {
+
+    },
+    "Frosted keeps cards and headings easy to read over any window. Clear shows more of what is behind the drawer — over a dark terminal it stays dark instead of turning grey." : {
+
+    },
+    "Glass" : {
+
+    },
+    "Hide Reading History" : {
+
+    },
+    "Hide meaning" : {
+
+    },
+    "Hide the meaning" : {
+
+    },
+    "Hold" : {
+
+    },
+    "Hover Lookup    hold %@" : {
+
+    },
+    "Italic" : {
+
+    },
+    "Keep this sense as a note" : {
+
+    },
+    "Large" : {
+
+    },
+    "Look Up Selection" : {
+
+    },
+    "Look Up Selection    %@" : {
+
+    },
+    "Look up the selection" : {
+
+    },
+    "Mark the word" : {
+
+    },
+    "Name the app a word was read in" : {
+
+    },
+    "Never look up in these apps" : {
+
+    },
+    "Never look up on these sites" : {
+
+    },
+    "No entry for “%@” in your dictionaries." : {
+
+    },
+    "No sense in this entry clearly fits this sentence." : {
+      "comment" : "Shown on the lookup card when no sense is close enough to claim"
+    },
+    "No sentence was captured around the word, so its senses cannot be told apart." : {
+      "comment" : "Shown on the lookup card when no sentence surrounded the word"
+    },
+    "No sentence was captured, so there is nothing to explain." : {
+
+    },
+    "Off" : {
+
+    },
+    "On" : {
+
+    },
+    "On a card" : {
+
+    },
+    "Open Settings…" : {
+
+    },
+    "Open in Dictionary" : {
+
+    },
+    "Password managers" : {
+
+    },
+    "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
+
+    },
+    "Pin this as a note that stays until you close it" : {
+
+    },
+    "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
+
+    },
+    "Press a shortcut…" : {
+
+    },
+    "Quit XiaolaiDict" : {
+
+    },
+    "Read recently" : {
+
+    },
+    "Reading History" : {
+
+    },
+    "Reading history drawer" : {
+
+    },
+    "Remove" : {
+
+    },
+    "Remove from history" : {
+
+    },
+    "Removed “%@”" : {
+
+    },
+    "Rest the pointer" : {
+
+    },
+    "Reveal meaning" : {
+
+    },
+    "Reveal the meaning" : {
+
+    },
+    "Say it aloud" : {
+
+    },
+    "Settings…" : {
+
+    },
+    "Several senses fit this sentence equally well." : {
+      "comment" : "Shown on the lookup card when two senses cannot be separated"
+    },
+    "Shortcut" : {
+
+    },
+    "Show the time a word was looked up" : {
+
+    },
+    "Shown without a claim" : {
+
+    },
+    "Size" : {
+
+    },
+    "Standard" : {
+
+    },
+    "Study From" : {
+
+    },
+    "Study from" : {
+
+    },
+    "Subdomains are covered too, so example.com also excludes docs.example.com." : {
+
+    },
+    "Switching dictionaries starts study over." : {
+
+    },
+    "Text" : {
+
+    },
+    "The app is not running" : {
+
+    },
+    "The gate" : {
+
+    },
+    "The only sense in this entry" : {
+
+    },
+    "The only sense in this entry." : {
+
+    },
+    "The sense you read could not be identified." : {
+
+    },
+    "This dictionary does not mark its senses, so the one you read cannot be identified." : {
+      "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
+    },
+    "This dictionary does not number its senses, so this one is identified by its position." : {
+
+    },
+    "This dictionary marks its senses with nothing a card can be keyed to." : {
+
+    },
+    "This pane is not connected to the dictionary service." : {
+
+    },
+    "This pane is not connected to the reader's settings." : {
+
+    },
+    "This pane is not connected to the shortcut." : {
+
+    },
+    "This sentence could not be compared against the senses." : {
+      "comment" : "Shown on the lookup card when the selector could not run"
+    },
+    "Today" : {
+
+    },
+    "Undo" : {
+
+    },
+    "Website" : {
+
+    },
+    "Whatever is selected is looked up, wherever you are." : {
+
+    },
+    "XiaolaiDict" : {
+
+    },
+    "Yesterday" : {
+
+    },
+    "You chose this sense" : {
+
+    },
+    "You have met this sense before" : {
+
+    },
+    "^[%lld other sense](inflect: true)" : {
+
+    },
+    "^[%lld word](inflect: true) · ^[%lld day](inflect: true)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "^[%1$lld word](inflect: true) · ^[%2$lld day](inflect: true)"
+          }
+        }
+      }
+    },
+    "^[Ambiguous — %lld sense](inflect: true) fit this sentence" : {
+
+    },
+    "^[Show all %lld word](inflect: true)" : {
+
+    },
+    "^[You have looked this up %lld time](inflect: true)" : {
+
+    },
+    "^[and %lld more](inflect: true)" : {
+
+    },
+    "adjective" : {
+
+    },
+    "adverb" : {
+
+    },
+    "and %lld more" : {
+
+    },
+    "example.com" : {
+
+    },
+    "not found" : {
+
+    },
+    "noun" : {
+
+    },
+    "on this Mac" : {
+
+    },
+    "senses not marked in this dictionary" : {
+
+    },
+    "sent to a remote service" : {
+
+    },
+    "verb" : {
+
+    },
+    "whole entries only" : {
+
+    },
+    "→ %@" : {
+
+    },
+    "→ %@ (from context)" : {
+
+    },
+    "✓ First that marks senses" : {
+
+    }
+  },
+  "version" : "1.0"
+}
