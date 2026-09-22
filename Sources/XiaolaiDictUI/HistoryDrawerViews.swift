@@ -329,7 +329,7 @@ private struct DayHeader: View {
             Text(title)
                 .font(.system(size: scale.text.body, weight: .semibold))
                 .foregroundStyle(.secondary)
-            Text("\(count)")
+            Text(count, format: .number)
                 .font(.system(size: scale.text.small, weight: .medium))
                 .monospacedDigit()
                 .padding(.horizontal, scale.space.inline)

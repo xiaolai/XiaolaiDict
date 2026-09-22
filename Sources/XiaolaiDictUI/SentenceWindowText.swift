@@ -31,7 +31,7 @@ struct SentenceWindowText: View {
                         // fallback, and is held to the lines instead.
                         .lineLimit(index == windows.count - 1 ? Token.Limit.wrapLines : nil)
                         .fixedSize(horizontal: false, vertical: true)
-                        .help(window.clippedBefore ? Text(fullSentence) : Text(""))
+                        .help(window.clippedBefore ? Text(fullSentence) : Text(verbatim: ""))
                 }
             }
         }

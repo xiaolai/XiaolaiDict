@@ -209,7 +209,7 @@ private struct SenseRow: View {
 
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
-            Text("\(sense.sense.path.ordinal)")
+            Text(sense.sense.path.ordinal, format: .number)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .frame(minWidth: scale.space.ordinal, alignment: .trailing)

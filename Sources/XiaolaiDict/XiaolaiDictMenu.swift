@@ -71,7 +71,7 @@ struct XiaolaiDictMenu: View {
                     Button {
                         app.choosePrimaryDictionary(capability.identity.key)
                     } label: {
-                        Text(app.chosenDictionary == capability.identity.key
+                        Text(verbatim: app.chosenDictionary == capability.identity.key
                              ? "\u{2713} \(capability.identity.name)    · \(capability.note)"
                              : "\(capability.identity.name)    · \(capability.note)")
                     }

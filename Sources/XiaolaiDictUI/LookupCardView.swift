@@ -82,7 +82,7 @@ public struct LookupCardView: View {
         Button {
             withAnimation(.easeOut(duration: Token.Motion.hover)) { showingMemory.toggle() }
         } label: {
-            Text("\(memory.occasion)")
+            Text(memory.occasion, format: .number)
                 .font(.system(size: scale.text.micro, weight: .semibold).monospacedDigit())
                 .padding(.horizontal, scale.space.inline)
                 .padding(.vertical, scale.space.tight)
@@ -276,7 +276,7 @@ public struct LookupCardView: View {
     private func alternative(_ sense: SensePresentation) -> some View {
         Button { onChoose?(sense) } label: {
             HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
-                Text("\(sense.ordinal)")
+                Text(sense.ordinal, format: .number)
                     .font(.system(size: scale.text.small).monospacedDigit())
                     .foregroundStyle(.tertiary)
                     .frame(minWidth: scale.space.ordinal, alignment: .trailing)

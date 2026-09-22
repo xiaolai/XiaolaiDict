@@ -165,7 +165,7 @@ struct LookupPane: View {
         Section {
             Picker("Hold", selection: $policy.modifier) {
                 ForEach(HoverModifier.allCases, id: \.self) { modifier in
-                    Text("\(modifier.name)  \(modifier.symbol)").tag(modifier)
+                    Text(verbatim: "\(modifier.name)  \(modifier.symbol)").tag(modifier)
                 }
             }
 
@@ -338,7 +338,7 @@ struct DictionaryPane: View {
                             // senses with nothing a parser can read only ever gives whole-entry
                             // cards, and the reader should see that before choosing rather than
                             // after a week of them.
-                            Text("\(capability.identity.name) — \(capability.note)")
+                            Text(verbatim: "\(capability.identity.name) — \(capability.note)")
                                 .tag(String?.some(capability.identity.key))
                         }
                     }
@@ -539,9 +539,9 @@ struct AboutPane: View {
             Section {
                 LabeledContent("Author") {
                     if let site = Self.site {
-                        Link("@xiaolai", destination: site)
+                        Link(destination: site) { Text(verbatim: "@xiaolai") }
                     } else {
-                        Text("@xiaolai")
+                        Text(verbatim: "@xiaolai")
                     }
                 }
                 if let site = Self.site {
