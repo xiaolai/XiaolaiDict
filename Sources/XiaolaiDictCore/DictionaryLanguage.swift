@@ -1,3 +1,5 @@
+import Foundation
+
 /// Which language a dictionary indexes, and which it explains in.
 ///
 /// Apple's bundles declare this as `DCSDictionaryLanguages`, one entry per direction. 牛津英汉汉英词典
@@ -24,23 +26,31 @@ public struct DictionaryLanguages: Codable, Sendable, Equatable, Hashable {
     /// Whether this pair is the one a reader of `language` wants for studying English: English
     /// headwords, explained in their own language.
     ///
-    /// Compared on the language subtag alone, so `en_US` matches `en` and `zh_CN` matches
-    /// `zh-Hans-CN`. Apple writes these with an underscore and `Locale.preferredLanguages` with a
-    /// hyphen, and a reader's list carries a region their dictionary never mentions.
+    /// Compared through `Locale.Language`, which normalises Apple's underscores and supplies the
+    /// script subtag neither side writes down. That matters here more than it looks: the two
+    /// Chinese dictionaries enabled on the development Mac are `zh_CN` and `zh_TW`, and Foundation
+    /// resolves those to **Hans and Hant** — so a Simplified reader is proposed 牛津英汉汉英词典 and
+    /// not 譯典通. Reducing both to a bare `zh` would have made them equally good candidates and
+    /// turned a correct proposal into a coin toss.
+    ///
+    /// Region is deliberately not compared. `en_US` and `en_GB` are the same reader's language, and
+    /// a reader in Singapore whose list says `zh-Hans-SG` still wants the `zh_CN` dictionary.
     public func indexesEnglish(explainedIn language: String) -> Bool {
-        Self.subtag(index) == "en" && Self.subtag(explains) == Self.subtag(language)
+        Self.tag(index)?.languageCode?.identifier == "en" && Self.same(explains, language)
     }
 
-    /// The primary subtag, lowercased: `zh_CN` and `zh-Hans-CN` both reduce to `zh`.
-    ///
-    /// **This deliberately loses the script.** Simplified and Traditional Chinese are different
-    /// dictionaries — 譯典通 is `zh_TW` and 牛津英汉汉英词典 is `zh_CN` — and reducing both to `zh` makes
-    /// them equally good matches for a Simplified reader. That is on purpose at this layer: the
-    /// rule this feeds answers "exactly one, or several" and a second Chinese dictionary is a
-    /// genuine *several*, which is a question for the reader rather than a coin toss.
-    static func subtag(_ tag: String) -> String {
-        let cut = tag.prefix { $0 != "_" && $0 != "-" }
-        return cut.lowercased()
+    /// Whether two tags name the same language *and* script.
+    static func same(_ a: String, _ b: String) -> Bool {
+        guard let x = tag(a), let y = tag(b) else { return false }
+        return x.languageCode == y.languageCode && x.script == y.script
+    }
+
+    /// Apple writes `zh_CN`; `Locale.preferredLanguages` answers `zh-Hans-CN`. One shape, or the
+    /// comparison is between spellings rather than languages.
+    static func tag(_ identifier: String) -> Locale.Language? {
+        let normalised = identifier.replacingOccurrences(of: "_", with: "-")
+        guard !normalised.isEmpty else { return nil }
+        return Locale.Language(identifier: normalised)
     }
 }
 

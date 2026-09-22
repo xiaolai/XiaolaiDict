@@ -35,12 +35,28 @@ struct DictionaryLanguageTests {
         #expect(!intoChinese.indexesEnglish(explainedIn: "zh_CN"))
     }
 
-    /// Simplified and Traditional both reduce to `zh`, deliberately. 譯典通 is `zh_TW` and
-    /// 牛津英汉汉英词典 is `zh_CN`, and treating a second Chinese dictionary as a genuine rival is what
-    /// sends the question to the reader instead of settling it with a coin toss.
-    @Test func theScriptIsNotUsedToSeparateTwoChineseDictionaries() {
+    /// Simplified and Traditional are different dictionaries, and Foundation is what tells them
+    /// apart: it resolves `zh_CN` to Hans and `zh_TW` to Hant although neither writes the script
+    /// down. Both are enabled on the development Mac, so without this a Simplified reader would be
+    /// offered 譯典通 as an equally good candidate and the proposal would be a coin toss.
+    @Test func traditionalIsNotOfferedToASimplifiedReader() {
         let traditional = DictionaryLanguages(index: "en", explains: "zh_TW")
-        #expect(traditional.indexesEnglish(explainedIn: "zh_CN"))
+        #expect(!traditional.indexesEnglish(explainedIn: "zh-Hans-CN"))
+        #expect(traditional.indexesEnglish(explainedIn: "zh-Hant-TW"))
+    }
+
+    /// A bare `zh` means Simplified to Foundation, which is the right default for an unqualified
+    /// Chinese reader.
+    @Test func abareChineseTagMeansSimplified() {
+        #expect(oxfordChinese.indexesEnglish(explainedIn: "zh"))
+    }
+
+    /// Region is not compared: `en_US` and `en_GB` are one reader's language, and a Singapore
+    /// reader writing `zh-Hans-SG` still wants the `zh_CN` dictionary.
+    @Test func regionDoesNotSeparateAReaderFromTheirDictionary() {
+        #expect(oxfordChinese.indexesEnglish(explainedIn: "zh-Hans-SG"))
+        let noad = DictionaryLanguages(index: "en_US", explains: "en_US")
+        #expect(noad.indexesEnglish(explainedIn: "en_GB"))
     }
 
     @Test func everyProbeWordHasAScript() {
