@@ -80,3 +80,8 @@ CLAUDE.md
 .codex/
 .mcp.json
 # <<< cc-suite <<<
+
+# Corpus extraction. The corpus is copyrighted dictionary text and is never committed — it lives
+# outside the repository by default, and these rules only catch a run that was pointed inside it.
+/Tools/corpus/.venv/
+/Tools/corpus/*.sqlite
