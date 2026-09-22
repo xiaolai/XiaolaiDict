@@ -353,6 +353,82 @@ struct DictionaryCapabilityTests {
         #expect(noad.identity.version != nil, "no content version, so a sense key has no version to be valid in")
     }
 
+    /// What counts as the dictionary having the probe word.
+    ///
+    /// The CJK rows are the ones that were got wrong: compared whole, `水  shuǐ` is not `水`, so
+    /// 牛津英汉汉英词典 reported itself as indexing Latin script alone and the bilingual looked
+    /// monolingual. The `finest` row is why the fix is a first-token comparison and not
+    /// `hasPrefix`.
+    @Test(arguments: [
+        ("水", "水  shuǐ", true),
+        ("水", "水  ㄕㄨㄟˇ", true),
+        ("fine", "fine", true),
+        ("fine", "Fine", true),
+        ("fine", "finest", false),
+        ("purple passage", "passage", false),
+        ("fine", nil as String?, false),
+        ("fine", "", false),
+    ])
+    func aRecordCountsOnlyWhenItsHeadwordIsTheWord(word: String, headword: String?, hit: Bool) {
+        #expect(DictionaryBridge.matches(word, headword) == hit)
+    }
+
+    /// Apple's assets declare their languages; every sideloaded conversion declares none.
+    ///
+    /// Both halves are load-bearing. If the plist read broke, the first assertion fails; if it
+    /// started inventing languages for bundles that carry none, the second does. Measured
+    /// 2026-09-22 across all seven enabled here.
+    @Test func appleAssetsDeclareTheirLanguagesAndSideloadedOnesDoNot() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        func found(_ name: String) throws -> DictionaryCapability {
+            try #require(
+                capabilities.first { $0.identity.name.contains(name) },
+                "\(name) is not enabled in Dictionary.app on this Mac")
+        }
+        #expect(try !found("New Oxford American").languages.isEmpty)
+        #expect(try !found("牛津").languages.isEmpty)
+        #expect(try found("Collins COBUILD").languages.isEmpty)
+        #expect(try found("Longman Dictionary").languages.isEmpty)
+    }
+
+    /// The rule the setup checklist asks: English headwords, explained in the reader's language.
+    ///
+    /// 牛津英汉汉英词典 declares `en → zh_CN` beside its `zh_CN → zh_CN`, and it is the second pair
+    /// that answers. NOAD explains in English, so it answers for an English reader and nobody else.
+    @Test func theBilingualIsTheOneForAReaderOfItsOwnLanguage() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        let noad = try #require(capabilities.first { $0.identity.name.contains("New Oxford American") })
+
+        #expect(oxford.teachesEnglish(to: "zh-Hans-CN"))
+        #expect(!oxford.teachesEnglish(to: "en"))
+        #expect(noad.teachesEnglish(to: "en"))
+        #expect(!noad.teachesEnglish(to: "zh-Hans-CN"))
+    }
+
+    /// A bundle that declares nothing is still classified, by what it answers.
+    ///
+    /// This is the signal that covers six of the seven dictionaries here. The second assertion is
+    /// the one that catches a broken probe: `DCSCopyRecordsForSearchString` matches fuzzily, so
+    /// without comparing headwords an English-only dictionary answers 水 too and every dictionary
+    /// reports every script.
+    @Test func aDictionaryThatDeclaresNothingIsClassifiedByWhatItAnswers() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let collins = try #require(capabilities.first { $0.identity.name.contains("Collins COBUILD") })
+        #expect(collins.languages.isEmpty, "the premise of this test is that it declares nothing")
+        #expect(collins.indexes.contains(.latin))
+        #expect(!collins.indexes.contains(.han), "an English dictionary answered a Chinese probe")
+    }
+
+    /// The bilingual answers both sides, which is what makes the probe a language signal rather
+    /// than a liveness check.
+    @Test func theProbeSeesBothHalvesOfABilingual() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        #expect(oxford.indexes.contains(.latin))
+        #expect(oxford.indexes.contains(.han))
+    }
+
     /// Probed once per process: each probe parses a real entry, and Longman's *hold* is 625 KB.
     ///
     /// Counted, not timed. The old version asserted the second call took under 5 ms, which proves
