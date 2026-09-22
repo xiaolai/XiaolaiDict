@@ -37,17 +37,9 @@ public enum Abstention: String, Sendable, CaseIterable, Codable {
     /// The selector could not run at all — no embedding for this language, or a refusal.
     case unavailable
 
-    /// What the panel says instead of a mark. It says why it did not choose, which is the other
-    /// half of "the popup can mark a sense, and can say why it did not".
-    public var reason: String {
-        switch self {
-        case .noCandidates: "This dictionary does not mark its senses, so the one you read cannot be identified."
-        case .noContext: "No sentence was captured around the word, so its senses cannot be told apart."
-        case .tooClose: "Several senses fit this sentence equally well."
-        case .nothingFits: "No sense in this entry clearly fits this sentence."
-        case .unavailable: "This sentence could not be compared against the senses."
-        }
-    }
+    // What the reader is told for each case is `Abstention.reason`, in `XiaolaiDictUI`. Display
+    // text lives in the view layer because that is where the string catalog is extracted from and
+    // where a translation is looked up; a sentence here could be shown but never translated.
 }
 
 /// The sense the selector *nearly* chose, kept when it declined to choose at all.

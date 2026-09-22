@@ -117,13 +117,6 @@ struct SenseSelectorTests {
             from: Self.senses, reading: "He was ordered to pay a heavy fine.", context: .complete)
         #expect(choice == .abstained(.unavailable))
     }
-
-    /// Every abstention can be shown to the reader: the popup must be able to say why it did not
-    /// mark anything, and an empty string would be a blank where an explanation belongs.
-    @Test(arguments: Abstention.allCases)
-    func everyAbstentionHasSomethingToSay(abstention: Abstention) {
-        #expect(!abstention.reason.isEmpty)
-    }
 }
 
 /// The ladder falls through when a rung is *absent*, and never when a rung has *decided*.
