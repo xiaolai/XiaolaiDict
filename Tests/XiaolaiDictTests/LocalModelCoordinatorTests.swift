@@ -72,7 +72,7 @@ struct LocalModelCoordinatorTests {
         // lookup prewarming, which is what the app does next — is the lift and nothing else.
         #expect(await sessionsOpened(prewarming: coordinator, of: service, until: 2) == 2,
                 "the local rung was never let go again after the old service had ended")
-        await DetachedWork.settles(at: store.storeLockFile())
+        await coordinator.pruning?.value
     }
 
     /// **A service that would not end holds the local rung back.** The process with the replaced
@@ -95,7 +95,7 @@ struct LocalModelCoordinatorTests {
         // that the test above opens its second session inside.
         #expect(await sessionsOpened(prewarming: coordinator, of: service, until: 2) == 1,
                 "the local rung answered again while the replaced model's service was still running")
-        await DetachedWork.settles(at: store.storeLockFile())
+        await coordinator.pruning?.value
     }
 
     /// Waits for the wire `refresh()` spawns to reach the service. **Polled, not slept**: it runs on

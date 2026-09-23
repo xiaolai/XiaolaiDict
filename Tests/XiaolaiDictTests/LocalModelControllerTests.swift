@@ -116,7 +116,7 @@ struct LocalModelControllerTests {
         controller.startDownload(.standard)
         await settle(controller)
         controller.refresh()
-        await DetachedWork.settles(at: store.storeLockFile())
+        await controller.pruning?.value
         guard case .stopped = controller.state else {
             Issue.record("a refresh erased why the download stopped: \(controller.state)")
             return
@@ -130,7 +130,7 @@ struct LocalModelControllerTests {
         await settle(controller)
         try store.remove(Self.manifest(.standard))
         controller.refresh()
-        await DetachedWork.settles(at: store.storeLockFile())
+        await controller.pruning?.value
         #expect(controller.state == .notDownloaded)
     }
 
@@ -205,7 +205,7 @@ struct LocalModelControllerTests {
         let (controller, store) = controller(memory: 16 * Self.gigabyte)
         try Self.install(.small, into: store)
         controller.refresh()
-        await DetachedWork.settles(at: store.storeLockFile())
+        await controller.pruning?.value
         #expect(controller.state == .ready(.small))
         #expect(controller.choice.larger == .standard)
     }
@@ -217,7 +217,7 @@ struct LocalModelControllerTests {
         let (controller, store) = controller(memory: 16 * Self.gigabyte)
         try Self.install(.large, into: store)
         controller.refresh()
-        await DetachedWork.settles(at: store.storeLockFile())
+        await controller.pruning?.value
         #expect(controller.state == .notDownloaded)
         #expect(controller.licenceURL == nil)
     }

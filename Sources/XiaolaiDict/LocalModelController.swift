@@ -97,6 +97,24 @@ final class LocalModelController {
         if case .ready(let size) = read { pruneStrays(keeping: size) }
     }
 
+    /// The prune the last `refresh()` started, or nil where it started none.
+    ///
+    /// **Work this class does not await still has to be waitable.** The prune runs detached so the
+    /// board is not held by it, and it writes inside the store's root — so anything that owns that
+    /// root, a test fixture above all, has to be able to wait for it before removing the directory
+    /// underneath it. Holding the task is the only wait that says what it means: `nil` is "no prune
+    /// was started", and a task is "here is the work, await it".
+    ///
+    /// What this replaced was a poll for `.staging/store.lock` appearing, and that could not tell
+    /// three different situations apart. The lock file is created with `O_CREAT` and **never
+    /// unlinked**, so it outlives the prune that made it: a store where anything had installed
+    /// already had the file, and the poll returned at once having waited for nothing. Where no
+    /// prune was started — `refresh()` only prunes when the store reads `.ready` — the poll instead
+    /// spent its whole bound and answered false. And a `.background` task starved under a parallel
+    /// test run had not written it yet. Same reading for "done", "never going to happen" and "not
+    /// yet": five of six call sites were timing out silently and passing.
+    @ObservationIgnored private(set) var pruning: Task<Void, Never>?
+
     /// Anything left from an earlier model, removed again — in the background, off the actor the
     /// board draws on. A removal that failed while the new model was installing, because a file was
     /// still open or a permission was missing, is **retried** here rather than logged once and
@@ -104,7 +122,7 @@ final class LocalModelController {
     private func pruneStrays(keeping size: LocalModelSize) {
         let store = store
         let wanted = manifest(size)
-        Task.detached(priority: .background) { _ = store.removeStrays(keeping: wanted) }
+        pruning = Task.detached(priority: .background) { _ = store.removeStrays(keeping: wanted) }
     }
 
     private static func read(

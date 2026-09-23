@@ -64,6 +64,10 @@ final class LocalModelCoordinator {
     /// Re-reads the store. Called where the reader looks: the board opening, and the menu.
     func refresh() { controller.refresh() }
 
+    /// The prune the last `refresh()` started — see `LocalModelController.pruning`. Forwarded so a
+    /// caller holding only the coordinator can still wait for work `refresh()` does not await.
+    var pruning: Task<Void, Never>? { controller.pruning }
+
     /// The shipped sense ladder — the local model first, Apple's on-device model, `NLEmbedding`.
     var senseLadder: LadderSenseSelector { access.senseLadder.ladder }
 
