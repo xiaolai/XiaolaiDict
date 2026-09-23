@@ -45,14 +45,17 @@ struct TemporaryDirectoryTests {
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" && !$0.standardizedFileURL.path.hasPrefix(support) }
         try #require(files.count > 20, "found only \(files.count) test files — the scan is not looking where the tests are")
-        // Built from parts so this file does not match its own search.
-        let making = "temporary" + "Directory"
+        // Built from parts so this file does not match its own search, and matched without regard
+        // to case because the leak has two spellings: `FileManager.temporaryDirectory` and
+        // Foundation's older `NSTemporaryDirectory()`. Searching for the first alone left the
+        // second making UUID-named directories under a rule written to stop exactly that.
+        let making = "temporary" + "directory"
         var offenders: [String] = []
         for file in files {
             for (index, line) in try String(contentsOf: file, encoding: .utf8)
                 .components(separatedBy: .newlines).enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
-                guard !code.hasPrefix("//"), code.contains(making) else { continue }
+                guard !code.hasPrefix("//"), code.lowercased().contains(making) else { continue }
                 // A *file* under it is cleaned up by the `defer` the ledger fixtures already have;
                 // what leaks is a directory, which is what `appending(path:` with a directory hint
                 // or `createDirectory` makes.

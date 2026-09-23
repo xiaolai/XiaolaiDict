@@ -65,7 +65,11 @@ public struct LookupCardView: View {
             }
             Spacer(minLength: scale.space.inline)
             if let memory = card.memory { memoryBadge(memory) }
-            action("speaker.wave.2", help: "Say it aloud") { Speech.say(card.term) }
+            // The help says what the voice will be where that is worth saying: only a compact one
+            // installed, or none at all for this language.
+            action("speaker.wave.2", help: Speech.caveat(forSpeaking: card.term) ?? "Say it aloud") {
+                Speech.say(card.term)
+            }
             action("character.book.closed", help: "Open in Dictionary") {
                 SystemDictionary.open(card.term)
             }
@@ -385,11 +389,10 @@ public struct LookupPanelContent: View {
     /// translation asked afterwards was still told the sense the reader had just rejected. A tap is
     /// a fact (`chosen_by: reader`); it replaces the hypothesis here as well as in the ledger.
     ///
-    /// **Keyed by the entry it was made in**, because a sense key means nothing outside the
-    /// dictionary that issued it: held as one value, a tap in an auxiliary entry became the primary
-    /// entry's mark, and two dictionaries whose keys happen to collide could confirm the wrong
-    /// sense outright — which copy, pin, translation and explanation would all then carry.
-    @State private var chosen: [String: SenseMark] = [:]
+    /// The decision is `PanelSelection`'s rather than this view's, so it can be asked questions
+    /// from a test: keyed by the entry it was made in, and answering whether the selector's late
+    /// proposal still changes what is on screen.
+    @State private var selection = PanelSelection()
 
     public init(presentation: LookupPresentation, waiting: String? = nil) {
         self.presentation = presentation
@@ -483,7 +486,7 @@ public struct LookupPanelContent: View {
                         // sense here has the mark they asked for, and clearing on the selector's
                         // late answer took away a translation they had asked for after choosing.
                         .onChange(of: presentation.sense) {
-                            if chosen[Self.identity(of: entry)] == nil { clearPanes() }
+                            if !selection.hasChosen(in: entry) { clearPanes() }
                         }
                     // Only beside the card it was made for. A different dictionary, or a sense that
                     // arrived after it was asked, is a different card.
@@ -521,20 +524,17 @@ public struct LookupPanelContent: View {
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a
     /// guess, and under D8 the only way an auxiliary dictionary's sense becomes a study item.
+    ///
+    /// The encounter is built **first**, and nothing is marked where it cannot be: an entry with no
+    /// id, or a dictionary whose senses carry none, gives a tap that would be a confirmation with
+    /// nothing behind it.
     private func choose(_ sense: SensePresentation, in entry: DictionaryEntry) {
         guard let key = sense.key,
-              let encounter = OutcomeView.encounter(from: entry, senseKey: key)
+              let encounter = SenseEncounter.of(entry, senseKey: key, chosenBy: .reader, at: .now)
         else { return }
         studySense(encounter)
-        chosen[Self.identity(of: entry)] = .chosen(key: key, by: .reader)
+        selection.choose(key, in: entry)
         clearPanes()
-    }
-
-    /// Which entry a tap belongs to: the dictionary that issued the sense, and the entry inside it.
-    /// Both halves are needed — one dictionary answers a word with several entries, and a sense key
-    /// is only meaningful inside the dictionary that issued it.
-    private static func identity(of entry: DictionaryEntry) -> String {
-        "\(entry.dictionary.key)\u{1}\(entry.entryKey ?? "")"
     }
 
     /// Whatever was said about the card as it was is not about the card as it is: a translation in
@@ -555,7 +555,7 @@ public struct LookupPanelContent: View {
     /// The mark the card draws and every question is built from: the reader's own tap **in this
     /// entry** where there is one, and the selector's proposal otherwise.
     private func mark(for entry: DictionaryEntry) -> SenseMark? {
-        chosen[Self.identity(of: entry)] ?? presentation.sense
+        selection.mark(for: entry, proposing: presentation.sense)
     }
 
     // MARK: - The row under the card

@@ -74,9 +74,6 @@ enum Token {
         /// screen — and at 680 it clipped the 697-point pane it became by 17, which scrolls just
         /// enough to look like a mistake.
         static let settingsMaxHeight: CGFloat = 700
-        /// The dictionary list beside an entry: wide enough for the longest dictionary name
-        /// without taking room the entry needs.
-        static let dictionaryList: CGFloat = 260
         /// How large an app icon is rasterised and cached at. Fixed rather than scaled: it is the
         /// source bitmap the card downscales from, and one raster has to serve every text size.
         static let appIconRaster: CGFloat = 32

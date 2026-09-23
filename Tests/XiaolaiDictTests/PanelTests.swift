@@ -4,7 +4,6 @@ import Carbon.HIToolbox
 @testable import XiaolaiDictUI
 import XiaolaiDictCore
 import Testing
-import WebKit
 
 struct PanelPlacementTests {
     private let screen = UpRect(x: 0, y: 0, width: 1_440, height: 900)
@@ -81,23 +80,6 @@ struct EscapeKeyTests {
     }
 }
 
-struct EntryNavigationTests {
-    private let document = EntryNavigationPolicy.documentURL
-
-    /// Only XiaolaiDict's own load of the document, in the main frame, and only while it is expected.
-    @Test func onlyTheExpectedLoadIsAllowed() {
-        #expect(EntryNavigationPolicy.allows(url: document, isMainFrame: true, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: document, isMainFrame: true, expectingLoad: false))
-        #expect(!EntryNavigationPolicy.allows(url: document, isMainFrame: false, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: URL(string: "https://example.com/"), isMainFrame: true, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: URL(string: "x-dictionary:r:run"), isMainFrame: true, expectingLoad: true))
-    }
-
-    /// The resource blocker must compile, or every entry would be refused its display.
-    @Test @MainActor func theResourceBlockerCompiles() async throws {
-        _ = try await EntryContentRules.compiled()
-    }
-}
 
 /// **A card carries the lookup it is, and a tap belongs to that one.** The panel's own counter
 /// moves when the *next* lookup starts — before its selection has been read, let alone drawn — so a

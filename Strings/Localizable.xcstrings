@@ -39,9 +39,6 @@
     "%lld things are still needed." : {
 
     },
-    "A guess at the sense you were reading, from your sentence. It may be wrong." : {
-
-    },
     "A guess — not confirmed" : {
 
     },
@@ -111,9 +108,6 @@
     "Confirmed" : {
 
     },
-    "Copy" : {
-
-    },
     "Copy the word and this sense" : {
 
     },
@@ -153,9 +147,6 @@
 
     },
     "Everything this Mac can do is in place. Anything here can still be changed." : {
-
-    },
-    "Explain how this word is used in your sentence — runs on this Mac" : {
 
     },
     "Explain this sentence" : {
@@ -198,6 +189,9 @@
 
     },
     "Licence" : {
+
+    },
+    "Licences" : {
 
     },
     "Local model" : {
@@ -251,10 +245,10 @@
     "No sentence was captured around the word, so its senses cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
-    "No sentence was captured, so there is nothing to explain." : {
+    "No shortcut is registered, so selections can be looked up from the menu only." : {
 
     },
-    "No shortcut is registered, so selections can be looked up from the menu only." : {
+    "No voice is installed for this language." : {
 
     },
     "Not available" : {
@@ -287,6 +281,9 @@
     "One thing is still needed." : {
 
     },
+    "Only a compact voice is installed for this language. Better ones are a free download in System Settings → Accessibility → Spoken Content." : {
+
+    },
     "Open Dictionary…" : {
 
     },
@@ -299,13 +296,13 @@
     "Open in Dictionary" : {
 
     },
+    "Open source" : {
+
+    },
     "Password managers" : {
 
     },
     "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
-
-    },
-    "Pin this as a note that stays until you close it" : {
 
     },
     "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
@@ -464,13 +461,16 @@
     "The model declined to compare this sentence against the senses." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
     },
+    "The notices could not be opened. They are in the app itself, at %@." : {
+
+    },
     "The only sense in this entry" : {
 
     },
-    "The only sense in this entry." : {
+    "The sense you read could not be identified." : {
 
     },
-    "The sense you read could not be identified." : {
+    "Third-party notices" : {
 
     },
     "This Mac has too little memory for the local model." : {
@@ -481,12 +481,6 @@
     },
     "This dictionary does not mark its senses, so the one you read cannot be identified." : {
       "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
-    },
-    "This dictionary does not number its senses, so this one is identified by its position." : {
-
-    },
-    "This dictionary marks its senses with nothing a card can be keyed to." : {
-
     },
     "This pane is not connected to the dictionary service." : {
 
@@ -610,9 +604,6 @@
     "adverb" : {
 
     },
-    "and %lld more" : {
-
-    },
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
@@ -632,9 +623,6 @@
 
     },
     "on this Mac" : {
-
-    },
-    "senses not marked in this dictionary" : {
 
     },
     "sent to a remote service" : {
@@ -667,17 +655,8 @@
     "verb" : {
 
     },
-    "whole entries only" : {
-
-    },
     "you stopped it" : {
       "comment" : "Why the model download stopped"
-    },
-    "→ %@" : {
-
-    },
-    "→ %@ (from context)" : {
-
     },
     "✓ First that marks senses" : {
 

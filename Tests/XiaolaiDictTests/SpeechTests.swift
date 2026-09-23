@@ -48,4 +48,23 @@ struct SpeechTests {
     func blankTextIsNotSpoken(text: String) {
         Speech.say(text)
     }
+    /// **The wire, not the value.** `Speech.caveat` was complete, memoised and tested while nothing
+    /// in the card asked for it — the reader with only a compact voice was told nothing for as long
+    /// as the card has existed. The check is on what reaches the button, because that is the part
+    /// that was missing.
+    @Test func theSpeakButtonCarriesTheCaveatAboutTheVoice() throws {
+        let card = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDictUI/LookupCardView.swift")
+        let source = try String(contentsOf: card, encoding: .utf8)
+        #expect(source.contains("help: Speech.caveat(forSpeaking: card.term) ?? \"Say it aloud\""),
+                "the speak button says nothing about the voice it will use")
+    }
+
+    /// And a word in a language with no voice at all is told so rather than failing silently.
+    @Test func aLanguageWithNoVoiceIsNamedRatherThanSilent() {
+        let caveat = Speech.caveat(for: "xx-nonexistent", among: [])
+        #expect(caveat == String(localized: "No voice is installed for this language."))
+    }
+
 }
