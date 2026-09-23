@@ -338,12 +338,30 @@ verify_signatures() {
     done
     # The service trusts only its own team, so a bundle whose parts disagree is one where every
     # lookup is refused at runtime. Checked here, where the cause is still visible.
-    local app_team service_team model_team
-    app_team=$(codesign -dv "$bundle" 2>&1 | grep '^TeamIdentifier=' || true)
-    service_team=$(codesign -dv "$bundle/$XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
-    model_team=$(codesign -dv "$bundle/$MODEL_XPC_PATH" 2>&1 | grep '^TeamIdentifier=' || true)
-    [ -n "$app_team" ] && [ "$app_team" = "$service_team" ] && [ "$app_team" = "$model_team" ] \
-        || { echo "app ($app_team), service ($service_team) and model service ($model_team) are not signed by one team"; return 1; }
+    #
+    # **Equal team identifiers are not enough.** Read alone, this passed for any other team's
+    # signature and for `TeamIdentifier=not set`, which is what an ad-hoc signature reports — and an
+    # ad-hoc build keeps none of the permission grants this project signs Developer ID for. So each
+    # part must carry the *configured* identity's authority, and must not be ad hoc.
+    local part team authority app_team_expected=""
+    for part in "$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH"; do
+        local described
+        described=$(codesign -dvvv "$part" 2>&1 || true)
+        team=$(grep '^TeamIdentifier=' <<<"$described" | head -1)
+        authority=$(grep '^Authority=' <<<"$described" | head -1)
+        case $team in
+            TeamIdentifier=|TeamIdentifier=not\ set|"")
+                echo "$part carries no team identifier — an ad-hoc signature keeps no permission grant"; return 1 ;;
+        esac
+        [ "$team" = "$app_team_expected" ] || [ -z "${app_team_expected:-}" ] \
+            || { echo "$part is signed by $team, not by the app's $app_team_expected"; return 1; }
+        app_team_expected=$team
+        # The identity this build was told to sign with, by name: `Developer ID Application: …`.
+        grep -qF "${XIAOLAIDICT_SIGN_ID}" <<<"$authority" \
+            || { echo "$part is signed by '$authority', not by '$XIAOLAIDICT_SIGN_ID'"; return 1; }
+        grep -q '^CodeDirectory .*flags=0x10000(runtime)' <<<"$described" \
+            || { echo "$part is not signed with the hardened runtime"; return 1; }
+    done
 }
 
 # **A release must carry a secure timestamp, and this is where that is enforced.** The up-to-date

@@ -76,10 +76,18 @@ enum ModelReport {
         guard downloaded.installed else { return false }
 
         let client = ModelClient()
-        // **A service already running holds the model it loaded, not the one just downloaded.**
-        // The app ends it before saying "ready" for exactly this reason; a report that skipped that
-        // step would prewarm the old process and publish its numbers as the new model's.
-        if downloaded.changed { _ = await client.unload() }
+        // **Measured against a service this run started.** A resident one holds whatever it loaded
+        // — the previous revision of this same size satisfies every check below, because they
+        // compare sizes and not pins — and its prewarm time would be reported as a cold load that
+        // never happened. Ended before anything is measured, whether or not this run downloaded
+        // anything, and the run stops if it will not go: numbers from the wrong process are worse
+        // than no numbers.
+        let ended = await client.unload()
+        report["endedTheRunningService"] = ended
+        guard ended else {
+            report["error"] = "a model service was already running and would not end, so nothing here would be about this build"
+            return false
+        }
         guard case .status(let before)? = await client.ask(.status) else {
             report["reachable"] = false
             return false
@@ -168,7 +176,11 @@ enum ModelReport {
         let translation = await client.ask(.translate(TranslationQuestion(
             sentence: sentence, target: "zh-Hans", met: met)))
         report["translationSeconds"] = seconds(since: translationStarted)
-        if case .translation(let text)? = translation {
+        // **Checked the way the pane checks it.** Any `.translation` counted as success here, while
+        // the pane runs `TranslationCheck` and would reject an echo or an untranslated answer — so
+        // the report could pass on exactly what the reader would be shown a fallback for.
+        if case .translation(let text)? = translation,
+           TranslationCheck.isTranslation(text, of: sentence, into: "zh-Hans") {
             report["translation"] = text
         } else {
             report["translation"] = NSNull()
@@ -190,7 +202,7 @@ enum ModelReport {
         }
 
         let chosen = if case .sense(2)? = sense { true } else { false }
-        let translated = if case .translation? = translation { true } else { false }
+        let translated = report["translation"] is String
         let explained = if case .explanation? = explanation { true } else { false }
         return chosen && translated && explained
     }
@@ -262,8 +274,10 @@ enum ModelReport {
 
     static let relaunchTries = 3
     /// How much of the idle interval must pass before a service going counts as having idled out
-    /// rather than crashed. Not 1.0: the watch polls, and the timer's own check lands on a boundary.
-    static let earliestIdleShare = 0.8
+    /// rather than crashed. Not 1.0 — the watch polls and the timer's own check lands on a boundary
+    /// — but close to it: at 0.8 a 120 s interval would have accepted an exit 24 s early, which is
+    /// a crash with plenty of room to look like a feature.
+    static let earliestIdleShare = 0.95
 
     private static func megabytes(_ bytes: UInt64) -> UInt64 { bytes / 1_048_576 }
 

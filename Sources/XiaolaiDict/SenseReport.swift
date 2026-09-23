@@ -1,3 +1,4 @@
+import Foundation
 import XiaolaiDictCore
 
 /// `--sense-report`: **the ladder's order, decided on the labelled set** — every rung scored on the
@@ -56,10 +57,22 @@ enum SenseReport {
             // about the order they were run in than about the rungs.
             if !warmed {
                 for rung in rungs {
-                    _ = try? await withDeadline(Self.rungLimit) {
-                        await rung.selector.choose(
-                            from: candidates, reading: labelled.sentence, context: .complete,
-                            partOfSpeech: partOfSpeech)
+                    // **A warm-up that timed out stops the run.** `withDeadline` gives up on work
+                    // it cannot cancel, so a generation that overran would go on running beside
+                    // every timing below — and the numbers would be of two answers at once.
+                    do {
+                        _ = try await withDeadline(Self.rungLimit) {
+                            await rung.selector.choose(
+                                from: candidates, reading: labelled.sentence, context: .complete,
+                                partOfSpeech: partOfSpeech)
+                        }
+                    } catch is CancellationError {
+                        return .interrupted
+                    } catch {
+                        _ = Instrument.write(
+                            ["error": "\(rung.name) did not warm up within \(Self.rungLimit); anything measured after it would be beside a generation still running"],
+                            to: write)
+                        return .failure
                     }
                 }
                 warmed = true
@@ -95,6 +108,10 @@ enum SenseReport {
                 let bucket = LabelledSenses.bucket(choice, correct: labelled.correct)
                 scores[rung.name]?[bucket.rawValue, default: 0] += 1
                 row[rung.name] = choice.abstention.map { "\(bucket.rawValue) (\($0.rawValue))" } ?? bucket.rawValue
+                // **Which sense, not only which bucket.** Two different wrong answers both read as
+                // "wrong", so a ladder that dropped its top rung's answer and got the same bucket
+                // from a lower one passed the check that says the answer was carried through.
+                row["\(rung.name)Key"] = choice.key ?? choice.nearest?.key ?? NSNull()
             }
             answers.append(row)
         }

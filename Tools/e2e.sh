@@ -1480,6 +1480,12 @@ for row in d["answers"]:
     if local in ("right", "wrong") and row["ladder"] != local:
         sys.exit("the ladder did not carry the local model answer on " + row["word"] + ": "
                  + local + " became " + row["ladder"])
+    # And the same *sense*, not merely the same bucket: two different wrong answers both read as
+    # "wrong", so a ladder that dropped its top rung and got a wrong answer from a lower one
+    # passed this check while doing exactly what it is here to catch.
+    if local in ("right", "wrong") and row.get("localModelKey") != row.get("ladderKey"):
+        sys.exit("the ladder answered " + row["word"] + " with a different sense from the local "
+                 "model: " + str(row.get("ladderKey")) + " against " + str(row.get("localModelKey")))
 # D6: a rung above another earns its place with at least 10 points more top-1 accuracy and a
 # confidently-wrong count no higher.
 def earns(upper, lower):
@@ -1494,13 +1500,18 @@ print("; ".join(f"{r}: {n(r, RIGHT)} right, {n(r, WRONG)} wrong" for r in ("loca
 # Apple is skipped only where it is genuinely not on this Mac -- every case abstaining *because it
 # is unavailable*. An Apple rung that abstained for any other reason is a rung that ran, and is
 # measured like the rest.
+#
+# **Read off the order the report gives, never the order this check expects.** Written as the three
+# hard-coded pairs, an order of localModel, embedding, onDevice passed: the comparisons asked about
+# a ladder that was not the one running.
 apple = [row.get("onDevice", "") for row in d["answers"]]
 absent = bool(apple) and all("(unavailable)" in verdict for verdict in apple)
-if absent:
-    ok = earns("localModel", "embedding")
-else:
-    ok = (earns("localModel", "onDevice") and earns("onDevice", "embedding")
-          and earns("localModel", "embedding"))
+rungs = [r for r in order if not (absent and r == "onDevice")]
+if rungs[:1] != ["localModel"]: sys.exit(f"the shipped ladder does not run the local model first: {order}")
+ok = all(earns(upper, lower) for upper, lower in zip(rungs, rungs[1:]))
+# Every rung above another, not only the adjacent pairs: a ladder that ordered them A, B, C with A
+# beating B and B beating C but A no better than C is not an order anything measured.
+ok = ok and all(earns(rungs[i], rungs[j]) for i in range(len(rungs)) for j in range(i + 1, len(rungs)))
 sys.exit(0 if ok else 2)
 ' 2>&1); then
     pass "model: the shipped ladder runs the local model first, and the labelled set backs it ($verdict)"
