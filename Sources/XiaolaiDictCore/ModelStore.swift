@@ -185,6 +185,28 @@ public struct ModelStore: Sendable, Equatable {
         return found
     }
 
+    /// The bytes other installs in this store still have to fetch — what their manifests list, less
+    /// what is already on disk for them. Read from `.staging`, which is where an install in flight
+    /// keeps its files, so it needs no coordination beyond the directory itself.
+    func outstandingElsewhere(excluding mine: URL) -> Int64 {
+        let mine = mine.standardizedFileURL.path
+        var outstanding: Int64 = 0
+        for manifest in ModelManifest.all {
+            let directory = stagingDirectory(for: manifest)
+            guard directory.standardizedFileURL.path != mine,
+                  FileManager.default.fileExists(atPath: directory.path)
+            else { continue }
+            for file in manifest.files {
+                let onDisk = [file.path, file.path + Self.partialSuffix]
+                    .map { directory.appending(path: $0).path }
+                    .compactMap { (try? FileManager.default.attributesOfItem(atPath: $0)[.size] as? NSNumber)?.int64Value }
+                    .max() ?? 0
+                outstanding += max(0, file.size - onDisk)
+            }
+        }
+        return outstanding
+    }
+
     /// Whether any install anywhere in this store is holding its lock right now — asked by trying
     /// to take each lock and giving it straight back. A lock file with nobody on it is left behind
     /// by every finished install, so the *file* proves nothing; only the `flock` does.
@@ -374,8 +396,15 @@ public struct ModelDownloader: Sendable {
         guard let available = freeDisk(staging) else {
             throw ModelDownloadError.diskCapacityUnknown(path: staging.path)
         }
-        guard available >= needed + Self.diskMargin else {
-            throw ModelDownloadError.insufficientDisk(needed: needed + Self.diskMargin, available: available)
+        // **What every other install still has to fetch counts too.** Each one asked this question
+        // under its own per-model lock, so two sizes downloading at once — the app's 4B and the
+        // report's 9B — both saw the same free space, both counted the same margin, and between
+        // them could fill the volume. What is already staged is on disk and is not counted again;
+        // what those files still lack is.
+        let outstanding = store.outstandingElsewhere(excluding: staging)
+        let wanted = needed + outstanding + Self.diskMargin
+        guard available >= wanted else {
+            throw ModelDownloadError.insufficientDisk(needed: wanted, available: available)
         }
     }
 

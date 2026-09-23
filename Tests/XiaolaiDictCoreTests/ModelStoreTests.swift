@@ -378,6 +378,28 @@ struct ModelStoreTests {
                 "this pin's own staged download was deleted")
     }
 
+    /// **Two installs cannot both spend the same free space.** Each asked the disk question under
+    /// its own per-model lock, so the app downloading 4B and `--model-report` downloading 9B both
+    /// saw the same gigabytes free, both counted the same margin, and between them could fill the
+    /// volume. What another install still has to fetch is counted against this one.
+    @Test func whatAnotherInstallStillNeedsCountsAgainstThisOne() throws {
+        let store = try store()
+        let other = LocalModelSize.large.manifest
+        let staged = store.stagingDirectory(for: other)
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+        let outstandingWithNothingOnDisk = store.outstandingElsewhere(excluding: store.root)
+        #expect(outstandingWithNothingOnDisk == other.totalBytes,
+                "an install with nothing fetched yet was counted as needing nothing")
+
+        // What it has already fetched is on disk and is not counted twice.
+        let first = other.files[0]
+        try Data(count: Int(first.size)).write(to: staged.appending(path: first.path))
+        #expect(store.outstandingElsewhere(excluding: store.root) == other.totalBytes - first.size)
+
+        // And an install does not count itself.
+        #expect(store.outstandingElsewhere(excluding: staged) == 0)
+    }
+
     /// **A prune and a commit cannot interleave.** The prune decides across every model at once —
     /// enumerate, then delete — and an install that commits in between has its new model read as a
     /// stray by a decision taken before it existed. Both take one store-wide lock.
