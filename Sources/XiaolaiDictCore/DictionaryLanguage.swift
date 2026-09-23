@@ -56,11 +56,27 @@ public struct DictionaryLanguages: Codable, Sendable, Equatable, Hashable {
 
 /// Which writing systems a dictionary actually answers in, measured rather than declared.
 ///
-/// **Six of the seven dictionaries enabled on the development Mac declare no language at all** —
-/// `DCSDictionaryLanguages` is absent from every sideloaded conversion, measured 2026-09-22 across
-/// Cambridge, Collins COBUILD, both Longmans, Merriam-Webster and Oxford Collocation. So metadata
-/// alone leaves most of a reader's list unclassified, while what a dictionary *answers* is a fact
-/// about it that no bundle can omit.
+/// **No sideloaded conversion declares a language at all** — `DCSDictionaryLanguages` is absent
+/// from all six installed on the development Mac, measured 2026-09-22 across Cambridge, Collins
+/// COBUILD, both Longmans, Merriam-Webster and Oxford Collocation; three of those six are among
+/// the seven enabled. Apple's own assets do declare — the bridge's
+/// `appleAssetsDeclareTheirLanguagesAndSideloadedOnesDoNot` reads NOAD's and 牛津英汉汉英's off the
+/// live bundles. So metadata alone leaves part of a reader's list unclassified, while what a
+/// dictionary *answers* is a fact about it that no bundle can omit.
+///
+/// The count above is the *installed* sideloaded one. Among the **seven enabled**, the number that
+/// declare nothing is **three, and they are the same three that are sideloaded** — measured
+/// 2026-09-24 by reading `DCSDictionaryLanguages` out of each of the seven bundles named in
+/// `AGENTS.md`: all four Apple assets declare (NOAD and the Writer's Thesaurus `en_US`,
+/// 牛津英汉汉英 `zh_CN` and `zh_CN`→`en`, 譯典通 `zh_TW` and `zh_TW`→`en`), and none of Collins
+/// COBUILD, Longman or Oxford Collocation does.
+///
+/// **"Six of the seven declare no language" stood here and in three other files, and was false**:
+/// it was the installed sideloaded six wearing the enabled seven's denominator. Both halves of the
+/// original sentence are one number on this Mac, which is exactly why they were easy to conflate —
+/// but the way to tell two counts apart is to measure the second one, not to assert that they
+/// differ. The bridge's `appleAssetsDeclareTheirLanguagesAndSideloadedOnesDoNot` was already
+/// enough to refute "six", since it requires two Apple assets to declare.
 ///
 /// Han and kana are probed separately because together they are Japanese and han alone is Chinese.
 /// That distinction is the only reason to ask two questions instead of one.

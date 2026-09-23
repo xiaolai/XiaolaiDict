@@ -241,12 +241,15 @@ public struct SetupView: View {
                      study from — changing it later starts your study over.
                      """)
             case .nothingSuitable:
-                // **"None declares it" is not "you have none".** Six of the seven dictionaries on
-                // the development Mac are sideloaded conversions that declare no language at all,
-                // so the rule cannot propose one — a records probe says what a dictionary indexes
-                // and never what it explains in. Telling a reader with Longman and Collins enabled
-                // that they have no English dictionary would be false, and this is the row where
-                // the probe's answer finally earns its keep.
+                // **"None declares it" is not "you have none".** Three of the seven dictionaries
+                // enabled on the development Mac declare no language at all, so the rule cannot
+                // classify them: a records probe says what a dictionary indexes and never what it
+                // explains in. The three are exactly the three sideloaded conversions — measured
+                // 2026-09-24 by reading `DCSDictionaryLanguages` out of all seven bundles, where
+                // every Apple asset declares and no sideloaded one does. One number, not two.
+                // Telling a reader with Longman and Collins enabled that they have no English
+                // dictionary would be false, and this is the row where the probe's answer finally
+                // earns its keep.
                 if board.undeclaredEnglishDictionaries.isEmpty {
                     // No promise of automatic detection: nothing watches Dictionary.app, and
                     // "this will notice" would have the reader waiting for something that never

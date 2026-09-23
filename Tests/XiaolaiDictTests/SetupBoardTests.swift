@@ -172,10 +172,17 @@ struct SetupBoardTests {
         #expect(!unknown.isComplete, "the board claimed completeness while it knew nothing about the model")
     }
 
-    /// **"None declares it" is not "you have none."** Six of the seven dictionaries on the
-    /// development Mac declare no language, so the rule cannot propose one — but telling a reader
-    /// with Longman enabled that they have no English dictionary would be false. This is the
-    /// consumer the script probe was missing.
+    /// **"None declares it" is not "you have none."** Three of the seven dictionaries enabled on
+    /// the development Mac declare no language, so the rule cannot classify them — but telling a
+    /// reader with Longman enabled that they have no English dictionary would be false. This is
+    /// the consumer the script probe was missing.
+    ///
+    /// **The declares-nothing three and the sideloaded three are the same three**, measured
+    /// 2026-09-24 from all seven bundles' `DCSDictionaryLanguages`: every Apple asset declares,
+    /// no sideloaded conversion does. Two earlier readings of this had them as different counts
+    /// — "six declare nothing, three are sideloaded" — which was the *installed* sideloaded six
+    /// wearing the enabled seven's denominator. The fixture below does not depend on the number:
+    /// it is a language claim tested through the rule, and `languages: []` is what carries it.
     @Test func aDictionaryThatDeclaresNothingIsStillCountedAsIndexingEnglish() {
         let longman = DictionaryCapability(
             identity: DictionaryIdentity(name: "Longman"), senseKeyKind: .position, probed: true,

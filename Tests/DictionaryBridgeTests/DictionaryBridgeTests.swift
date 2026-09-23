@@ -408,7 +408,12 @@ struct DictionaryCapabilityTests {
 
     /// A bundle that declares nothing is still classified, by what it answers.
     ///
-    /// This is the signal that covers six of the seven dictionaries here. The second assertion is
+    /// This is the signal that covers any dictionary declaring nothing. On this Mac that is
+    /// exactly the three sideloaded conversions of the seven enabled: measured 2026-09-24, all
+    /// four Apple assets declare and no sideloaded one does. The signal is not written for that
+    /// coincidence — an Apple asset declaring nothing would fall to it too — but nothing here
+    /// currently exercises that case, so the three are the whole of what this covers today.
+    /// The second assertion is
     /// the one that catches a broken probe: `DCSCopyRecordsForSearchString` matches fuzzily, so
     /// without comparing headwords an English-only dictionary answers 水 too and every dictionary
     /// reports every script.

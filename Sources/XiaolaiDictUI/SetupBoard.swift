@@ -102,11 +102,13 @@ public struct SetupBoard: Equatable, Sendable {
     /// Dictionaries that declare no language but were **measured** to index English.
     ///
     /// This is what the script probe is for, and until now nothing read it. A sideloaded
-    /// conversion declares nothing — six of the seven on the development Mac — so the rule in
-    /// `StudyDictionaryProposal` cannot propose one: a records probe says what a dictionary indexes
-    /// and never what it explains in. But "none declares it" and "you have none" are different
-    /// sentences, and telling a reader with Longman and Collins enabled that they have no English
-    /// dictionary is simply false.
+    /// conversion declares nothing and every Apple asset does — **three of the seven enabled on
+    /// the development Mac declare no language, and they are the same three that are sideloaded**,
+    /// measured 2026-09-24 by reading `DCSDictionaryLanguages` out of all seven bundles — so the
+    /// rule in `StudyDictionaryProposal` cannot classify them: a records probe says what a
+    /// dictionary indexes and never what it explains in. But "none declares it" and "you have
+    /// none" are different sentences, and telling a reader with Longman and Collins enabled that
+    /// they have no English dictionary is simply false.
     public var undeclaredEnglishDictionaries: [DictionaryCapability] {
         (available ?? []).filter { $0.languages.isEmpty && $0.indexes.contains(.latin) }
     }
