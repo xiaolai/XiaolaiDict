@@ -87,6 +87,8 @@ public struct SettingsView: View {
     /// Opens the setup board. The board is reachable from the menu too; this is the other way in,
     /// for a reader already in Settings wondering whether anything is missing.
     private var openSetup: (() -> Void)?
+    /// The local model's licence, downloaded with its weights — nil until there is a model.
+    private var modelLicence: URL?
 
     /// Stands in for the app's policy in a preview, so the hover pane is live rather than inert
     /// wherever it is looked at. In the app the binding is passed in and this is never read.
@@ -99,7 +101,7 @@ public struct SettingsView: View {
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
         hover: Binding<HoverPolicy>? = nil, dictionary: DictionaryChoice? = nil,
-        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil
+        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil, modelLicence: URL? = nil
     ) {
         _model = State(initialValue: model)
         self.appearance = appearance
@@ -107,6 +109,7 @@ public struct SettingsView: View {
         self.dictionary = dictionary
         self.shortcut = shortcut
         self.openSetup = openSetup
+        self.modelLicence = modelLicence
     }
 
     public var body: some View {
@@ -234,7 +237,9 @@ public struct SettingsView: View {
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
-        case .about: AboutPane(release: AppRelease(Bundle.main))
+        case .about:
+            AboutPane(release: AppRelease(Bundle.main), modelLicence: modelLicence,
+                      notices: Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt"))
         }
     }
 }

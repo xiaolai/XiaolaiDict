@@ -4,7 +4,6 @@ import Carbon.HIToolbox
 @testable import XiaolaiDictUI
 import XiaolaiDictCore
 import Testing
-import WebKit
 
 struct PanelPlacementTests {
     private let screen = UpRect(x: 0, y: 0, width: 1_440, height: 900)
@@ -81,20 +80,62 @@ struct EscapeKeyTests {
     }
 }
 
-struct EntryNavigationTests {
-    private let document = EntryNavigationPolicy.documentURL
 
-    /// Only XiaolaiDict's own load of the document, in the main frame, and only while it is expected.
-    @Test func onlyTheExpectedLoadIsAllowed() {
-        #expect(EntryNavigationPolicy.allows(url: document, isMainFrame: true, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: document, isMainFrame: true, expectingLoad: false))
-        #expect(!EntryNavigationPolicy.allows(url: document, isMainFrame: false, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: URL(string: "https://example.com/"), isMainFrame: true, expectingLoad: true))
-        #expect(!EntryNavigationPolicy.allows(url: URL(string: "x-dictionary:r:run"), isMainFrame: true, expectingLoad: true))
+/// **A card carries the lookup it is, and a tap belongs to that one.** The panel's own counter
+/// moves when the *next* lookup starts — before its selection has been read, let alone drawn — so a
+/// tap on the card still in front of the reader was being attributed to a lookup that had not
+/// happened, and the ledger hung the sense off the wrong word.
+@MainActor
+struct PanelRequestIdentityTests {
+    @Test func theContentKnowsWhichLookupItIs() {
+        let presentation = LookupPresentation(
+            request: 7, term: "hold", lemma: Lemma(text: "hold", basis: .tagger), source: nil,
+            capture: .accessibility(.accessibilityTextRange, context: .complete))
+        #expect(PanelContent.lookup(presentation).request == 7)
+        // A message is not a lookup, so there is nothing for a tap to belong to.
+        #expect(PanelContent.message(title: "no selection", detail: "…").request == nil)
     }
 
-    /// The resource blocker must compile, or every entry would be refused its display.
-    @Test @MainActor func theResourceBlockerCompiles() async throws {
-        _ = try await EntryContentRules.compiled()
+    /// The wire, read at its call site: nothing else can see which value the closure passes.
+    @Test func theTapIsGivenTheCardsRequestAndNotTheCounter() throws {
+        let panel = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDict/LookupPanel.swift")
+        let text = try String(contentsOf: panel, encoding: .utf8)
+        #expect(!text.isEmpty)
+        #expect(text.contains("guard let request = content.request else { return }"))
+        #expect(!text.contains("controller.currentRequest"),
+                "a tap is attributed to whatever lookup the panel has moved on to")
+    }
+}
+
+/// **One resize watch per panel, however many times its view is updated.** The window accessor's
+/// closure runs on every update of the view it is attached to, and the panel's body reads the
+/// model download's progress — so a 3 GB download registered a fresh observer a few hundred times,
+/// each one outliving its window and firing for every resize afterwards.
+///
+/// What this can see is that one token is held and replaced. That the old one was *removed* is the
+/// line beside it; no API reports what a notification centre is observing.
+@MainActor
+struct PanelResizeWatchTests {
+    @Test func watchingAgainReplacesTheWatchRatherThanAddingOne() {
+        let panel = LookupPanelController()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: true)
+        #expect(panel.resizeObserver == nil)
+        panel.watchForResize(of: window)
+        let first = try? #require(panel.resizeObserver)
+        panel.watchForResize(of: window)
+        let second = try? #require(panel.resizeObserver)
+        #expect(first !== second, "the panel kept watching through its previous observer as well")
+
+        // And the watch ends with the panel: registered still, it holds a closed window alive and
+        // waits for a resize that cannot come.
+        panel.show(
+            .message(title: "anything", detail: "so that closing it is a real close"),
+            near: UpPoint(.zero), for: panel.newRequest())
+        panel.closed()
+        #expect(panel.resizeObserver == nil, "the panel went on watching a window that had closed")
     }
 }

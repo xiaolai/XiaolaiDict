@@ -72,13 +72,27 @@ public enum Speech {
         for language: String, among voices: [AVSpeechSynthesisVoice]
     ) -> String? {
         guard let voice = bestVoice(for: language, among: voices) else {
-            return "No voice is installed for this language."
+            return String(localized: "No voice is installed for this language.")
         }
         guard voice.quality == .default else { return nil }
-        return """
+        return String(localized: """
             Only a compact voice is installed for this language. Better ones are a free download in \
             System Settings → Accessibility → Spoken Content.
-            """
+            """)
+    }
+
+    /// The caveat for the text that would be spoken, found the way `say` finds its voice.
+    ///
+    /// **Restored 2026-09-23, having stopped reaching the reader when the card replaced the
+    /// panel.** The old panel asked for this; the card had no caller, so the whole thing — the
+    /// memoisation measured at 43 ms a call, the wording, its tests — sat unreachable under a green
+    /// suite, which is the failure class this project has recorded twice. It rides on the speak
+    /// button's own help text: that is where the reader already is when the voice matters, and it
+    /// costs no layout. Nil where there is nothing worth saying.
+    public static func caveat(forSpeaking text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return caveat(for: Lemmatizer.language(of: trimmed, in: nil) ?? "en")
     }
 
     /// Says `text` in the language it appears to be in. Silence is reported to the log rather than

@@ -90,8 +90,32 @@ struct LedgerSchema4Tests {
         #expect(met.first?.gloss == "the reader's own")
     }
 
-    @Test func theSchemaIsFive() {
-        #expect(Ledger.schemaVersion == 5)
+    @Test func theSchemaIsSix() {
+        #expect(Ledger.schemaVersion == 6)
+    }
+
+    /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads
+    /// back as a different fact from "no model here" — in the lookup's history and in the drawer.
+    @Test(arguments: [Abstention.refused, .unavailable, .tooClose])
+    func whyNoSenseWasMarkedIsKept(why: Abstention) throws {
+        let ledger = try Ledger(path: ":memory:")
+        let id = try ledger.record(LookupRecord(
+            surface: "charge", lemma: "charge", context: "The police will charge him with fraud.",
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            senseAbstention: why))
+        #expect(try ledger.history(of: "charge").first?.senseAbstention == why)
+        let drawn = try #require(try ledger.recentLookups(since: now.addingTimeInterval(-60), limit: 5).first)
+        #expect(drawn.id == id)
+        #expect(drawn.senseAbstention == why)
+    }
+
+    /// A lookup that marked a sense records no reason, and an old row reads back as unrecorded.
+    @Test func aMarkedLookupRecordsNoReason() throws {
+        let ledger = try Ledger(path: ":memory:")
+        try ledger.record(LookupRecord(
+            surface: "hold", lemma: "hold", context: "Hold the line.", lookedUpAt: now, result: .found,
+            answeredBy: .dictionaryService, quality: nil))
+        #expect(try ledger.history(of: "hold").first?.senseAbstention == nil)
     }
 
     /// Everything captured now survives the boundary, and reads back as it went in.

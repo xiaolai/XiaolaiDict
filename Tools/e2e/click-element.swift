@@ -198,9 +198,47 @@ func waitToBeFrontmost() {
     die("\(bundleID) is not frontmost (\(front) is); a click would only bring it forward")
 }
 
+/// The scroll area a control is inside, if any — walked up from the control itself.
+func scrollArea(around element: AXUIElement) -> AXUIElement? {
+    var node = element
+    for _ in 0..<visitLimit {
+        if value(node, kAXRoleAttribute) as? String == kAXScrollAreaRole { return node }
+        guard let parent = value(node, kAXParentAttribute) else { return nil }
+        node = parent as! AXUIElement
+    }
+    return nil
+}
+
+/// **Scrolled into view before it is clicked, the way the reader would.** A grouped `Form` scrolls,
+/// so a control below the fold has a frame outside the visible area — measured 2026-09-23 on the
+/// setup board: "Not now" at y=923 against a board ending at y=800, where the hit test finds
+/// whatever is behind the board and the click is refused as covered, which read as the button not
+/// being there. `AXScrollToVisible` is not offered by these controls (their only action is
+/// `AXPress`), so the scroll area itself is paged. Bounded: a control that never comes into view
+/// falls through to the ordinary refusal, which says what covered it.
+func scrollIntoView(_ element: AXUIElement, _ rect: CGRect, called title: String) -> CGRect {
+    guard let area = scrollArea(around: element), let visible = frame(area) else { return rect }
+    var current = rect
+    for _ in 0..<8 {
+        if visible.contains(current) { return current }
+        // The names are not in the Swift overlay; they are the documented Accessibility actions.
+        let action = current.midY > visible.midY ? "AXScrollDownByPage" : "AXScrollUpByPage"
+        guard AXUIElementPerformAction(area, action as CFString) == .success else { return current }
+        usleep(150_000)
+        guard let moved = frame(element) else { return current }
+        if moved == current { return current }  // the page did not move it; nothing more to try
+        current = moved
+    }
+    return current
+}
+
 for title in wanted {
     waitToBeFrontmost()
-    let (element, rect) = target(title)
+    var (element, rect) = target(title)
+    rect = scrollIntoView(element, rect, called: title)
+    // Read again so the click lands where the control came to rest, not where the scroll left it
+    // mid-animation.
+    (element, rect) = target(title)
     let point = CGPoint(x: rect.midX, y: rect.midY)
     if let covering = cover(of: element, at: point) {
         die("\"\(title)\" is covered at (\(Int(point.x)), \(Int(point.y))) by \(covering); refusing to click it")

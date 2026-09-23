@@ -7,8 +7,8 @@
 #   e2e.sh <ssh-host> [stage...]   ship .build/XiaolaiDict.app to the host and run stages there
 #
 # With no stage names every stage runs. With them, only those — a full run costs minutes and most
-# changes touch one or two. Names: launch lookup crash accessibility selection shortcut deadline
-# hover drawer recogniser scenes.
+# changes touch one or two. The names are `KNOWN_STAGES` below, and a name that is not one of them
+# is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
 #
 # Each result is recorded in .build/e2e-status.tsv against the build it ran on. A pass is only a
 # fact about that build, so one carried over from an older build is shown as stale rather than as a
@@ -50,6 +50,42 @@ awk -v dir="$heredocs" '
     inside && /^SH$/ { inside = 0; close(file); next }
     inside { print > file }
 ' "$SELF"
+# **And the Python inside the remote scripts is compiled, for the same reason.** A syntax error in
+# a `python3 -c '…'` block is invisible to `bash -n` and to the parse above — the shell sees a
+# string — so the far machine finds it ten minutes into a run, after the report it was meant to
+# judge has already been produced. Measured 2026-09-23: an f-string whose escaped quotes were valid
+# shell and not valid Python, in the check that reads the translation.
+python3 - "$SELF" <<'GUARD' || fail "the inline Python in this script does not compile"
+import ast
+import sys
+
+# A block opens with a line ending `python3 -c '` and closes at the next apostrophe, which cannot
+# appear inside it: the body is a single-quoted shell string, so an apostrophe would end it there
+# too. That is what makes the extraction exact rather than a guess at the shape of the closing line.
+lines = open(sys.argv[1]).read().split("\n")
+blocks, current = [], None
+for line in lines:
+    if current is None:
+        if line.rstrip().endswith("python3 -c '"):
+            current = []
+    elif "'" in line:
+        current.append(line[:line.index("'")])
+        blocks.append("\n".join(current))
+        current = None
+    else:
+        current.append(line)
+if current is not None:
+    sys.exit("a python3 -c block is never closed")
+if not blocks:
+    sys.exit("no inline Python was found, so this check has stopped covering anything")
+for block in blocks:
+    try:
+        ast.parse(block)
+    except SyntaxError as error:
+        sys.exit(f"line {error.lineno} of a python3 -c block: {error.msg}\n    {(error.text or '').rstrip()}")
+print(f"{len(blocks)} inline Python block(s) compile")
+GUARD
+
 checked=0
 for script in "$heredocs"/remote-*.sh; do
     [ -f "$script" ] || continue
@@ -87,7 +123,8 @@ pids() {  # processes started from exactly this executable path
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
     while read -r pid exe; do [ "$exe" != "$1" ] || echo "$pid"; done <<<"$table"
 }
-for exe in "$app/Contents/MacOS/XiaolaiDict" "$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService"; do
+for exe in "$app/Contents/MacOS/XiaolaiDict" "$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService" \
+           "$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"; do
     running=$(pids "$exe" | tr '\n' ' ')
     [ -z "$running" ] || kill -TERM $running
     for _ in $(seq 1 50); do [ -n "$(pids "$exe")" ] || continue 2; sleep 0.1; done
@@ -102,7 +139,7 @@ rm -rf .build/e2e && mkdir -p .build/e2e
 for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
-cp Tools/e2e/notes.txt Tools/e2e/page.html .build/e2e/
+cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -128,6 +165,19 @@ failures=0
 # them again, so a quoted "a b c" arrives as three separate arguments. Reading only $2 ran the
 # first stage named and silently skipped the rest.
 WANTED=("${@:2}")
+# **Every stage named has to exist.** A typo ran no stage at all, printed "all stages passed", and
+# exited 0 — a green mark for a run that tested nothing, which is the one thing this file is written
+# to make impossible. This is the only list of the names; the header points at it rather than
+# naming them again, because two lists of one thing are one list nobody keeps.
+KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes model)
+for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
+    found=""
+    for known in "${KNOWN_STAGES[@]}"; do [ "$wanted" = "$known" ] && { found=yes; break; }; done
+    [ -n "$found" ] || {
+        echo "no stage called '$wanted'; the stages are: ${KNOWN_STAGES[*]}" >&2
+        exit 2
+    }
+done
 STAGE=""
 want() {  # want <name>: is this stage wanted? Also names it, for the result lines.
     STAGE=$1
@@ -166,8 +216,51 @@ on_exit() {
         echo "FAIL  ${STAGE:-setup}: the script stopped at line ${died_at:-?} before the stage finished"
         printf "RESULT\t%s\tfail\n" "${STAGE:-setup}"
     fi
+    # **The status is settled here, last.** The trap runs *after* the script's own exit line, so a
+    # cleanup that failed — a setting this run could not put back — was printed in the table and
+    # then exited 0 over the top of it. `exit` inside an EXIT trap replaces the status and does not
+    # re-enter the trap.
+    [ "$failures" -eq 0 ] || exit 1
 }
 trap on_exit EXIT
+
+# restore_default <key> <had> <value> [type-flag]: puts a setting back the way this run found it.
+#
+# **`defaults write` prints a page of usage and still exits 0** when the value is empty — measured
+# 2026-09-23 with `-bool ""`, which is how a restore with nothing to restore dumped that page into
+# a run that had just reported every stage green, with nothing to say which setting it was. So an
+# empty value deletes the key instead, and **what was written is read back**: an exit code that is
+# 0 either way is not evidence that the reader got their setting back.
+restore_default() {
+    local key=$1 had=$2 wanted=$3 flag=${4:-} value=$3 now
+    if [ "$had" != yes ] || [ -z "$wanted" ]; then
+        defaults delete com.xiaolaidict "$key" 2>/dev/null || true
+        return 0
+    fi
+    # **`defaults read` prints a boolean as 1, and `defaults write -bool` does not accept 1.** Its
+    # grammar is `true | false | yes | no`; given `1` it prints its usage, writes nothing, and exits
+    # **0**. So the reader's setup flag was never actually put back by any run, and the only reason
+    # the machine looked right afterwards is that the app writes that flag itself.
+    if [ "$flag" = -bool ]; then
+        case $value in 1|true|yes) value=true ;; 0|false|no) value=false ;; esac
+    fi
+    if [ -n "$flag" ]; then
+        defaults write com.xiaolaidict "$key" "$flag" "$value"
+    else
+        defaults write com.xiaolaidict "$key" "$value"
+    fi
+    # Compared against what was *read*, not what was written: a boolean goes in as `true` and comes
+    # back as `1`, and comparing the written form would call a correct restore a failure.
+    now=$(defaults read com.xiaolaidict "$key" 2>/dev/null || echo "")
+    if [ "$now" != "$wanted" ]; then
+        # **A run that changed the reader's settings and could not change them back is not a run
+        # that passed.** Printed and swallowed, this left the machine altered under a green mark,
+        # and the next run then measured the setting this one forced.
+        echo "FAIL  cleanup: $key was not put back — wanted '$wanted', found '$now'"
+        failures=$((failures + 1))
+        printf "RESULT\tcleanup\tfail\n"
+    fi
+}
 
 pids() {
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
@@ -215,6 +308,17 @@ select_then_read() {
 helpers="$HOME/$1/e2e"
 ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
 
+# Where this run's reports are written. **Its own directory, made fresh and readable only by this
+# user**: the fixed `/tmp/xiaolaidict-<name>.json` names they replaced are in a world-writable
+# sticky directory, opened with `>` and `open --stdout`, both of which follow a symlink — so anyone
+# on the machine could choose what those writes landed on, and two runs at once clobbered each
+# other. The backdrop captures keep their fixed names: the bundle writes those, and they are kept
+# on purpose for looking at afterwards.
+reports=$(mktemp -d /tmp/xiaolaidict-e2e.XXXXXX) || { echo "could not make a reports directory" >&2; exit 1; }
+chmod 700 "$reports"
+drop_reports() { rm -rf "$reports"; }
+at_exit drop_reports
+
 newest_row_id() { sqlite3 -readonly "$ledger" "select coalesce(max(id), 0) from lookups" 2>/dev/null || echo 0; }
 # Rows for one lookup: newer than id $1, of the word $2, read in the app $3. Both halves narrow it
 # — the ledger holds other lookups of the same word from earlier runs and other stages, and the
@@ -251,9 +355,40 @@ row_after() {
 # whose own deadlines allow nearly 100: three captures of 30 s each, plus settling, appearing and
 # closing. A report past the harness's patience was declared silent and left running — still able
 # to capture the screen during whatever stage came next.
+# run_bounded <flag> <out> <seconds> <label>: runs an in-bundle report directly — no window, so no
+# LaunchServices — and gives up on it at the deadline. Its stderr goes to the terminal as well as to
+# a file, so a download that takes half an hour is visible while it runs rather than afterwards.
+# Answers with the report's own exit status, and fails the stage on a non-zero one. Both of the
+# model stage's reports go through it: each had grown its own copy of the waiting, and one of them
+# had none at all.
+#
+# **The exit status is the report's verdict, and throwing it away made every finished run a pass.**
+# An instrument that writes plausible JSON and then exits non-zero — one that measured a service it
+# could not reach, or a rung that never answered — was recorded as having passed, because the only
+# thing looked at afterwards was whether some keys could be read out of its output.
+run_bounded() {
+    local flag=$1 out=$2 budget=$3 label=$4
+    : > "$out"
+    "$exe" "$flag" >"$out" 2> >(tee "$reports/${label}.err" >&2) &
+    local pid=$! waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$budget" ]; do sleep 1; waited=$((waited + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        flunk "model: $flag did not finish within $((budget / 60)) minutes"
+        return 1
+    fi
+    local status=0
+    wait "$pid" || status=$?
+    if [ "$status" -ne 0 ]; then
+        flunk "model: $flag exited $status"
+    fi
+    return "$status"
+}
+
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
     local flag=$1 budget=$2 name=${1#--}
-    local out="/tmp/xiaolaidict-$name.json" err="/tmp/xiaolaidict-$name.err"
+    local out="$reports/$name.json" err="$reports/$name.err"
     rm -f "$out" "$err"
     open -n --stdout "$out" --stderr "$err" "$app" --args "$flag"
     local waited=0
@@ -286,11 +421,7 @@ else
     setup_shown_original=""
 fi
 restore_setup_shown() {
-    if [ "$setup_shown_had" = yes ]; then
-        defaults write com.xiaolaidict SetupWindowShown -bool "$setup_shown_original"
-    else
-        defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
-    fi
+    restore_default SetupWindowShown "$setup_shown_had" "$setup_shown_original" -bool
 }
 at_exit restore_setup_shown
 
@@ -311,6 +442,20 @@ fi
 # locked screen is refused here, in one line, rather than reported as a list of XiaolaiDict's defects.
 if ! lock_state=$("$helpers/screen-state" 2>&1); then
     echo "FAIL  setup: the screen is ${lock_state:-locked} — unlock the test Mac and run again; nothing below would be testing XiaolaiDict"
+    exit 1
+fi
+
+# **And a system alert nobody answered voids every click the same way.** `click-element` refuses a
+# control something is covering, which is right — a click posted through an alert goes to the
+# alert — but the refusal then reads as the control not existing. Measured 2026-09-23: an
+# unanswered "Allow …to find devices on local networks?" had been sitting at (734, 222) since
+# 2026-09-20, over the settings window's tab strip, and two stages failed as though the app were at
+# fault. Refused here, in one line, with what the alert says, because answering it is a decision
+# for whoever owns the machine.
+alert_windows=$("$helpers/on-screen" com.apple.UserNotificationCenter 2>/dev/null || true)
+if printf '%s' "$alert_windows" | grep -q '"windows":\[{'; then
+    alert_text=$("$helpers/panel" com.apple.UserNotificationCenter 2>/dev/null | head -c 300 || true)
+    echo "FAIL  setup: a system alert is on the test Mac's screen and would swallow the clicks below — answer it and run again: $alert_text"
     exit 1
 fi
 
@@ -619,10 +764,7 @@ else
     had_glass=no
     original_glass=""
 fi
-restore_glass() {
-    if [ "$had_glass" = yes ]; then defaults write com.xiaolaidict DrawerGlass "$original_glass"
-    else defaults delete com.xiaolaidict DrawerGlass 2>/dev/null || true; fi
-}
+restore_glass() { restore_default DrawerGlass "$had_glass" "$original_glass"; }
 at_exit restore_glass
 # The stripes image, kept beside the report under the glass it was taken in. Missing is a note, not
 # an abort: an unguarded copy under `set -e` ended the whole run when a capture failed, before its
@@ -644,7 +786,7 @@ defaults write com.xiaolaidict DrawerGlass frosted
 drawer=$(history_report)
 keep_stripes frosted
 if ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
-    flunk "drawer: --history-report did not report ($(head -c 160 /tmp/xiaolaidict-history-report.err 2>/dev/null))"
+    flunk "drawer: --history-report did not report ($(head -c 160 $reports/history-report.err 2>/dev/null))"
 else
     if why=$(expect "$drawer" insideBundle=True appeared=True activatedTheApp=False \
                     claimedEscapeWhileShown=True releasedEscapeAfterClosing=True 2>&1); then
@@ -742,7 +884,7 @@ if want recogniser; then
 #    harness and not about XiaolaiDict. `open --stdout` is what puts the instrument in the GUI session and
 #    still lets its answer be read.
 read_point() {  # read_point <x> <y>: the instrument's JSON on success, nothing on failure
-    local out=/tmp/xiaolaidict-read-point.json err=/tmp/xiaolaidict-read-point.err
+    local out="$reports/read-point.json" err="$reports/read-point.err"
     rm -f "$out" "$err"
     open -n --stdout "$out" --stderr "$err" "$app" --args --read-point "$1" "$2"
     # Polled, not slept: a cold capture pays a system-wide warm-up that a warm one does not.
@@ -760,14 +902,21 @@ else
     read -r wx wy _ _ <<<"$frame"
     # A grid, because where a terminal's text sits depends on its prompt, its font and its padding.
     reading=""
+    read_x=0
+    read_y=0
     for dy in 98 113 83 128 68 143; do
         for dx in 50 160 280; do
             got=$(read_point $((wx + dx)) $((wy + dy)))
-            if printf '%s' "$got" | grep -q opticalRecognition; then reading=$got; break 2; fi
+            if printf '%s' "$got" | grep -q opticalRecognition; then
+                reading=$got
+                read_x=$((wx + dx))
+                read_y=$((wy + dy))
+                break 2
+            fi
         done
     done
     if [ -z "$reading" ]; then
-        flunk "recogniser: no point in the Ghostty window came back through OCR; last error: $(head -c 120 /tmp/xiaolaidict-read-point.err 2>/dev/null)"
+        flunk "recogniser: no point in the Ghostty window came back through OCR; last error: $(head -c 120 "$reports/read-point.err" 2>/dev/null)"
     else
         if why=$(expect "$reading" captureSource=opticalRecognition bundleID=com.mitchellh.ghostty 2>&1); then
             word=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["text"])' "$reading")
@@ -775,14 +924,26 @@ else
         else
             flunk "recogniser: $why"
         fi
-        # Asserted warm. The first capture after boot pays a system-wide ScreenCaptureKit warm-up
-        # — measured once at 14.8 s against ~0.5 s for every read after — which is a fact about the
-        # machine, so a budget asserted on the first read would measure its state and not the code.
-        took=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
-        if [ "$took" -lt 5000 ]; then
-            pass "recogniser: the read cost ${took} ms, inside the 5 s capture deadline"
+        # **Timed on a second read of the same point**, which is what "warm" means. The first
+        # capture after boot pays a system-wide ScreenCaptureKit warm-up — measured at 14.8 s once
+        # and 24.8 s on 2026-09-23 — against ~0.5 s for every read after. This comment said
+        # "asserted warm" while the code timed the very first read, so the stage was measuring how
+        # long the machine had been up. A warm read that fails to come back is reported as that,
+        # never silently replaced by the cold one.
+        warm=$(read_point "$read_x" "$read_y")
+        cold=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
+        if ! printf '%s' "$warm" | grep -q opticalRecognition; then
+            # **Not substituted by the cold one.** Timing the first read under a "warm read cost…"
+            # line would be a PASS that says the opposite of what was measured.
+            flunk "recogniser: the same point would not read a second time, so the warm budget was not measured: $(head -c 120 "$reports/read-point.err" 2>/dev/null)"
+            took=""
         else
-            flunk "recogniser: the read took ${took} ms, past the 5 s capture deadline"
+            took=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$warm")
+        fi
+        if [ -n "$took" ] && [ "$took" -lt 5000 ]; then
+            pass "recogniser: the warm read cost ${took} ms, inside the 5 s capture deadline (first read ${cold} ms)"
+        elif [ -n "$took" ]; then
+            flunk "recogniser: the warm read took ${took} ms, past the 5 s capture deadline (first read ${cold} ms)"
         fi
     fi
 fi
@@ -847,6 +1008,30 @@ board_state() {
 # The flag was saved before the app was ever launched — see the setup section above. Saving it
 # here would record whatever the first launch wrote, which is the value this stage is about.
 
+# **The model row is measured as a fresh reader sees it.** Once this machine has run the model stage
+# once, the store holds the weights for good and the row takes its "ready" branch — so the consent
+# controls, the weaker-engine sentence and "nothing has begun downloading" stopped being measured at
+# all, silently, on every machine that had ever run the suite. The store is set aside for that check
+# and put back at the end of the stage: a rename inside one filesystem, so three gigabytes do not
+# move. It is set aside **where this stage already restarts the app**, not before the menu-driven
+# open above: a board asked for from the menu seconds after a launch did not come forward at all,
+# and the row is better read from the board a first launch opens by itself anyway — that is the
+# reader this branch is about.
+models=$HOME/Library/Application\ Support/XiaolaiDict/Models
+stashed=no
+unstash_models() {
+    [ "$stashed" = yes ] || return 0
+    rm -rf "$models"
+    mv "$models.e2e-stash" "$models" || { echo "the model store could not be put back" >&2; return 1; }
+    stashed=no
+    # Put back behind the app's back, so the app is restarted: its controller read an empty store at
+    # launch and would go on reporting one to every stage after this.
+    restart_app || { echo "XiaolaiDict did not come back after the model store was put back" >&2; return 1; }
+}
+at_exit unstash_models
+if [ -d "$models" ]; then
+    mv "$models" "$models.e2e-stash" && stashed=yes
+fi
 # Opened from the menu, the way a reader reaches it after the first launch. The app was launched
 # moments ago by the set-up above, so the menu is not driven until the launch has settled.
 settle_after_launch
@@ -901,7 +1086,7 @@ else
     # the right tool for *text* — it is only the wrong tool for "can the reader see it".
     shown=$("$helpers/panel" com.xiaolaidict)
     missing=""
-    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Sense picking"; do
+    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Translation and sense picking"; do
         printf '%s' "$shown" | grep -q "$row" || missing="$missing $row"
     done
     if [ -z "$missing" ]; then
@@ -965,6 +1150,11 @@ fi
 
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+# The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
+# model. Put back at the end of the stage, before anything that needs the weights.
+if [ -d "$models" ]; then
+    mv "$models" "$models.e2e-stash" && stashed=yes
+fi
 if ! restart_app; then
     flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
 else
@@ -975,6 +1165,65 @@ else
     else
         flunk "setup: nothing opened the board on a first launch"
     fi
+
+    # Read from the board that just opened by itself, with no model in the store.
+    shown=$("$helpers/panel" com.xiaolaidict)
+    # **The model row, read through Accessibility, and the store asked separately.** What this can
+    # see is the row's text and which controls exist — not whether a button is wired to anything,
+    # which only clicking it would show, and which the `setup` stage's own click checks do below.
+    # What must be true on a Mac where the model is not downloaded: it is still needed, the weaker
+    # engine is named, both choices are offered. That **nothing has begun downloading** is asked of
+    # the store rather than of the row, because a row that is simply slow to redraw would otherwise
+    # read as proof.
+    staging=~/Library/Application\ Support/XiaolaiDict/Models/.staging
+    if [ -d "$staging" ] && [ -n "$(find "$staging" -name '*.partial' -mmin -5 2>/dev/null)" ]; then
+        flunk "setup: something has been fetching model files in the last five minutes, unasked"
+    else
+        pass "setup: nothing had begun downloading a model"
+    fi
+    if printf '%s' "$shown" | grep -q "Translation and sense picking"; then
+        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and sense picking" || true)
+        # Every state the row can be in, named — and **a download under way is a failure here**, not
+        # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
+        # the board is first opened is the regression the rule exists to catch: it used to be one of
+        # the accepted branches, two lines under a comment promising "nothing has begun downloading".
+        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
+            pass "setup: the model row says the model is ready"
+        elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
+            flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
+        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
+            # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
+            if printf '%s' "$shown" | grep -q "Without a local model"; then
+                pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
+            else
+                flunk "setup: too little memory, and the fallback still promises a model later — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "download stopped"; then
+            # **Resume, not Download.** The button says what it does: the size a stopped download was
+            # of, finishing what is already on disk.
+            # Resume, the weaker engine named, **and a way to decline** — the row offers Not now in
+            # this state exactly as in the one below, unless the reader has already declined, and
+            # asking for only the first two let a stopped download become the one state the reader
+            # could not get out of.
+            if printf '%s' "$shown" | grep -q "Resume" && printf '%s' "$shown" | grep -q "misreads some" \
+                && { printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "still one click away"; }; then
+                pass "setup: the model row reports a stopped download, offers to resume it, names what answers meanwhile, and can still be declined"
+            else
+                flunk "setup: a stopped download with no way to resume or decline it, or with nothing named as answering meanwhile — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "misreads some" && printf '%s' "$shown" | grep -q "Download"; then
+            # Both choices, unless the reader already chose **Not now** — which the row remembers,
+            # and which takes its button away while leaving the download one click from here.
+            if printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
+                pass "setup: the model row offers the download and Not now, and names the weaker engine meanwhile"
+            else
+                flunk "setup: the model row offers a download with no way to decline it — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        else
+            flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
+        fi
+    fi
+
     # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
     # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
     # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
@@ -1004,6 +1253,54 @@ else
     else
         flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
     fi
+
+    # **And Not now is pressed.** Everything the row check above does is read text, and a button
+    # wired to nothing reads exactly like one that works. Pressed, the row must say the reader is no
+    # longer being waited on and must keep the download one click away — which is also the only way
+    # the `.declined` branch is ever reached on this machine. Download is never pressed: three
+    # gigabytes must not be fetched by a test run.
+    #
+    # **Here, and not where the row was read.** A board that opened by itself is behind whatever the
+    # reader was using — that is the point of the check above it — and `click-element` refuses a
+    # control in an app that is not frontmost. This is the first moment the board is both on the
+    # fresh-reader branch and in front.
+    if printf '%s' "$shown" | grep -q "Not now"; then
+        if declined_original=$(defaults read com.xiaolaidict LocalModelDeclined 2>/dev/null); then
+            declined_had=yes
+        else
+            declined_had=no; declined_original=""
+        fi
+        restore_declined() { restore_default LocalModelDeclined "$declined_had" "$declined_original" -bool; }
+        at_exit restore_declined
+        # **Clicked until it takes.** The check above waits for the *flag* that says the board was
+        # seen, which flips before the window has finished coming to the front — so the first click
+        # landed while Ghostty was still over the button and `click-element` refused it, correctly.
+        # Bounded, and it keeps the helper's own words: thrown away, "could not be clicked" reads as
+        # a button that is not there, whatever actually stopped the click.
+        pressed=no
+        why=""
+        for _ in $(seq 1 50); do
+            if why=$("$helpers/click-element" com.xiaolaidict "Not now" 2>&1); then pressed=yes; break; fi
+            sleep 0.2
+        done
+        if [ "$pressed" != yes ]; then
+            flunk "setup: Not now could not be clicked — $why ($(board_state))"
+        else
+            declined_shown=""
+            for _ in $(seq 1 25); do
+                declined_shown=$("$helpers/panel" com.xiaolaidict)
+                printf '%s' "$declined_shown" | grep -q "still one click away" && break
+                sleep 0.2
+            done
+            if printf '%s' "$declined_shown" | grep -q "still one click away" \
+                && printf '%s' "$declined_shown" | grep -q "Download"; then
+                pass "setup: Not now is wired — the row stops waiting on the reader and keeps the download one click away"
+            else
+                flunk "setup: Not now changed nothing the reader can see — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
+            fi
+            restore_declined
+        fi
+    fi
 fi
 
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
@@ -1030,6 +1327,9 @@ fi
 # next, and the scenes stage measures which app is frontmost. The flag itself is put back by
 # `restore_setup_shown`, registered before anything was launched.
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+# And the model store is put back here rather than at exit, because the model stage runs after this
+# one and would otherwise measure a Mac with no weights on it.
+unstash_models || flunk "setup: the model store was not put back"
 fi
 
 if want scenes; then
@@ -1048,7 +1348,7 @@ if want scenes; then
 settings_report() { run_report --settings-report 90; }
 report=$(settings_report)
 if [ -z "$report" ]; then
-    flunk "settings: --settings-report printed nothing ($(head -c 160 /tmp/xiaolaidict-settings-report.err 2>/dev/null))"
+    flunk "settings: --settings-report printed nothing ($(head -c 160 $reports/settings-report.err 2>/dev/null))"
 else
     # **One pass over the report**, where each assertion used to start Python again to read one
     # field. Emits a PASS or FAIL line per claim and DONE last: a validator that died part-way
@@ -1152,10 +1452,25 @@ else
         [ "$front" = com.xiaolaidict ] && break
         sleep 0.2
     done
+    # **And the tab is clicked until it takes, not once.** `click-element` refuses a control whose
+    # window is still moving — the settings window resizes itself to each pane — and it refuses one
+    # that something is covering. Measured 2026-09-23: a notification banner from
+    # `UserNotificationCenter` sat over the Lookup tab and the refusal read as "the pane is not
+    # there". A banner goes by itself in about five seconds, so the wait is twenty; an alert that
+    # stays is a machine that needs a person, and the failure now says which it was.
+    clicked=no
+    why=""
+    for _ in $(seq 1 100); do
+        [ "$front" = com.xiaolaidict ] || break
+        if why=$("$helpers/click-element" com.xiaolaidict Lookup 2>&1); then clicked=yes; break; fi
+        sleep 0.2
+    done
     if [ "$front" != com.xiaolaidict ]; then
         flunk "shortcut: Settings never came forward — $front is in front"
-    elif ! "$helpers/click-element" com.xiaolaidict Lookup >/dev/null 2>&1; then
-        flunk "shortcut: no Lookup pane in the settings window"
+    elif [ "$clicked" != yes ]; then
+        # **What the helper said, not just that it said no.** Thrown away, this read as "the pane is
+        # not there" for a click that was refused for some other reason entirely.
+        flunk "shortcut: could not click the Lookup pane — $why"
     else
         if [ -z "$current" ] || ! "$helpers/click-element" com.xiaolaidict "$current" >/dev/null 2>&1; then
             flunk "shortcut: nothing on the Lookup pane showing '$current' to arm"
@@ -1275,6 +1590,212 @@ for surface in "Reading History" "Settings…"; do
 done
 fi
 
+if want model; then
+# 13. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
+#     downloader, a sense answer and a translation through the model service, the service's
+#     footprint, and the service ending itself when idle — which is how the model unloads.
+#
+#     Run directly rather than through LaunchServices: nothing here captures the screen, so TCC's
+#     refusal of processes launched over SSH does not apply, and a report that runs for minutes
+#     while a download finishes is simpler to bound from here.
+model_service="$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"
+# launchd starts the service with no arguments, so its idle interval comes from the app's defaults.
+# Shortened for the run so the unload is seen inside it, and put back however the run ends.
+if idle_original=$(defaults read com.xiaolaidict ModelIdleSeconds 2>/dev/null); then idle_had=yes; else idle_had=no; idle_original=""; fi
+restore_idle() { restore_default ModelIdleSeconds "$idle_had" "$idle_original" -int; }
+at_exit restore_idle
+defaults write com.xiaolaidict ModelIdleSeconds -int 20
+# A service already running read the old interval; this run's must start fresh. Asserted, not
+# assumed: everything after this would otherwise be measuring the old process — its old interval,
+# and a model it had already loaded.
+for pid in $(pids "$model_service"); do kill -TERM "$pid" 2>/dev/null || true; done
+for _ in $(seq 1 50); do [ -z "$(pids "$model_service")" ] && break; sleep 0.1; done
+if [ -n "$(pids "$model_service")" ]; then
+    flunk "model: a model service from before the stage would not quit; every check below would measure it"
+else
+
+status=$("$exe" --model-status 2>/dev/null || true)
+if printf '%s' "$status" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("gpu") else 1)' 2>/dev/null; then
+    pass "model: the signed service evaluates an MLX op on the GPU ($(printf '%s' "$status" | sed -n 's/.*"gpu":"\([^"]*\)".*/\1/p'))"
+else
+    flunk "model: the service cannot run MLX — $status"
+fi
+
+# **A service that dies takes nothing with it** — the reason MLX lives in a process of its own, and
+# a claim nothing had ever exercised. Killed outright while the reader's app is running: the app
+# must still be there afterwards, and the next question must be answered by a service launchd
+# brought back. Killing it *after* a question, so there is a loaded model to lose.
+# The service has to be *the app's*, and the app only has one once it has asked the model
+# something — launchd ends a service when its client exits, so the short-lived `--model-status`
+# process above took its own service with it. A lookup through the reader's own path is what gives
+# the app a live service: the panel prewarms the model beside the dictionary lookup.
+app_pid_before=$(pids "$exe" | head -1)
+ledger_before=$(newest_row_id)
+open -a TextEdit "$helpers/notes.txt"; sleep 1.5
+lookup_driven=no
+if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+    "$helpers/keys" 2 control option
+    for _ in $(seq 1 100); do [ -n "$(pids "$model_service")" ] && break; sleep 0.1; done
+    "$helpers/keys" 53 2>/dev/null || true
+    lookup_driven=yes
+else
+    echo "model: could not drive a lookup to wake the service ($why)"
+fi
+
+# **What the reader's own lookup left behind.** Everything else in this stage asks an in-bundle
+# instrument — `--model-report`, `--sense-report` — and an instrument answering says nothing about
+# the panel the reader actually uses: the whole production path could be disconnected and every
+# check here would still pass. This is the one assertion in the stage that reads the ledger a real
+# keypress wrote. The sense is written on a later await than the panel, so the row is waited for.
+if [ "$lookup_driven" = yes ]; then
+    waited=$(row_after "$ledger_before" meeting com.apple.TextEdit)
+    lookup_id=$(row_id_of "$ledger_before" meeting com.apple.TextEdit)
+    if [ "${lookup_id:-0}" -eq 0 ]; then
+        flunk "model: the lookup wrote no ledger row (waited ${waited}s)"
+    else
+        chosen=$(sqlite3 -readonly "$ledger" "select coalesce(chosen_by, '') from sense_encounters where lookup_id = $lookup_id" 2>/dev/null || echo "")
+        abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $lookup_id" 2>/dev/null || echo "")
+        # Any of `model`, `reader` or `onlySense` is the sense path having answered; which one it
+        # was is reported rather than demanded, because an entry with a single sense is keyed
+        # without asking a model at all and that is not a failure.
+        if [ -n "$chosen" ]; then
+            pass "model: the reader's own lookup reached the ledger with a sense (chosen_by=$chosen, ${waited}s)"
+        elif [ -n "$abstained" ]; then
+            # A sense nothing could key is a legitimate answer — but it has to be recorded as one.
+            # What must never happen is a lookup that recorded neither.
+            pass "model: the reader's own lookup recorded why no sense was marked ($abstained)"
+        else
+            flunk "model: the lookup recorded neither a chosen sense nor an abstention — the selector's answer never reached the ledger"
+        fi
+    fi
+fi
+service_pids=$(pids "$model_service")
+if [ -z "$app_pid_before" ]; then
+    flunk "model: the app is not running, so crash isolation cannot be observed"
+elif [ -z "$service_pids" ]; then
+    flunk "model: no model service to kill, so crash isolation was not exercised"
+else
+    for pid in $service_pids; do kill -9 "$pid" 2>/dev/null || true; done
+    for _ in $(seq 1 50); do [ -z "$(pids "$model_service")" ] && break; sleep 0.1; done
+    sleep 1
+    app_pid_after=$(pids "$exe" | head -1)
+    if [ "$app_pid_after" = "$app_pid_before" ]; then
+        pass "model: the app survived its model service being killed (pid $app_pid_before)"
+    else
+        flunk "model: the app went with its model service — was $app_pid_before, now ${app_pid_after:-gone}"
+    fi
+    again=$("$exe" --model-status 2>/dev/null || true)
+    if printf '%s' "$again" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("reachable") and d.get("gpu") else 1)' 2>/dev/null; then
+        pass "model: a fresh service answered after the kill"
+    else
+        flunk "model: nothing came back after the service was killed — $again"
+    fi
+fi
+
+# Bounded at 40 minutes: a first run downloads 3 GB, measured at ~10 MB/s from this network.
+report_out=$reports/model-report.json
+run_bounded --model-report "$report_out" 2400 model-report || true
+report=$(cat "$report_out" 2>/dev/null || true)
+echo "model report: $report"
+if why=$(expect "$report" installed=True sense=2 loaded=True prewarmed=True relaunched=True 2>&1); then
+    pass "model: downloaded or found whole, a sense answer (2 of 3, the cargo space) and a translation through the service"
+else
+    flunk "model: $why"
+fi
+# **Answered in the language asked for, not merely answered.** Any non-empty string passed, so
+# untranslated English would have read as a translation into Chinese — which is exactly the failure
+# `TranslationCheck` exists for, and the reason the pane would have shown a fallback for it.
+if why=$(printf '%s' "$report" | python3 -c '
+import json, sys, unicodedata
+d = json.load(sys.stdin)
+text = d.get("translation")
+if not text: sys.exit("no translation came back")
+han = sum(1 for ch in text if "CJK" in unicodedata.name(ch, ""))
+if han < 4: sys.exit(f"the translation into zh-Hans holds {han} Chinese characters: {text[:60]}")
+# **And the sense it was told is the sense it rendered.** Telling the model which sense the reader
+# met is what sharpened 船舱 to 货舱 in every measured run; a translation that reads "hold" as the
+# verb carries neither, and it is Chinese either way, so the language check above cannot see it.
+told = d.get("translationToldSense")
+if "舱" not in text:
+    sys.exit(f"the translation does not render the cargo sense it was told ({told}): {text[:60]}")
+' 2>&1); then
+    pass "model: the sentence came back translated: $(printf '%s' "$report" | sed -n 's/.*"translation":"\([^"]*\)".*/\1/p')"
+else
+    flunk "model: $why"
+fi
+# The sentence pane asks this model too — and it is the only engine a reader without Apple
+# Intelligence has for it, so "the model answers" has to include this one.
+# Explained, not echoed: the sentence handed back is not an explanation of it, and it is long
+# enough to be two or three sentences rather than a word.
+if why=$(printf '%s' "$report" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+text = (d.get("explanation") or "").strip()
+if not text: sys.exit("no explanation came back")
+if len(text) < 40: sys.exit(f"the explanation is {len(text)} characters: {text}")
+sentence = d.get("sentence")
+if not sentence: sys.exit("the report carries no sentence, so the echo check cannot fail")
+if text.lower() in sentence.lower(): sys.exit("the explanation is the sentence handed back")
+if "hold" not in text.lower(): sys.exit(f"the explanation never names the word: {text[:60]}")
+' 2>&1); then
+    pass "model: the sentence came back explained ($(printf '%s' "$report" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["explanation"]))' 2>/dev/null) characters)"
+else
+    flunk "model: $why ($(printf '%s' "$report" | sed -n 's/.*"explanationFailure":"\([^"]*\)".*/\1/p'))"
+fi
+footprint=$(printf '%s' "$report" | sed -n 's/.*"footprintMB":\([0-9]*\).*/\1/p')
+# **Both bounds.** A service holding a 4B model and answering is gigabytes, so a few megabytes means
+# nothing was loaded — and a lower bound alone passes a service that has leaked its way to twelve.
+# The upper one is the measured peak this project sizes against (3,585 MB for 4B) with room for the
+# process itself; past that, admission decisions made from those peaks are about the wrong number.
+if [ -z "$footprint" ]; then
+    flunk "model: the service reported no footprint"
+elif [ "$footprint" -le 1000 ]; then
+    flunk "model: the service's footprint is ${footprint} MB — the model is not loaded"
+elif [ "$footprint" -gt 4500 ]; then
+    flunk "model: the service holds ${footprint} MB against a measured peak of 3,585 MB for this size"
+else
+    pass "model: the service holds the model — ${footprint} MB"
+fi
+
+# The labelled set, every rung, in this bundle — the measurement that decides the ladder's order.
+# Bounded: its Apple rung calls the on-device model directly, and a stalled one would hang the whole
+# run with no result and no cleanup.
+sense_out="$reports/sense-report.json"
+run_bounded --sense-report "$sense_out" 600 sense-report || true
+senses=$(cat "$sense_out" 2>/dev/null || true)
+echo "sense report: $senses"
+# **The judgement is a file, not a heredoc.** It decides whether this build's ladder ships, and the
+# report it reads takes ten minutes to produce — so it is exercised against reports built by hand
+# (`Tools/tests/test_ladder_gate.py`, run by `make test-tools`) rather than only by the run it gates.
+if verdict=$(python3 "$helpers/ladder-gate.py" "$sense_out" 2>&1); then
+    pass "model: the shipped ladder runs the local model first, and the labelled set backs it ($verdict)"
+else
+    flunk "model: the labelled set does not back the shipped ladder — $verdict"
+fi
+
+# **Which model answered.** The report used to name none, so a 2B run and a 4B run produced
+# indistinguishable output — and the order this project records was read off one of them. That
+# order belongs to Qwen3.5-4B, the size the catalogue calls standard; a run scored with any other
+# size measured a different ladder and must not be read as confirming it.
+measured_size=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("modelSize") or "none")' "$sense_out" 2>/dev/null || echo none)
+if [ "$measured_size" = standard ]; then
+    pass "model: the labelled set was scored with Qwen3.5-4B, the size the recorded order belongs to"
+else
+    flunk "model: the recorded order belongs to Qwen3.5-4B (standard); this run scored the set with ${measured_size}"
+fi
+
+# Unloading is the service ending **while its client is still running** — watched by the report
+# from inside, because when a client exits launchd ends its service with it, and a watch from out
+# here once passed in 0 s on exactly that. Between the interval and 15 s past it: sooner is the
+# timer misfiring or the client-exit case again, later is the timer not firing.
+unloaded_after=$(printf '%s' "$report" | sed -n 's/.*"unloadedAfterSeconds":\([0-9.]*\).*/\1/p')
+if [ -n "$unloaded_after" ] && python3 -c 'import sys; t = float(sys.argv[1]); sys.exit(0 if 19 <= t <= 35 else 1)' "$unloaded_after"; then
+    pass "model: the service ended itself ${unloaded_after} s after the last request (idle interval 20 s), and the next question brought a fresh one"
+else
+    flunk "model: the idle unload — ${unloaded_after:-not seen} s against an interval of 20 s ($(printf '%s' "$report" | sed -n 's/.*"unload":"\([^"]*\)".*/\1/p'))"
+fi
+fi  # the old service had gone
+fi
 finished=true
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }

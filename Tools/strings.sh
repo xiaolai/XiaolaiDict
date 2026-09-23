@@ -30,7 +30,10 @@ rm -rf "$EXTRACTED" .build/strings
 mkdir -p "$EXTRACTED" "$(dirname "$CATALOG")"
 [ -e "$CATALOG" ] || printf '{\n  "sourceLanguage" : "en",\n  "strings" : {},\n  "version" : "1.0"\n}\n' > "$CATALOG"
 
-swift build --scratch-path .build/strings \
+# The app's product only — which is every module the reader sees text from: the app, the view layer
+# and the core. The two services carry no reader-facing text, and building the model service would
+# compile all of MLX again into this scratch path, minutes of it, to extract nothing.
+swift build --scratch-path .build/strings --product XiaolaiDict \
     -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc "$EXTRACTED" > /dev/null
 
 # Two guards, because a partial extraction silently empties the catalog. `.stringsdata` files are

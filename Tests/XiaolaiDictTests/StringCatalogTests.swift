@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 /// The string catalog is what a translator is given, and `Tools/strings.sh` generates it from the
 /// source. Two things have to hold for that to mean anything: what the code says must be in it,
@@ -115,11 +116,9 @@ struct StringCatalogTests {
         strings[key] = ["localizations": ["de": ["stringUnit": ["state": "translated", "value": "ÜBERSETZT"]]]]
         contents["strings"] = strings
 
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("xiaolaidict-catalog-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let copy = directory.appendingPathComponent("Localizable.xcstrings")
+        let scratch = TemporaryDirectory(named: "xiaolaidict-catalog")
+        let directory = scratch.url
+        let copy = scratch.appending("Localizable.xcstrings")
         try JSONSerialization.data(withJSONObject: contents).write(to: copy)
 
         let compile = Process()

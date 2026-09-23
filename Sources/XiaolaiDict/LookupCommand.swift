@@ -33,7 +33,7 @@ enum LookupCommand {
         lookup: @Sendable (String) async throws(CancellationError) -> LookupOutcome,
         now: @Sendable () -> ContinuousClock.Instant = { .now },
         sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        write: @Sendable (String) -> Void = writeLine,
+        write: @Sendable (String) -> Void = { _ = writeLine($0) },
         writeError: @Sendable (String) -> Void = writeError
     ) async -> CommandStatus {
         let start = now()
@@ -94,7 +94,7 @@ enum LookupCommand {
     /// `XiaolaiDict --read-selection BUNDLE_ID`: what the reader would see from that app's selection. The
     /// app is found on the main actor; its Accessibility tree is read off it.
     @MainActor
-    static func readSelection(bundleID: String, write: (String) -> Void = writeLine) async -> CommandStatus {
+    static func readSelection(bundleID: String, write: (String) -> Void = { _ = writeLine($0) }) async -> CommandStatus {
         let report: any Encodable
         let status: CommandStatus
         if let front = FrontApp.running(bundleID) {
@@ -119,9 +119,13 @@ enum LookupCommand {
         }
     }
 
-    static func writeLine(_ line: String) {
+    /// **False when the line did not leave this process.** Each lookup's line must survive whatever
+    /// the next one does, so it is flushed — and a flush that fails is the report not arriving,
+    /// which an instrument must not go on to report as a success.
+    @discardableResult
+    static func writeLine(_ line: String) -> Bool {
         print(line)
-        fflush(stdout)  // each lookup's line must survive whatever the next one does
+        return fflush(stdout) == 0
     }
 
     static func writeError(_ line: String) {

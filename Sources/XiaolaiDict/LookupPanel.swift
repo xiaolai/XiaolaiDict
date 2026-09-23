@@ -50,6 +50,11 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Held only while the panel is on screen — a monitor that outlived it would dismiss a panel
     /// that is not there and keep a closure alive for every lookup the reader ever made.
     private var clickAway: Any?
+    /// The one resize observer, kept so it can be **replaced** rather than added to. The window
+    /// accessor's closure runs on every update of the view it is attached to, and the panel's body
+    /// reads the model download's progress — so a 3 GB download registered a fresh observer a few
+    /// hundred times, each one outliving its window and calling back for every resize after.
+    private(set) var resizeObserver: (any NSObjectProtocol)?
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
@@ -63,7 +68,12 @@ final class LookupPanelController: LookupPanelPresenting {
     }
 
     /// What the reader asked to study, as they ask for it. Set by the app, which owns the ledger.
-    var onStudySense: (@MainActor (SenseEncounter) -> Void)?
+    /// **With the request it belongs to.** The reader can tap a sense as soon as the entry is on
+    /// screen, which is well before the lookup's own row exists — so a tap carries the request that
+    /// made the panel, and the app holds it until that row is written rather than hanging it off
+    /// whichever lookup happens to have been recorded last.
+    var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
+
 
     /// The window SwiftUI made for the panel's scene, or nil when it is not up.
     ///
@@ -171,6 +181,37 @@ final class LookupPanelController: LookupPanelPresenting {
         current += 1
         escape.release()
         stopWatchingForClicksAway()
+        // The window this watched has gone with the panel. Left registered, the observer holds the
+        // closed window alive and waits for a resize that cannot come.
+        stopWatchingForResize()
+    }
+
+    /// Watches one window for the reader finishing a drag. Registering again replaces the last
+    /// watch rather than adding to it, and closing the panel ends it.
+    ///
+    /// The window is held **weakly**: a notification closure is kept by the notification centre, so
+    /// capturing it strongly would keep a closed window alive for as long as the app runs.
+    func watchForResize(of window: NSWindow) {
+        stopWatchingForResize()
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+        ) { [weak self, weak window] _ in
+            guard let window else { return }
+            MainActor.assumeIsolated { self?.rememberChosenSize(window.frame.size) }
+        }
+    }
+
+    func stopWatchingForResize() {
+        guard let resizeObserver else { return }
+        NotificationCenter.default.removeObserver(resizeObserver)
+        self.resizeObserver = nil
+    }
+
+    /// `isolated` so it can reach the observer at all: a nonisolated `deinit` cannot touch a
+    /// non-`Sendable` property. A panel controller lives as long as the app, so this is the
+    /// belt to `closed()`'s braces.
+    isolated deinit {
+        stopWatchingForResize()
     }
 
     /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
@@ -185,6 +226,12 @@ final class LookupPanelController: LookupPanelPresenting {
 struct LookupPanelSceneView: View {
     let controller: LookupPanelController
     @Bindable var model: LookupPanelModel
+    /// Read inside this body, never the scene's: the model's download progress is observable, and
+    /// reading it in an `App`'s body would re-evaluate every scene on each update.
+    let translation: @MainActor () -> TranslationActions
+    /// Read here for the same reason, and read at the click rather than when the panel was built:
+    /// a model downloaded while the panel was open explains from the panel that is already up.
+    let explainer: @MainActor () -> ExplanationActions
 
     var body: some View {
         Group {
@@ -193,9 +240,16 @@ struct LookupPanelSceneView: View {
                     .environment(\.pinNote) { [controller] note in
                         controller.notes.pin(note, near: controller.lastPointer)
                     }
+                    // **The request this card is**, not the one the panel is on. `newRequest()`
+                    // moves the counter when the next lookup begins — before its selection has
+                    // been read, let alone drawn — so a tap on the card still in front of the
+                    // reader was being filed under a lookup that had not happened.
                     .environment(\.studySense) { [controller] encounter in
-                        controller.onStudySense?(encounter)
+                        guard let request = content.request else { return }
+                        controller.onStudySense?(encounter, request)
                     }
+                    .environment(\.translation, translation())
+                    .environment(\.explainer, explainer())
             }
         }
         .frame(minWidth: model.minimumSize.width)
@@ -205,11 +259,7 @@ struct LookupPanelSceneView: View {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = false
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
-            ) { [controller] _ in
-                MainActor.assumeIsolated { controller.rememberChosenSize(window.frame.size) }
-            }
+            controller.watchForResize(of: window)
         }
         // The reader closing the window is as final as Escape: whatever is still arriving for this
         // lookup is stale.

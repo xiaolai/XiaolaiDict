@@ -19,7 +19,7 @@ import XiaolaiDictTestSupport
 
     @Test func theBoardIsRememberedWhenItsWindowBecomesKey() {
         let defaults = TemporaryDefaults.suite()
-        let app = XiaolaiDictApp(defaults: defaults)
+        let app = XiaolaiDictApp(defaults: defaults, models: .temporary(defaults: defaults))
         let store = SetupPresentationStore(defaults: defaults)
         let board = window()
 
@@ -34,7 +34,7 @@ import XiaolaiDictTestSupport
     /// the board, and counting it would mark a board nobody opened.
     @Test func anotherWindowBecomingKeyDoesNotCount() {
         let defaults = TemporaryDefaults.suite()
-        let app = XiaolaiDictApp(defaults: defaults)
+        let app = XiaolaiDictApp(defaults: defaults, models: .temporary(defaults: defaults))
         let store = SetupPresentationStore(defaults: defaults)
 
         app.setupWindow = window()
@@ -46,7 +46,7 @@ import XiaolaiDictTestSupport
     /// an observer left on the old one would fire for a window that is no longer the board.
     @Test func aReplacedWindowNoLongerCounts() {
         let defaults = TemporaryDefaults.suite()
-        let app = XiaolaiDictApp(defaults: defaults)
+        let app = XiaolaiDictApp(defaults: defaults, models: .temporary(defaults: defaults))
         let store = SetupPresentationStore(defaults: defaults)
         let first = window()
 

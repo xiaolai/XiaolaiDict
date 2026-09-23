@@ -1,5 +1,4 @@
 import XiaolaiDictCore
-import XPC
 
 
 /// One conversation with the dictionary service — the seam tests replace. The real one is an XPC
@@ -22,20 +21,14 @@ actor DictionaryClient {
     private let deadline: Duration
     private let connect: Connect
     private let fallback: @Sendable (String) -> String?
-
-    private struct Session {
-        let transport: any DictionaryTransport
-        /// Which session this is. A failure or cancellation reported late — after a newer session
-        /// replaced this one — must not touch the newer one.
-        let generation: Int
-    }
-
-    private var session: Session?
-    private var generation = 0
+    private var sessions = ServiceSessions<any DictionaryTransport>()
 
     init(
         deadline: Duration = defaultDeadline,
-        connect: @escaping Connect = XPCDictionaryTransport.connect,
+        connect: @escaping Connect = { onCancel in
+            try XPCServiceTransport<ServiceRequest, ServiceReply>(
+                service: XiaolaiDictIdentity.dictionaryService, onCancel: onCancel)
+        },
         fallback: @escaping @Sendable (String) -> String? = PublicDictionary.definition(of:)
     ) {
         self.deadline = deadline
@@ -46,7 +39,7 @@ actor DictionaryClient {
     /// libxpc traps (`_xpc_api_misuse`) when a session is released without being cancelled first —
     /// found when `--lookup` let its client go and crashed on the way out.
     deinit {
-        session?.transport.cancel(reason: "dictionary client released")
+        sessions.current?.transport.cancel(reason: "dictionary client released")
     }
 
     /// Throws only when the caller is cancelled — a newer lookup replaced this one — which says
@@ -92,7 +85,7 @@ actor DictionaryClient {
     }
 
     private func ask(_ request: ServiceRequest) async throws(AskError) -> ServiceReply {
-        let session: Session
+        let session: ServiceSessions<any DictionaryTransport>.Open
         do {
             session = try currentSession()
         } catch {
@@ -110,59 +103,28 @@ actor DictionaryClient {
         }
     }
 
-    private func currentSession() throws -> Session {
-        if let session { return session }
-        generation += 1
-        let mine = generation
+    private func currentSession() throws -> ServiceSessions<any DictionaryTransport>.Open {
         // Dropped the moment the service dies, so the next lookup opens a fresh session and launchd
         // relaunches the service. Kept until the next send, a dead session made the first lookup
         // after any crash fall back to plain text needlessly — measured, before this handler.
-        let transport = try connect { [weak self] in
-            Task { await self?.forget(generation: mine) }
+        try sessions.open { mine in
+            try connect { [weak self] in
+                Task { await self?.forget(generation: mine) }
+            }
         }
-        let fresh = Session(transport: transport, generation: mine)
-        session = fresh
-        return fresh
     }
 
     /// Cancels the session the failed request used — which may no longer be the current one — and
     /// forgets it only if it still is.
-    private func drop(_ failed: Session, reason: String) {
+    private func drop(_ failed: ServiceSessions<any DictionaryTransport>.Open, reason: String) {
         failed.transport.cancel(reason: reason)
         forget(generation: failed.generation)
     }
 
     private func forget(generation dead: Int) {
-        guard session?.generation == dead else { return }
-        session = nil
+        sessions.forget(generation: dead)
     }
 
     /// For tests: which session is open, nil when none is.
-    var openSessionGeneration: Int? { session?.generation }
-}
-
-/// The real transport: an XPC session to the service embedded in the app bundle.
-struct XPCDictionaryTransport: DictionaryTransport {
-    let session: XPCSession
-
-    static func connect(onCancel: @escaping @Sendable () -> Void) throws -> any DictionaryTransport {
-        XPCDictionaryTransport(session: try XPCSession(
-            xpcService: XiaolaiDictIdentity.dictionaryService, cancellationHandler: { _ in onCancel() }))
-    }
-
-    func send(_ request: ServiceRequest) async throws -> ServiceReply {
-        try await withCheckedThrowingContinuation { continuation in
-            do {
-                try session.send(request) { (result: Result<ServiceReply, any Error>) in
-                    continuation.resume(with: result)
-                }
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    func cancel(reason: String) {
-        session.cancel(reason: reason)
-    }
+    var openSessionGeneration: Int? { sessions.current?.generation }
 }

@@ -32,8 +32,11 @@ actor LedgerStore {
     }
 
     /// What the reader met of this lemma before `before`. Encounters, never meanings.
-    func priorEncounters(of lemma: String, before: Date) throws -> PriorEncounters {
-        try ledger.priorEncounters(of: lemma, before: before)
+    ///
+    /// **In this language.** English *gift* and German *Gift* share a lemma and are two words; asked
+    /// without one, a reader of both is shown the other word's history as this one's.
+    func priorEncounters(of lemma: String, before: Date, language: String?) throws -> PriorEncounters {
+        try ledger.priorEncounters(of: lemma, before: before, language: language)
     }
 
     /// The lookup, and the sense it met where that is a fact — in one call, so a sense can never

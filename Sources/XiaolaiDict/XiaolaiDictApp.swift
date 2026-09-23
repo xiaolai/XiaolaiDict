@@ -11,6 +11,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
     private let panel = LookupPanelController()
     private let client = DictionaryClient()
+    /// The local model: its store, its download, the service that runs it, and the lifecycle
+    /// between them. Owned by `LocalModelCoordinator`, not by this delegate.
+    let models: LocalModelCoordinator
     /// **The suite the app was given, not `.standard`** — the same reason the shortcut store takes
     /// one. A test that chose a dictionary used to rewrite the reader's own choice, and switching
     /// the primary starts their study over.
@@ -50,14 +53,23 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `init()` and every launch died with "Use of unimplemented initializer", while the unit
     /// suite stayed green because tests call the initializer Swift can see.
     override convenience init() {
-        self.init(defaults: .standard)
+        // The one place the real model directory and the real XPC service are reached for.
+        self.init(defaults: .standard, models: LocalModelCoordinator(defaults: .standard))
     }
 
     /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
     /// anything about the reader's settings means writing to the real ones — a test suite that
     /// changes the machine it runs on, which is the same objection the project makes to driving
     /// the GUI on the building Mac.
-    init(defaults: UserDefaults, hotkeys: HotkeyCenter = .shared) {
+    /// `models` is a parameter for the same reason `defaults` is: without it a test would read — and
+    /// a download would write — the reader's own model directory, and would open a real XPC session
+    /// to the service. **It has no default**, because a default is what made that happen anyway: the
+    /// comment said what the parameter was for while `nil` quietly built the production coordinator
+    /// for every test that omitted it. `init()` supplies the real one.
+    init(
+        defaults: UserDefaults, hotkeys: HotkeyCenter = .shared,
+        models: LocalModelCoordinator
+    ) {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
@@ -73,6 +85,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         let primary = PrimaryDictionaryStore(defaults: defaults)
         primaryDictionary = primary
         chosenDictionary = primary.load().chosen
+        self.models = models
         self.hotkeys = hotkeys
         super.init()
     }
@@ -135,13 +148,19 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // open to have observed anything. The observable copy is what the windows draw, and
         // `askForDictionaries` re-reads it so the two cannot drift apart after a change made
         // outside this process.
+        let models = models
         return LookupRunner(
             client: client, panel: panel, primary: { store.load() },
-            priorEncounters: { [weak self] lemma, before in
+            // The local model first, wherever it is downloaded; Apple's on-device model while it is
+            // not — pending, declined, or too big for what is free now; `NLEmbedding` beneath both.
+            selector: models.senseLadder,
+            priorEncounters: { [weak self] lemma, before, language in
                 guard let opening = await MainActor.run(body: { self?.ledger }) else { return PriorEncounters() }
                 // A ledger that cannot be read costs the memory strip, never the lookup.
-                return (try? await opening.value.priorEncounters(of: lemma, before: before)) ?? PriorEncounters()
-            })
+                return (try? await opening.value.priorEncounters(
+                    of: lemma, before: before, language: language)) ?? PriorEncounters()
+            },
+            prewarm: { await models.prewarm() })
     }
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
     /// the menu says it does not know rather than showing a list it made up.
@@ -166,9 +185,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// happened to finish last.
     private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
 
-    /// The lookup a reader-chosen sense hangs off: the newest one recorded. A tap before anything
-    /// was recorded has nothing to attach to, and writes nothing.
-    private var lastLookup: Int?
+    /// Which lookup a reader's tap belongs to — see `SenseTapQueue`.
+    private var taps = SenseTapQueue()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside
@@ -178,7 +196,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.onStudySense = { [weak self] encounter in self?.study(encounter) }
+        panel.onStudySense = { [weak self] encounter, request in self?.study(encounter, request: request) }
         let opening = Task { try await LedgerStore.openDefault() }
         ledger = opening
         Task {
@@ -282,8 +300,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// A sense the reader tapped. Recorded as theirs — `chosen_by: reader` — which the ledger
     /// keeps apart from the selector's guesses, because a hypothesis and a fact must never merge.
-    private func study(_ encounter: SenseEncounter) {
-        guard let ledger, let lookup = lastLookup else { return }
+    private func study(_ encounter: SenseEncounter, request: Int) {
+        guard ledger != nil, let lookup = taps.tapped(encounter, request: request) else { return }
+        write(encounter, for: lookup)
+    }
+
+    private func write(_ encounter: SenseEncounter, for lookup: Int) {
+        guard let ledger else { return }
         Task {
             do {
                 try await ledger.value.record(encounter, for: lookup)
@@ -297,7 +320,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         guard let ledger else { return }
         var problem: String?
         do {
-            lastLookup = try await ledger.value.record(record)
+            let id = try await ledger.value.record(record)
+            // Whatever the reader tapped while this row was being written now has somewhere to go.
+            for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
         } catch {
             problem = "The last lookup was not recorded: \(error)"
             log.error("ledger write failed: \(String(describing: error), privacy: .public)")

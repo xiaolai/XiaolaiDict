@@ -25,7 +25,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-icon icon strings e2e e2e-status release clean
+.PHONY: all run test test-swift test-tools icon strings e2e e2e-status release clean
 
 # A Developer ID, never ad hoc, for two reasons:
 #   - macOS keys Accessibility and Screen Recording grants on the signing identity. An ad-hoc
@@ -60,12 +60,15 @@ all: test-swift
 run: test-swift
 	@Tools/build-bundle.sh run
 
-test: test-swift test-icon
+test: test-swift test-tools
 
 test-swift:
-	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; exit $$status
+	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; \
+	Tools/clean-test-scratch.sh || status=1; exit $$status
 
-test-icon:
+# The Python suite: the icon generator, and the ladder gate `e2e.sh` decides a release with.
+# Named for the directory rather than for the icon, because it stopped being only the icon's.
+test-tools:
 	python3 -m unittest discover -s Tools/tests
 
 # Re-extract every localizable string into Strings/Localizable.xcstrings, the file a

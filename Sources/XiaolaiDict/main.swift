@@ -1,5 +1,14 @@
 import AppKit
 
+/// A report that shows no window: run it, print it, exit with its status. `dispatchMain()` rather
+/// than AppKit's runloop is right for exactly these — nothing here captures the screen, which is
+/// what needs a window server — and writing the lifecycle once keeps the next one from drifting.
+@MainActor
+func runHeadlessReport(_ report: @escaping @MainActor () async -> CommandStatus) -> Never {
+    Task { exit(await report().rawValue) }
+    dispatchMain()
+}
+
 switch LaunchArguments.parse(Array(CommandLine.arguments.dropFirst())) {
 case .failure(let error):
     LookupCommand.writeError("\(error)\n\(LaunchArguments.usage)")
@@ -38,14 +47,12 @@ case .success(.readPoint(let x, let y)):
 // Spike S1's instrument. It must run inside the signed bundle: a bare CLI binary reported voices
 // that could not be resolved and a voice that synthesised zero frames.
 case .success(.speechReport):
-    Task { exit(await SpeechReport.run().rawValue) }
-    dispatchMain()
+    runHeadlessReport { await SpeechReport.run() }
 
 // Whether the signed bundle can actually translate. Measured, because an availability API
 // already reported `available` here for a model that then refused Developer ID signatures.
 case .success(.translationReport):
-    Task { exit(await TranslationReport.run().rawValue) }
-    dispatchMain()
+    runHeadlessReport { await TranslationReport.run() }
 
 // Unlike the other reports this one shows a window, so it needs AppKit's runloop rather than
 // dispatchMain(). `.accessory` for the same reason the app uses it: no Dock icon, and nothing
@@ -58,6 +65,16 @@ case .success(.historyReport):
 case .success(.settingsReport):
     SettingsReport.isWanted = true
     XiaolaiDictScene.main()
+
+// The local model's instruments. No window, so no AppKit runloop: they talk to services.
+case .success(.modelStatus):
+    runHeadlessReport { await ModelReport.status() }
+
+case .success(.modelReport):
+    runHeadlessReport { await ModelReport.run() }
+
+case .success(.senseReport):
+    runHeadlessReport { await SenseReport.run() }
 
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.

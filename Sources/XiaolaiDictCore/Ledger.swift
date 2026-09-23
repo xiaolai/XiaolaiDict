@@ -53,13 +53,17 @@ public struct LookupRecord: Equatable, Sendable {
     /// it was found and never written again: the migration cannot know which of the two any old row
     /// held, and guessing would be worse than leaving it whole and unclaimed.
     public let legacySourceURL: String?
+    /// Why no sense was marked, where the selector declined. Recorded from schema 6 on, and never
+    /// before — which is why nil means "not recorded", not "a sense was marked". It is what keeps
+    /// "the model declined this sentence" (`refused`) apart from "no model here" (`unavailable`).
+    public let senseAbstention: Abstention?
 
     public init(
         surface: String, lemma: String, context: String, lemmaBasis: Lemma.Basis? = nil,
         language: String? = nil, contextRange: NSRange? = nil, partOfSpeech: String? = nil,
         place: ReadingPlace = ReadingPlace(),
         lookedUpAt: Date, result: LookupResult, answeredBy: AnswerSource?, quality: CaptureQuality?,
-        legacySourceURL: String? = nil
+        legacySourceURL: String? = nil, senseAbstention: Abstention? = nil
     ) {
         self.surface = surface
         self.lemma = Lemmatizer.canonical(lemma)
@@ -74,6 +78,7 @@ public struct LookupRecord: Equatable, Sendable {
         self.answeredBy = answeredBy
         self.quality = quality
         self.legacySourceURL = legacySourceURL
+        self.senseAbstention = senseAbstention
     }
 }
 
@@ -139,7 +144,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -213,8 +218,8 @@ public final class Ledger {
                                  result, answered_by, capture_source, capture_confidence, context_quality,
                                  lemma_basis, language, context_range_location, context_range_length,
                                  source_name, source_document, source_page, source_title, source_title_raw,
-                                 source_precision, part_of_speech)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 source_precision, part_of_speech, sense_abstention)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [
                 .text(record.surface), .text(record.lemma), .text(record.context),
@@ -229,7 +234,7 @@ public final class Ledger {
                 .optionalText(record.place.name), .optionalText(record.place.document),
                 .optionalText(record.place.page), .optionalText(record.place.title),
                 .optionalText(record.place.rawTitle), .text(record.place.precision.rawValue),
-                .optionalText(record.partOfSpeech),
+                .optionalText(record.partOfSpeech), .optionalText(record.senseAbstention?.rawValue),
             ]
         ) { _ in }
         return Int(sqlite3_last_insert_rowid(db))
@@ -456,7 +461,7 @@ public final class Ledger {
                    result, answered_by, capture_source, capture_confidence, context_quality,
                    lemma_basis, language, context_range_location, context_range_length,
                    source_name, source_document, source_page, source_title, source_title_raw,
-                   part_of_speech
+                   part_of_speech, sense_abstention
             -- Numbered, not bare: a bare `?` is parameter 1, so `?1` beside it would alias the
             -- lemma rather than the language.
             FROM lookups WHERE lemma = ?1 AND (?2 IS NULL OR language = ?2)
@@ -476,7 +481,7 @@ public final class Ledger {
                     title: row.optionalText(18), rawTitle: row.optionalText(19)),
                 lookedUpAt: Date(timeIntervalSince1970: row.real(5)),
                 result: try row.result(6), answeredBy: try row.answerSource(7), quality: try row.quality(8),
-                legacySourceURL: row.optionalText(4)))
+                legacySourceURL: row.optionalText(4), senseAbstention: try row.abstention(21)))
         }
         return records
     }
@@ -520,7 +525,10 @@ public final class Ledger {
                    -- reader can ask for it; it is not shown unless they do, which is what keeps
                    -- C2 intact. What the card shows unasked is *which* sense, never its wording.
                    se.dictionary_name, se.sense_block, se.sense_ordinal, se.entry_sense_count,
-                   se.gloss, se.chosen_by
+                   se.gloss, se.chosen_by,
+                   -- Why no sense was marked, where the selector declined: "the model declined"
+                   -- and "no model here" are different facts, and the card can say which.
+                   l.sense_abstention
             FROM lookups l
             -- By id rather than by lookup_id, so a lookup with more than one encounter contributes
             -- one row and not several. Only the primary dictionary is recorded, so there should be
@@ -555,7 +563,8 @@ public final class Ledger {
                     title: row.optionalText(12), rawTitle: row.optionalText(13)),
                 at: Date(timeIntervalSince1970: row.real(4)),
                 result: try row.result(5), quality: try row.quality(14),
-                partOfSpeech: partOfSpeech, sense: try row.senseNote(18)))
+                partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
+                senseAbstention: try row.abstention(24)))
         }
         return entries
     }
@@ -674,6 +683,12 @@ public final class Ledger {
                 // own sentence rather than showing a hole — a guess that says so, never a stored
                 // value that cannot be told from a recorded one.
                 try execute("ALTER TABLE lookups ADD COLUMN part_of_speech TEXT;")
+            }
+            if found < 6 {
+                // Why the selector declined was decided at every lookup and kept nowhere, so a
+                // model refusing a sentence and no model being here left the same trace: none.
+                // Rows written before this get NULL — not recorded, never a guessed reason.
+                try execute("ALTER TABLE lookups ADD COLUMN sense_abstention TEXT;")
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")
@@ -813,6 +828,12 @@ public final class Ledger {
             guard let raw = optionalText(column) else { return nil }
             guard let choice = SenseChoice(rawValue: raw) else { throw LedgerError.corruptRow("chosen_by '\(raw)'") }
             return choice
+        }
+
+        func abstention(_ column: Int32) throws -> Abstention? {
+            guard let raw = optionalText(column) else { return nil }
+            guard let why = Abstention(rawValue: raw) else { throw LedgerError.corruptRow("sense_abstention '\(raw)'") }
+            return why
         }
 
         func answerSource(_ column: Int32) throws -> AnswerSource? {

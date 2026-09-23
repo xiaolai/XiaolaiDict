@@ -20,13 +20,23 @@
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
 
     },
+    "%@ translates your sentences and picks the sense you met, on this Mac — a %@ download." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ translates your sentences and picks the sense you met, on this Mac — a %2$@ download."
+          }
+        }
+      }
+    },
+    "%@ translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere." : {
+
+    },
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
 
     },
     "%lld things are still needed." : {
-
-    },
-    "A guess at the sense you were reading, from your sentence. It may be wrong." : {
 
     },
     "A guess — not confirmed" : {
@@ -51,18 +61,6 @@
 
     },
     "Always" : {
-
-    },
-    "Apple Intelligence is off, so senses are picked by a simpler match. A marked sense is a guess until you confirm it, either way." : {
-
-    },
-    "Apple's on-device model does not run here, so senses are picked by a simpler match. A marked sense is a guess until you confirm it, either way." : {
-
-    },
-    "Apple's on-device model is available, and is tried first when a sense has to be                  picked. A simpler match is used whenever it declines." : {
-
-    },
-    "Apple's on-device model is still preparing. Senses are picked by a simpler match until it is ready." : {
 
     },
     "Ask macOS…" : {
@@ -110,19 +108,45 @@
     "Confirmed" : {
 
     },
-    "Copy" : {
-
-    },
     "Copy the word and this sense" : {
 
     },
     "Dictionary" : {
 
     },
+    "Download" : {
+
+    },
+    "Download the local model" : {
+
+    },
+    "Downloading" : {
+
+    },
+    "Downloading %@ — %@ of %@. %@ goes on answering until it is here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Downloading %1$@ — %2$@ of %3$@. %4$@ goes on answering until it is here."
+          }
+        }
+      }
+    },
+    "Downloading %@ — %@ of %@. It can be stopped and resumed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Downloading %1$@ — %2$@ of %3$@. It can be stopped and resumed."
+          }
+        }
+      }
+    },
     "Everything needed is in place. Anything here can still be changed." : {
 
     },
-    "Explain how this word is used in your sentence — runs on this Mac" : {
+    "Everything this Mac can do is in place. Anything here can still be changed." : {
 
     },
     "Explain this sentence" : {
@@ -164,6 +188,15 @@
     "Large" : {
 
     },
+    "Licence" : {
+
+    },
+    "Licences" : {
+
+    },
+    "Local model" : {
+
+    },
     "Look Up Selection" : {
 
     },
@@ -176,7 +209,13 @@
     "Lookup shortcut" : {
 
     },
+    "Made by" : {
+
+    },
     "Mark the word" : {
+
+    },
+    "Model" : {
 
     },
     "Name the app a word was read in" : {
@@ -197,19 +236,37 @@
     "No entry for “%@” in your dictionaries." : {
 
     },
+    "No model is available to explain this sentence." : {
+      "comment" : "Shown in the sentence pane when nothing can explain the sentence"
+    },
     "No sense in this entry clearly fits this sentence." : {
       "comment" : "Shown on the lookup card when no sense is close enough to claim"
     },
     "No sentence was captured around the word, so its senses cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
-    "No sentence was captured, so there is nothing to explain." : {
-
-    },
     "No shortcut is registered, so selections can be looked up from the menu only." : {
 
     },
+    "No voice is installed for this language." : {
+
+    },
+    "Not available" : {
+
+    },
+    "Not known" : {
+
+    },
+    "Not now" : {
+
+    },
     "Not set" : {
+
+    },
+    "Nothing is waiting on you. The local model is still one click away above." : {
+
+    },
+    "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
 
     },
     "Off" : {
@@ -224,7 +281,13 @@
     "One thing is still needed." : {
 
     },
+    "Only a compact voice is installed for this language. Better ones are a free download in System Settings → Accessibility → Spoken Content." : {
+
+    },
     "Open Dictionary…" : {
+
+    },
+    "Open Language & Region…" : {
 
     },
     "Open Settings…" : {
@@ -233,13 +296,13 @@
     "Open in Dictionary" : {
 
     },
+    "Open source" : {
+
+    },
     "Password managers" : {
 
     },
     "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
-
-    },
-    "Pin this as a note that stays until you close it" : {
 
     },
     "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
@@ -275,6 +338,9 @@
     "Rest the pointer" : {
 
     },
+    "Resume" : {
+
+    },
     "Reveal meaning" : {
 
     },
@@ -288,9 +354,6 @@
 
     },
     "Select a word anywhere and press %@." : {
-
-    },
-    "Sense picking" : {
 
     },
     "Set Up XiaolaiDict" : {
@@ -326,6 +389,9 @@
     "Standard" : {
 
     },
+    "Stop" : {
+
+    },
     "Study From" : {
 
     },
@@ -351,8 +417,24 @@
     "Switching dictionaries starts study over." : {
 
     },
+    "System Settings would not open. Look for Language & Region under General." : {
+
+    },
     "Text" : {
 
+    },
+    "The %@ download stopped: %@. What arrived is kept, and it resumes from there." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The %1$@ download stopped: %2$@. What arrived is kept, and it resumes from there."
+          }
+        }
+      }
+    },
+    "The Qwen team, Alibaba Cloud" : {
+      "comment" : "About pane: who published the local model's weights"
     },
     "The app is not running" : {
 
@@ -366,23 +448,39 @@
     "The gate" : {
 
     },
-    "The only sense in this entry" : {
+    "The licence could not be opened. It is published under %@, at %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The licence could not be opened. It is published under %1$@, at %2$@."
+          }
+        }
+      }
+    },
+    "The model declined to compare this sentence against the senses." : {
+      "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
+    },
+    "The notices could not be opened. They are in the app itself, at %@." : {
 
     },
-    "The only sense in this entry." : {
+    "The only sense in this entry" : {
 
     },
     "The sense you read could not be identified." : {
 
     },
+    "Third-party notices" : {
+
+    },
+    "This Mac has too little memory for the local model." : {
+
+    },
+    "This board was opened without the model's state, so it cannot say what is here." : {
+
+    },
     "This dictionary does not mark its senses, so the one you read cannot be identified." : {
       "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
-    },
-    "This dictionary does not number its senses, so this one is identified by its position." : {
-
-    },
-    "This dictionary marks its senses with nothing a card can be keyed to." : {
-
     },
     "This pane is not connected to the dictionary service." : {
 
@@ -396,7 +494,35 @@
     "This sentence could not be compared against the senses." : {
       "comment" : "Shown on the lookup card when the selector could not run"
     },
+    "This sentence could not be translated." : {
+
+    },
+    "This sentence does not settle which sense the word carries." : {
+      "comment" : "Shown on the lookup card when a model answered that the sentence decides nothing"
+    },
+    "This sentence is already in your language." : {
+
+    },
     "Today" : {
+
+    },
+    "Translate this sentence" : {
+
+    },
+    "Translated by Apple, which cannot be told which sense you met and misreads some sentences." : {
+      "comment" : "Under a translation of the reader's sentence when Apple's Translation framework produced it"
+    },
+    "Translating %@ into %@ needs that language pair. Add it in System Settings, under General → Language & Region → Translation Languages." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Translating %1$@ into %2$@ needs that language pair. Add it in System Settings, under General → Language & Region → Translation Languages."
+          }
+        }
+      }
+    },
+    "Translation and sense picking" : {
 
     },
     "Try again" : {
@@ -405,13 +531,28 @@
     "Undo" : {
 
     },
+    "Until then, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+
+    },
+    "Until then, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+
+    },
     "Use %@" : {
+
+    },
+    "Use the larger model (%@)" : {
 
     },
     "Website" : {
 
     },
     "Whatever is selected is looked up, wherever you are." : {
+
+    },
+    "Without a local model, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+
+    },
+    "Without a local model, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
 
     },
     "XiaolaiDict" : {
@@ -451,17 +592,29 @@
     "^[and %lld more](inflect: true)" : {
 
     },
+    "a file did not match what was published, so it was discarded" : {
+      "comment" : "Why the model download stopped"
+    },
+    "a half-finished copy could not be cleared away" : {
+      "comment" : "Why the model download stopped"
+    },
     "adjective" : {
 
     },
     "adverb" : {
 
     },
-    "and %lld more" : {
-
+    "declined" : {
+      "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
     "example.com" : {
 
+    },
+    "it ended before every file had arrived" : {
+      "comment" : "Why the model download stopped"
+    },
+    "it is already being downloaded" : {
+      "comment" : "Why the model download stopped"
     },
     "not found" : {
 
@@ -472,23 +625,38 @@
     "on this Mac" : {
 
     },
-    "senses not marked in this dictionary" : {
-
-    },
     "sent to a remote service" : {
 
+    },
+    "the connection failed" : {
+      "comment" : "Why the model download stopped"
+    },
+    "the download could not be completed" : {
+      "comment" : "Why the model download stopped"
+    },
+    "the model could not be saved to disk" : {
+      "comment" : "Why the model download stopped"
+    },
+    "the server answered %lld" : {
+      "comment" : "Why the model download stopped"
+    },
+    "there is not enough free disk space — it needs %@" : {
+      "comment" : "Why the model download stopped"
+    },
+    "this Mac is not connected to the internet" : {
+      "comment" : "Why the model download stopped"
+    },
+    "this Mac would not say how much disk space is free" : {
+      "comment" : "Why the model download stopped"
+    },
+    "undecided" : {
+      "comment" : "History card badge: a model answered that the sentence settles no sense"
     },
     "verb" : {
 
     },
-    "whole entries only" : {
-
-    },
-    "→ %@" : {
-
-    },
-    "→ %@ (from context)" : {
-
+    "you stopped it" : {
+      "comment" : "Why the model download stopped"
     },
     "✓ First that marks senses" : {
 

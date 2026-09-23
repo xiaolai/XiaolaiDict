@@ -22,9 +22,15 @@ public extension Abstention {
         case .nothingFits:
             String(localized: "No sense in this entry clearly fits this sentence.",
                    comment: "Shown on the lookup card when no sense is close enough to claim")
+        case .undecided:
+            String(localized: "This sentence does not settle which sense the word carries.",
+                   comment: "Shown on the lookup card when a model answered that the sentence decides nothing")
         case .unavailable:
             String(localized: "This sentence could not be compared against the senses.",
                    comment: "Shown on the lookup card when the selector could not run")
+        case .refused:
+            String(localized: "The model declined to compare this sentence against the senses.",
+                   comment: "Shown on the lookup card when a language model refused to answer for this sentence")
         }
     }
 }

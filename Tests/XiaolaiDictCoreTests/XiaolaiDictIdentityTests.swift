@@ -2,7 +2,7 @@ import Foundation
 import XiaolaiDictCore
 import Testing
 
-/// The app finds its service, and the service admits the app, by identifiers compiled into both —
+/// The app finds its services, and each service admits the app, by identifiers compiled into both —
 /// and the bundles declare theirs in Info.plist. A mismatch builds and signs cleanly, then fails
 /// every lookup at run time; it is caught here instead.
 struct XiaolaiDictIdentityTests {
@@ -20,5 +20,9 @@ struct XiaolaiDictIdentityTests {
 
     @Test func theServicesPlistDeclaresTheServicesIdentifier() throws {
         #expect(try bundleIdentifier(in: "DictionaryService-Info.plist") == XiaolaiDictIdentity.dictionaryService)
+    }
+
+    @Test func theModelServicesPlistDeclaresItsIdentifier() throws {
+        #expect(try bundleIdentifier(in: "ModelService-Info.plist") == XiaolaiDictIdentity.modelService)
     }
 }
