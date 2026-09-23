@@ -184,9 +184,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// happened to finish last.
     private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
 
-    /// The lookup a reader-chosen sense hangs off: the newest one recorded. A tap before anything
-    /// was recorded has nothing to attach to, and writes nothing.
-    private var lastLookup: Int?
+    /// Which lookup a reader's tap belongs to — see `SenseTapQueue`.
+    private var taps = SenseTapQueue()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside
@@ -196,7 +195,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.onStudySense = { [weak self] encounter in self?.study(encounter) }
+        panel.onStudySense = { [weak self] encounter, request in self?.study(encounter, request: request) }
         let opening = Task { try await LedgerStore.openDefault() }
         ledger = opening
         Task {
@@ -300,8 +299,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// A sense the reader tapped. Recorded as theirs — `chosen_by: reader` — which the ledger
     /// keeps apart from the selector's guesses, because a hypothesis and a fact must never merge.
-    private func study(_ encounter: SenseEncounter) {
-        guard let ledger, let lookup = lastLookup else { return }
+    private func study(_ encounter: SenseEncounter, request: Int) {
+        guard ledger != nil, let lookup = taps.tapped(encounter, request: request) else { return }
+        write(encounter, for: lookup)
+    }
+
+    private func write(_ encounter: SenseEncounter, for lookup: Int) {
+        guard let ledger else { return }
         Task {
             do {
                 try await ledger.value.record(encounter, for: lookup)
@@ -315,7 +319,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         guard let ledger else { return }
         var problem: String?
         do {
-            lastLookup = try await ledger.value.record(record)
+            let id = try await ledger.value.record(record)
+            // Whatever the reader tapped while this row was being written now has somewhere to go.
+            for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
         } catch {
             problem = "The last lookup was not recorded: \(error)"
             log.error("ledger write failed: \(String(describing: error), privacy: .public)")

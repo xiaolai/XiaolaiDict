@@ -68,7 +68,14 @@ final class LookupPanelController: LookupPanelPresenting {
     }
 
     /// What the reader asked to study, as they ask for it. Set by the app, which owns the ledger.
-    var onStudySense: (@MainActor (SenseEncounter) -> Void)?
+    /// **With the request it belongs to.** The reader can tap a sense as soon as the entry is on
+    /// screen, which is well before the lookup's own row exists — so a tap carries the request that
+    /// made the panel, and the app holds it until that row is written rather than hanging it off
+    /// whichever lookup happens to have been recorded last.
+    var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
+
+    /// The request the panel is showing.
+    var currentRequest: Int { current }
 
     /// The window SwiftUI made for the panel's scene, or nil when it is not up.
     ///
@@ -233,7 +240,7 @@ struct LookupPanelSceneView: View {
                         controller.notes.pin(note, near: controller.lastPointer)
                     }
                     .environment(\.studySense) { [controller] encounter in
-                        controller.onStudySense?(encounter)
+                        controller.onStudySense?(encounter, controller.currentRequest)
                     }
                     .environment(\.translation, translation())
             }
