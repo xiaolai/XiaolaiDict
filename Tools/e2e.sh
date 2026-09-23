@@ -792,10 +792,17 @@ else
     read -r wx wy _ _ <<<"$frame"
     # A grid, because where a terminal's text sits depends on its prompt, its font and its padding.
     reading=""
+    read_x=0
+    read_y=0
     for dy in 98 113 83 128 68 143; do
         for dx in 50 160 280; do
             got=$(read_point $((wx + dx)) $((wy + dy)))
-            if printf '%s' "$got" | grep -q opticalRecognition; then reading=$got; break 2; fi
+            if printf '%s' "$got" | grep -q opticalRecognition; then
+                reading=$got
+                read_x=$((wx + dx))
+                read_y=$((wy + dy))
+                break 2
+            fi
         done
     done
     if [ -z "$reading" ]; then
@@ -807,14 +814,23 @@ else
         else
             flunk "recogniser: $why"
         fi
-        # Asserted warm. The first capture after boot pays a system-wide ScreenCaptureKit warm-up
-        # — measured once at 14.8 s against ~0.5 s for every read after — which is a fact about the
-        # machine, so a budget asserted on the first read would measure its state and not the code.
-        took=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
+        # **Timed on a second read of the same point**, which is what "warm" means. The first
+        # capture after boot pays a system-wide ScreenCaptureKit warm-up — measured at 14.8 s once
+        # and 24.8 s on 2026-09-23 — against ~0.5 s for every read after. This comment said
+        # "asserted warm" while the code timed the very first read, so the stage was measuring how
+        # long the machine had been up. A warm read that fails to come back is reported as that,
+        # never silently replaced by the cold one.
+        warm=$(read_point "$read_x" "$read_y")
+        if ! printf '%s' "$warm" | grep -q opticalRecognition; then
+            flunk "recogniser: the same point would not read a second time: $(head -c 120 /tmp/xiaolaidict-read-point.err 2>/dev/null)"
+            warm=$reading
+        fi
+        took=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$warm")
+        cold=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
         if [ "$took" -lt 5000 ]; then
-            pass "recogniser: the read cost ${took} ms, inside the 5 s capture deadline"
+            pass "recogniser: the warm read cost ${took} ms, inside the 5 s capture deadline (first read ${cold} ms)"
         else
-            flunk "recogniser: the read took ${took} ms, past the 5 s capture deadline"
+            flunk "recogniser: the warm read took ${took} ms, past the 5 s capture deadline (first read ${cold} ms)"
         fi
     fi
 fi
