@@ -260,7 +260,10 @@ enum ModelReport {
         var idleSeconds: @MainActor () -> Int = {
             ModelIdle.seconds(configured: UserDefaults.standard.object(forKey: ModelIdle.defaultsKey) as? Int)
         }
-        var serviceIsRunning: @MainActor () -> Bool = { ModelServiceProcess.isRunning }
+        /// **Three answers, not two**, for the same reason `ModelClient.unload` asks it that way:
+        /// a scan that could not tell is not a process that went, and the watch's whole question is
+        /// whether the process went.
+        var servicePresence: @MainActor () -> ModelServiceProcess.Presence = { ModelServiceProcess.presence }
         var now: @MainActor () -> ContinuousClock.Instant = { ContinuousClock.now }
         var sleep: @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         /// One status question, nil where the service did not answer it.
@@ -285,14 +288,27 @@ enum ModelReport {
         }
         let lastRequest = watch.now()
         let limit = lastRequest.advanced(by: .seconds(interval) + unloadGrace)
-        while watch.serviceIsRunning(), watch.now() < limit {
+        while watch.servicePresence() != .gone, watch.now() < limit {
             try await watch.sleep(unloadPoll)
         }
         // A run someone stopped measured nothing, and must not be filed as a watch that failed.
         try Task.checkCancellation()
-        guard !watch.serviceIsRunning() else {
+        // **Only a scan that saw the process go counts as an unload**, which is the rule
+        // `ModelClient.unload` already follows. A scan that could not tell used to reach here as
+        // "not running" and be filed as an unload — the loop above ended on the first unreadable
+        // reading, the wait looked long enough, and the watch reported a service ending that
+        // nothing had seen. It is a failure now, and named as its own failure: "still running" is
+        // a claim about the process, and a scan that answered nothing made no claim at all.
+        switch watch.servicePresence() {
+        case .gone:
+            break
+        case .running:
             report["unloadWatch"] = UnloadWatch.failed.rawValue
             report["unload"] = "still running \(interval) s + \(unloadGrace) after the last request"
+            return .failed
+        case .couldNotTell:
+            report["unloadWatch"] = UnloadWatch.failed.rawValue
+            report["unload"] = "the process scan could not tell whether the service is still running, so no unload was seen"
             return .failed
         }
         let waited = seconds(since: lastRequest, now: watch.now())

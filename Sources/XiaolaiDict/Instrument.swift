@@ -2,8 +2,9 @@ import AppKit
 import CoreGraphics
 
 /// What the in-bundle instruments share — `--history-report`, `--settings-report`,
-/// `--model-status`, `--model-report` and `--sense-report` — written once, so they cannot drift
-/// apart. The polling helper was a verbatim copy in each.
+/// `--model-status`, `--model-report`, `--sense-report`, `--speech-report` and
+/// `--translation-report` — written once, so they cannot drift apart. The polling helper was a
+/// verbatim copy in each.
 @MainActor
 enum Instrument {
     /// Waits for `condition`, checking every 20 ms, and reports whether it came true.
@@ -35,8 +36,22 @@ enum Instrument {
     ///
     /// The serialisation diagnostic goes to standard error and not through `write`: `write` is
     /// where the **report** goes, and a run that could not build one has no report to send there.
-    static func write(_ report: [String: Any], to write: (String) -> Bool = LookupCommand.writeLine) -> Bool {
-        guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
+    ///
+    /// `nonisolated` because nothing here needs the main actor — the rest of `Instrument` does,
+    /// and two of the instruments this serves, `--speech-report` and `--translation-report`, do
+    /// not run on one. Isolated, they could not have called it where they stand: the hop would
+    /// carry a `[String: Any]` and a sink, and neither is `Sendable`.
+    /// **The report is asked whether it is valid JSON before it is written, and `try?` is not what
+    /// asks.** On Darwin `dataWithJSONObject:` *raises* `NSInvalidArgumentException` for a value it
+    /// cannot write — measured 2026-09-23 with `Double.nan`: "Invalid number value (NaN) in JSON
+    /// write", and the process died. An Objective-C exception is not a Swift error, so `try?` never
+    /// saw it and this branch could not be reached: what read as a handled failure was an
+    /// instrument taking the run down with it. `isValidJSONObject` answers the same question by
+    /// returning, and refuses NaN and a `Date` alike.
+    nonisolated static func write(_ report: [String: Any], to write: (String) -> Bool = LookupCommand.writeLine) -> Bool {
+        guard JSONSerialization.isValidJSONObject(report),
+              let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+        else {
             LookupCommand.writeError("the report could not be serialised")
             return false
         }

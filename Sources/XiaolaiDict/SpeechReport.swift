@@ -24,7 +24,7 @@ enum SpeechReport {
     /// A voice that never calls back is a finding, not a reason to hang.
     static let limit: Duration = .seconds(10)
 
-    static func run(write: (String) -> Void = { _ = LookupCommand.writeLine($0) }) async -> CommandStatus {
+    static func run(write: (String) -> Bool = LookupCommand.writeLine) async -> CommandStatus {
         let voices = AVSpeechSynthesisVoice.speechVoices()
         var byQuality: [String: Int] = [:]
         for voice in voices { byQuality[Self.name(of: voice.quality), default: 0] += 1 }
@@ -64,10 +64,7 @@ enum SpeechReport {
             "unresolvable": unresolvable,
             "synthesis": synthesis,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
-            return .internalError
-        }
-        write(String(decoding: data, as: UTF8.self))
+        guard Instrument.write(report, to: write) else { return .internalError }
         // A report that found no voice that actually speaks is a failed measurement, and says so
         // in its exit status rather than only in its text.
         return synthesis.contains { $0["spoke"] as? Bool == true } ? .success : .failure

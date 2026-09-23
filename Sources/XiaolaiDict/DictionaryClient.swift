@@ -93,7 +93,13 @@ actor DictionaryClient {
         }
         do {
             return try await withDeadline(deadline) { try await session.transport.send(request) }
-        } catch where Task.isCancelled {
+        } catch is CancellationError where Task.isCancelled {
+            // **Asked of the thrown error, never of `Task.isCancelled` alone.** A newer lookup
+            // replacing this one says nothing about the service, so its session is kept — but a
+            // transport failure or a deadline landing in the same moment the caller gives up is
+            // the service failing, and read off `Task.isCancelled` it was filed as this harmless
+            // case: the wedged session stayed current and every lookup after it went to the same
+            // dead peer. The model client learned this first; the two had drifted.
             throw .cancelled
         } catch {
             // Crashed, hung or refused. Drop the session: the next lookup opens a fresh one, and

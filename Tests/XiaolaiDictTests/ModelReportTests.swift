@@ -22,6 +22,10 @@ struct ModelReportIdleWatchTests {
         var elapsed: Duration = .zero
         /// When the service's process goes, on that same clock. Where this is nil it never goes.
         var goesAfter: Duration?
+        /// When the process scan stops being readable, on that same clock — `proc_listallpids`
+        /// answering nothing, which is a reading the watch could not take rather than a process it
+        /// saw go. Where this is nil every scan answers.
+        var scanStopsAnsweringAfter: Duration?
         /// One answer per status question, in order. A question past the end of the script comes
         /// back empty, which is how a service that never answers again is written.
         var statuses: [ModelServiceStatus?] = []
@@ -37,7 +41,11 @@ struct ModelReportIdleWatchTests {
         var watch: ModelReport.IdleWatch {
             ModelReport.IdleWatch(
                 idleSeconds: { self.idleSeconds },
-                serviceIsRunning: { self.goesAfter.map { self.elapsed < $0 } ?? true },
+                servicePresence: {
+                    if let blind = self.scanStopsAnsweringAfter, self.elapsed >= blind { return .couldNotTell }
+                    guard let goesAfter = self.goesAfter else { return .running }
+                    return self.elapsed < goesAfter ? .running : .gone
+                },
                 now: { self.base.advanced(by: self.elapsed) },
                 sleep: { duration in
                     if let error = self.sleepThrows { throw error }
@@ -110,6 +118,30 @@ struct ModelReportIdleWatchTests {
         let atLeast: Duration = .seconds(world.idleSeconds) + ModelReport.unloadGrace
         #expect(world.elapsed >= atLeast)
         #expect(world.statusQuestions == 0, "a service that never went was asked to prove it came back")
+    }
+
+    /// **A scan that could not tell is not a process that went.** The service here is running the
+    /// whole time; the only thing that changes at 19.75 s is that the scan stops answering — which
+    /// read as "not running" ended the wait, looked like an interval fully served, and filed an
+    /// unload nobody had seen. It is a failure, it waits the whole interval and grace first in
+    /// case the scan comes back, and it says which failure it is: the watch made no claim about
+    /// the process, so it must not print one.
+    @Test func aScanThatCouldNotTellIsNotFiledAsAnUnload() async throws {
+        let world = World()
+        world.goesAfter = nil
+        world.scanStopsAnsweringAfter = Self.wentAfter
+        world.statuses = [Self.status(loaded: false)]
+        var report: [String: Any] = [:]
+        let outcome = try await ModelReport.watchIdleUnload(world.watch, into: &report)
+        #expect(outcome == .failed)
+        #expect(report["unloadWatch"] as? String == "failed")
+        #expect((report["unload"] as? String)?.contains("could not tell") == true,
+                "the report does not say the scan failed: \(report["unload"] ?? "nothing")")
+        #expect(!report.keys.contains("unloadedAfterSeconds"),
+                "a wait was timed against a process nothing had seen go")
+        #expect(world.statusQuestions == 0, "an unreadable scan was asked whether the service came back")
+        let atLeast: Duration = .seconds(world.idleSeconds) + ModelReport.unloadGrace
+        #expect(world.elapsed >= atLeast, "the watch gave up on the first scan that would not answer")
     }
 
     /// **A service that went early did not idle out — it died.** Read as an unload, a crash on the

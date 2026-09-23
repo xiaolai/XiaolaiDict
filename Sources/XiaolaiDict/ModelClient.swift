@@ -283,13 +283,17 @@ enum ModelServiceProcess {
     /// **Three answers, not two.** "The scan failed" is not "the service is gone": read as gone, a
     /// kernel that would not enumerate processes became proof that the old model's weights had been
     /// released, and the app then told the reader a replacement was answering.
+    ///
+    /// There is deliberately no `isRunning` beside it. One existed, collapsed `couldNotTell` to
+    /// `false` three lines under the paragraph above, and `--model-report`'s idle watch — its only
+    /// reader — took that as the service having gone: a scan it could not take was filed as an
+    /// unload nobody saw. Every caller asks this enum by name and answers `couldNotTell` for
+    /// itself, because what it means is the caller's question and not this one's.
     enum Presence {
         case running
         case gone
         case couldNotTell
     }
-
-    static var isRunning: Bool { presence == .running }
 
     static var presence: Presence {
         guard let executable else { return .couldNotTell }

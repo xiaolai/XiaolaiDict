@@ -41,35 +41,17 @@ enum TranslationReport {
     /// renders that beside a correct entry misleads the reader, which is why the sentence stays.
     static let english = "The ship's hold was full."
 
-    /// The sentence the probe translates: short, unambiguous, and the project's own canonical
-    /// example, so a wrong reading is recognisable by eye.
-
-    /// Whether `target` is a translation at all, rather than the two failures that look like one.
-    ///
-    /// **An echo is the failure that reads as success.** A translator that hands the input back —
-    /// or returns nothing — produces a response object indistinguishable from a working one, and
-    /// a panel would render it with full confidence.
-    static func isRealTranslation(source: String, target: String) -> Bool {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return normalised(trimmed) != normalised(source)
-    }
-
-    /// Case and whitespace are not a translation. Compared this way so that "  the ship's HOLD was
-    /// full.  " is still recognised as the input coming back.
-    private static func normalised(_ text: String) -> String {
-        text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    }
-
     /// Measured 2026-09-19, both Macs, bundle and bare binary alike: **every pair reports
     /// `.supported` and then fails `translate` with `.notInstalled`**. So `.supported` describes
     /// Apple's catalogue, not this Mac — and an availability check alone would have shipped a
     /// translation feature that never translates. Before offering one, call `prepareTranslation()`
     /// so the reader is asked to download the pair, or handle `.notInstalled` where it lands.
-    static func run(write: (String) -> Void = { _ = LookupCommand.writeLine($0) }) async -> CommandStatus {
+    static func run(write: (String) -> Bool = LookupCommand.writeLine) async -> CommandStatus {
         #if canImport(Translation)
         guard #available(macOS 15.0, *) else {
-            write("{\"translation\":false,\"reason\":\"this macOS has no Translation framework\"}")
+            // Whether that line landed changes nothing: the run has already failed, and the exit
+            // code says so whether or not the harness could be told why.
+            _ = Instrument.write(["translation": false, "reason": "this macOS has no Translation framework"], to: write)
             return .failure
         }
         let availability = LanguageAvailability()
@@ -90,7 +72,13 @@ enum TranslationReport {
                 let response = try await session.translate(pair.sample)
                 let took = ContinuousClock.now - started
                 row["translated"] = response.targetText
-                row["real"] = isRealTranslation(source: pair.sample, target: response.targetText)
+                // **The shipped check, not a copy of it.** This column graded Apple's translator
+                // by a rule of its own that had fallen behind `TranslationCheck`: it caught a bare
+                // echo, but not a quoted one and not an answer still in the source language — the
+                // two failures the shipped path had already met and been taught to refuse. A
+                // report that passes what the pane would reject measures the wrong thing.
+                row["real"] = TranslationCheck.isTranslation(
+                    response.targetText, of: pair.sample, into: pair.target)
                 row["milliseconds"] = Int(took.components.seconds * 1000
                     + took.components.attoseconds / 1_000_000_000_000_000)
             } catch {
@@ -105,15 +93,12 @@ enum TranslationReport {
             "supportedLanguages": await availability.supportedLanguages.count,
             "pairs": results,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
-            return .internalError
-        }
-        write(String(decoding: data, as: UTF8.self))
+        guard Instrument.write(report, to: write) else { return .internalError }
         // A report in which nothing actually translated is a failed measurement, and says so in
         // its exit status rather than only in its text.
         return results.contains { $0["real"] as? Bool == true } ? .success : .failure
         #else
-        write("{\"translation\":false,\"reason\":\"this build has no Translation framework\"}")
+        _ = Instrument.write(["translation": false, "reason": "this build has no Translation framework"], to: write)
         return .failure
         #endif
     }

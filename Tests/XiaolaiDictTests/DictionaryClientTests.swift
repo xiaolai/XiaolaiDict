@@ -1,4 +1,5 @@
 @testable import XiaolaiDict
+import Foundation
 import XiaolaiDictCore
 import Synchronization
 import Testing
@@ -114,6 +115,77 @@ struct DictionaryClientTests {
         await #expect(throws: CancellationError.self) { try await lookup.value }
         #expect(await client.openSessionGeneration == 1)
         #expect(!service.cancelled(1))
+    }
+}
+
+/// **The two service clients ask one question the same way, and this is what holds them to it.**
+///
+/// `ServiceSessions` exists because each client had kept its own copy of the session policy and
+/// the copies had drifted. The catch clause drifted afterwards, the other way about: the model
+/// client asks the *thrown error* whether the caller was superseded, the dictionary client asked
+/// `Task.isCancelled` — so a transport failure or a deadline landing in the same moment a newer
+/// lookup replaced this one was read as harmless, and the wedged session was kept and handed to
+/// every lookup after it.
+///
+/// **Mechanical because a behavioural check cannot decide it.** `withDeadline` is first-wins and
+/// settles `CancellationError` the instant the calling task is cancelled, so no test can force a
+/// transport failure to be the error in hand while the caller is already cancelled: every
+/// cancellation arrangeable from outside arrives as a `CancellationError`, which both spellings
+/// read identically. The spelling is what can fail, so the spelling is what is read.
+///
+/// The scan is as wide as the one spelling it looks for — a `catch` guarded by
+/// `where Task.isCancelled` — with whitespace removed so a wrapped clause is the same string as a
+/// one-line one. A cancellation read off the task some other way is not something it can see.
+struct DictionaryClientCancellationDriftTests {
+    private static let clients = ["DictionaryClient.swift", "ModelClient.swift"]
+
+    private static var sources: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources")
+    }
+
+    @Test func bothClientsAskTheThrownErrorAndNotTheTask() throws {
+        for client in Self.clients {
+            let file = Self.sources.appending(path: "XiaolaiDict/\(client)")
+            let code = try String(contentsOf: file, encoding: .utf8)
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            #expect(code.contains("catch is CancellationError where Task.isCancelled"),
+                    "\(client) does not keep its session for a caller that was superseded")
+        }
+    }
+
+    /// And nowhere else either: an unqualified clause anywhere in `Sources` reads a service that
+    /// failed as a caller that moved on.
+    @Test func noCatchInTheSourcesReadsCancellationOffTheTask() throws {
+        let root = Self.sources
+        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        else { throw ScanFailure.unreadable(root.path) }
+
+        // `catch` … `where Task.isCancelled`, with whatever pattern stands between them.
+        let cancellationCatch = #/catch (?<pattern>[^{]*?)where Task\.isCancelled/#
+        var scanned = 0
+        var offenders: [String] = []
+        for case let file as URL in walk where file.pathExtension == "swift" {
+            scanned += 1
+            // Thrown rather than defaulted to "": a scanner that silently reads nothing passes
+            // forever and guards nothing.
+            let code = try String(contentsOf: file, encoding: .utf8)
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            for match in code.matches(of: cancellationCatch)
+            where !match.pattern.contains("is CancellationError") {
+                offenders.append("\(file.lastPathComponent): catch \(match.pattern)where Task.isCancelled")
+            }
+        }
+
+        // The positive control. If the walk ever stops finding files this test would pass while
+        // reading nothing at all.
+        #expect(scanned > 20, "the scan found \(scanned) Swift files, so it is not reading the sources")
+        #expect(offenders.isEmpty, "a cancellation read off the task rather than the error: \(offenders)")
+    }
+
+    enum ScanFailure: Error {
+        case unreadable(String)
     }
 }
 
