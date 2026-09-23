@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Resizes the settings window to the pane it is showing — **the one thing that does**, from
 /// outside layout, with the title bar held where the reader last saw it.
@@ -64,4 +65,60 @@ enum SettingsWindowFit {
             window.animator().setFrame(frame, display: true)
         }
     }
+}
+
+/// **A window that is as tall as the scrolling content it shows.**
+///
+/// A grouped `Form` is a scroll view, so it offers its window no height of its own and SwiftUI
+/// opens the window at a default — 450 points, whatever the form holds. Measured 2026-09-23 on the
+/// setup board of a Mac with no model downloaded: 933 points of content in a window ending at 800,
+/// with the model row's **Download** and **Not now** below the fold. That row is what the board
+/// exists to act on, and a reader who does not think to scroll never sees it. It is the same defect
+/// the settings window had — "every pane at 450, SwiftUI's default" — and this is the same
+/// arrangement that fixed it, reduced to the single-pane case: the content reports what it wants
+/// and what it was given, and the window moves by the difference, outside the layout pass.
+private struct FitsItsContent: ViewModifier {
+    let width: CGFloat
+    @State private var window: NSWindow?
+    @State private var wanted: CGFloat = 0
+    @State private var given: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: ContentFit.self) { geometry in
+                // Insets on both sides of the comparison, so whatever sits over the content is in
+                // each and cancels.
+                ContentFit(
+                    wanted: geometry.contentSize.height + geometry.contentInsets.top
+                        + geometry.contentInsets.bottom,
+                    given: geometry.containerSize.height)
+            } action: { _, fit in
+                wanted = fit.wanted
+                given = fit.given
+            }
+            .background(WindowReader { window = $0 })
+            .onChange(of: ContentFit(wanted: wanted, given: given), initial: true) { _, fit in
+                guard let window, let delta = SettingsWindowFit.shortfall(
+                    wanted: fit.wanted, given: fit.given) else { return }
+                // Outside the layout pass this runs in: resizing a window from inside one
+                // re-enters layout until AppKit gives up, which is measured in this file's own
+                // history.
+                DispatchQueue.main.async {
+                    SettingsWindowFit.move(
+                        window, by: delta, width: width,
+                        lowestBottom: window.screen?.visibleFrame.minY, animated: window.isVisible)
+                }
+            }
+    }
+
+    private struct ContentFit: Equatable {
+        let wanted: CGFloat
+        let given: CGFloat
+    }
+}
+
+extension View {
+    /// Makes the window this view is in as tall as the view's scrolling content, at `width`.
+    /// Inert where there is no window — a preview, a test — so the view is unchanged there.
+    func fitsItsContent(width: CGFloat) -> some View { modifier(FitsItsContent(width: width)) }
 }

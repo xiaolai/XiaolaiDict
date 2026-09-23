@@ -1272,8 +1272,19 @@ else
         fi
         restore_declined() { restore_default LocalModelDeclined "$declined_had" "$declined_original" -bool; }
         at_exit restore_declined
-        if ! "$helpers/click-element" com.xiaolaidict "Not now" >/dev/null 2>&1; then
-            flunk "setup: Not now could not be clicked"
+        # **Clicked until it takes.** The check above waits for the *flag* that says the board was
+        # seen, which flips before the window has finished coming to the front — so the first click
+        # landed while Ghostty was still over the button and `click-element` refused it, correctly.
+        # Bounded, and it keeps the helper's own words: thrown away, "could not be clicked" reads as
+        # a button that is not there, whatever actually stopped the click.
+        pressed=no
+        why=""
+        for _ in $(seq 1 50); do
+            if why=$("$helpers/click-element" com.xiaolaidict "Not now" 2>&1); then pressed=yes; break; fi
+            sleep 0.2
+        done
+        if [ "$pressed" != yes ]; then
+            flunk "setup: Not now could not be clicked — $why ($(board_state))"
         else
             declined_shown=""
             for _ in $(seq 1 25); do

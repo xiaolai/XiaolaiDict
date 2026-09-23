@@ -92,6 +92,10 @@ public struct SetupView: View {
         // the width a form of grouped sections reads well at, and the two surfaces are the same
         // kind of surface. If that width moves, both should move together.
         .frame(width: Token.Panel.settingsWidth)
+        // **As tall as it is, not as tall as SwiftUI's default.** A grouped `Form` scrolls, so it
+        // offers the window no height — and the board opened at 450 with the model row's buttons
+        // below the fold on exactly the Mac the row is for: one with no model downloaded.
+        .fitsItsContent(width: Token.Panel.settingsWidth)
         // macOS posts nothing when a permission changes, and the reader grants them in another app
         // and comes back. Polling is the only way to notice, and `.task` stops it when the window
         // goes away.
