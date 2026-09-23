@@ -869,4 +869,19 @@ struct ModelStoreTests {
         #expect(store.directory(for: LocalModelSize.standard.manifest).path()
             == "/tmp/support/XiaolaiDict/Models/mlx-community/Qwen3.5-4B-4bit@ab9c7a42fd31095a40634b3362317779dee9e7fa/")
     }
+    /// **A prune of a store that is not there makes nothing.** `removeStrays` creates the staging
+    /// directory because the lock lives in it, and with intermediate directories that is the store
+    /// root too — so a prune that arrived after its store had been removed put the root back, with
+    /// the lock inside and nothing else. In the suite that is one directory left behind per run;
+    /// in the app it is a store directory recreated under a reader who had just deleted it.
+    @Test func aPruneOfAStoreThatIsNotThereMakesNothing() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-store")
+        let root = scratch.appending("gone")
+        let store = ModelStore(root: root)
+        #expect(!FileManager.default.fileExists(atPath: root.path), "the fixture made the store itself")
+        #expect(store.removeStrays(keeping: Self.manifest(Self.bodies)) == [])
+        #expect(!FileManager.default.fileExists(atPath: root.path),
+                "the prune put the store back: \(try? FileManager.default.subpathsOfDirectory(atPath: root.path) ?? [])")
+    }
+
 }

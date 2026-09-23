@@ -105,9 +105,18 @@ public struct ModelStore: Sendable, Equatable {
         // **Held for the whole run.** Taken after the check above and given back at the end, so an
         // install cannot commit between the enumeration and the removals. Not taken means somebody
         // is committing right now; the prune is retried on the next refresh.
+        // **A prune never brings the store into existence.** The staging directory is made here
+        // because the lock lives in it — and with intermediate directories, which is the root as
+        // well. So a prune that arrived after its store had been removed *recreated* it, with the
+        // lock inside and nothing else: measured 2026-09-23 as one directory per test run under
+        // the system's temporary directory, each holding exactly `.staging/store.lock`, left by a
+        // detached prune that outran the fixture that owned the store. There is nothing to prune
+        // in a store that is not there, so there is nothing to make either — and the staging
+        // directory is made one level only, so no later change can put the root back by accident.
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         try? FileManager.default.createDirectory(
             at: root.appending(path: Self.stagingName, directoryHint: .isDirectory),
-            withIntermediateDirectories: true)
+            withIntermediateDirectories: false)
         guard let store = InstallLock(storeLockFile()) else {
             return ["the store was busy, so nothing was pruned"]
         }
