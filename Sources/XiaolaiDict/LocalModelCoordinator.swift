@@ -48,7 +48,9 @@ final class LocalModelCoordinator {
                 // replaced go on answering, with nothing on screen to say so. The quarantine lifts
                 // itself as soon as the process is seen to be gone, and meanwhile the ladder falls
                 // to Apple's model and the translator to Apple's framework, labelled as always.
-                access.quarantine.hold()
+                // **Nothing is taken here**: the quarantine was taken above and only the branch
+                // that saw the process go lifts it, so this branch simply leaves it held. The
+                // second `hold()` that used to stand here set a flag that was already set.
                 log.error("model: the service did not confirm it had ended; the local model is held back until it has")
             }
         }
