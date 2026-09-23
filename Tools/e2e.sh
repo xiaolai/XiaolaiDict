@@ -964,7 +964,9 @@ else
                 flunk "setup: too little memory, and the fallback still promises a model later — $(printf '%s' "$model_row" | head -c 300)"
             fi
         elif printf '%s' "$shown" | grep -q "download stopped"; then
-            if printf '%s' "$shown" | grep -q "Download"; then
+            # **Resume, not Download.** The button says what it does: the size a stopped download was
+            # of, finishing what is already on disk.
+            if printf '%s' "$shown" | grep -q "Resume"; then
                 pass "setup: the model row reports a stopped download and offers to resume it"
             else
                 flunk "setup: a stopped download with no way to resume it — $(printf '%s' "$model_row" | head -c 300)"

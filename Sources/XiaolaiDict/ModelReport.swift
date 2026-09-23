@@ -57,12 +57,17 @@ enum ModelReport {
     /// reports `skipped` — which is not a pass.
     private static func measure(into report: inout [String: Any]) async throws -> Bool {
         let store = ModelStore.standard()
-        let offered = ModelSizing.offered(physicalMemory: SystemMemory.physical)
-        // **The model this Mac would actually load**, which is the largest offered one already
-        // installed — the service picks that, so downloading the *recommended* size beside a larger
-        // one measured a model the service would never load, and left both on disk.
-        let installed = store.installedManifests(among: offered.map(\.manifest)).map(\.size).max()
-        guard let size = installed ?? ModelSizing.recommended(physicalMemory: SystemMemory.physical) else {
+        let physical = SystemMemory.physical
+        let available = SystemMemory.available() ?? 0
+        // **The model this Mac would actually load**, by the rule the service itself follows: the
+        // largest installed size that fits in memory *now*. Reading it as "the largest installed"
+        // alone reported a correctly chosen smaller model as a failure on a busy Mac; asking for the
+        // recommended size instead downloaded one the service would never load, beside a larger one.
+        let installed = store.installedManifests(among: ModelManifest.all)
+            .map(\.size)
+            .filter { ModelSizing.mayLoad($0, physicalMemory: physical, availableMemory: available) }
+            .max()
+        guard let size = installed ?? ModelSizing.recommended(physicalMemory: physical) else {
             report["error"] = "this Mac is offered no model"
             return false
         }

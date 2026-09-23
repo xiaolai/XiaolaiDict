@@ -82,14 +82,13 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
         guard !question.sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .unavailable("There is no sentence to explain.")
         }
-        switch SystemLanguageModel.default.availability {
-        case .available: break
-        case .unavailable(let reason):
+        // **Asked through `SenseEngine`, which is the one place that asks.** This switched over
+        // Apple's own enum itself, so the two could drift — and the reason a reader is told here
+        // would stop matching the one the setup board shows.
+        if let reason = SenseEngine.status().reason {
             // Unavailable in mainland China, and on any Mac without Apple Intelligence. Said
             // plainly rather than silently falling back to something that may send text away.
-            return .unavailable("The on-device model is not available here (\(reason)).")
-        @unknown default:
-            return .unavailable("The on-device model is not available here.")
+            return .unavailable("The on-device model is not available here (\(reason.rawValue)).")
         }
         do {
             let session = LanguageModelSession(instructions: Self.instructions)
