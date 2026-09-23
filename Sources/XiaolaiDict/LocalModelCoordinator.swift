@@ -37,7 +37,14 @@ final class LocalModelCoordinator {
             if await access.client.unload() {
                 log.notice("model: the service holding the previous model has ended")
             } else {
-                log.error("model: the service did not confirm it had ended; answers may come from the previous model until it does")
+                // **Ready is still published — and the local rung is held back until that process
+                // goes.** Refusing to say ready would leave the row unfinished for as long as a
+                // stuck service lives; letting the rung answer would let the model the reader just
+                // replaced go on answering, with nothing on screen to say so. The quarantine lifts
+                // itself as soon as the process is seen to be gone, and meanwhile the ladder falls
+                // to Apple's model and the translator to Apple's framework, labelled as always.
+                access.quarantine.hold()
+                log.error("model: the service did not confirm it had ended; the local model is held back until it has")
             }
         }
     }

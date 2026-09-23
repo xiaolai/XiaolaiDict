@@ -74,8 +74,6 @@ final class LookupPanelController: LookupPanelPresenting {
     /// whichever lookup happens to have been recorded last.
     var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
 
-    /// The request the panel is showing.
-    var currentRequest: Int { current }
 
     /// The window SwiftUI made for the panel's scene, or nil when it is not up.
     ///
@@ -242,8 +240,13 @@ struct LookupPanelSceneView: View {
                     .environment(\.pinNote) { [controller] note in
                         controller.notes.pin(note, near: controller.lastPointer)
                     }
+                    // **The request this card is**, not the one the panel is on. `newRequest()`
+                    // moves the counter when the next lookup begins — before its selection has
+                    // been read, let alone drawn — so a tap on the card still in front of the
+                    // reader was being filed under a lookup that had not happened.
                     .environment(\.studySense) { [controller] encounter in
-                        controller.onStudySense?(encounter, controller.currentRequest)
+                        guard let request = content.request else { return }
+                        controller.onStudySense?(encounter, request)
                     }
                     .environment(\.translation, translation())
                     .environment(\.explainer, explainer())

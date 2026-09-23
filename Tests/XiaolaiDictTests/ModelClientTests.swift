@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import XiaolaiDict
-import XiaolaiDictCore
+@testable import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 /// The app's side of the model service: a dead or silent service is nil — "not here" — and the next
@@ -70,7 +70,7 @@ struct ModelClientTests {
     /// nothing, be told to end, and count as having replaced the model it never held.
     @Test func unloadingWhenNothingRunsStartsNothing() async {
         let service = Service()
-        let client = ModelClient(connect: { service.connect($0) }, serviceIsRunning: { false })
+        let client = ModelClient(connect: { service.connect($0) }, servicePresence: { .gone })
         #expect(await client.unload())
         #expect(service.sessions.withLock { $0 } == 0, "a service was started in order to end it")
         #expect(service.asked.withLock { $0.isEmpty })
@@ -84,12 +84,74 @@ struct ModelClientTests {
         let service = Service()
         service.dies.withLock { $0 = true }
         let client = ModelClient(
-            connect: { service.connect($0) }, serviceIsRunning: { running.withLock { $0 } },
+            connect: { service.connect($0) }, servicePresence: { running.withLock { $0 } ? .running : .gone },
             shutdownLimit: .milliseconds(50))
         #expect(await client.unload() == false, "a service still running was reported as ended")
 
         running.withLock { $0 = false }
         #expect(await client.unload(), "a process that had gone was reported as still there")
+    }
+
+    /// **"Could not tell" is not "gone".** A kernel that will not enumerate processes says nothing
+    /// about the old model's weights; read as gone, it became the app's proof that a replacement
+    /// was answering.
+    @Test func anUnreadableProcessTableIsNotProofTheServiceEnded() async {
+        let service = Service()
+        let client = ModelClient(
+            connect: { service.connect($0) }, servicePresence: { .couldNotTell },
+            shutdownLimit: .milliseconds(50))
+        #expect(await client.unload() == false, "a scan that failed was taken for a service that had gone")
+    }
+
+    /// **A held quarantine answers nothing, so the ladder falls through.** After an unload that
+    /// could not be confirmed, the process with the replaced weights may still be answering — and
+    /// an answer from the model the reader just replaced, drawn as confidently as any other, is the
+    /// failure the whole lifecycle exists to prevent.
+    @Test func aQuarantinedRungIsNotAsked() async throws {
+        let service = Service()
+        let store = try Self.storeWithAModel()
+        let access = LocalModelAccess(
+            client: ModelClient(connect: { service.connect($0) }), store: store,
+            physicalMemory: 48 * 1_073_741_824)
+        #expect(access.isInstalled)
+        access.quarantine.hold()
+        #expect(await access.ask(Self.question) == .failure(.notInstalled))
+        await access.prewarm()
+        #expect(service.sessions.withLock { $0 } == 0, "the held-back rung opened a session anyway")
+    }
+
+    /// **A model this Mac is not offered is not installed as far as the app is concerned.** The
+    /// service refuses it for want of memory, so counting it here started a service on every lookup
+    /// to be told so — and disagreed with the row the reader is shown.
+    @Test func aModelThisMacCannotLoadDoesNotCountAsInstalled() async throws {
+        let service = Service()
+        let store = try Self.storeWithAModel()
+        let roomy = LocalModelAccess(
+            client: ModelClient(connect: { service.connect($0) }), store: store,
+            physicalMemory: 48 * 1_073_741_824)
+        let small = LocalModelAccess(
+            client: ModelClient(connect: { service.connect($0) }), store: store,
+            physicalMemory: 8 * 1_073_741_824)
+        #expect(roomy.isInstalled)
+        #expect(!small.isInstalled, "a model this Mac cannot load counted as one it has")
+        #expect(await small.ask(Self.question) == .failure(.notInstalled))
+        #expect(service.sessions.withLock { $0 } == 0)
+    }
+
+    /// A store holding the standard model whole, as the downloader would leave it.
+    private static func storeWithAModel() throws -> ModelStore {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "xiaolaidict-access-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let store = ModelStore(root: root)
+        let manifest = LocalModelSize.standard.manifest
+        let directory = store.directory(for: manifest)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for file in manifest.files {
+            try Data(count: Int(file.size)).write(to: directory.appending(path: file.path))
+        }
+        try ModelStore.markerText(for: manifest).write(
+            to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+        return store
     }
 
     /// Nothing is asked of a service that has no model to answer with.

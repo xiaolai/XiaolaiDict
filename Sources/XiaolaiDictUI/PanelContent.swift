@@ -58,6 +58,15 @@ public enum PanelContent {
     case message(title: String, detail: String)
 
 
+    /// Which lookup this content *is*, where it is one. **The panel's own counter is not this**:
+    /// it moves the moment a new lookup starts, which is before the reader's selection has even
+    /// been read — so a tap on the card still on screen would be attributed to a lookup that has
+    /// not happened yet, and the ledger would hang the sense off the wrong word.
+    public var request: Int? {
+        guard case .lookup(let presentation) = self else { return nil }
+        return presentation.request
+    }
+
     /// What this panel is waiting for, in words, or nil when it is waiting for nothing.
     public var waitingDescription: String? {
         guard case .lookup(let presentation) = self, presentation.outcome == nil else { return nil }

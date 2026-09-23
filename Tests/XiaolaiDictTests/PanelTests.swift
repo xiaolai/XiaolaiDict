@@ -99,6 +99,34 @@ struct EntryNavigationTests {
     }
 }
 
+/// **A card carries the lookup it is, and a tap belongs to that one.** The panel's own counter
+/// moves when the *next* lookup starts — before its selection has been read, let alone drawn — so a
+/// tap on the card still in front of the reader was being attributed to a lookup that had not
+/// happened, and the ledger hung the sense off the wrong word.
+@MainActor
+struct PanelRequestIdentityTests {
+    @Test func theContentKnowsWhichLookupItIs() {
+        let presentation = LookupPresentation(
+            request: 7, term: "hold", lemma: Lemma(text: "hold", basis: .tagger), source: nil,
+            capture: .accessibility(.accessibilityTextRange, context: .complete))
+        #expect(PanelContent.lookup(presentation).request == 7)
+        // A message is not a lookup, so there is nothing for a tap to belong to.
+        #expect(PanelContent.message(title: "no selection", detail: "…").request == nil)
+    }
+
+    /// The wire, read at its call site: nothing else can see which value the closure passes.
+    @Test func theTapIsGivenTheCardsRequestAndNotTheCounter() throws {
+        let panel = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDict/LookupPanel.swift")
+        let text = try String(contentsOf: panel, encoding: .utf8)
+        #expect(!text.isEmpty)
+        #expect(text.contains("guard let request = content.request else { return }"))
+        #expect(!text.contains("controller.currentRequest"),
+                "a tap is attributed to whatever lookup the panel has moved on to")
+    }
+}
+
 /// **One resize watch per panel, however many times its view is updated.** The window accessor's
 /// closure runs on every update of the view it is attached to, and the panel's body reads the
 /// model download's progress — so a 3 GB download registered a fresh observer a few hundred times,

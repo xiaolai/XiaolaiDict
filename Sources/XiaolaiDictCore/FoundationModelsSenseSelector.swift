@@ -54,8 +54,13 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
             let question = SenseQuestion(
                 sentence: reading, partOfSpeech: partOfSpeech, senses: keyable.map(\.text))
             let session = LanguageModelSession(instructions: ModelPrompt.senseInstructions)
+            // **Temperature 0, like rung 1.** Picking a sense is a choice from a numbered list,
+            // not writing; sampling only lets one sentence be answered two ways. Left at the
+            // backend's default, this rung was the one half of a pair the invariant claims is
+            // deterministic — and the ladder's order is measured by comparing the two.
             let answer = try await session.respond(
-                to: ModelPrompt.sense(question), generating: SenseAnswer.self)
+                to: ModelPrompt.sense(question), generating: SenseAnswer.self,
+                options: GenerationOptions(temperature: 0))
             // Mechanically checked against the list it was given. Anything else is an abstention,
             // never a nearest match — and **which** abstention is the same question rung 1 answers,
             // so the two are not scored on different fields. 0 is the instructions' own answer for

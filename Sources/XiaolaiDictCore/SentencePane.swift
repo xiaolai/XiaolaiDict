@@ -93,11 +93,23 @@ public struct LadderSentenceExplainer: SentenceExplaining {
     }
 
     public func explain(_ question: SentenceQuestion) async -> SentenceExplanation {
+        // Asked of both rungs, before either is woken: an explanation with no sentence or no word
+        // is not something a model can be asked, and falling through to Apple with it would only
+        // spend a second generation on the same nothing.
+        guard !question.sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !question.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return .unavailable("There is no sentence to explain.") }
+        guard !Task.isCancelled else { return .unavailable("The explanation was stopped.") }
         if case .explanation(let text)? = await local(question) {
-            return .explained(text, tier: tier)
+            // **Checked on the way out too.** A reply that arrives after the reader has closed the
+            // panel is an answer to a question nobody is waiting for, and a blank one is not an
+            // explanation — `SentenceExplanation` promises the pane is never empty.
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if Task.isCancelled { return .unavailable("The explanation was stopped.") }
+            if !trimmed.isEmpty { return .explained(trimmed, tier: tier) }
         }
-        // Not installed, out of memory, declined, or no service: the rung below answers, and says
-        // for itself why it could not where it cannot either.
+        // Not installed, out of memory, declined, blank, or no service: the rung below answers, and
+        // says for itself why it could not where it cannot either.
         guard !Task.isCancelled else { return .unavailable("The explanation was stopped.") }
         return await apple.explain(question)
     }

@@ -17,6 +17,6 @@ extension LocalModelCoordinator {
             defaults: defaults,
             store: ModelStore(root: FileManager.default.temporaryDirectory
                 .appending(path: "xiaolaidict-app-\(UUID().uuidString)", directoryHint: .isDirectory)),
-            client: ModelClient(connect: { _ in throw NoService() }, serviceIsRunning: { false }))
+            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }))
     }
 }

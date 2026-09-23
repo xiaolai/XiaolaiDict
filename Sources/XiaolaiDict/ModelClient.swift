@@ -1,3 +1,4 @@
+import Synchronization
 import Darwin
 import Foundation
 import XiaolaiDictCore
@@ -40,7 +41,7 @@ actor ModelClient {
     let shutdownLimit: Duration
 
     private let connect: Connect
-    private let serviceIsRunning: @Sendable () -> Bool
+    private let servicePresence: @Sendable () -> ModelServiceProcess.Presence
     private var sessions = ServiceSessions<any ModelTransport>()
     /// The session that has been prewarmed, so a prewarm is sent once per service process rather
     /// than once per lookup.
@@ -54,11 +55,11 @@ actor ModelClient {
             try XPCServiceTransport<ModelRequest, ModelReply>(
                 service: XiaolaiDictIdentity.modelService, onCancel: onCancel)
         },
-        serviceIsRunning: @escaping @Sendable () -> Bool = { ModelServiceProcess.isRunning },
+        servicePresence: @escaping @Sendable () -> ModelServiceProcess.Presence = { ModelServiceProcess.presence },
         shutdownLimit: Duration = ModelShutdown.processExit
     ) {
         self.connect = connect
-        self.serviceIsRunning = serviceIsRunning
+        self.servicePresence = servicePresence
         self.shutdownLimit = shutdownLimit
     }
 
@@ -99,13 +100,15 @@ actor ModelClient {
     @discardableResult
     func unload() async -> Bool {
         if let unloading { return await unloading.value }
-        let isRunning = serviceIsRunning
+        let presence = servicePresence
         // **Asked of the process, before a session is opened.** The service is launch-on-demand, so
         // opening one starts a service that was not running — which would load nothing, be asked to
-        // unload, and count as having ended something that never existed.
-        guard isRunning() else { return true }
+        // unload, and count as having ended something that never existed. A scan that could not
+        // tell is not "gone": it is asked again below, with a session, rather than being taken as
+        // proof that the old weights have been released.
+        if presence() == .gone { return true }
         // A connection that could not be made says nothing about the process; the process does.
-        guard let current = try? openSession() else { return !isRunning() }
+        guard let current = try? openSession() else { return presence() == .gone }
         let work = Task { () -> Bool in
             // The reply is not what decides — the process is — so it is not kept. What asking
             // buys is the service stopping cleanly rather than being outlived.
@@ -120,10 +123,12 @@ actor ModelClient {
             // way may still have reached a service that is draining and about to go; waiting only
             // on the word "unloading" reported those as still holding the old weights.
             let deadline = ContinuousClock.now.advanced(by: shutdownLimit)
-            while isRunning(), ContinuousClock.now < deadline {
+            while presence() != .gone, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            return !isRunning()
+            // Only a scan that *saw* the process go counts. "Could not tell" is reported as still
+            // holding the model, which is the answer that costs the reader nothing but a label.
+            return presence() == .gone
         }
         unloading = work
         let gone = await work.value
@@ -176,16 +181,26 @@ actor ModelClient {
 struct LocalModelAccess: Sendable {
     let client: ModelClient
     let store: ModelStore
+    /// This Mac's memory, so "installed" means the same thing here as on the setup board.
+    var physicalMemory: UInt64 = SystemMemory.physical
+    /// Set while a replaced model's service is still running — see `ModelQuarantine`.
+    var quarantine = ModelQuarantine()
 
-    var isInstalled: Bool { !store.installedSizes().isEmpty }
+    /// **Only a size this Mac is offered counts.** A model copied from a larger Mac is on disk and
+    /// the service will refuse it for want of memory — so counting it here started a service on
+    /// every lookup only to be told "not installed", and disagreed with the row the reader sees.
+    var isInstalled: Bool {
+        !store.installedManifests(
+            among: ModelSizing.offered(physicalMemory: physicalMemory).map(\.manifest)).isEmpty
+    }
 
     func ask(_ request: ModelRequest) async -> ModelReply? {
-        guard isInstalled else { return .failure(.notInstalled) }
+        guard isInstalled, !quarantine.isHeld else { return .failure(.notInstalled) }
         return await client.ask(request)
     }
 
     func prewarm() async {
-        guard isInstalled else { return }
+        guard isInstalled, !quarantine.isHeld else { return }
         await client.prewarmOnce()
     }
 
@@ -220,29 +235,61 @@ struct LocalModelAccess: Sendable {
 
 /// The embedded model service's own process, found the way `build-bundle.sh` finds its processes:
 /// by the exact executable path, never by name.
+/// **Held while a replaced model's service is still running.** Installing a new model ends the old
+/// service before the app says "ready"; where that end could not be confirmed, the process that
+/// still has the old weights would go on answering — and the reader would be told, confidently, by
+/// the model they had just replaced. While this is held the local rung answers nothing, so the
+/// ladder falls to Apple's model and the translator to Apple's framework, labelled as they always
+/// are. It lifts itself as soon as the process is seen to be gone.
+final class ModelQuarantine: Sendable {
+    private let held = Mutex(false)
+
+    init() {}
+
+    var isHeld: Bool {
+        guard held.withLock({ $0 }) else { return false }
+        guard ModelServiceProcess.presence == .gone else { return true }
+        held.withLock { $0 = false }
+        return false
+    }
+
+    func hold() { held.withLock { $0 = true } }
+}
+
 enum ModelServiceProcess {
     /// The service's executable inside this bundle, or nil outside one (`swift run`).
     static let executable: String? = Bundle(
         url: Bundle.main.bundleURL.appending(path: "Contents/XPCServices/XiaolaiDictModelService.xpc")
     )?.executableURL?.path
 
-    static var isRunning: Bool {
-        guard let executable else { return false }
-        return isRunning(executable)
+    /// **Three answers, not two.** "The scan failed" is not "the service is gone": read as gone, a
+    /// kernel that would not enumerate processes became proof that the old model's weights had been
+    /// released, and the app then told the reader a replacement was answering.
+    enum Presence {
+        case running
+        case gone
+        case couldNotTell
     }
 
-    static func isRunning(_ executable: String) -> Bool {
+    static var isRunning: Bool { presence == .running }
+
+    static var presence: Presence {
+        guard let executable else { return .couldNotTell }
+        return presence(of: executable)
+    }
+
+    static func presence(of executable: String) -> Presence {
         let count = proc_listallpids(nil, 0)
-        guard count > 0 else { return false }
+        guard count > 0 else { return .couldNotTell }
         var pids = [pid_t](repeating: 0, count: Int(count) * 2)
         let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-        guard found > 0 else { return false }
+        guard found > 0 else { return .couldNotTell }
         var path = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         for pid in pids.prefix(Int(found)) where pid > 0 {
             guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { continue }
             let bytes = path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            if String(decoding: bytes, as: UTF8.self) == executable { return true }
+            if String(decoding: bytes, as: UTF8.self) == executable { return .running }
         }
-        return false
+        return .gone
     }
 }

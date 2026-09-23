@@ -404,7 +404,30 @@ struct ModelStoreTests {
         #expect(store.removeStrays(keeping: manifest).isEmpty)
         #expect(FileManager.default.fileExists(atPath: stale.path),
                 "the prune decided over a store somebody else was writing to")
+
+        // **And an install waits for it** — which is the half of this test's own name that it used
+        // not to exercise at all: it never started an installer, so it would have passed against a
+        // commit that ignored the lock outright. A second model is staged whole and installed while
+        // the lock is held; nothing may appear at its destination until the lock is given back.
+        let second = ModelManifest(
+            size: .small, repository: manifest.repository, revision: "second",
+            files: manifest.files.map {
+                ModelFile(repository: $0.repository, revision: "second", path: $0.path,
+                          size: $0.size, sha256: $0.sha256)
+            })
+        let staged = store.stagingDirectory(for: second)
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+        for (path, body) in Self.bodies { try body.write(to: staged.appending(path: path)) }
+        let install = Task {
+            try await ModelDownloader(store: store, transport: MemoryTransport(Self.bodies)).install(second) { _ in }
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.installed(second) == nil, "a model was committed while the store was locked")
         held.release()
+        _ = try await install.value
+        #expect(store.installed(second) != nil, "the install never completed after the lock was given back")
+        // It gave the lock back too, so the prune below can take it.
+        try store.remove(second)
 
         #expect(store.removeStrays(keeping: manifest).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: stale.path))

@@ -34,6 +34,11 @@ public actor ModelService {
     /// `await task.value` cannot be given up on — it ignores the waiter's cancellation and has no
     /// deadline — so waiting that way puts every later question behind a prewarm that never returns.
     private var prewarmInFlight = false
+    /// What the GPU probe answered, kept so it is asked once — see `gpuName()`.
+    private var probedGPU: String??
+    /// Whether a generation is running now. The actor is reentrant across awaits, so a request that
+    /// arrives mid-answer is inside the actor while the model is busy.
+    private var isGenerating = false
     /// How long a question waits for a prewarm already running. Long enough for a cold load and a
     /// grammar compile — measured at 1.6–2.5 s on an M4 Max — and far short of the service watchdog.
     private let prewarmWait: Duration
@@ -65,14 +70,20 @@ public actor ModelService {
         case .prewarm: return await prewarm()
         // A prewarm already running loads the weights and compiles the grammar this question needs:
         // waited for, so the two are not generated side by side on one model.
+        // **Cancellation is checked after the wait as well as inside it.** `awaitPrewarm` returns
+        // when the caller gives up — and then the generation started anyway, loading weights and
+        // spending the GPU for an answer nobody was waiting for.
         case .pickSense(let question):
             await awaitPrewarm()
+            guard !Task.isCancelled else { return .failure(.generationFailed("the question was withdrawn")) }
             return await pickSense(question)
         case .translate(let question):
             await awaitPrewarm()
+            guard !Task.isCancelled else { return .failure(.generationFailed("the question was withdrawn")) }
             return await translate(question)
         case .explain(let question):
             await awaitPrewarm()
+            guard !Task.isCancelled else { return .failure(.generationFailed("the question was withdrawn")) }
             return await explain(question)
         }
     }
@@ -97,11 +108,25 @@ public actor ModelService {
 
     /// The size it holds, or the one it **would** load — asked of the same routine the loading asks,
     /// so status cannot advertise a model the service would refuse for want of memory.
+    /// **The GPU probe runs once and is remembered.** It evaluates an MLX op, and the actor is
+    /// reentrant across awaits — so a `.status` arriving mid-generation would put a second piece of
+    /// GPU work beside the model's own. Asked here at most once per process, before or between
+    /// answers, and reused after.
+    private func gpuName() -> String? {
+        if let probedGPU { return probedGPU }
+        // Never while the model is generating: that is the one time a second piece of GPU work
+        // costs something. Status then answers with what it knows, which is nothing yet.
+        guard !isGenerating else { return nil }
+        let name = gpu()
+        probedGPU = name
+        return name
+    }
+
     private func status() -> ModelReply {
         let available = availableMemory()
         return .status(ModelServiceStatus(
             installed: model?.size ?? fitting(available: available ?? 0)?.size,
-            loaded: hasAnswered, gpu: gpu(), footprint: footprint(), availableMemory: available))
+            loaded: hasAnswered, gpu: gpuName(), footprint: footprint(), availableMemory: available))
     }
 
     /// Loads the weights and compiles the sense grammar with a real answer, once per process — the
@@ -203,6 +228,8 @@ public actor ModelService {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): model = loaded
         }
+        isGenerating = true
+        defer { isGenerating = false }
         do {
             let reply = try await body(model)
             // **The weights are loaded once anything has come back from them** — including an answer
@@ -233,7 +260,12 @@ public actor ModelService {
     /// The model, building it the first time — **after** deciding it fits. Sizing is asked before
     /// every first load and never after one: once loaded, the memory is already spent.
     private func loaded() -> Result<any LanguageModel, ModelFailure> {
-        if let model { return .success(model.model) }
+        // **Only a model that has answered counts as loaded.** Building an `MLXLanguageModel` maps
+        // nothing — the weights arrive inside the first generation — so a cached value whose first
+        // generation was cancelled or failed would let every request after it skip the sizing gate
+        // and load whenever, against whatever memory was free by then. The gate is asked again
+        // until something has actually come back from the weights.
+        if let model, hasAnswered { return .success(model.model) }
         // **One reading of each.** Asking twice let the answer be about a different state from the
         // reason given for it — "not enough memory" quoting a figure from another moment.
         let available = availableMemory() ?? 0

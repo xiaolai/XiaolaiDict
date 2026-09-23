@@ -1,9 +1,8 @@
-import Foundation
-
 /// The top rung: Qwen, in the model service, guided to the candidate set.
 ///
-/// The same closed-set question the on-device rung asks, with the same instructions, prompt and
-/// narrowing — so the two are scored on one field and differ in nothing but the model. The model
+/// The same closed-set question the on-device rung asks, with the same instructions, prompt,
+/// narrowing and generation options — so the two are scored on one field and differ in nothing but
+/// the model. The model
 /// answers with a position in the list it was given, and the answer is checked against that list
 /// **here**, mechanically: a small model that answers "10" of eight senses (Qwen3.5-2B did, once)
 /// gets an abstention, never a nearest match.
@@ -13,7 +12,9 @@ import Foundation
 /// not here, and the next rung runs. A refusal is `.refused`: the model *was* here and declined this
 /// sentence, which the ledger keeps apart.
 public struct LocalModelSenseSelector: SenseSelecting {
-    /// One round trip to the model service; nil where it could not be reached at all.
+    /// One round trip to the model service. **Nil is "no usable reply"** — not only a service that
+    /// could not be reached: a deadline, a caller that gave up, and a transport that failed all
+    /// arrive here as nil, and the rung treats them alike because none of them is an answer.
     public typealias Ask = @Sendable (SenseQuestion) async -> ModelReply?
 
     private let ask: Ask

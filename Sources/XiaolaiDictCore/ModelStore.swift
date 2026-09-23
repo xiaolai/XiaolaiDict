@@ -335,7 +335,16 @@ public struct ModelDownloader: Sendable {
         try Task.checkCancellation()
         try ModelStore.markerText(for: manifest).write(
             to: staging.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
-        return try commit(staging, of: manifest)
+        // **Never committed without the store's lock.** A prune decides across every model at once,
+        // so it holds this for its whole run; committing inside it is what keeps a model that lands
+        // mid-prune from being read as a stray and deleted. An earlier version gave up after five
+        // seconds and committed anyway, which put the race back exactly where the lock had removed
+        // it. Waited for instead, with no deadline and with cancellation honoured: a prune holds
+        // this for the length of a directory walk, and the kernel gives a lock back when the
+        // process holding it dies, so there is nothing here to wait out for ever.
+        let held = try await Self.waitForStoreLock(store.storeLockFile())
+        defer { held.release() }
+        return try commit(staging, of: manifest, holding: held)
     }
 
     /// What is in staging, made trustworthy before anything is counted or fetched.
@@ -405,13 +414,8 @@ public struct ModelDownloader: Sendable {
     }
 
     /// The move that makes a model loadable: one rename, after which the directory holds all of it.
-    private func commit(_ staging: URL, of manifest: ModelManifest) throws -> URL {
-        // **Under the store's own lock.** A prune decides across every model at once, so it holds
-        // this for its whole run; committing inside it is what keeps a model that lands mid-prune
-        // from being read as a stray. Waited for rather than refused: the prune holds it for
-        // milliseconds and this download took minutes.
-        let held = Self.waitForStoreLock(store.storeLockFile())
-        defer { held?.release() }
+    private func commit(_ staging: URL, of manifest: ModelManifest, holding held: InstallLock) throws -> URL {
+        _ = held  // held by the caller for the whole commit; named so it cannot be dropped early
         let destination = store.directory(for: manifest)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -427,18 +431,18 @@ public struct ModelDownloader: Sendable {
         return installed
     }
 
-    /// The store lock, waited for within a bound. **Nil rather than throwing** where it cannot be
-    /// had: the weights are downloaded and checked, and refusing to install them because a prune
-    /// overran would throw away minutes of work to avoid a race the prune's own re-checks already
-    /// narrow to microseconds.
-    private static func waitForStoreLock(_ file: URL) -> InstallLock? {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while ContinuousClock.now < deadline {
+    /// The store lock, waited for until it is free. Throws only when the caller is cancelled — and
+    /// then before the model is moved into place, so the staged copy survives for the next attempt.
+    static func waitForStoreLock(_ file: URL) async throws -> InstallLock {
+        while true {
+            try Task.checkCancellation()
             if let held = InstallLock(file) { return held }
-            usleep(20_000)
+            try await Task.sleep(for: storeLockPoll)
         }
-        return nil
     }
+
+    /// How often the wait above looks. Short, because what it waits for is a directory walk.
+    static let storeLockPoll = Duration.milliseconds(20)
 
     /// Removes what must not survive — and says so when it cannot, rather than leaving a bad file to
     /// fail every retry from behind the error that made it.
