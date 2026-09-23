@@ -320,7 +320,9 @@ struct SetupWiringTests {
 
     /// And the menu, which is where a reader who is not in Settings looks.
     @Test func theMenuCanOpenTheBoard() throws {
-        let menu = try source("Sources/XiaolaiDict/XiaolaiDictMenu.swift")
+        // `code`, not `source`: a commented-out `showSetup()` satisfies a raw scan, and the rule
+        // would then read as held while no menu item opened anything.
+        let menu = try code("Sources/XiaolaiDict/XiaolaiDictMenu.swift")
         #expect(menu.contains("showSetup()"), "no menu item opens the setup board")
     }
 
@@ -331,8 +333,11 @@ struct SetupWiringTests {
     /// this file explains at length why a `UtilityWindow` is *not* used, and a scanner that cannot
     /// tell a declaration from an explanation reports the explanation as the offence.
     @Test func theBoardIsAWindowSceneAndNotAUtilityWindow() throws {
-        let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
+        // Both halves read the comment-stripped source. The second already did; the first did not,
+        // so the scene declaration it looks for could have been satisfied by a line explaining what
+        // the scene ought to be — in the one file that spends a paragraph explaining exactly that.
+        let scene = try code("Sources/XiaolaiDict/XiaolaiDictScene.swift")
         #expect(scene.contains("Window(\"Set Up XiaolaiDict\", id: Self.setupID)"))
-        #expect(!withoutComments(scene).contains("UtilityWindow"), "a UtilityWindow is created and never drawn")
+        #expect(!scene.contains("UtilityWindow"), "a UtilityWindow is created and never drawn")
     }
 }

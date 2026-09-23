@@ -264,6 +264,11 @@ public final class Ledger {
     }
 
     /// The senses met in one lookup, in the order they were recorded.
+    ///
+    /// **No surface calls it; it is how `record(_:for:)` is read back** — and, more than that, it is
+    /// the only way to see that `delete(lookup:)` takes a lookup's encounters with it. That cascade
+    /// is a product promise the drawer's delete rests on, and `ON DELETE CASCADE` firing is not
+    /// observable from anything else this type offers.
     public func encounters(ofLookup lookupID: Int) throws -> [SenseEncounter] {
         var found: [SenseEncounter] = []
         try run(
@@ -338,6 +343,10 @@ public final class Ledger {
             bind: [.text(Lemmatizer.canonical(lemma)), .real(before.timeIntervalSince1970),
                    .optionalText(language)]
         ) { row in
+            // The four columns *are* the identity, and they are the four `record(_:for:)` writes
+            // from the encounter — `dictionary_id` from `DictionaryIdentity.key`, so the read and
+            // the write cannot spell a dictionary differently. Built here rather than by way of a
+            // `SenseEncounter`, which would need ten more columns this query has no use for.
             met.insert(StudyItem(
                 dictionary: try row.text(0), entryID: try row.text(1),
                 senseKey: row.optionalText(2), senseKeyKind: try row.senseKeyKind(3)))
@@ -352,6 +361,12 @@ public final class Ledger {
     /// This is the query `study-unit.md` §4 calls the point of the whole design: a common word
     /// whose rare sense the reader does not know is the highest-value study item there is, and a
     /// word-level unit cannot express it, because the word is already marked known.
+    ///
+    /// **Nothing calls it yet** — the study surface it was written for is not built, and
+    /// `LedgerStore` does not forward it. Its tests are evidence that the SQL is right, never that
+    /// the feature works, and the three comments inside it record defects found by audit rather
+    /// than by a reader. It is kept because the query is the hard part and rediscovering it would
+    /// cost more than carrying it.
     public func newlyMetSenses(limit: Int) throws -> [NewlyMetSense] {
         guard limit >= 0 else { throw LedgerError.negativeLimit(limit) }
         var found: [NewlyMetSense] = []
@@ -419,6 +434,10 @@ public final class Ledger {
     /// Lemmas the dictionaries had, by how often they were looked up, most first; equal counts put
     /// the most recent first, and equal times the lemma in code-point order, so a list cut at
     /// `limit` is the same list every time.
+    ///
+    /// **Nothing calls it yet.** `feature-ledger-vocabulary-memory.md` G1 records it as the study
+    /// list's query with its surface pending, which is what it still is — and `LedgerStore` does
+    /// not forward it.
     public func studyList(limit: Int) throws -> [LemmaCount] {
         guard limit >= 0 else { throw LedgerError.negativeLimit(limit) }
         var list: [LemmaCount] = []
@@ -437,22 +456,16 @@ public final class Ledger {
         return list
     }
 
-    /// How many lookups this ledger holds, found or not.
-    ///
-    /// Exists so a migration can prove the rows arrived rather than that a file was moved: a
-    /// destination that opens cleanly and holds nothing is what losing a reader's history
-    /// actually looks like.
-    public func lookupCount() throws -> Int {
-        var count = 0
-        try run("SELECT COUNT(*) FROM lookups", bind: []) { count = $0.integer(0) }
-        return count
-    }
-
     /// Every lookup of `lemma`, found or not, newest first.
     ///
     /// `language` nil means every language — which is what a caller asking "have I ever looked this
     /// spelling up" wants. A caller that knows the language passes it, and does not get another
     /// language's homograph.
+    ///
+    /// **No surface calls it; it is how `record` is read back.** `recentLookups` is what the drawer
+    /// reads, and it projects a `ReadingEntry` rather than a whole `LookupRecord` — so this is the
+    /// only thing that returns every column a lookup writes, and every migration test reads through
+    /// it. Kept for that: a write path with no read-back is a write path nothing can check.
     public func history(of lemma: String, language: String? = nil) throws -> [LookupRecord] {
         var records: [LookupRecord] = []
         try run(

@@ -25,8 +25,13 @@ public enum SenseStanding: Equatable {
         switch self {
         case .confirmed(.reader): String(localized: "You chose this sense")
         case .confirmed(.onlySense): String(localized: "The only sense in this entry")
-        case .confirmed: String(localized: "Confirmed")
-        case .proposed: String(localized: "A guess — not confirmed")
+        // **`.confirmed(.model)` is unreachable, not merely unused**, and it is written here
+        // rather than left to a catch-all so that saying so costs nothing. `standing` and
+        // `EntryPresentation.standing(of:in:mark:)` both send `.model` to `.proposed`, which is
+        // decision D2 in the one place it is enforced. A catch-all arm gave it a "Confirmed" of
+        // its own, and that word sat in the translators' catalog as the only sentence in the app
+        // no reader can ever be shown.
+        case .confirmed(.model), .proposed: String(localized: "A guess — not confirmed")
         case .unclaimed: String(localized: "Shown without a claim")
         }
     }
@@ -69,9 +74,46 @@ public struct SensePresentation: Equatable, Identifiable {
     public let metBefore: Bool
 
     public var id: String { key ?? "\(ordinal)" }
+}
 
-    /// A position key is a weaker claim than a publisher's and must read as one (I4).
-    public var isPositional: Bool { keyKind == .position }
+/// One entry's headword, printed the way its dictionary prints it.
+///
+/// What is left of the panel's sidebar, which decision D1 shaped and the card replaced: the tree of
+/// dictionary → entry → sense went with the sidebar, and this is the one thing in it the card still
+/// asks for. Kept as a type rather than folded into `EntryPresentation` because raising a homograph
+/// marker has its own failure case — a marker that is not a number — and that is worth a name.
+public struct EntryNode: Equatable {
+    public let headword: String
+    /// NOAD's *fine¹ fine² fine³ fine⁴*, where the dictionary numbers its homographs.
+    public let homograph: String?
+
+    public init(headword: String, homograph: String?) {
+        self.headword = headword
+        self.homograph = homograph
+    }
+
+    /// The headword, with its homograph number raised the way the dictionary prints it. A marker
+    /// that is not a plain number is shown as it is rather than mangled into a superscript that
+    /// silently drops the characters it has no glyph for.
+    public var label: String {
+        guard let homograph else { return headword }
+        guard let raised = Self.raised(homograph) else { return "\(headword) (\(homograph))" }
+        return headword + raised
+    }
+
+    private static let superscripts: [Character: Character] = [
+        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+    ]
+
+    private static func raised(_ marker: String) -> String? {
+        guard !marker.isEmpty else { return nil }
+        var raised = ""
+        for character in marker {
+            guard let glyph = superscripts[character] else { return nil }
+            raised.append(glyph)
+        }
+        return raised
+    }
 }
 
 /// One entry, as the popup presents it: the heading, what it is, how it sounds, and its senses.
@@ -97,9 +139,7 @@ public struct EntryPresentation: Equatable {
 
     public init(entry: DictionaryEntry, mark: SenseMark?, met: Set<StudyItem>) {
         dictionary = entry.dictionary
-        heading = EntryNode(
-            index: 0, headword: entry.headword, homograph: entry.homograph, note: nil,
-            senseKeyKind: entry.senseKeyKind, senses: []).label
+        heading = EntryNode(headword: entry.headword, homograph: entry.homograph).label
         var seen: Set<String> = []
         partsOfSpeech = entry.blocks.compactMap(\.partOfSpeech).filter { seen.insert($0).inserted }
         pronunciations = entry.pronunciations

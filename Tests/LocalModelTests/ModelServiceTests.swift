@@ -429,6 +429,46 @@ struct ModelServiceTests {
         prewarm.cancel()
     }
 
+    /// **Unloading is refused here, not answered.** The executable takes `.unload` before this
+    /// switch ever sees it, and what it does there is stop admitting work and drain what is in
+    /// flight before the process exits. Answering `.unloading` from inside the actor skips all of
+    /// that silently: the caller is told the service has ended while generations it was meant to
+    /// wait for are still running, and the exit then kills them unanswered. A routing defect said
+    /// out loud costs one confusing reply; the same defect answered politely costs a lost drain
+    /// that nothing reports.
+    @Test func unloadingIsNotAnsweredByTheActorThatCannotDrain() async throws {
+        let model = ScriptedModel(.answer(#"{"senseNumber": 1}"#))
+        let reply = try await service(model).reply(to: .unload)
+        guard case .failure(.invalidRequest) = reply else {
+            Issue.record("the actor answered an unload with \(reply)")
+            return
+        }
+        #expect(model.requests.isEmpty)
+    }
+
+    /// **And a second `.prewarm` is bounded by the same wait a question is.** This was the one path
+    /// that still did `await task.value` on the prewarm — no deadline, and deaf to the caller's own
+    /// cancellation — reachable the moment two clients each send `.prewarm`, which is every second
+    /// client the app starts. The rule the file states in `awaitPrewarm` has to hold on both paths
+    /// or it holds on neither.
+    @Test func aSecondPrewarmIsNotHeldByAWedgedFirstOne() async throws {
+        let model = ScriptedModel(.wedgeOnce(#"{"senseNumber": 2}"#))
+        let service = try service(model, prewarmWait: .milliseconds(50))
+        let finished = Recorder(false)
+        let first = Task { _ = await service.reply(to: .prewarm); finished.withLock { $0 = true } }
+        await Self.waitUntil { !model.requests.isEmpty }
+        #expect(!model.requests.isEmpty, "the first prewarm's generation never started")
+
+        let second = await service.reply(to: .prewarm)
+        guard case .failure(.generationFailed) = second else {
+            Issue.record("a second prewarm behind a wedged one came back as \(second)")
+            return
+        }
+        #expect(model.requests.count == 1, "the second prewarm started a generation of its own")
+        #expect(finished.withLock { $0 } == false, "the second prewarm outlived the wedged first")
+        first.cancel()
+    }
+
     /// A reader who closes the panel takes their question with them. Waiting on a task's value
     /// cannot be given up on, so the wait watches for cancellation itself — **and the withdrawal is
     /// checked again after the wait**, because the wait also returns when the caller gives up, and
@@ -478,9 +518,13 @@ struct ModelServiceTests {
         // A word the sentence does not contain, so this proves the *term* field reached the prompt
         // rather than matching the sentence it is quoted in.
         #expect(asked.contains("orlop"))
-        let budget = try #require(model.budgets.first ?? nil)
-        #expect(budget == ModelPrompt.explanationTokens(for: question))
-        #expect(budget < 600)
+        // **What this proves is the wiring, and only that**: the explanation's budget is the one
+        // `ModelPrompt` computes for *this* question, so a call site that forgot it, or passed a
+        // different question, fails here. The bound that stood beside it — `budget < 600` — could
+        // not fail for any question, since `explanationTokens` is a `min(512, …)`; what the cap is
+        // worth is asserted against a written-out 512 in
+        // `aLongSentenceIsBudgetedToTheCapAndNoFurther`.
+        #expect(try #require(model.budgets.first ?? nil) == ModelPrompt.explanationTokens(for: question))
     }
 
     /// An explanation with nothing to explain is refused before a model is woken for it.
@@ -601,9 +645,11 @@ struct ModelServiceTests {
         let model = ScriptedModel(.answer("这艘船的货舱装满了。"))
         let question = TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")
         _ = try await service(model).reply(to: .translate(question))
-        let budget = try #require(model.budgets.first ?? nil)
-        #expect(budget == ModelPrompt.translationTokens(for: question))
-        #expect(budget < 200)
+        // The wiring, as above: this question's budget, from the one helper that computes it. The
+        // `budget < 200` beside it was the helper asked what it should have answered — it holds for
+        // every sentence a `min(1_024, …)` could produce. Where the cap itself is pinned as a
+        // number is the test below.
+        #expect(try #require(model.budgets.first ?? nil) == ModelPrompt.translationTokens(for: question))
     }
 
     /// **And a long sentence is budgeted to the cap, not to itself.** The cap is the whole point of

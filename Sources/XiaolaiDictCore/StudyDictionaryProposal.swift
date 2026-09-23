@@ -37,15 +37,6 @@ public enum StudyDictionaryProposal: Sendable, Equatable {
     /// which kind is missing and open Dictionary.app.
     case nothingSuitable
 
-    /// The dictionaries this proposal is about, in the order the reader set in Dictionary.app.
-    public var candidates: [DictionaryCapability] {
-        switch self {
-        case .propose(let one): [one]
-        case .choose(let several): several
-        case .nothingSuitable: []
-        }
-    }
-
     /// Applies the rule.
     ///
     /// Input order is preserved throughout — it is Dictionary.app's order, which is the reader's

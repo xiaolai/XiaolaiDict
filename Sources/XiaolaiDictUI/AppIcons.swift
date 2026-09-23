@@ -58,4 +58,13 @@ enum AppIcons {
 
     /// For the tests, which must not inherit whatever the last one looked up.
     static func forget() { cache.removeAll() }
+
+    /// Whether an answer for `bundleID` is held — **including a miss**, which is the half of this
+    /// cache nothing else can observe.
+    ///
+    /// A second `icon(for:)` returning nil looks identical whether it came from here or from
+    /// another trip to `NSWorkspace`, so asking twice and comparing the answers cannot tell a
+    /// working cache from one that had stopped keeping misses. That is the case worth keeping: an
+    /// app the reader has deleted is searched for on every card of every scroll.
+    static func remembers(_ bundleID: String) -> Bool { cache.index(forKey: bundleID) != nil }
 }

@@ -105,6 +105,33 @@ struct SentenceWindowRenderTests {
         return best.offset
     }
 
+    /// The height of exactly `count` lines of the card's own prose, **measured rather than
+    /// computed**, and measured outside `SentenceWindowText` so that neither `AtMost` nor the
+    /// view's own `lineLimit` can widen the bound it is being held to.
+    ///
+    /// Plain `Text`, at the width, font and line spacing the card sets, with the lines forced by
+    /// newlines so the count is exact rather than a guess about where a sentence wraps.
+    ///
+    /// **Multiplying a one-line render is what this replaced, and it was wrong by construction.**
+    /// Line spacing falls *between* lines, so one line measures 15.0 points and two measure 32.5,
+    /// not 30.0 — the missing 2.5 is `scale.text.leading`, the single gap. The card was drawing
+    /// its two lines correctly and the yardstick called it three: a repair that failed the thing
+    /// it was meant to protect, which is what running it is for.
+    private func lineBox(_ count: Int, width: CGFloat = 300) throws -> CGFloat {
+        let scale = Scale.standard
+        let renderer = ImageRenderer(content:
+            Text(verbatim: Array(repeating: "A", count: count).joined(separator: "\n"))
+                .font(.system(size: scale.text.body))
+                .lineSpacing(scale.text.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: width, alignment: .topLeading)
+                .background(Color.white)
+                .environment(\.colorScheme, ColorScheme.light))
+        renderer.scale = 2
+        let image = try #require(renderer.cgImage)
+        return CGFloat(image.height) / renderer.scale
+    }
+
     private func render(_ windows: [SentenceExcerpt], width: CGFloat = 300) throws -> (pixels: [UInt8], height: CGFloat) {
         let renderer = ImageRenderer(content:
             SentenceWindowText(windows: windows, fullSentence: windows.first?.text ?? "") { AttributedString($0.text) }
@@ -145,7 +172,14 @@ struct SentenceWindowRenderTests {
         let singles = try windows.map { try pixels([$0]) }
         let chosen = nearest(shown.pixels, among: singles)
         #expect(chosen.map { $0 > 0 } == true, "the card showed \(chosen.map { "window \($0)" } ?? "no window") rather than a tighter one")
-        let lines = Scale.standard.text.height(ofLines: Token.Limit.wrapLines)
-        #expect(shown.height <= lines, "the sentence took \(shown.height) points, past the card's \(lines)")
+
+        // **Measured against lines this test rendered, never against the view's own bound.** The
+        // expected height used to be `Scale.standard.text.height(ofLines: Token.Limit.wrapLines)`
+        // — character for character the expression `SentenceWindowText` bounds itself by — so the
+        // arithmetic in `height(ofLines:)` was checked against itself and any drift in it moved
+        // both sides of the comparison together.
+        let lines = try lineBox(Token.Limit.wrapLines)
+        #expect(shown.height <= lines,
+                "the sentence took \(shown.height) points, past \(Token.Limit.wrapLines) lines at \(lines)")
     }
 }

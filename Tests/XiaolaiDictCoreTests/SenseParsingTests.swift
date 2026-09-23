@@ -124,7 +124,11 @@ struct SenseParsingTests {
                 #"<span d:def="1" class="trans">\#(definition)</span></span></span></d:entry>"#
             return EntryDocument.parse(Self.document(body))!.senses[0].textHash
         }
-        #expect(hash("很好的") == hash("很好的"))
+        // **Written out, not compared with itself.** `hash(x) == hash(x)` holds for any
+        // deterministic hash — including `Hasher`, which is seeded per process and would give this
+        // sense a different key on every launch while passing here every time. A literal is the
+        // only form of this check that a per-process seed fails.
+        #expect(hash("很好的") == "45c42943927ed172")
         #expect(hash("很好的") != hash("天气好的"))
     }
 

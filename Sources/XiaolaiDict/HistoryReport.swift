@@ -65,10 +65,6 @@ enum HistoryReport {
         } else {
             backdrop = .unmeasured("the drawer is drawn but has no geometry to read it through")
         }
-        // What the backdrop measurement depends on: the drawer above an ordinary window. Reported
-        // so a reading can be checked against the stacking it assumed.
-        let drawerLevel = app.drawerWindowLevel
-
         app.toggleHistory()
         let released = await Instrument.settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
 
@@ -77,10 +73,8 @@ enum HistoryReport {
             "insideBundle": Bundle.main.bundleIdentifier != nil,
             "screens": screens.count,
             "appeared": appeared,
-            "drawnOnScreen": drawn,
             "dockedWhereAsked": docked,
             "frame": NSStringFromRect(frame),
-            "expectedFrame": expected.map { NSStringFromRect($0.windowRect.cg) } ?? "none",
             // False is the passing value. True means the drawer stole focus from whatever the
             // reader was reading, which is the whole reason this report exists.
             "activatedTheApp": activatedUs,
@@ -97,14 +91,12 @@ enum HistoryReport {
             "backdropShowsThrough": backdrop.reading.map { $0.showsThrough as Any } ?? "unmeasured",
             "backdropChangedFraction": backdrop.reading?.changedFraction ?? -1,
             "backdropProblem": backdrop.problem ?? "none",
-            "drawerWindowLevel": drawerLevel,
             // The glass this instance loaded from the reader's settings, and how much of the
             // stripes' colour came through it. e2e.sh runs the report once per glass and compares:
             // a setting the drawer never reads would score the same both times.
             "drawerGlass": app.appearance.drawerGlass.rawValue,
             "stripesColour": backdrop.stripesColour ?? -1,
             "glassOverBlack": backdrop.reading?.glassOverBlack ?? -1,
-            "backdropWindowLevel": NSWindow.Level.normal.rawValue,
             // The stripes are a picture to look at, not a score — so their failing is reported on
             // its own and never costs the black-and-white reading it did not take part in.
             "stripesProblem": backdrop.stripesProblem ?? "none",

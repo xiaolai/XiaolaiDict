@@ -1,4 +1,5 @@
 import AVFoundation
+import SwiftUI
 import XiaolaiDictCore
 import os
 
@@ -93,6 +94,20 @@ public enum Speech {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return caveat(for: Lemmatizer.language(of: trimmed, in: nil) ?? "en")
+    }
+
+    /// **The tooltip on a speak button, wherever one is drawn.**
+    ///
+    /// Written out twice — once on the lookup card, once on a history card — it had already drifted
+    /// in the way that is hardest to see. The drawer's was `Text("Say it aloud")`, so the compiler
+    /// extracted it and a translator got it; the card's was assembled as a `String` and reached
+    /// `Text` through the verbatim overload, which extracts nothing. Same tooltip, translated in one
+    /// surface and English in the other, and no test would ever have said so.
+    ///
+    /// The caveat, where there is one, is a sentence this type has already localized, so it arrives
+    /// verbatim; the ordinary case is a key.
+    public static func sayItAloudHelp(for text: String) -> Text {
+        caveat(forSpeaking: text).map { Text(verbatim: $0) } ?? Text("Say it aloud")
     }
 
     /// Says `text` in the language it appears to be in. Silence is reported to the log rather than

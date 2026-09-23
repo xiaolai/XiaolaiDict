@@ -144,8 +144,16 @@ struct HoverPolicyTests {
 
     /// The commonest refusal is checked first, so a reader who is simply reading never pays for
     /// Accessibility, an exclusion lookup, or a clock read.
+    ///
+    /// **The site has to be one the shipped policy really excludes, or the order is not under
+    /// test.** This asked about `com.apple.Terminal`, which stopped being excluded when terminals
+    /// were un-excluded — after which `.modifierNotHeld` was the only refusal the site could
+    /// produce whatever order the guards were in, and the check passed by construction. A password
+    /// manager is excluded by `defaultExcludedApps`, so the site can answer either way and the
+    /// order is what decides which.
     @Test func theCommonestRefusalIsCheckedFirst() {
-        let excludedAndUnmodified = HoverSite(bundleID: "com.apple.Terminal")
+        let excludedAndUnmodified = HoverSite(bundleID: "com.1password.1password")
+        #expect(decide(excludedAndUnmodified) == .stayQuiet(.excludedApp), "the fixture is not excluded")
         #expect(decide(excludedAndUnmodified, held: []) == .stayQuiet(.modifierNotHeld))
     }
 
@@ -213,11 +221,11 @@ struct HoverHostMatchingTests {
     /// The menu read "Hover Lookup    hold ⌥" as a literal while `HoverModifier` had four cases,
     /// so the label was correct only for as long as the modifier could not be changed. Making it
     /// changeable without this would have shipped a menu that confidently names the wrong key.
+    ///
+    /// Asserted over `allCases` as one list, the way the written names are: a case added later
+    /// fails here rather than sliding past a set of four per-case assertions that never mention it.
     @Test func everyModifierCarriesItsKeySymbol() {
-        #expect(HoverModifier.option.symbol == "\u{2325}")
-        #expect(HoverModifier.control.symbol == "\u{2303}")
-        #expect(HoverModifier.command.symbol == "\u{2318}")
-        #expect(HoverModifier.shift.symbol == "\u{21E7}")
+        #expect(HoverModifier.allCases.map(\.symbol) == ["\u{2325}", "\u{2303}", "\u{2318}", "\u{21E7}"])
     }
 
     /// And a written name, for a picker where a lone symbol is a guessing game.
@@ -225,13 +233,6 @@ struct HoverHostMatchingTests {
         #expect(HoverModifier.allCases.map(\.name) == ["Option", "Control", "Command", "Shift"])
     }
 
-    /// No case may be left out of either, which a `switch` guarantees and a dictionary does not.
-    @Test func noModifierIsMissingEitherForm() {
-        for modifier in HoverModifier.allCases {
-            #expect(!modifier.symbol.isEmpty, "\(modifier) has no symbol")
-            #expect(!modifier.name.isEmpty, "\(modifier) has no name")
-        }
-    }
 
     // MARK: - The rest the reader can choose
 

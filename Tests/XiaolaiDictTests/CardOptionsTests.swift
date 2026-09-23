@@ -30,12 +30,8 @@ struct CardOptionsTests {
         #expect(Set(WordEmphasis.allCases.map(\.label)).count == WordEmphasis.allCases.count)
     }
 
-    private func scratchDefaults() -> UserDefaults {
-        TemporaryDefaults.suite()
-    }
-
     @Test func bothChoicesSurviveTheNextLaunch() {
-        let defaults = scratchDefaults()
+        let defaults = TemporaryDefaults.suite()
         let store = TextSizeStore(defaults: defaults)
         #expect(store.loadShowsTime() == false)
         #expect(store.loadEmphasis() == .italic)
@@ -52,14 +48,14 @@ struct CardOptionsTests {
     }
 
     @Test func anUnrecognisedEmphasisFallsBackRatherThanFailing() {
-        let defaults = scratchDefaults()
+        let defaults = TemporaryDefaults.suite()
         defaults.set("engraved", forKey: TextSizeStore.emphasisKey)
         #expect(TextSizeStore(defaults: defaults).loadEmphasis() == .italic)
     }
 
     @MainActor
     @Test func theAppearanceCarriesThemToTheCard() {
-        let appearance = Appearance(store: TextSizeStore(defaults: scratchDefaults()))
+        let appearance = Appearance(store: TextSizeStore(defaults: TemporaryDefaults.suite()))
         appearance.showsTime = true
         appearance.showsPlaceName = true
         appearance.emphasis = .bold
@@ -109,13 +105,17 @@ struct AppIconTests {
 
     /// A miss is cached too. An app the reader has deleted would otherwise be searched for on
     /// every scroll, which is the expensive case rather than the cheap one.
+    ///
+    /// **Asked of the cache, not of the answer.** This used to look the word up twice and expect
+    /// nil both times — which is true of a cache that keeps misses and equally true of one that
+    /// keeps none, because a second `NSWorkspace` search for a missing app also answers nil. So it
+    /// could not fail for the reason it names, and its second assertion was a copy of its first.
     @Test func aMissIsRememberedAsAMiss() {
         AppIcons.forget()
         let id = "com.example.nothing-is-installed-here"
+        #expect(!AppIcons.remembers(id), "the cache was not cleared to start with")
         #expect(AppIcons.icon(for: id) == nil)
-        // Nothing to assert about speed here that would not be timing a test runner; what is
-        // checkable is that the answer is stable, which is what the cache is for.
-        #expect(AppIcons.icon(for: id) == nil)
+        #expect(AppIcons.remembers(id), "the miss was not kept, so every card searches for it again")
     }
 
     /// Rasterised once at draw size, not handed over at 1024 pt for every card to shrink.

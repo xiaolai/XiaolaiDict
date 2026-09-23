@@ -79,8 +79,7 @@ enum TranslationReport {
                 // report that passes what the pane would reject measures the wrong thing.
                 row["real"] = TranslationCheck.isTranslation(
                     response.targetText, of: pair.sample, into: pair.target)
-                row["milliseconds"] = Int(took.components.seconds * 1000
-                    + took.components.attoseconds / 1_000_000_000_000_000)
+                row["milliseconds"] = Int(took.milliseconds.rounded())
             } catch {
                 row["real"] = false
                 row["error"] = "\(error)"

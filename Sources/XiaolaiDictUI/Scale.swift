@@ -145,8 +145,6 @@ struct Scale: Equatable, Sendable {
         let stack: CGFloat
         /// Between a block of text and whatever is parked at the far end of its row.
         let column: CGFloat
-        /// How far a child is set in from its parent — a sense under its entry.
-        let indent: CGFloat
         /// Between one day and the next — the only gap meant to read as a break.
         let section: CGFloat
         /// The ordinal column in front of a sense, so labels line up however many digits the
@@ -187,7 +185,6 @@ struct Scale: Equatable, Sendable {
             inline = em * 0.50
             stack = em * 0.75
             column = em * 1.00
-            indent = em * 1.25
             section = em * 1.50
             ordinal = em * 1.50
             padAcross = em * 1.50

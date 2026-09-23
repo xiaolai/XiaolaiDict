@@ -73,6 +73,27 @@ extension AccessibilityReading {
         cast(try parameterized(element, name, argument), AXTextMarkerRangeGetTypeID(), as: AXTextMarkerRange.self)
     }
 
+    /// Parents walked up from an element to the page containing it. A browser's web area sits a
+    /// few levels under toolbars and tab groups; a tree deeper than this is one with no page in it.
+    static var webAreaAncestorLimit: Int { 40 }
+
+    /// The web area containing `element`, walking up its parents — the page a word was read on.
+    ///
+    /// **One walk, for the selection path and the hover path alike.** There were two, with the same
+    /// algorithm and the same bound, and only one of them refused an element that reports itself as
+    /// its own parent — so on the hover path such an element cost forty rounds of synchronous
+    /// Accessibility IPC before the bound stopped it. The guard is what makes the bound the worst
+    /// case rather than the usual one.
+    func webArea(containing element: AXUIElement) throws(CaptureError) -> AXUIElement? {
+        var current = element
+        for _ in 0..<Self.webAreaAncestorLimit {
+            if try string(current, kAXRoleAttribute) == "AXWebArea" { return current }
+            guard let parent = try self.element(current, kAXParentAttribute), parent != current else { return nil }
+            current = parent
+        }
+        return nil
+    }
+
     /// A CF value as `type`, checked by type ID first: `as?` on a CF type always succeeds.
     private func cast<T>(_ value: CFTypeRef?, _ typeID: CFTypeID, as _: T.Type) -> T? {
         guard let value, CFGetTypeID(value) == typeID else { return nil }

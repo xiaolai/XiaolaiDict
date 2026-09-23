@@ -559,7 +559,7 @@ struct ReadingCardView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
-        .help(Text("Say it aloud"))
+        .help(Speech.sayItAloudHelp(for: entry.surface))
     }
 
     /// No confirmation dialog. The reason a reader reaches for this is a word they did not mean
@@ -581,7 +581,7 @@ struct ReadingCardView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
-        .help(Text("Open in Dictionary"))
+        .help(SystemDictionary.openHelp)
     }
 
     /// The sentence, whole when it fits the card's lines and cut to a window around the word when
@@ -604,12 +604,7 @@ struct ReadingCardView: View {
             .foregroundStyle(.secondary)
             .lineSpacing(scale.text.leading)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.leading, scale.space.inline)
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.primary.opacity(Token.Opacity.border))
-                    .frame(width: Token.Stroke.hairline)
-            }
+            .setApart()
             .transition(.opacity)
     }
 

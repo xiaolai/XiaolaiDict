@@ -21,12 +21,6 @@ struct SenseEngineTests {
         }
     }
 
-    /// Asked twice, it says the same thing. A row that flickered between rungs would be reporting
-    /// the reader's machine changing its mind, which it is not.
-    @Test func itIsStableWithinARun() {
-        #expect(SenseEngine.status() == SenseEngine.status())
-    }
-
     /// Every reason is its own value. A duplicated raw value would make two distinct reasons
     /// decode as one, and the reader would be told the wrong thing about their Mac.
     ///

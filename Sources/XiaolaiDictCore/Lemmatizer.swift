@@ -231,10 +231,14 @@ public enum Lemmatizer {
         return fromLemma
     }
 
+    /// Word boundaries, from the one place that draws them.
+    ///
+    /// **`TextSegmenter.wordRanges` rather than a copy here**, which is what this was: the same
+    /// three lines around the same `NLTokenizer`, minus the trimming and the empty-token filter. So
+    /// the hover and OCR paths agreed about where a word ends and the lemma path did not, and
+    /// `parts(of:surface:in:at:)` is what marks the reader's own sentence in the drawer.
     private static func wordRanges(in text: String) -> [Range<String.Index>] {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-        return tokenizer.tokens(for: text.startIndex..<text.endIndex)
+        TextSegmenter.wordRanges(in: text)
     }
 
     // MARK: - Lemmatizing

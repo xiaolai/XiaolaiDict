@@ -16,10 +16,8 @@ struct TranslationPaneTests {
         (.unavailable, false),
     ])
     func theWeakerEngineIsLabelledExactlyWhenItAnswered(outcome: TranslationOutcome, labelled: Bool) {
-        for _ in [true, false] {
-            let pane = TranslationPane(outcome, of: Self.key)
-            #expect((pane.caveat != nil) == labelled, "\(outcome)")
-        }
+        let pane = TranslationPane(outcome, of: Self.key)
+        #expect((pane.caveat != nil) == labelled, "\(outcome)")
     }
 
     /// The label says what it means for this sentence, in the reader's terms.
@@ -78,7 +76,7 @@ struct TranslationPaneTests {
 
     private static func card(_ answer: LookupCard.Answer) -> LookupCard {
         LookupCard(term: "hold", heading: "hold", partOfSpeech: "noun", pronunciation: nil,
-                   dictionary: "NOAD", answer: answer, sentence: "The ship's hold was full.", alternatives: [])
+                   answer: answer, sentence: "The ship's hold was full.", alternatives: [])
     }
 
     private static var cargo: SensePresentation {

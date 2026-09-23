@@ -533,7 +533,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var drawerPlacement: CGRect? { drawer.placement }
     var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }
     var drawerWindowFrame: CGRect { drawer.windowFrame }
-    var drawerWindowLevel: Int { drawer.windowLevel }
     var drawerReload: Task<Void, Never>? { drawer.reload }
     var drawerHoldsEscape: Bool { drawer.isEscapeClaimed }
 

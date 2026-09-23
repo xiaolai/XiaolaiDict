@@ -82,16 +82,8 @@ enum ScreenWordReader {
             bundleID: running?.bundleIdentifier))
     }
 
-    /// `point` is global with a top-left origin — the CGEvent space, which is also AX's.
-    static func read(at point: CGPoint) -> Outcome {
-        switch target(at: point) {
-        case .none(let why): return .miss(why)
-        case .ourOwnWindow: return .miss("the pointer is over the app's own window")
-        case .found(let target): return read(at: point, in: target)
-        }
-    }
-
-    /// Reads the text, given a target whose owner has already been vetted.
+    /// Reads the text, given a target whose owner has already been vetted. `point` is global with a
+    /// top-left origin — the CGEvent space, which is also AX's.
     static func read(at point: CGPoint, in target: Target) -> Outcome {
         let element = target.element
         let appName = target.appName
@@ -152,7 +144,7 @@ enum ScreenWordReader {
     // MARK: - text markers
 
     private static func textMarkers(_ element: AXUIElement, at point: CGPoint) -> WordAtPoint? {
-        let host = webArea(containing: element) ?? element
+        let host = webArea(containing: element)
         guard let marker = param(host, "AXTextMarkerForPosition", value(point)) else { return nil }
         // A marker is a caret position, *between* characters: from the right half of a word's last
         // letter it points past the word, at the following space. Weigh both neighbours.
@@ -235,16 +227,24 @@ enum ScreenWordReader {
 
     // MARK: - Plumbing
 
-    private static func webArea(containing element: AXUIElement) -> AXUIElement? {
-        var current = element
-        for _ in 0..<SelectionReader.webAreaAncestorLimit {
-            if copy(current, kAXRoleAttribute) as? String == "AXWebArea" { return current }
-            guard let parent = copy(current, kAXParentAttribute),
-                  CFGetTypeID(parent) == AXUIElementGetTypeID()
-            else { return nil }
-            current = parent as! AXUIElement
+    /// This reader's own unbounded reads, as `AccessibilityReading`, so the page walk is the one in
+    /// `AccessibilitySession.swift` rather than a second copy of it. Nothing here throws: the hover
+    /// path classifies no failure — a value it cannot read is a value it does not have — and its
+    /// timeout is `messagingTimeout`, a quarter of what a selection read allows, which is why it
+    /// cannot simply borrow an `AccessibilitySession`.
+    private struct DirectReads: AccessibilityReading {
+        func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {
+            copy(element, name)
         }
-        return nil
+
+        func parameterized(_ element: AXUIElement, _ name: String, _ argument: CFTypeRef) throws(CaptureError) -> CFTypeRef? {
+            param(element, name, argument)
+        }
+    }
+
+    /// The page containing `element`, or `element` itself where there is none.
+    private static func webArea(containing element: AXUIElement) -> AXUIElement {
+        ((try? DirectReads().webArea(containing: element)) ?? nil) ?? element
     }
 
     private static func awaken(_ pid: pid_t) {

@@ -82,17 +82,13 @@ struct LaunchArgumentsTests {
 }
 
 /// Spike S1's instrument has to be reachable, and reachable only as written.
+///
+/// **Its command line is not asserted here.** `--speech-report` parsing to `.speechReport` and
+/// refusing an operand are two of the rows in `aCommandParsesToItsOwnModeAndTakesNothingElse`
+/// below, and it is listed in the usage by `everyAcceptedCommandIsDocumented` — both mechanical
+/// over every command, where a per-command copy covers one and goes stale silently when a command
+/// is added. What is left here is the part no parameterised test can make: the probe's own shape.
 struct SpeechReportArgumentTests {
-    @Test func theReportIsACommand() {
-        #expect(LaunchArguments.parse(["--speech-report"]) == .success(.speechReport))
-    }
-
-    @Test func itTakesNoArguments() {
-        #expect(throws: (any Error).self) {
-            try LaunchArguments.parse(["--speech-report", "extra"]).get()
-        }
-    }
-
     /// One voice per quality, plus Siri — enough to answer the question without synthesising 180
     /// times.
     @Test func theProbeIsBoundedAndCoversEachQuality() {

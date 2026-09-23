@@ -71,18 +71,44 @@ struct MarkedSentenceTests {
         #expect(marked.map { String(text[$0.range].characters) } == ["took", "over"])
     }
 
-    /// **The alignment itself.** Both surfaces ask the same function, so the same word in the same
-    /// sentence at the same setting comes out the same — by construction rather than by two
-    /// implementations agreeing.
-    @Test func theSameWordLooksTheSameInBothSurfaces() {
-        let accent = ReadingPalette.accent(for: "temper").color(in: .light)
-        for emphasis in WordEmphasis.allCases {
-            let drawer = MarkedSentence.text(
-                sentence, marking: range, size: 12, emphasis: emphasis, accent: accent)
-            let panel = MarkedSentence.text(
-                sentence, marking: range, size: 12, emphasis: emphasis, accent: accent)
-            #expect(attributes(drawer).0 == attributes(panel).0)
-            #expect(attributes(drawer).1 == attributes(panel).1)
+    /// **The alignment itself, asserted where it can actually break.**
+    ///
+    /// This used to call `MarkedSentence.text` twice with identical arguments and compare the two
+    /// answers. `text` is a pure function, so that could not fail for any reason — and above all
+    /// not for the reason the test is named after, because neither call went anywhere near a
+    /// surface. The two implementations that drifted were in the *views*, so the views are what
+    /// has to be read: there is one marking function, both surfaces ask it, and neither colours a
+    /// sentence any other way.
+    ///
+    /// Read from the source, the way `NoMagicValuesTests` reads it. A rendered comparison cannot
+    /// stand in: the two cards lay their sentence out differently on purpose, so matching pixels
+    /// would be the wrong claim and mismatching ones would prove nothing.
+    @Test func bothSurfacesMarkTheWordThroughTheOneImplementation() throws {
+        let views = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDictUI")
+        let surfaces = ["LookupCardView.swift", "HistoryDrawerViews.swift"]
+        for name in surfaces {
+            // Thrown rather than defaulted: a surface that has been renamed must fail this test
+            // loudly, not pass it by having nothing left to read.
+            let source = try String(contentsOf: views.appending(path: name), encoding: .utf8)
+            #expect(source.contains("MarkedSentence.text("),
+                    "\(name) no longer marks the word through MarkedSentence")
+            #expect(source.contains("emphasis: options.emphasis"),
+                    "\(name) is not passing the reader's emphasis setting through")
+        }
+
+        // And nowhere else colours one. This is the shape the drift took last time — a second
+        // implementation, in a view, hardcoding its own weight and `.primary` — so the check is
+        // that only `MarkedSentence` ever sets a foreground colour on an `AttributedString`.
+        let files = try FileManager.default
+            .contentsOfDirectory(at: views, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "MarkedSentence.swift" }
+        #expect(files.count > 1, "no view files were found to scan")
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            #expect(!source.contains(".foregroundColor = "),
+                    "\(file.lastPathComponent) marks text itself instead of asking MarkedSentence")
         }
     }
 

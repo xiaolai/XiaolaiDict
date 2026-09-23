@@ -59,8 +59,6 @@ final class ScreenTextRecogniser: Sendable {
     /// fragments were joined into one that reads perfectly and was never on screen. A band costs
     /// 349 ms against the box's 267 ms and gets the sentence whole.
     static let bandHeight: CGFloat = 140
-    /// Used only when there is no window under the pointer to scope to.
-    static let displayRegion = CGSize(width: 420, height: 100)
 
     private let cache = ShareableContentCache()
 
@@ -160,17 +158,17 @@ final class ScreenTextRecogniser: Sendable {
         if !content.displays.contains(where: { $0.displayID == displayID }) {
             content = try await shareableContent(refresh: true)  // cached while locked, or a display appeared
         }
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+        guard content.displays.contains(where: { $0.displayID == displayID }) else {
             throw RecognitionError.displayNotCapturable(displayID)
         }
-        let bounds = CGDisplayBounds(displayID)
-        // No window to scope to, so keep XiaolaiDict's own panel out of the capture by hand.
-        let own = content.applications.filter { $0.processID == getpid() }
-        let region = CaptureGeometry.rect(around: point, size: Self.displayRegion, within: bounds)
-        return Target(
-            filter: SCContentFilter(display: display, excludingApplications: own, exceptingWindows: []),
-            region: region, sourceRect: region.offsetBy(dx: -bounds.minX, dy: -bounds.minY),
-            appName: nil, bundleID: nil)
+        // **And there it stops.** A display-scoped capture has no owning window, so it can be
+        // attributed to no app — and `read` refuses an unattributable region one line after asking
+        // for this one, because a region XiaolaiDict cannot name is a region it cannot check against
+        // the exclusion list. So the filter this used to build could never be captured through: it
+        // was assembled, returned, and thrown away by its only caller. The display is still looked
+        // for, because *which* of the two refusals applies is what the reader is told — a display
+        // that is not there, a screen that is locked, or simply no window under the pointer.
+        throw RecognitionError.unattributable
     }
 
     /// The frontmost ordinary window under the pointer, XiaolaiDict's own excluded. `CGWindowList` is

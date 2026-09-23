@@ -114,9 +114,6 @@
     "Compact" : {
 
     },
-    "Confirmed" : {
-
-    },
     "Copy the word and this sense" : {
 
     },
@@ -682,9 +679,6 @@
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
-    "entry for “%@”, its dictionary form" : {
-      "comment" : "Under a dictionary's name when it answered with the word's lemma"
-    },
     "example.com" : {
 
     },
@@ -696,9 +690,6 @@
     },
     "jumps" : {
       "comment" : "The one word of the specimen shown in the reader's chosen emphasis; it must occur in that sentence"
-    },
-    "nearest entry: “%@”" : {
-      "comment" : "Under a dictionary's name when it answered with a different headword"
     },
     "not found" : {
 
@@ -714,9 +705,6 @@
     },
     "the connection failed" : {
       "comment" : "Why the model download stopped"
-    },
-    "the dictionary did not name its headword" : {
-      "comment" : "Under a dictionary's name when its entry carries no headword"
     },
     "the download could not be completed" : {
       "comment" : "Why the model download stopped"

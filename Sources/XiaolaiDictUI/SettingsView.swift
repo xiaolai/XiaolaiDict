@@ -76,7 +76,6 @@ public final class SettingsModel {
 /// also drop their own `glassEffect` — a grouped section *is* the raised surface, and glass inside
 /// glass muddies both.
 public struct SettingsView: View {
-    @Environment(\.scale) private var scale
     @State private var model: SettingsModel
     /// Optional so a preview can show the window without one. A preview of the permission rows
     /// should not have to build an `Appearance`.

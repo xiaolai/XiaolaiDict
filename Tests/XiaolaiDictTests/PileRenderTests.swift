@@ -94,10 +94,25 @@ struct PileRenderTests {
         // region and the border at each end.
         let interior = Array(row[60..<(image.width - 60)])
         let tones = Set(interior)
+
+        // **That there is a card across this row at all, established before anything is read off
+        // it.** Neither check below could see an empty render on its own: nothing drawn is also
+        // "one tone", and the light backdrop is `Color(white: 0.98)`, which rasterises to exactly
+        // the 250 that the old `card >= 250` accepted. So a `DayPileView` that drew nothing
+        // satisfied both halves of this. The backdrop is read out of this same image's own
+        // padding rather than recomputed, the way `aCardIsLighterThanTheDrawerItSitsOn` reads it.
+        let backdrop = try scanline(image, y: 2)[2]
+        try #require(
+            tones != [backdrop],
+            Comment(rawValue: "nothing was drawn across this row, or the card is wholly transparent: "
+                + "the whole span reads the backdrop's \(backdrop)"))
+
         #expect(tones.count == 1, "the card body is not one tone: \(tones.sorted())")
-        // And that one tone is the opaque card, not the backdrop showing through.
+        // And that one tone is the opaque card — **lighter than what it sits on**, compared rather
+        // than held to a constant, because the constant was the backdrop's own value.
         let card = try #require(tones.first)
-        #expect(card >= 250, "the card is darker than an opaque white plate: \(card)")
+        #expect(card > backdrop,
+                "the backdrop shows through the card: \(card) against a backdrop of \(backdrop)")
     }
 
     /// The other half of the same defect: the buried cards' coloured edges used to draw at full
@@ -260,7 +275,12 @@ struct PileRenderTests {
         let tones = try column(image, x: image.width / 2)
         let drops = (1..<tones.count).filter { tones[$0 - 1] - tones[$0] >= 12 }
         // The front card's bottom edge, then each plate's.
-        #expect(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
+        //
+        // **`#require`, not `#expect`.** An expectation records a failure and carries on, so a pile
+        // that drew fewer than three edges went straight into `bottoms[1]` and `bottoms[2]` and
+        // **trapped the test runner** — which takes the whole process down and reports nothing about
+        // the pile. A crash is not a test result; this is the guard that turns it into one.
+        try #require(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
         let bottoms = Array(drops.suffix(3))
         let first = bottoms[1] - bottoms[0]
         let second = bottoms[2] - bottoms[1]
@@ -286,7 +306,9 @@ struct PileRenderTests {
             height: 260, scheme: .light)
         let tones = try column(image, x: image.width / 2)
         let drops = (1..<tones.count).filter { tones[$0 - 1] - tones[$0] >= 12 }
-        #expect(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
+        // Required rather than expected, for the reason the test above it gives: too few edges
+        // must fail here, not trap on `bottoms[2]`.
+        try #require(drops.count >= 3, "found \(drops.count) card edges, expected at least 3")
         let bottoms = Array(drops.suffix(3))
         let first = bottoms[1] - bottoms[0]
         let second = bottoms[2] - bottoms[1]

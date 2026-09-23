@@ -34,7 +34,6 @@ public struct DictionaryChoice {
 // MARK: - Reading
 
 struct ReadingPane: View {
-    @Environment(\.scale) private var scale
     var appearance: Appearance?
 
     var body: some View {
@@ -55,6 +54,8 @@ struct ReadingPane: View {
     /// `$` binding is not something an `if let` can produce.
     private struct Bound: View {
         @Environment(\.scale) private var scale
+        /// The specimen's accent follows the appearance, the way a card's does.
+        @Environment(\.colorScheme) private var scheme
         @Bindable var appearance: Appearance
 
         var body: some View {
@@ -112,21 +113,25 @@ struct ReadingPane: View {
 
         /// The sentence and the one word in it that is set in the reader's chosen emphasis. A pair:
         /// the word has to occur in the sentence, so a translation that moves one must move the
-        /// other. It degrades to an unemphasised specimen rather than to a wrong one if it does not.
+        /// other. It degrades to an unemphasised specimen rather than to a wrong one if it does not
+        /// — `MarkedSentence` drops a range it cannot place, which is what `NSString.range(of:)`
+        /// hands it when the word is missing.
+        ///
+        /// **Through `MarkedSentence`, like the two cards.** This was a third implementation of
+        /// marking a word in a sentence, written out beside the one the lookup card and the drawer
+        /// share — the same drift those two had, in the one surface whose whole job is to show the
+        /// reader what their setting does. It had already gone wrong in the way a copy does: the
+        /// accent was pinned to `.light`, so in a dark appearance the control previewed a shade no
+        /// card would ever draw.
         private var specimen: AttributedString {
             let sentence = String(localized: "The quick brown fox jumps over the lazy dog.",
                                   comment: "Type specimen in the Reading pane; any sentence that shows off the reader's script will do")
             let emphasised = String(localized: "jumps",
                                     comment: "The one word of the specimen shown in the reader's chosen emphasis; it must occur in that sentence")
-            var text = AttributedString(sentence)
-            guard let marked = text.range(of: emphasised) else { return text }
-            let chosen = appearance.emphasis
-            var font = Font.system(size: appearance.scale.text.body, weight: chosen.weight)
-            if chosen.isItalic { font = font.italic() }
-            text[marked].font = font
-            text[marked].foregroundColor = ReadingPalette.accents[
-                ReadingPalette.index(for: emphasised)].color(in: .light)
-            return text
+            return MarkedSentence.text(
+                sentence, marking: [(sentence as NSString).range(of: emphasised)],
+                size: appearance.scale.text.body, emphasis: appearance.emphasis,
+                accent: ReadingPalette.accent(for: emphasised).color(in: scheme))
         }
     }
 }
@@ -342,7 +347,6 @@ private struct AppRow: View {
 
 /// Decision D7: the reader studies from **one** dictionary.
 struct DictionaryPane: View {
-    @Environment(\.scale) private var scale
     var choice: DictionaryChoice?
 
     var body: some View {
@@ -401,7 +405,6 @@ struct DictionaryPane: View {
 // MARK: - Permissions
 
 struct PermissionsPane: View {
-    @Environment(\.scale) private var scale
     var model: SettingsModel
     var openSetup: (() -> Void)?
 

@@ -69,30 +69,26 @@ struct TextSizeTests {
 
     // MARK: - Remembering it
 
-    private func scratchDefaults() -> UserDefaults {
-        TemporaryDefaults.suite()
-    }
-
     @Test func aReaderWhoHasNeverChosenGetsTheDefault() {
-        #expect(TextSizeStore(defaults: scratchDefaults()).load() == .standard)
+        #expect(TextSizeStore(defaults: TemporaryDefaults.suite()).load() == .standard)
     }
 
     @Test func aChosenSizeSurvivesTheNextLaunch() {
-        let defaults = scratchDefaults()
+        let defaults = TemporaryDefaults.suite()
         TextSizeStore(defaults: defaults).save(.large)
         #expect(TextSizeStore(defaults: defaults).load() == .large)
     }
 
     /// A preference file written by a later version must not leave the reader with no text at all.
     @Test func anUnrecognisedSizeFallsBackRatherThanFailing() {
-        let defaults = scratchDefaults()
+        let defaults = TemporaryDefaults.suite()
         defaults.set("enormous", forKey: TextSizeStore.defaultsKey)
         #expect(TextSizeStore(defaults: defaults).load() == .standard)
     }
 
     @MainActor
     @Test func changingTheSizeWritesItDownWithoutBeingAsked() {
-        let defaults = scratchDefaults()
+        let defaults = TemporaryDefaults.suite()
         let appearance = Appearance(store: TextSizeStore(defaults: defaults))
         appearance.textSize = .comfortable
         #expect(TextSizeStore(defaults: defaults).load() == .comfortable)

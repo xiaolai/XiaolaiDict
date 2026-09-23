@@ -64,8 +64,15 @@ public struct SentenceQuestion: Codable, Sendable, Equatable {
         return lines.joined(separator: "\n")
     }
 
-    /// Whether `text` could carry publisher's text to a remote service. Used by the test that keeps
-    /// the boundary honest, and cheap enough to assert on every remote send.
+    /// Whether `text` could carry publisher's text to a remote service.
+    ///
+    /// **Nothing sends remotely yet, so nothing calls this yet** — `.remote` is milestone 3's
+    /// frontier pane and no explainer claims that tier. The doc here used to say it was "cheap
+    /// enough to assert on every remote send", which read as a description of something happening
+    /// and was a plan. It stays because the tier it guards is a licence boundary rather than a
+    /// preference, and the assertion belongs at the send itself: whatever first builds a request for
+    /// `.remote` asserts this over the bytes it is about to put on the wire, not over the prompt it
+    /// meant to build.
     public func leaksDictionaryText(_ text: String) -> Bool {
         guard let senseText, !senseText.isEmpty else { return false }
         return text.contains(senseText)

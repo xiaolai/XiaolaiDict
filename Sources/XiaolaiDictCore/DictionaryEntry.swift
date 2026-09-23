@@ -1,5 +1,5 @@
 /// One dictionary's entry for a term, as Dictionary.app renders it.
-public struct DictionaryEntry: Codable, Sendable, Equatable {
+public struct DictionaryEntry: Codable, Sendable, Equatable, SenseStructured {
     /// How the entry's headword relates to the term that was looked up.
     public enum Match: String, Codable, Sendable {
         /// The headword is the term, up to case.
@@ -38,13 +38,8 @@ public struct DictionaryEntry: Codable, Sendable, Equatable {
     /// The pronunciations the entry prints (`d:prn`).
     public let pronunciations: [String]
 
-    /// Every sense in the entry, across its blocks.
-    public var senses: [DictionarySense] { blocks.flatMap(\.senses) }
-    /// "Sense 47 of 49" needs both halves; this is the second.
-    public var senseCount: Int { blocks.reduce(0) { $0 + $1.senses.count } }
-    /// How precisely this entry's senses can be addressed at best — the quality signal a card must
-    /// carry, so a positional claim never reads as a publisher's.
-    public var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
+    // `senses`, `senseCount` and `senseKeyKind` come from `SenseStructured`, which is the one place
+    // they are written.
 
     /// What a ledger row and a study card hang on — **not** `entryID`.
     ///
@@ -194,8 +189,10 @@ public struct DictionaryCapability: Codable, Sendable, Equatable {
     public let probed: Bool
     /// What the bundle declares about its languages, empty where it declares nothing.
     ///
-    /// Empty is the common case rather than the edge: six of the seven dictionaries enabled on the
-    /// development Mac are sideloaded conversions and not one carries `DCSDictionaryLanguages`.
+    /// Empty is an ordinary state, not a defect: no sideloaded conversion carries
+    /// `DCSDictionaryLanguages`, and three of the seven dictionaries enabled on the development Mac
+    /// are sideloaded. An Apple asset that declares none reads the same way here, which is why
+    /// `indexes` below is what a reader's list is finally classified by.
     public let languages: [DictionaryLanguages]
     /// The writing systems this dictionary was measured to answer in — the signal that still works
     /// when `languages` is empty. Says what it indexes, never what it explains in.

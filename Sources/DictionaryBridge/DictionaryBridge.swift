@@ -6,7 +6,8 @@ import Synchronization
 public struct InstalledDictionary: Sendable, Equatable {
     public let identity: DictionaryIdentity
     /// What the bundle declares about its languages — empty for every sideloaded conversion,
-    /// which is six of the seven enabled on the development Mac.
+    /// which is three of the seven enabled on the development Mac, and for any of Apple's own
+    /// assets that declares none.
     public let languages: [DictionaryLanguages]
 
     public init(identity: DictionaryIdentity, languages: [DictionaryLanguages] = []) {
@@ -277,7 +278,12 @@ public enum DictionaryBridge {
         }
     }
 
-    static let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
+    /// **`EntryDocument`'s own, never a copy of it.** This is the producer and that is the consumer:
+    /// the namespace written into a repaired document here is the one `EntryDocument` tests for to
+    /// set `isStyled`. Declared twice, a change to either spelling would leave every repaired entry
+    /// parsing as unstyled — the panel showing a dictionary's stylesheet as text — with both
+    /// declarations still looking right on their own.
+    static let xhtmlNamespace = EntryDocument.xhtmlNamespace
 
     /// A dictionary bundle's content version, read once per bundle per process — a plist read per
     /// lookup, across seven dictionaries, would be seven file reads on a path with a 1 s budget.

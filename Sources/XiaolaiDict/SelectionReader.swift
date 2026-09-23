@@ -79,8 +79,6 @@ enum SelectionReader {
     /// Nodes visited looking for a browser window's page, which sits a few levels under toolbars and
     /// tab groups. A tree this search cannot cross is reported, not treated as "no page".
     static let webAreaSearchLimit = 400
-    /// Parents walked up from a focused element to the page containing it.
-    static let webAreaAncestorLimit = 40
     /// Text read either side of a selection to find its sentence, in UTF-16 units: widened while the
     /// sentence runs into the edge of what was read, up to the last.
     static let contextRadii = [400, 1_600, 6_400]
@@ -126,7 +124,7 @@ enum SelectionReader {
             case .found(let capture):
                 // Where it came from is worth having, not worth the selection: if reading it fails,
                 // the selection stands without it.
-                let place = (try? readPlace(host: capture.host, app: app, ax)) ?? ReadingPlace(
+                let place = (try? readPlace(host: capture.host, app: app, ax, policy: .shipped)) ?? ReadingPlace(
                     bundleID: app.bundleID, name: app.name)
                 return selection(from: capture, app: app, place: place)
             case .nothing:
@@ -233,7 +231,7 @@ enum SelectionReader {
     // MARK: - text marker dialect
 
     private static func markerCapture(_ element: AXUIElement, _ ax: some AccessibilityReading) throws(CaptureError) -> Capture? {
-        let host = try webArea(containing: element, ax) ?? element
+        let host = try ax.webArea(containing: element) ?? element
         guard let selection = try ax.markerRange(host, "AXSelectedTextMarkerRange"),
               let text = try ax.string(host, "AXStringForTextMarkerRange", selection),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -270,17 +268,6 @@ enum SelectionReader {
 
     // MARK: - Pages and provenance
 
-    /// The page containing `element`, walking up its parents.
-    private static func webArea(containing element: AXUIElement, _ ax: some AccessibilityReading) throws(CaptureError) -> AXUIElement? {
-        var current = element
-        for _ in 0..<webAreaAncestorLimit {
-            if try ax.string(current, kAXRoleAttribute) == "AXWebArea" { return current }
-            guard let parent = try ax.element(current, kAXParentAttribute), parent != current else { return nil }
-            current = parent
-        }
-        return nil
-    }
-
     /// Where the word was read: a browser's page URL, a document app's file, and the window's
     /// title — three separate coordinates, read from the element the selection came from and its
     /// own window, never the app's focused window, which may be another document.
@@ -291,11 +278,10 @@ enum SelectionReader {
     ///
     /// Apps on the exclusion list contribute their name and nothing more.
     static func readPlace(
-        host: AXUIElement, app: FrontApp, _ ax: some AccessibilityReading,
-        policy: PlacePolicy = .shipped
+        host: AXUIElement, app: FrontApp, _ ax: some AccessibilityReading, policy: PlacePolicy
     ) throws(CaptureError) -> ReadingPlace {
         var page: String?
-        if let area = try webArea(containing: host, ax),
+        if let area = try ax.webArea(containing: host),
            let url = try ax.attribute(area, kAXURLAttribute, ofApplication: false) {
             page = (url as? URL)?.absoluteString ?? (url as? String)
         }

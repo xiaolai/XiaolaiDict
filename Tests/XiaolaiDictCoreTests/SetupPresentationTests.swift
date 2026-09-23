@@ -33,19 +33,6 @@ struct SetupPresentationTests {
         #expect(defaults.object(forKey: SetupPresentationStore.defaultsKey) != nil)
     }
 
-    /// Forgetting restores a fresh install's *behaviour* and nothing else — no dictionary, no
-    /// shortcut and no permission is touched, because none of them is stored here.
-    @Test func forgettingOnlyAffectsWhetherItOpensByItself() {
-        // A suite of its own, so a test can never read or write the reader's real preferences.
-        let defaults = TemporaryDefaults.suite()
-        defaults.set("com.apple.dictionary.NOAD", forKey: "PrimaryDictionary")
-        let store = SetupPresentationStore(defaults: defaults)
-        store.markOpened()
-        store.forget()
-        #expect(!store.hasOpenedBefore())
-        #expect(defaults.string(forKey: "PrimaryDictionary") == "com.apple.dictionary.NOAD")
-    }
-
     /// The key is pinned as a literal. Renaming it silently re-opens the window for every reader
     /// who has already been through setup, and nothing else would say so.
     @Test func theKeyIsPinned() {

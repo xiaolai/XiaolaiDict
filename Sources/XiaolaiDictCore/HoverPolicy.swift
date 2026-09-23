@@ -73,8 +73,6 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
 public enum HoverDecision: Sendable, Equatable {
     case look
     case stayQuiet(HoverRefusal)
-
-    public var willLook: Bool { self == .look }
 }
 
 /// Where the pointer is, in terms a decision can be made about.
@@ -147,7 +145,9 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// read prose in terminals.
     ///
     /// Kept as a set so a reader who wants the old behaviour can have it in one line rather than by
-    /// enumerating six bundle identifiers.
+    /// enumerating six bundle identifiers. **That one line is the whole reason it is `public` and
+    /// the whole reason nothing calls it** — being unreferenced is the state it is meant to be in,
+    /// and `terminalsRemainANamedSetAReaderCanExclude` is what proves the line still works.
     public static let terminals: Set<String> = [
         "com.apple.Terminal",
         "com.googlecode.iterm2",

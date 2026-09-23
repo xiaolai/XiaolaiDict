@@ -27,9 +27,19 @@ public actor ModelService {
     /// Whether the model has answered anything — which is when its weights are actually in memory.
     /// Building the `LanguageModel` maps nothing; the first generation loads.
     private var hasAnswered = false
-    /// The one prewarm, shared by everyone who asks while it runs. The actor is reentrant across
-    /// awaits, so a flag set after the work would let two prewarms both start it.
-    private var prewarming: Task<ModelReply, Never>?
+    /// What the one prewarm concluded, once it has — and **the only thing anyone but its own caller
+    /// reads.**
+    ///
+    /// The `Task` used to be held here instead, and holding it is what invited
+    /// `await prewarming.value` from a *second* `.prewarm`: no deadline, deaf to that caller's own
+    /// cancellation, and reached by nothing rarer than two clients starting at once. A question
+    /// arriving at the same instant went through the bounded `awaitPrewarm` beside it, so the rule
+    /// held on one path and not the other. Nothing needs the task now; a waiter needs the answer.
+    ///
+    /// `.prewarmed` here means the weights are up and a second `.prewarm` costs nothing. Anything
+    /// else is the last attempt's failure, kept so a waiter is told what happened and replaced the
+    /// moment the next caller tries again.
+    private var prewarmed: ModelReply?
     /// Whether that prewarm is still running. A question waits on **this**, not on the task's value:
     /// `await task.value` cannot be given up on — it ignores the waiter's cancellation and has no
     /// deadline — so waiting that way puts every later question behind a prewarm that never returns.
@@ -66,8 +76,16 @@ public actor ModelService {
     public func reply(to request: ModelRequest) async -> ModelReply {
         switch request {
         case .status: return status()
-        // The executable ends the process after this reply is sent; nothing here to release.
-        case .unload: return .unloading
+        // **Unloading is not this type's to answer, and answering it here would be worse than not
+        // answering at all.** Ending the service means ending the *process* — there is nothing to
+        // release inside this actor — and the one path that does it stops admitting work and drains
+        // what is in flight first, so a caller routed through here would get `.unloading` while
+        // generations it was meant to wait for were still running, and then be killed mid-answer by
+        // the exit. The executable handles `.unload` before it ever reaches this switch; anything
+        // reaching it is a routing defect in a caller, said plainly rather than mistaken for the
+        // drain it skipped.
+        case .unload:
+            return .failure(.invalidRequest("unloading ends the process and is not answered here"))
         case .prewarm: return await prewarm()
         // A prewarm already running loads the weights and compiles the grammar this question needs:
         // waited for, so the two are not generated side by side on one model.
@@ -140,7 +158,21 @@ public actor ModelService {
     /// first answer measured 1.6–2.5 s cold against 0.24–0.44 s warm, and it is the one the reader
     /// would otherwise wait for.
     private func prewarm() async -> ModelReply {
-        if let prewarming { return await prewarming.value }
+        // Already warm: nothing to run, and nothing to wait for.
+        if prewarmed == .prewarmed { return .prewarmed }
+        // **Someone else's prewarm is running, so this caller waits the way a question waits** —
+        // bounded by `prewarmWait`, and given up when this caller is. Never `await task.value`: it
+        // has no deadline and ignores the waiter's cancellation, so one wedged prewarm would hold
+        // every later `.prewarm` for as long as the process lives. Two clients each sending
+        // `.prewarm` is all it takes to be here.
+        if prewarmInFlight {
+            await awaitPrewarm()
+            return prewarmed ?? .failure(.generationFailed("the prewarm already running has not answered"))
+        }
+        prewarmed = nil
+        // Both set before the first suspension, so a second `.prewarm` arriving into this reentrant
+        // actor takes the branch above rather than starting a prewarm of its own.
+        prewarmInFlight = true
         let work = Task { () -> ModelReply in
             let warmed = await pickSense(SenseQuestion(
                 sentence: "The ship's hold was full.", partOfSpeech: "noun",
@@ -148,12 +180,14 @@ public actor ModelService {
             if case .failure(let failure) = warmed { return .failure(failure) }
             return .prewarmed
         }
-        prewarming = work
-        prewarmInFlight = true
+        // **This caller owns the work, and waiting for it is what it asked for.** Unstructured so
+        // the work is not cancelled with it — every question in the process is waiting on this one
+        // load — and bounded from outside by the service's watchdog rather than from in here.
         let reply = await work.value
+        // The answer before the flag, so a waiter woken by the flag finds it. A failure is kept
+        // only until the next caller asks, which is what makes a failed prewarm retried.
+        prewarmed = reply
         prewarmInFlight = false
-        // A failed prewarm is not kept: the next one tries again.
-        if reply != .prewarmed { prewarming = nil }
         return reply
     }
 
@@ -295,23 +329,6 @@ public actor ModelService {
         model = (chosen.size, built)
         return .success(built)
     }
-}
-
-/// The sense answer's shape. A number, bounded so the grammar keeps it to two digits; whether it
-/// is a position that exists is checked by the app, which holds the list.
-///
-/// **One schema for every question**, not one sized to each list: guided generation compiles a
-/// grammar per schema, and the cold compile is the expensive part of a first answer. A bound the
-/// size of the list would make every entry length a new compile.
-@Generable
-struct SenseNumber {
-    /// The largest number the schema admits — and so the longest list a question may carry. The
-    /// app's own rungs read it from `ModelPrompt`, which is where both sides can see it.
-    static let maximum = ModelPrompt.maximumSenses
-
-    @Guide(description: "The number of the sense the word carries in the sentence, or 0 if none clearly fits.",
-           .range(0...SenseNumber.maximum))
-    var senseNumber: Int
 }
 
 private extension String {

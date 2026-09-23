@@ -84,15 +84,6 @@ final class LookupPanelController: LookupPanelPresenting {
             ?? NSApplication.shared.windows.first { $0.title == XiaolaiDictScene.lookupTitle }
     }
 
-    /// Whether the **compositor** has it on screen — not the controller's bookkeeping, and not
-    /// AppKit's `isVisible`. A window the compositor does not list is not on screen.
-    var isDrawnOnScreen: Bool {
-        guard let number = window?.windowNumber else { return false }
-        let listed = (CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
-        return listed.contains { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == Int(number) }
-    }
-
     func newRequest() -> PanelTicket {
         current += 1
         return PanelTicket(number: current)

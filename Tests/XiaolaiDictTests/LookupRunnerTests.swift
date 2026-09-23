@@ -18,15 +18,32 @@ struct LookupRunnerTests {
             bundleID: "com.apple.Preview", name: "Preview", document: "file:///tmp/paper.pdf",
             page: nil, title: "paper", rawTitle: "paper.pdf"))
 
-    /// The promise, at the deadline the app actually ships. A service that never replies holds the
-    /// content for the full three seconds; the panel must not wait with it.
+    /// The shipped deadline itself, pinned against a literal.
+    ///
+    /// **Separated from the behaviour below on purpose.** That test used to end by asserting its own
+    /// elapsed wall clock was `>= DictionaryClient.defaultDeadline` under the message "the deadline
+    /// was not the shipped one" — a bound taken from the very constant it claimed to check, so
+    /// shrinking the deadline shrank the bound with it and the assertion went on passing. It could
+    /// not fail for the reason its message named, and it spent three seconds of wall clock on every
+    /// run to say so. A literal here fails the moment the constant moves, and costs nothing.
+    @Test func theShippedDeadlineIsThreeSeconds() {
+        #expect(DictionaryClient.defaultDeadline == .seconds(3))
+    }
+
+    /// The promise: a service that never replies holds the content, and the panel must not wait
+    /// with it.
+    ///
+    /// Run at a deadline of its own rather than the shipped three seconds. The runner's ordering
+    /// does not depend on how long the deadline is — the same code path either way — so the
+    /// magnitude is pinned once, above, and the behaviour is measured where it is cheap.
     @Test func thePanelIsShownBeforeTheDictionariesAnswer() async throws {
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in nil }), panel: panel)
+            client: DictionaryClient(
+                deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+            panel: panel)
         let ticket = panel.newRequest()
 
-        let started = ContinuousClock.now
         let lookup = Task { await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket) }
         try await panel.waitForShow()
 
@@ -38,8 +55,8 @@ struct LookupRunnerTests {
         // dictionaries, however long the machine took to get there. The 1 s product promise is a
         // statement about a real machine and is measured on one — e2e.sh stage 7 exists for that.
         //
-        // The clock is still read below, for the *lower* bound on the whole lookup. A floor is
-        // safe where a ceiling is not: a loaded machine can only ever take longer.
+        // The clock is no longer read here at all: the *lower* bound that used to close this test
+        // was taken from the constant it was checking, so it could not see that constant move.
         #expect(panel.contents.count == 1)
         #expect(panel.contents[0].isWaitingLookup, "the first thing shown already had an outcome")
         // Still waiting: the content cannot have arrived, because the service never answers.
@@ -48,7 +65,6 @@ struct LookupRunnerTests {
         _ = await lookup.value
         #expect(panel.updates.count == 1, "the panel was never filled in")
         #expect(panel.updates[0].isAnsweredLookup)
-        #expect(ContinuousClock.now - started >= DictionaryClient.defaultDeadline, "the deadline was not the shipped one")
     }
 
     /// The local model is loaded while the dictionaries are asked, so the sense question after them
@@ -83,6 +99,13 @@ struct LookupRunnerTests {
         var answered = presentation
         answered.outcome = .notFound(serviceFailure: nil)
         #expect(PanelContent.lookup(presentation).kind == PanelContent.lookup(answered).kind)
+        // **The positive control.** `kind` switches on the case alone, so the equality above reads
+        // as a constant compared with itself unless something shows that `kind` can tell two
+        // contents apart at all. A message is the other kind, and it is the comparison that makes
+        // the first line a measurement: without it, a `kind` that answered `.lookup` to everything
+        // would pass here and resize the panel on being filled in.
+        #expect(PanelContent.lookup(presentation).kind
+                != PanelContent.message(title: "no selection", detail: "…").kind)
     }
 
     /// A lookup superseded while it waited was never seen: it neither fills the newer panel nor
@@ -200,8 +223,16 @@ struct LookupRunnerTests {
             client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
             panel: panel)
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
-        for content in panel.contents + panel.updates {
-            guard case .lookup(let lookup) = content else { continue }
+        // **A run that produced no lookup would pass this loop without executing one assertion.**
+        // The `continue` skips every other kind of content, so the floor is what makes the loop
+        // below evidence of anything — the same guard two other tests in this directory carry.
+        let lookups = (panel.contents + panel.updates).compactMap { content -> LookupPresentation? in
+            guard case .lookup(let lookup) = content else { return nil }
+            return lookup
+        }
+        #expect(lookups.count >= 2,
+                "\(lookups.count) lookup contents reached the panel; expected the waiting card and the answered one")
+        for lookup in lookups {
             #expect(lookup.memory == nil)
             #expect(lookup.met.isEmpty)
         }

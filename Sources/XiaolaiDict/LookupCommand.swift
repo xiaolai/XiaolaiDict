@@ -152,9 +152,16 @@ struct LookupReport: Encodable, Equatable {
     var bytes: [Int]?
     /// One per entry, so a run through the real XPC path shows that every record arrived — not
     /// only the first of each dictionary — and that each carries its identity.
+    ///
+    /// **Printed for a person, not read by a check**, and this comment used to claim otherwise: it
+    /// said these were "what makes a sense-level regression visible from outside the process",
+    /// which reads as a guarantee that something is watching them. Nothing is — `e2e.sh` takes
+    /// `outcome` from this line and nothing else. They are here because the invariants they show
+    /// are the ones this path has actually broken: every record reaching the reader, one entry
+    /// arriving once however many index forms found it, and how precisely each sense can be
+    /// addressed. Whoever runs `--lookup` can see all three; no run fails on them.
     var entryIDs: [String]?
-    /// One per entry: how many senses it has, and how precisely they can be addressed. This is
-    /// what makes a sense-level regression visible from outside the process.
+    /// One per entry: how many senses it has, and how precisely they can be addressed.
     var senseCounts: [Int]?
     var senseKeyKinds: [String]?
     var unreadable: [String]?
@@ -254,8 +261,4 @@ struct SelectionReport: Encodable, Equatable {
         confidence = selection.quality.confidence
         context = selection.quality.context.rawValue
     }
-}
-
-private extension Duration {
-    var milliseconds: Double { Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15 }
 }

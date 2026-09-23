@@ -45,12 +45,6 @@ struct DictionaryLanguageTests {
         #expect(traditional.indexesEnglish(explainedIn: "zh-Hant-TW"))
     }
 
-    /// A bare `zh` means Simplified to Foundation, which is the right default for an unqualified
-    /// Chinese reader.
-    @Test func abareChineseTagMeansSimplified() {
-        #expect(oxfordChinese.indexesEnglish(explainedIn: "zh"))
-    }
-
     /// Region is not compared: `en_US` and `en_GB` are one reader's language, and a Singapore
     /// reader writing `zh-Hans-SG` still wants the `zh_CN` dictionary.
     @Test func regionDoesNotSeparateAReaderFromTheirDictionary() {

@@ -34,10 +34,4 @@ public struct SetupPresentationStore {
     public func markOpened() {
         defaults.set(true, forKey: Self.defaultsKey)
     }
-
-    /// Puts a reader back to a fresh install's behaviour, for the next launch only. Nothing else is
-    /// forgotten — not the chosen dictionary, not the shortcut, not a permission.
-    public func forget() {
-        defaults.removeObject(forKey: Self.defaultsKey)
-    }
 }

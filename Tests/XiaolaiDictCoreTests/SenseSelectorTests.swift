@@ -19,12 +19,16 @@ struct SenseSelectorTests {
 
     /// The output is a closed-set choice. It cannot invent a sense, which is what makes this the
     /// safe use of a model rather than the risky one.
-    @Test func whateverItChoosesIsOneOfTheCandidates() async {
+    ///
+    /// **Required rather than unwrapped with `if let`.** Guarded that way it asserted nothing at
+    /// all whenever the selector abstained, which is every way this can go wrong except the one it
+    /// was written for — a sentence naming one sense outright is the case where a rung that
+    /// answers nothing is itself the defect.
+    @Test func whateverItChoosesIsOneOfTheCandidates() async throws {
         let choice = await selector.choose(
             from: Self.senses, reading: "He was ordered to pay a heavy fine for speeding.", context: .complete)
-        if let key = choice.key {
-            #expect(Self.senses.map(\.key).contains(key), "chose \(key), which was never offered")
-        }
+        let key = try #require(choice.key, "abstained as \(String(describing: choice.abstention))")
+        #expect(Self.senses.map(\.key).contains(key), "chose \(key), which was never offered")
     }
 
     // MARK: - The three cases where it must not answer
@@ -73,11 +77,17 @@ struct SenseSelectorTests {
 
     /// **Only `.tooClose` has one.** Nothing fitting is not a narrow decision, and offering the
     /// least-bad candidate there would be inventing an answer rather than hedging one.
+    ///
+    /// `.nothingFits` is forced the way `nothingCloseEnoughIsAnAbstention` forces it — by the
+    /// distance, not by hoping an unrelated sense scores badly enough. Guarded by
+    /// `if … == .nothingFits` over the default 1.45, the assertion inside simply never ran: the
+    /// one candidate is always the favourite, so the selector chose it and the guard was false.
     @Test func theOtherAbstentionsKeepNothing() async {
-        let unrelated = [Self.candidate("e.1", "a kind of igneous rock")]
-        let nothingFits = await selector.choose(
-            from: unrelated, reading: "She made a warm drink.", context: .complete)
-        if nothingFits.abstention == .nothingFits { #expect(nothingFits.nearest == nil) }
+        let strict = EmbeddingSenseSelector(maximumDistance: 0.0001)
+        let nothingFits = await strict.choose(
+            from: Self.senses, reading: "She made a warm drink.", context: .complete)
+        #expect(nothingFits.abstention == .nothingFits)
+        #expect(nothingFits.nearest == nil)
 
         let noContext = await selector.choose(from: Self.senses, reading: nil, context: .complete)
         #expect(noContext.abstention == .noContext)
@@ -96,10 +106,16 @@ struct SenseSelectorTests {
     }
 
     /// One sense is not a choice, and is not credited to the selector as one.
+    ///
+    /// **The margin is the load-bearing half, not the key.** `.infinity` is what the resolver reads
+    /// as "nothing was chosen, so nothing can be wrong" and turns into `chosenBy: .onlySense` —
+    /// the distinction the ledger's *`chosen_by` never merges* invariant rests on. Asserting the
+    /// key alone, a selector that returned a finite margin here would pass while every one of those
+    /// encounters was filed as the selector's own guess.
     @Test func aSingleCandidateIsNotAChoiceTheSelectorMade() async {
         let choice = await selector.choose(
             from: [Self.candidate("e.1", "a penalty")], reading: "He paid it.", context: .complete)
-        #expect(choice.key == "e.1")
+        #expect(choice == .chose(key: "e.1", margin: .infinity, entryID: "e"))
     }
 
     /// Nothing close enough is an abstention, not a least-bad pick.

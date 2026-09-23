@@ -11,15 +11,12 @@ import SwiftUI
 /// pinned, and it can say which version of which dictionary it came from.
 public struct PinnedNote: Equatable, Identifiable {
     public let id = UUID()
-    public let term: String
     public let heading: String
     public let dictionary: DictionaryIdentity
     public let partOfSpeech: String?
     public let pronunciation: String?
     /// The sense's own words, copied at the moment of pinning.
     public let text: String
-    public let senseKey: String?
-    public let pinnedAt: Date
 
     /// Where it came from, precisely enough to be checked later.
     public var provenance: String {

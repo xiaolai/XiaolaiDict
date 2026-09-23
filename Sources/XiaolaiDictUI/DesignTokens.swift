@@ -102,9 +102,6 @@ enum Token {
         /// The most any label wraps to. Enough of a sentence to be a cue, not so much that a card
         /// becomes a paragraph.
         static let wrapLines = 2
-        /// How many pronunciations a heading carries. A word with five is telling the reader about
-        /// the dictionary rather than about the word.
-        static let pronunciations = 2
         /// A dictionary that answers in prose rather than in senses. Enough to be the answer,
         /// capped because the card is not the entry.
         static let proseLines = 6
@@ -147,11 +144,10 @@ enum Token {
         /// A capsule tinted with a word's own colour. Low, because the digit on top of it is at
         /// full strength and the pair has to read as one small mark rather than as two.
         static let badgeWash = 0.18
-        /// A pane tinted to say what it is: a warning, a memory strip, a sense the reader kept.
-        /// Three steps because they stack — a wash that reads as emphasis on its own reads as
-        /// noise next to two others.
+        /// A pane tinted to say what it is: a warning, or what the model made of the sentence.
+        /// Two steps because they stack — a wash that reads as emphasis on its own reads as noise
+        /// next to another.
         static let caveatWash = 0.08
-        static let memoryWash = 0.07
         static let senseWash = 0.05
         /// A word that was never found has no colour of its own, and its edge says so quietly.
         static let missAccent = 0.45
@@ -164,9 +160,6 @@ enum Token {
         /// How often the settings window re-asks the system about a permission. macOS posts
         /// nothing when one changes, and the reader grants it in another app and comes back.
         static let permissionPoll: Duration = .seconds(1)
-        /// A local document of a few kilobytes renders in milliseconds; one still loading after
-        /// this is stuck, and says so rather than staying a blank pane.
-        static let entryLoad: Duration = .seconds(5)
         /// How long a removed card can still be brought back. Long enough for the reader to see
         /// the row and reach it, short enough that a drawer left open all afternoon is not still
         /// holding a deletion the reader considers done.

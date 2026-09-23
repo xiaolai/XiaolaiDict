@@ -8,8 +8,11 @@ import Testing
 /// longer has. So the rule is mechanical — **the view declares no values** — and this is what makes
 /// it true rather than aspirational.
 ///
-/// Every view in `XiaolaiDictUI`, with four exemptions, each of which is a reason rather than a
-/// convenience — a long unexplained allow-list is how a rule like this dies:
+/// Every view in `XiaolaiDictUI`, with eight exemptions — the count is the file count, not the row
+/// count, because two files share a reason — each of which is a reason rather than a convenience:
+/// a long unexplained allow-list is how a rule like this dies. The prose said "four" for as long
+/// as the table said eight, which is why `everyExemptionIsInTheTableAndEveryTableRowIsExempt`
+/// now reads this comment rather than trusting it:
 ///
 /// | File | Why |
 /// |---|---|
@@ -120,8 +123,8 @@ struct NoMagicValuesTests {
             "views are declaring values instead of reading tokens:\n\(offenders.joined(separator: "\n"))")
     }
 
-    /// The exemptions have to stay reasons. A file that no longer exists, or one added to the list
-    /// without being added to the table above, is how the rule turns into a formality.
+    /// The exemptions have to stay reasons. A file that no longer exists is how the rule turns
+    /// into a formality.
     @Test func everyExemptionNamesAFileThatIsStillThere() throws {
         for name in Self.exempt {
             let path = viewLayer.appending(path: name)
@@ -129,6 +132,36 @@ struct NoMagicValuesTests {
                 FileManager.default.fileExists(atPath: path.path),
                 "\(name) is exempt from the scan but no longer exists")
         }
+    }
+
+    /// **And the table above says why, for each of them.**
+    ///
+    /// The check beside this one asked only whether the exempt files exist — never whether the
+    /// documented reason had kept up. It had not: the prose claimed four exemptions while the set
+    /// held eight, and a file could have been added to the set with no reason written anywhere.
+    /// Both directions, because the drift runs both ways: a set entry with no row is an
+    /// unexplained exemption, and a row with no set entry is a reason for a rule nobody applies.
+    @Test func everyExemptionIsInTheTableAndEveryTableRowIsExempt() throws {
+        let doc = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix { !$0.hasPrefix("struct NoMagicValuesTests") }
+            .filter { $0.hasPrefix("///") }
+            .joined(separator: "\n")
+
+        for name in Self.exempt {
+            #expect(doc.contains("`\(name)`"), "\(name) is exempt with no reason written down")
+        }
+        // Every file the table names is one the scan actually skips. Read back out of the same
+        // prose, so a row for a file that was un-exempted cannot linger as a false explanation.
+        var named: Set<String> = []
+        var rest = Substring(doc)
+        while let open = rest.range(of: "`"), let close = rest[open.upperBound...].range(of: "`") {
+            let quoted = String(rest[open.upperBound..<close.lowerBound])
+            if quoted.hasSuffix(".swift") { named.insert(quoted) }
+            rest = rest[close.upperBound...]
+        }
+        #expect(named == Self.exempt,
+                "the table and the exemption list disagree: \(named.symmetricDifference(Self.exempt).sorted())")
     }
 
     /// The scanner has to be able to fail, or its passing says nothing. This feeds the real

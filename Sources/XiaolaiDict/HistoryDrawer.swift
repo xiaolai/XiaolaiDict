@@ -150,8 +150,6 @@ final class HistoryDrawerController {
         NSApplication.shared.windows.first { $0.title == "Reading History" }
     }
 
-    var isOnScreen: Bool { window?.isVisible ?? false }
-
     /// Whether the **compositor** has this window on screen — not the controller's bookkeeping,
     /// and not AppKit's `isVisible` either.
     ///
@@ -165,8 +163,6 @@ final class HistoryDrawerController {
     /// The frame AppKit actually gave the window, **not** the rect that was asked for. Comparing
     /// the request with itself is an assertion that cannot fail, which is what this once became.
     var windowFrame: CGRect { window?.frame ?? .zero }
-    /// The level AppKit gave the drawer's window, or -1 when it is not up. For the report only.
-    var windowLevel: Int { window?.level.rawValue ?? -1 }
     /// Whether Escape is currently XiaolaiDict's. It must be claimed only while the drawer shows.
     var isEscapeClaimed: Bool { escape.isHeld }
 

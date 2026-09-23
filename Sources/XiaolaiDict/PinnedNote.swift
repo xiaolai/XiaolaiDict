@@ -9,8 +9,6 @@ final class PinnedNoteController {
     /// Where the next note should be placed, read back by `defaultWindowPlacement`.
     private(set) var placement = NSRect(origin: .zero, size: NSSize(width: 320, height: 200))
 
-    var count: Int { notes.count }
-
     func note(_ id: UUID) -> PinnedNote? { notes[id] }
 
     /// The reader dismissed one. Reported by the scene's `onDisappear`, since SwiftUI owns the

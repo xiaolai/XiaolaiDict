@@ -9,16 +9,16 @@ import Testing
 /// A preview is the only way to look at this panel without a dictionary installed, and it is built
 /// the way the app is — real `d:entry` markup through `EntryDocument.parse` — so that a preview
 /// cannot look right while the parser is wrong. The failure this guards is the quiet one: markup
-/// that stops parsing gives an entry with no senses, which draws as an empty sidebar and reads
-/// exactly like a bug in the app rather than a stale fixture.
+/// that stops parsing gives an entry with no senses, which draws as a card with nothing to lead
+/// with and reads exactly like a bug in the app rather than a stale fixture.
 struct PanelPreviewSampleTests {
     private let entry = sampleEntry("New Oxford American Dictionary")
 
-    @Test func theSampleParsesIntoTheEntryTheSidebarNeeds() {
+    @Test func theSampleParsesIntoTheEntryTheCardNeeds() {
         #expect(entry.headword == "fine")
         #expect(entry.entryID == "m_en_gbus0362750")
         #expect(entry.pronunciations.isEmpty == false, "the heading would have no respelling")
-        // Two part-of-speech blocks, so the sidebar shows the grouping it exists to show.
+        // Two part-of-speech blocks, so a sense carries a part of speech the card can lead with.
         #expect(entry.blocks.count == 2)
         #expect(entry.senseCount == 4)
     }
@@ -39,13 +39,18 @@ struct PanelPreviewSampleTests {
         #expect(keys.contains("m_en_gbus0362750.020"), "the XiaolaiDict-guessed preview marks nothing")
     }
 
-    /// Two dictionaries, so the sidebar is a list rather than a single row — the case where its
-    /// grouping and its scrolling are worth looking at.
+    /// Two dictionaries, so the panel has a primary and an auxiliary — the case where the card's
+    /// footer, D8's tap-to-study and `PanelSelection`'s per-entry filing are worth looking at. A
+    /// one-dictionary sample previews none of them.
     @Test func theSampleIsTwoDictionariesAndNotOne() {
-        let outline = EntryOutline(entries: [
+        let entries = [
             sampleEntry("New Oxford American Dictionary"), sampleEntry("Oxford Thesaurus"),
-        ])
-        #expect(outline.dictionaries.count == 2)
+        ]
+        #expect(Set(entries.map(\.dictionary.key)).count == 2)
+        // And the panel can tell them apart. Both are built from the same markup, so they carry
+        // the same publisher ids — an identity taken from the entry id alone would file a tap in
+        // the thesaurus against NOAD.
+        #expect(PanelSelection.identity(of: entries[0]) != PanelSelection.identity(of: entries[1]))
     }
 
     /// The pane is a web view, so the markup has to arrive as a document rather than as a

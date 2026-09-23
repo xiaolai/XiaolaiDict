@@ -63,12 +63,14 @@ public struct ModelStore: Sendable, Equatable {
         return directory
     }
 
-    /// Every size that is installed and whole, smallest first.
-    public func installedSizes() -> [LocalModelSize] {
-        installedManifests().map(\.size)
-    }
-
     /// Of `manifests`, the ones installed whole — by default every manifest the app knows.
+    ///
+    /// **Always asked with an explicit `among:` by anything that speaks for this Mac.** An
+    /// `installedSizes()` convenience over the default list was here and was the wrong question: it
+    /// answers with a model copied from a larger Mac, which is on disk and can never be loaded here
+    /// — read as ready it promises an answer the service then refuses for want of memory.
+    /// `LocalModelController` passes the sizes this Mac is *offered*, and that is the only reading
+    /// the reader is shown.
     public func installedManifests(among manifests: [ModelManifest] = ModelManifest.all) -> [ModelManifest] {
         manifests.filter { installed($0) != nil }
     }

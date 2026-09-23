@@ -235,8 +235,7 @@ enum SenseReport {
                 return .failure(.failed("\(rung.name) did not answer for \(labelled.word): \(error)"))
             }
             let took = ContinuousClock.now - started
-            scored.milliseconds.append((rung.name, Int(
-                took.components.seconds * 1_000 + took.components.attoseconds / 1_000_000_000_000_000)))
+            scored.milliseconds.append((rung.name, Int(took.milliseconds.rounded())))
             let bucket = LabelledSenses.bucket(choice, correct: labelled.correct)
             scored.buckets.append((rung.name, bucket))
             scored.row[rung.name] = choice.abstention.map { "\(bucket.rawValue) (\($0.rawValue))" } ?? bucket.rawValue

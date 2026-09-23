@@ -46,11 +46,18 @@ struct SenseTapQueueTests {
     }
 
     /// A lookup that is never recorded cannot grow the list for ever.
+    ///
+    /// **The cap is a literal here, and the loop is written against that literal.** Both were
+    /// `SenseTapQueue.mostHeld`, so the test proved only that *some* cap existed: setting it to 0
+    /// kept this green, and the queue would have dropped every tap. The number is the thing being
+    /// asserted, so it is spelled out — 32 taps is a reader tapping senses faster than any lookup
+    /// can be recorded, and a queue shorter than that loses their work.
     @Test func whatIsHeldIsBounded() {
+        #expect(SenseTapQueue.mostHeld == 32)
         var taps = SenseTapQueue()
-        for i in 0..<(SenseTapQueue.mostHeld + 10) {
+        for i in 0..<42 {
             #expect(taps.tapped(Self.encounter("s\(i)"), request: 99) == nil)
         }
-        #expect(taps.heldCount == SenseTapQueue.mostHeld)
+        #expect(taps.heldCount == 32)
     }
 }

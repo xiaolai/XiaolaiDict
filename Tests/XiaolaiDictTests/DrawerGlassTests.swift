@@ -13,32 +13,28 @@ import XiaolaiDictTestSupport
 /// drawer, and that is the reader's to know, so it is a setting rather than a constant.
 @MainActor
 struct DrawerGlassTests {
-    private func scratch() -> UserDefaults {
-        TemporaryDefaults.suite()
-    }
-
     /// The drawer as it shipped, for everyone who has not chosen.
     @Test func aReaderWhoHasNeverChosenGetsFrosted() {
-        #expect(TextSizeStore(defaults: scratch()).loadDrawerGlass() == .frosted)
+        #expect(TextSizeStore(defaults: TemporaryDefaults.suite()).loadDrawerGlass() == .frosted)
         #expect(DrawerGlass.standard == .frosted)
     }
 
     @Test func aChosenGlassSurvivesTheNextLaunch() {
-        let defaults = scratch()
+        let defaults = TemporaryDefaults.suite()
         TextSizeStore(defaults: defaults).save(DrawerGlass.clear)
         #expect(TextSizeStore(defaults: defaults).loadDrawerGlass() == .clear)
     }
 
     /// A value a later version wrote, or a hand-edited one, is the default — never a failure.
     @Test func anUnrecognisedGlassFallsBackToFrosted() {
-        let defaults = scratch()
+        let defaults = TemporaryDefaults.suite()
         defaults.set("stained", forKey: TextSizeStore.drawerGlassKey)
         #expect(TextSizeStore(defaults: defaults).loadDrawerGlass() == .frosted)
     }
 
     /// Changed in Settings, it is saved at once — not only on a clean quit.
     @Test func choosingItInSettingsSavesIt() {
-        let defaults = scratch()
+        let defaults = TemporaryDefaults.suite()
         let appearance = Appearance(store: TextSizeStore(defaults: defaults))
         appearance.drawerGlass = .clear
         #expect(Appearance(store: TextSizeStore(defaults: defaults)).drawerGlass == .clear)

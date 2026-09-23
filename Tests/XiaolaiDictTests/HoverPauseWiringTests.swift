@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XiaolaiDictCore
 import Testing
@@ -101,8 +102,20 @@ import XiaolaiDictTestSupport
     /// called the initializer Swift could see. Only `e2e.sh` noticed, at stage 1.
     ///
     /// This costs milliseconds and catches it before a bundle is ever built.
+    /// **The construction is the test; there is nothing to assert about what it returns.**
+    /// `(XiaolaiDictApp.self as NSObject.Type).init()` traps when the runtime cannot find an
+    /// initialiser — which is the failure this exists for, and it takes the run down rather than
+    /// returning something to inspect. The `built is XiaolaiDictApp` that used to close it asked
+    /// whether `XiaolaiDictApp.self.init()` had produced a `XiaolaiDictApp`, which is true by the
+    /// type of the expression and could never have been false. What the line below adds is that
+    /// the object is usable afterwards rather than a bare `NSObject` the runtime allocated.
     @Test func theDelegateCanBeBuiltTheWayTheAdaptorBuildsIt() {
         let built = (XiaolaiDictApp.self as NSObject.Type).init()
-        #expect(built is XiaolaiDictApp, "the adaptor's initialiser did not produce a XiaolaiDictApp")
+        // Asked of the Objective-C runtime, which is what the adaptor asks: `built is XiaolaiDictApp`
+        // is settled by the type of the expression, and reading a property off it would read this
+        // Mac's own `UserDefaults.standard` — the delegate's `init()` forwards to `.standard` — so
+        // the value would be the developer's settings rather than anything about the build.
+        #expect(built.responds(to: #selector(NSApplicationDelegate.applicationDidFinishLaunching(_:))),
+                "the delegate the adaptor built does not answer the callback the adaptor sends it")
     }
 }

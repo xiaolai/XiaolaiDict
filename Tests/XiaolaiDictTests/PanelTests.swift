@@ -104,7 +104,14 @@ struct PanelRequestIdentityTests {
         let text = try String(contentsOf: panel, encoding: .utf8)
         #expect(!text.isEmpty)
         #expect(text.contains("guard let request = content.request else { return }"))
-        #expect(!text.contains("controller.currentRequest"),
+        // **Every spelling of the counter, not one that was deleted.** This forbade
+        // `controller.currentRequest`, a symbol removed in b3aac6d, so the only source text it
+        // could match was text nobody can compile. Matching `controller.current` covers that name
+        // and every other the counter could be exposed under — and the exposure is the defect's
+        // first move: `current` is `private`, which in Swift is the declaring scope and not the
+        // file, so a view in this same file cannot read it until somebody widens it. This is a
+        // scan of source text, so it catches the widening and the read together.
+        #expect(!text.contains("controller.current"),
                 "a tap is attributed to whatever lookup the panel has moved on to")
     }
 }

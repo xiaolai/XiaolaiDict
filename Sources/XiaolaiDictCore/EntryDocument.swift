@@ -8,7 +8,7 @@ import Foundation
 /// (`dev-docs/dictionary-markup.md` §3–§4). Only the structural layer is read here — `x_xh0` the
 /// headword block, `x_xd0` a part-of-speech block, `x_xd1` one sense, and the `d:` attributes — so
 /// nothing depends on `df`, `trans`, `semb` or `se2`. Everything it cannot find is nil, not guessed.
-public struct EntryDocument: Sendable, Equatable, Codable {
+public struct EntryDocument: Sendable, Equatable, Codable, SenseStructured {
     /// Apple's dictionary namespace. Every installed dictionary's entries declare it — Apple's nine
     /// and the six sideloaded conversions alike — but the prefix bound to it is the document's
     /// business, so it is resolved rather than assumed to be `d`.
@@ -36,14 +36,8 @@ public struct EntryDocument: Sendable, Equatable, Codable {
     /// The pronunciations the entry prints (`d:prn`), in document order.
     public let pronunciations: [String]
 
-    /// Every sense in the entry, across its blocks. "Sense 47 of 49" needs both halves, and the
-    /// second half is this.
-    public var senses: [DictionarySense] { blocks.flatMap(\.senses) }
-    public var senseCount: Int { blocks.reduce(0) { $0 + $1.senses.count } }
-
-    /// The best rung any of the entry's senses reached — so an entry whose senses are positional
-    /// never reports itself as carrying publisher ids, and one with no senses reports `.none`.
-    public var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
+    // `senses`, `senseCount` and `senseKeyKind` come from `SenseStructured`, which is the one place
+    // they are written.
 
     public init(
         isStyled: Bool, entryID: String?, homograph: String?,
@@ -95,11 +89,14 @@ final class EntryReader: NSObject, XMLParserDelegate {
     /// entries reported entry A's id with A's and B's senses together — A credited with B's
     /// meanings. Found by audit.
     private var entryDepth: Int?
-    private var isPastFirstEntry = false
 
     /// Whether structure found here belongs to the entry being read. Outside any `d:entry` — a
     /// document that declares none — everything counts, which is what the sideloaded conversions
     /// need.
+    ///
+    /// **This is the whole of the second-entry protection.** Closing the first `d:entry` clears
+    /// `entryDepth` and leaves `sawEntry` set, so everything after it — a second entry included —
+    /// answers false here and is collected by nothing.
     private var isCollecting: Bool {
         guard sawEntry else { return true }
         return entryDepth != nil
@@ -246,10 +243,6 @@ final class EntryReader: NSObject, XMLParserDelegate {
         // audit.
         if Self.breaksWord(element.local, element.namespace) { appendToOpenRegions(" ") }
 
-        if element.local == "entry", element.namespace == EntryDocument.namespace, sawEntry, entryDepth == nil {
-            // A second entry in the same document: its senses are not this entry's.
-            isPastFirstEntry = true
-        }
         if !sawEntry, element.local == "entry", element.namespace == EntryDocument.namespace {
             sawEntry = true
             entryDepth = depth

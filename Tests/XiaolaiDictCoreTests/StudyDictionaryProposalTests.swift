@@ -63,10 +63,14 @@ struct StudyDictionaryProposalTests {
     }
 
     /// Dictionary.app's order is the reader's own, and nothing here re-sorts it.
+    ///
+    /// Matched against the whole case rather than a flattened list of names: which case the rule
+    /// reached is half of what it decided, and comparing names alone would pass for a `.propose`
+    /// that had somehow grown two.
     @Test func theReadersOwnOrderSurvives() {
         let proposal = StudyDictionaryProposal.forReader(
             of: "en", among: [thesaurus, longman, noad])
-        #expect(proposal.candidates.map(\.identity.name) == [thesaurus, noad].map(\.identity.name))
+        #expect(proposal == .choose([thesaurus, noad]))
     }
 
     /// A Korean reader with only these dictionaries has nothing suitable — and XiaolaiDict cannot
@@ -91,9 +95,17 @@ struct StudyDictionaryProposalTests {
                 == .propose(oxfordChinese))
     }
 
-    /// The reader's language comes from the system's list, never from the bundle's.
+    /// The reader's language comes from the system's list, never from `Locale.current`.
+    ///
+    /// **The two are distinguishable here, which is what keeps this from being a restatement of a
+    /// one-line body.** Measured on the development Mac 2026-09-24: `Locale.preferredLanguages`
+    /// answers `en-US` and `Locale.current.identifier` answers `en_US`. So the first assertion
+    /// fails outright if the source is ever swapped, and the second says *how* they differ —
+    /// a language tag, not a bundle-style identifier, which is the shape `DictionaryLanguages.tag`
+    /// and everything downstream of it is given.
     @Test func theReadersLanguageIsTakenFromTheSystemList() {
         #expect(ReaderLanguage.preferred == Locale.preferredLanguages.first)
+        #expect(!ReaderLanguage.preferred.contains("_"), "\(ReaderLanguage.preferred) is not a language tag")
         #expect(!ReaderLanguage.preferred.isEmpty)
     }
 }

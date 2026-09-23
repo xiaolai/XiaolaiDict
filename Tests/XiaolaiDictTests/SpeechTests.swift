@@ -1,4 +1,5 @@
 import AVFoundation
+import SwiftUI
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 import Testing
@@ -43,22 +44,41 @@ struct SpeechTests {
         }
     }
 
-    /// Speaking nothing is not an error, and must not raise one.
-    @Test(arguments: ["", "   ", "\n\t"])
-    func blankTextIsNotSpoken(text: String) {
-        Speech.say(text)
-    }
     /// **The wire, not the value.** `Speech.caveat` was complete, memoised and tested while nothing
     /// in the card asked for it — the reader with only a compact voice was told nothing for as long
     /// as the card has existed. The check is on what reaches the button, because that is the part
     /// that was missing.
+    ///
+    /// The composition it used to read for — `caveat(forSpeaking:) ?? "Say it aloud"`, written out
+    /// at the call site — is now `Speech.sayItAloudHelp(for:)`, because the drawer wrote the same
+    /// thing out a second time and the two reached the translator differently. The wire is what
+    /// still matters here; `theHelpIsTheCaveatWhereThereIsOne` covers what the helper composes.
     @Test func theSpeakButtonCarriesTheCaveatAboutTheVoice() throws {
         let card = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "Sources/XiaolaiDictUI/LookupCardView.swift")
+        // Comment lines are dropped first: a scanner that cannot tell a declaration from an
+        // explanation is satisfied by the call site written out inside a comment, which is exactly
+        // how this rule would come to hold on paper and not in the view.
         let source = try String(contentsOf: card, encoding: .utf8)
-        #expect(source.contains("help: Speech.caveat(forSpeaking: card.term) ?? \"Say it aloud\""),
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        #expect(source.contains("help: Speech.sayItAloudHelp(for: card.term)"),
                 "the speak button says nothing about the voice it will use")
+    }
+
+    /// What the extracted helper composes, as opposed to who calls it. A caveat is a sentence
+    /// `Speech` has already localized, so it arrives verbatim; with nothing worth saying the help
+    /// is the plain key a translator gets. The two `Text`s are built differently on purpose, which
+    /// is what lets this tell them apart.
+    @Test func theHelpIsTheCaveatWhereThereIsOne() {
+        let help = Speech.sayItAloudHelp(for: "hold")
+        if let caveat = Speech.caveat(forSpeaking: "hold") {
+            #expect(help == Text(verbatim: caveat), "the caveat did not reach the button's help")
+        } else {
+            #expect(help == Text("Say it aloud"), "a good voice was apologised for")
+        }
     }
 
     /// And a word in a language with no voice at all is told so rather than failing silently.

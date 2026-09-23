@@ -140,10 +140,6 @@ enum SettingsReport {
             // one way, and never past where it was going.
             "reversals": measured.map(\.move.reversals).reduce(0, +),
             "worstOvershoot": measured.map(\.move.overshoot).max() ?? 0,
-            // True is expected here, and is the one place in XiaolaiDict where it is: Settings is a
-            // window the reader chose from a menu and is about to type into. The rule it does not
-            // break is about the panels they did not ask for.
-            "appIsActive": NSApp.isActive,
             // False is the passing value: the pane decides the height, and an edge the reader could
             // drag would be a second answer disagreeing with it.
             "resizable": window.styleMask.contains(.resizable),
@@ -232,7 +228,7 @@ enum SettingsReport {
     /// alone is satisfied by a pane that has not finished: a frame that has not moved yet, or a
     /// height reported a moment before the resize it causes.
     private static func restingFrame(
-        of window: NSWindow, measured: @MainActor () -> Bool = { true }
+        of window: NSWindow, measured: @MainActor () -> Bool
     ) async -> Bool {
         let started = ContinuousClock.now
         var last = window.frame

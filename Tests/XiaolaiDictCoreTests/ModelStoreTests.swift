@@ -206,7 +206,10 @@ struct ModelStoreTests {
         try ModelStore.markerText(for: manifest).write(
             to: staging.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
         #expect(store.installed(manifest) == nil)
-        #expect(store.installedSizes().isEmpty)
+        // Asked with an explicit `among:`, because that is the only way this store is ever asked:
+        // the manifest under test is a fixture and is not one of `ModelManifest.all`, so the
+        // default list would answer "nothing installed" whatever staging held.
+        #expect(store.installedManifests(among: [manifest]).isEmpty)
     }
 
     /// The model's own directory without the marker, or with a file cut short, is not installed.
@@ -371,7 +374,7 @@ struct ModelStoreTests {
         await #expect(throws: MemoryTransport.Dropped.self) { try await downloader.install(manifest) }
 
         let seen = Recorder<[Int64]>([])
-        transport.restarts.withLock { $0.insert("model.safetensors") }
+        transport.restarts.withLock { _ = $0.insert("model.safetensors") }
         try await downloader.install(manifest) { progress in seen.withLock { $0.append(progress.received) } }
         let received = seen.withLock { $0 }
         #expect(received.last == manifest.totalBytes)
@@ -384,11 +387,20 @@ struct ModelStoreTests {
 
     /// The pins themselves: every file by commit, from ModelScope, with a SHA-256 and a size — and
     /// every size carries its licence, which the mirror does not.
+    ///
+    /// **Lower case, and that is not a style rule.** `ModelStore.sha256(of:)` writes its digest with
+    /// `%02x` and compares it with `==`, so a pin transcribed in upper case never matches a file
+    /// that downloaded perfectly — and the revision goes into a `resolve/<commit>/` URL, which is
+    /// the same string either way only if both sides agree on its case. `allSatisfy(\.isHexDigit)`
+    /// alone admitted exactly that pin here while `LocalModelCatalogTests` refused it; one field,
+    /// one rule.
     @Test(arguments: ModelManifest.all)
     func everyShippedManifestIsPinned(manifest: ModelManifest) {
-        #expect(manifest.revision.count == 40 && manifest.revision.allSatisfy(\.isHexDigit))
+        #expect(manifest.revision.count == 40 && manifest.revision.allSatisfy { $0.isHexDigit && !$0.isUppercase })
         for file in manifest.files {
-            #expect(file.sha256.count == 64 && file.sha256.allSatisfy(\.isHexDigit), "\(file.path)")
+            #expect(
+                file.sha256.count == 64 && file.sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase },
+                "\(file.path)")
             #expect(file.size > 0)
             #expect(file.url.host() == "modelscope.cn")
             #expect(file.url.path().contains("/resolve/\(file.revision)/"), "not pinned by commit: \(file.path)")
@@ -881,7 +893,7 @@ struct ModelStoreTests {
         #expect(!FileManager.default.fileExists(atPath: root.path), "the fixture made the store itself")
         #expect(store.removeStrays(keeping: Self.manifest(Self.bodies)) == [])
         #expect(!FileManager.default.fileExists(atPath: root.path),
-                "the prune put the store back: \(try? FileManager.default.subpathsOfDirectory(atPath: root.path) ?? [])")
+                "the prune put the store back: \((try? FileManager.default.subpathsOfDirectory(atPath: root.path)) ?? [])")
     }
 
 }

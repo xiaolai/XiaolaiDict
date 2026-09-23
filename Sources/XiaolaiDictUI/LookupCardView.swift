@@ -67,10 +67,10 @@ public struct LookupCardView: View {
             if let memory = card.memory { memoryBadge(memory) }
             // The help says what the voice will be where that is worth saying: only a compact one
             // installed, or none at all for this language.
-            action("speaker.wave.2", help: Speech.caveat(forSpeaking: card.term) ?? "Say it aloud") {
+            action("speaker.wave.2", help: Speech.sayItAloudHelp(for: card.term)) {
                 Speech.say(card.term)
             }
-            action("character.book.closed", help: "Open in Dictionary") {
+            action("character.book.closed", help: SystemDictionary.openHelp) {
                 SystemDictionary.open(card.term)
             }
         }
@@ -122,13 +122,16 @@ public struct LookupCardView: View {
         }
     }
 
-    private func action(_ symbol: String, help: String, _ act: @escaping () -> Void) -> some View {
+    /// `help` is a `Text` and not a `String`, and that is the whole repair: `Text(someString)`
+    /// takes the *verbatim* overload, so every tooltip that reached this as a `String` was English
+    /// in a translated build while the drawer's own copy of the same sentence was translated.
+    private func action(_ symbol: String, help: Text, _ act: @escaping () -> Void) -> some View {
         Button(action: act) {
             Image(systemName: symbol).font(.system(size: scale.text.body))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help(Text(help))
+        .help(help)
     }
 
     // MARK: - The answer
@@ -186,12 +189,7 @@ public struct LookupCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
             standing
         }
-        .padding(.leading, scale.space.inline)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Color.primary.opacity(Token.Opacity.border))
-                .frame(width: Token.Stroke.hairline)
-        }
+        .setApart()
     }
 
     /// Said plainly. "XiaolaiDict's guess" and "you chose this" are different claims and the reader is
@@ -463,9 +461,9 @@ public struct LookupPanelContent: View {
         case .none:
             WaitingView(detail: waiting)
         case .notFound:
-            LookupCardView(card: absentCard)
+            LookupCardView(card: cardWithoutAnEntry(.absent))
         case .plainText(let text, _):
-            LookupCardView(card: proseCard(text))
+            LookupCardView(card: cardWithoutAnEntry(.prose(text)))
         case .entries(_, let unreadable):
             if let entry {
                 VStack(alignment: .leading, spacing: scale.space.stack) {
@@ -508,17 +506,14 @@ public struct LookupPanelContent: View {
             memory: presentation.memory)
     }
 
-    private var absentCard: LookupCard {
+    /// **A card with no entry behind it.** Both states the primary dictionary can leave the panel
+    /// in — nothing found, and prose rather than senses — differ only in the answer, so they are
+    /// one builder: written out twice, a change to the sentence or the memory strip reached one
+    /// card and not the other.
+    private func cardWithoutAnEntry(_ answer: LookupCard.Answer) -> LookupCard {
         LookupCard(
             term: presentation.term, heading: presentation.term, partOfSpeech: nil,
-            pronunciation: nil, dictionary: "", answer: .absent,
-            sentence: presentation.sentence, alternatives: [], memory: presentation.memory)
-    }
-
-    private func proseCard(_ text: String) -> LookupCard {
-        LookupCard(
-            term: presentation.term, heading: presentation.term, partOfSpeech: nil,
-            pronunciation: nil, dictionary: "", answer: .prose(text),
+            pronunciation: nil, answer: answer,
             sentence: presentation.sentence, alternatives: [], memory: presentation.memory)
     }
 
@@ -688,9 +683,9 @@ public struct LookupPanelContent: View {
             let card = card(for: entry)
             guard case .sense(let sense) = card.answer else { return }
             pin(PinnedNote(
-                term: presentation.term, heading: card.heading, dictionary: entry.dictionary,
+                heading: card.heading, dictionary: entry.dictionary,
                 partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
-                text: sense.label, senseKey: sense.key, pinnedAt: .now))
+                text: sense.label))
         } label: {
             Image(systemName: "pin").font(.system(size: scale.text.body))
         }

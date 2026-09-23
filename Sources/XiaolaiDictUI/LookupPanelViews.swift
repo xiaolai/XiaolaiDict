@@ -76,8 +76,24 @@ struct SentencePaneView: View {
                 Text(text).font(.callout).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 // Which tier answered, so "this stayed on my Mac" is visible rather than promised.
-                Text(tier == .onDevice ? "on this Mac" : "sent to a remote service")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                //
+                // **The remote arm draws nothing today, and stays.** Every `SentenceExplaining`
+                // declares `tier = .onDevice`, so only the first line can currently be shown, and
+                // the second sits in the catalog as a key nothing draws — a real but small cost.
+                // Dropping it costs more: `ExplainerTier` is a *licence* boundary, Milestone 3's
+                // frontier model is what will set `.remote`, and a pane with one label would then
+                // tell a reader their sentence stayed on this Mac while it was being sent away.
+                // That is the one thing the tier split exists to prevent.
+                //
+                // A `switch` rather than the ternary it replaced, so a third tier is a compile
+                // error here instead of silently taking the remote wording.
+                Group {
+                    switch tier {
+                    case .onDevice: Text("on this Mac")
+                    case .remote: Text("sent to a remote service")
+                    }
+                }
+                .font(.caption2).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, scale.space.padAcross)
             .padding(.vertical, scale.space.column)
@@ -109,24 +125,6 @@ extension EnvironmentValues {
     public var studySense: @MainActor (SenseEncounter) -> Void {
         get { self[StudySenseKey.self] }
         set { self[StudySenseKey.self] = newValue }
-    }
-}
-
-extension DictionaryEntry {
-    /// Under the dictionary's name in the sidebar, when its entry is not headed by the term itself.
-    public var matchNote: String? {
-        switch match {
-        case .exact: nil
-        case .dictionaryForm:
-            String(localized: "entry for “\(headword)”, its dictionary form",
-                   comment: "Under a dictionary's name when it answered with the word's lemma")
-        case .otherHeadword:
-            String(localized: "nearest entry: “\(headword)”",
-                   comment: "Under a dictionary's name when it answered with a different headword")
-        case .headwordUnknown:
-            String(localized: "the dictionary did not name its headword",
-                   comment: "Under a dictionary's name when its entry carries no headword")
-        }
     }
 }
 

@@ -14,12 +14,6 @@ public enum SenseMark: Equatable {
     }
 
     /// A sense XiaolaiDict picked is a guess and must read as one; one the reader tapped is a fact.
-    /// The sense it nearly chose, where it declined because several fit equally well.
-    public var nearest: NearMiss? {
-        guard case .couldNot(_, let nearest) = self else { return nil }
-        return nearest
-    }
-
     public var isHypothesis: Bool {
         guard case .chosen(_, let by) = self else { return false }
         return by == .model

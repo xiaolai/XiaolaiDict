@@ -219,6 +219,25 @@ public enum SenseCandidates {
         else { return .settled(.abstained(.noContext)) }
         return .ask(considered, sentence: sentence)
     }
+
+    /// The preflight applied: `body` runs only where there is a question left to ask, and the three
+    /// settled answers are returned without reaching it.
+    ///
+    /// **A closure rather than a `Preflight` the caller switches on, because the switch was the
+    /// copied part.** Each of the four rungs spelled out the same six lines — declare the two
+    /// bindings, `case .settled: return`, `case .ask: bind` — around a shared decision that exists
+    /// precisely so no rung answers those three questions differently from another. A rung cannot
+    /// now reach its own body without having gone through them.
+    static func asking(
+        _ candidates: [SenseCandidate], matching partOfSpeech: String?, reading sentence: String?,
+        context: CaptureQuality.Context,
+        _ body: (_ considered: [SenseCandidate], _ reading: String) async -> SenseSelection
+    ) async -> SenseSelection {
+        switch preflight(candidates, matching: partOfSpeech, reading: sentence, context: context) {
+        case .settled(let answer): return answer
+        case .ask(let considered, let reading): return await body(considered, reading)
+        }
+    }
 }
 
 /// Rung 1: `NLEmbedding` cosine distance between the reader's sentence and each sense's text.
@@ -260,36 +279,32 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         // drew the *verb* "to hold something back" over the noun "the power to steer or restrain"
         // — the meaning right, the grammar wrong. The three answers before any scoring are the
         // shared ones, so no rung answers them differently from another.
-        let keyable: [SenseCandidate], reading: String
-        switch SenseCandidates.preflight(
+        await SenseCandidates.asking(
             candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
             context: context
-        ) {
-        case .settled(let answer): return answer
-        case .ask(let asking, let sentence): (keyable, reading) = (asking, sentence)
-        }
+        ) { keyable, reading in
+            let scored = rank(keyable, reading: reading)
+            guard let best = scored.first else { return .abstained(.unavailable) }
+            guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
 
-        let scored = rank(keyable, reading: reading)
-        guard let best = scored.first else { return .abstained(.unavailable) }
-        guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
-
-        // The list is in distance order, so the first entry holding a *different* key is the
-        // runner-up. Keys repeat across entries: a positional key is literally
-        // "\(block).\(ordinal)", so a margin measured against a second copy of the favourite's
-        // own key would be zero, and a set with no real rival in it would abstain as "too close".
-        let runnerUp = scored.first { $0.candidate.key != best.candidate.key }?.distance
-        guard let runnerUp else {
-            return .chose(key: best.candidate.key, margin: .infinity, entryID: best.candidate.entryID)
+            // The list is in distance order, so the first entry holding a *different* key is the
+            // runner-up. Keys repeat across entries: a positional key is literally
+            // "\(block).\(ordinal)", so a margin measured against a second copy of the favourite's
+            // own key would be zero, and a set with no real rival in it would abstain as "too close".
+            let runnerUp = scored.first { $0.candidate.key != best.candidate.key }?.distance
+            guard let runnerUp else {
+                return .chose(key: best.candidate.key, margin: .infinity, entryID: best.candidate.entryID)
+            }
+            let margin = runnerUp - best.distance
+            guard margin >= minimumMargin else {
+                // The favourite is kept rather than discarded. It is not a choice — the margin says
+                // so — but it is the most useful thing known about a sentence that does not settle.
+                return .abstained(
+                    .tooClose,
+                    nearest: NearMiss(key: best.candidate.key, margin: margin, among: scored.count))
+            }
+            return .chose(key: best.candidate.key, margin: margin, entryID: best.candidate.entryID)
         }
-        let margin = runnerUp - best.distance
-        guard margin >= minimumMargin else {
-            // The favourite is kept rather than discarded. It is not a choice — the margin says
-            // so — but it is the most useful thing known about a sentence that does not settle.
-            return .abstained(
-                .tooClose,
-                nearest: NearMiss(key: best.candidate.key, margin: margin, among: scored.count))
-        }
-        return .chose(key: best.candidate.key, margin: margin, entryID: best.candidate.entryID)
     }
 
     /// The candidates in distance order, nearest first — the scoring half of `choose`, with none
@@ -426,27 +441,23 @@ public struct ShortlistSenseSelector: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        let considered: [SenseCandidate], reading: String
-        switch SenseCandidates.preflight(
+        await SenseCandidates.asking(
             candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
             context: context
-        ) {
-        case .settled(let answer): return answer
-        case .ask(let asking, let sentence): (considered, reading) = (asking, sentence)
+        ) { considered, reading in
+            let ranked = ranker.rank(considered, reading: reading)
+            // **A shortlist it could not build is not an abstention.** Where the embedding cannot run
+            // — which is every Traditional Chinese, Japanese and Korean sentence, measured — the
+            // decider is handed everything instead. Abstaining here would make this arrangement
+            // strictly worse than the decider alone for exactly the readers who have no other rung.
+            let shortlisted = ranked.isEmpty
+                ? considered
+                : ranked.prefix(shortlist).map(\.candidate)
+
+            // The part of speech is passed on although the narrowing is already done: the decider may
+            // put it in its prompt, and narrowing an already-narrowed set is a no-op.
+            return await decider.choose(
+                from: shortlisted, reading: reading, context: context, partOfSpeech: partOfSpeech)
         }
-
-        let ranked = ranker.rank(considered, reading: reading)
-        // **A shortlist it could not build is not an abstention.** Where the embedding cannot run
-        // — which is every Traditional Chinese, Japanese and Korean sentence, measured — the
-        // decider is handed everything instead. Abstaining here would make this arrangement
-        // strictly worse than the decider alone for exactly the readers who have no other rung.
-        let shortlisted = ranked.isEmpty
-            ? considered
-            : ranked.prefix(shortlist).map(\.candidate)
-
-        // The part of speech is passed on although the narrowing is already done: the decider may
-        // put it in its prompt, and narrowing an already-narrowed set is a no-op.
-        return await decider.choose(
-            from: shortlisted, reading: reading, context: context, partOfSpeech: partOfSpeech)
     }
 }

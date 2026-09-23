@@ -34,12 +34,6 @@ enum CardSurface {
         return accent.opacity(Token.Opacity.accentBorder)
     }
 
-    /// The four fills a card can have, written out rather than computed from a base and a delta:
-    /// "white" and "very slightly grey" are two decisions, not one decision and a nudge.
-    ///
-    /// A card is always **lighter** than the drawer it sits on, in both appearances — raised, never
-    /// a recessed patch. The wash this replaced was darker than the drawer, which is what made it
-    /// read as a stain rather than as a surface.
     /// The lookup panel's own surface — **paper, not material.** `.regularMaterial` takes its
     /// colour from whatever happens to be behind the window, so the card is a different shade over
     /// a photograph than over an editor, and the word's coloured shadow has nothing steady to sit
@@ -49,6 +43,12 @@ enum CardSurface {
         Color(white: scheme == .dark ? Shade.darkResting.rawValue : 0.985)
     }
 
+    /// The four fills a card can have, written out rather than computed from a base and a delta:
+    /// "white" and "very slightly grey" are two decisions, not one decision and a nudge.
+    ///
+    /// A card is always **lighter** than the drawer it sits on, in both appearances — raised, never
+    /// a recessed patch. The wash this replaced was darker than the drawer, which is what made it
+    /// read as a stain rather than as a surface.
     enum Shade: Double {
         case lightResting = 1.0
         case lightHovered = 0.945

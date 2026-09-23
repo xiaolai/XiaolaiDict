@@ -101,3 +101,31 @@ public struct SenseBlock: Codable, Sendable, Equatable {
         self.senses = senses
     }
 }
+
+/// Anything holding an entry's part-of-speech blocks, and the three readings every consumer takes
+/// off them.
+///
+/// `EntryDocument` is what the parser produced and `DictionaryEntry` is what the app passes around;
+/// both store the same `blocks`, and both spelled these three properties out, character for
+/// character, over it. Two subsystems reading one structure through two copies of the same
+/// arithmetic are one edit away from disagreeing about how many senses an entry has — and
+/// "sense 47 of 49" is a claim the reader can see.
+public protocol SenseStructured {
+    /// One per part-of-speech block, in document order. Empty when the dictionary has no sense
+    /// structure at all — the sideloaded conversions whose sense boundary is a colour change.
+    var blocks: [SenseBlock] { get }
+}
+
+public extension SenseStructured {
+    /// Every sense in the entry, across its blocks. "Sense 47 of 49" needs both halves, and the
+    /// second half is this.
+    var senses: [DictionarySense] { blocks.flatMap(\.senses) }
+
+    /// How many senses the entry has — the other half of "sense 47 of 49".
+    var senseCount: Int { blocks.reduce(0) { $0 + $1.senses.count } }
+
+    /// The best rung any of the entry's senses reached — so an entry whose senses are positional
+    /// never reports itself as carrying publisher ids, and one with no senses reports `.none`. The
+    /// quality signal a card must carry, so a positional claim never reads as a publisher's.
+    var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
+}

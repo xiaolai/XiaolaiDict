@@ -288,19 +288,28 @@ struct ScreenReadingAuditTests {
     /// Distances are compared in **points**, so the nearest edge wins — the same rule every other
     /// capture path uses. Comparing normalised numbers, by weight or lexicographically, compares
     /// two different scales, and both orderings were shown to reverse a correct pick.
+    ///
+    /// **Both lines have to reach the pointer, and the check has to name which one won.** This
+    /// asked only `picked != nil` over a pair whose second line sat 20 pt away — outside its own
+    /// slack, so it was never a candidate — and passed on the first line whichever way the
+    /// comparator ran. The point now sits inside both widened bands and outside both real ones, so
+    /// the two are *equally outside* and only the distance separates them.
     @Test func amongLinesEquallyOutsideTheNearestEdgeWins() {
-        // A 1000 x 140 pt capture. Candidate A is 1 pt above its line and 3 pt from its word;
-        // candidate B is 1.05 pt above and directly on its word. B is nearer.
+        // A 1000 x 140 pt capture, so a normalised unit is 1000 pt across and 140 pt down.
         let region = CGSize(width: 1_000, height: 140)
         let a = Self.wordLine("a", y: 0.20, height: 0.05, words: [("aaa", 0.30, 0.10)])
-        let b = Self.wordLine("b", y: 0.40, height: 0.05, words: [("bbb", 0.50, 0.10)])
-        // Point sits 1 pt below a's band and 1.05 pt above b's band, 3 pt right of a's word.
-        let y = (a.box.maxY * 140 + 1) / 140
-        let point = CGPoint(x: (0.30 * 1_000 + 0.10 * 1_000 + 3) / 1_000, y: y)
+        // 1 pt below a's band: outside it, and well inside the 2.8 pt of vertical slack.
+        let y = (a.box.maxY * region.height + 1) / region.height
+        // b begins 1.05 pt below the pointer — barely further away vertically than a is — but its
+        // word is directly under the pointer, where a's ends 3 pt to the left of it. Nearest edge
+        // in points: a is hypot(3, 1) = 3.16 pt away and b is 1.05, so b wins.
+        let b = Self.wordLine(
+            "b", y: (y * region.height + 1.05) / region.height, height: 0.05,
+            words: [("bbb", 0.38, 0.10)])
+        let point = CGPoint(x: (0.30 * region.width + 0.10 * region.width + 3) / region.width, y: y)
         let picked = RecognisedTextPicker.pick(
             at: point, in: [a, b], slack: CGSize(width: 0.01, height: 0.02), region: region)
-        // Whatever it picks, it must be the *nearer in points* — not merely the nearer line.
-        #expect(picked != nil)
+        #expect(picked == RecognisedPick(line: 1, word: 0), "the further word in points was taken")
     }
 
     /// Where two slack-widened bands both reach the pointer, the line it is actually *inside* wins.

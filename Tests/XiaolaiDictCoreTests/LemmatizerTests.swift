@@ -380,4 +380,23 @@ struct LemmaPartsTests {
     @Test func aSingleWordLookupDoesNotGrowIntoAPhrase() {
         #expect(marked("took", in: "He took it over.", lemma: "take") == ["took"])
     }
+
+    /// **A mark never swallows the space beside the word**, and this is the one place the rule is
+    /// visible.
+    ///
+    /// Word boundaries came from two implementations in one module: `TextSegmenter.wordRanges`,
+    /// which trims each token and drops the empties, and a private copy here that did neither — so
+    /// the hover and OCR paths agreed about where a word ends and the lemma path, which is what
+    /// marks the reader's own sentence in the drawer, did not. The copy is gone and this is what
+    /// keeps it gone.
+    ///
+    /// The fixture is an en quad rather than a plain space because that is where the two answers
+    /// actually differ: measured 2026-09-24, `NLTokenizer(unit: .word)` puts U+2000 and U+2001 —
+    /// and only those — inside the token when one sits at either end of the string. A plain space
+    /// it excludes by itself, which is why this went unnoticed for as long as it did. Both are
+    /// ordinary in text set for print and copied out of a PDF.
+    @Test func aMarkStopsAtTheWordAndNotAtTheSpaceAfterIt() {
+        #expect(marked("over", in: "He took it over\u{2000}") == ["over"])
+        #expect(marked("He", in: "\u{2000}He took it over") == ["He"])
+    }
 }

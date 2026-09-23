@@ -26,7 +26,6 @@ enum ModelReport {
         let report: [String: Any] = [
             "reachable": true, "gpu": status.gpu ?? NSNull(), "installed": status.installed?.rawValue ?? NSNull(),
             "loaded": status.loaded, "footprintMB": status.footprint.map(megabytes) ?? NSNull(),
-            "availableMB": status.availableMemory.map(megabytes) ?? NSNull(),
         ]
         guard Instrument.write(report, to: write) else { return .internalError }
         return status.gpu == nil ? .failure : .success
@@ -378,8 +377,9 @@ enum ModelReport {
     private static func seconds(
         since start: ContinuousClock.Instant, now: ContinuousClock.Instant = ContinuousClock.now
     ) -> Double {
-        let elapsed = now - start
-        return ((Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18) * 100).rounded() / 100
+        // Seconds to two decimals, from the one conversion in `Instrument.swift`: milliseconds
+        // divided by ten is hundredths of a second, so this rounds where it used to decompose.
+        return ((now - start).milliseconds / 10).rounded() / 100
     }
 }
 

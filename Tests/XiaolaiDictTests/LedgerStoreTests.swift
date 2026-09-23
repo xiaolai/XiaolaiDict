@@ -2,6 +2,7 @@ import Foundation
 @testable import XiaolaiDict
 import XiaolaiDictCore
 import Testing
+import XiaolaiDictTestSupport
 
 /// The store is opened at a path of the test's choosing, so nothing here touches the reader's own
 /// ledger in Application Support.
@@ -39,15 +40,19 @@ struct LedgerStoreTests {
     /// Literals, not `LedgerStore.directoryName`: the point is that the location cannot change
     /// without this failing, because a moved ledger is one the reader's history is not in.
     @Test func openDefaultCreatesTheLedgerWhereTheReadersHistoryLives() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-open-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        // `TemporaryDirectory`, which owns the removal. What stood here spelled the same thing in
+        // a way the scan that enforces this rule cannot see: the token was split across two lines
+        // and the directory was made by `appendingPathComponent(_:isDirectory:)`, so neither the
+        // "temporarydirectory" line nor the "createDirectory" line carried both halves the scan
+        // looks for. It leaked under a rule written to stop exactly this.
+        let scratch = TemporaryDirectory(named: "xiaolaidict-open")
 
-        let store = try await LedgerStore.openDefault(applicationSupport: root)
+        let store = try await LedgerStore.openDefault(applicationSupport: scratch.url)
 
         #expect(try await store.recentLookups(since: Date(timeIntervalSince1970: 1_800_000_000), limit: 10).isEmpty)
-        let ledger = root.appendingPathComponent("XiaolaiDict/ledger.sqlite").path
+        // Built from `scratch` rather than from a copy of its URL, so the directory is still alive
+        // at the assertion: nothing else here holds it, and its removal is its deinit.
+        let ledger = scratch.appending("XiaolaiDict/ledger.sqlite").path
         #expect(FileManager.default.fileExists(atPath: ledger), "the ledger is not where the reader's history is")
     }
 }

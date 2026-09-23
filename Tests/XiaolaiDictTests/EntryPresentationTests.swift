@@ -115,7 +115,7 @@ struct EntryPresentationTests {
             ]),
         ])
         let popup = EntryPresentation(entry: positional, mark: nil, met: [])
-        #expect(popup.senses[0].isPositional)
+        #expect(popup.senses[0].keyKind == .position)
         #expect(popup.canKeySenses, "a positional sense is still keyable, just less precisely")
     }
 
@@ -196,16 +196,15 @@ struct PinnedNoteTests {
 
     private func note(_ dictionary: DictionaryIdentity, text: String) -> PinnedNote {
         PinnedNote(
-            term: "fine", heading: "fine²", dictionary: dictionary, partOfSpeech: "noun",
-            pronunciation: "fīn", text: text, senseKey: "m2.005",
-            pinnedAt: Date(timeIntervalSince1970: 1_800_000_000))
+            heading: "fine²", dictionary: dictionary, partOfSpeech: "noun",
+            pronunciation: "fīn", text: text)
     }
 
     /// The words are held by value. Nothing reaches back into the dictionary to re-read them.
     @Test func itHoldsItsOwnWords() {
         let pinned = note(noad, text: "money a court orders you to pay")
         #expect(pinned.text == "money a court orders you to pay")
-        #expect(pinned.senseKey == "m2.005")
+        #expect(pinned.heading == "fine²")
     }
 
     /// Which dictionary, and which version of it — a sense key is only meaningful inside one version.

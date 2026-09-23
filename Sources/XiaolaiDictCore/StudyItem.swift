@@ -24,17 +24,6 @@ public struct StudyItem: Codable, Sendable, Equatable, Hashable {
         self.senseKey = senseKey
         self.senseKeyKind = senseKeyKind
     }
-
-    /// Which rung of `study-unit.md` §3 this item stands on.
-    public var rung: Rung { senseKey == nil ? .entry : .sense }
-
-    public enum Rung: String, Codable, Sendable {
-        /// Keyed to one sense of one entry.
-        case sense
-        /// Keyed to the entry alone — which still separates *fine* the penalty from *fine* the
-        /// adjective, and is 100% available across every installed dictionary.
-        case entry
-    }
 }
 
 /// How a sense came to be the one recorded. A sense the model picked is a hypothesis; one the
@@ -114,11 +103,6 @@ public struct SenseEncounter: Sendable, Equatable {
             // A snapshot so the ledger stays readable when a dictionary is updated or removed.
             // Local only — never shipped, published, or sent to a remote service.
             gloss: sense.label, chosenBy: chosenBy, chosenAt: when)
-    }
-
-    /// The study item this encounter is a meeting with.
-    public var studyItem: StudyItem {
-        StudyItem(dictionary: dictionary.key, entryID: entryID, senseKey: senseKey, senseKeyKind: senseKeyKind)
     }
 }
 

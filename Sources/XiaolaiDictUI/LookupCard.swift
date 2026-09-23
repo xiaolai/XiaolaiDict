@@ -63,7 +63,6 @@ public struct LookupCard: Equatable {
     public let heading: String
     public let partOfSpeech: String?
     public let pronunciation: String?
-    public let dictionary: String
     public let answer: Answer
     /// The reader's own sentence, where one was captured. The cue that makes a wrong answer
     /// visible: they can judge the claim against the text they read it in without opening anything.
@@ -105,14 +104,13 @@ public struct LookupCard: Equatable {
 
     public init(
         term: String, heading: String, partOfSpeech: String?, pronunciation: String?,
-        dictionary: String, answer: Answer, sentence: String?, alternatives: [SensePresentation],
+        answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil
     ) {
         self.term = term
         self.heading = heading
         self.partOfSpeech = partOfSpeech
         self.pronunciation = pronunciation
-        self.dictionary = dictionary
         self.answer = answer
         self.sentence = sentence
         self.alternatives = alternatives
@@ -173,8 +171,13 @@ public extension LookupCard {
                 }
                 return presentation.partsOfSpeech.first
             }(),
+            // One respelling, the first the entry prints. A heading that carries the whole `d:prn`
+            // list is telling the reader about the dictionary rather than about the word — the old
+            // panel did that, and `Token.Limit.pronunciations` was the number that capped it. The
+            // card does not need the number: `pronunciation` is a `String?`, so there is no list
+            // here to run long, and document order is the publisher's own idea of which respelling
+            // leads. That is the rule; it is a type now rather than a token nothing read.
             pronunciation: presentation.pronunciations.first,
-            dictionary: presentation.dictionary.name,
             answer: answer,
             sentence: sentence,
             alternatives: presentation.senses.filter { ($0.key ?? "\($0.ordinal)") != shown },

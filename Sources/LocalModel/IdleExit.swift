@@ -19,9 +19,12 @@ public final class IdleExit: Sendable {
     private struct State {
         var inFlight = 0
         var lastActivity: ContinuousClock.Instant
-        /// Set when the service has decided to end, or is draining to end. Nothing is admitted after.
+        /// Set when the service has decided to end, or is draining to end. Nothing is admitted
+        /// after, and nothing ever clears it — so this is also what says the ending already
+        /// happened. A second `fired` flag beside it could not disagree: both were set together,
+        /// under one lock, and neither was ever cleared, which made the first half of `fireIfIdle`'s
+        /// guard unable to be false. One state, or a guard with a clause that cannot fail.
         var draining = false
-        var fired = false
         var watching = false
     }
 
@@ -105,13 +108,16 @@ public final class IdleExit: Sendable {
     /// began or ended. **Admission closes inside the lock, and `onIdle` runs outside it**: nothing can
     /// slip in between the decision and the ending, and nothing the callback does can deadlock against
     /// a request arriving. Exposed so the rule can be tested without waiting on a clock.
+    ///
+    /// `draining` is what makes it fire once: it is set here and never cleared, so a second call
+    /// after the first — or after `drain(within:)` was asked directly — finds the service already
+    /// ending and declines.
     @discardableResult
     func fireIfIdle(at now: ContinuousClock.Instant = .now) -> Bool {
         let fire = state.withLock { state -> Bool in
-            guard !state.fired, !state.draining, state.inFlight == 0,
+            guard !state.draining, state.inFlight == 0,
                   now >= state.lastActivity.advanced(by: interval)
             else { return false }
-            state.fired = true
             state.draining = true
             return true
         }

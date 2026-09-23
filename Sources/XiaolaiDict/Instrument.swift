@@ -58,3 +58,20 @@ enum Instrument {
         return write(String(decoding: data, as: UTF8.self))
     }
 }
+
+/// How long something took, for a report that prints milliseconds.
+///
+/// **One conversion, for every instrument that reports one.** There were four, all decomposing
+/// `components` by hand and none agreeing on the rounding: `--lookup` kept a `Double` and rounded
+/// at the call site, `--sense-report` and `--translation-report` built theirs out of integer
+/// arithmetic — which truncates, so a measurement of 1.9 ms was reported as 1 — and `--model-report`
+/// went the other way to seconds at two decimal places. They differed by up to a millisecond on the
+/// same duration, which is the kind of drift that is invisible until two reports are compared.
+///
+/// Exact here, rounded by whoever prints it: a report that wants whole milliseconds asks for them,
+/// and one that wants seconds divides. `XiaolaiDictCore`'s `Watchdog` keeps a private `timeInterval`
+/// of its own — a different module, and it converts to seconds for a dispatch deadline rather than
+/// for a report.
+extension Duration {
+    var milliseconds: Double { Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15 }
+}

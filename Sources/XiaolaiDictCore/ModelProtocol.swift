@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 
 /// What the app asks the model service. Typed and `Codable`, the way it asks the dictionary service
 /// — rather than an app-side `LanguageModelExecutor` forwarding over XPC, which would carry
@@ -264,6 +265,30 @@ public enum ModelPrompt {
     static func languageName(_ identifier: String) -> String {
         Locale(identifier: "en").localizedString(forIdentifier: identifier) ?? identifier
     }
+}
+
+/// The sense answer's shape. A number, bounded so the grammar keeps it to two digits; whether it is
+/// a position that exists is checked against the list by whoever holds it.
+///
+/// **One schema, here, for every rung that asks.** Apple's rung declared its own beside itself and
+/// the model service declared another beside the service — the same two fields with the same bound,
+/// written twice — and the ladder's order is measured by comparing those two rungs, so a drift
+/// between the grammars would have been read as a difference between the models. It lives beside
+/// `ModelPrompt` because the instructions and the prompt do, and because both sides already import
+/// this module.
+///
+/// **One schema for every question**, not one sized to each list: guided generation compiles a
+/// grammar per schema, and the cold compile is the expensive part of a first answer. A bound the
+/// size of the list would make every entry length a new compile.
+@Generable
+public struct SenseNumber {
+    /// The largest number the schema admits — and so the longest list a question may carry, which
+    /// is why `ModelPrompt.maximumSenses` is where both sides can see it.
+    public static let maximum = ModelPrompt.maximumSenses
+
+    @Guide(description: "The number of the sense the word carries in the sentence, or 0 if none clearly fits.",
+           .range(0...SenseNumber.maximum))
+    public var senseNumber: Int
 }
 
 /// How long ending the service may take, **in one place because the two sides have to agree**.

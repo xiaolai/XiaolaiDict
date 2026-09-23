@@ -60,6 +60,12 @@ enum SystemDictionary {
         guard let url = url(for: term) else { return }
         NSWorkspace.shared.open(url)
     }
+
+    /// **The tooltip on the button that does it, wherever one is drawn.** Written out on the lookup
+    /// card and again on a history card, and the two did not reach the translator alike: the
+    /// drawer's was a `Text` literal and was extracted, the card's arrived as a `String` through
+    /// `Text`'s verbatim overload and was not.
+    static var openHelp: Text { Text("Open in Dictionary") }
 }
 
 /// The reader's word for a part of speech, from the dictionaries' word for it.
