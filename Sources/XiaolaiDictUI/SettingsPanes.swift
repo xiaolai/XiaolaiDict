@@ -610,7 +610,9 @@ struct AboutPane: View {
                 }
             }
             if licenceWouldNotOpen {
-                Text("The licence could not be opened. It is published at \(LocalModelAttribution.licenceName).")
+                // The name is not a place. A reader who cannot open the link is given the address.
+                Text("The licence could not be opened. It is published under \(LocalModelAttribution.licenceName), at \(LocalModelAttribution.licenceURL?.absoluteString ?? "apache.org").")
+                    .textSelection(.enabled)
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)
             }
@@ -622,10 +624,16 @@ struct AboutPane: View {
     /// **And says so where neither opens**, for the same reason: a link the system refuses must not
     /// read as a button the reader failed to press.
     private func open(_ url: URL) {
-        guard !NSWorkspace.shared.open(url) else { return }
-        guard url != Self.licence, let published = Self.licence, NSWorkspace.shared.open(published) else {
+        // **Answered afresh on every attempt.** Set once and left, the message stood over the next
+        // attempt, which worked.
+        if NSWorkspace.shared.open(url) {
+            licenceWouldNotOpen = false
+            return
+        }
+        guard url != Self.licence, let published = Self.licence else {
             licenceWouldNotOpen = true
             return
         }
+        licenceWouldNotOpen = !NSWorkspace.shared.open(published)
     }
 }

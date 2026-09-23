@@ -445,8 +445,15 @@
     "The gate" : {
 
     },
-    "The licence could not be opened. It is published at %@." : {
-
+    "The licence could not be opened. It is published under %@, at %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The licence could not be opened. It is published under %1$@, at %2$@."
+          }
+        }
+      }
     },
     "The model declined to compare this sentence against the senses." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
