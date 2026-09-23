@@ -119,5 +119,13 @@ struct PanelResizeWatchTests {
         panel.watchForResize(of: window)
         let second = try? #require(panel.resizeObserver)
         #expect(first !== second, "the panel kept watching through its previous observer as well")
+
+        // And the watch ends with the panel: registered still, it holds a closed window alive and
+        // waits for a resize that cannot come.
+        panel.show(
+            .message(title: "anything", detail: "so that closing it is a real close"),
+            near: UpPoint(.zero), for: panel.newRequest())
+        panel.closed()
+        #expect(panel.resizeObserver == nil, "the panel went on watching a window that had closed")
     }
 }

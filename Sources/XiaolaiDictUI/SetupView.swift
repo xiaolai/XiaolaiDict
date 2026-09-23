@@ -118,6 +118,11 @@ public struct SetupView: View {
             // **"Everything" is a claim, and a row this Mac cannot have makes it false.** Nothing is
             // waiting on the reader either way; which of the two sentences is true depends on
             // whether something here is simply not available.
+            // **Not known is not "this Mac cannot".** A board that was never told about the model
+            // reads as unavailable to `isAvailable`, and the sentence below would say this Mac had
+            // everything it can have while the row itself says it does not know.
+            case 0 where board.model == nil:
+                Text("Nothing is waiting on you. What this Mac can do about the local model is not known yet.")
             case 0 where board.steps.contains(where: { !board.isAvailable($0) }):
                 Text("Everything this Mac can do is in place. Anything here can still be changed.")
             // **A model the reader put off is not one that is in place.** Nothing is waiting on

@@ -176,17 +176,37 @@ final class LookupPanelController: LookupPanelPresenting {
         current += 1
         escape.release()
         stopWatchingForClicksAway()
+        // The window this watched has gone with the panel. Left registered, the observer holds the
+        // closed window alive and waits for a resize that cannot come.
+        stopWatchingForResize()
     }
 
     /// Watches one window for the reader finishing a drag. Registering again replaces the last
-    /// watch rather than adding to it.
+    /// watch rather than adding to it, and closing the panel ends it.
+    ///
+    /// The window is held **weakly**: a notification closure is kept by the notification centre, so
+    /// capturing it strongly would keep a closed window alive for as long as the app runs.
     func watchForResize(of window: NSWindow) {
-        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        stopWatchingForResize()
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
-        ) { [weak self] _ in
+        ) { [weak self, weak window] _ in
+            guard let window else { return }
             MainActor.assumeIsolated { self?.rememberChosenSize(window.frame.size) }
         }
+    }
+
+    func stopWatchingForResize() {
+        guard let resizeObserver else { return }
+        NotificationCenter.default.removeObserver(resizeObserver)
+        self.resizeObserver = nil
+    }
+
+    /// `isolated` so it can reach the observer at all: a nonisolated `deinit` cannot touch a
+    /// non-`Sendable` property. A panel controller lives as long as the app, so this is the
+    /// belt to `closed()`'s braces.
+    isolated deinit {
+        stopWatchingForResize()
     }
 
     /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
