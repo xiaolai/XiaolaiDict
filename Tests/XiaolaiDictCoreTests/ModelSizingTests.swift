@@ -66,10 +66,20 @@ struct ModelSizingTests {
         info.free_count = 1_000          // includes the speculative pages below
         info.speculative_count = 200
         info.purgeable_count = 50
-        info.external_page_count = 300   // clean copies of files, reclaimable
+        info.external_page_count = 300   // clean copies of files — the speculative ones among them
         info.inactive_count = 5_000      // anonymous: compressed or swapped to reclaim
         info.active_count = 9_000
-        #expect(SystemMemory.reclaimable(info) == 1_350)
+        // 1,000 free less the 200 speculative, plus 50 purgeable and 300 file-backed. The
+        // speculative pages are counted **once**, inside the file-backed total.
+        #expect(SystemMemory.reclaimable(info) == 1_150)
+
+        // Never below zero, whatever a kernel reports: a speculative count larger than the free one
+        // would otherwise wrap around to an enormous "available".
+        var odd = vm_statistics64_data_t()
+        odd.free_count = 10
+        odd.speculative_count = 400
+        odd.external_page_count = 100
+        #expect(SystemMemory.reclaimable(odd) == 100)
     }
 
     /// A Mac reports what it reports: the live reading is a number of bytes, or nothing.

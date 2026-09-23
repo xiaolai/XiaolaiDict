@@ -80,8 +80,22 @@ public enum SystemMemory {
 
     /// The pages a load can have without compressing or swapping anything. Split out so the
     /// accounting itself can be tested against numbers a Mac would report.
+    ///
+    /// **Speculative pages are subtracted once.** They are file-backed read-ahead, so they are
+    /// inside `external_page_count`; whether `free_count` counts them as well was not settled
+    /// here — two readings of a live Mac differ by more than the speculative count, so the
+    /// experiment cannot answer it. Subtracting is the conservative reading: if the kernel does
+    /// count them twice, this stops a load going ahead without the headroom it was promised, and
+    /// if it does not, the cost is the speculative count itself — measured at 7 to 62 MB on this
+    /// Mac, against a gigabyte of headroom.
+    ///
+    /// Anonymous inactive pages are not here at all: reclaiming those is exactly the compressing
+    /// and swapping this gate exists to avoid.
     static func reclaimable(_ info: vm_statistics64_data_t) -> UInt64 {
-        UInt64(info.free_count) + UInt64(info.purgeable_count) + UInt64(info.external_page_count)
+        let free = UInt64(info.free_count)
+        let speculative = UInt64(info.speculative_count)
+        return free - min(free, speculative) + UInt64(info.purgeable_count)
+            + UInt64(info.external_page_count)
     }
 
     /// This process's footprint, as Activity Monitor reports it — **nil where the kernel would not
