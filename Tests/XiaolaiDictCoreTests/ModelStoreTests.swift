@@ -443,7 +443,20 @@ struct ModelStoreTests {
         let install = Task {
             try await ModelDownloader(store: store, transport: MemoryTransport(Self.bodies)).install(second) { _ in }
         }
-        try await Task.sleep(for: .milliseconds(200))
+        // **Waited for, not slept past.** A fixed sleep proves nothing about where the installer
+        // got to: it could still be starting. The installer holds its own per-model lock for the
+        // whole install, so waiting until that lock cannot be taken is what says it is inside —
+        // and only then does "nothing has been committed" mean anything.
+        // The marker is written inside staging *immediately before* the commit, so its arrival is
+        // the installer telling us it has reached the one step this test is about. Probing its lock
+        // instead would take the lock the installer needs and fail the install outright.
+        let marker = staged.appending(path: ModelStore.completionMarker)
+        var reachedTheCommit = false
+        for _ in 0..<500 where !reachedTheCommit {
+            if FileManager.default.fileExists(atPath: marker.path) { reachedTheCommit = true; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reachedTheCommit, "the installer never reached the commit, so the assertion below proves nothing")
         #expect(store.installed(second) == nil, "a model was committed while the store was locked")
         held.release()
         _ = try await install.value

@@ -107,6 +107,11 @@ enum ModelReport {
         // above are about a different model.
         report["installedNow"] = after.installed?.rawValue ?? NSNull()
         report["measuredTheModelInstalled"] = after.installed == size
+        // **The pin, not only the size.** Every check here compares `LocalModelSize`, which an
+        // older revision of the same size satisfies — so the identifier is reported beside them and
+        // the store is asked whether the model on disk is the one this build pins.
+        report["identifier"] = size.manifest.identifier
+        report["installedIsThePinnedRevision"] = store.installed(size.manifest) != nil
 
         let unload = try await watchIdleUnload(client, into: &report)
         // A watch that was skipped is not an unload that was seen: the stage asks for `observed`,

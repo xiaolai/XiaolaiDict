@@ -36,9 +36,10 @@ public actor ModelService {
     private var prewarmInFlight = false
     /// What the GPU probe answered, kept so it is asked once — see `gpuName()`.
     private var probedGPU: String??
-    /// Whether a generation is running now. The actor is reentrant across awaits, so a request that
-    /// arrives mid-answer is inside the actor while the model is busy.
-    private var isGenerating = false
+    /// How many generations are running now. **A count, not a flag**: the actor is reentrant across
+    /// awaits, so two answers can be in flight, and the first to finish would clear a flag while the
+    /// second was still using the GPU.
+    private var generating = 0
     /// How long a question waits for a prewarm already running. Long enough for a cold load and a
     /// grammar compile — measured at 1.6–2.5 s on an M4 Max — and far short of the service watchdog.
     private let prewarmWait: Duration
@@ -116,7 +117,7 @@ public actor ModelService {
         if let probedGPU { return probedGPU }
         // Never while the model is generating: that is the one time a second piece of GPU work
         // costs something. Status then answers with what it knows, which is nothing yet.
-        guard !isGenerating else { return nil }
+        guard generating == 0 else { return nil }
         let name = gpu()
         probedGPU = name
         return name
@@ -228,8 +229,8 @@ public actor ModelService {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): model = loaded
         }
-        isGenerating = true
-        defer { isGenerating = false }
+        generating += 1
+        defer { generating -= 1 }
         do {
             let reply = try await body(model)
             // **The weights are loaded once anything has come back from them** — including an answer

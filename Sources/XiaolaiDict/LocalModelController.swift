@@ -86,6 +86,9 @@ final class LocalModelController {
             // answering from the model *it* loaded. The download path ends that service before
             // saying ready; this asks it to end too, rather than leaving the row naming one model
             // and the answers coming from another until the service idles out ten minutes later.
+            // `onInstalled` is what holds the local rung back for the length of the unload — see
+            // the coordinator — so the window between publishing "ready" here and that unload
+            // finishing is one where nothing is asked of the process that still has the old model.
             if case .ready(let size) = read, state.answering != size {
                 Task { [onInstalled] in await onInstalled?() }
             }

@@ -254,6 +254,9 @@ final class ModelQuarantine: Sendable {
     }
 
     func hold() { held.withLock { $0 = true } }
+
+    /// Lifted only where the old process was *seen* to go — never on a scan that could not tell.
+    func lift() { held.withLock { $0 = false } }
 }
 
 enum ModelServiceProcess {

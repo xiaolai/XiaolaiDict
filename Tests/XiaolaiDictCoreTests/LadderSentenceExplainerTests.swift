@@ -59,9 +59,13 @@ struct LadderSentenceExplainerTests {
         let explainer = LadderSentenceExplainer(
             local: { question in localAsked.withLock { $0.append(question) }; return .explanation("late") },
             apple: ScriptedApple(answer: .explained("Apple's words", tier: .onDevice), asked: appleAsked))
-        let task = Task { await explainer.explain(Self.question) }
-        task.cancel()
-        let answer = await task.value
+        // **Cancelled from inside, before the call.** `Task { … }; task.cancel()` is a race — the
+        // body can run to completion before the cancellation lands — and a racy test that passes
+        // is indistinguishable from one that proves the rule.
+        let answer = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await explainer.explain(Self.question)
+        }.value
         #expect(answer == .unavailable("The explanation was stopped."))
         #expect(appleAsked.withLock { $0.isEmpty })
         #expect(localAsked.withLock { $0.isEmpty })

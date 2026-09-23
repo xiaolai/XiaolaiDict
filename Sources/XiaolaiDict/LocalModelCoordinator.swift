@@ -34,7 +34,12 @@ final class LocalModelCoordinator {
         // process lives, which is worse than a few answers from the model being replaced. The
         // failure is recorded rather than swallowed.
         controller.onInstalled = { [access, log] in
+            // **Held for the length of the unload**, so nothing is asked of the old process while
+            // it is being ended — the window `refresh()` opens by publishing "ready" without
+            // awaiting this. Released only where the process was *seen* to go.
+            access.quarantine.hold()
             if await access.client.unload() {
+                access.quarantine.lift()
                 log.notice("model: the service holding the previous model has ended")
             } else {
                 // **Ready is still published — and the local rung is held back until that process

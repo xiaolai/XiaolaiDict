@@ -343,8 +343,15 @@ verify_signatures() {
     # signature and for `TeamIdentifier=not set`, which is what an ad-hoc signature reports — and an
     # ad-hoc build keeps none of the permission grants this project signs Developer ID for. So each
     # part must carry the *configured* identity's authority, and must not be ad hoc.
-    local part team authority app_team_expected=""
-    for part in "$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH"; do
+    #
+    # The resource bundles are checked the same way: they are signed code objects inside the
+    # service, and one carrying another signature is one the service loads at runtime.
+    local part team authority parts=("$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH")
+    local app_team_expected=""
+    for built in $(model_resource_bundles); do
+        parts+=("$bundle/$MODEL_XPC_PATH/Contents/Resources/$built")
+    done
+    for part in "${parts[@]}"; do
         local described
         described=$(codesign -dvvv "$part" 2>&1 || true)
         team=$(grep '^TeamIdentifier=' <<<"$described" | head -1)

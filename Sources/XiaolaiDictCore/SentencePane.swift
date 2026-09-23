@@ -100,7 +100,15 @@ public struct LadderSentenceExplainer: SentenceExplaining {
               !question.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return .unavailable("There is no sentence to explain.") }
         guard !Task.isCancelled else { return .unavailable("The explanation was stopped.") }
-        if case .explanation(let text)? = await local(question) {
+        let reply = await local(question)
+        // **A request the service refused as invalid is a defect in this rung**, not a reason to
+        // spend a second generation on the same thing: the bounds it checks are ones this ladder
+        // built, and falling through would hide that behind an answer.
+        if case .failure(.invalidRequest(let why))? = reply {
+            assertionFailure("the model service refused this rung's own question: \(why)")
+            return .unavailable("This sentence could not be explained.")
+        }
+        if case .explanation(let text)? = reply {
             // **Checked on the way out too.** A reply that arrives after the reader has closed the
             // panel is an answer to a question nobody is waiting for, and a blank one is not an
             // explanation — `SentenceExplanation` promises the pane is never empty.
