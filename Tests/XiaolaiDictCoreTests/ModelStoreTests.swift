@@ -339,6 +339,70 @@ struct ModelStoreTests {
         #expect(FileManager.default.fileExists(atPath: staging.path), "a download in flight was deleted")
     }
 
+    /// **And what an interrupted download of a superseded pin left behind.** Nothing names that
+    /// revision again, so its part-file stays for good — the same gigabytes as a stray model, in the
+    /// one directory the prune deliberately does not walk. Removed only while its own install lock
+    /// can be taken, which is what says nobody is downloading it now.
+    @Test func aStagedDownloadOfAnOlderPinIsReclaimedUnlessItIsRunning() throws {
+        let store = try store()
+        let keeper = Self.manifest(Self.bodies)
+        let stale = ModelManifest(
+            size: .standard, repository: keeper.repository, revision: "older",
+            files: keeper.files.map {
+                ModelFile(repository: $0.repository, revision: "older", path: $0.path,
+                          size: $0.size, sha256: $0.sha256)
+            })
+        // The keeper is installed, as a prune requires; both have something staged.
+        let directory = store.directory(for: keeper)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (path, body) in Self.bodies { try body.write(to: directory.appending(path: path)) }
+        try ModelStore.markerText(for: keeper).write(
+            to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+        for manifest in [keeper, stale] {
+            let staged = store.stagingDirectory(for: manifest)
+            try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+            try Data(count: 1_024).write(to: staged.appending(path: "model.safetensors.partial"))
+        }
+
+        // While the old pin is being downloaded, its part-file is not touched.
+        let held = try #require(InstallLock(store.lockFile(for: stale)))
+        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: store.stagingDirectory(for: stale).path),
+                "a staged download that was running was deleted")
+        held.release()
+
+        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: store.stagingDirectory(for: stale).path),
+                "the older pin's part-file was left on disk for good")
+        #expect(FileManager.default.fileExists(atPath: store.stagingDirectory(for: keeper).path),
+                "this pin's own staged download was deleted")
+    }
+
+    /// **A body that runs past its pin is refused as it arrives, not after it has all landed.** The
+    /// disk was checked for the pinned size and nothing more, so a server sending an endless file
+    /// would fill the reader's disk before the size check meant to catch it ever ran. Driven through
+    /// the delegate directly: no fake transport reaches this, and a real one cannot be asked for it.
+    @Test func aBodyLongerThanItsPinIsRefusedWhileItArrives() async throws {
+        let store = try store()
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let writer = try RangeWriter(
+            destination: file, offset: 0, path: "model.safetensors", expecting: 8, progress: { _ in })  
+        let task = URLSession.shared.dataTask(with: try #require(URL(string: "https://example.invalid/x")))
+
+        writer.urlSession(.shared, dataTask: task, didReceive: Data(count: 4))
+        writer.urlSession(.shared, dataTask: task, didReceive: Data(count: 99))
+
+        // **What is on disk is the assertion.** Asking the writer for its outcome would mean
+        // resuming the task, and a test that reaches the network hangs where there is none — which
+        // is worse than the defect: a guard that regressed would stall the suite instead of failing
+        // it. Unrefused, the second chunk lands and the file is 103 bytes.
+        let onDisk = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
+        #expect(onDisk == 4, "the oversized chunk was written before it was refused")
+        #expect(task.state != .running, "the refused download was left running")
+    }
+
     /// The standard model's directory is named for its repository and commit, under the support
     /// directory the ledger shares — which is what lets the service find what the app downloaded.
     @Test func theModelLivesWhereTheServiceWillLook() throws {

@@ -73,8 +73,10 @@ public struct ModelStore: Sendable, Equatable {
         manifests.filter { installed($0) != nil }
     }
 
-    /// Removes a model and anything of it still staged.
-    public func remove(_ manifest: ModelManifest) throws {
+    /// Removes a model and anything of it still staged. **Not `public`, and not called by the
+    /// app**: pruning is `removeStrays(keeping:)`, which holds off while an install is in flight.
+    /// This is the tests' own way of putting a store into a state.
+    func remove(_ manifest: ModelManifest) throws {
         for directory in [directory(for: manifest), stagingDirectory(for: manifest)]
         where FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
@@ -104,10 +106,53 @@ public struct ModelStore: Sendable, Equatable {
         let keep = directory(for: keeping).standardizedFileURL.path
         var failures: [String] = []
         for directory in completeDirectories() where directory.standardizedFileURL.path != keep {
+            // **Asked again before each removal.** The check above is a moment, and enumerating a
+            // store takes another: an install that began in between would have its model deleted by
+            // a decision taken before it existed. This does not close the window — nothing short of
+            // a store-wide lock would — but it narrows it to the removal itself, and a 3 GB download
+            // cannot start and finish inside one.
+            guard !isInstalling else { break }
             do { try FileManager.default.removeItem(at: directory) }
             catch { failures.append(directory.lastPathComponent) }
         }
+        return failures + removeStagedStrays(keeping: keeping)
+    }
+
+    /// What an interrupted download of a **superseded pin** left in `.staging`. Nothing ever names
+    /// that revision again, so its part-file sits there for good: measured against the same defect
+    /// as the completed strays above, and gigabytes either way.
+    ///
+    /// Each is removed only while **its own install lock can be taken** — which is what says nobody
+    /// is downloading it now — and the lock is given straight back afterwards.
+    private func removeStagedStrays(keeping: ModelManifest) -> [String] {
+        let staging = root.appending(path: Self.stagingName, directoryHint: .isDirectory)
+        let keep = stagingDirectory(for: keeping).standardizedFileURL.path
+        var failures: [String] = []
+        for directory in stagedModels(under: staging) where directory.standardizedFileURL.path != keep {
+            // The identifier is the path under `.staging` — the same shape the lock is named from.
+            let identifier = directory.standardizedFileURL.path
+                .replacingOccurrences(of: staging.standardizedFileURL.path + "/", with: "")
+            guard let taken = InstallLock(
+                staging.appending(path: identifier.replacing("/", with: "-") + ".lock"))
+            else { continue }  // somebody is downloading it
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { failures.append(identifier) }
+            taken.release()
+        }
         return failures
+    }
+
+    /// The staged model directories: one level below `.staging/<owner>`, which is how an identifier
+    /// of the form `owner/name@revision` lands on disk.
+    private func stagedModels(under staging: URL) -> [URL] {
+        let owners = (try? FileManager.default.contentsOfDirectory(
+            at: staging, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        return owners.flatMap { owner -> [URL] in
+            guard (try? owner.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return [] }
+            return ((try? FileManager.default.contentsOfDirectory(
+                at: owner, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+                .filter { $0.lastPathComponent.contains("@") }
+        }
     }
 
     /// Every directory under the root holding a completion marker. Hidden entries are skipped,
@@ -429,7 +474,9 @@ public struct URLSessionModelTransport: ModelFileTransport {
     ) async throws {
         var request = URLRequest(url: file.url)
         if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
-        let writer = try RangeWriter(destination: destination, offset: offset, path: file.path, progress: progress)
+        let writer = try RangeWriter(
+            destination: destination, offset: offset, path: file.path, expecting: file.size,
+            progress: progress)
         let task = URLSession.shared.dataTask(with: request)
         task.delegate = writer
         try await withTaskCancellationHandler {
@@ -445,7 +492,9 @@ public struct URLSessionModelTransport: ModelFileTransport {
 /// The settling is a small state machine rather than a stored continuation, because the two can
 /// arrive in either order: a task cancelled before `run` installs its continuation completes first,
 /// and a writer that only stored continuations would drop that result and suspend forever.
-private final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// Internal rather than private so its refusals can be driven directly: the guard below fires on a
+/// server that keeps sending, which no fake transport reaches and no unit test can ask a real one for.
+final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private enum State {
         case waiting
         case running(CheckedContinuation<Void, any Error>)
@@ -458,15 +507,24 @@ private final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Se
     private let offset: Int64
     private let path: String
     private let progress: @Sendable (Int64) -> Void
+    /// What the pin says this file is. **A body is refused the moment it passes it**, rather than
+    /// after it has all arrived: the disk was reserved for this many bytes and nothing else, so a
+    /// server sending an endless one would fill the reader's disk before the size check that was
+    /// meant to catch it ever ran.
+    private let expected: Int64
     /// Bytes of this file on disk: what was already there, plus what has arrived — and reset when a
     /// host ignores the range and starts the file again, so progress never counts a discarded front.
     private var onDisk: Int64
     private var state = State.waiting
 
-    init(destination: URL, offset: Int64, path: String, progress: @escaping @Sendable (Int64) -> Void) throws {
+    init(
+        destination: URL, offset: Int64, path: String, expecting: Int64,
+        progress: @escaping @Sendable (Int64) -> Void
+    ) throws {
         handle = try FileHandle(forWritingTo: destination)
         self.offset = offset
         self.path = path
+        self.expected = expecting
         self.progress = progress
         onDisk = offset
     }
@@ -545,6 +603,16 @@ private final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Se
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // **Refused before it is written, not after it has all arrived.** The disk was checked for
+        // the pinned size; a body that runs past it is either the wrong file or an endless one, and
+        // writing it first means finding out when the disk is full.
+        let would = lock.withLock { onDisk } + Int64(data.count)
+        guard would <= expected else {
+            settle(.failure(ModelDownloadError.sizeMismatch(
+                path: path, expected: expected, received: would)))
+            dataTask.cancel()
+            return
+        }
         do {
             try handle.write(contentsOf: data)
             let total = lock.withLock { onDisk += Int64(data.count); return onDisk }
