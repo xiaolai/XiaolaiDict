@@ -154,10 +154,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // The local model first, wherever it is downloaded; Apple's on-device model while it is
             // not — pending, declined, or too big for what is free now; `NLEmbedding` beneath both.
             selector: models.senseLadder,
-            priorEncounters: { [weak self] lemma, before in
+            priorEncounters: { [weak self] lemma, before, language in
                 guard let opening = await MainActor.run(body: { self?.ledger }) else { return PriorEncounters() }
                 // A ledger that cannot be read costs the memory strip, never the lookup.
-                return (try? await opening.value.priorEncounters(of: lemma, before: before)) ?? PriorEncounters()
+                return (try? await opening.value.priorEncounters(
+                    of: lemma, before: before, language: language)) ?? PriorEncounters()
             },
             prewarm: { await models.prewarm() })
     }

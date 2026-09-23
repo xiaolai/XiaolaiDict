@@ -177,7 +177,12 @@ struct LookupRunnerTests {
             met: [met])
         let runner = LookupRunner(
             client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
-            panel: panel, priorEncounters: { _, _ in earlier })
+            panel: panel,
+            priorEncounters: { _, _, language in
+                // The ledger is asked in the language the sentence was read in.
+                #expect(language == "en")
+                return earlier
+            })
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
 
         let shown = try #require(panel.updates.compactMap { content -> LookupPresentation? in

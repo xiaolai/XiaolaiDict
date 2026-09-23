@@ -19,7 +19,10 @@ final class LookupRunner {
     private let panel: any LookupPanelPresenting
     private let primary: () -> PrimaryDictionary
     private let selector: any SenseSelecting
-    private let priorEncounters: @Sendable (String, Date) async -> PriorEncounters
+    /// What this word cost the reader before — **by lemma and language**. English *gift* and
+    /// German *Gift* are one lemma and two words; the ledger keeps them apart and this has to ask
+    /// it to, or a reader of both is shown the other one's history.
+    private let priorEncounters: @Sendable (String, Date, String?) async -> PriorEncounters
     /// Loads the local model while the dictionaries are asked, so the sense question that follows
     /// does not pay for the load: the first answer measured 1.6–2.5 s cold, 0.24–0.44 s warm.
     private let prewarm: @Sendable () async -> Void
@@ -28,7 +31,7 @@ final class LookupRunner {
         client: DictionaryClient, panel: any LookupPanelPresenting,
         primary: @escaping () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
         selector: any SenseSelecting = LadderSenseSelector(),
-        priorEncounters: @escaping @Sendable (String, Date) async -> PriorEncounters = { _, _ in PriorEncounters() },
+        priorEncounters: @escaping @Sendable (String, Date, String?) async -> PriorEncounters = { _, _, _ in PriorEncounters() },
         prewarm: @escaping @Sendable () async -> Void = {}
     ) {
         self.client = client
@@ -64,7 +67,10 @@ final class LookupRunner {
         Task.detached(priority: .userInitiated) { [prewarm] in await prewarm() }
         // The ledger read starts here too, so what this word cost the reader before is being fetched
         // while the dictionaries are asked rather than after them.
-        let history = Task { [priorEncounters] in await priorEncounters(lemma.text, requestedAt) }
+        let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
+        let history = Task { [priorEncounters] in
+            await priorEncounters(lemma.text, requestedAt, language)
+        }
 
         guard let outcome = try? await client.lookup(selection.text), panel.isCurrent(ticket) else {
             history.cancel()
@@ -72,6 +78,25 @@ final class LookupRunner {
         }
         presentation.outcome = outcome
         panel.update(.lookup(presentation), for: ticket)
+
+        // Which entry, and where it is a fact rather than a guess, which sense.
+        //
+        // The entry is already on screen with every one of its senses; only the *mark* waits on the
+        // selector. That is Stage 1's fill-in pattern again, and no new mechanism was needed for it.
+        //
+        // **Started before the ledger is awaited**, because the two have nothing to do with each
+        // other: the selector can take seconds on the model's rung, and waiting for a disk read
+        // first would add its time to the mark for nothing.
+        var entries: [DictionaryEntry] = []
+        if case .entries(let found, _) = outcome { entries = Array(found) }
+        // Built here rather than inside the `async let`: the closure that reads the reader's chosen
+        // dictionary belongs to this actor and must not travel with the work.
+        let resolver = SenseResolver(primary: primary(), selector: selector)
+        async let resolved = resolver.resolve(
+            entries: entries, sentence: selection.sentence, context: selection.quality.context,
+            partOfSpeech: Lemmatizer.partOfSpeech(
+                of: selection.text, in: selection.sentence, at: selection.rangeInSentence),
+            at: .now)
 
         // **The memory strip, and the senses already met.** The entry is on screen; this arrives
         // when the ledger answers, which is the container-fills-in pattern again. Absent on a first
@@ -84,17 +109,7 @@ final class LookupRunner {
             panel.update(.lookup(presentation), for: ticket)
         }
 
-        // Which entry, and where it is a fact rather than a guess, which sense.
-        //
-        // The entry is already on screen with every one of its senses; only the *mark* waits on the
-        // selector. That is Stage 1's fill-in pattern again, and no new mechanism was needed for it.
-        var entries: [DictionaryEntry] = []
-        if case .entries(let found, _) = outcome { entries = Array(found) }
-        let resolution = await SenseResolver(primary: primary(), selector: selector).resolve(
-            entries: entries, sentence: selection.sentence, context: selection.quality.context,
-            partOfSpeech: Lemmatizer.partOfSpeech(
-                of: selection.text, in: selection.sentence, at: selection.rangeInSentence),
-            at: .now)
+        let resolution = await resolved
         if let mark = resolution.mark, panel.isCurrent(ticket) {
             presentation.sense = mark
             panel.update(.lookup(presentation), for: ticket)

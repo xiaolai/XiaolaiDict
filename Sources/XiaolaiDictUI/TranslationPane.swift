@@ -169,6 +169,7 @@ struct TranslationPaneView: View {
             }
             waysOut
         }
+        .onChange(of: pane) { failedToOpenSettings = false }
         .padding(.horizontal, scale.space.padAcross)
         .padding(.vertical, scale.space.column)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,7 +205,10 @@ struct TranslationPaneView: View {
                 Button("Open Language & Region…") { open(settings) }
                     .buttonStyle(.glass)
             }
-            if failedToOpenSettings {
+            // Only under the pane that offers the link, and only while it is the same pane: SwiftUI
+            // reuses this view for the next outcome, and a failure left standing under a
+            // translation that has no settings button at all is about nothing the reader can see.
+            if failedToOpenSettings, pane.opensLanguageSettings {
                 Text("System Settings would not open. Look for Language & Region under General.")
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)

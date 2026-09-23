@@ -47,7 +47,10 @@ public struct SetupView: View {
     public init(
         model: SetupModel = SetupModel(), dictionary: DictionaryChoice? = nil,
         shortcut: ShortcutChoice? = nil, shortcutIsRegistered: Bool = true,
-        localModel: LocalModelChoice? = nil,
+        // **No default.** Nil is a board that does not know what this Mac can do about the model,
+        // and a default made that the quiet outcome of forgetting to wire it: the row says "Not
+        // known" and offers nothing, with nothing to say it was a mistake rather than a state.
+        localModel: LocalModelChoice?,
         openSettings: ((SettingsPane) -> Void)? = nil,
         refreshDictionaries: (() async -> Void)? = nil
     ) {
