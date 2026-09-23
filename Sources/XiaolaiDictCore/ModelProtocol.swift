@@ -8,6 +8,11 @@ public enum ModelRequest: Codable, Sendable, Equatable {
     case pickSense(SenseQuestion)
     /// The reader's sentence, in the reader's language.
     case translate(TranslationQuestion)
+    /// How the word is being used in the reader's sentence, in prose. **Asked of this model and
+    /// not Apple's**: the LLM panes must work for a reader without Apple Intelligence, which is
+    /// most of mainland China, and an explanation that only some readers get is a pane that reads
+    /// as broken to the rest.
+    case explain(SentenceQuestion)
     /// Load the model and compile what the first answer would, so that answer does not pay for it.
     /// The first call measured 1.6–2.5 s cold against 0.24–0.44 s warm.
     case prewarm
@@ -73,6 +78,7 @@ public enum ModelReply: Codable, Sendable, Equatable {
     /// **Not yet checked against the list** — that is the caller's job, because it holds the list.
     case sense(Int)
     case translation(String)
+    case explanation(String)
     case prewarmed
     case status(ModelServiceStatus)
     case unloading
@@ -196,6 +202,23 @@ public enum ModelPrompt {
 
     static let minimumTranslationTokens = 64
     static let maximumTranslationTokens = 1_024
+
+    /// What the model is told before it is asked to explain a sentence. The reader is a language
+    /// learner, and what they want is the *use*, not a definition they already have on screen.
+    public static let explanationInstructions = """
+        You explain how one word is being used in one sentence, for a language learner.
+        Be brief: two or three sentences. Explain the usage, do not define the word in isolation, \
+        and do not repeat the sentence back.
+        """
+
+    /// The most an explanation may generate: two or three sentences, with room for a script that
+    /// takes more tokens than the source — never the backend's default of thousands.
+    public static func explanationTokens(for question: SentenceQuestion) -> Int {
+        min(maximumExplanationTokens, minimumExplanationTokens + question.sentence.utf16.count)
+    }
+
+    static let minimumExplanationTokens = 128
+    static let maximumExplanationTokens = 512
 
     /// The language's English name, which is what the model was prompted with. An identifier the
     /// system cannot name is passed through as it is.

@@ -1401,6 +1401,13 @@ if printf '%s' "$report" | python3 -c 'import json,sys; d=json.load(sys.stdin); 
 else
     flunk "model: no translation came back"
 fi
+# The sentence pane asks this model too — and it is the only engine a reader without Apple
+# Intelligence has for it, so "the model answers" has to include this one.
+if printf '%s' "$report" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("explanation") else 1)' 2>/dev/null; then
+    pass "model: the sentence came back explained ($(printf '%s' "$report" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["explanation"]))' 2>/dev/null) characters)"
+else
+    flunk "model: no explanation came back ($(printf '%s' "$report" | sed -n 's/.*"explanationFailure":"\([^"]*\)".*/\1/p'))"
+fi
 footprint=$(printf '%s' "$report" | sed -n 's/.*"footprintMB":\([0-9]*\).*/\1/p')
 # A service holding a 4B model and answering is gigabytes; a few megabytes means nothing was loaded.
 if [ -n "$footprint" ] && [ "$footprint" -gt 1000 ]; then

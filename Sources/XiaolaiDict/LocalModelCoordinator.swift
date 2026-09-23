@@ -56,6 +56,12 @@ final class LocalModelCoordinator {
     /// Loads the model beside a lookup, so the sense question after it does not pay for the load.
     func prewarm() async { await access.prewarm() }
 
+    /// What the lookup panel's sentence pane is handed: the downloaded model first, Apple's
+    /// on-device model where there is none. Read at the click, like the translator.
+    var explanationActions: ExplanationActions {
+        ExplanationActions { [access] question in await access.explainer.explain(question) }
+    }
+
     /// What the lookup panel's translation pane is handed: the translator, the reader's language,
     /// and the download to put beside Apple's answer.
     var translationActions: TranslationActions {

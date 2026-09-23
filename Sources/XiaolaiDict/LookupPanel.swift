@@ -231,6 +231,9 @@ struct LookupPanelSceneView: View {
     /// Read inside this body, never the scene's: the model's download progress is observable, and
     /// reading it in an `App`'s body would re-evaluate every scene on each update.
     let translation: @MainActor () -> TranslationActions
+    /// Read here for the same reason, and read at the click rather than when the panel was built:
+    /// a model downloaded while the panel was open explains from the panel that is already up.
+    let explainer: @MainActor () -> ExplanationActions
 
     var body: some View {
         Group {
@@ -243,6 +246,7 @@ struct LookupPanelSceneView: View {
                         controller.onStudySense?(encounter, controller.currentRequest)
                     }
                     .environment(\.translation, translation())
+                    .environment(\.explainer, explainer())
             }
         }
         .frame(minWidth: model.minimumSize.width)

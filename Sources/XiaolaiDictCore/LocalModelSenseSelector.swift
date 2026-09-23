@@ -76,7 +76,7 @@ public struct LocalModelSenseSelector: SenseSelecting {
         // Not installed, too little memory now, a generation that failed, an answer of the wrong
         // shape, or no service at all: the model is not here for this lookup, and the rung below
         // runs.
-        case .failure?, .translation?, .prewarmed?, .status?, .unloading?, nil:
+        case .failure?, .translation?, .explanation?, .prewarmed?, .status?, .unloading?, nil:
             return .abstained(.unavailable)
         }
     }

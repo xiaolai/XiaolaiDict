@@ -50,6 +50,35 @@ struct SetupWiringTests {
         }
     }
 
+    /// **The panel is handed both model panes.** `LookupCardView` reads the translator and the
+    /// explainer from the environment, and both have inert defaults that say "could not" — so a
+    /// panel built without them renders buttons that never answer, and every unit test over the
+    /// card still passes. The explainer was one: it reached past the environment for Apple's model
+    /// directly, which made the pane work only for readers who have Apple Intelligence.
+    @Test func theAppHandsThePanelItsTranslatorAndItsExplainer() throws {
+        let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
+        let call = try callSite(scene, of: "LookupPanelSceneView")
+        // **The value, not just the label.** A label with `.none` behind it passes a check for the
+        // label and hands the pane an action that answers nothing — which is the defect this whole
+        // file exists for, one level further in.
+        for (argument, value) in [
+            ("controller:", "panelController"), ("model:", "panelModel"),
+            ("translation:", "models.translationActions"), ("explainer:", "models.explanationActions"),
+        ] {
+            #expect(
+                call.contains(argument) && call.contains(value),
+                "LookupPanelSceneView is built without \(argument) \(value); the pane it feeds would answer nothing")
+        }
+        // And the panel puts both into the environment the card reads.
+        let panel = try source("Sources/XiaolaiDict/LookupPanel.swift")
+        #expect(panel.contains("environment(\\.translation, translation())"))
+        #expect(panel.contains("environment(\\.explainer, explainer())"))
+        // The card asks the environment rather than a model of its own.
+        let card = try source("Sources/XiaolaiDictUI/LookupCardView.swift")
+        #expect(!card.contains("OnDeviceSentenceExplainer()"),
+                "the card reaches past the environment for Apple's model, which readers without Apple Intelligence do not have")
+    }
+
     /// The other way in. §4 of the plan asks for both, and a menu item alone leaves a reader who is
     /// already in Settings with no way to the board.
     @Test func settingsCanOpenTheBoard() throws {

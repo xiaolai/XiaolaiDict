@@ -24,7 +24,10 @@ public enum ExplainerTier: String, Sendable, CaseIterable {
 /// The dictionary text is *optional here and dropped at the boundary* rather than being trusted not
 /// to be sent: `prompt(for:)` cannot include it for the remote tier, so a caller who assembles the
 /// wrong thing gets a prompt without it rather than a licence breach.
-public struct SentenceQuestion: Sendable, Equatable {
+/// `Codable` because it crosses XPC to the model service — the same boundary the dictionary
+/// questions cross, and the reason the tier's dropping happens in `prompt(for:)` rather than at
+/// each call site.
+public struct SentenceQuestion: Codable, Sendable, Equatable {
     /// The reader's own sentence. Theirs, not the publisher's — always sendable.
     public let sentence: String
     /// The word they looked up.
@@ -66,6 +69,38 @@ public enum SentenceExplanation: Sendable, Equatable {
 public protocol SentenceExplaining: Sendable {
     var tier: ExplainerTier { get }
     func explain(_ question: SentenceQuestion) async -> SentenceExplanation
+}
+
+/// The explainer the reader actually gets: **the downloaded model first, Apple's where it is not
+/// here.** The same shape as `SentenceTranslator`, and for the same reason — the LLM panes must
+/// work for a reader without Apple Intelligence, which is most of mainland China, and a pane only
+/// some readers ever see an answer in is a pane that reads as broken to the rest.
+///
+/// No label, unlike translation: both engines run on this Mac and neither was measured worse than
+/// the other at explaining. What is labelled there is a *measured* difference, not the mere fact of
+/// a fallback.
+public struct LadderSentenceExplainer: SentenceExplaining {
+    /// One round trip to the model service; nil where it could not be reached at all.
+    public typealias Local = @Sendable (SentenceQuestion) async -> ModelReply?
+
+    public let tier = ExplainerTier.onDevice
+    private let local: Local
+    private let apple: any SentenceExplaining
+
+    public init(local: @escaping Local, apple: any SentenceExplaining = OnDeviceSentenceExplainer()) {
+        self.local = local
+        self.apple = apple
+    }
+
+    public func explain(_ question: SentenceQuestion) async -> SentenceExplanation {
+        if case .explanation(let text)? = await local(question) {
+            return .explained(text, tier: tier)
+        }
+        // Not installed, out of memory, declined, or no service: the rung below answers, and says
+        // for itself why it could not where it cannot either.
+        guard !Task.isCancelled else { return .unavailable("The explanation was stopped.") }
+        return await apple.explain(question)
+    }
 }
 
 /// The on-device tier: Apple's model, which may see the dictionary entry because nothing leaves

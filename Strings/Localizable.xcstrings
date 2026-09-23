@@ -242,6 +242,9 @@
     "No entry for “%@” in your dictionaries." : {
 
     },
+    "No model is available to explain this sentence." : {
+      "comment" : "Shown in the sentence pane when nothing can explain the sentence"
+    },
     "No sense in this entry clearly fits this sentence." : {
       "comment" : "Shown on the lookup card when no sense is close enough to claim"
     },

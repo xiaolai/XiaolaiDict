@@ -71,6 +71,9 @@ public actor ModelService {
         case .translate(let question):
             await awaitPrewarm()
             return await translate(question)
+        case .explain(let question):
+            await awaitPrewarm()
+            return await explain(question)
         }
     }
 
@@ -161,6 +164,31 @@ public actor ModelService {
                 return .failure(.generationFailed("the model answered with the sentence it was given"))
             }
             return .translation(text)
+        }
+    }
+
+    /// How the word is used in the reader's sentence, in prose.
+    ///
+    /// **Sampled, unlike the sense answer.** This is writing, not a choice from a list: at
+    /// temperature 0 a small model repeats itself and falls into the same three clauses for every
+    /// sentence. The bound is the token budget, not the grammar.
+    private func explain(_ question: SentenceQuestion) async -> ModelReply {
+        guard !question.sentence.isBlank, !question.term.isBlank else {
+            return .failure(.invalidRequest("an explanation needs a sentence and a word"))
+        }
+        return await withModel { model in
+            let session = LanguageModelSession(
+                model: model, instructions: ModelPrompt.explanationInstructions)
+            // The local model runs on this Mac, so it may see the dictionary's own text — the same
+            // boundary `ExplainerTier` draws, asked for by name rather than assembled here.
+            let text = try await session.respond(
+                to: question.prompt(for: .onDevice),
+                options: GenerationOptions(maximumResponseTokens: ModelPrompt.explanationTokens(for: question)))
+                .content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                return .failure(.generationFailed("the model answered with nothing"))
+            }
+            return .explanation(text)
         }
     }
 

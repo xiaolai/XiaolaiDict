@@ -359,6 +359,7 @@ public struct LookupPanelContent: View {
     @Environment(\.pinNote) private var pin
     @Environment(\.studySense) private var studySense
     @Environment(\.translation) private var translator
+    @Environment(\.explainer) private var explainer
     @Environment(\.colorScheme) private var scheme
     public let presentation: LookupPresentation
     /// What it is waiting for, in words. Nil once the dictionaries have answered.
@@ -623,8 +624,12 @@ public struct LookupPanelContent: View {
             let question = SentenceQuestion(
                 sentence: presentation.sentence ?? "", term: presentation.term, senseText: sense)
             explaining?.cancel()
+            let explain = explainer.explain
             explaining = Task {
-                let answer = await OnDeviceSentenceExplainer().explain(question)
+                // **The downloaded model first.** Reaching for Apple's here would make the pane
+                // work only for readers who have Apple Intelligence — which the LLM-pane decision
+                // says it must not.
+                let answer = await explain(question)
                 guard !Task.isCancelled else { return }
                 explanation = answer
                 explaining = nil

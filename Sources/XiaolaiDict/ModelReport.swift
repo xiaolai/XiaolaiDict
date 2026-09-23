@@ -174,9 +174,25 @@ enum ModelReport {
             report["translation"] = NSNull()
             report["translationFailure"] = "\(String(describing: translation))"
         }
+        // **The sentence pane's own path, on the same sentence.** It is the third thing the panel
+        // asks this model for, and the one a reader without Apple Intelligence has no other engine
+        // for — so a run that measured sense and translation and left it out would say nothing
+        // about whether the pane works at all.
+        let explanationStarted = ContinuousClock.now
+        let explanation = await client.ask(.explain(SentenceQuestion(
+            sentence: sentence, term: "hold", senseText: met?.sense)))
+        report["explanationSeconds"] = seconds(since: explanationStarted)
+        if case .explanation(let text)? = explanation {
+            report["explanation"] = text
+        } else {
+            report["explanation"] = NSNull()
+            report["explanationFailure"] = "\(String(describing: explanation))"
+        }
+
         let chosen = if case .sense(2)? = sense { true } else { false }
         let translated = if case .translation? = translation { true } else { false }
-        return chosen && translated
+        let explained = if case .explanation? = explanation { true } else { false }
+        return chosen && translated && explained
     }
 
     enum UnloadWatch: String {

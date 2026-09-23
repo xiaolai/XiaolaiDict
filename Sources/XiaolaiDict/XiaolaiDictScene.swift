@@ -35,7 +35,8 @@ struct XiaolaiDictScene: App {
         Window(Self.lookupTitle, id: Self.lookupID) {
             LookupPanelSceneView(
                 controller: delegate.panelController, model: delegate.panelModel,
-                translation: { [delegate] in delegate.models.translationActions })
+                translation: { [delegate] in delegate.models.translationActions },
+                explainer: { [delegate] in delegate.models.explanationActions })
                 .xiaolaiDictAppearance(delegate.appearance)
         }
         // `.plain`, not `.hiddenTitleBar`. A reader pointing at a word asked a question; they did

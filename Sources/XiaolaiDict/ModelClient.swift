@@ -25,6 +25,8 @@ actor ModelClient {
         switch request {
         case .pickSense: .seconds(12)
         case .translate: .seconds(30)
+        // Prose rather than a number, and a slow Mac writes it a token at a time.
+        case .explain: .seconds(45)
         case .prewarm: .seconds(60)
         case .status: .seconds(10)
         // Longer than the service's own drain, because unloading *is* that wait: bounded shorter,
@@ -201,6 +203,11 @@ struct LocalModelAccess: Sendable {
             ("embedding", EmbeddingSenseSelector()),
         ]
         return (LadderSenseSelector(rungs: rungs.map(\.selector)), rungs)
+    }
+
+    /// The sentence pane's engines: this model first, Apple's on-device model where it is not here.
+    var explainer: LadderSentenceExplainer {
+        LadderSentenceExplainer(local: { question in await ask(.explain(question)) })
     }
 
     /// The translation pane's engines: this model first, Apple's framework where it is not here.

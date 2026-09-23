@@ -306,6 +306,46 @@ struct ModelServiceTests {
         prewarm.cancel()
     }
 
+    /// **The sentence pane's answer comes from this model too.** It is prose, so it is bounded by a
+    /// token budget rather than a grammar — and it may carry the dictionary's own sense text,
+    /// because this model runs on the reader's Mac.
+    @Test func anExplanationComesBackAsProseAndCarriesTheSense() async throws {
+        let model = ScriptedModel(.answer("Here it names the cargo space of a ship."))
+        let question = SentenceQuestion(
+            sentence: "The ship's hold was full.", term: "hold",
+            senseText: "a large space in the lower part of a ship")
+        let reply = try await Self.service(model).reply(to: .explain(question))
+        #expect(reply == .explanation("Here it names the cargo space of a ship."))
+        let asked = try #require(model.requests.first)
+        #expect(asked.contains("a large space in the lower part of a ship"))
+        #expect(asked.contains("hold"))
+        let budget = try #require(model.budgets.first ?? nil)
+        #expect(budget == ModelPrompt.explanationTokens(for: question))
+        #expect(budget < 600)
+    }
+
+    /// An explanation with nothing to explain is refused before a model is woken for it.
+    @Test func anExplanationNeedsASentenceAndAWord() async throws {
+        let built = Recorder(0)
+        let service = try Self.service(ScriptedModel(.answer("x")), built: built)
+        let blank = SentenceQuestion(sentence: "   ", term: "hold", senseText: nil)
+        guard case .failure(.invalidRequest) = await service.reply(to: .explain(blank)) else {
+            Issue.record("a blank sentence was sent to the model")
+            return
+        }
+        #expect(built.withLock { $0 } == 0)
+    }
+
+    /// A model that answers an explanation with nothing has not explained anything.
+    @Test func anEmptyExplanationIsAFailureNotAnExplanation() async throws {
+        let service = try Self.service(ScriptedModel(.answer("   ")))
+        let question = SentenceQuestion(sentence: "The ship's hold was full.", term: "hold", senseText: nil)
+        guard case .failure(.generationFailed) = await service.reply(to: .explain(question)) else {
+            Issue.record("a blank answer was passed off as an explanation")
+            return
+        }
+    }
+
     /// A list longer than the answer can name is refused before a model is woken for it.
     @Test func moreSensesThanTheAnswerCanNameAreRefused() async throws {
         let built = Recorder(0)
