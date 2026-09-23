@@ -211,6 +211,16 @@ public enum ModelPrompt {
         and do not repeat the sentence back.
         """
 
+    /// The prompt for an explanation. **The dictionary's own sense text is cut** to the same length
+    /// the sense list is: a 49-sense entry's definition can run to thousands of characters, and an
+    /// unbounded prompt is one a long entry can push past the model's context — after which the
+    /// pane falls to a weaker engine for a reason nothing records.
+    public static func explanation(_ question: SentenceQuestion) -> String {
+        let cut = question.senseText.map { String($0.prefix(translatedSenseLimit)) }
+        return SentenceQuestion(sentence: question.sentence, term: question.term, senseText: cut)
+            .prompt(for: .onDevice)
+    }
+
     /// The most an explanation may generate: two or three sentences, with room for a script that
     /// takes more tokens than the source — never the backend's default of thousands.
     public static func explanationTokens(for question: SentenceQuestion) -> Int {

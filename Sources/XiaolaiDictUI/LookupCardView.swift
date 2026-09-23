@@ -369,12 +369,15 @@ public struct LookupPanelContent: View {
     @State private var showing = 0
     @State private var explanation: SentenceExplanation?
     /// The explanation in flight — **held, like the translation, rather than started and
-    /// forgotten**. A bare task outlives the card that started it: the reader closes the panel and
-    /// an on-device generation goes on running for a sentence nobody will see.
+    /// forgotten**. A bare task outlives the card that started it, and the answer it eventually
+    /// writes lands on whatever card is there by then. Cancelling stops this side waiting; a
+    /// generation already inside the model service runs until the service bounds it.
     @State private var explaining: Task<Void, Never>?
     @State private var translation: TranslationPane?
     /// The one translation in flight. Replacing it cancels the one before, so two clicks cannot
-    /// finish out of order, and it is cancelled when the card goes away.
+    /// finish out of order, and it is cancelled when the card goes away. **Cancelling stops this
+    /// side waiting** — a generation already running inside the model service is not something a
+    /// client can stop, and the service's own watchdog is what bounds that.
     @State private var translating: Task<Void, Never>?
     @State private var copied = false
     /// **The sense the reader tapped, per entry.** `choose` used to write to the ledger and nothing
@@ -537,6 +540,10 @@ public struct LookupPanelContent: View {
     /// Whatever was said about the card as it was is not about the card as it is: a translation in
     /// flight was told the old sense, and an answer already on screen was written for it.
     private func clearPanes() {
+        // **The checkmark is about what is on the pasteboard**, and what was copied was the card as
+        // it was. Left standing, it says the sense now shown is the one the reader has, while the
+        // pasteboard still holds the old one.
+        copied = false
         translating?.cancel()
         translating = nil
         translation = nil
@@ -591,7 +598,7 @@ public struct LookupPanelContent: View {
         }
     }
 
-    /// The reader's sentence in their own language — on request, because translation is a reveal,
+    /// The reader's sentence **put into** their own language — on request, because it is a reveal,
     /// and fed the sense the card is leading with.
     /// A footer action that runs something and waits for it: the same symbol swap, the same
     /// disabling, the same help. Two of them had grown their own copies, and their behaviour under

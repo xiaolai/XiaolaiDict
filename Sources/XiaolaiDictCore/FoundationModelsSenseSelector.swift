@@ -70,7 +70,7 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
             if number == 0 { return .abstained(.undecided) }
             guard number >= 1, number <= keyable.count else { return .abstained(.unavailable) }
             return .chose(
-                key: keyable[number - 1].key, margin: 1, entryID: keyable[number - 1].entryID)
+                key: keyable[number - 1].key, margin: nil, entryID: keyable[number - 1].entryID)
         } catch {
             // None of these is a reason to pick something. But a refusal is the model declining
             // *this sentence*, and is kept apart from a context overflow or the model going away.

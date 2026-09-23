@@ -83,8 +83,10 @@ public struct ModelStore: Sendable, Equatable {
         }
     }
 
-    /// Every complete model directory under the root **except** `keeping`'s, removed. Returns the
-    /// ones it could not remove, so a caller can say so rather than assume silence means success.
+    /// Every complete model directory under the root **except** `keeping`'s, removed. Returns what
+    /// it could not do — a removal that failed, a store it could not read, or a prune it did not
+    /// run because something else was writing — so a caller can say so rather than read silence as
+    /// success. An empty answer means the store is as this pin wants it.
     ///
     /// A model's directory is named for its pin — `repository@revision` — so bumping the pin
     /// installs the new weights *beside* the old ones rather than over them. Removing by manifest
@@ -99,14 +101,16 @@ public struct ModelStore: Sendable, Equatable {
         // a stray by a prune that read the store before it landed — and three gigabytes deleted a
         // moment after they arrived. A staged download is never at risk (`.staging` is hidden from
         // the walk below); a *completed* one is, which is what this guards.
-        guard !isInstalling else { return [] }
+        guard !isInstalling else { return ["the store was busy, so nothing was pruned"] }
         // **Held for the whole run.** Taken after the check above and given back at the end, so an
         // install cannot commit between the enumeration and the removals. Not taken means somebody
         // is committing right now; the prune is retried on the next refresh.
         try? FileManager.default.createDirectory(
             at: root.appending(path: Self.stagingName, directoryHint: .isDirectory),
             withIntermediateDirectories: true)
-        guard let store = InstallLock(storeLockFile()) else { return [] }
+        guard let store = InstallLock(storeLockFile()) else {
+            return ["the store was busy, so nothing was pruned"]
+        }
         defer { store.release() }
         // Nothing is removed on behalf of a model that is not there: whatever the caller believed
         // about the store, it is not what the store says now.

@@ -73,7 +73,8 @@ struct SenseSelectionAccuracyTests {
                 right ? (score.right += 1) : (score.wrong += 1)
                 let text = candidates.first { $0.key == key }?.text.prefix(46) ?? ""
                 score.report += "  \(right ? "✓" : "✗") \(labelled.word.padded(10))"
-                    + " [\(partOfSpeech ?? "?")] \(key)  margin \(String(format: "%.4f", margin))  \(text)\n"
+                    + " [\(partOfSpeech ?? "?")] \(key)  margin "
+                    + (margin.map { String(format: "%.4f", $0) } ?? "—") + "  \(text)\n"
             case .abstained(let why, let nearest):
                 if let nearest {
                     // It declined to choose and kept a favourite. The card shows that favourite
@@ -212,6 +213,9 @@ struct SenseSelectionAccuracyTests {
             guard case .chose(let key, let margin, _) = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
             else { continue }
+            // The embedding rung is the one with a margin; a rung that reports none is not scored
+            // on a gap it never measured.
+            guard let margin else { continue }
             if key == labelled.correct { rightMargins.append(margin) } else { wrongMargins.append(margin) }
         }
         let worstRight = rightMargins.min() ?? 0

@@ -43,8 +43,11 @@ actor ModelClient {
     private let connect: Connect
     private let servicePresence: @Sendable () -> ModelServiceProcess.Presence
     private var sessions = ServiceSessions<any ModelTransport>()
-    /// The session that has been prewarmed, so a prewarm is sent once per service process rather
-    /// than once per lookup.
+    /// The session that has been prewarmed. **Once per session, which is once per service process
+    /// in the ordinary case** — a session outlives nothing the service does, so a session dropped
+    /// for a failed request re-prewarms a process that may still be warm. That costs one extra
+    /// prewarm after a failure and is the safe direction: the alternative is a cold model the app
+    /// believes is warm.
     private var warmed: Int?
     /// An unload in flight. Nothing is asked while it runs: the point of unloading is that what is
     /// asked next reaches a *new* process, not the one on its way out.
@@ -80,7 +83,11 @@ actor ModelClient {
         } catch is CancellationError where Task.isCancelled {
             // **The caller was superseded, not the service.** Dropping the session here would cancel
             // whatever else is in flight on it — a prewarm, another lookup — for a lookup nobody is
-            // waiting on any more. The session is healthy and stays.
+            // waiting on any more. The session is healthy and stays. What this does *not* do is
+            // stop the generation: MLX's work is a Metal call nothing outside it can interrupt, so
+            // the model finishes the answer and throws it away. The service's watchdog is what
+            // bounds that, and a per-request cancel message would only stop this side waiting,
+            // which is what returning here already does.
             //
             // Asked of the *thrown error*, never of `Task.isCancelled`: a transport failure or a
             // deadline that lands in the same moment the caller gives up would otherwise be read as
@@ -106,7 +113,13 @@ actor ModelClient {
         // unload, and count as having ended something that never existed. A scan that could not
         // tell is not "gone": it is asked again below, with a session, rather than being taken as
         // proof that the old weights have been released.
-        if presence() == .gone { return true }
+        if presence() == .gone {
+            // **And nothing is left pointing at it.** A session held from before the process went
+            // would be handed to the next question, which would then talk to a dead peer and lose
+            // an answer for it — the launch-on-demand relaunch happens on a *new* session.
+            if let current = sessions.current { drop(current, reason: "the service is not running") }
+            return true
+        }
         // A connection that could not be made says nothing about the process; the process does.
         guard let current = try? openSession() else { return presence() == .gone }
         let work = Task { () -> Bool in
@@ -220,7 +233,9 @@ struct LocalModelAccess: Sendable {
         return (LadderSenseSelector(rungs: rungs.map(\.selector)), rungs)
     }
 
-    /// The sentence pane's engines: this model first, Apple's on-device model where it is not here.
+    /// The sentence pane's engines: this model first, Apple's on-device model **wherever this one
+    /// does not answer** — not downloaded, not enough memory, declined, a generation that failed,
+    /// a reply of the wrong shape, or no service at all.
     var explainer: LadderSentenceExplainer {
         LadderSentenceExplainer(local: { question in await ask(.explain(question)) })
     }

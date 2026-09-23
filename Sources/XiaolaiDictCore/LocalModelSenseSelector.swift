@@ -42,8 +42,13 @@ public struct LocalModelSenseSelector: SenseSelecting {
         // invalid request — a defect in whatever built it — and an entry with a hundred senses is
         // not a defect, it is *run* in a large dictionary. The rung below has no such bound.
         guard considered.count <= ModelPrompt.maximumSenses else { return .abstained(.unavailable) }
+        // **Cut before it crosses the process boundary.** The prompt keeps only
+        // `senseCharacterLimit` characters of each sense, so sending whole bodies — up to 99 of
+        // them, and a single COBUILD sense runs to hundreds of characters — serialises kilobytes
+        // that are then thrown away on the other side.
         let question = SenseQuestion(
-            sentence: reading, partOfSpeech: partOfSpeech, senses: considered.map(\.text))
+            sentence: reading, partOfSpeech: partOfSpeech,
+            senses: considered.map { String($0.text.prefix(ModelPrompt.senseCharacterLimit)) })
         switch await ask(question) {
         case .sense(0)?:
             // The answer its instructions call correct and expected: the sentence does not settle
@@ -56,27 +61,25 @@ public struct LocalModelSenseSelector: SenseSelecting {
             // ladder: 2B answered "10" of eight senses once. The rung could not run, so the next one does.
             guard number >= 1, number <= considered.count else { return .abstained(.unavailable) }
             let chosen = considered[number - 1]
-            // `margin` is 1 because a model answers with a position, not a score — there is no gap
-            // over a runner-up to report. The card draws a model's choice as a hypothesis whatever
-            // the number says.
-            return .chose(key: chosen.key, margin: 1, entryID: chosen.entryID)
+            // **No margin**: a model answers with a position in a list, not a score, so there is
+            // no gap over a runner-up to report and a number here would be one this rung made up —
+            // which the accuracy report would then read as confidence.
+            return .chose(key: chosen.key, margin: nil, entryID: chosen.entryID)
         case .failure(.refused)?:
             return .abstained(.refused)
-        // **A request this rung built and the service refused is a defect here, not a condition.**
-        // The bounds are checked above, so reaching this means the two sides disagree about what a
-        // sense question is — and the ladder falling quietly through to a weaker rung is how that
-        // would stay hidden. Loud in a debug build and in the tests; the reader still gets an
-        // answer from the rung below.
-        case .failure(.invalidRequest(let why))?:
-            assertionFailure("the model service refused this rung's own question: \(why)")
+        // **A request this rung built and the service refused is a defect here** — the bounds are
+        // checked above, so reaching this means the two sides disagree about what a sense question
+        // is. It is *not* trapped on: the service is a separate process that can be a different
+        // build of this app entirely, and killing the reader's app over a version skew is a worse
+        // answer than falling to the rung below. The reader gets a sense; the disagreement shows up
+        // as this rung never answering, which `--sense-report` measures.
+        case .failure(.invalidRequest)?:
             return .abstained(.unavailable)
-        // An answer to a question nobody asked is **not** asserted on, though it is the same kind
-        // of disagreement: a reply arrives over XPC, and this rung cannot make a service that is
-        // out of step with it behave. `LocalModelSenseSelectorTests` pins the fall-through.
-        //
         // Not installed, too little memory now, a generation that failed, an answer of the wrong
-        // shape, or no service at all: the model is not here for this lookup, and the rung below
-        // runs.
+        // shape, or no service at all: the model is not here **for this lookup**, and the rung
+        // below runs. These are not all the same thing — a corrupt installation and a busy Mac end
+        // up here alike — and what tells them apart is `--model-status`, which asks the service
+        // directly rather than inferring from a rung that fell through.
         case .failure?, .translation?, .explanation?, .prewarmed?, .status?, .unloading?, nil:
             return .abstained(.unavailable)
         }

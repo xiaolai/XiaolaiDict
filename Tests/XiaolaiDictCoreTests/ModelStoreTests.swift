@@ -328,7 +328,9 @@ struct ModelStoreTests {
         // `--model-report`; a model the other process finished a moment ago looks exactly like a
         // stray to a prune that read the store before it landed.
         let held = try #require(InstallLock(store.lockFile(for: keeper)))
-        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        // A prune that did not run says so: an empty answer would read as "the store is as this pin
+        // wants it", which is exactly what nobody checked.
+        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
         #expect(store.installed(stale) != nil, "a model was deleted while a download was in flight")
         held.release()
 
@@ -366,7 +368,7 @@ struct ModelStoreTests {
 
         // While the old pin is being downloaded, its part-file is not touched.
         let held = try #require(InstallLock(store.lockFile(for: stale)))
-        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
         #expect(FileManager.default.fileExists(atPath: store.stagingDirectory(for: stale).path),
                 "a staged download that was running was deleted")
         held.release()
@@ -423,7 +425,7 @@ struct ModelStoreTests {
         try "not this pin".write(
             to: stale.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
 
-        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(store.removeStrays(keeping: manifest) == ["the store was busy, so nothing was pruned"])
         #expect(FileManager.default.fileExists(atPath: stale.path),
                 "the prune decided over a store somebody else was writing to")
 
@@ -490,7 +492,7 @@ struct ModelStoreTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: staging.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path) }
         #expect(store.isInstalling, "an unreadable staging directory was read as nothing installing")
-        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
         #expect(store.installed(keeper) != nil)
     }
 

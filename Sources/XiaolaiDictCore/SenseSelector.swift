@@ -84,14 +84,16 @@ public struct NearMiss: Sendable, Equatable {
 public enum SenseSelection: Sendable, Equatable {
     /// `key` is always one of the candidates it was given — the output is a choice from a closed
     /// set, never generated, so the worst failure is a *wrong existing* sense, not an invented one.
-    /// `margin` is how far ahead of the runner-up it was.
+    /// `margin` is how far ahead of the runner-up it was — **nil where there is no score to
+    /// compare**. A model answers with a position in a list, not with a distance, so a number here
+    /// would be invented; `.infinity` is not that answer either, it is the one candidate case.
     ///
     /// **`entryID` is what makes the key mean something.** A positional key is literally
     /// `"\(block).\(ordinal)"` — no entry id, no hash — so every entry in a dictionary has a sense
     /// keyed `"1.1"`. A caller resolving a choice by key alone takes the first entry that happens
     /// to contain one, which is the right sense of the wrong word often enough to matter, and it
     /// writes that into the study ledger. Nil only where the selector did not know it.
-    case chose(key: String, margin: Double, entryID: String? = nil)
+    case chose(key: String, margin: Double?, entryID: String? = nil)
     /// `nearest` is set only for `.tooClose`; see `NearMiss`.
     case abstained(Abstention, nearest: NearMiss? = nil)
 

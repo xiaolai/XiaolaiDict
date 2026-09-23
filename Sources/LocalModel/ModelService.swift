@@ -107,8 +107,9 @@ public actor ModelService {
     /// one is running pays at most this much after it finishes.
     static let prewarmPoll = Duration.milliseconds(20)
 
-    /// The size it holds, or the one it **would** load — asked of the same routine the loading asks,
-    /// so status cannot advertise a model the service would refuse for want of memory.
+    /// The size it holds, or the one it **would** load. Where a model is already loaded that is the
+    /// answer; otherwise the same routine the loading asks, so status cannot advertise a size the
+    /// service would then refuse for want of memory.
     /// **The GPU probe runs once and is remembered.** It evaluates an MLX op, and the actor is
     /// reentrant across awaits — so a `.status` arriving mid-generation would put a second piece of
     /// GPU work beside the model's own. Asked here at most once per process, before or between
@@ -186,7 +187,9 @@ public actor ModelService {
                 options: GenerationOptions(maximumResponseTokens: ModelPrompt.translationTokens(for: question)))
                 .content.trimmingCharacters(in: .whitespacesAndNewlines)
             // An echo reads as success and is not one: 9B once handed its English back untranslated.
-            guard TranslationCheck.isTranslation(text, of: question.sentence) else {
+            // **Told the target too**, so an answer still in the source's language is caught here
+            // rather than only at the pane — the report and the end-to-end gate read this reply.
+            guard TranslationCheck.isTranslation(text, of: question.sentence, into: question.target) else {
                 return .failure(.generationFailed("the model answered with the sentence it was given"))
             }
             return .translation(text)
@@ -208,11 +211,16 @@ public actor ModelService {
             // The local model runs on this Mac, so it may see the dictionary's own text — the same
             // boundary `ExplainerTier` draws, asked for by name rather than assembled here.
             let text = try await session.respond(
-                to: question.prompt(for: .onDevice),
+                to: ModelPrompt.explanation(question),
                 options: GenerationOptions(maximumResponseTokens: ModelPrompt.explanationTokens(for: question)))
                 .content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
                 return .failure(.generationFailed("the model answered with nothing"))
+            }
+            // **The sentence handed back is not an explanation of it**, any more than it is a
+            // translation of it — the same failure that reads as success, and the same check.
+            guard TranslationCheck.isTranslation(text, of: question.sentence) else {
+                return .failure(.generationFailed("the model answered with the sentence it was given"))
             }
             return .explanation(text)
         }

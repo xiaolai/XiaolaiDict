@@ -44,7 +44,9 @@ struct LocalModelSenseSelectorTests {
     @Test func theAnswerIsReadAgainstTheListTheModelWasSent() async {
         let asked = Recorder<[SenseQuestion]>([])
         let choice = await Self.choose(.sense(1), asked: asked)
-        #expect(choice == .chose(key: "h.2", margin: 1, entryID: "hold2"))
+        // **No margin.** A model answers with a position, not a score, so a number here would be
+        // one this rung invented — and the accuracy report would read it as confidence.
+        #expect(choice == .chose(key: "h.2", margin: nil, entryID: "hold2"))
         #expect(asked.withLock { $0.first?.senses } == ["the cargo space of a ship", "a grip in wrestling"])
         #expect(asked.withLock { $0.first?.partOfSpeech } == "noun")
     }
