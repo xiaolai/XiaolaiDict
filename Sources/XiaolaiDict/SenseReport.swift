@@ -40,6 +40,16 @@ enum SenseReport {
                 _ = Instrument.write(["error": String(describing: error)], to: write)
                 return .failure
             }
+            // **The labelled answer has to be among the candidates.** A dictionary asset updated
+            // under us, or a parser change that drops a sense, would otherwise be scored as every
+            // rung getting the word wrong — the instrument reporting a model defect for a fixture
+            // one. Checked against the set as it is today, before anything is asked of a model.
+            if let correct = labelled.correct, !candidates.contains(where: { $0.key == correct }) {
+                _ = Instrument.write(
+                    ["error": "\(labelled.word): the labelled sense \(correct) is not among NOAD's candidates today, so this set cannot score it"],
+                    to: write)
+                return .failure
+            }
             let partOfSpeech = Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
             // **Warmed before anything is timed.** Otherwise the first rung measured pays the cold
             // load and grammar compile that every rung after it is spared, and the numbers say more

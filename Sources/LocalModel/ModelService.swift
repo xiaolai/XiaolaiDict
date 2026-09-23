@@ -133,7 +133,14 @@ public actor ModelService {
         }
         return await withModel { model in
             let session = LanguageModelSession(model: model, instructions: ModelPrompt.senseInstructions)
-            let answer = try await session.respond(to: ModelPrompt.sense(question), generating: SenseNumber.self)
+            // **Temperature 0.** This is a classification over a closed set, not writing: sampling
+            // adds nothing a reader wants and makes the same question answerable two ways. The
+            // measurement depends on it — the report runs the rung and the ladder separately over
+            // one sentence, and two sampled generations can disagree by chance, which would read as
+            // the ladder dropping an answer it did not drop.
+            let answer = try await session.respond(
+                to: ModelPrompt.sense(question), generating: SenseNumber.self,
+                options: GenerationOptions(temperature: 0))
             return .sense(answer.content.senseNumber)
         }
     }

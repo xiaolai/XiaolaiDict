@@ -85,10 +85,12 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
         // **Asked through `SenseEngine`, which is the one place that asks.** This switched over
         // Apple's own enum itself, so the two could drift — and the reason a reader is told here
         // would stop matching the one the setup board shows.
-        if let reason = SenseEngine.status().reason {
+        if SenseEngine.status().reason != nil {
             // Unavailable in mainland China, and on any Mac without Apple Intelligence. Said
-            // plainly rather than silently falling back to something that may send text away.
-            return .unavailable("The on-device model is not available here (\(reason.rawValue)).")
+            // plainly rather than silently falling back to something that may send text away — and
+            // **without the enum's own name in it**: `appleIntelligenceNotEnabled` is an identifier,
+            // not a sentence, and this string is not translatable where it lives.
+            return .unavailable("The on-device model is not available here.")
         }
         do {
             let session = LanguageModelSession(instructions: Self.instructions)
