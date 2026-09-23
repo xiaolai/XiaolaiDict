@@ -237,7 +237,9 @@ public struct SettingsView: View {
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
-        case .about: AboutPane(release: AppRelease(Bundle.main), modelLicence: modelLicence)
+        case .about:
+            AboutPane(release: AppRelease(Bundle.main), modelLicence: modelLicence,
+                      notices: Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt"))
         }
     }
 }

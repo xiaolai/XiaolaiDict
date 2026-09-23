@@ -58,6 +58,8 @@ readonly ICON_DIGEST=.build/icon.inputs-sha256
 readonly RESOURCES=.build/resources
 readonly LOCK=.build/bundle.lock
 readonly CATALOG=Strings/Localizable.xcstrings
+# What the About pane opens: every linked package's licence, gathered by `third-party-notices.sh`.
+readonly NOTICES=ThirdPartyNotices.txt
 
 fail() { echo "error: $*" >&2; exit 1; }
 note() { echo "$*"; }
@@ -66,20 +68,74 @@ note() { echo "$*"; }
 # Read from the products directory rather than listed here, because the list grows with the model
 # service's dependencies and a hand-kept copy is one that silently falls behind.
 #
-# **Filtered to the packages this build resolves.** `make clean` keeps the build cache on purpose,
-# so a dependency removed from `Package.swift` leaves its bundle sitting there — and a bare glob
-# would go on copying and signing it into the app for ever, with nothing to say where it came from.
-# A bundle is named `<package>_<target>.bundle`, and `Package.resolved` is the list of packages that
-# are still in the graph.
-model_resource_bundles() {
-    local products packages name
-    products=$(swift build -c "$CONFIG" --show-bin-path) || return 1
-    packages=$(python3 -c 'import json,sys; print(" ".join(p["identity"] for p in json.load(open(sys.argv[1])).get("pins", [])))' \
-        Package.resolved) || return 1
-    find "$products" -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort | while read -r name; do
-        case " $packages " in *" ${name%%_*} "*) echo "$name" ;; esac
-    done
+# **Filtered to the model service's own build graph**, not by a glob and not by the resolved
+# packages. `make clean` keeps the build cache on purpose, and the products directory is shared by
+# every product this package builds — so a bundle left behind by a dependency that has since been
+# removed, or one belonging to a product the service does not link, would go on being copied into
+# the XPC service and signed with this project's Developer ID, with nothing to say where it came
+# from. SwiftPM writes the graph it is about to build to `.build/manifest.pif`; the service
+# product's dependency closure in that file names exactly the bundle targets it can load. Filtering
+# by `Package.resolved` instead admitted all thirteen pins, `swift-syntax` and
+# `swift-argument-parser` among them, which the model service does not link at all.
+readonly PIF=.build/manifest.pif
+
+# The bundle targets in the model service's dependency closure, by name. Whether each one actually
+# produced a bundle is a separate question, answered by the products directory: a target with no
+# resources of its own writes none.
+model_service_bundle_targets() {
+    [ -f "$PIF" ] || { echo "$PIF is missing, so the model service's graph cannot be read" >&2; return 1; }
+    python3 - "$PIF" "$MODEL_SERVICE-product" <<'GRAPH'
+import json, sys
+
+plan = json.load(open(sys.argv[1]))
+targets = {target["contents"]["guid"]: target["contents"]
+           for target in plan if target.get("type") == "target"}
+roots = [target for target in targets.values() if target["name"] == sys.argv[2]]
+if not roots:
+    sys.exit(f"{sys.argv[2]} is not in the build plan")
+seen, pending = set(), [target["guid"] for target in roots]
+while pending:
+    guid = pending.pop()
+    if guid in seen or guid not in targets:
+        continue
+    seen.add(guid)
+    for dependency in targets[guid].get("dependencies", []):
+        pending.append(dependency["guid"] if isinstance(dependency, dict) else dependency)
+for guid in sorted(seen):
+    if targets[guid].get("productTypeIdentifier") == "com.apple.product-type.bundle":
+        print(targets[guid]["name"])
+GRAPH
 }
+
+# Resolved once per run, into a list and an array. `verify_bundle` asks for the bundles four times
+# and `assemble` twice, and each answer otherwise costs a SwiftPM invocation and a pass over a
+# seven-megabyte build plan. The array is what loops read: an unquoted expansion of the
+# newline-separated list is pathname expansion as well as word splitting, so a bundle whose name
+# held a glob character would expand to whatever happened to sit beside it.
+PRODUCTS=""
+BUNDLES=""
+BUNDLE_LIST=()
+resolve_products() {
+    [ -z "$PRODUCTS" ] || return 0
+    local products targets name
+    # **`XIAOLAIDICT_PRODUCTS` is for the checks that exercise this script**, and for nothing else.
+    # Verification is the one thing here that can be asked of a bundle without building it — and a
+    # test that has to start SwiftPM to ask cannot run inside `swift test`, where SwiftPM is already
+    # running. A build never sets it, so a build always asks the build.
+    products=${XIAOLAIDICT_PRODUCTS:-$(swift build -c "$CONFIG" --show-bin-path)} || return 1
+    targets=$(model_service_bundle_targets) || return 1
+    # Matched whole-line against the graph's target names. Written with `grep -x` rather than a
+    # `case` because bash 3.2 mis-parses a `case` nested inside a command substitution at run time,
+    # while `bash -n` accepts it — a syntax error that only a run can find.
+    BUNDLES=$(find "$products" -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort \
+        | while read -r name; do
+            printf '%s\n' "$targets" | grep -qx -- "${name%.bundle}" && echo "$name"
+        done)
+    BUNDLE_LIST=()
+    while IFS= read -r name; do [ -z "$name" ] || BUNDLE_LIST+=("$name"); done <<<"$BUNDLES"
+    PRODUCTS=$products
+}
+
 
 # ---------------------------------------------------------------------------------------------
 # One build at a time, across processes. `.NOTPARALLEL` orders recipes within one make; two makes
@@ -108,7 +164,8 @@ bundle_inputs_digest() {
         # The development build number is a property of each build, not an input: hashing it would
         # rebuild every time. A release number is an input.
         printf '%s\0' "$CONFIG" "$BUNDLE_ID" "$XIAOLAIDICT_SIGN_ID" "${XIAOLAIDICT_BUILD_NUMBER:-}"
-        find Sources Strings "$RESOURCES" Package.swift Makefile Tools/build-bundle.sh -type f -print0 | digest_files
+        find Sources Strings "$RESOURCES" Package.swift Makefile Tools/build-bundle.sh \
+            Tools/third-party-notices.sh -type f -print0 | digest_files
         [ ! -f Package.resolved ] || printf 'Package.resolved\0' | digest_files
     } | shasum -a 256 | cut -d' ' -f1
 }
@@ -185,8 +242,10 @@ PY
 generate_icon() {
     note "regenerating the icon from Tools/icon"
     python3 Tools/make-icon.py Tools/icon Resources
+    # The whole Python suite, not a pattern matching the icon's own files: a glob that excluded the
+    # others would quietly stop covering the next test file whose name happened to match it.
     python3 -m unittest discover -s Tools/tests >/dev/null 2>.build/icon-tests.log \
-        || { cat .build/icon-tests.log; fail "the icon generator's tests fail"; }
+        || { cat .build/icon-tests.log; fail "the tool tests fail"; }
     icon_inputs_digest > "$ICON_DIGEST"
 }
 
@@ -277,14 +336,15 @@ verify_required_files() {
         [ -x "$bundle/$executable" ] || { echo "not executable: $bundle/$executable"; return 1; }
     done
     for file in Contents/Info.plist Contents/Resources/Assets.car \
-                Contents/Resources/MenuBarIcon.svg "$XPC_PATH/Contents/Info.plist" \
+                Contents/Resources/MenuBarIcon.svg "Contents/Resources/$NOTICES" \
+                "$XPC_PATH/Contents/Info.plist" \
                 "$MODEL_XPC_PATH/Contents/Info.plist" "$METALLIB_PATH"; do
         [ -s "$bundle/$file" ] || { echo "missing: $bundle/$file"; return 1; }
     done
     # Every resource bundle the model product built has to be here, not only the one named above.
-    local expected present
-    expected=$(model_resource_bundles) || return 1
-    for built in $expected; do
+    local present
+    resolve_products || return 1
+    for built in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
         [ -d "$bundle/$MODEL_XPC_PATH/Contents/Resources/$built" ] \
             || { echo "missing from the model service: $built"; return 1; }
     done
@@ -294,7 +354,7 @@ verify_required_files() {
     # because that is the thing being shipped.
     for present in $(cd "$bundle/$MODEL_XPC_PATH/Contents/Resources" 2>/dev/null \
         && find . -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort); do
-        case " ${expected//$'\n'/ } " in
+        case " ${BUNDLE_LIST[*]} " in
             *" $present "*) ;;
             *) echo "the model service carries $present, which this build did not produce"; return 1 ;;
         esac
@@ -360,7 +420,8 @@ verify_signatures() {
     # resources, and each must itself be a signed code object ("code object is not signed at all"
     # otherwise, S2).
     codesign --verify --strict "$bundle/$MODEL_XPC_PATH" || { echo "the model service's signature does not cover its contents"; return 1; }
-    for built in $(model_resource_bundles); do
+    resolve_products || return 1
+    for built in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
         codesign --verify --strict "$bundle/$MODEL_XPC_PATH/Contents/Resources/$built" \
             || { echo "$built is not a signed code object"; return 1; }
     done
@@ -376,7 +437,7 @@ verify_signatures() {
     # service, and one carrying another signature is one the service loads at runtime.
     local part team authority parts=("$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH")
     local app_team_expected=""
-    for built in $(model_resource_bundles); do
+    for built in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
         parts+=("$bundle/$MODEL_XPC_PATH/Contents/Resources/$built")
     done
     for part in "${parts[@]}"; do
@@ -408,7 +469,8 @@ verify_release_timestamps() {
     local bundle=$1 part info built
     is_release || return 0
     local parts=("$bundle" "$bundle/$XPC_PATH" "$bundle/$MODEL_XPC_PATH")
-    for built in $(model_resource_bundles); do parts+=("$bundle/$MODEL_XPC_PATH/Contents/Resources/$built"); done
+    resolve_products || return 1
+    for built in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do parts+=("$bundle/$MODEL_XPC_PATH/Contents/Resources/$built"); done
     for part in "${parts[@]}"; do
         info=$(codesign -dvvv "$part" 2>&1)
         grep -q '^Timestamp=' <<<"$info" || { echo "a release is signed without a secure timestamp: $part"; return 1; }
@@ -466,7 +528,7 @@ assemble() {
     grep -qF "$XIAOLAIDICT_SIGN_ID" <<<"$identities" \
         || fail "signing identity not in the keychain: $XIAOLAIDICT_SIGN_ID — set SIGN_ID to another Developer ID Application identity"
 
-    # One build for both products: they share every module but their mains.
+    # One build for all three executable products: they share every module but their mains.
     swift build -c "$CONFIG"
     local products
     products=$(swift build -c "$CONFIG" --show-bin-path)
@@ -477,9 +539,8 @@ assemble() {
     # problem, not a packaging one.
     [ -f "$products/$METAL_BUNDLE/Contents/Resources/default.metallib" ] \
         || fail "$products/$METAL_BUNDLE has no default.metallib; refusing to ship a model service with no Metal shaders"
-    local bundles
-    bundles=$(model_resource_bundles)
-    grep -qx "$METAL_BUNDLE" <<<"$bundles" \
+    resolve_products || fail "the model service's build graph could not be read"
+    grep -qx "$METAL_BUNDLE" <<<"$BUNDLES" \
         || fail "the build produced no $METAL_BUNDLE; refusing to ship a model service with no Metal shaders"
 
     local contents=$STAGE/Contents
@@ -492,11 +553,18 @@ assemble() {
     cp "$products/$SERVICE" "$xpc/Contents/MacOS/$SERVICE"
     cp "$products/$MODEL_SERVICE" "$model_xpc/Contents/MacOS/$MODEL_SERVICE"
     local resource
-    for resource in $bundles; do cp -R "$products/$resource" "$model_xpc/Contents/Resources/$resource"; done
+    for resource in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
+        cp -R "$products/$resource" "$model_xpc/Contents/Resources/$resource"
+    done
     cp "$RESOURCES/Info.plist" "$contents/Info.plist"
     cp "$RESOURCES/DictionaryService-Info.plist" "$xpc/Contents/Info.plist"
     cp "$RESOURCES/ModelService-Info.plist" "$model_xpc/Contents/Info.plist"
     cp "$RESOURCES/MenuBarIcon.svg" "$contents/Resources/MenuBarIcon.svg"
+    # The licences of what is statically linked into the two services. Generated here rather than
+    # tracked, so it cannot drift from `Package.resolved` — which is itself one of the inputs this
+    # bundle's digest is taken over, so a dependency changed is a bundle rebuilt.
+    Tools/third-party-notices.sh "$contents/Resources/$NOTICES" \
+        || fail "the third-party notices could not be gathered"
 
     # The build number is stamped into the copies, not the tracked files: it is a property of the
     # build. Then read back, because PlistBuddy reports success for keys it did not write.
@@ -519,7 +587,7 @@ assemble() {
     ! is_release || stamp=--timestamp
     # Innermost first: each resource bundle is a code object of its own, and the model service cannot
     # be signed over an unsigned one — "code object is not signed at all" (S2).
-    for resource in $bundles; do
+    for resource in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
         codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc/Contents/Resources/$resource" >/dev/null
     done
     codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc" >/dev/null
@@ -703,6 +771,22 @@ health_check() {
 
 case "${1:-}" in
     build) build ;;
+    # **Whether the published bundle was built from the inputs that are here now.** Digest only —
+    # nothing is verified, nothing is built, and the resource snapshot is read rather than retaken,
+    # so this stays a question. `BundleVerificationTests` asks it before mutating a copy of that
+    # bundle: verifying a bundle older than the checks it is being measured against would fail on
+    # what the last build did not know to produce, and say nothing about the checks.
+    current)
+        [ -d "$APP" ] && [ -d "$RESOURCES" ] \
+            && [ "$(cat "$BUNDLE_DIGEST" 2>/dev/null)" = "$(bundle_inputs_digest)" ]
+        ;;
+    # Verification alone, over a bundle named on the command line — what `BundleVerificationTests`
+    # drives. The checks refuse in `verify_bundle`'s own words, which is what those tests read.
+    verify)
+        [ -n "${2:-}" ] || fail "usage: $0 verify <bundle>"
+        verify_bundle "$2" || fail "$2 failed verification"
+        note "$2 verifies"
+        ;;
     run)
         build
         quit_running
@@ -718,6 +802,6 @@ case "${1:-}" in
         rm -rf "$STAGE_ROOT" "$APP" "$BUNDLE_DIGEST" "$ICON_DIGEST" "$RESOURCES" "$RESOURCES.new"
         ;;
     *)
-        fail "usage: $0 build|run|icon|clean"
+        fail "usage: $0 build|run|icon|clean|current|verify <bundle>"
         ;;
 esac

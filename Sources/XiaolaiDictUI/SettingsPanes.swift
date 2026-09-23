@@ -527,8 +527,14 @@ struct AboutPane: View {
     /// from the upstream repository, because the MLX mirror carries none — so a reader who has the
     /// model has the licence it was published under.
     var modelLicence: URL?
+    /// The licences of the open-source packages the app is built from, as the bundle carries them.
+    /// Handed in rather than read here for the same reason the release is: a preview and a test
+    /// would otherwise be looking at Xcode's bundle.
+    var notices: URL?
     /// Shown when neither the downloaded licence nor the published one would open.
     @State private var licenceWouldNotOpen = false
+    /// Shown when the notices are in the bundle and the system would not open them.
+    @State private var noticesWouldNotOpen = false
 
     /// Built once and checked, rather than force-unwrapped at the call site. A link that is nil is
     /// a link that is not drawn — never a crash on a settings pane.
@@ -538,13 +544,14 @@ struct AboutPane: View {
     /// weights does not exist yet. Once it does, it is the one opened — same text, no network.
     private static let licence = LocalModelAttribution.licenceURL
 
-    /// Three subjects, three sections: which app this is, who made it, and what the model it can
-    /// download is licensed under.
+    /// Four subjects, four sections: which app this is, who made it, what the model it can download
+    /// is licensed under, and what it is itself built from.
     var body: some View {
         Form {
             identity
             author
             localModel
+            openSource
         }
         .formStyle(.grouped)
     }
@@ -617,6 +624,38 @@ struct AboutPane: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// What the app itself is built from. Both licences the dependencies carry — MIT and
+    /// Apache-2.0 — ask that their notice travel with every copy of the software, and a static link
+    /// leaves nothing in the bundle to say the code is there. The file is generated at build time
+    /// from the packages SwiftPM resolved, so it cannot fall behind them.
+    ///
+    /// **Drawn only where the file is there.** Outside a built bundle — a preview, a test — there is
+    /// nothing to open, and a button that cannot do anything is worse than no button.
+    @ViewBuilder private var openSource: some View {
+        if let notices {
+            Section("Open source") {
+                LabeledContent("Licences") {
+                    Button { open(notices, missing: $noticesWouldNotOpen) } label: { Text("Third-party notices") }
+                        .buttonStyle(.link)
+                }
+                if noticesWouldNotOpen {
+                    // The reader is told where it is, so the text is reachable without this button.
+                    Text("The notices could not be opened. They are in the app itself, at \(notices.path()).")
+                        .textSelection(.enabled)
+                        .font(.system(size: scale.text.small))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Opens a file the app carries, and says so when the system refuses — the same rule as the
+    /// licence below, without the published-copy fallback, because a file inside the bundle has no
+    /// second address.
+    private func open(_ url: URL, missing: Binding<Bool>) {
+        missing.wrappedValue = !NSWorkspace.shared.open(url)
     }
 
     /// Opens the downloaded copy, and falls back to the published one where that will not open —
