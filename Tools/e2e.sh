@@ -170,6 +170,37 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# restore_default <key> <had> <value> [type-flag]: puts a setting back the way this run found it.
+#
+# **`defaults write` prints a page of usage and still exits 0** when the value is empty — measured
+# 2026-09-23 with `-bool ""`, which is how a restore with nothing to restore dumped that page into
+# a run that had just reported every stage green, with nothing to say which setting it was. So an
+# empty value deletes the key instead, and **what was written is read back**: an exit code that is
+# 0 either way is not evidence that the reader got their setting back.
+restore_default() {
+    local key=$1 had=$2 wanted=$3 flag=${4:-} value=$3 now
+    if [ "$had" != yes ] || [ -z "$wanted" ]; then
+        defaults delete com.xiaolaidict "$key" 2>/dev/null || true
+        return 0
+    fi
+    # **`defaults read` prints a boolean as 1, and `defaults write -bool` does not accept 1.** Its
+    # grammar is `true | false | yes | no`; given `1` it prints its usage, writes nothing, and exits
+    # **0**. So the reader's setup flag was never actually put back by any run, and the only reason
+    # the machine looked right afterwards is that the app writes that flag itself.
+    if [ "$flag" = -bool ]; then
+        case $value in 1|true|yes) value=true ;; 0|false|no) value=false ;; esac
+    fi
+    if [ -n "$flag" ]; then
+        defaults write com.xiaolaidict "$key" "$flag" "$value"
+    else
+        defaults write com.xiaolaidict "$key" "$value"
+    fi
+    # Compared against what was *read*, not what was written: a boolean goes in as `true` and comes
+    # back as `1`, and comparing the written form would call a correct restore a failure.
+    now=$(defaults read com.xiaolaidict "$key" 2>/dev/null || echo "")
+    [ "$now" = "$wanted" ] || echo "cleanup: $key was not put back — wanted '$wanted', found '$now'"
+}
+
 pids() {
     local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
     while read -r pid path; do [ "$path" != "$1" ] || echo "$pid"; done <<<"$table"
@@ -318,11 +349,7 @@ else
     setup_shown_original=""
 fi
 restore_setup_shown() {
-    if [ "$setup_shown_had" = yes ]; then
-        defaults write com.xiaolaidict SetupWindowShown -bool "$setup_shown_original"
-    else
-        defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
-    fi
+    restore_default SetupWindowShown "$setup_shown_had" "$setup_shown_original" -bool
 }
 at_exit restore_setup_shown
 
@@ -651,10 +678,7 @@ else
     had_glass=no
     original_glass=""
 fi
-restore_glass() {
-    if [ "$had_glass" = yes ]; then defaults write com.xiaolaidict DrawerGlass "$original_glass"
-    else defaults delete com.xiaolaidict DrawerGlass 2>/dev/null || true; fi
-}
+restore_glass() { restore_default DrawerGlass "$had_glass" "$original_glass"; }
 at_exit restore_glass
 # The stripes image, kept beside the report under the glass it was taken in. Missing is a note, not
 # an abort: an unguarded copy under `set -e` ended the whole run when a capture failed, before its
@@ -1376,14 +1400,8 @@ if want model; then
 model_service="$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"
 # launchd starts the service with no arguments, so its idle interval comes from the app's defaults.
 # Shortened for the run so the unload is seen inside it, and put back however the run ends.
-if idle_original=$(defaults read com.xiaolaidict ModelIdleSeconds 2>/dev/null); then idle_had=yes; else idle_had=no; fi
-restore_idle() {
-    if [ "$idle_had" = yes ]; then
-        defaults write com.xiaolaidict ModelIdleSeconds -int "$idle_original"
-    else
-        defaults delete com.xiaolaidict ModelIdleSeconds 2>/dev/null || true
-    fi
-}
+if idle_original=$(defaults read com.xiaolaidict ModelIdleSeconds 2>/dev/null); then idle_had=yes; else idle_had=no; idle_original=""; fi
+restore_idle() { restore_default ModelIdleSeconds "$idle_had" "$idle_original" -int; }
 at_exit restore_idle
 defaults write com.xiaolaidict ModelIdleSeconds -int 20
 # A service already running read the old interval; this run's must start fresh. Asserted, not
