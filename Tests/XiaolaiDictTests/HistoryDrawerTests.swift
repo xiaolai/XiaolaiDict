@@ -276,6 +276,22 @@ struct CardBadgeTests {
         #expect(badge.explanation == Abstention.refused.reason)
     }
 
+    /// **And the same for a model that answered "I cannot tell".** `.undecided` is the same shape as
+    /// a refusal — something a model said about this sentence — and it was the same bug a second
+    /// time: the card reported how many senses the entry has and dropped what the model decided.
+    @Test func aModelThatSettledNothingIsSaidRatherThanTheEntrysSenseCount() throws {
+        let badge = try #require(CardBadge(of: Self.entry(sense: Self.entryLevel, abstention: .undecided)))
+        #expect(badge.text == "undecided")
+        #expect(!badge.isConfirmed)
+        #expect(badge.explanation == Abstention.undecided.reason)
+        #expect(badge.text != Self.entryLevel.badge)
+
+        // A tap outranks it, as it outranks a refusal.
+        let tapped = SenseNote(
+            dictionary: "NOAD", block: 1, ordinal: 4, outOf: 12, gloss: nil, chosenBy: .reader)
+        #expect(CardBadge(of: Self.entry(sense: tapped, abstention: .undecided))?.text == tapped.badge)
+    }
+
     /// Every other abstention leaves the card as it was: "no model here" is not a fact about this
     /// sentence, and the entry's own badge is what there is to say.
     @Test func otherAbstentionsLeaveTheEntrysBadgeAlone() throws {

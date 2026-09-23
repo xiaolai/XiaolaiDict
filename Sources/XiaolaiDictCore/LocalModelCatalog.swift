@@ -74,7 +74,12 @@ public struct ModelFile: Sendable, Equatable, Hashable {
     public let size: Int64
     public let sha256: String
 
-    public init(repository: String, revision: String, path: String, size: Int64, sha256: String) {
+    /// **Internal**, like the manifest's: every pin in this app is a constant in this file, checked
+    /// against what the mirror published and asserted by `LocalModelCatalogPinTests`. A public
+    /// initialiser would say these can come from somewhere else — and the values are used as
+    /// filesystem paths and byte counts, where "somewhere else" is a path that climbs out of the
+    /// model's own directory.
+    init(repository: String, revision: String, path: String, size: Int64, sha256: String) {
         self.repository = repository
         self.revision = revision
         self.path = path
@@ -108,7 +113,7 @@ public struct ModelManifest: Sendable, Equatable, Hashable {
     public let revision: String
     public let files: [ModelFile]
 
-    public init(size: LocalModelSize, repository: String, revision: String, files: [ModelFile]) {
+    init(size: LocalModelSize, repository: String, revision: String, files: [ModelFile]) {
         self.size = size
         self.repository = repository
         self.revision = revision

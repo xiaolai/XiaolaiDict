@@ -376,6 +376,11 @@ public struct LookupPanelContent: View {
     /// finish out of order, and it is cancelled when the card goes away.
     @State private var translating: Task<Void, Never>?
     @State private var copied = false
+    /// **The sense the reader tapped, once they have.** `choose` used to write to the ledger and
+    /// nothing else, so the card went on drawing the selector's proposal as its mark and — worse —
+    /// a translation asked afterwards was still told the sense the reader had just rejected. A tap
+    /// is a fact (`chosen_by: reader`); it replaces the hypothesis here as well as in the ledger.
+    @State private var chosen: SenseMark?
 
     public init(presentation: LookupPresentation, waiting: String? = nil) {
         self.presentation = presentation
@@ -460,14 +465,12 @@ public struct LookupPanelContent: View {
                     LookupCardView(card: card(for: entry), onChoose: { choose($0, in: entry) })
                         // A different dictionary is a different card: what was translated for the
                         // last one is neither shown nor still being worked on.
-                        .onChange(of: showing) {
-                            translating?.cancel()
-                            translating = nil
-                            translation = nil
-                            explaining?.cancel()
-                            explaining = nil
-                            explanation = nil
-                        }
+                        // A different dictionary is a different card — and so is the same card once
+                        // the sense mark arrives, which happens *after* it is first drawn: an
+                        // explanation written while the card said nothing about the sense would
+                        // otherwise sit under a card that now names one.
+                        .onChange(of: showing) { clearPanes() }
+                        .onChange(of: presentation.sense) { clearPanes() }
                     // Only beside the card it was made for. A different dictionary, or a sense that
                     // arrived after it was asked, is a different card.
                     if let translation, translation.of == translationKey(for: entry) {
@@ -482,9 +485,8 @@ public struct LookupPanelContent: View {
 
     private func card(for entry: DictionaryEntry) -> LookupCard {
         LookupCard(
-            presentation: EntryPresentation(
-                entry: entry, mark: presentation.sense, met: presentation.met),
-            term: presentation.term, sentence: presentation.sentence, mark: presentation.sense,
+            presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
+            term: presentation.term, sentence: presentation.sentence, mark: mark,
             memory: presentation.memory)
     }
 
@@ -509,7 +511,24 @@ public struct LookupPanelContent: View {
               let encounter = OutcomeView.encounter(from: entry, senseKey: key)
         else { return }
         studySense(encounter)
+        chosen = .chosen(key: key, by: .reader)
+        clearPanes()
     }
+
+    /// Whatever was said about the card as it was is not about the card as it is: a translation in
+    /// flight was told the old sense, and an answer already on screen was written for it.
+    private func clearPanes() {
+        translating?.cancel()
+        translating = nil
+        translation = nil
+        explaining?.cancel()
+        explaining = nil
+        explanation = nil
+    }
+
+    /// The mark the card draws and every question is built from: the reader's own tap where there
+    /// is one, and the selector's proposal otherwise.
+    private var mark: SenseMark? { chosen ?? presentation.sense }
 
     // MARK: - The row under the card
 
@@ -615,11 +634,9 @@ public struct LookupPanelContent: View {
 
     private func copyButton(_ entry: DictionaryEntry) -> some View {
         Button {
-            let presented = EntryPresentation(
-                entry: entry, mark: presentation.sense, met: presentation.met)
-            let card = LookupCard(
-                presentation: presented, term: presentation.term,
-                sentence: presentation.sentence, mark: presentation.sense)
+            // The card as it is drawn — including a sense the reader tapped, which is the one
+            // they mean to copy.
+            let card = card(for: entry)
             if case .sense(let sense) = card.answer {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString("\(card.heading) — \(sense.label)", forType: .string)
@@ -636,11 +653,7 @@ public struct LookupPanelContent: View {
 
     private func pinButton(_ entry: DictionaryEntry) -> some View {
         Button {
-            let presented = EntryPresentation(
-                entry: entry, mark: presentation.sense, met: presentation.met)
-            let card = LookupCard(
-                presentation: presented, term: presentation.term,
-                sentence: presentation.sentence, mark: presentation.sense)
+            let card = card(for: entry)
             guard case .sense(let sense) = card.answer else { return }
             pin(PinnedNote(
                 term: presentation.term, heading: card.heading, dictionary: entry.dictionary,

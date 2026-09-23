@@ -648,6 +648,9 @@
     "this Mac would not say how much disk space is free" : {
       "comment" : "Why the model download stopped"
     },
+    "undecided" : {
+      "comment" : "History card badge: a model answered that the sentence settles no sense"
+    },
     "verb" : {
 
     },
