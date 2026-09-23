@@ -42,11 +42,23 @@ public struct SentenceQuestion: Codable, Sendable, Equatable {
     }
 
     /// The prompt for `tier`, with anything that tier may not see removed **here**, once, rather
-    /// than at each call site.
+    /// than at each call site — and with every untrusted field flattened and cut here for the same
+    /// reason.
+    ///
+    /// **The bounding moved into this method because one rung was built without it.** It used to
+    /// live in `ModelPrompt.explanation`, which the local rung calls and Apple's rung does not:
+    /// `OnDeviceSentenceExplainer` asks this method directly, so the reader's captured sentence and
+    /// the publisher's sense text reached Apple's model raw and unbounded — on exactly the Mac
+    /// where Apple's rung answers, which is any Mac without the downloaded model. A rule that has
+    /// to be remembered at each call site is a rule one call site will be written without. Here,
+    /// there is nowhere to build a prompt that skips it.
     public func prompt(for tier: ExplainerTier) -> String {
-        var lines = ["Sentence: \(sentence)", "Word: \(term)"]
+        var lines = [
+            "Sentence: \(ModelPrompt.flattened(sentence, limit: ModelPrompt.sentenceCharacterLimit))",
+            "Word: \(term)",
+        ]
         if tier.maySeeDictionaryText, let senseText, !senseText.isEmpty {
-            lines.append("Dictionary sense: \(senseText)")
+            lines.append("Dictionary sense: \(ModelPrompt.flattened(senseText, limit: ModelPrompt.translatedSenseLimit))")
         }
         lines.append("Explain how the word is being used in this sentence, in two or three sentences.")
         return lines.joined(separator: "\n")
@@ -148,7 +160,7 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
             return .unavailable("The on-device model is not available here.")
         }
         do {
-            let session = LanguageModelSession(instructions: Self.instructions)
+            let session = LanguageModelSession(instructions: ModelPrompt.explanationInstructions)
             let answer = try await session.respond(to: question.prompt(for: tier))
             // **A blank answer is not an explanation.** `.explained` promises the pane has
             // something to show; handed an empty string it drew an empty pane, which reads as the
@@ -171,10 +183,4 @@ public struct OnDeviceSentenceExplainer: SentenceExplaining {
             return .unavailable("The on-device model declined to answer.")
         }
     }
-
-    static let instructions = """
-        You explain how one word is being used in one sentence, for a language learner.
-        Be brief: two or three sentences. Explain the usage, do not define the word in isolation, \
-        and do not repeat the sentence back.
-        """
 }

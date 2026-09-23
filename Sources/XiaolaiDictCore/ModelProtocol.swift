@@ -244,10 +244,10 @@ public enum ModelPrompt {
     /// unbounded prompt is one a long entry can push past the model's context — after which the
     /// pane falls to a weaker engine for a reason nothing records.
     public static func explanation(_ question: SentenceQuestion) -> String {
-        let cut = question.senseText.map { flattened($0, limit: translatedSenseLimit) }
-        return SentenceQuestion(sentence: flattened(question.sentence, limit: sentenceCharacterLimit),
-                                term: question.term, senseText: cut)
-            .prompt(for: .onDevice)
+        // The flattening and the cut live in `prompt(for:)` now, where every rung reaches them —
+        // this used to do the work itself, and Apple's rung, which calls that method directly,
+        // never got it.
+        question.prompt(for: .onDevice)
     }
 
     /// The most an explanation may generate: two or three sentences, with room for a script that
