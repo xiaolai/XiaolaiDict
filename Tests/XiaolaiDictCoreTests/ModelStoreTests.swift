@@ -378,6 +378,29 @@ struct ModelStoreTests {
                 "this pin's own staged download was deleted")
     }
 
+    /// **A store that cannot be read is not a store with nothing in it.** Both answers here decide
+    /// whether to delete gigabytes, so "could not tell" has to mean "do not": an unreadable staging
+    /// directory reads as an install in flight, and an unreadable root is reported as a failure
+    /// rather than as a prune that found nothing to do.
+    @Test func whatCannotBeReadIsNeverTakenForAnEmptyStore() throws {
+        let store = try store()
+        let keeper = Self.manifest(Self.bodies)
+        let directory = store.directory(for: keeper)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (path, body) in Self.bodies { try body.write(to: directory.appending(path: path)) }
+        try ModelStore.markerText(for: keeper).write(
+            to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+
+        // A staging directory nobody can look inside.
+        let staging = store.root.appending(path: ".staging", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: staging.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path) }
+        #expect(store.isInstalling, "an unreadable staging directory was read as nothing installing")
+        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(store.installed(keeper) != nil)
+    }
+
     /// **A body that runs past its pin is refused as it arrives, not after it has all landed.** The
     /// disk was checked for the pinned size and nothing more, so a server sending an endless file
     /// would fill the reader's disk before the size check meant to catch it ever ran. Driven through

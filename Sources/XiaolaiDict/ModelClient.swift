@@ -65,13 +65,16 @@ actor ModelClient {
     }
 
     func ask(_ request: ModelRequest) async -> ModelReply? {
+        // An unload can take as long as the service's drain. A caller that gave up while waiting is
+        // not then given a session: it would be opened for an answer nobody is waiting for, which
+        // on a launch-on-demand service means starting one.
         if let unloading { _ = await unloading.value }
-        guard let current = try? openSession() else { return nil }
+        guard !Task.isCancelled, let current = try? openSession() else { return nil }
         do {
             return try await withDeadline(Self.deadline(for: request)) {
                 try await current.transport.send(request)
             }
-        } catch is CancellationError {
+        } catch is CancellationError where Task.isCancelled {
             // **The caller was superseded, not the service.** Dropping the session here would cancel
             // whatever else is in flight on it — a prewarm, another lookup — for a lookup nobody is
             // waiting on any more. The session is healthy and stays.
@@ -129,7 +132,12 @@ actor ModelClient {
     /// Loads the model ahead of the question that needs it — once per service process. The first
     /// answer measured 1.6–2.5 s cold against 0.24–0.44 s warm.
     func prewarmOnce() async {
-        guard let current = try? openSession(), warmed != current.generation else { return }
+        // **After any unload, never through one.** Opening a session here while the service is on
+        // its way out starts the next one early — which makes the unload it is racing look as
+        // though it timed out, and records a prewarm against a generation that is already gone.
+        if let unloading { _ = await unloading.value }
+        guard !Task.isCancelled, let current = try? openSession(), warmed != current.generation
+        else { return }
         warmed = current.generation
         if case .prewarmed? = await ask(.prewarm) { return }
         // It did not take: let the next lookup try again.

@@ -105,7 +105,12 @@ public struct ModelStore: Sendable, Equatable {
         guard installed(keeping) != nil else { return [] }
         let keep = directory(for: keeping).standardizedFileURL.path
         var failures: [String] = []
-        for directory in completeDirectories() where directory.standardizedFileURL.path != keep {
+        let complete = completeDirectories()
+        if complete.isEmpty, FileManager.default.fileExists(atPath: root.path) {
+            // The keeper is installed — asked above — so the walk finding nothing means it failed.
+            failures.append("the model directory could not be read")
+        }
+        for directory in complete where directory.standardizedFileURL.path != keep {
             // **Asked again before each removal.** The check above is a moment, and enumerating a
             // store takes another: an install that began in between would have its model deleted by
             // a decision taken before it existed. This does not close the window — nothing short of
@@ -159,6 +164,8 @@ public struct ModelStore: Sendable, Equatable {
     /// which is what keeps `.staging` out of it — a download writes its marker there, inside the
     /// directory it is about to move, and a prune that reached in would delete a model mid-install.
     private func completeDirectories() -> [URL] {
+        // A root that cannot be walked is not a root with nothing in it. The caller is told by the
+        // failure it gets back, rather than by a prune that quietly removed nothing.
         guard let walk = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
         else { return [] }
@@ -178,8 +185,12 @@ public struct ModelStore: Sendable, Equatable {
     /// by every finished install, so the *file* proves nothing; only the `flock` does.
     var isInstalling: Bool {
         let staging = root.appending(path: Self.stagingName, directoryHint: .isDirectory)
-        let locks = (try? FileManager.default.contentsOfDirectory(
-            at: staging, includingPropertiesForKeys: nil)) ?? []
+        // **Fails closed.** A staging directory that is there and cannot be read says nothing about
+        // what is downloading — and the answer is used to decide whether to delete gigabytes, so
+        // "could not tell" has to mean "do not".
+        guard let locks = try? FileManager.default.contentsOfDirectory(
+            at: staging, includingPropertiesForKeys: nil)
+        else { return FileManager.default.fileExists(atPath: staging.path) }
         for lock in locks where lock.pathExtension == "lock" {
             guard let taken = InstallLock(lock) else { return true }
             taken.release()
