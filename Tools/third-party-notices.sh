@@ -78,5 +78,9 @@ HEADER
 } > "$work"
 
 mkdir -p "$(dirname "$out")"
+# `mktemp` makes its file readable only by this user, and a resource inside an app bundle has to be
+# readable by whoever runs the app — a copy installed in /Applications is read by every account on
+# the Mac. The mode is set here rather than left to the umask that happened to be in force.
+chmod 644 "$work"
 mv "$work" "$out"
 trap - EXIT

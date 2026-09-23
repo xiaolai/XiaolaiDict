@@ -50,6 +50,42 @@ awk -v dir="$heredocs" '
     inside && /^SH$/ { inside = 0; close(file); next }
     inside { print > file }
 ' "$SELF"
+# **And the Python inside the remote scripts is compiled, for the same reason.** A syntax error in
+# a `python3 -c '…'` block is invisible to `bash -n` and to the parse above — the shell sees a
+# string — so the far machine finds it ten minutes into a run, after the report it was meant to
+# judge has already been produced. Measured 2026-09-23: an f-string whose escaped quotes were valid
+# shell and not valid Python, in the check that reads the translation.
+python3 - "$SELF" <<'GUARD' || fail "the inline Python in this script does not compile"
+import ast
+import sys
+
+# A block opens with a line ending `python3 -c '` and closes at the next apostrophe, which cannot
+# appear inside it: the body is a single-quoted shell string, so an apostrophe would end it there
+# too. That is what makes the extraction exact rather than a guess at the shape of the closing line.
+lines = open(sys.argv[1]).read().split("\n")
+blocks, current = [], None
+for line in lines:
+    if current is None:
+        if line.rstrip().endswith("python3 -c '"):
+            current = []
+    elif "'" in line:
+        current.append(line[:line.index("'")])
+        blocks.append("\n".join(current))
+        current = None
+    else:
+        current.append(line)
+if current is not None:
+    sys.exit("a python3 -c block is never closed")
+if not blocks:
+    sys.exit("no inline Python was found, so this check has stopped covering anything")
+for block in blocks:
+    try:
+        ast.parse(block)
+    except SyntaxError as error:
+        sys.exit(f"line {error.lineno} of a python3 -c block: {error.msg}\n    {(error.text or '').rstrip()}")
+print(f"{len(blocks)} inline Python block(s) compile")
+GUARD
+
 checked=0
 for script in "$heredocs"/remote-*.sh; do
     [ -f "$script" ] || continue
@@ -406,6 +442,20 @@ fi
 # locked screen is refused here, in one line, rather than reported as a list of XiaolaiDict's defects.
 if ! lock_state=$("$helpers/screen-state" 2>&1); then
     echo "FAIL  setup: the screen is ${lock_state:-locked} — unlock the test Mac and run again; nothing below would be testing XiaolaiDict"
+    exit 1
+fi
+
+# **And a system alert nobody answered voids every click the same way.** `click-element` refuses a
+# control something is covering, which is right — a click posted through an alert goes to the
+# alert — but the refusal then reads as the control not existing. Measured 2026-09-23: an
+# unanswered "Allow …to find devices on local networks?" had been sitting at (734, 222) since
+# 2026-09-20, over the settings window's tab strip, and two stages failed as though the app were at
+# fault. Refused here, in one line, with what the alert says, because answering it is a decision
+# for whoever owns the machine.
+alert_windows=$("$helpers/on-screen" com.apple.UserNotificationCenter 2>/dev/null || true)
+if printf '%s' "$alert_windows" | grep -q '"windows":\[{'; then
+    alert_text=$("$helpers/panel" com.apple.UserNotificationCenter 2>/dev/null | head -c 300 || true)
+    echo "FAIL  setup: a system alert is on the test Mac's screen and would swallow the clicks below — answer it and run again: $alert_text"
     exit 1
 fi
 
@@ -958,11 +1008,15 @@ board_state() {
 # The flag was saved before the app was ever launched — see the setup section above. Saving it
 # here would record whatever the first launch wrote, which is the value this stage is about.
 
-# **Measured as a fresh reader sees it.** Once this machine has run the model stage once, the store
-# holds the weights for good and the model row takes its "ready" branch — so the consent controls,
-# the weaker-engine sentence and "nothing has begun downloading" stopped being measured at all,
-# silently, on every machine that had ever run the suite. The store is set aside for this stage and
-# put back at the end of it: a rename inside one filesystem, so three gigabytes do not move.
+# **The model row is measured as a fresh reader sees it.** Once this machine has run the model stage
+# once, the store holds the weights for good and the row takes its "ready" branch — so the consent
+# controls, the weaker-engine sentence and "nothing has begun downloading" stopped being measured at
+# all, silently, on every machine that had ever run the suite. The store is set aside for that check
+# and put back at the end of the stage: a rename inside one filesystem, so three gigabytes do not
+# move. It is set aside **where this stage already restarts the app**, not before the menu-driven
+# open above: a board asked for from the menu seconds after a launch did not come forward at all,
+# and the row is better read from the board a first launch opens by itself anyway — that is the
+# reader this branch is about.
 models=$HOME/Library/Application\ Support/XiaolaiDict/Models
 stashed=no
 unstash_models() {
@@ -978,8 +1032,6 @@ at_exit unstash_models
 if [ -d "$models" ]; then
     mv "$models" "$models.e2e-stash" && stashed=yes
 fi
-restart_app || flunk "setup: XiaolaiDict did not come back with the model store set aside"
-
 # Opened from the menu, the way a reader reaches it after the first launch. The app was launched
 # moments ago by the set-up above, so the menu is not driven until the launch has settled.
 settle_after_launch
@@ -1043,93 +1095,6 @@ else
         flunk "setup: the board is missing a row —$missing"
     fi
 
-    # **The model row, read through Accessibility, and the store asked separately.** What this can
-    # see is the row's text and which controls exist — not whether a button is wired to anything,
-    # which only clicking it would show, and which the `setup` stage's own click checks do below.
-    # What must be true on a Mac where the model is not downloaded: it is still needed, the weaker
-    # engine is named, both choices are offered. That **nothing has begun downloading** is asked of
-    # the store rather than of the row, because a row that is simply slow to redraw would otherwise
-    # read as proof.
-    staging=~/Library/Application\ Support/XiaolaiDict/Models/.staging
-    if [ -d "$staging" ] && [ -n "$(find "$staging" -name '*.partial' -mmin -5 2>/dev/null)" ]; then
-        flunk "setup: something has been fetching model files in the last five minutes, unasked"
-    else
-        pass "setup: nothing had begun downloading a model"
-    fi
-    if printf '%s' "$shown" | grep -q "Translation and sense picking"; then
-        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and sense picking" || true)
-        # Every state the row can be in, named — and **a download under way is a failure here**, not
-        # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
-        # the board is first opened is the regression the rule exists to catch: it used to be one of
-        # the accepted branches, two lines under a comment promising "nothing has begun downloading".
-        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
-            pass "setup: the model row says the model is ready"
-        elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
-            flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
-        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
-            # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
-            if printf '%s' "$shown" | grep -q "Without a local model"; then
-                pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
-            else
-                flunk "setup: too little memory, and the fallback still promises a model later — $(printf '%s' "$model_row" | head -c 300)"
-            fi
-        elif printf '%s' "$shown" | grep -q "download stopped"; then
-            # **Resume, not Download.** The button says what it does: the size a stopped download was
-            # of, finishing what is already on disk.
-            # Resume, the weaker engine named, **and a way to decline** — the row offers Not now in
-            # this state exactly as in the one below, unless the reader has already declined, and
-            # asking for only the first two let a stopped download become the one state the reader
-            # could not get out of.
-            if printf '%s' "$shown" | grep -q "Resume" && printf '%s' "$shown" | grep -q "misreads some" \
-                && { printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "still one click away"; }; then
-                pass "setup: the model row reports a stopped download, offers to resume it, names what answers meanwhile, and can still be declined"
-            else
-                flunk "setup: a stopped download with no way to resume or decline it, or with nothing named as answering meanwhile — $(printf '%s' "$model_row" | head -c 300)"
-            fi
-        elif printf '%s' "$shown" | grep -q "misreads some" && printf '%s' "$shown" | grep -q "Download"; then
-            # Both choices, unless the reader already chose **Not now** — which the row remembers,
-            # and which takes its button away while leaving the download one click from here.
-            if printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
-                pass "setup: the model row offers the download and Not now, and names the weaker engine meanwhile"
-            else
-                flunk "setup: the model row offers a download with no way to decline it — $(printf '%s' "$model_row" | head -c 300)"
-            fi
-            # **And Not now is pressed.** Everything above reads text: a button wired to nothing
-            # reads exactly like one that works. Pressed, the row must say the reader is no longer
-            # being waited on and must keep the download one click away — which is also the only
-            # way the `.declined` branch of the row is ever reached on this machine. Download is
-            # never pressed: three gigabytes must not be fetched by a test run.
-            if printf '%s' "$shown" | grep -q "Not now"; then
-                if declined_original=$(defaults read com.xiaolaidict LocalModelDeclined 2>/dev/null); then
-                    declined_had=yes
-                else
-                    declined_had=no; declined_original=""
-                fi
-                restore_declined() { restore_default LocalModelDeclined "$declined_had" "$declined_original" -bool; }
-                at_exit restore_declined
-                if ! "$helpers/click-element" com.xiaolaidict "Not now" >/dev/null 2>&1; then
-                    flunk "setup: Not now could not be clicked"
-                else
-                    declined_shown=""
-                    for _ in $(seq 1 25); do
-                        declined_shown=$("$helpers/panel" com.xiaolaidict)
-                        printf '%s' "$declined_shown" | grep -q "still one click away" && break
-                        sleep 0.2
-                    done
-                    if printf '%s' "$declined_shown" | grep -q "still one click away" \
-                        && printf '%s' "$declined_shown" | grep -q "Download"; then
-                        pass "setup: Not now is wired — the row stops waiting on the reader and keeps the download one click away"
-                    else
-                        flunk "setup: Not now changed nothing the reader can see — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
-                    fi
-                    restore_declined
-                fi
-            fi
-        else
-            flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
-        fi
-    fi
-
     # **Waited for, not read once.** A cold XPC probe parses real entries — Longman's *hold* alone
     # is 625 KB — so a board asserted the instant it appears is being failed for the service still
     # working, not for a defect. Bounded, so a service that never answers is still a failure.
@@ -1185,6 +1150,11 @@ fi
 
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+# The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
+# model. Put back at the end of the stage, before anything that needs the weights.
+if [ -d "$models" ]; then
+    mv "$models" "$models.e2e-stash" && stashed=yes
+fi
 if ! restart_app; then
     flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
 else
@@ -1195,6 +1165,65 @@ else
     else
         flunk "setup: nothing opened the board on a first launch"
     fi
+
+    # Read from the board that just opened by itself, with no model in the store.
+    shown=$("$helpers/panel" com.xiaolaidict)
+    # **The model row, read through Accessibility, and the store asked separately.** What this can
+    # see is the row's text and which controls exist — not whether a button is wired to anything,
+    # which only clicking it would show, and which the `setup` stage's own click checks do below.
+    # What must be true on a Mac where the model is not downloaded: it is still needed, the weaker
+    # engine is named, both choices are offered. That **nothing has begun downloading** is asked of
+    # the store rather than of the row, because a row that is simply slow to redraw would otherwise
+    # read as proof.
+    staging=~/Library/Application\ Support/XiaolaiDict/Models/.staging
+    if [ -d "$staging" ] && [ -n "$(find "$staging" -name '*.partial' -mmin -5 2>/dev/null)" ]; then
+        flunk "setup: something has been fetching model files in the last five minutes, unasked"
+    else
+        pass "setup: nothing had begun downloading a model"
+    fi
+    if printf '%s' "$shown" | grep -q "Translation and sense picking"; then
+        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and sense picking" || true)
+        # Every state the row can be in, named — and **a download under way is a failure here**, not
+        # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
+        # the board is first opened is the regression the rule exists to catch: it used to be one of
+        # the accepted branches, two lines under a comment promising "nothing has begun downloading".
+        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
+            pass "setup: the model row says the model is ready"
+        elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
+            flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
+        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
+            # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
+            if printf '%s' "$shown" | grep -q "Without a local model"; then
+                pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
+            else
+                flunk "setup: too little memory, and the fallback still promises a model later — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "download stopped"; then
+            # **Resume, not Download.** The button says what it does: the size a stopped download was
+            # of, finishing what is already on disk.
+            # Resume, the weaker engine named, **and a way to decline** — the row offers Not now in
+            # this state exactly as in the one below, unless the reader has already declined, and
+            # asking for only the first two let a stopped download become the one state the reader
+            # could not get out of.
+            if printf '%s' "$shown" | grep -q "Resume" && printf '%s' "$shown" | grep -q "misreads some" \
+                && { printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "still one click away"; }; then
+                pass "setup: the model row reports a stopped download, offers to resume it, names what answers meanwhile, and can still be declined"
+            else
+                flunk "setup: a stopped download with no way to resume or decline it, or with nothing named as answering meanwhile — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        elif printf '%s' "$shown" | grep -q "misreads some" && printf '%s' "$shown" | grep -q "Download"; then
+            # Both choices, unless the reader already chose **Not now** — which the row remembers,
+            # and which takes its button away while leaving the download one click from here.
+            if printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
+                pass "setup: the model row offers the download and Not now, and names the weaker engine meanwhile"
+            else
+                flunk "setup: the model row offers a download with no way to decline it — $(printf '%s' "$model_row" | head -c 300)"
+            fi
+        else
+            flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
+        fi
+    fi
+
     # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
     # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
     # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
@@ -1223,6 +1252,43 @@ else
         pass "setup: seeing it once is remembered"
     else
         flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
+    fi
+
+    # **And Not now is pressed.** Everything the row check above does is read text, and a button
+    # wired to nothing reads exactly like one that works. Pressed, the row must say the reader is no
+    # longer being waited on and must keep the download one click away — which is also the only way
+    # the `.declined` branch is ever reached on this machine. Download is never pressed: three
+    # gigabytes must not be fetched by a test run.
+    #
+    # **Here, and not where the row was read.** A board that opened by itself is behind whatever the
+    # reader was using — that is the point of the check above it — and `click-element` refuses a
+    # control in an app that is not frontmost. This is the first moment the board is both on the
+    # fresh-reader branch and in front.
+    if printf '%s' "$shown" | grep -q "Not now"; then
+        if declined_original=$(defaults read com.xiaolaidict LocalModelDeclined 2>/dev/null); then
+            declined_had=yes
+        else
+            declined_had=no; declined_original=""
+        fi
+        restore_declined() { restore_default LocalModelDeclined "$declined_had" "$declined_original" -bool; }
+        at_exit restore_declined
+        if ! "$helpers/click-element" com.xiaolaidict "Not now" >/dev/null 2>&1; then
+            flunk "setup: Not now could not be clicked"
+        else
+            declined_shown=""
+            for _ in $(seq 1 25); do
+                declined_shown=$("$helpers/panel" com.xiaolaidict)
+                printf '%s' "$declined_shown" | grep -q "still one click away" && break
+                sleep 0.2
+            done
+            if printf '%s' "$declined_shown" | grep -q "still one click away" \
+                && printf '%s' "$declined_shown" | grep -q "Download"; then
+                pass "setup: Not now is wired — the row stops waiting on the reader and keeps the download one click away"
+            else
+                flunk "setup: Not now changed nothing the reader can see — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
+            fi
+            restore_declined
+        fi
     fi
 fi
 
@@ -1375,10 +1441,25 @@ else
         [ "$front" = com.xiaolaidict ] && break
         sleep 0.2
     done
+    # **And the tab is clicked until it takes, not once.** `click-element` refuses a control whose
+    # window is still moving — the settings window resizes itself to each pane — and it refuses one
+    # that something is covering. Measured 2026-09-23: a notification banner from
+    # `UserNotificationCenter` sat over the Lookup tab and the refusal read as "the pane is not
+    # there". A banner goes by itself in about five seconds, so the wait is twenty; an alert that
+    # stays is a machine that needs a person, and the failure now says which it was.
+    clicked=no
+    why=""
+    for _ in $(seq 1 100); do
+        [ "$front" = com.xiaolaidict ] || break
+        if why=$("$helpers/click-element" com.xiaolaidict Lookup 2>&1); then clicked=yes; break; fi
+        sleep 0.2
+    done
     if [ "$front" != com.xiaolaidict ]; then
         flunk "shortcut: Settings never came forward — $front is in front"
-    elif ! "$helpers/click-element" com.xiaolaidict Lookup >/dev/null 2>&1; then
-        flunk "shortcut: no Lookup pane in the settings window"
+    elif [ "$clicked" != yes ]; then
+        # **What the helper said, not just that it said no.** Thrown away, this read as "the pane is
+        # not there" for a click that was refused for some other reason entirely.
+        flunk "shortcut: could not click the Lookup pane — $why"
     else
         if [ -z "$current" ] || ! "$helpers/click-element" com.xiaolaidict "$current" >/dev/null 2>&1; then
             flunk "shortcut: nothing on the Lookup pane showing '$current' to arm"
@@ -1623,9 +1704,9 @@ if han < 4: sys.exit(f"the translation into zh-Hans holds {han} Chinese characte
 # **And the sense it was told is the sense it rendered.** Telling the model which sense the reader
 # met is what sharpened 船舱 to 货舱 in every measured run; a translation that reads "hold" as the
 # verb carries neither, and it is Chinese either way, so the language check above cannot see it.
+told = d.get("translationToldSense")
 if "舱" not in text:
-    sys.exit(f"the translation does not render the cargo sense it was told "
-             f"({d.get(\"translationToldSense\")}): {text[:60]}")
+    sys.exit(f"the translation does not render the cargo sense it was told ({told}): {text[:60]}")
 ' 2>&1); then
     pass "model: the sentence came back translated: $(printf '%s' "$report" | sed -n 's/.*"translation":"\([^"]*\)".*/\1/p')"
 else
