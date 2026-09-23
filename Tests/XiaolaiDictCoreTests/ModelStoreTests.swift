@@ -22,12 +22,17 @@ struct ModelStoreTests {
 
         struct Dropped: Error {}
 
+        /// Asked for a path this fixture does not hold. **Thrown by name**, because serving zero
+        /// bytes for it made a mistake in a test's own set-up arrive as a product failure — a
+        /// size mismatch on a file the manifest and the fixture simply disagreed about.
+        struct NotInTheFixture: Error { let path: String }
+
         func fetch(
             _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
             progress: @escaping @Sendable (Int64) -> Void
         ) async throws {
             requests.withLock { $0.append((file.path, offset)) }
-            let body = bodies[file.path] ?? Data()
+            guard let body = bodies[file.path] else { throw NotInTheFixture(path: file.path) }
             // A host that ignores the range sends the whole file, and what was on disk is discarded.
             var from = offset
             if restarts.withLock({ $0.remove(file.path) }) != nil {
@@ -43,6 +48,50 @@ struct ModelStoreTests {
             try handle.close()
             progress(from + Int64(slice.count))
             if cut != nil { throw Dropped() }
+        }
+    }
+
+    /// Serves every file whole but one, and on that one writes the front and then **waits to be
+    /// cancelled** — which is the only way an install is stopped part-way without the transport
+    /// having failed.
+    ///
+    /// The wait is bounded and gives up with a name of its own. An unbounded one would hang the
+    /// suite on exactly the defect this exists to catch, and a stall is worse than a failure: a
+    /// cancellation that stopped working must fail the test, not stop it.
+    final class ParkingTransport: ModelFileTransport, @unchecked Sendable {
+        let bodies: [String: Data]
+        let parkingOn: String
+        /// How much of `parkingOn` is on disk before it parks.
+        let after: Int
+        /// Set once that front has landed. **What the test waits for**: cancelling before the
+        /// transport had written anything would say nothing about what a cancellation leaves.
+        let landed = Recorder<Bool>(false)
+
+        init(_ bodies: [String: Data], parkingOn: String, after: Int) {
+            self.bodies = bodies
+            self.parkingOn = parkingOn
+            self.after = after
+        }
+
+        struct NeverCancelled: Error {}
+
+        func fetch(
+            _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+            progress: @escaping @Sendable (Int64) -> Void
+        ) async throws {
+            guard let body = bodies[file.path] else {
+                throw MemoryTransport.NotInTheFixture(path: file.path)
+            }
+            let slice = file.path == parkingOn ? body.prefix(after) : body.dropFirst(Int(offset))
+            let handle = try FileHandle(forWritingTo: destination)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: slice)
+            try handle.close()
+            progress(offset + Int64(slice.count))
+            guard file.path == parkingOn else { return }
+            landed.withLock { $0 = true }
+            try await Task.sleep(for: .seconds(30))
+            throw NeverCancelled()
         }
     }
 
@@ -71,6 +120,26 @@ struct ModelStoreTests {
     private func store() throws -> (ModelStore, TemporaryDirectory) {
         let scratch = TemporaryDirectory(named: "xiaolaidict-models")
         return (ModelStore(root: scratch.url), scratch)
+    }
+
+    /// What is on disk, in bytes — nil where there is no file there at all.
+    private static func size(of url: URL) -> Int64? {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value
+    }
+
+    /// A data task that is **never resumed**, so nothing in the writer tests reaches a network.
+    /// `range` is the header a resumed download would have sent, which the redirect handler reads
+    /// back off the task.
+    private static func suspendedTask(range: String? = nil) throws -> URLSessionDataTask {
+        var request = URLRequest(url: try #require(URL(string: "https://example.invalid/model.safetensors")))
+        if let range { request.setValue(range, forHTTPHeaderField: "Range") }
+        return URLSession.shared.dataTask(with: request)
+    }
+
+    private static func response(_ status: Int) throws -> HTTPURLResponse {
+        let url = try #require(URL(string: "https://example.invalid/model.safetensors"))
+        return try #require(
+            HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil))
     }
 
     @Test func aCompleteDownloadIsInstalledAndLoadable() async throws {
@@ -202,7 +271,13 @@ struct ModelStoreTests {
         #expect(transport.requests.withLock { $0.count } == first)
     }
 
-    /// Progress ends at the whole model, and never runs backwards.
+    /// Progress starts at nothing, ends at the whole model, and never claims a byte that is not on
+    /// disk.
+    ///
+    /// **Not that it rises monotonically.** `ModelFileTransport`'s contract is that progress is how
+    /// many bytes of a file are on disk *now*, and a host that ignores a range request truncates
+    /// what was there — so a decrease is intended behaviour, not a defect. `received.sorted()`
+    /// asserted the opposite and passed only because this fixture writes each file in one go.
     @Test func progressRisesToTheWholeModel() async throws {
         let (store, scratch) = try store()
         defer { _ = scratch }
@@ -211,8 +286,9 @@ struct ModelStoreTests {
         try await ModelDownloader(store: store, transport: MemoryTransport(Self.bodies), freeDisk: { _ in .max })
             .install(manifest) { progress in seen.withLock { $0.append(progress.received) } }
         let received = seen.withLock { $0 }
+        #expect(received.first == 0, "a download into an empty store did not start from nothing")
         #expect(received.last == manifest.totalBytes)
-        #expect(received == received.sorted())
+        #expect(received.allSatisfy { $0 <= manifest.totalBytes }, "progress claimed more than the model")
     }
 
     /// **A staged file is trusted for its bytes, not its name.** A stale or corrupted file of the
@@ -298,8 +374,11 @@ struct ModelStoreTests {
         transport.restarts.withLock { $0.insert("model.safetensors") }
         try await downloader.install(manifest) { progress in seen.withLock { $0.append(progress.received) } }
         let received = seen.withLock { $0 }
-        #expect(received == received.sorted(), "progress ran backwards over a restarted file")
         #expect(received.last == manifest.totalBytes)
+        // **The ceiling is the assertion, not the shape of the climb.** A restart throws away what
+        // was on disk, so the number it reports afterwards is *meant* to be smaller than the one
+        // before it — `aHostThatIgnoresTheRangeStartsTheFileAgain` asserts that drop directly, at
+        // the writer, where the truncation actually happens.
         #expect(received.allSatisfy { $0 <= manifest.totalBytes }, "progress counted a discarded front")
     }
 
@@ -498,10 +577,13 @@ struct ModelStoreTests {
         #expect(store.installed(manifest) != nil)
     }
 
-    /// **A store that cannot be read is not a store with nothing in it.** Both answers here decide
-    /// whether to delete gigabytes, so "could not tell" has to mean "do not": an unreadable staging
-    /// directory reads as an install in flight, and an unreadable root is reported as a failure
-    /// rather than as a prune that found nothing to do.
+    /// **An unreadable staging directory reads as an install in flight.** The answer decides
+    /// whether to delete gigabytes, so "could not tell" has to mean "do not".
+    ///
+    /// It stops there, and the doc comment used to claim more: the prune never reaches its
+    /// enumerator once `isInstalling` has said yes, so the *root* being unreadable is a different
+    /// branch and a different test — `aRootThatCannotBeWalkedIsReportedRatherThanPrunedAsEmpty`,
+    /// below, which is what that branch is actually held to.
     @Test func whatCannotBeReadIsNeverTakenForAnEmptyStore() throws {
         let (store, scratch) = try store()
         defer { _ = scratch }
@@ -522,6 +604,48 @@ struct ModelStoreTests {
         #expect(store.installed(keeper) != nil)
     }
 
+    /// **And a root that cannot be walked is reported, not read as a store holding only the
+    /// keeper.** The walk coming back empty is the same shape as a store with one model in it, and
+    /// that answer is the one that deletes gigabytes.
+    ///
+    /// The root is made searchable but **not** readable — `0o311` — so only the enumerator is
+    /// affected: the keeper is still found by its own full path, the store lock under `.staging` is
+    /// still taken, and the staged prune still runs. Anything coarser (`0o000`) stops the prune at
+    /// `isInstalling` and never reaches this branch at all, which is why the test above could be
+    /// deleted from the code it was supposed to defend and stay green.
+    @Test func aRootThatCannotBeWalkedIsReportedRatherThanPrunedAsEmpty() throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let keeper = Self.manifest(Self.bodies)
+        let stale = ModelManifest(
+            size: .standard, repository: keeper.repository, revision: "older",
+            files: keeper.files.map {
+                ModelFile(repository: $0.repository, revision: "older", path: $0.path,
+                          size: $0.size, sha256: $0.sha256)
+            })
+        for manifest in [keeper, stale] {
+            let directory = store.directory(for: manifest)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for (path, body) in Self.bodies { try body.write(to: directory.appending(path: path)) }
+            try ModelStore.markerText(for: manifest).write(
+                to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+        }
+        try FileManager.default.createDirectory(
+            at: store.root.appending(path: ".staging", directoryHint: .isDirectory),
+            withIntermediateDirectories: true)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o311], ofItemAtPath: store.root.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: store.root.path)
+        }
+
+        #expect(store.removeStrays(keeping: keeper) == ["the model directory could not be read"])
+        // **And nothing was removed on the strength of it.** The stray is exactly what a prune that
+        // read an empty walk as an emptied store would have deleted.
+        #expect(store.installed(stale) != nil, "a model was deleted because the store could not be read")
+        #expect(store.installed(keeper) != nil)
+    }
+
     /// **A body that runs past its pin is refused as it arrives, not after it has all landed.** The
     /// disk was checked for the pinned size and nothing more, so a server sending an endless file
     /// would fill the reader's disk before the size check meant to catch it ever ran. Driven through
@@ -533,7 +657,7 @@ struct ModelStoreTests {
         let file = store.root.appending(path: "model.safetensors")
         FileManager.default.createFile(atPath: file.path, contents: nil)
         let writer = try RangeWriter(
-            destination: file, offset: 0, path: "model.safetensors", expecting: 8, progress: { _ in })  
+            destination: file, offset: 0, path: "model.safetensors", expecting: 8, progress: { _ in })
         let task = URLSession.shared.dataTask(with: try #require(URL(string: "https://example.invalid/x")))
 
         writer.urlSession(.shared, dataTask: task, didReceive: Data(count: 4))
@@ -555,6 +679,186 @@ struct ModelStoreTests {
             path: "model.safetensors", expected: 8, received: 103)) {
             try await writer.run(task)
         }
+    }
+
+    /// **A host that ignores the Range header starts the file again, and the file on disk says so.**
+    /// ModelScope's CDN is entitled to answer a resumed request with 200 and the whole body;
+    /// appending that to what was already there is how a resumed download becomes a doubled one.
+    /// Driven through the delegate, like the test above: `MemoryTransport` fakes the restart itself,
+    /// so nothing until now exercised the writer's side of it.
+    @Test func aHostThatIgnoresTheRangeStartsTheFileAgain() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        try Data([1, 2, 3, 4]).write(to: file)  // the front an earlier attempt left
+        let seen = Recorder<[Int64]>([])
+        let writer = try RangeWriter(
+            destination: file, offset: 4, path: "model.safetensors", expecting: 8,
+            progress: { onDisk in seen.withLock { $0.append(onDisk) } })
+        let task = try Self.suspendedTask(range: "bytes=4-")
+
+        let disposition = Recorder<[URLSession.ResponseDisposition]>([])
+        writer.urlSession(.shared, dataTask: task, didReceive: try Self.response(200)) { answer in
+            disposition.withLock { $0.append(answer) }
+        }
+        #expect(disposition.withLock { $0 } == [.allow], "the whole body was refused rather than restarted")
+        #expect(Self.size(of: file) == 0, "the discarded front was left for the new body to land on top of")
+
+        writer.urlSession(.shared, dataTask: task, didReceive: Data([9, 9, 9]))
+        #expect(try Data(contentsOf: file) == Data([9, 9, 9]))
+        // **Progress counts from zero again, so it drops — and the drop is the point.** The writer
+        // began at the four bytes that were on disk and reports three after the restart. A
+        // truncating restart *means* a decrease: progress is what is on disk now, not a running
+        // total, which is why nothing asserts that it only ever rises.
+        #expect(seen.withLock { $0 } == [3], "the discarded front was counted as bytes gained")
+    }
+
+    /// **206 is the answer a resume asked for, and it appends.** The handle is opened at the front
+    /// of the file, so without the seek the resumed bytes are written *over* the front already
+    /// there — leaving a file of exactly the right length holding the wrong bytes, which only the
+    /// hash would then catch and only after the whole thing had been fetched again.
+    @Test func aRangedAnswerAppendsToWhatWasAlreadyThere() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        try Data([1, 2, 3, 4]).write(to: file)
+        let seen = Recorder<[Int64]>([])
+        let writer = try RangeWriter(
+            destination: file, offset: 4, path: "model.safetensors", expecting: 8,
+            progress: { onDisk in seen.withLock { $0.append(onDisk) } })
+        let task = try Self.suspendedTask(range: "bytes=4-")
+
+        let disposition = Recorder<[URLSession.ResponseDisposition]>([])
+        writer.urlSession(.shared, dataTask: task, didReceive: try Self.response(206)) { answer in
+            disposition.withLock { $0.append(answer) }
+        }
+        #expect(disposition.withLock { $0 } == [.allow])
+        #expect(Self.size(of: file) == 4, "a resumed answer threw away the front it was resuming")
+
+        writer.urlSession(.shared, dataTask: task, didReceive: Data([5, 6, 7, 8]))
+        #expect(try Data(contentsOf: file) == Data([1, 2, 3, 4, 5, 6, 7, 8]),
+                "the resumed bytes were written over the front rather than after it")
+        #expect(seen.withLock { $0 } == [8])
+    }
+
+    /// **A status that is neither is refused before a byte is written.** 416 is what a host answers
+    /// when the range is past the end of the file it now has — a resume onto weights that have been
+    /// republished — and a 404 or a 500 is an error page the writer would otherwise append to the
+    /// model and hash.
+    @Test func aStatusThatIsNeitherTwoHundredNorPartialIsRefused() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        try Data([1, 2, 3, 4]).write(to: file)
+        let writer = try RangeWriter(
+            destination: file, offset: 4, path: "model.safetensors", expecting: 8, progress: { _ in })
+        let task = try Self.suspendedTask(range: "bytes=4-")
+
+        let disposition = Recorder<[URLSession.ResponseDisposition]>([])
+        writer.urlSession(.shared, dataTask: task, didReceive: try Self.response(416)) { answer in
+            disposition.withLock { $0.append(answer) }
+        }
+        #expect(disposition.withLock { $0 } == [.cancel], "a refused response was allowed to send a body")
+        #expect(Self.size(of: file) == 4, "a refused response truncated the file anyway")
+        // **The error by name**, and carrying the status the host actually sent: `run` hands back
+        // what the refusal settled on without resuming the task, which is what makes this
+        // checkable with no network in front of it.
+        await #expect(throws: ModelDownloadError.http(status: 416, path: "model.safetensors")) {
+            try await writer.run(task)
+        }
+    }
+
+    /// **The Range goes with the redirect.** ModelScope answers with a 302 to its CDN, and the
+    /// request URLSession offers here is one it built from that response — so the header the
+    /// download asked with is put back on by hand. Without it the CDN sends the whole file, and a
+    /// resumed download becomes a doubled one.
+    @Test func aRedirectCarriesTheRangeWithIt() throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let writer = try RangeWriter(
+            destination: file, offset: 40_000, path: "model.safetensors", expecting: 100_000,
+            progress: { _ in })
+        let task = try Self.suspendedTask(range: "bytes=40000-")
+        let cdn = URLRequest(url: try #require(URL(string: "https://cdn.example.invalid/blob")))
+
+        let handed = Recorder<[URLRequest?]>([])
+        writer.urlSession(
+            .shared, task: task, willPerformHTTPRedirection: try Self.response(302), newRequest: cdn
+        ) { request in handed.withLock { $0.append(request) } }
+
+        #expect(handed.withLock { $0.count } == 1, "the redirect was not answered exactly once")
+        let redirected = try #require(handed.withLock { $0.first ?? nil }, "the redirect was not followed at all")
+        #expect(redirected.value(forHTTPHeaderField: "Range") == "bytes=40000-",
+                "the CDN would have been asked for the whole file")
+        #expect(redirected.url == cdn.url, "the redirect was followed somewhere other than where it pointed")
+    }
+
+    /// **A file shorter than its pin is refused, and its front is kept to resume from.** Reached
+    /// through the downloader rather than the writer: a host that stops early is the ordinary way
+    /// this happens, and until now only `RangeWriter` had a test for a length that did not match.
+    /// The error is named rather than matched by type, because the hash of a short file does not
+    /// match either — and `hashMismatch` would pass a test about length while deleting the front.
+    @Test func aFileShorterThanTheManifestSaysIsRefusedAndKept() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        var listed = Self.bodies
+        listed["model.safetensors"]! += Data(count: 1_000)
+        let manifest = Self.manifest(Self.bodies, listedAs: listed)
+        let transport = MemoryTransport(Self.bodies)
+        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
+
+        await #expect(throws: ModelDownloadError.sizeMismatch(
+            path: "model.safetensors", expected: 101_000, received: 100_000)) {
+            try await downloader.install(manifest)
+        }
+        #expect(store.installed(manifest) == nil)
+        let partial = store.stagingDirectory(for: manifest).appending(path: "model.safetensors.partial")
+        #expect(Self.size(of: partial) == 100_000, "what arrived was discarded, so every retry starts over")
+    }
+
+    /// **A cancelled install keeps what arrived, and the next call resumes from it.** `install`
+    /// promises it is safe to call again after any failure *or cancellation* — and nothing had ever
+    /// cancelled one, so the checks that make that true were never run and the promise stood on
+    /// nothing. The transport parks once the front of the weights is on disk, which is what the
+    /// poll below waits for; a fixed sleep would prove nothing about where the install had got to.
+    @Test func aCancelledInstallKeepsWhatArrivedAndTheNextCallResumes() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let parking = ParkingTransport(Self.bodies, parkingOn: "model.safetensors", after: 40_000)
+        let install = Task {
+            try await ModelDownloader(store: store, transport: parking, freeDisk: { _ in .max })
+                .install(manifest)
+        }
+        var parked = false
+        for _ in 0..<500 where !parked {
+            if parking.landed.withLock({ $0 }) { parked = true; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(parked, "the transport never wrote anything, so the assertions below prove nothing")
+
+        install.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await install.value }
+        #expect(store.installed(manifest) == nil, "a cancelled install was loadable")
+        let partial = store.stagingDirectory(for: manifest).appending(path: "model.safetensors.partial")
+        #expect(Self.size(of: partial) == 40_000, "what had already arrived was thrown away")
+
+        // Called again with the ordinary fixture: the file that finished is not fetched again, the
+        // one that did not is asked for from byte 40,000, and the model installs.
+        let transport = MemoryTransport(Self.bodies)
+        let directory = try await ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
+            .install(manifest)
+        #expect(transport.requests.withLock { $0.map(\.0) } == ["model.safetensors"],
+                "the file that had finished was fetched a second time")
+        #expect(transport.requests.withLock { $0.map(\.1) } == [40_000])
+        #expect(store.installed(manifest) == directory)
+        #expect(try Data(contentsOf: directory.appending(path: "model.safetensors")) == Self.bodies["model.safetensors"])
     }
 
     /// The standard model's directory is named for its repository and commit, under the support

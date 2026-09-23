@@ -71,10 +71,36 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
             guard number >= 1, number <= keyable.count else { return .abstained(.unavailable) }
             return .chose(
                 key: keyable[number - 1].key, margin: nil, entryID: keyable[number - 1].entryID)
+        } catch let error as LanguageModelError {
+            // None of these is a reason to pick something, so every arm abstains and the ladder
+            // goes on to the rung below. What differs is what the ledger is told, and whether the
+            // failure is this build's fault.
+            switch error {
+            case .refusal, .guardrailViolation:
+                // The model declining *this sentence* — a fact about the reader's text, kept apart
+                // from the model being absent. `ModelRefusal` is where that question is answered.
+                return .abstained(ModelRefusal.isRefusal(error) ? .refused : .unavailable)
+            case .unsupportedGenerationGuide, .unsupportedTranscriptContent, .unsupportedCapability:
+                // The schema and the instructions are compiled into this binary, so this is a
+                // defect here rather than a fact about the reader's Mac. It traps in a debug build
+                // and still abstains in a shipped one: a reader must not lose their lookup over it.
+                // The trap is right here and wrong in the local rung, where the answer comes from a
+                // separately-built process that may be a different version of this app.
+                assertionFailure("this rung's own request was refused: \(error)")
+                return .abstained(.unavailable)
+            case .contextSizeExceeded:
+                // The list outgrew the window. Deliberately not narrowed to fit: dropping
+                // candidates to make room is how the sense the reader actually met gets dropped,
+                // and a confidently-wrong answer is worse than falling to a rung that can hold the
+                // whole list. `NLEmbedding` holds it.
+                return .abstained(.unavailable)
+            default:
+                return .abstained(.unavailable)
+            }
         } catch {
-            // None of these is a reason to pick something. But a refusal is the model declining
-            // *this sentence*, and is kept apart from a context overflow or the model going away.
-            return .abstained(ModelRefusal.isRefusal(error) ? .refused : .unavailable)
+            // Not the model's own error type at all — a cancellation, or something the framework
+            // wrapped. Nothing to distinguish, and nothing to pick.
+            return .abstained(.unavailable)
         }
     }
 }

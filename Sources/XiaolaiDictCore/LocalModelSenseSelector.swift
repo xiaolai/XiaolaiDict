@@ -1,3 +1,5 @@
+import os
+
 /// The top rung: Qwen, in the model service, guided to the candidate set.
 ///
 /// The same closed-set question the on-device rung asks, with the same instructions, prompt,
@@ -75,13 +77,28 @@ public struct LocalModelSenseSelector: SenseSelecting {
         // as this rung never answering, which `--sense-report` measures.
         case .failure(.invalidRequest)?:
             return .abstained(.unavailable)
-        // Not installed, too little memory now, a generation that failed, an answer of the wrong
-        // shape, or no service at all: the model is not here **for this lookup**, and the rung
-        // below runs. These are not all the same thing — a corrupt installation and a busy Mac end
-        // up here alike — and what tells them apart is `--model-status`, which asks the service
-        // directly rather than inferring from a rung that fell through.
+        case .failure(.generationFailed(let why))?:
+            // **The service said why, so the reason is not dropped.** A generation that failed is a
+            // corrupt install or a wedged GPU — a fact about this Mac that somebody will have to
+            // diagnose — and it arrived here folded into the same silence as "there is no model on
+            // this Mac", which is nothing of the sort. The *answer* is unchanged, because the
+            // ladder's contract is that the next rung runs either way; what changes is that the
+            // reason survives somewhere an instrument can read it. Not a sentence for the reader:
+            // `XiaolaiDictCore` carries no display text, and what the panel says about an
+            // abstention is `Abstention.reason`, in `XiaolaiDictUI`.
+            Self.log.error("the model service could not answer a sense question: \(why, privacy: .public)")
+            return .abstained(.unavailable)
+        // Not installed, too little memory now, an answer of the wrong shape, or no service at all:
+        // the model is not here **for this lookup**, and the rung below runs. These are not all the
+        // same thing — a busy Mac and a service that was never reached end up here alike — and what
+        // tells them apart is `--model-status`, which asks the service directly rather than
+        // inferring from a rung that fell through.
         case .failure?, .translation?, .explanation?, .prewarmed?, .status?, .unloading?, nil:
             return .abstained(.unavailable)
         }
     }
+
+    /// Where a reason that has no other home goes. The rung runs in the app, which is the process
+    /// whose log a reader is asked for.
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "sense")
 }

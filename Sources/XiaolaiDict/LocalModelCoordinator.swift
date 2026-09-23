@@ -69,7 +69,9 @@ final class LocalModelCoordinator {
     func prewarm() async { await access.prewarm() }
 
     /// What the lookup panel's sentence pane is handed: the downloaded model first, Apple's
-    /// on-device model where there is none. Read at the click, like the translator.
+    /// on-device model **wherever that one does not answer** — not downloaded, not enough memory,
+    /// declined, a generation that failed, a reply of the wrong shape, or no service at all. Read
+    /// at the click, like the translator.
     var explanationActions: ExplanationActions {
         ExplanationActions { [access] question in await access.explainer.explain(question) }
     }

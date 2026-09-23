@@ -112,10 +112,11 @@ struct LocalModelControllerTests {
 
     /// A stopped download keeps saying why when the board re-reads the store.
     @Test func aRefreshKeepsTheReasonADownloadStopped() async {
-        let (controller, _) = controller(fails: true)
+        let (controller, store) = controller(fails: true)
         controller.startDownload(.standard)
         await settle(controller)
         controller.refresh()
+        await DetachedWork.settles(at: store.storeLockFile())
         guard case .stopped = controller.state else {
             Issue.record("a refresh erased why the download stopped: \(controller.state)")
             return
@@ -129,6 +130,7 @@ struct LocalModelControllerTests {
         await settle(controller)
         try store.remove(Self.manifest(.standard))
         controller.refresh()
+        await DetachedWork.settles(at: store.storeLockFile())
         #expect(controller.state == .notDownloaded)
     }
 
@@ -199,10 +201,11 @@ struct LocalModelControllerTests {
     /// **The next size up, not the largest.** A reader with 2B on a 16 GB Mac can move to 4B — the
     /// recommended size, which fits there — and a row written in terms of 9B alone offered them
     /// nothing at all, because 9B does not fit and was the only upgrade it knew about.
-    @Test func theUpgradeOfferedIsTheNextSizeThisMacCanHold() throws {
+    @Test func theUpgradeOfferedIsTheNextSizeThisMacCanHold() async throws {
         let (controller, store) = controller(memory: 16 * Self.gigabyte)
         try Self.install(.small, into: store)
         controller.refresh()
+        await DetachedWork.settles(at: store.storeLockFile())
         #expect(controller.state == .ready(.small))
         #expect(controller.choice.larger == .standard)
     }
@@ -210,10 +213,11 @@ struct LocalModelControllerTests {
     /// **A model on disk this Mac cannot load is not a model it has.** One copied from a larger Mac,
     /// or left by one that had more memory, reads as ready and then fails at the service for want of
     /// memory — a failure rendering exactly as confidently as a success.
-    @Test func aModelThisMacCannotLoadDoesNotReadAsReady() throws {
+    @Test func aModelThisMacCannotLoadDoesNotReadAsReady() async throws {
         let (controller, store) = controller(memory: 16 * Self.gigabyte)
         try Self.install(.large, into: store)
         controller.refresh()
+        await DetachedWork.settles(at: store.storeLockFile())
         #expect(controller.state == .notDownloaded)
         #expect(controller.licenceURL == nil)
     }

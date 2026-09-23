@@ -39,6 +39,25 @@ struct LocalModelSenseSelectorTests {
         #expect(asked.withLock { $0.isEmpty }, "a list the answer cannot name was sent anyway")
     }
 
+    /// **And a list of exactly that length is asked, whole.** Only the bound's far side was
+    /// covered, so the guard written as `<` instead of `<=` would abstain on the longest entry the
+    /// answer can in fact name — the reader losing the top rung on precisely the big entries it is
+    /// worth most on — and every test here would still have passed.
+    @Test func anEntryOfTheLongestListTheAnswerCanNameIsAsked() async {
+        let many = (1...ModelPrompt.maximumSenses).map {
+            SenseCandidate(entryID: "run", key: "r.\($0)", keyKind: .publisher, text: "sense \($0)",
+                           partOfSpeech: "verb")
+        }
+        let asked = Recorder<[SenseQuestion]>([])
+        let choice = await LocalModelSenseSelector { question in
+            asked.withLock { $0.append(question) }
+            return .sense(ModelPrompt.maximumSenses)
+        }.choose(from: many, reading: "He had to run for it.", context: .complete, partOfSpeech: "verb")
+        #expect(choice == .chose(key: "r.\(ModelPrompt.maximumSenses)", margin: nil, entryID: "run"))
+        #expect(asked.withLock { $0.first?.senses.count } == ModelPrompt.maximumSenses,
+                "the model was sent a shorter list than the entry has")
+    }
+
     /// The number is a position in the list the model was sent — narrowed to nouns and to what can
     /// be keyed — and it comes back as that sense's key and entry.
     @Test func theAnswerIsReadAgainstTheListTheModelWasSent() async {
@@ -69,8 +88,15 @@ struct LocalModelSenseSelectorTests {
     }
 
     /// Every other reply is the model not being here for this lookup — including an answer to a
-    /// question nobody asked.
-    @Test(arguments: [ModelReply.translation("x"), .prewarmed, .unloading])
+    /// question nobody asked. **Every shape of one**, because the rung's own arm names them all and
+    /// a sampled pair says nothing about the ones left out: `.explanation` and `.status` were
+    /// missing, and a switch that had dropped either would have passed.
+    @Test(arguments: [
+        ModelReply.translation("x"), .explanation("Here it means the cargo space."), .prewarmed,
+        .status(ModelServiceStatus(
+            installed: nil, loaded: false, gpu: nil, footprint: nil, availableMemory: nil)),
+        .unloading,
+    ])
     func anAnswerToAnotherQuestionIsNotAnAnswer(reply: ModelReply) async {
         #expect(await Self.choose(reply) == .abstained(.unavailable))
     }

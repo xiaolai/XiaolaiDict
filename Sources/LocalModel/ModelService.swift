@@ -107,9 +107,6 @@ public actor ModelService {
     /// one is running pays at most this much after it finishes.
     static let prewarmPoll = Duration.milliseconds(20)
 
-    /// The size it holds, or the one it **would** load. Where a model is already loaded that is the
-    /// answer; otherwise the same routine the loading asks, so status cannot advertise a size the
-    /// service would then refuse for want of memory.
     /// **The GPU probe runs once and is remembered.** It evaluates an MLX op, and the actor is
     /// reentrant across awaits — so a `.status` arriving mid-generation would put a second piece of
     /// GPU work beside the model's own. Asked here at most once per process, before or between
@@ -124,10 +121,18 @@ public actor ModelService {
         return name
     }
 
+    /// The size it holds, or the one it **would** load. Where the weights are in memory that is
+    /// the answer, since that memory is already spent; otherwise the same gate the loading asks, so
+    /// status cannot advertise a size the service would then refuse for want of memory.
+    ///
+    /// **"Holds" means it has answered, exactly as `loaded()` means it.** A built `MLXLanguageModel`
+    /// has mapped nothing, so after a first generation that failed or was cancelled, `model` is set
+    /// and no weights are resident — and status reading that field alone would name a size that
+    /// `loaded()` then refuses for want of memory, which is the promise this method exists to keep.
     private func status() -> ModelReply {
         let available = availableMemory()
         return .status(ModelServiceStatus(
-            installed: model?.size ?? fitting(available: available ?? 0)?.size,
+            installed: (hasAnswered ? model?.size : nil) ?? fitting(available: available ?? 0)?.size,
             loaded: hasAnswered, gpu: gpuName(), footprint: footprint(), availableMemory: available))
     }
 

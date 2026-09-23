@@ -13,6 +13,16 @@ struct ModelClientTests {
         let asked = Recorder<[ModelRequest]>([])
         let dies = Recorder(false)
         let cancelHandlers = Recorder<[@Sendable () -> Void]>([])
+        /// What being told to unload does to this service's **process**. The real one answers and
+        /// exits a moment later, and it is the exit rather than the answer that `unload` waits for —
+        /// so a test that wants an unload to take ends its own process here. The default is a
+        /// service that was asked and stayed, which is the failure the quarantine exists for.
+        let whenUnloaded: @Sendable () -> Void
+
+        init(whenUnloaded: @escaping @Sendable () -> Void = {}) { self.whenUnloaded = whenUnloaded }
+
+        /// What this service explains with, so its answer can be told from Apple's.
+        static let explanation = "Here the word names the ship's cargo space, not the verb."
 
         struct Died: Error {}
 
@@ -21,7 +31,14 @@ struct ModelClientTests {
             func send(_ request: ModelRequest) async throws -> ModelReply {
                 service.asked.withLock { $0.append(request) }
                 if service.dies.withLock({ $0 }) { throw Died() }
-                return request == .prewarm ? .prewarmed : .sense(1)
+                switch request {
+                case .prewarm: return .prewarmed
+                case .explain: return .explanation(Service.explanation)
+                case .unload:
+                    service.whenUnloaded()
+                    return .unloading
+                default: return .sense(1)
+                }
             }
             func cancel(reason: String) {}
         }
@@ -144,19 +161,60 @@ struct ModelClientTests {
         #expect(service.sessions.withLock { $0 } == 0)
     }
 
-    /// A store holding the standard model whole, as the downloader would leave it.
-    private static func storeWithAModel() throws -> (ModelStore, TemporaryDirectory) {
+    /// **The sentence pane asks this model to *explain*, and the request is what says so.** Nothing
+    /// else in the suite goes through `explainer`: the pane's only path to the service is this one
+    /// closure, and `.explain` swapped for `.translate` there left every other check green while the
+    /// reader got a translation in the explanation pane. So the assertion is on what the service
+    /// received, not only on what came back — a fake that answered any request with prose would say
+    /// nothing about which one was asked.
+    @Test func theSentencePaneAsksTheModelToExplainTheReadersSentence() async throws {
+        let service = Service()
+        let (store, scratch) = try Self.storeWithAModel()
+        scratches.withLock { $0.append(scratch) }
+        let access = LocalModelAccess(
+            client: ModelClient(connect: { service.connect($0) }), store: store,
+            physicalMemory: 48 * 1_073_741_824)
+        let question = SentenceQuestion(
+            sentence: "The ship's hold was full.", term: "hold", senseText: "a cargo space in a ship")
+        #expect(await access.explainer.explain(question) == .explained(Service.explanation, tier: .onDevice))
+        #expect(service.asked.withLock { $0 } == [.explain(question)],
+                "the pane's explainer asked the service something other than this sentence, explained")
+    }
+
+    /// A store holding the standard model whole, as the downloader would leave it. **Shared with
+    /// `LocalModelCoordinatorTests`**, which installs into a store it has already handed the
+    /// coordinator — the same fixture, reached the other way round, rather than a second copy of it.
+    static func storeWithAModel() throws -> (ModelStore, TemporaryDirectory) {
         let scratch = TemporaryDirectory(named: "xiaolaidict-access")
         let store = ModelStore(root: scratch.url)
+        try installTheModel(into: store)
+        return (store, scratch)
+    }
+
+    /// Writes the standard model into `store` exactly as a finished download leaves it: every file
+    /// at its listed size, then the completion marker that says the directory is whole.
+    ///
+    /// **The weights are a hole in the file, not three gigabytes of zeroes.** `ModelStore.installed`
+    /// reads each file's size attribute and never a byte of it — "sizes, not hashes", as it says
+    /// there — so a sparse file is the same fixture. Measured 2026-09-23 on the 3,034,300,695-byte
+    /// safetensors: written out, **1.79 s and 3 GB of disk**; truncated, **0.4 ms and 0 blocks**,
+    /// with the same size attribute, and a hole reads back as the zeroes it stands in for. Five
+    /// tests want this store, so written out it is nine seconds and fifteen gigabytes — and three
+    /// of those gigabytes live in memory at once per test, while the tests run in parallel. The two
+    /// that had it measured 4.25 s and 4.28 s before this and 0.019 s and 0.016 s after.
+    static func installTheModel(into store: ModelStore) throws {
         let manifest = LocalModelSize.standard.manifest
         let directory = store.directory(for: manifest)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for file in manifest.files {
-            try Data(count: Int(file.size)).write(to: directory.appending(path: file.path))
+            let url = directory.appending(path: file.path)
+            try Data().write(to: url)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(file.size))
+            try handle.close()
         }
         try ModelStore.markerText(for: manifest).write(
             to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
-        return (store, scratch)
     }
 
     /// Nothing is asked of a service that has no model to answer with.

@@ -110,22 +110,7 @@ struct LadderSentenceExplainerTests {
         #expect(await explainer.explain(Self.question) == .unavailable("Apple could not either."))
     }
 
-    /// **The licence boundary, at the rung that crosses it.** The dictionary's own text may reach
-    /// a model on this Mac and must never reach a remote one — and a prefix of a definition is as
-    /// much the publisher's text as the whole of it, so the remote prompt is checked for *any* run
-    /// of it rather than for the complete literal.
-    @Test func whatTheRemoteTierIsGivenCarriesNoneOfThePublishersText() {
-        let sense = try! #require(Self.question.senseText)
-        let local = Self.question.prompt(for: .onDevice)
-        let remote = Self.question.prompt(for: .remote)
-        #expect(local.contains(sense))
-        // Every run of eight words or more that appears in the sense must be absent from the remote
-        // prompt: a leak does not have to be the whole definition to be one.
-        let words = sense.split(separator: " ")
-        for start in words.indices where start + 8 <= words.count {
-            let fragment = words[start..<(start + 8)].joined(separator: " ")
-            #expect(!remote.contains(fragment), "the remote prompt carries publisher text: \(fragment)")
-        }
-        #expect(remote.contains(Self.question.sentence), "the reader's own sentence is theirs and may go")
-    }
+    // The licence boundary is checked in `SentenceTierTests`, where it belongs: it is a property of
+    // `SentenceQuestion.prompt(for:)`, which is the one place the dropping happens, and the test
+    // that lived here built neither a ladder nor a local model to exercise it.
 }
