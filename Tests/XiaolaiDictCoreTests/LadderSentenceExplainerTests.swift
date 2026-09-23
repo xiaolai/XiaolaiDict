@@ -87,8 +87,12 @@ struct LadderSentenceExplainerTests {
     @Test(arguments: [
         ModelReply.failure(.notInstalled), .failure(.refused),
         .failure(.insufficientMemory(needed: 1, available: 0)), .failure(.generationFailed("x")),
-        // An answer to a question nobody asked is not an answer either.
-        .translation("这艘船的货舱装满了。"), .prewarmed,
+        // **An answer to a question nobody asked is not an answer either** — every shape of one,
+        // because each is a different case in the switch and a sampled pair proves nothing about
+        // the ones left out.
+        .translation("这艘船的货舱装满了。"), .prewarmed, .sense(2), .unloading,
+        .status(ModelServiceStatus(
+            installed: nil, loaded: false, gpu: nil, footprint: nil, availableMemory: nil)),
     ])
     func whereTheModelCannotAnswerApplesDoes(reply: ModelReply) async {
         let asked = Recorder<[SentenceQuestion]>([])
@@ -106,10 +110,22 @@ struct LadderSentenceExplainerTests {
         #expect(await explainer.explain(Self.question) == .unavailable("Apple could not either."))
     }
 
-    /// The prompt the local model is given may carry the dictionary's own text, because it runs on
-    /// this Mac — and the tier says so rather than each call site deciding.
-    @Test func theLocalPromptCarriesTheSenseAndTheRemoteOneNever() {
-        #expect(Self.question.prompt(for: .onDevice).contains("a large space in the lower part of a ship"))
-        #expect(!Self.question.prompt(for: .remote).contains("a large space in the lower part of a ship"))
+    /// **The licence boundary, at the rung that crosses it.** The dictionary's own text may reach
+    /// a model on this Mac and must never reach a remote one — and a prefix of a definition is as
+    /// much the publisher's text as the whole of it, so the remote prompt is checked for *any* run
+    /// of it rather than for the complete literal.
+    @Test func whatTheRemoteTierIsGivenCarriesNoneOfThePublishersText() {
+        let sense = try! #require(Self.question.senseText)
+        let local = Self.question.prompt(for: .onDevice)
+        let remote = Self.question.prompt(for: .remote)
+        #expect(local.contains(sense))
+        // Every run of eight words or more that appears in the sense must be absent from the remote
+        // prompt: a leak does not have to be the whole definition to be one.
+        let words = sense.split(separator: " ")
+        for start in words.indices where start + 8 <= words.count {
+            let fragment = words[start..<(start + 8)].joined(separator: " ")
+            #expect(!remote.contains(fragment), "the remote prompt carries publisher text: \(fragment)")
+        }
+        #expect(remote.contains(Self.question.sentence), "the reader's own sentence is theirs and may go")
     }
 }

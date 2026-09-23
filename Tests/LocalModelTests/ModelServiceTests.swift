@@ -34,6 +34,10 @@ struct ScriptedModel: LanguageModel {
     static let heard = Recorder<[UUID: [String]]>([:])
     /// The response budget each request carried.
     static let budgets = Recorder<[UUID: [Int?]]>([:])
+    /// The sampling temperature each request carried. **Recorded because it is load-bearing**: a
+    /// sense answer is a choice from a list and must be deterministic, and nothing else in the
+    /// suite would notice it drifting back to the backend's default.
+    static let temperatures = Recorder<[UUID: [Double?]]>([:])
     /// Generations running now, and the most there ever were at once.
     static let running = Recorder<(now: Int, most: Int)>((0, 0))
     /// The models whose one wedged request has already been taken.
@@ -46,6 +50,7 @@ struct ScriptedModel: LanguageModel {
 
     var requests: [String] { Self.heard.withLock { $0[id] ?? [] } }
     var budgets: [Int?] { Self.budgets.withLock { $0[id] ?? [] } }
+    var temperatures: [Double?] { Self.temperatures.withLock { $0[id] ?? [] } }
 }
 
 struct ScriptedExecutor: LanguageModelExecutor {
@@ -60,6 +65,7 @@ struct ScriptedExecutor: LanguageModelExecutor {
     ) async throws {
         ScriptedModel.heard.withLock { $0[id, default: []].append(Self.text(of: request.transcript)) }
         ScriptedModel.budgets.withLock { $0[id, default: []].append(request.generationOptions.maximumResponseTokens) }
+        ScriptedModel.temperatures.withLock { $0[id, default: []].append(request.generationOptions.temperature) }
         switch ScriptedModel.scripts.withLock({ $0[id] }) {
         case .answer(let text)?:
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
@@ -325,13 +331,15 @@ struct ModelServiceTests {
     @Test func anExplanationComesBackAsProseAndCarriesTheSense() async throws {
         let model = ScriptedModel(.answer("Here it names the cargo space of a ship."))
         let question = SentenceQuestion(
-            sentence: "The ship's hold was full.", term: "hold",
+            sentence: "The ship's hold was full.", term: "orlop",
             senseText: "a large space in the lower part of a ship")
         let reply = try await service(model).reply(to: .explain(question))
         #expect(reply == .explanation("Here it names the cargo space of a ship."))
         let asked = try #require(model.requests.first)
         #expect(asked.contains("a large space in the lower part of a ship"))
-        #expect(asked.contains("hold"))
+        // A word the sentence does not contain, so this proves the *term* field reached the prompt
+        // rather than matching the sentence it is quoted in.
+        #expect(asked.contains("orlop"))
         let budget = try #require(model.budgets.first ?? nil)
         #expect(budget == ModelPrompt.explanationTokens(for: question))
         #expect(budget < 600)
@@ -357,6 +365,49 @@ struct ModelServiceTests {
             Issue.record("a blank answer was passed off as an explanation")
             return
         }
+    }
+
+    /// **A sense is picked at temperature 0.** It is a choice from a numbered list, not writing:
+    /// sampling only lets one sentence be answered two ways, and the measurement compares the rung
+    /// against the whole ladder over the same sentence. Left to the backend's default, nothing else
+    /// here would have noticed.
+    @Test func aSenseIsPickedWithoutSampling() async throws {
+        let model = ScriptedModel(.answer(#"{"senseNumber": 2}"#))
+        _ = try await service(model).reply(to: .pickSense(Self.question))
+        #expect(model.temperatures == [0], "the sense answer was sampled")
+    }
+
+    /// Prose is not: at temperature 0 a small model repeats itself, so the translation and the
+    /// explanation keep the backend's own sampling and are bounded by their token budget instead.
+    @Test func proseKeepsItsSampling() async throws {
+        let translator = ScriptedModel(.answer("这艘船的货舱装满了。"))
+        _ = try await service(translator).reply(to: .translate(
+            TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")))
+        #expect(translator.temperatures == [nil], "the translation was pinned to a temperature")
+
+        let explainer = ScriptedModel(.answer("Here it names the cargo space."))
+        _ = try await service(explainer).reply(to: .explain(
+            SentenceQuestion(sentence: "The ship's hold was full.", term: "hold")))
+        #expect(explainer.temperatures == [nil], "the explanation was pinned to a temperature")
+    }
+
+    /// **A generation that failed for any other reason is not a refusal.** `.refused` is the model
+    /// declining this sentence and the ladder keeps it apart from everything else; a failed prewarm
+    /// is also not kept, so the next one tries again rather than reporting the old failure for ever.
+    @Test func aFailedGenerationIsNotARefusalAndAFailedPrewarmIsRetried() async throws {
+        let model = ScriptedModel(.fail)
+        let service = try service(model)
+        guard case .failure(.generationFailed) = await service.reply(to: .pickSense(Self.question)) else {
+            Issue.record("a generation that failed was reported as something else")
+            return
+        }
+        guard case .failure = await service.reply(to: .prewarm) else {
+            Issue.record("a prewarm over a failing model reported success")
+            return
+        }
+        // Not kept: asked again, the model is asked again.
+        _ = await service.reply(to: .prewarm)
+        #expect(model.requests.count >= 3, "a failed prewarm was remembered instead of retried")
     }
 
     /// A list longer than the answer can name is refused before a model is woken for it.

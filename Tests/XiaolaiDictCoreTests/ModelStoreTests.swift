@@ -164,7 +164,12 @@ struct ModelStoreTests {
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in 1_000 })
-        await #expect(throws: ModelDownloadError.self) { try await downloader.install(manifest) }
+        // **The error by name.** `ModelDownloadError.self` is satisfied by any of them, so a
+        // failure before the disk was ever looked at would pass a test about the disk.
+        await #expect(throws: ModelDownloadError.insufficientDisk(
+            needed: manifest.totalBytes + ModelDownloader.diskMargin, available: 1_000)) {
+            try await downloader.install(manifest)
+        }
         #expect(transport.requests.withLock { $0.isEmpty })
     }
 
@@ -253,7 +258,8 @@ struct ModelStoreTests {
         let (store, scratch) = try store()
         defer { _ = scratch }
         let transport = MemoryTransport(Self.bodies)
-        await #expect(throws: ModelDownloadError.self) {
+        await #expect(throws: ModelDownloadError.diskCapacityUnknown(
+            path: store.stagingDirectory(for: Self.manifest(Self.bodies)).path)) {
             try await ModelDownloader(store: store, transport: transport, freeDisk: { _ in nil })
                 .install(Self.manifest(Self.bodies))
         }
@@ -537,9 +543,18 @@ struct ModelStoreTests {
         // resuming the task, and a test that reaches the network hangs where there is none — which
         // is worse than the defect: a guard that regressed would stall the suite instead of failing
         // it. Unrefused, the second chunk lands and the file is 103 bytes.
+        //
+        // What is *not* asserted is the task's own state: a data task is created suspended, so
+        // `state != .running` holds whether or not the writer ever cancelled it. An assertion that
+        // passes for both answers is not one.
         let onDisk = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
         #expect(onDisk == 4, "the oversized chunk was written before it was refused")
-        #expect(task.state != .running, "the refused download was left running")
+        // The writer settled on the refusal rather than waiting for more: `run` returns it without
+        // resuming anything, which is what makes this checkable without a network.
+        await #expect(throws: ModelDownloadError.sizeMismatch(
+            path: "model.safetensors", expected: 8, received: 103)) {
+            try await writer.run(task)
+        }
     }
 
     /// The standard model's directory is named for its repository and commit, under the support

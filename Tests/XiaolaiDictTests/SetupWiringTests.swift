@@ -5,10 +5,12 @@ import Testing
 
 /// **The board is handed everything it needs, by the app that owns it.**
 ///
-/// `SetupView` takes four parameters and every one of them defaults to nil, so a board built with
-/// none of them compiles, renders, and shows a permanent "Asking which dictionaries are enabled…"
-/// with no dictionary to choose, no shortcut to name and no way out to Settings. Every unit test
-/// over `SetupBoard` would still pass: they construct the board directly.
+/// `SetupView` takes seven parameters. `localModel` has no default any more — a board that does not
+/// know what this Mac can do about the model is a state, not something to fall into by forgetting —
+/// but the rest still default to nil, so a board built without them compiles, renders, and shows a
+/// permanent "Asking which dictionaries are enabled…" with no dictionary to choose, no shortcut to
+/// name and no way out to Settings. Every unit test over `SetupBoard` would still pass: they
+/// construct the board directly.
 ///
 /// That is the `HoverPause` defect's exact shape — a model that was complete, covered, and
 /// connected to nothing, because a defaulted closure parameter nobody supplies is invisible to
@@ -40,17 +42,22 @@ struct SetupWiringTests {
     @Test func theAppHandsTheBoardEveryPartOfItsState() throws {
         let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
         let call = try callSite(scene, of: "SetupView")
-        for argument in [
-            "model:", "dictionary:", "shortcut:", "shortcutIsRegistered:", "localModel:", "openSettings:",
-            "refreshDictionaries:",
+        // **Label *and* value.** A label with nil behind it passes a check for the label and hands
+        // the board nothing — which is the inert "Not known" row this whole file exists to prevent,
+        // one level further in.
+        for (argument, value) in [
+            ("model:", "app.setup"), ("dictionary:", "DictionaryChoice("),
+            ("shortcut:", "app.shortcutChoice"), ("shortcutIsRegistered:", "app.shortcutIsRegistered"),
+            ("localModel:", "app.models.choice"), ("openSettings:", "app.showSettings("),
+            ("refreshDictionaries:", "app.refreshDictionaries("),
         ] {
             #expect(
-                call.contains(argument),
-                "SetupView is built without \(argument); that parameter defaults to nil, so the board would silently lose what it carries")
+                call.contains(argument) && call.contains(value),
+                "SetupView is built without \(argument) \(value); the board would silently lose what it carries")
         }
     }
 
-    /// **The panel is handed both model panes.** `LookupCardView` reads the translator and the
+    /// **The panel is handed both model panes.** The card's content reads the translator and the
     /// explainer from the environment, and both have inert defaults that say "could not" — so a
     /// panel built without them renders buttons that never answer, and every unit test over the
     /// card still passes. The explainer was one: it reached past the environment for Apple's model
@@ -88,21 +95,14 @@ struct SetupWiringTests {
             "the settings window cannot open the setup board")
     }
 
-    /// The translation pane is handed its translator by the panel's scene. Unwired, the environment's
-    /// default answers "could not be translated" for every sentence and offers no download — a
-    /// feature complete and connected to nothing, the `HoverPause` shape again.
-    @Test func theLookupPanelIsHandedItsTranslator() throws {
-        let panel = try source("Sources/XiaolaiDict/LookupPanel.swift")
-        #expect(panel.contains(".environment(\\.translation, translation())"),
-                "the lookup panel never sets the translation environment")
-        let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
-        #expect(scene.contains("delegate.models.translationActions"), "the scene hands the panel no translator")
-    }
-
-    /// About names the model's licence from the file that came with the weights.
+    /// About names the model's licence from the file that came with the weights. **The value, not
+    /// the label**: `modelLicence: nil` passes a label check and leaves About linking only to the
+    /// published copy, so a reader who downloaded the weights never sees the terms they came with.
     @Test func aboutIsHandedTheModelsLicence() throws {
         let scene = try source("Sources/XiaolaiDict/XiaolaiDictScene.swift")
-        #expect(try callSite(scene, of: "SettingsView").contains("modelLicence:"))
+        let call = try callSite(scene, of: "SettingsView")
+        #expect(call.contains("modelLicence: app.models.licenceURL"),
+                "About is not handed the licence that came with the weights")
     }
 
     /// And the menu, which is where a reader who is not in Settings looks.
