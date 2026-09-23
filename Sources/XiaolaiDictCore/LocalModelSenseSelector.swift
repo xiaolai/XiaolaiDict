@@ -37,6 +37,10 @@ public struct LocalModelSenseSelector: SenseSelecting {
         case .ask(let asking, let sentence): (considered, reading) = (asking, sentence)
         }
 
+        // **Asked only for a list the answer can name.** The service refuses a longer one as an
+        // invalid request — a defect in whatever built it — and an entry with a hundred senses is
+        // not a defect, it is *run* in a large dictionary. The rung below has no such bound.
+        guard considered.count <= ModelPrompt.maximumSenses else { return .abstained(.unavailable) }
         let question = SenseQuestion(
             sentence: reading, partOfSpeech: partOfSpeech, senses: considered.map(\.text))
         switch await ask(question) {

@@ -21,6 +21,24 @@ struct LocalModelSenseSelectorTests {
         }.choose(from: candidates, reading: "The ship's hold was full.", context: .complete, partOfSpeech: partOfSpeech)
     }
 
+    /// **An entry longer than the answer can name is not asked about.** The service refuses a list
+    /// past the schema's bound as an invalid request — a defect in whatever built it — and *run* in
+    /// a large dictionary is not a defect. The rung abstains so the one below, which has no such
+    /// bound, runs.
+    @Test func anEntryTooLongForTheAnswerIsNotAsked() async {
+        let many = (1...ModelPrompt.maximumSenses + 1).map {
+            SenseCandidate(entryID: "run", key: "r.\($0)", keyKind: .publisher, text: "sense \($0)",
+                           partOfSpeech: "verb")
+        }
+        let asked = Recorder<[SenseQuestion]>([])
+        let choice = await LocalModelSenseSelector { question in
+            asked.withLock { $0.append(question) }
+            return .sense(1)
+        }.choose(from: many, reading: "He had to run for it.", context: .complete, partOfSpeech: "verb")
+        #expect(choice == .abstained(.unavailable))
+        #expect(asked.withLock { $0.isEmpty }, "a list the answer cannot name was sent anyway")
+    }
+
     /// The number is a position in the list the model was sent — narrowed to nouns and to what can
     /// be keyed — and it comes back as that sense's key and entry.
     @Test func theAnswerIsReadAgainstTheListTheModelWasSent() async {

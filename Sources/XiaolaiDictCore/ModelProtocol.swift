@@ -136,6 +136,15 @@ public enum ModelPrompt {
     /// sentence. The same cut as the on-device rung.
     public static let senseCharacterLimit = 240
 
+    /// The longest list a sense question may carry — the largest number the answer's schema admits.
+    /// **Here rather than beside the schema**, because the rung that builds the question has to
+    /// know it too: asking past it is refused as an invalid request, which is a defect in the
+    /// caller and not something a reader with a 100-sense entry should ever reach.
+    ///
+    /// One schema for every question, not one sized to each list: guided generation compiles a
+    /// grammar per schema, and the cold compile is the expensive part of a first answer.
+    public static let maximumSenses = 99
+
     public static func sense(_ question: SenseQuestion) -> String {
         var lines = ["Sentence: \(question.sentence)"]
         if let partOfSpeech = question.partOfSpeech { lines.append("The word is used as a \(partOfSpeech).") }

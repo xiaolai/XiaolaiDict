@@ -224,8 +224,9 @@ public actor ModelService {
 /// size of the list would make every entry length a new compile.
 @Generable
 struct SenseNumber {
-    /// The largest number the schema admits — and so the longest list a question may carry.
-    static let maximum = 99
+    /// The largest number the schema admits — and so the longest list a question may carry. The
+    /// app's own rungs read it from `ModelPrompt`, which is where both sides can see it.
+    static let maximum = ModelPrompt.maximumSenses
 
     @Guide(description: "The number of the sense the word carries in the sentence, or 0 if none clearly fits.",
            .range(0...SenseNumber.maximum))
