@@ -378,6 +378,41 @@ struct ModelStoreTests {
                 "this pin's own staged download was deleted")
     }
 
+    /// **A prune and a commit cannot interleave.** The prune decides across every model at once —
+    /// enumerate, then delete — and an install that commits in between has its new model read as a
+    /// stray by a decision taken before it existed. Both take one store-wide lock.
+    @Test func aPruneHoldsTheStoreWhileItRunsAndAnInstallWaitsForIt() async throws {
+        let store = try store()
+        let manifest = Self.manifest(Self.bodies)
+        try FileManager.default.createDirectory(
+            at: store.root.appending(path: ".staging", directoryHint: .isDirectory),
+            withIntermediateDirectories: true)
+
+        // Held by somebody else: the prune does nothing rather than deciding over a store that is
+        // being written to, and is retried on the next refresh.
+        let held = try #require(InstallLock(store.storeLockFile()))
+        let directory = store.directory(for: manifest)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (path, body) in Self.bodies { try body.write(to: directory.appending(path: path)) }
+        try ModelStore.markerText(for: manifest).write(
+            to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+        let stale = store.root.appending(path: "old/model@0", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        try "not this pin".write(
+            to: stale.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+
+        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: stale.path),
+                "the prune decided over a store somebody else was writing to")
+        held.release()
+
+        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        // And it gives the lock back: a second prune runs.
+        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(store.installed(manifest) != nil)
+    }
+
     /// **A store that cannot be read is not a store with nothing in it.** Both answers here decide
     /// whether to delete gigabytes, so "could not tell" has to mean "do not": an unreadable staging
     /// directory reads as an install in flight, and an unreadable root is reported as a failure

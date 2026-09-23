@@ -100,6 +100,14 @@ public struct ModelStore: Sendable, Equatable {
         // moment after they arrived. A staged download is never at risk (`.staging` is hidden from
         // the walk below); a *completed* one is, which is what this guards.
         guard !isInstalling else { return [] }
+        // **Held for the whole run.** Taken after the check above and given back at the end, so an
+        // install cannot commit between the enumeration and the removals. Not taken means somebody
+        // is committing right now; the prune is retried on the next refresh.
+        try? FileManager.default.createDirectory(
+            at: root.appending(path: Self.stagingName, directoryHint: .isDirectory),
+            withIntermediateDirectories: true)
+        guard let store = InstallLock(storeLockFile()) else { return [] }
+        defer { store.release() }
         // Nothing is removed on behalf of a model that is not there: whatever the caller believed
         // about the store, it is not what the store says now.
         guard installed(keeping) != nil else { return [] }
@@ -111,12 +119,9 @@ public struct ModelStore: Sendable, Equatable {
             failures.append("the model directory could not be read")
         }
         for directory in complete where directory.standardizedFileURL.path != keep {
-            // **Asked again before each removal.** The check above is a moment, and enumerating a
-            // store takes another: an install that began in between would have its model deleted by
-            // a decision taken before it existed. This does not close the window — nothing short of
-            // a store-wide lock would — but it narrows it to the removal itself, and a 3 GB download
-            // cannot start and finish inside one.
-            guard !isInstalling else { break }
+            // No re-check here: the store lock above is held across the enumeration *and* these
+            // removals, and an install commits under the same lock — so nothing can land between
+            // the decision and the deletion. That is what the lock is for.
             do { try FileManager.default.removeItem(at: directory) }
             catch { failures.append(directory.lastPathComponent) }
         }
@@ -191,12 +196,27 @@ public struct ModelStore: Sendable, Equatable {
         guard let locks = try? FileManager.default.contentsOfDirectory(
             at: staging, includingPropertiesForKeys: nil)
         else { return FileManager.default.fileExists(atPath: staging.path) }
-        for lock in locks where lock.pathExtension == "lock" {
+        // **The store's own lock is not an install's.** A prune holds it for its whole run, so
+        // counting it here made the prune read itself as an install in flight and remove nothing.
+        for lock in locks where lock.pathExtension == "lock"
+            && lock.lastPathComponent != Self.storeLockName {
             guard let taken = InstallLock(lock) else { return true }
             taken.release()
         }
         return false
     }
+
+    /// **The lock a prune holds for its whole run, and an install takes while it commits.** One
+    /// name, so the two cannot interleave: a prune enumerating the store while an install renames
+    /// its staging directory into place would find the new model a stray and delete it a moment
+    /// after it arrived. Per-manifest locks cannot close that, because the prune's decision spans
+    /// every model rather than one.
+    func storeLockFile() -> URL {
+        root.appending(path: Self.stagingName, directoryHint: .isDirectory)
+            .appending(path: Self.storeLockName)
+    }
+
+    static let storeLockName = "store.lock"
 
     /// The lock one install of `manifest` holds — against another process, and against this one.
     func lockFile(for manifest: ModelManifest) -> URL {
@@ -386,6 +406,12 @@ public struct ModelDownloader: Sendable {
 
     /// The move that makes a model loadable: one rename, after which the directory holds all of it.
     private func commit(_ staging: URL, of manifest: ModelManifest) throws -> URL {
+        // **Under the store's own lock.** A prune decides across every model at once, so it holds
+        // this for its whole run; committing inside it is what keeps a model that lands mid-prune
+        // from being read as a stray. Waited for rather than refused: the prune holds it for
+        // milliseconds and this download took minutes.
+        let held = Self.waitForStoreLock(store.storeLockFile())
+        defer { held?.release() }
         let destination = store.directory(for: manifest)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -399,6 +425,19 @@ public struct ModelDownloader: Sendable {
             throw ModelDownloadError.incomplete(identifier: manifest.identifier)
         }
         return installed
+    }
+
+    /// The store lock, waited for within a bound. **Nil rather than throwing** where it cannot be
+    /// had: the weights are downloaded and checked, and refusing to install them because a prune
+    /// overran would throw away minutes of work to avoid a race the prune's own re-checks already
+    /// narrow to microseconds.
+    private static func waitForStoreLock(_ file: URL) -> InstallLock? {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if let held = InstallLock(file) { return held }
+            usleep(20_000)
+        }
+        return nil
     }
 
     /// Removes what must not survive — and says so when it cannot, rather than leaving a bad file to
