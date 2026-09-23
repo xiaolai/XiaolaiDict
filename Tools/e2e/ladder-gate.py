@@ -51,6 +51,15 @@ def judge(report):
     order = report.get("order") or []
     answers = report.get("answers", [])
 
+    # **`order` is the rungs, and the composite is not one of them.** It is scored beside them
+    # (`SenseReport.swift`) so the ladder's answer can be held against its top rung's; a report that
+    # named it here would have `earns` below ask whether the ladder earns its place above its own
+    # top rung, which the labelled set cannot answer — the ladder's answers *are* the rungs'. There
+    # used to be a `continue` inside that loop skipping any pair involving the ladder, which could
+    # never run, so the shape it was written against went unchecked. Refused by name instead.
+    if "ladder" in order:
+        return [f"the report's order names the ladder among its own rungs: {order}"]
+
     # Apple is skipped only where it is genuinely not on this Mac — every case abstaining *because
     # it is unavailable*. A rung that abstained for any other reason is a rung that ran.
     apple = [row.get("onDevice", "") for row in answers]
@@ -103,8 +112,6 @@ def judge(report):
     # beats B and B beats C but A is no better than C is not an order anything measured.
     for i, upper in enumerate(rungs):
         for lower in rungs[i + 1:]:
-            if lower == "ladder" or upper == "ladder":
-                continue
             if not earns(upper, lower):
                 refusals.append(f"{upper} does not earn its place above {lower}: "
                                 f"{scored(upper, 'right')} right / {scored(upper, 'wrong')} wrong "

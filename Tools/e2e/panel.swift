@@ -1,5 +1,5 @@
 // panel <bundle-id>: what the reader sees, as one JSON object — the frontmost app, and the text in
-// each window of the app <bundle-id>, with the texts of any web page in it listed separately.
+// each window of the app <bundle-id>.
 import AppKit
 import ApplicationServices
 
@@ -10,32 +10,25 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
 }
-/// Every string a window shows, and separately the texts inside its web page — a page laid out
-/// as a document shows many; one parsed as bare XML shows a single run, stylesheet included.
-func contents(of window: AXUIElement) -> (texts: [String], webTexts: [String]?) {
-    var queue: [(node: AXUIElement, inWeb: Bool)] = [(window, false)], head = 0
-    var texts: [String] = [], webTexts: [String]?
+/// Every string a window shows.
+func contents(of window: AXUIElement) -> [String] {
+    var queue: [AXUIElement] = [window], head = 0
+    var texts: [String] = []
     while head < queue.count, head < 4_000 {
-        let (node, inWeb) = queue[head]; head += 1
-        let isWeb = inWeb || attribute(node, kAXRoleAttribute) as? String == "AXWebArea"
-        if isWeb, webTexts == nil { webTexts = [] }
+        let node = queue[head]; head += 1
         for name in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
             guard let text = attribute(node, name) as? String, !text.isEmpty else { continue }
             texts.append(text)
-            if isWeb, attribute(node, kAXRoleAttribute) as? String == "AXStaticText" { webTexts?.append(text) }
         }
-        queue += (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).map { ($0, isWeb) }
+        queue += attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []
     }
-    return (texts, webTexts)
+    return texts
 }
 var windows: [[String: Any]] = []
 if let app = NSRunningApplication.runningApplications(withBundleIdentifier: CommandLine.arguments[1]).first {
     let element = AXUIElementCreateApplication(app.processIdentifier)
     for window in attribute(element, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
-        let (texts, webTexts) = contents(of: window)
-        var entry: [String: Any] = ["texts": texts]
-        if let webTexts { entry["webTexts"] = webTexts }
-        windows.append(entry)
+        windows.append(["texts": contents(of: window)])
     }
 }
 let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""

@@ -35,8 +35,11 @@ func emit(_ report: [String: Any]) -> Never {
 }
 
 let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+// An app that is not running draws nothing, which is the same answer as an app that is running and
+// draws nothing — and the same answer every caller wants. The alert gate asks this of
+// UserNotificationCenter on every run precisely because it is usually not running at all.
 guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
-    emit(["running": false, "frontmost": front, "matches": [], "windows": []])
+    emit(["frontmost": front, "matches": [], "windows": []])
 }
 let pid = app.processIdentifier
 
@@ -47,21 +50,16 @@ else {
     exit(1)
 }
 
-/// The app's windows as the compositor draws them.
-struct Drawn {
-    let frame: CGRect
-    let layer: Int
-    let name: String
-}
-var drawn: [Drawn] = []
+/// The app's windows as the compositor draws them. Their bounds and nothing else: a window's
+/// `kCGWindowName` needs Screen Recording, which a helper started over SSH never has, so a title
+/// read from here says more about the harness than about the app.
+var drawn: [CGRect] = []
 for window in listed {
     guard window[kCGWindowOwnerPID as String] as? pid_t == pid,
           let bounds = window[kCGWindowBounds as String] as? [String: Any],
           let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
     else { continue }
-    drawn.append(Drawn(
-        frame: frame, layer: window[kCGWindowLayer as String] as? Int ?? 0,
-        name: window[kCGWindowName as String] as? String ?? ""))
+    drawn.append(frame)
 }
 
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -106,7 +104,7 @@ if !fragment.isEmpty {
             entry["height"] = Int(rect.height)
             // Listed at that frame *and* with some area: a window listed at no size is listed and
             // not drawn, and the two must not read the same.
-            entry["drawn"] = rect.width > 0 && rect.height > 0 && drawn.contains { sameFrame($0.frame, rect) }
+            entry["drawn"] = rect.width > 0 && rect.height > 0 && drawn.contains { sameFrame($0, rect) }
         } else {
             entry["drawn"] = false
         }
@@ -115,13 +113,10 @@ if !fragment.isEmpty {
 }
 
 emit([
-    "running": true,
     "frontmost": front,
     // Accessibility's windows with the title asked for, each with whether the compositor draws it.
     "matches": matches,
-    // Every window the compositor draws for the app, titled where titles are readable.
-    "windows": drawn.map { ["x": Int($0.frame.minX), "y": Int($0.frame.minY), "width": Int($0.frame.width),
-                            "height": Int($0.frame.height), "layer": $0.layer, "name": $0.name] },
-    // Whether the compositor's titles were readable at all. Reported, never relied on.
-    "titlesReadable": drawn.isEmpty || drawn.contains { !$0.name.isEmpty },
+    // Every window the compositor draws for the app.
+    "windows": drawn.map { ["x": Int($0.minX), "y": Int($0.minY),
+                            "width": Int($0.width), "height": Int($0.height)] },
 ])

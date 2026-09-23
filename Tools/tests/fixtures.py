@@ -13,6 +13,7 @@ import contextlib
 import functools
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 SCRIPT = TOOLS / "make-icon.py"
+BUILD = TOOLS / "build-bundle.sh"
 DESIGN = REPO / "Tools" / "icon"
 GOLDEN = REPO / "Resources"
 # Sorted, because `Workspace.listing` is sorted and every test compares the two directly.
@@ -36,6 +38,22 @@ SYNTHETIC = {
     "XiaolaiDict.icon/Assets/contour.svg": b"<svg synthetic/>\n",
     "MenuBarIcon.svg": b"<svg synthetic tray/>\n",
 }
+
+
+def _minimum_macos() -> str:
+    """The platform floor `actool` compiles the document against, read from the build script that
+    declares it. A test that compiles the icon for a macOS the app does not ship to validates it
+    against rules the bundle never meets — and a floor restated here is one that silently stops
+    matching the day the real one moves, which is how it came to say 26.0 under a comment promising
+    it mirrored the build. Read once, and loudly: a build script that stops declaring one stops the
+    tests rather than quietly supplying a default nothing measured."""
+    declared = re.search(r"^readonly MINIMUM_MACOS=(\S+)$", BUILD.read_text(), re.M)
+    if not declared:
+        raise AssertionError(f"{BUILD} no longer declares MINIMUM_MACOS, so the floor cannot be read")
+    return declared.group(1)
+
+
+MINIMUM_MACOS = _minimum_macos()
 
 
 # The package the entry point runs, imported the way the entry point imports it: from beside it.

@@ -12,9 +12,14 @@ class Parsing(unittest.TestCase):
         # rewritten (whitelist.PAINT_ATTRS). An attribute admitted as a colour but not repainted
         # would ride through into the layer asset and paint it, over the colour icon.json assigns
         # per appearance — so the two sets are the same set, mechanically.
-        tables = (whitelist.SVG_ATTRS, whitelist.GROUND_ATTRS, whitelist.GROUP_ATTRS,
-                  whitelist.STROKED_PATH_ATTRS, whitelist.STROKED_PATH_OPTIONAL,
-                  whitelist.FILLED_PATH_ATTRS, whitelist.FILLED_RECT_ATTRS)
+        #
+        # **Every table the module has, asked for by the module.** Listed by hand, this named seven
+        # of the eight and left out TRAY_PATH_OPTIONAL, so a colour admitted there was the one thing
+        # a check written to make that impossible could not see. A table added later is covered by
+        # being a table. The derivation is self-guarding: find no tables and `carries_colour` is
+        # empty, which is not PAINT_ATTRS, so the test fails rather than passing vacuously.
+        tables = [value for name, value in vars(whitelist).items()
+                  if not name.startswith("_") and isinstance(value, dict)]
         carries_colour = {a for table in tables
                           for a, rule in table.items() if rule is whitelist.COLOUR}
         self.assertEqual(carries_colour, set(whitelist.PAINT_ATTRS))

@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from fixtures import (
     DESIGN,
     GOLDEN,
+    MINIMUM_MACOS,
     OUTPUTS,
     TRAY,
     Workspace,
@@ -210,7 +211,9 @@ class Outputs(unittest.TestCase):
     @unittest.skipUnless(shutil.which("xcrun") and subprocess.run(
         ["xcrun", "--find", "actool"], capture_output=True).returncode == 0, "needs Xcode's actool")
     def test_actool_compiles_the_document(self) -> None:
-        # What the Makefile does with the document, minus the app around it.
+        # What the Makefile does with the document, minus the app around it — including the floor it
+        # compiles against, which is read from `Tools/build-bundle.sh` rather than written again
+        # here. Written again, it said 26.0 while the build said 27.0, under this same comment.
         ws = Workspace(self)
         publish.publish_outputs(ws.resources, self.files)
         compiled = ws.resources.parent / "compiled"
@@ -218,7 +221,7 @@ class Outputs(unittest.TestCase):
         proc = subprocess.run(
             ["xcrun", "actool", "--compile", str(compiled), "--app-icon", "XiaolaiDict",
              "--output-partial-info-plist", str(compiled / "partial.plist"), "--platform", "macosx",
-             "--minimum-deployment-target", "26.0", "--target-device", "mac", "--errors", "--warnings",
+             "--minimum-deployment-target", MINIMUM_MACOS, "--target-device", "mac", "--errors", "--warnings",
              "--output-format", "human-readable-text", str(ws.resources / "XiaolaiDict.icon")],
             capture_output=True, text=True, timeout=300)
         report = proc.stdout + proc.stderr

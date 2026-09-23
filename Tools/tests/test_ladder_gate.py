@@ -74,6 +74,15 @@ class LadderGateTests(unittest.TestCase):
         broken["localModelInstalled"] = False
         self.assertIn("the local model is not installed, so its rung measured nothing", gate.judge(broken))
 
+    def test_an_order_that_names_the_composite_is_refused(self):
+        # `order` is the rungs the ladder is built over, and the ladder is not one of them: it is
+        # scored beside them so its answer can be compared with its top rung's. A report that named
+        # it there would have `earns` ask whether the ladder earns its place above its own top rung
+        # — a question the labelled set cannot answer, because the ladder's answers *are* the rungs'.
+        # The guard that used to sit inside `earns` skipped that pair instead, and could never fire.
+        refusals = gate.judge(report(order=("localModel", "onDevice", "embedding", "ladder")))
+        self.assertTrue(refusals and "names the ladder among its own rungs" in refusals[0], refusals)
+
     def test_an_embedding_first_order_is_refused(self):
         refusals = gate.judge(report(order=("embedding", "onDevice", "localModel")))
         self.assertTrue(refusals and "does not run the local model first" in refusals[0], refusals)

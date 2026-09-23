@@ -10,9 +10,10 @@
 # changes touch one or two. The names are `KNOWN_STAGES` below, and a name that is not one of them
 # is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
 #
-# Each result is recorded in .build/e2e-status.tsv against the build it ran on. A pass is only a
-# fact about that build, so one carried over from an older build is shown as stale rather than as a
-# pass: a green mark that outlives what it tested is worse than no mark.
+# Each result is filed by `Tools/e2e-status.sh` against the build it ran on, which is also what
+# `make e2e-status` reads. A pass is only a fact about that build, so one carried over from an older
+# build is shown as stale rather than as a pass: a green mark that outlives what it tested is worse
+# than no mark.
 #
 # Each stage asserts what it saw, including that the thing it tested happened at all: a test that
 # silently did nothing must not look like one that passed.
@@ -28,7 +29,6 @@ cd "$(dirname "$SELF")/.."
 host=${1:?usage: e2e.sh <ssh-host> [stage...]}
 shift
 STAGES="$*"
-readonly STATUS=.build/e2e-status.tsv
 readonly APP=.build/XiaolaiDict.app
 readonly REMOTE_DIR=XiaolaiDictE2E
 fail() { echo "e2e: FAIL: $*" >&2; exit 1; }
@@ -99,6 +99,45 @@ trap - EXIT
 [ "$checked" -gt 0 ] || fail "found no remote scripts to check — the heredoc marker has changed"
 
 # ---------------------------------------------------------------------------------------------
+# **The shell both remote scripts need, written once.** Quitting the installed copy and running the
+# stages are two SSH sessions, so each carries whatever they share — and two copies of one function
+# is one function nobody keeps: these two had already drifted, in the name of a loop variable, and
+# both were wrong in the same way. Prepended to each script rather than shipped with the helpers,
+# because the first of the two runs before anything has been copied to the machine. It is a quoted
+# heredoc like the scripts themselves, so the guard above parses it too; it does move the line
+# numbers the remote ERR trap reports, which are relative to the remote script either way.
+remote_scripts=$(mktemp -d)
+# Removed however this script ends. The later `trap … EXIT` for the run log *replaces* this one
+# rather than adding to it, so that line removes this directory as well.
+trap 'rm -rf "$remote_scripts"' EXIT
+cat >"$remote_scripts/common.sh" <<'SH'
+# Sets PIDS to the processes started from exactly the executable path $1 — by the executable `ps`
+# reports, so arguments LaunchServices adds cannot hide one; by string equality, never a pattern;
+# and never by name, which would match any other process called the same.
+#
+# **Not a `$(…)` function, and that is the whole point.** A `ps` that fails has to stop the run:
+# "could not look" is not "nothing is running". Answering on stdout put every caller inside a
+# command substitution, where `exit 1` ends only the subshell and leaves the empty string behind —
+# so the gate that refuses a model service left over from an earlier run passed on a failed `ps`
+# and every check after it measured the old process, and quitting the installed copy reported a
+# cold machine that still had the previous build running. `Tools/build-bundle.sh` has `find_pids`
+# in this shape for this reason, with the same comment beside it.
+find_pids() {
+    local table pid executable
+    table=$(ps -axww -o pid=,comm=) || { echo "ps failed, so whether $1 is running cannot be told" >&2; exit 1; }
+    PIDS=()
+    while read -r pid executable; do
+        [ "$executable" != "$1" ] || PIDS+=("$pid")
+    done <<<"$table"
+}
+
+is_running() {  # $1: an executable path. Stops the run, rather than answering, if `ps` fails.
+    find_pids "$1"
+    [ "${#PIDS[@]}" -gt 0 ]
+}
+SH
+
+# ---------------------------------------------------------------------------------------------
 stage "machine"
 # The whole point is a second machine. Refuse this one, whatever the SSH name resolves to.
 local_uuid=$(ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}')
@@ -116,18 +155,14 @@ echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
 # ---------------------------------------------------------------------------------------------
 # Runs on the E2E machine: quit a running copy of the E2E bundle, by its exact executable path.
 remote_quit() {
-    ssh_e2e bash -s -- "$REMOTE_DIR" <<'SH'
+    cat "$remote_scripts/common.sh" - <<'SH' | ssh_e2e bash -s -- "$REMOTE_DIR"
 set -euo pipefail
 app="$HOME/$1/XiaolaiDict.app"
-pids() {  # processes started from exactly this executable path
-    local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
-    while read -r pid exe; do [ "$exe" != "$1" ] || echo "$pid"; done <<<"$table"
-}
 for exe in "$app/Contents/MacOS/XiaolaiDict" "$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService" \
            "$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"; do
-    running=$(pids "$exe" | tr '\n' ' ')
-    [ -z "$running" ] || kill -TERM $running
-    for _ in $(seq 1 50); do [ -n "$(pids "$exe")" ] || continue 2; sleep 0.1; done
+    find_pids "$exe"
+    [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}"
+    for _ in $(seq 1 50); do is_running "$exe" || continue 2; sleep 0.1; done
     echo "still running after 5 s: $exe" >&2; exit 1
 done
 SH
@@ -153,9 +188,11 @@ echo "build $remote_version installed and verified"
 # The remaining stages run there, in one session, and report each result as one line.
 stage "run${STAGES:+: $STAGES}"
 RUN_LOG=$(mktemp)
-trap 'rm -f "$RUN_LOG"' EXIT
-set +e
-ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <<'SH' | tee "$RUN_LOG" | grep -v "^RESULT	"
+# This *replaces* the trap that removes the shared shell, so it removes that too.
+trap 'rm -f "$RUN_LOG"; rm -rf "$remote_scripts"' EXIT
+# Assembled into a file rather than piped into ssh, so `${PIPESTATUS[0]}` below is still the ssh —
+# with a `cat … |` in front of it, it would be the cat, and every run would read as having passed.
+cat "$remote_scripts/common.sh" - >"$remote_scripts/run.sh" <<'SH'
 set -euo pipefail
 app="$HOME/$1/XiaolaiDict.app"; exe="$app/Contents/MacOS/XiaolaiDict"
 service="$app/Contents/XPCServices/XiaolaiDictService.xpc/Contents/MacOS/XiaolaiDictService"
@@ -178,7 +215,11 @@ for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
         exit 2
     }
 done
-STAGE=""
+# **Until a stage claims it, what is running is setup**, and setup is a name the record can hold.
+# Left empty, `flunk` before the first `want` printed a RESULT line with no stage on it, which the
+# recording loop skips — so the menu-bar gate below failed the run while every stage's *previous*
+# pass stayed in the table, unmarked. A green mark that outlives what it tested is worse than none.
+STAGE=setup
 want() {  # want <name>: is this stage wanted? Also names it, for the result lines.
     STAGE=$1
     [ ${#WANTED[@]} -eq 0 ] && return 0
@@ -213,8 +254,8 @@ on_exit() {
     local cleanup
     for cleanup in ${cleanups[@]+"${cleanups[@]}"}; do "$cleanup" || true; done
     if [ "$finished" != true ]; then
-        echo "FAIL  ${STAGE:-setup}: the script stopped at line ${died_at:-?} before the stage finished"
-        printf "RESULT\t%s\tfail\n" "${STAGE:-setup}"
+        echo "FAIL  $STAGE: the script stopped at line ${died_at:-?} before the stage finished"
+        printf "RESULT\t%s\tfail\n" "$STAGE"
     fi
     # **The status is settled here, last.** The trap runs *after* the script's own exit line, so a
     # cleanup that failed — a setting this run could not put back — was printed in the table and
@@ -262,13 +303,10 @@ restore_default() {
     fi
 }
 
-pids() {
-    local table; table=$(ps -axww -o pid=,comm=) || { echo "ps failed" >&2; exit 1; }
-    while read -r pid path; do [ "$path" != "$1" ] || echo "$pid"; done <<<"$table"
-}
 outcomes() { python3 -c 'import json,sys; print(" ".join(json.loads(l)["outcome"] for l in sys.stdin if l.strip()))'; }
-# expect <json> key=value ...: every field as stated (a value ending in * matches as a prefix,
-# one starting with * as a suffix); prints the mismatches.
+# expect <json> key=value ...: every field as stated (a value starting with * matches as a suffix,
+# which is how a path is asserted without the directory it happens to be under); prints the
+# mismatches.
 expect() {
     python3 - "$@" <<'PY'
 import json, sys
@@ -287,7 +325,7 @@ for pair in sys.argv[2:]:
         if got.get(key) is None: continue
         wrong.append(f"{key}: wanted nothing, got {have!r}")
         continue
-    ok = have.startswith(want[:-1]) if want.endswith("*") else have.endswith(want[1:]) if want.startswith("*") else have == want
+    ok = have.endswith(want[1:]) if want.startswith("*") else have == want
     if not ok: wrong.append(f"{key}: wanted {want!r}, got {have!r}")
 sys.exit("; ".join(wrong) if wrong else 0)
 PY
@@ -428,9 +466,9 @@ at_exit restore_setup_shown
 # Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
 # asserts that it starts and stays up, which is a different claim and stays a stage of its own.
 # Without this, selecting a later stage failed for want of something an earlier one happened to do.
-if [ -z "$(pids "$exe")" ]; then
+if ! is_running "$exe"; then
     open "$app"
-    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
 fi
 
 # **A locked screen voids every stage that looks at it or types into it — so it is checked, not
@@ -471,16 +509,18 @@ for _ in $(seq 1 200); do
     sleep 0.1
 done
 if [ -z "$menu_ready" ]; then
-    echo "FAIL  setup: the menu-bar item never appeared — every menu-driven stage below is void"
-    failures=$((failures + 1))
+    # Through `flunk`, so it is *recorded* and not only printed. Counted into `failures` alone, the
+    # run ended non-zero while the table `make e2e-status` reads still showed every stage's previous
+    # pass, with nothing in it to say this had happened.
+    flunk "setup: the menu-bar item never appeared — every menu-driven stage below is void"
 fi
 
 if want launch; then
 # 1. LaunchServices starts it, and it stays up.
 open "$app"
-for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
 sleep 1
-if [ -n "$(pids "$exe")" ]; then pass "launch: running, and still running after 1 s"; else flunk "launch: not running"; fi
+if is_running "$exe"; then pass "launch: running, and still running after 1 s"; else flunk "launch: not running"; fi
 fi
 
 if want lookup; then
@@ -500,8 +540,10 @@ client=$!
 killed=""
 # Every instance: each client gets its own, and the one serving this client is not told apart.
 for _ in $(seq 1 30); do
-    victims=$(pids "$service" | tr '\n' ' ')
-    if [ -n "$victims" ] && [ "$(wc -l <"$out")" -ge 1 ]; then kill -KILL $victims; killed=$victims; break; fi
+    find_pids "$service"
+    if [ "${#PIDS[@]}" -gt 0 ] && [ "$(wc -l <"$out")" -ge 1 ]; then
+        killed="${PIDS[*]}"; kill -KILL "${PIDS[@]}"; break
+    fi
     sleep 0.1
 done
 wait "$client" || true
@@ -528,13 +570,12 @@ fi
 
 if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
-#    Automation prompt can block the screen. They need an unlocked screen: while it is locked,
-#    Accessibility reports each app's only window, and its focused element, as the app itself.
-locked=$(ioreg -n Root -d1 -a | plutil -extract IOConsoleUsers.0.CGSSessionScreenIsLocked raw -o - - 2>/dev/null || echo false)
-if [ "$locked" = true ]; then
-    flunk "selection: the screen is locked, so Accessibility shows no windows — unlock it and run again"
-    echo; echo "$failures stage(s) failed"; exit 1
-fi
+#    Automation prompt can block the screen. They need an unlocked screen — while it is locked,
+#    Accessibility reports each app's only window, and its focused element, as the app itself — and
+#    the setup gate above has already refused a locked screen for every stage. This stage used to
+#    ask a second time and ask it wrong: `… || echo false` reads "the session could not be asked"
+#    as "the screen is unlocked", which is the nil-session hole `screen-state` was written to close
+#    by failing closed. Two answers to one question, and the weaker one ran last.
 open -a TextEdit "$helpers/notes.txt"; sleep 2
 select_then_read "TextEdit: the second of two words is the one read (range dialect)" com.apple.TextEdit \
     "$helpers/select-text" com.apple.TextEdit meeting 2 -- \
@@ -641,11 +682,12 @@ at_exit resume
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "waiting panel: could not select ($why)"
 else
-    stopped=$(pids "$service" | tr '\n' ' ')
-    if [ -z "$stopped" ]; then
+    find_pids "$service"
+    if [ "${#PIDS[@]}" -eq 0 ]; then
         flunk "waiting panel: no dictionary service to suspend — the test did not happen"
     else
-        kill -STOP $stopped
+        stopped="${PIDS[*]}"
+        kill -STOP "${PIDS[@]}"
         started=$EPOCHREALTIME
         "$helpers/keys" 2 control option
         shown="" ; waiting=""
@@ -950,7 +992,6 @@ fi
 fi
 
 if want setup; then
-board_drawn_now() { "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"drawn":true' && echo yes || echo no; }
 # **Settle before driving the menu after a launch.** A click that lands while the app's state changes
 # under an open menu is dropped: SwiftUI re-renders the menu and the click goes nowhere, while
 # `menu-click` still reports it. Measured 2026-09-22 — after a cold start with the board open, the
@@ -960,12 +1001,11 @@ board_drawn_now() { "$helpers/on-screen" com.xiaolaidict "Set Up" | grep -q '"dr
 # Defined before anything below uses them: `settle_after_launch` calls `board_on_screen`, and
 # a helper defined after its first caller is "command not found" — under `|| return 0`, silently.
 restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
-    local running
-    running=$(pids "$exe" | tr '\n' ' ')
-    [ -z "$running" ] || kill -TERM $running
-    for _ in $(seq 1 100); do [ -n "$(pids "$exe")" ] || break; sleep 0.1; done
+    find_pids "$exe"
+    [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}"
+    for _ in $(seq 1 100); do is_running "$exe" || break; sleep 0.1; done
     open "$app"
-    for _ in $(seq 1 100); do [ -z "$(pids "$exe")" ] || break; sleep 0.1; done
+    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
     for _ in $(seq 1 100); do
         "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
         sleep 0.2
@@ -1608,9 +1648,10 @@ defaults write com.xiaolaidict ModelIdleSeconds -int 20
 # A service already running read the old interval; this run's must start fresh. Asserted, not
 # assumed: everything after this would otherwise be measuring the old process — its old interval,
 # and a model it had already loaded.
-for pid in $(pids "$model_service"); do kill -TERM "$pid" 2>/dev/null || true; done
-for _ in $(seq 1 50); do [ -z "$(pids "$model_service")" ] && break; sleep 0.1; done
-if [ -n "$(pids "$model_service")" ]; then
+find_pids "$model_service"
+[ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}" 2>/dev/null || true
+for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
+if is_running "$model_service"; then
     flunk "model: a model service from before the stage would not quit; every check below would measure it"
 else
 
@@ -1629,13 +1670,13 @@ fi
 # something — launchd ends a service when its client exits, so the short-lived `--model-status`
 # process above took its own service with it. A lookup through the reader's own path is what gives
 # the app a live service: the panel prewarms the model beside the dictionary lookup.
-app_pid_before=$(pids "$exe" | head -1)
+find_pids "$exe"; app_pid_before=${PIDS[0]:-}
 ledger_before=$(newest_row_id)
 open -a TextEdit "$helpers/notes.txt"; sleep 1.5
 lookup_driven=no
 if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     "$helpers/keys" 2 control option
-    for _ in $(seq 1 100); do [ -n "$(pids "$model_service")" ] && break; sleep 0.1; done
+    for _ in $(seq 1 100); do ! is_running "$model_service" || break; sleep 0.1; done
     "$helpers/keys" 53 2>/dev/null || true
     lookup_driven=yes
 else
@@ -1669,16 +1710,16 @@ if [ "$lookup_driven" = yes ]; then
         fi
     fi
 fi
-service_pids=$(pids "$model_service")
+find_pids "$model_service"
 if [ -z "$app_pid_before" ]; then
     flunk "model: the app is not running, so crash isolation cannot be observed"
-elif [ -z "$service_pids" ]; then
+elif [ "${#PIDS[@]}" -eq 0 ]; then
     flunk "model: no model service to kill, so crash isolation was not exercised"
 else
-    for pid in $service_pids; do kill -9 "$pid" 2>/dev/null || true; done
-    for _ in $(seq 1 50); do [ -z "$(pids "$model_service")" ] && break; sleep 0.1; done
+    kill -9 "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
     sleep 1
-    app_pid_after=$(pids "$exe" | head -1)
+    find_pids "$exe"; app_pid_after=${PIDS[0]:-}
     if [ "$app_pid_after" = "$app_pid_before" ]; then
         pass "model: the app survived its model service being killed (pid $app_pid_before)"
     else
@@ -1800,34 +1841,17 @@ finished=true
 echo
 [ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
 SH
+set +e
+ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <"$remote_scripts/run.sh" | tee "$RUN_LOG" | grep -v "^RESULT	"
 remote_status=${PIPESTATUS[0]}
 set -e
 
 # Recorded against the build it ran on. Without that a pass says only "it worked once", which is
 # not a claim anyone can act on — and a green mark that outlives what it tested is worse than none.
-build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo unknown)
-mkdir -p "$(dirname "$STATUS")"
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-# A stage passes only if every assertion in it passed. Taking the last result per stage recorded
-# a stage as green when one of its checks had failed — the same hollow mark this file exists to
-# prevent. awk rather than an associative array: macOS ships bash 3.2, which has none.
-while IFS=$'\t' read -r name result; do
-    [ -n "${name:-}" ] || continue
-    if [ -f "$STATUS" ]; then grep -v "^$name	" "$STATUS" > "$STATUS.new" || true; else : > "$STATUS.new"; fi
-    printf '%s\t%s\t%s\t%s\n' "$name" "$result" "$build" "$now" >> "$STATUS.new"
-    mv "$STATUS.new" "$STATUS"
-done < <(grep "^RESULT	" "$RUN_LOG" | awk -F'\t' '
-    { if ($3 == "fail") seen[$2] = "fail"; else if (!($2 in seen)) seen[$2] = "pass" }
-    END { for (n in seen) print n "\t" seen[n] }' || true)
-
+# Filed and printed by `Tools/e2e-status.sh`, which `make e2e-status` also reads: the file, its
+# format and the staleness rule have one implementation, and a second copy of the table here had
+# already lost the timestamp column.
+Tools/e2e-status.sh record <"$RUN_LOG"
 echo
-echo "== recorded against build $build"
-[ -f "$STATUS" ] && sort "$STATUS" | while IFS=$'\t' read -r name result ran when; do
-    if [ "$ran" != "$build" ]; then
-        printf '  %-14s %-4s stale (ran on %s)\n' "$name" "$result" "$ran"
-    else
-        printf '  %-14s %-4s\n' "$name" "$result"
-    fi
-done
-echo "  $STATUS"
+Tools/e2e-status.sh show
 exit "$remote_status"

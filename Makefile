@@ -82,20 +82,11 @@ icon:
 e2e: all
 	@Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
 
-# Reads the record rather than running anything. A stage whose build no longer matches the one on
-# disk is shown as stale: a pass is a fact about the build it ran on and expires with it.
+# Reads the record rather than running anything. The script is the one implementation of it: the end
+# of a run prints the same table from the same place, and a second copy here had already lost a
+# column.
 e2e-status:
-	@build=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" .build/XiaolaiDict.app/Contents/Info.plist 2>/dev/null || echo none); \
-	echo "bundle on disk: $$build"; \
-	if [ -f .build/e2e-status.tsv ]; then \
-		sort .build/e2e-status.tsv | while IFS=$$'\t' read -r name result ran when; do \
-			if [ "$$ran" != "$$build" ]; then \
-				printf '  %-14s %-4s stale (ran on %s, %s)\n' "$$name" "$$result" "$$ran" "$$when"; \
-			else \
-				printf '  %-14s %-4s %s\n' "$$name" "$$result" "$$when"; \
-			fi; \
-		done; \
-	else echo "  nothing recorded yet"; fi
+	@Tools/e2e-status.sh show
 
 # Tests first, as for every bundle: nothing is published over a failing suite, and a notarised
 # one least of all, since it is the build other people download.
