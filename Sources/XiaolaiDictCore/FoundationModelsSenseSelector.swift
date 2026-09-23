@@ -47,6 +47,10 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
         do {
             // **The same question the local model is asked**, from the one place it is written: two
             // rungs compared on differently worded prompts would be measured on different fields.
+            // The same bound rung 1 keeps, for the same reason: the answer's schema cannot name a
+            // position past it, so a longer list would have its tail made unreachable rather than
+            // being refused. Two rungs measured on one field have to ask one question.
+            guard keyable.count <= ModelPrompt.maximumSenses else { return .abstained(.unavailable) }
             let question = SenseQuestion(
                 sentence: reading, partOfSpeech: partOfSpeech, senses: keyable.map(\.text))
             let session = LanguageModelSession(instructions: ModelPrompt.senseInstructions)
@@ -70,8 +74,12 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
     }
 }
 
+/// **The same schema rung 1 answers with**, bound included: an unbounded one let Apple's model
+/// return a number that names no sense, which the caller then had to reject — and the two rungs,
+/// which the ladder's order is measured from, were being asked in two different grammars.
 @Generable
 struct SenseAnswer {
-    @Guide(description: "The number of the sense the word carries in the sentence, or 0 if none clearly fits.")
+    @Guide(description: "The number of the sense the word carries in the sentence, or 0 if none clearly fits.",
+           .range(0...ModelPrompt.maximumSenses))
     var senseNumber: Int
 }

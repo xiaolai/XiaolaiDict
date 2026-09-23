@@ -61,10 +61,20 @@ note() { echo "$*"; }
 # Every resource bundle the build produced, one per line — the model service carries all of them.
 # Read from the products directory rather than listed here, because the list grows with the model
 # service's dependencies and a hand-kept copy is one that silently falls behind.
+#
+# **Filtered to the packages this build resolves.** `make clean` keeps the build cache on purpose,
+# so a dependency removed from `Package.swift` leaves its bundle sitting there — and a bare glob
+# would go on copying and signing it into the app for ever, with nothing to say where it came from.
+# A bundle is named `<package>_<target>.bundle`, and `Package.resolved` is the list of packages that
+# are still in the graph.
 model_resource_bundles() {
-    local products
+    local products packages name
     products=$(swift build -c "$CONFIG" --show-bin-path) || return 1
-    find "$products" -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort
+    packages=$(python3 -c 'import json,sys; print(" ".join(p["identity"] for p in json.load(open(sys.argv[1])).get("pins", [])))' \
+        Package.resolved) || return 1
+    find "$products" -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort | while read -r name; do
+        case " $packages " in *" ${name%%_*} "*) echo "$name" ;; esac
+    done
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -268,9 +278,22 @@ verify_required_files() {
         [ -s "$bundle/$file" ] || { echo "missing: $bundle/$file"; return 1; }
     done
     # Every resource bundle the model product built has to be here, not only the one named above.
-    for built in $(model_resource_bundles); do
+    local expected present
+    expected=$(model_resource_bundles) || return 1
+    for built in $expected; do
         [ -d "$bundle/$MODEL_XPC_PATH/Contents/Resources/$built" ] \
             || { echo "missing from the model service: $built"; return 1; }
+    done
+    # **And nothing else.** The check above only ever asked whether what the cache holds reached the
+    # app; it could not see a bundle the app carries that this build did not produce — which is what
+    # a stale cache entry becomes once it has been copied in. Asked of the bundle being verified,
+    # because that is the thing being shipped.
+    for present in $(cd "$bundle/$MODEL_XPC_PATH/Contents/Resources" 2>/dev/null \
+        && find . -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort); do
+        case " $(echo $expected) " in
+            *" $present "*) ;;
+            *) echo "the model service carries $present, which this build did not produce"; return 1 ;;
+        esac
     done
     # A translation that never reached the bundle is a reader still reading English.
     for language in $(catalog_languages); do
