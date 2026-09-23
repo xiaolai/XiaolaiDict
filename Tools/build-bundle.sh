@@ -21,6 +21,10 @@ cd "$(dirname "$0")/.."
 
 readonly APP_NAME=XiaolaiDict
 readonly BUNDLE_ID=com.xiaolaidict
+# The platform floor, in one place: the three plists declare it, `verify_bundle_metadata` holds them
+# to it, and `actool` validates the icon against it. A mismatch here is an icon checked for a macOS
+# the app does not ship to.
+readonly MINIMUM_MACOS=27.0
 readonly SERVICE=XiaolaiDictService
 readonly SERVICE_ID=$BUNDLE_ID.DictionaryService
 # The local model's service: its own process, so a GPU fault or an out-of-memory kill takes it and
@@ -290,7 +294,7 @@ verify_required_files() {
     # because that is the thing being shipped.
     for present in $(cd "$bundle/$MODEL_XPC_PATH/Contents/Resources" 2>/dev/null \
         && find . -maxdepth 1 -name '*.bundle' -exec basename {} \; | sort); do
-        case " $(echo $expected) " in
+        case " ${expected//$'\n'/ } " in
             *" $present "*) ;;
             *) echo "the model service carries $present, which this build did not produce"; return 1 ;;
         esac
@@ -321,6 +325,30 @@ verify_bundle_metadata() {
     model_version=$(plist_value "$bundle/$MODEL_XPC_PATH/Contents/Info.plist" CFBundleShortVersionString)
     [ -n "$app_version" ] && [ "$app_version" = "$service_version" ] && [ "$app_version" = "$model_version" ] \
         || { echo "app ($app_version), service ($service_version) and model service ($model_version) declare different versions"; return 1; }
+
+    # **The keys a service needs to launch at all**, not only the one that names it. A wrong
+    # `CFBundleExecutable` or a missing `XPCService` dictionary builds, signs, verifies and ships —
+    # and then every lookup fails at runtime with nothing to say why, because launchd refuses the
+    # service rather than the app.
+    local path executable
+    for path in "$XPC_PATH:$SERVICE:$SERVICE_ID" "$MODEL_XPC_PATH:$MODEL_SERVICE:$MODEL_SERVICE_ID"; do
+        local xpc=${path%%:*} rest=${path#*:} name id
+        name=${rest%%:*}; id=${rest#*:}
+        executable=$(plist_value "$bundle/$xpc/Contents/Info.plist" CFBundleExecutable)
+        [ "$executable" = "$name" ] \
+            || { echo "$xpc declares CFBundleExecutable '$executable', not '$name'"; return 1; }
+        [ -x "$bundle/$xpc/Contents/MacOS/$executable" ] \
+            || { echo "$xpc names an executable it does not have: $executable"; return 1; }
+        [ "$(plist_value "$bundle/$xpc/Contents/Info.plist" CFBundlePackageType)" = XPC! ] \
+            || { echo "$xpc is not declared as an XPC service (CFBundlePackageType)"; return 1; }
+        [ "$(plist_value "$bundle/$xpc/Contents/Info.plist" "XPCService:ServiceType")" = Application ] \
+            || { echo "$xpc does not declare XPCService:ServiceType Application"; return 1; }
+        [ "$(plist_value "$bundle/$xpc/Contents/Info.plist" LSMinimumSystemVersion)" = "$MINIMUM_MACOS" ] \
+            || { echo "$xpc declares a different LSMinimumSystemVersion from $MINIMUM_MACOS"; return 1; }
+        [ -n "$id" ] || return 1
+    done
+    [ "$(plist_value "$bundle/Contents/Info.plist" LSMinimumSystemVersion)" = "$MINIMUM_MACOS" ] \
+        || { echo "the app declares a different LSMinimumSystemVersion from $MINIMUM_MACOS"; return 1; }
 }
 
 verify_signatures() {
@@ -514,7 +542,7 @@ compile_icon() {
     # to /dev/null is one nobody ever sees. Any warning or error stops the build.
     xcrun actool --compile "$PWD/$contents/Resources" --app-icon "$APP_NAME" \
         --output-partial-info-plist "$PWD/$partial" \
-        --platform macosx --minimum-deployment-target 26.0 --target-device mac \
+        --platform macosx --minimum-deployment-target "$MINIMUM_MACOS" --target-device mac \
         --errors --warnings --output-format human-readable-text "$PWD/$RESOURCES/XiaolaiDict.icon" \
         >"$report" 2>&1 || { cat "$report"; fail "actool failed"; }
     if grep -qiE ": (warning|error):" "$report"; then
