@@ -39,6 +39,10 @@ struct ModelClientTests {
     private static let question = ModelRequest.pickSense(
         SenseQuestion(sentence: "The ship's hold was full.", partOfSpeech: "noun", senses: ["a", "b"]))
 
+    /// The scratch directories this test made, held for as long as the test instance lives so they
+    /// are removed when it ends. A local `let` would be released while the store is still in use.
+    private let scratches = Recorder<[TemporaryDirectory]>([])
+
     @Test func aDeadServiceIsNilAndTheNextQuestionOpensAFreshSession() async {
         let service = Service()
         let client = ModelClient(connect: { service.connect($0) })
@@ -109,7 +113,8 @@ struct ModelClientTests {
     /// failure the whole lifecycle exists to prevent.
     @Test func aQuarantinedRungIsNotAsked() async throws {
         let service = Service()
-        let store = try Self.storeWithAModel()
+        let (store, scratch) = try Self.storeWithAModel()
+        scratches.withLock { $0.append(scratch) }
         let access = LocalModelAccess(
             client: ModelClient(connect: { service.connect($0) }), store: store,
             physicalMemory: 48 * 1_073_741_824)
@@ -125,7 +130,8 @@ struct ModelClientTests {
     /// to be told so — and disagreed with the row the reader is shown.
     @Test func aModelThisMacCannotLoadDoesNotCountAsInstalled() async throws {
         let service = Service()
-        let store = try Self.storeWithAModel()
+        let (store, scratch) = try Self.storeWithAModel()
+        scratches.withLock { $0.append(scratch) }
         let roomy = LocalModelAccess(
             client: ModelClient(connect: { service.connect($0) }), store: store,
             physicalMemory: 48 * 1_073_741_824)
@@ -139,10 +145,9 @@ struct ModelClientTests {
     }
 
     /// A store holding the standard model whole, as the downloader would leave it.
-    private static func storeWithAModel() throws -> ModelStore {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "xiaolaidict-access-\(UUID().uuidString)", directoryHint: .isDirectory)
-        let store = ModelStore(root: root)
+    private static func storeWithAModel() throws -> (ModelStore, TemporaryDirectory) {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-access")
+        let store = ModelStore(root: scratch.url)
         let manifest = LocalModelSize.standard.manifest
         let directory = store.directory(for: manifest)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -151,7 +156,7 @@ struct ModelClientTests {
         }
         try ModelStore.markerText(for: manifest).write(
             to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
-        return store
+        return (store, scratch)
     }
 
     /// Nothing is asked of a service that has no model to answer with.

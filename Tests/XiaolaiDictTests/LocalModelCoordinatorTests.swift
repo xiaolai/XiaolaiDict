@@ -12,9 +12,15 @@ import XiaolaiDictTestSupport
 struct LocalModelCoordinatorTests {
     private static let gigabyte: UInt64 = 1_073_741_824
 
+    /// The scratch directories this test made, held for as long as the test instance lives so they
+    /// are removed when it ends. A local `let` would be released while the store is still in use.
+    private let scratches = Recorder<[TemporaryDirectory]>([])
+
+
     private func coordinator(memory: UInt64 = 48 * gigabyte) -> LocalModelCoordinator {
-        let store = ModelStore(root: FileManager.default.temporaryDirectory
-            .appending(path: "xiaolaidict-coordinator-\(UUID().uuidString)", directoryHint: .isDirectory))
+        let scratch = TemporaryDirectory(named: "xiaolaidict-coordinator")
+        scratches.withLock { $0.append(scratch) }
+        let store = ModelStore(root: scratch.url)
         return LocalModelCoordinator(
             defaults: TemporaryDefaults.suite(), store: store,
             transport: LocalModelControllerTests.Transport(fails: true), physicalMemory: memory)
@@ -44,6 +50,14 @@ struct LocalModelCoordinatorTests {
             return
         }
         #expect(size == .large, "the pane started a different model from the one the row offers")
+        // **Waited out, not merely asked to stop.** A cancel is a request; the download's own task
+        // goes on for a moment, and it recreates its staging directory — after the scratch
+        // directory this test owns has already been removed. That is how one directory per run was
+        // still being left behind after everything else had been cleaned up.
         coordinator.choice.cancel()
+        for _ in 0..<500 where coordinator.choice.state.isDownloading {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!coordinator.choice.state.isDownloading)
     }
 }

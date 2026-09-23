@@ -63,7 +63,8 @@ run: test-swift
 test: test-swift test-icon
 
 test-swift:
-	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; exit $$status
+	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; \
+	Tools/clean-test-scratch.sh || status=1; exit $$status
 
 test-icon:
 	python3 -m unittest discover -s Tools/tests

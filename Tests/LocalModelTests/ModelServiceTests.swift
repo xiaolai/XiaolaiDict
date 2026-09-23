@@ -114,10 +114,11 @@ struct ModelServiceTests {
     }()
 
     /// A store holding it whole, as the downloader would leave it.
-    private static func installedStore() throws -> ModelStore {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "xiaolaidict-service-\(UUID().uuidString)", directoryHint: .isDirectory)
-        let store = ModelStore(root: root)
+    /// A store holding it whole, as the downloader would leave it — **in a directory that removes
+    /// itself**, returned alongside so the test holds its lifetime.
+    private static func installedStore() throws -> (ModelStore, TemporaryDirectory) {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-service")
+        let store = ModelStore(root: scratch.url)
         let body = Data("weights".utf8)
         let manifest = Self.manifest
         let directory = store.directory(for: manifest)
@@ -125,15 +126,24 @@ struct ModelServiceTests {
         for file in manifest.files { try body.write(to: directory.appending(path: file.path)) }
         try ModelStore.markerText(for: manifest).write(
             to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
-        return store
+        return (store, scratch)
     }
 
-    private static func service(
+    /// The scratch directories these tests made, held for the life of the test instance so they are
+    /// removed when it ends — 2,291 had been left behind under the system's temporary directory.
+    private let scratches = Recorder<[TemporaryDirectory]>([])
+
+    private func service(
         _ model: ScriptedModel, store: ModelStore? = nil, available: UInt64 = 40 * gigabyte,
         built: Recorder<Int> = Recorder(0), prewarmWait: Duration = .seconds(45)
     ) throws -> ModelService {
-        ModelService(
-            store: try store ?? installedStore(), manifests: [manifest], physicalMemory: 48 * gigabyte,
+        let store = try store ?? {
+            let (made, scratch) = try Self.installedStore()
+            scratches.withLock { $0.append(scratch) }
+            return made
+        }()
+        return ModelService(
+            store: store, manifests: [Self.manifest], physicalMemory: 48 * Self.gigabyte,
             availableMemory: { available },
             makeModel: { _, _ in built.withLock { $0 += 1 }; return model }, prewarmWait: prewarmWait)
     }
@@ -144,7 +154,7 @@ struct ModelServiceTests {
 
     @Test func aSenseAnswerComesBackAsTheNumberTheModelChose() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 2}"#))
-        let reply = try await Self.service(model).reply(to: .pickSense(Self.question))
+        let reply = try await service(model).reply(to: .pickSense(Self.question))
         #expect(reply == .sense(2))
     }
 
@@ -152,7 +162,7 @@ struct ModelServiceTests {
     /// and every sense, numbered.
     @Test func theModelIsAskedTheAppsOwnQuestion() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 2}"#))
-        _ = try await Self.service(model).reply(to: .pickSense(Self.question))
+        _ = try await service(model).reply(to: .pickSense(Self.question))
         let asked = try #require(model.requests.first)
         #expect(asked.contains("You identify which dictionary sense of a word"))
         #expect(asked.contains("Sentence: The ship's hold was full of grain."))
@@ -167,7 +177,7 @@ struct ModelServiceTests {
         let question = TranslationQuestion(
             sentence: "The ship's hold was full.", target: "zh-Hans",
             met: .init(term: "hold", sense: "a large space in the lower part of a ship in which cargo is stored"))
-        let reply = try await Self.service(model).reply(to: .translate(question))
+        let reply = try await service(model).reply(to: .translate(question))
         #expect(reply == .translation("这艘船的货舱装满了货物。"))
         let asked = try #require(model.requests.first)
         #expect(asked.contains(#""hold" is used in this sense — a large space in the lower part of a ship in which cargo is stored"#))
@@ -179,7 +189,7 @@ struct ModelServiceTests {
     /// An echo is not a translation, however confidently it arrives.
     @Test func anEchoIsAFailureNotATranslation() async throws {
         let model = ScriptedModel(.answer("The ship's hold was full."))
-        let reply = try await Self.service(model).reply(
+        let reply = try await service(model).reply(
             to: .translate(TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")))
         guard case .failure(.generationFailed) = reply else {
             Issue.record("an echo came back as \(reply)")
@@ -189,14 +199,14 @@ struct ModelServiceTests {
 
     /// A refusal is its own answer — never "no model here".
     @Test func aRefusalIsReportedAsARefusal() async throws {
-        let reply = try await Self.service(ScriptedModel(.refuse)).reply(to: .pickSense(Self.question))
+        let reply = try await service(ScriptedModel(.refuse)).reply(to: .pickSense(Self.question))
         #expect(reply == .failure(.refused))
     }
 
     @Test func nothingInstalledIsNotInstalled() async throws {
         let empty = ModelStore(root: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
         let built = Recorder(0)
-        let reply = try await Self.service(ScriptedModel(.answer("{}")), store: empty, built: built)
+        let reply = try await service(ScriptedModel(.answer("{}")), store: empty, built: built)
             .reply(to: .pickSense(Self.question))
         #expect(reply == .failure(.notInstalled))
         #expect(built.withLock { $0 } == 0)
@@ -206,7 +216,7 @@ struct ModelServiceTests {
     /// so nothing is mapped — and the reply says how much it needed.
     @Test func aModelThatDoesNotFitIsNeverLoaded() async throws {
         let built = Recorder(0)
-        let reply = try await Self.service(
+        let reply = try await service(
             ScriptedModel(.answer(#"{"senseNumber": 1}"#)), available: 2 * Self.gigabyte, built: built
         ).reply(to: .pickSense(Self.question))
         #expect(reply == .failure(.insufficientMemory(
@@ -218,7 +228,10 @@ struct ModelServiceTests {
     @Test func unknownFreeMemoryLoadsNothing() async throws {
         let built = Recorder(0)
         let service = ModelService(
-            store: try Self.installedStore(), manifests: [Self.manifest], physicalMemory: 48 * Self.gigabyte,
+            store: try { let (made, scratch) = try Self.installedStore()
+                         scratches.withLock { $0.append(scratch) }
+                         return made }(),
+            manifests: [Self.manifest], physicalMemory: 48 * Self.gigabyte,
             availableMemory: { nil },
             makeModel: { _, _ in built.withLock { $0 += 1 }; return ScriptedModel(.answer("{}")) })
         guard case .failure(.insufficientMemory) = await service.reply(to: .pickSense(Self.question)) else {
@@ -231,13 +244,13 @@ struct ModelServiceTests {
     /// Built once, however many questions follow.
     @Test func theModelIsBuiltOnce() async throws {
         let built = Recorder(0)
-        let service = try Self.service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)), built: built)
+        let service = try service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)), built: built)
         for _ in 0..<3 { _ = await service.reply(to: .pickSense(Self.question)) }
         #expect(built.withLock { $0 } == 1)
     }
 
     @Test func statusSaysWhatIsInstalledAndWhetherItIsLoaded() async throws {
-        let service = try Self.service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)))
+        let service = try service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)))
         guard case .status(let before) = await service.reply(to: .status) else { Issue.record("no status"); return }
         #expect(before.installed == .standard)
         #expect(!before.loaded)
@@ -248,7 +261,7 @@ struct ModelServiceTests {
 
     /// Loaded is the model having answered — a translation first counts as much as a prewarm.
     @Test func aTranslationFirstLeavesTheModelLoaded() async throws {
-        let service = try Self.service(ScriptedModel(.answer("这艘船的货舱装满了。")))
+        let service = try service(ScriptedModel(.answer("这艘船的货舱装满了。")))
         _ = await service.reply(to: .translate(TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")))
         guard case .status(let status) = await service.reply(to: .status) else { Issue.record("no status"); return }
         #expect(status.loaded)
@@ -257,7 +270,7 @@ struct ModelServiceTests {
     /// Two prewarms at once are one: the second waits on the first rather than running its own.
     @Test func concurrentPrewarmsAskTheModelOnce() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 1}"#))
-        let service = try Self.service(model)
+        let service = try service(model)
         async let first = service.reply(to: .prewarm)
         async let second = service.reply(to: .prewarm)
         #expect(await [first, second] == [.prewarmed, .prewarmed])
@@ -268,7 +281,7 @@ struct ModelServiceTests {
     /// prewarm is loading the weights and compiling the grammar that question needs.
     @Test func aQuestionWaitsForAPrewarmAlreadyRunning() async throws {
         ScriptedModel.running.withLock { $0 = (0, 0) }
-        let service = try Self.service(ScriptedModel(.answerSlowly(#"{"senseNumber": 2}"#)))
+        let service = try service(ScriptedModel(.answerSlowly(#"{"senseNumber": 2}"#)))
         async let warming = service.reply(to: .prewarm)
         try await Task.sleep(for: .milliseconds(20))
         async let answer = service.reply(to: .pickSense(Self.question))
@@ -281,7 +294,7 @@ struct ModelServiceTests {
     /// question behind it for as long as the process lives. Bounded against the wedge itself rather
     /// than against the clock: the answer arrives while the prewarm is still hanging.
     @Test func aQuestionDoesNotWaitForeverOnAPrewarmThatNeverFinishes() async throws {
-        let service = try Self.service(
+        let service = try service(
             ScriptedModel(.wedgeOnce(#"{"senseNumber": 2}"#)), prewarmWait: .milliseconds(50))
         let finished = Recorder(false)
         let prewarm = Task { _ = await service.reply(to: .prewarm); finished.withLock { $0 = true } }
@@ -294,7 +307,7 @@ struct ModelServiceTests {
     /// A reader who closes the panel takes their question with them. Waiting on a task's value
     /// cannot be given up on, so the wait watches for cancellation itself.
     @Test func aQuestionGivesUpOnAPrewarmWhenItsCallerDoes() async throws {
-        let service = try Self.service(ScriptedModel(.wedgeOnce(#"{"senseNumber": 2}"#)))
+        let service = try service(ScriptedModel(.wedgeOnce(#"{"senseNumber": 2}"#)))
         let finished = Recorder(false)
         let prewarm = Task { _ = await service.reply(to: .prewarm); finished.withLock { $0 = true } }
         try await Task.sleep(for: .milliseconds(20))
@@ -314,7 +327,7 @@ struct ModelServiceTests {
         let question = SentenceQuestion(
             sentence: "The ship's hold was full.", term: "hold",
             senseText: "a large space in the lower part of a ship")
-        let reply = try await Self.service(model).reply(to: .explain(question))
+        let reply = try await service(model).reply(to: .explain(question))
         #expect(reply == .explanation("Here it names the cargo space of a ship."))
         let asked = try #require(model.requests.first)
         #expect(asked.contains("a large space in the lower part of a ship"))
@@ -327,7 +340,7 @@ struct ModelServiceTests {
     /// An explanation with nothing to explain is refused before a model is woken for it.
     @Test func anExplanationNeedsASentenceAndAWord() async throws {
         let built = Recorder(0)
-        let service = try Self.service(ScriptedModel(.answer("x")), built: built)
+        let service = try service(ScriptedModel(.answer("x")), built: built)
         let blank = SentenceQuestion(sentence: "   ", term: "hold", senseText: nil)
         guard case .failure(.invalidRequest) = await service.reply(to: .explain(blank)) else {
             Issue.record("a blank sentence was sent to the model")
@@ -338,7 +351,7 @@ struct ModelServiceTests {
 
     /// A model that answers an explanation with nothing has not explained anything.
     @Test func anEmptyExplanationIsAFailureNotAnExplanation() async throws {
-        let service = try Self.service(ScriptedModel(.answer("   ")))
+        let service = try service(ScriptedModel(.answer("   ")))
         let question = SentenceQuestion(sentence: "The ship's hold was full.", term: "hold", senseText: nil)
         guard case .failure(.generationFailed) = await service.reply(to: .explain(question)) else {
             Issue.record("a blank answer was passed off as an explanation")
@@ -349,7 +362,7 @@ struct ModelServiceTests {
     /// A list longer than the answer can name is refused before a model is woken for it.
     @Test func moreSensesThanTheAnswerCanNameAreRefused() async throws {
         let built = Recorder(0)
-        let service = try Self.service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)), built: built)
+        let service = try service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)), built: built)
         let long = SenseQuestion(sentence: "A sentence.", partOfSpeech: nil, senses: (1...100).map { "sense \($0)" })
         guard case .failure(.invalidRequest) = await service.reply(to: .pickSense(long)) else {
             Issue.record("a list of 100 senses was asked")
@@ -363,7 +376,7 @@ struct ModelServiceTests {
     @Test func aTranslationIsBudgetedToItsSentence() async throws {
         let model = ScriptedModel(.answer("这艘船的货舱装满了。"))
         let question = TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")
-        _ = try await Self.service(model).reply(to: .translate(question))
+        _ = try await service(model).reply(to: .translate(question))
         let budget = try #require(model.budgets.first ?? nil)
         #expect(budget == ModelPrompt.translationTokens(for: question))
         #expect(budget < 200)
@@ -372,7 +385,7 @@ struct ModelServiceTests {
     /// Prewarming is sent on every lookup's first need; the second one costs the model nothing.
     @Test func prewarmingTwiceAsksTheModelOnce() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 1}"#))
-        let service = try Self.service(model)
+        let service = try service(model)
         #expect(await service.reply(to: .prewarm) == .prewarmed)
         #expect(await service.reply(to: .prewarm) == .prewarmed)
         #expect(model.requests.count == 1)
@@ -381,7 +394,7 @@ struct ModelServiceTests {
     /// A question with nothing to ask is refused before a model is woken for it.
     @Test func anEmptyQuestionIsRefusedBeforeLoading() async throws {
         let built = Recorder(0)
-        let service = try Self.service(ScriptedModel(.answer("{}")), built: built)
+        let service = try service(ScriptedModel(.answer("{}")), built: built)
         guard case .failure(.invalidRequest) = await service.reply(
             to: .pickSense(SenseQuestion(sentence: " ", partOfSpeech: nil, senses: ["a"])))
         else { Issue.record("a blank sentence was asked"); return }

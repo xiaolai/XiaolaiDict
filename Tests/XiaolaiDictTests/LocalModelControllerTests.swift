@@ -45,11 +45,17 @@ struct LocalModelControllerTests {
 
     private static let gigabyte: UInt64 = 1_073_741_824
 
+    /// The scratch directories this test made, held for as long as the test instance lives so they
+    /// are removed when it ends. A local `let` would be released while the store is still in use.
+    private let scratches = Recorder<[TemporaryDirectory]>([])
+
+
     private func controller(
         memory: UInt64 = 48 * gigabyte, fails: Bool = false, defaults: UserDefaults = TemporaryDefaults.suite()
     ) -> (LocalModelController, ModelStore) {
-        let store = ModelStore(root: FileManager.default.temporaryDirectory
-            .appending(path: "xiaolaidict-controller-\(UUID().uuidString)", directoryHint: .isDirectory))
+        let scratch = TemporaryDirectory(named: "xiaolaidict-controller")
+        scratches.withLock { $0.append(scratch) }
+        let store = ModelStore(root: scratch.url)
         return (LocalModelController(
             defaults: defaults, store: store, physicalMemory: memory,
             transport: Transport(fails: fails), manifest: Self.manifest), store)

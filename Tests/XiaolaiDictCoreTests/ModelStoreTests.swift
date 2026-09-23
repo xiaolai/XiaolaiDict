@@ -65,15 +65,17 @@ struct ModelStoreTests {
         "model.safetensors": Data((0..<100_000).map { UInt8($0 % 251) }),
     ]
 
-    private func store() throws -> ModelStore {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "xiaolaidict-models-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return ModelStore(root: root)
+    /// A store in a directory of this test's own. **The scratch directory is returned with it**,
+    /// and removes itself when the test lets it go — left to the system, every run added one, and
+    /// 16,363 had accumulated by 2026-09-23.
+    private func store() throws -> (ModelStore, TemporaryDirectory) {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-models")
+        return (ModelStore(root: scratch.url), scratch)
     }
 
     @Test func aCompleteDownloadIsInstalledAndLoadable() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let directory = try await ModelDownloader(
             store: store, transport: MemoryTransport(Self.bodies), freeDisk: { _ in .max }
@@ -87,7 +89,8 @@ struct ModelStoreTests {
     /// The drop comes 40,000 bytes into the weights. The retry asks for **byte 40,000 onwards**, and
     /// the file that results is the whole file — not a restart, and not a doubled front.
     @Test func anInterruptedDownloadResumesFromWhereItStopped() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 40_000 }
@@ -107,7 +110,8 @@ struct ModelStoreTests {
     /// Bytes that are not the pinned file are refused, deleted — so a retry starts clean rather than
     /// resuming onto them — and nothing is installed.
     @Test func aFileWithTheWrongHashIsRefused() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         var tampered = Self.bodies
         tampered["model.safetensors"]![500] ^= 0xFF
         let manifest = Self.manifest(Self.bodies)
@@ -124,7 +128,8 @@ struct ModelStoreTests {
     /// Every file of a model sitting in staging — the whole of it, even — is still not loadable.
     /// Only the move into place makes it so.
     @Test func aStagingDirectoryIsNeverLoaded() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let staging = store.stagingDirectory(for: manifest)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -137,7 +142,8 @@ struct ModelStoreTests {
 
     /// The model's own directory without the marker, or with a file cut short, is not installed.
     @Test func aDirectoryWithoutItsMarkerOrWithAShortFileIsNotInstalled() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let directory = store.directory(for: manifest)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -153,7 +159,8 @@ struct ModelStoreTests {
 
     /// Checked before a byte is fetched: a download that would not fit never starts.
     @Test func tooLittleDiskIsRefusedBeforeAnythingIsFetched() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in 1_000 })
@@ -163,7 +170,8 @@ struct ModelStoreTests {
 
     /// What already arrived is not counted against the disk: the check is for what is still to come.
     @Test func whatAlreadyArrivedIsNotCountedAgainstTheDisk() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 90_000 }
@@ -178,7 +186,8 @@ struct ModelStoreTests {
     }
 
     @Test func anInstalledModelIsNotFetchedAgain() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
@@ -190,7 +199,8 @@ struct ModelStoreTests {
 
     /// Progress ends at the whole model, and never runs backwards.
     @Test func progressRisesToTheWholeModel() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let seen = Recorder<[Int64]>([])
         try await ModelDownloader(store: store, transport: MemoryTransport(Self.bodies), freeDisk: { _ in .max })
@@ -203,7 +213,8 @@ struct ModelStoreTests {
     /// **A staged file is trusted for its bytes, not its name.** A stale or corrupted file of the
     /// right size would otherwise be kept — the final check reads sizes — and shipped as the model.
     @Test func aStagedFileThatIsNotThePinnedOneIsFetchedAgain() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let staging = store.stagingDirectory(for: manifest)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -221,7 +232,8 @@ struct ModelStoreTests {
     /// A partial longer than the file cannot be a front to resume from — and counting it as a whole
     /// file is what once let it skip the disk check entirely.
     @Test func anOversizedPartialIsDiscardedBeforeAnythingIsCounted() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let staging = store.stagingDirectory(for: manifest)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -238,7 +250,8 @@ struct ModelStoreTests {
 
     /// A volume that will not say what it has is not a volume with room: refused, not attempted.
     @Test func aDiskThatWillNotSayIsRefused() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let transport = MemoryTransport(Self.bodies)
         await #expect(throws: ModelDownloadError.self) {
             try await ModelDownloader(store: store, transport: transport, freeDisk: { _ in nil })
@@ -250,7 +263,8 @@ struct ModelStoreTests {
     /// **One install of a model at a time.** The app's board and the report share a store, and two
     /// installs of one manifest write the same staging files and can remove each other's directory.
     @Test func aSecondInstallOfTheSameModelIsRefusedWhileTheFirstHoldsIt() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         try FileManager.default.createDirectory(
             at: store.stagingDirectory(for: manifest), withIntermediateDirectories: true)
@@ -266,7 +280,8 @@ struct ModelStoreTests {
     /// Progress is what is on disk. A host that ignores the range and restarts a file must not read
     /// as bytes gained — the download would report itself finished while short.
     @Test func aRestartedFileDoesNotCountItsDiscardedFront() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 40_000 }
@@ -304,7 +319,8 @@ struct ModelStoreTests {
     /// remove it. A staged download's own marker is written inside `.staging` just before the move,
     /// which is why the prune must not reach in there.
     @Test func strayModelsAreRemovedAndAStagedDownloadIsLeftAlone() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let keeper = Self.manifest(Self.bodies)
         let stale = ModelManifest(
             size: .standard, repository: keeper.repository, revision: "older",
@@ -346,7 +362,8 @@ struct ModelStoreTests {
     /// one directory the prune deliberately does not walk. Removed only while its own install lock
     /// can be taken, which is what says nobody is downloading it now.
     @Test func aStagedDownloadOfAnOlderPinIsReclaimedUnlessItIsRunning() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let keeper = Self.manifest(Self.bodies)
         let stale = ModelManifest(
             size: .standard, repository: keeper.repository, revision: "older",
@@ -385,7 +402,8 @@ struct ModelStoreTests {
     /// saw the same gigabytes free, both counted the same margin, and between them could fill the
     /// volume. What another install still has to fetch is counted against this one.
     @Test func whatAnotherInstallStillNeedsCountsAgainstThisOne() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let other = LocalModelSize.large.manifest
         let staged = store.stagingDirectory(for: other)
         try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
@@ -406,7 +424,8 @@ struct ModelStoreTests {
     /// enumerate, then delete — and an install that commits in between has its new model read as a
     /// stray by a decision taken before it existed. Both take one store-wide lock.
     @Test func aPruneHoldsTheStoreWhileItRunsAndAnInstallWaitsForIt() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         try FileManager.default.createDirectory(
             at: store.root.appending(path: ".staging", directoryHint: .isDirectory),
@@ -478,7 +497,8 @@ struct ModelStoreTests {
     /// directory reads as an install in flight, and an unreadable root is reported as a failure
     /// rather than as a prune that found nothing to do.
     @Test func whatCannotBeReadIsNeverTakenForAnEmptyStore() throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         let keeper = Self.manifest(Self.bodies)
         let directory = store.directory(for: keeper)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -501,7 +521,8 @@ struct ModelStoreTests {
     /// would fill the reader's disk before the size check meant to catch it ever ran. Driven through
     /// the delegate directly: no fake transport reaches this, and a real one cannot be asked for it.
     @Test func aBodyLongerThanItsPinIsRefusedWhileItArrives() async throws {
-        let store = try store()
+        let (store, scratch) = try store()
+        defer { _ = scratch }
         try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
         let file = store.root.appending(path: "model.safetensors")
         FileManager.default.createFile(atPath: file.path, contents: nil)
