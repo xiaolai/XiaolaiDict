@@ -242,23 +242,17 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Asked, not assumed: without Accessibility there is no selection to read, and saying so
         // is better than an empty panel.
         guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
-            panel.show(.message(
-                title: "XiaolaiDict needs Accessibility access",
-                detail: "It reads your selection through Accessibility. Allow XiaolaiDict in \(PrivacySettings.accessibilityLocation), then press the shortcut again."),
-                near: pointer, for: ticket)
+            panel.show(.accessibilityIsOff, near: pointer, for: ticket)
             return
         }
         guard let app = FrontApp.frontmost() else {
-            panel.show(.message(
-                title: "Nothing to look up",
-                detail: "The frontmost app could not be identified, so its selection cannot be read."),
-                near: pointer, for: ticket)
+            panel.show(.frontmostAppUnknown, near: pointer, for: ticket)
             return
         }
         lookup = Task {
             switch await SelectionReader.read(from: app) {
             case .nothing(let reason):
-                panel.show(.message(title: "Nothing to look up", detail: reason), near: pointer, for: ticket)
+                panel.show(.nothingToLookUp(reason), near: pointer, for: ticket)
             case .selected(let selection):
                 await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket)
             }

@@ -16,10 +16,18 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
 
     public var id: String { rawValue }
 
+    /// The name macOS gives it, and the name the reader is looking for in System Settings — so a
+    /// translation has to be the running system's own word for the list, not a fresh rendering of
+    /// the English. `SetupView` draws the same two names, and drew them translated while these
+    /// stayed English, which is the whole reason they are keys rather than literals.
     public var name: String {
         switch self {
-        case .accessibility: "Accessibility"
-        case .screenRecording: "Screen Recording"
+        case .accessibility:
+            String(localized: "Accessibility",
+                   comment: "The Accessibility permission, as macOS names it in System Settings")
+        case .screenRecording:
+            String(localized: "Screen Recording",
+                   comment: "The Screen Recording permission, as macOS names it in System Settings")
         }
     }
 
@@ -29,9 +37,11 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     public var blocks: String {
         switch self {
         case .accessibility:
-            "Reading the selection under your shortcut, and the fast hover path."
+            String(localized: "Reading the selection under your shortcut, and the fast hover path.",
+                   comment: "What stops working without the Accessibility permission")
         case .screenRecording:
-            "Reading words by hover from apps that expose no text — a terminal, a canvas, an image."
+            String(localized: "Reading words by hover from apps that expose no text — a terminal, a canvas, an image.",
+                   comment: "What stops working without the Screen Recording permission")
         }
     }
 
@@ -125,10 +135,16 @@ public struct PermissionsReport: Equatable, Sendable {
         case 0: nil
         case 1:
             switch missing[0].permission {
-            case .accessibility: "Accessibility is off — your selection cannot be read"
-            case .screenRecording: "Screen Recording is off — hover cannot read the screen"
+            case .accessibility:
+                String(localized: "Accessibility is off — your selection cannot be read",
+                       comment: "Menu warning when only Accessibility is missing")
+            case .screenRecording:
+                String(localized: "Screen Recording is off — hover cannot read the screen",
+                       comment: "Menu warning when only Screen Recording is missing")
             }
-        default: "\(missing.count) permissions are off — selections and the screen cannot be read"
+        default:
+            String(localized: "\(missing.count) permissions are off — selections and the screen cannot be read",
+                   comment: "Menu warning when more than one permission is missing")
         }
     }
 

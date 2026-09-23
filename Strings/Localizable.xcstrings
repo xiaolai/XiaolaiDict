@@ -36,6 +36,9 @@
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
 
     },
+    "%lld permissions are off — selections and the screen cannot be read" : {
+      "comment" : "Menu warning when more than one permission is missing"
+    },
     "%lld things are still needed." : {
 
     },
@@ -51,8 +54,14 @@
     "A sense id only means anything inside the dictionary that issued it, so what has been learned about your senses cannot follow you to another one. Your reading history is kept either way." : {
 
     },
-    "Accessibility" : {
+    "About" : {
 
+    },
+    "Accessibility" : {
+      "comment" : "The Accessibility permission, as macOS names it in System Settings"
+    },
+    "Accessibility is off — your selection cannot be read" : {
+      "comment" : "Menu warning when only Accessibility is missing"
     },
     "Add" : {
 
@@ -91,7 +100,7 @@
 
     },
     "Checking…" : {
-
+      "comment" : "While the permissions are being probed"
     },
     "Choose…" : {
 
@@ -110,6 +119,9 @@
     },
     "Copy the word and this sense" : {
 
+    },
+    "Device Control and Data Access" : {
+      "comment" : "macOS 27's name for the Accessibility list — use the system's own wording"
     },
     "Dictionary" : {
 
@@ -142,6 +154,9 @@
           }
         }
       }
+    },
+    "Everything needed has been granted." : {
+      "comment" : "Permissions pane, when nothing is missing"
     },
     "Everything needed is in place. Anything here can still be changed." : {
 
@@ -179,6 +194,9 @@
     "Hover Lookup    hold %@" : {
 
     },
+    "It reads your selection through Accessibility. Allow XiaolaiDict in %@, then press the shortcut again." : {
+      "comment" : "The placeholder is the System Settings list to grant it in"
+    },
     "Italic" : {
 
     },
@@ -204,6 +222,15 @@
 
     },
     "Look up the selection" : {
+
+    },
+    "Looking up “%@” in your dictionaries…" : {
+      "comment" : "Shown while the dictionaries are being asked; the placeholder is the word"
+    },
+    "Looking up…" : {
+      "comment" : "Shown while a lookup is still being made"
+    },
+    "Lookup" : {
 
     },
     "Lookup shortcut" : {
@@ -269,6 +296,12 @@
     "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
 
     },
+    "Nothing read yet" : {
+      "comment" : "Drawer notice when nothing has been looked up yet"
+    },
+    "Nothing to look up" : {
+      "comment" : "Lookup panel, when there was no word to look up"
+    },
     "Off" : {
 
     },
@@ -305,6 +338,9 @@
     "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
 
     },
+    "Permissions" : {
+
+    },
     "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
 
     },
@@ -317,11 +353,20 @@
     "Read recently" : {
 
     },
+    "Reading" : {
+
+    },
     "Reading History" : {
 
     },
     "Reading history drawer" : {
 
+    },
+    "Reading the selection under your shortcut, and the fast hover path." : {
+      "comment" : "What stops working without the Accessibility permission"
+    },
+    "Reading words by hover from apps that expose no text — a terminal, a canvas, an image." : {
+      "comment" : "What stops working without the Screen Recording permission"
     },
     "Ready" : {
 
@@ -350,8 +395,14 @@
     "Say it aloud" : {
 
     },
+    "Screen & System Audio Recording" : {
+      "comment" : "macOS 27's name for the Screen Recording list — use the system's own wording"
+    },
     "Screen Recording" : {
-
+      "comment" : "The Screen Recording permission, as macOS names it in System Settings"
+    },
+    "Screen Recording is off — hover cannot read the screen" : {
+      "comment" : "Menu warning when only Screen Recording is missing"
     },
     "Select a word anywhere and press %@." : {
 
@@ -370,6 +421,12 @@
     },
     "Shortcut" : {
 
+    },
+    "Show All" : {
+      "comment" : "Fans a day's pile of cards out"
+    },
+    "Show Less" : {
+      "comment" : "Closes a day's pile of cards"
     },
     "Show the time a word was looked up" : {
 
@@ -420,6 +477,9 @@
     "System Settings would not open. Look for Language & Region under General." : {
 
     },
+    "System Settings → Privacy & Security → %@" : {
+      "comment" : "Where a permission is granted; the placeholder is the list's own name"
+    },
     "Text" : {
 
     },
@@ -445,6 +505,9 @@
     "The dictionary you study from is no longer enabled in Dictionary. Senses are being marked against whichever dictionary answers instead, and study history is kept per dictionary — so those marks build up apart from yours." : {
 
     },
+    "The frontmost app could not be identified, so its selection cannot be read." : {
+      "comment" : "Lookup panel, when no app is frontmost"
+    },
     "The gate" : {
 
     },
@@ -466,6 +529,9 @@
     },
     "The only sense in this entry" : {
 
+    },
+    "The quick brown fox jumps over the lazy dog." : {
+      "comment" : "Type specimen in the Reading pane; any sentence that shows off the reader's script will do"
     },
     "The sense you read could not be identified." : {
 
@@ -555,8 +621,14 @@
     "Without a local model, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
 
     },
+    "Words you look up appear here, grouped by the day you met them." : {
+      "comment" : "Drawer notice when nothing has been looked up yet"
+    },
     "XiaolaiDict" : {
 
+    },
+    "XiaolaiDict needs Accessibility access" : {
+      "comment" : "Lookup panel, when Accessibility has not been granted"
     },
     "Yesterday" : {
 
@@ -566,6 +638,9 @@
     },
     "You have met this sense before" : {
 
+    },
+    "Your reading history is unavailable" : {
+      "comment" : "Drawer notice when the ledger could not be read"
     },
     "^[%lld other sense](inflect: true)" : {
 
@@ -607,6 +682,9 @@
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
+    "entry for “%@”, its dictionary form" : {
+      "comment" : "Under a dictionary's name when it answered with the word's lemma"
+    },
     "example.com" : {
 
     },
@@ -615,6 +693,12 @@
     },
     "it is already being downloaded" : {
       "comment" : "Why the model download stopped"
+    },
+    "jumps" : {
+      "comment" : "The one word of the specimen shown in the reader's chosen emphasis; it must occur in that sentence"
+    },
+    "nearest entry: “%@”" : {
+      "comment" : "Under a dictionary's name when it answered with a different headword"
     },
     "not found" : {
 
@@ -630,6 +714,9 @@
     },
     "the connection failed" : {
       "comment" : "Why the model download stopped"
+    },
+    "the dictionary did not name its headword" : {
+      "comment" : "Under a dictionary's name when its entry carries no headword"
     },
     "the download could not be completed" : {
       "comment" : "Why the model download stopped"

@@ -258,8 +258,10 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
-    /// The tab's label. Also what the report prints, so a stage failure names the pane the reader
-    /// would have clicked.
+    /// What `--settings-report` prints, so a stage failure names the pane the reader would have
+    /// clicked. **Not the tab's label** and deliberately never localized: the harness matches on
+    /// it, and a name that changed with the reader's language would name nothing on a translated
+    /// Mac. `title` is the label.
     public var name: String {
         switch self {
         case .reading: "Reading"
@@ -270,7 +272,19 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var title: LocalizedStringKey { LocalizedStringKey(name) }
+    /// The tab's label. Written out per case rather than built from `name`, because a
+    /// `LocalizedStringKey` assembled at run time is a key the compiler never saw and so a key no
+    /// translator is ever given — the four that are not also written somewhere else were missing
+    /// from the catalog for exactly that reason.
+    var title: LocalizedStringKey {
+        switch self {
+        case .reading: "Reading"
+        case .lookup: "Lookup"
+        case .dictionary: "Dictionary"
+        case .permissions: "Permissions"
+        case .about: "About"
+        }
+    }
 
     var symbol: String {
         switch self {

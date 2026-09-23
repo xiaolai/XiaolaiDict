@@ -110,15 +110,22 @@ struct ReadingPane: View {
             }
         }
 
+        /// The sentence and the one word in it that is set in the reader's chosen emphasis. A pair:
+        /// the word has to occur in the sentence, so a translation that moves one must move the
+        /// other. It degrades to an unemphasised specimen rather than to a wrong one if it does not.
         private var specimen: AttributedString {
-            var text = AttributedString("The quick brown fox jumps over the lazy dog.")
-            guard let marked = text.range(of: "jumps") else { return text }
+            let sentence = String(localized: "The quick brown fox jumps over the lazy dog.",
+                                  comment: "Type specimen in the Reading pane; any sentence that shows off the reader's script will do")
+            let emphasised = String(localized: "jumps",
+                                    comment: "The one word of the specimen shown in the reader's chosen emphasis; it must occur in that sentence")
+            var text = AttributedString(sentence)
+            guard let marked = text.range(of: emphasised) else { return text }
             let chosen = appearance.emphasis
             var font = Font.system(size: appearance.scale.text.body, weight: chosen.weight)
             if chosen.isItalic { font = font.italic() }
             text[marked].font = font
             text[marked].foregroundColor = ReadingPalette.accents[
-                ReadingPalette.index(for: "jumps")].color(in: .light)
+                ReadingPalette.index(for: emphasised)].color(in: .light)
             return text
         }
     }
@@ -401,7 +408,7 @@ struct PermissionsPane: View {
     var body: some View {
         Form {
             Section {
-                Text(verdict).foregroundStyle(.secondary)
+                Text(verbatim: verdict).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 // The other way into the board. This pane answers "are my permissions on"; the
                 // board answers "is any of this working", which is the question a reader who came
@@ -424,8 +431,12 @@ struct PermissionsPane: View {
     /// Asking costs a ScreenCaptureKit round trip, so there is a moment before the answer. Saying
     /// so beats showing a verdict that is merely the empty state.
     private var verdict: String {
-        guard model.hasAsked else { return "Checking…" }
-        return model.report.allGranted ? "Everything needed has been granted." : (model.report.menuWarning ?? "")
+        guard model.hasAsked else {
+            return String(localized: "Checking…", comment: "While the permissions are being probed")
+        }
+        guard model.report.allGranted else { return model.report.menuWarning ?? "" }
+        return String(localized: "Everything needed has been granted.",
+                      comment: "Permissions pane, when nothing is missing")
     }
 }
 
@@ -438,20 +449,21 @@ struct PermissionRow: View {
             HStack(spacing: scale.space.inline) {
                 Image(systemName: state.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(state.isGranted ? AnyShapeStyle(.green) : AnyShapeStyle(.orange))
-                Text(state.permission.name).font(.system(size: scale.text.heading, weight: .medium))
+                Text(verbatim: state.permission.name)
+                    .font(.system(size: scale.text.heading, weight: .medium))
                 Spacer(minLength: scale.space.inline)
                 Text(state.isGranted ? "On" : "Off")
                     .font(.system(size: scale.text.body, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
-            Text(state.permission.blocks)
+            Text(verbatim: state.permission.blocks)
                 .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if !state.isGranted {
-                Text(state.permission.location)
+                Text(verbatim: state.permission.location)
                     .font(.system(size: scale.text.label))
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)

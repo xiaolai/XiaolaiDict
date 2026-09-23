@@ -13,9 +13,12 @@ public struct PanelView: View {
     public var body: some View {
         switch content {
         case .message(let title, let detail):
+            // Both arrive localized — `detail` is sometimes the reason a reader was given for a
+            // selection that could not be read — so neither is looked up a second time here.
             VStack(alignment: .leading, spacing: scale.space.stack) {
-                Text(title).font(.headline)
-                Text(detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: title).font(.headline)
+                Text(verbatim: detail).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(scale.space.pad)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -35,7 +38,9 @@ struct WaitingView: View {
     public var body: some View {
         HStack(spacing: scale.space.column) {
             ProgressView().controlSize(.small)
-            Text(detail ?? "Looking up…").foregroundStyle(.secondary)
+            Text(verbatim: detail ?? String(localized: "Looking up…",
+                                            comment: "Shown while a lookup is still being made"))
+                .foregroundStyle(.secondary)
         }
         .padding(scale.space.pad)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -112,9 +117,15 @@ extension DictionaryEntry {
     public var matchNote: String? {
         switch match {
         case .exact: nil
-        case .dictionaryForm: "entry for “\(headword)”, its dictionary form"
-        case .otherHeadword: "nearest entry: “\(headword)”"
-        case .headwordUnknown: "the dictionary did not name its headword"
+        case .dictionaryForm:
+            String(localized: "entry for “\(headword)”, its dictionary form",
+                   comment: "Under a dictionary's name when it answered with the word's lemma")
+        case .otherHeadword:
+            String(localized: "nearest entry: “\(headword)”",
+                   comment: "Under a dictionary's name when it answered with a different headword")
+        case .headwordUnknown:
+            String(localized: "the dictionary did not name its headword",
+                   comment: "Under a dictionary's name when its entry carries no headword")
         }
     }
 }
@@ -235,18 +246,15 @@ func sampleLookup(_ mark: SenseMark?) -> LookupPresentation {
         .frame(width: 760, height: 520)
 }
 
+// The panel's own two messages, previewed from the same values the app shows — a second copy here
+// is how the previews came to be the only place four of these sentences were written as literals.
 #Preview("Nothing to look up") {
-    PanelView(content: .message(
-        title: "Nothing to look up",
-        detail: "The frontmost app could not be identified, so its selection cannot be read."))
+    PanelView(content: .frontmostAppUnknown)
         .frame(width: 420, height: 150)
 }
 
 #Preview("Accessibility is off") {
-    PanelView(content: .message(
-        title: "XiaolaiDict needs Accessibility access",
-        detail: "It reads your selection through Accessibility. Allow XiaolaiDict in "
-            + "\(PrivacySettings.accessibilityLocation), then press the shortcut again."))
+    PanelView(content: .accessibilityIsOff)
         .frame(width: 420, height: 180)
 }
 #endif

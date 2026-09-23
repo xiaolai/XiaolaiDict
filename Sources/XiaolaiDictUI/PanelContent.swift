@@ -70,7 +70,37 @@ public enum PanelContent {
     /// What this panel is waiting for, in words, or nil when it is waiting for nothing.
     public var waitingDescription: String? {
         guard case .lookup(let presentation) = self, presentation.outcome == nil else { return nil }
-        return "Looking up “\(presentation.term)” in your dictionaries…"
+        return String(localized: "Looking up “\(presentation.term)” in your dictionaries…",
+                      comment: "Shown while the dictionaries are being asked; the placeholder is the word")
+    }
+
+    /// Accessibility is off, so there is no selection to read.
+    ///
+    /// The panel's own sentences live here rather than where the panel is shown, for the reason
+    /// `waitingDescription` already did: this is the view layer, which is where reader-facing text
+    /// belongs and where the string scan looks. The app module had them, and the previews had a
+    /// second copy of the same four.
+    public static var accessibilityIsOff: PanelContent {
+        .message(
+            title: String(localized: "XiaolaiDict needs Accessibility access",
+                          comment: "Lookup panel, when Accessibility has not been granted"),
+            detail: String(localized: "It reads your selection through Accessibility. Allow XiaolaiDict in \(PrivacySettings.accessibilityLocation), then press the shortcut again.",
+                           comment: "The placeholder is the System Settings list to grant it in"))
+    }
+
+    /// There is no frontmost app to read a selection out of.
+    public static var frontmostAppUnknown: PanelContent {
+        nothingToLookUp(String(localized: "The frontmost app could not be identified, so its selection cannot be read.",
+                               comment: "Lookup panel, when no app is frontmost"))
+    }
+
+    /// Nothing could be read, under the reason the reader was given. That reason is already in the
+    /// reader's own words by the time it arrives, so it is not looked up a second time here.
+    public static func nothingToLookUp(_ reason: String) -> PanelContent {
+        .message(
+            title: String(localized: "Nothing to look up",
+                          comment: "Lookup panel, when there was no word to look up"),
+            detail: reason)
     }
 
     public enum Kind: Hashable {

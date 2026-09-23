@@ -142,12 +142,20 @@ struct HistoryDrawerSurface: View {
     private var contents: some View {
         if let problem = model.problem {
             notice(
-                icon: "exclamationmark.triangle", title: "Your reading history is unavailable",
+                icon: "exclamationmark.triangle",
+                title: String(localized: "Your reading history is unavailable",
+                              comment: "Drawer notice when the ledger could not be read"),
+                // Not localized on purpose: what follows is the failure the ledger reported, in
+                // whatever words it reported it, and inventing a key for a value would leave the
+                // translator a sentence nobody can translate.
                 detail: problem)
         } else if model.days.isEmpty && !model.isLoading {
             notice(
-                icon: "book.closed", title: "Nothing read yet",
-                detail: "Words you look up appear here, grouped by the day you met them.")
+                icon: "book.closed",
+                title: String(localized: "Nothing read yet",
+                              comment: "Drawer notice when nothing has been looked up yet"),
+                detail: String(localized: "Words you look up appear here, grouped by the day you met them.",
+                               comment: "Drawer notice when nothing has been looked up yet"))
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: scale.space.section) {
@@ -170,13 +178,15 @@ struct HistoryDrawerSurface: View {
         }
     }
 
+    /// `title` and `detail` arrive localized — `detail` may be the ledger's own failure — so both
+    /// are drawn verbatim rather than looked up a second time.
     private func notice(icon: String, title: String, detail: String) -> some View {
         VStack(spacing: scale.space.stack) {
             Image(systemName: icon)
                 .font(.system(size: scale.text.icon))
                 .foregroundStyle(.secondary)
-            Text(title).font(.system(size: scale.text.strong, weight: .semibold))
-            Text(detail)
+            Text(verbatim: title).font(.system(size: scale.text.strong, weight: .semibold))
+            Text(verbatim: detail)
                 .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -276,7 +286,9 @@ struct DayPileView: View {
             Button(action: toggle) {
                 DayHeader(
                     day: day, count: day.entries.count, isToday: false,
-                    trailing: expanded ? "Show Less" : "Show All")
+                    trailing: expanded
+                        ? String(localized: "Show Less", comment: "Closes a day's pile of cards")
+                        : String(localized: "Show All", comment: "Fans a day's pile of cards out"))
             }
             .buttonStyle(.plain)
 
@@ -322,11 +334,12 @@ private struct DayHeader: View {
     let day: ReadingDay
     let count: Int
     let isToday: Bool
+    /// Localized where it is chosen, so the header draws it rather than deciding it.
     var trailing: String?
 
     var body: some View {
         HStack(spacing: scale.space.inline) {
-            Text(title)
+            Text(verbatim: title)
                 .font(.system(size: scale.text.body, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(count, format: .number)
@@ -340,7 +353,7 @@ private struct DayHeader: View {
                 .foregroundStyle(isToday ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             Spacer(minLength: scale.space.inline)
             if let trailing {
-                Text(trailing)
+                Text(verbatim: trailing)
                     .font(.system(size: scale.text.label, weight: .medium))
                     .foregroundStyle(.tint)
             }
