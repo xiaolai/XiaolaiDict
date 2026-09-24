@@ -27,6 +27,12 @@
 .DEFAULT_GOAL := all
 .PHONY: all run test test-swift test-tools icon strings e2e e2e-status release clean
 
+# Machine-local settings, untracked: the name of your end-to-end machine and anything else that
+# belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
+# because `?=` only fills a variable that is still unset. Absent is normal — `-` is what makes a
+# missing file silent here and a missing host loud at the point of use.
+-include local.mk
+
 # A Developer ID, never ad hoc, for two reasons:
 #   - macOS keys Accessibility and Screen Recording grants on the signing identity. An ad-hoc
 #     signature changes with every byte, so every build would have to be granted again.
@@ -37,7 +43,9 @@ SIGN_ID ?= Developer ID Application: HANDO K.K. (Y53RSUA3SM)
 # Empty for a development build, numbered from the clock. Releases pass the release counter's value.
 BUILD_NUMBER ?=
 # The SSH name of the machine end-to-end tests run on. They never run on the machine that builds.
-E2E_HOST ?= mbp16
+# No default: it is a host on your own network, so it is set in `local.mk` or the environment
+# rather than committed. The `e2e` target says so when it is missing.
+E2E_HOST ?=
 
 # Handed to the script through the environment, as data: never spliced into a shell command,
 # where a quote in the identity would become code.
@@ -80,6 +88,11 @@ icon:
 	@Tools/build-bundle.sh icon
 
 e2e: all
+	@[ -n "$(E2E_HOST)" ] || { \
+	  echo "E2E_HOST is not set. The end-to-end tests run on a second Mac, reached over SSH."; \
+	  echo "Set it once in local.mk (untracked):   echo 'E2E_HOST = your-ssh-host' > local.mk"; \
+	  echo "or per run:                            make e2e E2E_HOST=your-ssh-host"; \
+	  exit 1; }
 	@Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
 
 # Reads the record rather than running anything. The script is the one implementation of it: the end

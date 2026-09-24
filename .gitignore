@@ -88,3 +88,6 @@ CLAUDE.md
 
 # macOS writes these into every directory it looks at.
 .DS_Store
+
+# Machine-local Make settings — one developer's network, not this project's.
+/local.mk
