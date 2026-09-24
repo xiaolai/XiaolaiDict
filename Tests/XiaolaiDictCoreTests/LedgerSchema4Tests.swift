@@ -90,8 +90,12 @@ struct LedgerSchema4Tests {
         #expect(met.first?.gloss == "the reader's own")
     }
 
-    @Test func theSchemaIsSix() {
-        #expect(Ledger.schemaVersion == 6)
+    /// **The pin, which is the point of it.** Bumping `schemaVersion` without writing a migration
+    /// leaves `PRAGMA user_version` claiming a shape the database does not have, and every later
+    /// read is a column that is not there. This fails on the bump and is meant to: the number moves
+    /// only in the same change as the `ALTER TABLE` that earns it.
+    @Test func theSchemaIsSeven() {
+        #expect(Ledger.schemaVersion == 7)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads
@@ -104,7 +108,8 @@ struct LedgerSchema4Tests {
             lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
             senseAbstention: why))
         #expect(try ledger.history(of: "charge").first?.senseAbstention == why)
-        let drawn = try #require(try ledger.recentLookups(since: now.addingTimeInterval(-60), limit: 5).first)
+        let drawn = try #require(try ledger.recentLookups(
+            since: now.addingTimeInterval(-60), limit: 5, studying: Set(ProbeScript.allCases)).first)
         #expect(drawn.id == id)
         #expect(drawn.senseAbstention == why)
     }

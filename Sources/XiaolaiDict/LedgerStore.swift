@@ -57,8 +57,12 @@ actor LedgerStore {
     /// What the history drawer shows. Bounded in both directions — a window of days and a cap on
     /// rows — because the drawer is a surface the reader opens often, and a ledger years deep must
     /// never arrive whole on the main actor.
-    func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
-        try ledger.recentLookups(since: since, limit: limit)
+    ///
+    /// `studying` is passed through rather than defaulted here, for the reason the ledger makes it
+    /// required: a surface that forgot the reader's setting would go on drawing the words they
+    /// filtered out, and read as a setting that does nothing.
+    func recentLookups(since: Date, limit: Int, studying: Set<ProbeScript>) throws -> [ReadingEntry] {
+        try ledger.recentLookups(since: since, limit: limit, studying: studying)
     }
 
     /// A lookup the reader did not mean to make. The senses met in it go with it.

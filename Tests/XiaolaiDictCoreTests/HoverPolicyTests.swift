@@ -258,3 +258,44 @@ struct HoverHostMatchingTests {
         }
     }
 }
+
+extension HoverPolicyTests {
+    /// **Decided after the word is read, never in `decide`.** The gate runs before any text
+    /// exists — that is what makes it cheap — so the script of the word cannot be one of its
+    /// inputs. This is the second line, beside the repeat check.
+    @Test func aWordInAScriptTheReaderDoesNotStudyIsNotLookedUp() {
+        var policy = HoverPolicy.shipped
+        policy.scripts = [.latin]
+        #expect(policy.studies("hold"))
+        #expect(!policy.studies("水"), "a han word was looked up under a Latin-only policy")
+        #expect(!policy.studies("하다"))
+    }
+
+    /// The reader who wants both gets both. This is the setting's whole point: a reader whose
+    /// study dictionary is 譯典通 studies han, and the same switch serves them.
+    @Test func aReaderWhoStudiesBothScriptsGetsBoth() {
+        var policy = HoverPolicy.shipped
+        policy.scripts = [.latin, .han]
+        #expect(policy.studies("hold"))
+        #expect(policy.studies("水"))
+        #expect(!policy.studies("する"), "kana was not asked for")
+    }
+
+    /// **What cannot be classified is looked up.** A capture of `42`, of punctuation, or of a
+    /// script this does not know names no script at all — and refusing there would make the filter
+    /// quietly wider than the reader set it, in exactly the cases where OCR is least sure.
+    @Test func textInNoScriptAtAllIsStillLookedUp() {
+        var policy = HoverPolicy.shipped
+        policy.scripts = [.latin]
+        #expect(policy.studies("42"))
+        #expect(policy.studies("—"))
+        #expect(policy.studies(""))
+    }
+
+    /// The refusal says something a reader could act on. Every other refusal here is silent
+    /// because "you did not hold the modifier" explains itself; this one does not.
+    @Test func theScriptRefusalExplainsItself() {
+        #expect(!HoverRefusal.scriptNotStudied.reason.isEmpty)
+        #expect(HoverRefusal.scriptNotStudied.reason != HoverRefusal.excludedApp.reason)
+    }
+}

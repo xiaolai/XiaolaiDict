@@ -144,7 +144,13 @@ final class LookupRunner {
             quality: selection.quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
-            senseAbstention: abstention)
+            senseAbstention: abstention,
+            // **The surface, not the sentence.** The filter is about the word the reader looked
+            // up; a Chinese word quoted inside an English sentence is still a Chinese word, and
+            // classifying the sentence would file it under Latin and show it to a reader who
+            // asked not to see it. Nil where nothing classifies — a number, punctuation — which
+            // the drawer draws rather than hides.
+            script: ProbeScript.dominant(in: selection.text))
     }
 }
 

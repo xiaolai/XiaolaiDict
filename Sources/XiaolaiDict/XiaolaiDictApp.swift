@@ -120,10 +120,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private func makeDrawer() -> HistoryDrawerController {
         let drawer = HistoryDrawerController { [weak self] in
             guard let opening = self?.ledger else { return .unavailable("The ledger is not open yet.") }
+            // **The same setting the hover gate asks, read at open time.** A reader who widens the
+            // scripts they study sees the words already in the ledger the next time they open the
+            // drawer — the filter is on the reading, not on the recording, so nothing was thrown
+            // away while the setting was narrow.
+            let studying = self?.hoverPolicy.scripts ?? HoverPolicy.defaultScripts
             do {
                 let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
                 return .entries(try await opening.value.recentLookups(
-                    since: since, limit: HistoryDrawerController.cardLimit))
+                    since: since, limit: HistoryDrawerController.cardLimit, studying: studying))
             } catch {
                 return .unavailable("\(error)")
             }

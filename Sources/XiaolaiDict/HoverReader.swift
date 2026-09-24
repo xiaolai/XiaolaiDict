@@ -180,6 +180,16 @@ final class HoverReader {
         if let bundleID = selection.place.bundleID, policy.excludedApps.contains(bundleID) {
             return .excludedApp
         }
+        // **The script the word is written in, which could not be asked before it was read.**
+        // Everything the gate refuses, it refuses before paying for anything; this one costs the
+        // Accessibility round trip or the capture that already happened, and saves what comes
+        // after — the XPC lookup and the sense ladder, which on an ambiguous entry is a prompt
+        // through the model on the GPU for an answer the reader never wanted.
+        //
+        // Hover only. `XiaolaiDictApp.lookUpSelection` does not come through here and must not:
+        // the reader selected that text and pressed the shortcut, and refusing what was explicitly
+        // asked for is a different product from declining to volunteer.
+        if !policy.studies(selection.text) { return .scriptNotStudied }
         if Self.key(selection, at: point) == lastLookedUp { return .samePlace }
         return nil
     }

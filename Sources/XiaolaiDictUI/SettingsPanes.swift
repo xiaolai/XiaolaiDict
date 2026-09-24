@@ -196,12 +196,28 @@ struct LookupPane: View {
                 ForEach(HoverPolicy.settleChoices) { Text($0.name).tag($0.milliseconds) }
             }
             .pickerStyle(.segmented)
+
+            // **Scripts, because only a script is decidable from one word.** A row saying
+            // "English only" would be a promise the code cannot keep: a single word gives
+            // `NLLanguageRecognizer` far too little to separate English from German, and the
+            // hover path often has no sentence to offer it. Naming the writing system says
+            // exactly what is checked.
+            ForEach(ProbeScript.allCases, id: \.self) { script in
+                Toggle(isOn: binding(for: script)) { Self.label(for: script) }
+            }
         } header: {
             Text("The gate")
         } footer: {
+            // **The second sentence is the whole reason this footer changed.** A word in an
+            // unticked script is read and then dropped, and hover's refusals are otherwise silent
+            // — "you did not hold the key" explains itself, this does not. A reader who never
+            // opened this pane still gets the default, so the place they will go looking when
+            // nothing happens over a Chinese word has to answer them.
             Text("""
                  A hover only fires while the key is held and the pointer has stopped. \
-                 There is no setting for holding nothing.
+                 There is no setting for holding nothing. \
+                 Words in a script you have not ticked are not looked up, and do not \
+                 appear in your reading history — untick nothing and everything is looked up.
                  """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -287,6 +303,42 @@ struct LookupPane: View {
             case (.none, .none): left < right
             }
         }
+    }
+
+    /// What each script is called, in the reader's own words.
+    ///
+    /// **Here and not on `ProbeScript`**, which lives in `XiaolaiDictCore` — a module with no view
+    /// layer, where a sentence can be written and never extracted for a translator.
+    /// `theCoreHoldsNoDisplayText` is what keeps that true. The scripts are named the way a reader
+    /// names them rather than the way Unicode does: "Chinese characters", not "Han".
+    static func label(for script: ProbeScript) -> Text {
+        switch script {
+        case .latin: Text("Latin — English and most European languages")
+        case .han: Text("Chinese characters")
+        case .hangul: Text("Korean")
+        case .kana: Text("Japanese kana")
+        }
+    }
+
+    /// One box per script, and **the last one cannot be unticked**.
+    ///
+    /// An empty set looks up nothing at all, which is not a preference any reader is expressing —
+    /// it is a state a settings pane can walk into one click at a time, and the reader would then
+    /// find hover silently dead with every other setting looking right. `HoverPolicyStore` repairs
+    /// it on the way in as a backstop; this stops it being reachable.
+    private func binding(for script: ProbeScript) -> Binding<Bool> {
+        Binding(
+            get: { policy.scripts.contains(script) },
+            set: { wanted in
+                var scripts = policy.scripts
+                if wanted {
+                    scripts.insert(script)
+                } else {
+                    scripts.remove(script)
+                }
+                guard !scripts.isEmpty else { return }
+                policy.scripts = scripts
+            })
     }
 
     /// Normalised on the way in, for the reason `HoverPolicy` normalises on the way out: an

@@ -56,6 +56,9 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     /// A capture is already running. Two simultaneous `SCScreenshotManager` captures deadlock —
     /// measured 6 times out of 6 — so a second one is refused rather than started.
     case captureInFlight
+    /// The word is not written in a script the reader studies. Unlike every other refusal here,
+    /// this one is a setting the reader chose and can change, so its text has to say so.
+    case scriptNotStudied
 
     public var reason: String {
         switch self {
@@ -66,6 +69,7 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
         case .stillMoving: "The pointer is still moving."
         case .samePlace: "This word was just looked up."
         case .captureInFlight: "A capture is already running."
+        case .scriptNotStudied: "This word is not in a script you study. Change that under Hover in Settings."
         }
     }
 }
@@ -104,6 +108,18 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     public var excludedHosts: Set<String>
     /// How long the pointer must be still. Debouncing is non-negotiable.
     public var settleMilliseconds: Int
+    /// The scripts the reader studies. A word in any other is read and then dropped.
+    ///
+    /// **Scripts and not languages, because only one of the two is decidable here.** A single word
+    /// carries far too little for `NLLanguageRecognizer` to separate English from German, and the
+    /// hover path often has no sentence to give it — so a setting called "English only" would
+    /// refuse *Schadenfreude* and the reader would have no way to find out why. The script a word
+    /// is written in is a property of its characters, and `ProbeScript.dominant` reads it exactly.
+    ///
+    /// Latin alone by default: the reader this app is for studies English, and a popup over every
+    /// Chinese word they pass is the noise the switch exists to remove. A reader whose study
+    /// dictionary is 譯典通 adds `han` and is served by the same setting.
+    public var scripts: Set<ProbeScript>
 
     /// The rests the reader can choose between, named.
     ///
@@ -157,17 +173,37 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
         "co.zeit.hyper",
     ]
 
+    /// The scripts a reader studies unless they say otherwise.
+    public static let defaultScripts: Set<ProbeScript> = [.latin]
+
     public static let shipped = HoverPolicy(
-        modifier: .option, excludedApps: defaultExcludedApps, excludedHosts: [], settleMilliseconds: 180)
+        modifier: .option, excludedApps: defaultExcludedApps, excludedHosts: [],
+        settleMilliseconds: 180)
 
     public init(
         modifier: HoverModifier, excludedApps: Set<String>, excludedHosts: Set<String>,
-        settleMilliseconds: Int
+        settleMilliseconds: Int, scripts: Set<ProbeScript> = HoverPolicy.defaultScripts
     ) {
         self.modifier = modifier
         self.excludedApps = excludedApps
         self.excludedHosts = excludedHosts
         self.settleMilliseconds = settleMilliseconds
+        self.scripts = scripts
+    }
+
+    /// **Decoded with a default, because the policy is stored as one blob.** A value written
+    /// before `scripts` existed carries no such key, and a synthesised decoder would throw on it —
+    /// which `HoverPolicyStore.load` turns into `.shipped`, silently discarding every app and site
+    /// the reader had excluded. That would read as the exclusions resetting themselves one launch
+    /// after an update, with nothing said. Every field a later version adds needs this treatment.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        modifier = try values.decode(HoverModifier.self, forKey: .modifier)
+        excludedApps = try values.decode(Set<String>.self, forKey: .excludedApps)
+        excludedHosts = try values.decode(Set<String>.self, forKey: .excludedHosts)
+        settleMilliseconds = try values.decode(Int.self, forKey: .settleMilliseconds)
+        scripts = try values.decodeIfPresent(Set<ProbeScript>.self, forKey: .scripts)
+            ?? HoverPolicy.defaultScripts
     }
 
     /// The order is deliberate: the cheapest and commonest refusal first, so the ordinary case —
@@ -184,6 +220,22 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
         guard pointerStillFor >= .milliseconds(settleMilliseconds) else { return .stayQuiet(.stillMoving) }
         if let wordKey = site.wordKey, wordKey == lastLookedUp { return .stayQuiet(.samePlace) }
         return .look
+    }
+
+    /// Whether a word the reader rested on is written in a script they study.
+    ///
+    /// **Asked after the word has been read, never inside `decide`.** The gate runs before any
+    /// text exists — that is what makes the ordinary refusal cost one set comparison — so the
+    /// script cannot be one of its inputs. This is the second line, beside the repeat check, and
+    /// what it saves is everything downstream: the XPC lookup and the sense ladder, which on a
+    /// multi-sense entry is a prompt through the model on the GPU.
+    ///
+    /// **Text in no script at all is looked up.** A capture of `42`, of punctuation, or of a
+    /// script this does not enumerate names nothing — and refusing there would make the filter
+    /// quietly wider than the reader set it, in precisely the captures OCR is least sure of.
+    public func studies(_ text: String) -> Bool {
+        guard let script = ProbeScript.dominant(in: text) else { return true }
+        return scripts.contains(script)
     }
 
     /// Host names are case-insensitive and may carry a trailing root dot, so `EXAMPLE.COM.` and

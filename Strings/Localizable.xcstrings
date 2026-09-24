@@ -45,7 +45,7 @@
     "A guess — not confirmed" : {
 
     },
-    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing." : {
+    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing. Words in a script you have not ticked are not looked up, and do not appear in your reading history — untick nothing and everything is looked up." : {
 
     },
     "A menu-bar dictionary for macOS." : {
@@ -101,6 +101,9 @@
     },
     "Checking…" : {
       "comment" : "While the permissions are being probed"
+    },
+    "Chinese characters" : {
+
     },
     "Choose…" : {
 
@@ -197,10 +200,19 @@
     "Italic" : {
 
     },
+    "Japanese kana" : {
+
+    },
     "Keep this sense as a note" : {
 
     },
+    "Korean" : {
+
+    },
     "Large" : {
+
+    },
+    "Latin — English and most European languages" : {
 
     },
     "Licence" : {

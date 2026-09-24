@@ -34,6 +34,12 @@ public struct HoverPolicyStore {
         // version, an edited plist, a partial write — is corrected on the way in rather than
         // trusted. What the reader added is kept alongside, because that part *is* a preference.
         stored.excludedApps.formUnion(HoverPolicy.defaultExcludedApps)
+        // **An empty script set looks up nothing at all**, which is not a preference any reader
+        // expresses — it is what a half-written file, or a settings pane that let every box be
+        // unticked, produces. Corrected the same way and for the same reason as the line above:
+        // a stored value that would leave hover doing nothing is repaired on the way in rather
+        // than handed to the gate.
+        if stored.scripts.isEmpty { stored.scripts = HoverPolicy.defaultScripts }
         return stored
     }
 

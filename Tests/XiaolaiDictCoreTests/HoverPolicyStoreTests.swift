@@ -79,3 +79,37 @@ struct HoverPolicyStoreTests {
         #expect(reopened.excludedApps.isSuperset(of: HoverPolicy.defaultExcludedApps))
     }
 }
+
+extension HoverPolicyStoreTests {
+    /// **A policy stored before `scripts` existed must still load.** The policy is kept as one
+    /// encoded blob, and a decoder that requires a key the old value does not carry throws — which
+    /// `load()` turns into `.shipped`, silently discarding every app and site the reader had
+    /// excluded. The failure would look like the exclusions "resetting themselves" one launch
+    /// after an update, with nothing in the log.
+    @Test func aPolicyStoredBeforeScriptsExistedKeepsItsExclusions() throws {
+        let defaults = TemporaryDefaults.suite()
+        // Written by hand in the old shape: every field the previous version had, and no `scripts`.
+        let old = """
+            {"modifier":"option","excludedApps":["com.example.vault"],
+             "excludedHosts":["example.com"],"settleMilliseconds":300}
+            """
+        defaults.set(Data(old.utf8), forKey: HoverPolicyStore.defaultsKey)
+
+        let loaded = HoverPolicyStore(defaults: defaults).load()
+        #expect(loaded.excludedApps.contains("com.example.vault"), "the reader's exclusions were lost")
+        #expect(loaded.excludedHosts == ["example.com"])
+        #expect(loaded.settleMilliseconds == 300)
+        #expect(loaded.scripts == [.latin], "an older policy takes the shipped default rather than none")
+    }
+
+    /// An empty script set would refuse every word, which is a state no reader asked for and the
+    /// one a half-written preferences file is most likely to produce.
+    @Test func anEmptyScriptSetIsCorrectedOnTheWayIn() {
+        let defaults = TemporaryDefaults.suite()
+        var policy = HoverPolicy.shipped
+        policy.scripts = []
+        HoverPolicyStore(defaults: defaults).save(policy)
+        #expect(HoverPolicyStore(defaults: defaults).load().scripts == [.latin],
+                "an empty set would look up nothing at all")
+    }
+}

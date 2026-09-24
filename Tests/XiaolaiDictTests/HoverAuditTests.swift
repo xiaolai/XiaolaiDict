@@ -67,3 +67,51 @@ struct HoverAuditTests {
         #expect(guardOne.claim())
     }
 }
+
+/// The script filter is hover's, and the shortcut's answer must not depend on it.
+struct ScriptFilterWiringTests {
+    private func source(_ name: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appending(path: name), encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+
+    /// **The wire, not the value.** `HoverPolicy.studies` is unit-tested on its own; what went
+    /// untested in this project's last two defects of this shape was whether anything called the
+    /// thing that was built. A filter nothing asks is a setting the reader can change with no
+    /// effect.
+    @Test func theHoverPathAsksWhetherTheScriptIsStudied() throws {
+        #expect(try source("Sources/XiaolaiDict/HoverReader.swift").contains("policy.studies(selection.text)"),
+                "the hover reader does not consult the script filter")
+    }
+
+    /// **And the shortcut path does not.** The reader selected that text and pressed the key;
+    /// refusing it would be refusing something explicitly asked for. If this ever needs to change
+    /// it should be a second, separate switch — not this one leaking across.
+    @Test func theSelectionShortcutIsNotFilteredByScript() throws {
+        let app = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        #expect(!app.contains(".studies("),
+                "the selection path consults the hover script filter, which refuses what the reader asked for")
+    }
+
+    /// **The wire for the other half.** `Ledger` stores a script and the drawer filters on it,
+    /// both tested — and neither says a word about whether anything ever puts a script in a row.
+    /// Left unwired, every row would be NULL, every NULL is drawn, and the drawer filter would
+    /// pass its own tests while doing nothing to the reader's history.
+    @Test func everyRecordedLookupCarriesTheScriptItWasWrittenIn() throws {
+        let runner = try source("Sources/XiaolaiDict/LookupRunner.swift")
+        #expect(runner.contains("script: ProbeScript.dominant(in: selection.text)"),
+                "the ledger record is built without a script, so the drawer filter can never bite")
+    }
+
+    /// And the drawer asks for the reader's set rather than defaulting to everything.
+    @Test func theDrawerFiltersByTheScriptsTheReaderStudies() throws {
+        let app = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        #expect(app.contains("studying: studying"), "the drawer does not pass the reader's scripts")
+        #expect(app.contains("hoverPolicy.scripts"),
+                "the drawer's filter is not the setting the hover gate reads")
+    }
+}

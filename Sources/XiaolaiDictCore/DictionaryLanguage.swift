@@ -105,4 +105,58 @@ public enum ProbeScript: String, Codable, Sendable, CaseIterable, Comparable {
         default: return nil
         }
     }
+
+    /// The script `text` is mostly written in, or nil where it is written in none.
+    ///
+    /// **`of` is not this, and the difference is the input.** A probe word is single-script by
+    /// construction — `DictionaryBridge.probeWords` picks them that way — so its first scalar
+    /// settles it. Text the reader rested on is whatever was on their screen: it opens with a
+    /// quotation mark, carries a digit, or mixes scripts where OCR took in a neighbour. Reusing
+    /// the first-scalar classifier there would have answered nil for `"hold"` in quotation marks
+    /// and han for `the 水`.
+    ///
+    /// Letters vote and nothing else does. Punctuation, digits and spaces are skipped rather than
+    /// counted, so a string with no letters at all answers nil — a number is not written in a
+    /// script, and naming one for it would put every `42` in the reader's history under Latin.
+    ///
+    /// **Kana absorbs han rather than merely outvoting it.** The two are probed separately for one
+    /// reason, recorded in `probeWords`: 水 alone is Chinese and 水 beside する is Japanese. So any
+    /// kana makes the han beside it Japanese too — otherwise `勉強する` is 2 han against 2 kana and
+    /// comes out a tie, and `漢字を勉強する` comes out Chinese on a majority of kanji.
+    ///
+    /// A tie among the rest goes to whichever appeared first, so the answer does not depend on the
+    /// order a dictionary happens to enumerate.
+    public static func dominant(in text: String) -> ProbeScript? {
+        var counts: [ProbeScript: Int] = [:]
+        var order: [ProbeScript] = []
+        for scalar in text.unicodeScalars {
+            guard let script = letterScript(of: scalar) else { continue }
+            if counts[script] == nil { order.append(script) }
+            counts[script, default: 0] += 1
+        }
+        if let kana = counts[.kana], let han = counts.removeValue(forKey: .han) {
+            counts[.kana] = kana + han
+            order.removeAll { $0 == .han }
+        }
+        guard let best = counts.values.max() else { return nil }
+        return order.first { counts[$0] == best }
+    }
+
+    /// The script one scalar is a letter of. Nil for punctuation, digits, spaces and symbols —
+    /// they are skipped by `dominant`, never counted as a script of their own.
+    ///
+    /// Latin reaches past ASCII on purpose: *naïve* and *café* are Latin words, and a range that
+    /// stopped at `z` would leave them unclassified in exactly the European text this is meant to
+    /// let through. The two division signs sitting inside that block are symbols, not letters.
+    static func letterScript(of scalar: Unicode.Scalar) -> ProbeScript? {
+        switch scalar.value {
+        case 0x3040...0x30FF, 0x31F0...0x31FF: return .kana
+        case 0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF: return .hangul
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF: return .han
+        case 0x0041...0x005A, 0x0061...0x007A: return .latin
+        case 0x00D7, 0x00F7: return nil
+        case 0x00C0...0x024F: return .latin
+        default: return nil
+        }
+    }
 }

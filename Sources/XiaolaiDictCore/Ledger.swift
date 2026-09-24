@@ -46,6 +46,11 @@ public struct LookupRecord: Equatable, Sendable {
     public let result: LookupResult
     /// What answered. Nil only for lookups recorded before the ledger stored it (schemas 1 and 2).
     public let answeredBy: AnswerSource?
+    /// The script `surface` is written in, so the drawer can be filtered to the scripts the reader
+    /// studies. Nil where nothing could be classified — a number, punctuation, a script this does
+    /// not enumerate — and for every row written before schema 7. Both mean unknown, and an
+    /// unknown row is drawn.
+    public let script: ProbeScript?
     /// How the word and its context were captured. Nil only for lookups recorded before the ledger
     /// stored it (schema 1): unknown, rather than guessed.
     public let quality: CaptureQuality?
@@ -63,7 +68,8 @@ public struct LookupRecord: Equatable, Sendable {
         language: String? = nil, contextRange: NSRange? = nil, partOfSpeech: String? = nil,
         place: ReadingPlace = ReadingPlace(),
         lookedUpAt: Date, result: LookupResult, answeredBy: AnswerSource?, quality: CaptureQuality?,
-        legacySourceURL: String? = nil, senseAbstention: Abstention? = nil
+        legacySourceURL: String? = nil, senseAbstention: Abstention? = nil,
+        script: ProbeScript? = nil
     ) {
         self.surface = surface
         self.lemma = Lemmatizer.canonical(lemma)
@@ -79,6 +85,7 @@ public struct LookupRecord: Equatable, Sendable {
         self.quality = quality
         self.legacySourceURL = legacySourceURL
         self.senseAbstention = senseAbstention
+        self.script = script
     }
 }
 
@@ -144,7 +151,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 6
+    public static let schemaVersion = 7
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -218,8 +225,8 @@ public final class Ledger {
                                  result, answered_by, capture_source, capture_confidence, context_quality,
                                  lemma_basis, language, context_range_location, context_range_length,
                                  source_name, source_document, source_page, source_title, source_title_raw,
-                                 source_precision, part_of_speech, sense_abstention)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 source_precision, part_of_speech, sense_abstention, script)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [
                 .text(record.surface), .text(record.lemma), .text(record.context),
@@ -235,6 +242,7 @@ public final class Ledger {
                 .optionalText(record.place.page), .optionalText(record.place.title),
                 .optionalText(record.place.rawTitle), .text(record.place.precision.rawValue),
                 .optionalText(record.partOfSpeech), .optionalText(record.senseAbstention?.rawValue),
+                .optionalText(record.script?.rawValue),
             ]
         ) { _ in }
         return Int(sqlite3_last_insert_rowid(db))
@@ -512,7 +520,22 @@ public final class Ledger {
     ///
     /// It does carry `capture_quality`, which is not a definition but a warning label: it is what
     /// lets a card tell a sentence from the word echoed back into the context column.
-    public func recentLookups(since: Date, limit: Int) throws -> [ReadingEntry] {
+    /// The drawer's query.
+    ///
+    /// `studying` is required rather than defaulted, so every caller states which scripts the
+    /// reader wants to see. A default of "everything" would be the quiet option: a surface that
+    /// forgot to pass the setting would go on showing rows the reader had filtered out, and look
+    /// exactly like a setting that does not work.
+    /// A JSON array of strings, for a bound `json_each` parameter. Written here rather than with
+    /// `JSONEncoder` because the values are a closed enum's raw values — no escaping is reachable —
+    /// and a throwing encoder inside a query builder would have to invent a failure mode.
+    static func jsonArray(of values: [String]) -> String {
+        "[" + values.sorted().map { "\"\($0)\"" }.joined(separator: ",") + "]"
+    }
+
+    public func recentLookups(
+        since: Date, limit: Int, studying: Set<ProbeScript>
+    ) throws -> [ReadingEntry] {
         // A limit of none asks for nothing. SQLite reads a *negative* LIMIT as no limit at all,
         // so this guard is what stops `limit: -1` returning a ledger years deep. (`LIMIT 0`
         // genuinely returns nothing; an earlier version of this comment claimed otherwise.)
@@ -550,12 +573,20 @@ public final class Ledger {
                 SELECT id FROM sense_encounters WHERE lookup_id = l.id ORDER BY id DESC LIMIT 1
             )
             WHERE l.looked_up_at >= ?1
+              -- The reader's script filter, applied by SQLite so `LIMIT` still counts rows they
+              -- will actually see. `IS NULL` first and deliberately: every row written before
+              -- schema 7 has no script, and unknown is drawn rather than dropped.
+              AND (l.script IS NULL OR l.script IN (SELECT value FROM json_each(?3)))
             -- The row id breaks a tie, so two lookups sharing a timestamp keep their order between
             -- one reading of the drawer and the next.
             ORDER BY l.looked_up_at DESC, l.id DESC
             LIMIT ?2
             """,
-            bind: [.real(since.timeIntervalSince1970), .integer(limit)]
+            // The script set travels as a JSON array read by `json_each`, so the predicate is one
+            // bound parameter however many scripts the reader studies. Interpolating an `IN` list
+            // would build SQL out of values, which this file does nowhere.
+            bind: [.real(since.timeIntervalSince1970), .integer(limit),
+                   .text(Self.jsonArray(of: studying.map(\.rawValue)))]
         ) { row in
             let range: NSRange? = sqlite3_column_type(row.statement, 6) == SQLITE_NULL
                 ? nil : NSRange(location: row.integer(6), length: row.integer(7))
@@ -702,6 +733,18 @@ public final class Ledger {
                 // model refusing a sentence and no model being here left the same trace: none.
                 // Rows written before this get NULL — not recorded, never a guessed reason.
                 try execute("ALTER TABLE lookups ADD COLUMN sense_abstention TEXT;")
+            }
+            if found < 7 {
+                // The script the word is written in, so the drawer can be filtered to the scripts
+                // the reader studies — the same setting the hover gate asks, and asked the same
+                // way, because one setting answered by two different rules is a filter that reads
+                // as broken. Derived at read time it could not be a SQL predicate, and a filter
+                // applied after `LIMIT` hands back fewer cards than were asked for.
+                //
+                // NULL for every row written before this, meaning unknown. `recentLookups` draws
+                // those: hiding history that cannot be classified would empty the reader's past
+                // after an update, with a filter they never set to blame.
+                try execute("ALTER TABLE lookups ADD COLUMN script TEXT;")
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")

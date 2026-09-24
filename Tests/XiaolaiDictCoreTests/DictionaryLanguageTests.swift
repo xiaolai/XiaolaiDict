@@ -70,6 +70,64 @@ struct DictionaryLanguageTests {
         #expect(ProbeScript.of("する") == .kana)
     }
 
+    /// **`of` reads the first scalar, and that is right for a probe word and wrong for a captured
+    /// one.** The probe words are single-script by construction — `DictionaryBridge.probeWords`
+    /// chooses them that way — so the first character settles it. A word the reader rested on is
+    /// whatever was on their screen: it can open with a quotation mark, a digit, or an opening
+    /// bracket, and it can mix scripts. Reusing `of` there would have silently extended its job.
+    @Test func theFirstScalarClassifierIsNotEnoughForCapturedText() {
+        #expect(ProbeScript.of("“hold”") == nil, "the first scalar is punctuation, not a script")
+        #expect(ProbeScript.dominant(in: "“hold”") == .latin)
+        #expect(ProbeScript.of("3D") == nil)
+        #expect(ProbeScript.dominant(in: "3D") == .latin)
+    }
+
+    /// Letters decide; everything else is ignored rather than counted as a script of its own.
+    @Test func punctuationDigitsAndSpacesDoNotVote() {
+        #expect(ProbeScript.dominant(in: "well-being") == .latin)
+        #expect(ProbeScript.dominant(in: "第 3 章") == .han)
+        #expect(ProbeScript.dominant(in: "") == nil)
+        #expect(ProbeScript.dominant(in: "…—·") == nil, "nothing but punctuation names no script")
+        #expect(ProbeScript.dominant(in: "42") == nil, "a number is not written in a script")
+    }
+
+    /// **Any kana makes it Japanese, whatever the count of han.** This is the same fact the probe
+    /// words exist for, applied the other way round: 水 alone is Chinese, and 水 beside する is
+    /// Japanese. A majority vote would call 日本語を話す han, because the kanji outnumber nothing —
+    /// here they do not, but `勉強する` is 3 han to 2 kana and would come out Chinese.
+    @Test func anyKanaMakesItJapaneseHoweverManyHanThereAre() {
+        #expect(ProbeScript.dominant(in: "勉強する") == .kana)
+        #expect(ProbeScript.dominant(in: "水") == .han)
+        #expect(ProbeScript.dominant(in: "日本語") == .han, "kanji with no kana is indistinguishable from Chinese")
+    }
+
+    /// **Latin is not ASCII**, and a range that stopped at `z` would leave the European words this
+    /// filter exists to let through unclassified — which reads to the reader as the filter being
+    /// broken rather than as a gap in a range. The two division signs inside that block are
+    /// symbols and must not vote.
+    /// **The fixture has to be letters the ASCII range cannot reach.** Written with *naïve* and
+    /// *café* this passed with the Latin-1 range deleted — four ASCII letters outvote one accented
+    /// one, so it answered `.latin` either way and could not fail for the reason it is named
+    /// after. Verified by deleting the range and watching it stay green.
+    @Test func latinReachesPastAscii() {
+        #expect(ProbeScript.dominant(in: "çà") == .latin, "every letter here is past ASCII")
+        #expect(ProbeScript.dominant(in: "ÀÉÎÕÜ") == .latin)
+        // These two only prove the accented letters do not *break* an otherwise ASCII word; they
+        // are kept as the realistic case, not as the check.
+        #expect(ProbeScript.dominant(in: "naïve") == .latin)
+        #expect(ProbeScript.dominant(in: "Grüße") == .latin)
+        #expect(ProbeScript.dominant(in: "×÷") == nil, "a division sign is a symbol, not a letter")
+    }
+
+    /// A mixed capture takes the script most of its letters are in. The case this is for is a word
+    /// picked up with a stray neighbour — OCR returning `the 水` — where refusing to classify at
+    /// all would be worse than naming the majority.
+    @Test func amongLettersTheMajorityScriptWins() {
+        #expect(ProbeScript.dominant(in: "the 水") == .latin)
+        #expect(ProbeScript.dominant(in: "水水 a") == .han)
+        #expect(ProbeScript.dominant(in: "하다 a") == .hangul)
+    }
+
     @Test func aDictionaryDeclaringNothingTeachesNobodyByMetadata() {
         let sideloaded = DictionaryCapability(
             identity: DictionaryIdentity(name: "Longman"), senseKeyKind: .position, probed: true,

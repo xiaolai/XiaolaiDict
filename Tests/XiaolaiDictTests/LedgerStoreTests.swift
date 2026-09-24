@@ -49,7 +49,9 @@ struct LedgerStoreTests {
 
         let store = try await LedgerStore.openDefault(applicationSupport: scratch.url)
 
-        #expect(try await store.recentLookups(since: Date(timeIntervalSince1970: 1_800_000_000), limit: 10).isEmpty)
+        #expect(try await store.recentLookups(
+            since: Date(timeIntervalSince1970: 1_800_000_000), limit: 10,
+            studying: Set(ProbeScript.allCases)).isEmpty)
         // Built from `scratch` rather than from a copy of its URL, so the directory is still alive
         // at the assertion: nothing else here holds it, and its removal is its deinit.
         let ledger = scratch.appending("XiaolaiDict/ledger.sqlite").path

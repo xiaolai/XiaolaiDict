@@ -49,7 +49,7 @@ struct LedgerHistoryTests {
             _ = try ledger.record(record("older", at: noon.addingTimeInterval(-3600)))
             _ = try ledger.record(record("newer", at: noon))
 
-            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 50)
+            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.map(\.lemma) == ["newer", "older"])
         }
     }
@@ -59,7 +59,7 @@ struct LedgerHistoryTests {
             _ = try ledger.record(record("ancient", at: noon.addingTimeInterval(-86400 * 30)))
             _ = try ledger.record(record("recent", at: noon))
 
-            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 50)
+            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.map(\.lemma) == ["recent"])
         }
     }
@@ -70,7 +70,7 @@ struct LedgerHistoryTests {
             for index in 0..<10 {
                 _ = try ledger.record(record("w\(index)", at: noon.addingTimeInterval(Double(index))))
             }
-            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 3)
+            let found = try ledger.recentLookups(since: noon.addingTimeInterval(-86400), limit: 3, studying: Set(ProbeScript.allCases))
             #expect(found.count == 3)
             // The newest three, not the first three off the disk.
             #expect(found.map(\.lemma) == ["w9", "w8", "w7"])
@@ -80,8 +80,8 @@ struct LedgerHistoryTests {
     @Test func aLimitOfNoneAsksForNothingRatherThanEverything() throws {
         try withLedger { ledger in
             _ = try ledger.record(record("fine", at: noon))
-            let none = try ledger.recentLookups(since: .distantPast, limit: 0)
-            let negative = try ledger.recentLookups(since: .distantPast, limit: -5)
+            let none = try ledger.recentLookups(since: .distantPast, limit: 0, studying: Set(ProbeScript.allCases))
+            let negative = try ledger.recentLookups(since: .distantPast, limit: -5, studying: Set(ProbeScript.allCases))
             #expect(none.isEmpty)
             #expect(negative.isEmpty)
         }
@@ -93,7 +93,7 @@ struct LedgerHistoryTests {
             let first = try ledger.record(record("fine", at: noon))
             let second = try ledger.record(record("hold", at: noon.addingTimeInterval(1)))
 
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.map(\.id) == [second, first])
         }
     }
@@ -107,7 +107,7 @@ struct LedgerHistoryTests {
                     bundleID: "com.apple.Safari", name: "Safari",
                     page: "https://example.com/a", title: "A page")))
 
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             let entry = try #require(found.first)
             #expect(entry.sentence == "The ship's hold was full.")
             #expect(entry.sentenceRange == NSRange(location: 11, length: 4))
@@ -121,7 +121,7 @@ struct LedgerHistoryTests {
     @Test func aMissComesBackMarkedAsOne() throws {
         try withLedger { ledger in
             _ = try ledger.record(record("qqqq", at: noon, result: .notFound))
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             let entry = try #require(found.first)
             #expect(entry.result == .notFound)
         }
@@ -129,7 +129,7 @@ struct LedgerHistoryTests {
 
     @Test func anEmptyLedgerHasNoHistory() throws {
         try withLedger { ledger in
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.isEmpty)
         }
     }
@@ -141,7 +141,7 @@ struct LedgerHistoryTests {
             let first = try ledger.record(record("a", at: noon))
             let second = try ledger.record(record("b", at: noon))
 
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.map(\.id) == [second, first])
         }
     }
@@ -157,7 +157,7 @@ struct LedgerHistoryTests {
                 "qqqq", at: noon, context: "qqqq", range: nil,
                 quality: .accessibility(.accessibilityTextRange, context: .missing)))
 
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             let entry = try #require(found.first)
             #expect(entry.quality?.context == .missing)
             // And the card built from it says nothing rather than printing the word twice.
@@ -171,7 +171,7 @@ struct LedgerHistoryTests {
                 "hold", at: noon, context: "The ship's hold was",
                 quality: .accessibility(.accessibilityTextMarkers, context: .mayBeCut)))
 
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.quality?.context == .mayBeCut)
             #expect(entry.cue == .truncatedSentence)
         }
@@ -185,7 +185,7 @@ struct LedgerHistoryTests {
                 source: .opticalRecognition, confidence: 0.62, context: .complete))
             _ = try ledger.record(record("hold", at: noon, quality: read))
 
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.quality?.source == .opticalRecognition)
             #expect(entry.quality?.confidence == 0.62)
         }
@@ -197,7 +197,7 @@ struct LedgerHistoryTests {
     @Test func aRowWrittenBeforeTheQualityColumnComesBackWithoutOne() throws {
         try withLedger { ledger in
             _ = try ledger.record(record("hold", at: noon, quality: nil))
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.quality == nil)
         }
     }
@@ -210,7 +210,7 @@ struct LedgerHistoryTests {
         try withLedger { ledger in
             _ = try ledger.record(record(
                 "hold", at: noon, context: "Hold the line.", partOfSpeech: "verb"))
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.partOfSpeech == "verb")
         }
     }
@@ -227,7 +227,7 @@ struct LedgerHistoryTests {
                 "hold", at: noon, context: "The ship's hold was full.",
                 range: ("The ship's hold was full." as NSString).range(of: "hold"),
                 partOfSpeech: nil))
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.partOfSpeech == "noun")
         }
     }
@@ -240,7 +240,7 @@ struct LedgerHistoryTests {
                 "hold", at: noon, context: "The ship's hold was full.",
                 range: ("The ship's hold was full." as NSString).range(of: "hold"),
                 partOfSpeech: "verb"))
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.partOfSpeech == "verb", "the stored answer was thrown away for a guess")
         }
     }
@@ -254,7 +254,7 @@ struct LedgerHistoryTests {
                 encounter(gloss: "a neutralizing force", ordinal: 4, outOf: 12, chosenBy: .reader),
                 for: id)
 
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             let sense = try #require(entry.sense)
             #expect(sense.dictionary == "NOAD")
             #expect(sense.ordinal == 4)
@@ -273,7 +273,7 @@ struct LedgerHistoryTests {
                 encounter(gloss: "a guess", ordinal: 2, outOf: 12, chosenBy: .model), for: id)
 
             let sense = try #require(
-                try ledger.recentLookups(since: .distantPast, limit: 50).first?.sense)
+                try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first?.sense)
             #expect(sense.isConfirmed == false)
             #expect(sense.canReveal)
         }
@@ -284,7 +284,7 @@ struct LedgerHistoryTests {
     @Test func aLookupWithNoSenseHasNoSenseNote() throws {
         try withLedger { ledger in
             _ = try ledger.record(record("temper", at: noon))
-            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50).first)
+            let entry = try #require(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).first)
             #expect(entry.sense == nil)
         }
     }
@@ -297,7 +297,7 @@ struct LedgerHistoryTests {
             try ledger.record(encounter(gloss: "first", ordinal: 1, outOf: 12, chosenBy: .model), for: id)
             try ledger.record(encounter(gloss: "second", ordinal: 2, outOf: 12, chosenBy: .reader), for: id)
 
-            let found = try ledger.recentLookups(since: .distantPast, limit: 50)
+            let found = try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases))
             #expect(found.count == 1, "the join multiplied the card")
             // The later one: a reader's tap arrives after the model's guess and replaces it.
             #expect(found.first?.sense?.gloss == "second")
@@ -329,7 +329,7 @@ struct LedgerDeletionTests {
         _ = try ledger.record(record("fine", at: noon.addingTimeInterval(1)))
 
         try ledger.delete(lookup: stray)
-        #expect(try ledger.recentLookups(since: .distantPast, limit: 50).map(\.lemma) == ["fine"])
+        #expect(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).map(\.lemma) == ["fine"])
     }
 
     /// **The cascade is the point.** A sense met only in a lookup that never happened was never
@@ -364,6 +364,6 @@ struct LedgerDeletionTests {
         try ledger.delete(lookup: stray)
         try ledger.delete(lookup: stray)
         try ledger.delete(lookup: 9_999)
-        #expect(try ledger.recentLookups(since: .distantPast, limit: 50).isEmpty)
+        #expect(try ledger.recentLookups(since: .distantPast, limit: 50, studying: Set(ProbeScript.allCases)).isEmpty)
     }
 }
