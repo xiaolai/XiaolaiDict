@@ -229,7 +229,21 @@ want() {  # want <name>: is this stage wanted? Also names it, for the result lin
 }
 # RESULT lines are for the caller to record; PASS/FAIL lines are for a person to read.
 pass() { echo "PASS  $*"; printf 'RESULT\t%s\tpass\n' "$STAGE"; }
-flunk() { echo "FAIL  $*"; failures=$((failures + 1)); printf 'RESULT\t%s\tfail\n' "$STAGE"; }
+# **The names of the stages that failed, not just a count of checks.** `failures` counts
+# assertions, so a stage failing three of its checks used to report "3 stage(s) failed" beside a
+# board listing one — two numbers for the same run, disagreeing, the wrong one first. A space-padded
+# string because this is bash 3.2, which has no associative arrays; `case` is safe in a function
+# body, unlike inside `$( )`, which this file records separately.
+failed_stages=" "
+flunk() {
+    echo "FAIL  $*"
+    failures=$((failures + 1))
+    case "$failed_stages" in
+        *" $STAGE "*) ;;
+        *) failed_stages="$failed_stages$STAGE " ;;
+    esac
+    printf 'RESULT\t%s\tfail\n' "$STAGE"
+}
 
 # **A stage that dies part-way is a failed stage, and says where it died.** `set -e` ends this
 # script at the first unguarded failure, silently, and every assertion after it simply never runs
@@ -563,7 +577,7 @@ if want accessibility; then
 reading=$("$exe" --read-selection com.apple.finder 2>&1 || true)
 if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off"; then
     flunk "accessibility: not granted to this session — the selection tests cannot run"
-    echo; echo "$((failures)) stage(s) failed"; exit 1
+    echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
 fi
 pass "accessibility: readable"
 fi
@@ -1839,7 +1853,15 @@ fi  # the old service had gone
 fi
 finished=true
 echo
-[ "$failures" -eq 0 ] && echo "all stages passed" || { echo "$failures stage(s) failed"; exit 1; }
+# **Assertions, not stages.** `failures` is incremented by `flunk`, which is per *check* — so a
+# single stage failing three of its checks reported "3 stage(s) failed" while the board beside it
+# listed one. Two numbers for the same run, disagreeing, with the wrong one first. The stage count
+# comes from the records, which is where the board reads it too.
+stages_failed=$(echo $failed_stages | wc -w | tr -d ' ')
+[ "$failures" -eq 0 ] && echo "all stages passed" || {
+    echo "$failures assertion(s) failed, in $stages_failed stage(s): $(echo $failed_stages)"
+    exit 1
+}
 SH
 set +e
 ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <"$remote_scripts/run.sh" | tee "$RUN_LOG" | grep -v "^RESULT	"
