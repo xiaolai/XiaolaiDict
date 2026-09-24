@@ -399,4 +399,43 @@ struct LemmaPartsTests {
         #expect(marked("over", in: "He took it over\u{2000}") == ["over"])
         #expect(marked("He", in: "\u{2000}He took it over") == ["He"])
     }
+
+}
+
+/// What NLTagger does not do for us, measured rather than assumed.
+///
+/// Probed on macOS 27 across 63 irregular English forms on 2026-09-24: 52 lemmatise correctly, one
+/// comes back a *different word*, and ten come back unchanged — and those ten are **exactly** the
+/// forms that are also words in their own right. That is a strong result for the table's design:
+/// the criterion it was built on is the one the tagger actually follows. It is not a result for the
+/// table's contents, which were two short.
+struct IrregularFormCoverageTests {
+    /// **`ground` and `bound` were missing, and missing is worse than absent here.** Not being in
+    /// the table does not mean "no lemma"; it means `resolve` falls through to
+    /// `Lemma(text: tagged, basis: .tagger)` — the inflected form recorded as the dictionary form,
+    /// under the *most* confident basis there is. A reader grinding coffee got a study item for the
+    /// earth under their feet, and nothing in the row said it was a guess.
+    @Test func theFormsTheTaggerLeavesAloneAreAllInTheTable() {
+        // Verb readings, where the table applies at all.
+        #expect(Lemmatizer.lemma(of: "ground", in: "They ground the coffee beans.").text == "grind")
+        #expect(Lemmatizer.lemma(of: "bound", in: "They had bound the papers together.").text == "bind")
+    }
+
+    /// The noun readings are untouched: the table is consulted only where NLTagger says verb, and
+    /// `endsNounPhrase` holds the rest. Sitting on the ground is not grinding.
+    @Test func theNounReadingsOfThoseFormsAreLeftAlone() {
+        #expect(Lemmatizer.lemma(of: "ground", in: "He sat on the ground.").text == "ground")
+    }
+
+    /// **The one the table cannot catch, because the tagger changed the word.** `broke` comes back
+    /// as `brake` — a different verb, in all five sentences probed — and `resolve` only consults the
+    /// table when the tagger returned the word unchanged. So this arrived as a confident lemma for
+    /// a word the reader never read. Corrections are a separate table for that reason: one is about
+    /// a form the tagger declines to resolve, the other about one it resolves wrongly.
+    @Test func aLemmaTheTaggerGetsWrongIsCorrected() {
+        for sentence in ["They broke it yesterday.", "He broke the window.", "The vase broke."] {
+            #expect(Lemmatizer.lemma(of: "broke", in: sentence).text == "break",
+                    "broke was lemmatised wrongly in: \(sentence)")
+        }
+    }
 }

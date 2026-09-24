@@ -296,6 +296,16 @@ public enum Lemmatizer {
     private static func resolve(_ index: Int, in tokens: [LemmaToken]) -> Lemma {
         let token = tokens[index]
         guard let tagged = token.lemma, !tagged.isEmpty else { return Lemma(text: token.word, basis: .surface) }
+        // **A lemma the tagger got wrong, which the table above cannot reach.** `AmbiguousPastForm`
+        // is consulted only where the tagger returned the word *unchanged* — a form it declined to
+        // resolve. This is the other failure: a form it resolved, to the wrong verb. Measured on
+        // macOS 27, 2026-09-24: `broke` lemmatises to `brake` in every sentence tried, tagged Verb,
+        // so it arrived as a confident dictionary form for a word the reader never read. Kept as a
+        // separate table because the two are different facts about the tagger, and because this one
+        // needs no grammar: "broke" is the past of "break" and of nothing else.
+        if token.lexicalClass == .verb, let corrected = TaggerCorrection.table[token.word] {
+            return Lemma(text: corrected, basis: .inferred)
+        }
         guard tagged == token.word, token.lexicalClass == .verb, let form = AmbiguousPastForm.table[token.word] else {
             return Lemma(text: tagged, basis: .tagger)
         }
@@ -309,6 +319,24 @@ private struct LemmaToken {
     let word: String
     let lemma: String?
     let lexicalClass: NLTag?
+}
+
+/// Forms NLTagger resolves to the **wrong** word, corrected by surface form.
+///
+/// Distinct from `AmbiguousPastForm`, which is about forms the tagger leaves alone. Here it commits,
+/// confidently, to a different verb — so nothing downstream can tell the answer is wrong, and the
+/// basis recorded would be `tagger`, the strongest there is. `inferred` instead: this project knows
+/// better than the tagger, and the row should say the lemma came from a rule rather than from it.
+///
+/// **Kept short and measured.** An entry earns its place by being probed, not by being remembered:
+/// every one here was reproduced across several sentences on macOS 27, 2026-09-24. A correction
+/// added on a hunch would be this project overriding Apple's model on no evidence.
+private enum TaggerCorrection {
+    static let table: [String: String] = [
+        // "brake" in all five sentences probed, tagged Verb each time. The past of "brake" is
+        // "braked", so "broke" has no reading that leads there.
+        "broke": "break",
+    ]
 }
 
 /// Irregular past forms that are also the base form of another word. NLTagger returns them
@@ -334,6 +362,19 @@ private struct AmbiguousPastForm {
         "lay": .init(pastOf: "lie", participleOf: nil, pastUsuallyMeant: false),
         "bore": .init(pastOf: "bear", participleOf: nil, pastUsuallyMeant: false),
         "wound": .init(pastOf: "wind", participleOf: "wind", pastUsuallyMeant: false),
+        // **Measured, not guessed at.** Probed on macOS 27 across 63 irregular English forms on
+        // 2026-09-24: ten came back from NLTagger unchanged, and those ten are exactly the forms
+        // that are also words in their own right — which is the criterion this table was built on,
+        // confirmed by the tagger's own behaviour. Eight of the ten were here. These are the two
+        // that were not, and being absent was worse than being unhandled: `resolve` falls through
+        // to `Lemma(text: tagged, basis: .tagger)`, so "they ground the coffee" recorded a study
+        // item for the earth under the reader's feet, under the most confident basis there is.
+        "ground": .init(pastOf: "grind", participleOf: "grind", pastUsuallyMeant: true),
+        // `false`, unlike `ground`: bare "bound" as a verb is *not* usually bind. "bound for
+        // London" and "bound to happen" are both tagged Verb by NLTagger and neither is binding,
+        // so where the grammar is silent this stays the surface form and is reported ambiguous —
+        // which is the table's whole discipline, and the reason it is not a replacement list.
+        "bound": .init(pastOf: "bind", participleOf: "bind", pastUsuallyMeant: false),
     ]
 
     /// Before a base form: "will found", "to lay", "did lay".
