@@ -37,6 +37,10 @@ readonly MODEL_SERVICE_ID=$BUNDLE_ID.ModelService
 # traps rather than returning nil when its bundle is missing, and swift-crypto's carries a privacy
 # manifest. A service that ships one bundle of three works until the day it reaches for another.
 readonly METAL_BUNDLE=mlx-swift_Cmlx.bundle
+# How many times a `codesign` call is attempted. Only a release's `--timestamp` can fail for a
+# reason worth repeating — it is a request to Apple's server — so a development build, which signs
+# offline, always succeeds or fails on the first. Five, the same as release.sh's notarisation retry.
+readonly SIGN_TRIES=5
 readonly CONFIG=release
 readonly APP=.build/$APP_NAME.app
 # Assembled here, and published by an atomic swap only when every check has passed: $APP is the
@@ -460,6 +464,34 @@ verify_signatures() {
     done
 }
 
+# **`--timestamp` is a network call, so it fails the way network calls fail.** Apple's timestamp
+# server is contacted once per code object, and a release signs five of them back to back. Measured
+# 2026-09-25 on the first release ever attempted: `mlx-swift_Cmlx.bundle` took a timestamp, the very
+# next object failed with *"A timestamp was expected but was not found"*, and the build died with
+# two resource bundles left unsigned — the same signature re-applied by hand a minute later
+# succeeded first try. So the failure is transient and retrying is the whole fix.
+#
+# This is the house pattern already: `release.sh` retries notarisation and stapling five times for
+# exactly this reason, and the signing step was the one network-dependent part of a release with no
+# retry at all. A development build passes `--timestamp=none`, contacts nobody, and so can never
+# spend more than its first attempt.
+#
+# stdout silenced, stderr kept, so a failure says why. The last attempt's stderr is not swallowed:
+# a genuinely bad identity or a malformed bundle must still fail loudly rather than after five
+# silent tries.
+sign_part() {  # $1: the timestamp option; $2: the code object to sign
+    local stamp=$1 part=$2 attempt
+    for (( attempt = 1; attempt <= SIGN_TRIES; attempt++ )); do
+        if (( attempt == SIGN_TRIES )); then
+            codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null
+            return
+        fi
+        codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null 2>&1 && return
+        note "signing $(basename "$part") failed on attempt $attempt of $SIGN_TRIES — retrying"
+        sleep $(( attempt * 2 ))
+    done
+}
+
 # **A release must carry a secure timestamp, and this is where that is enforced.** The up-to-date
 # check compares input digests, and the signing mode is not an input — so without this a release
 # could reuse a bundle signed with `--timestamp=none`, and notarisation would reject it after the
@@ -588,11 +620,11 @@ assemble() {
     # Innermost first: each resource bundle is a code object of its own, and the model service cannot
     # be signed over an unsigned one — "code object is not signed at all" (S2).
     for resource in ${BUNDLE_LIST[@]+"${BUNDLE_LIST[@]}"}; do
-        codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc/Contents/Resources/$resource" >/dev/null
+        sign_part "$stamp" "$model_xpc/Contents/Resources/$resource"
     done
-    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$model_xpc" >/dev/null
-    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$xpc" >/dev/null
-    codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$STAGE" >/dev/null
+    sign_part "$stamp" "$model_xpc"
+    sign_part "$stamp" "$xpc"
+    sign_part "$stamp" "$STAGE"
 
     verify_bundle "$STAGE" || fail "the staged bundle failed verification"
     note "assembled $STAGE (build $number)"
