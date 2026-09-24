@@ -438,4 +438,92 @@ struct IrregularFormCoverageTests {
                     "broke was lemmatised wrongly in: \(sentence)")
         }
     }
+
+    /// **The invariant that decides whether this is usable: a wrong lemma is never confident.**
+    ///
+    /// The raw tagger gets 52 of these 63 right on its own. That number is frightening out of
+    /// context and means little in it — every form here is an irregular verb, deliberately the
+    /// hardest class in English, chosen to break the thing. What matters is not how often Apple's
+    /// model is wrong but whether a wrong answer can reach the ledger *wearing confidence*, because
+    /// a study item keyed to the wrong dictionary form is unrecoverable later while an honest
+    /// `ambiguous` is merely unhelpful.
+    ///
+    /// So each form must end in one of two states: the right lemma, or the surface form marked
+    /// `ambiguous`/`surface`. What must never happen is the third — a different word under
+    /// `tagger` or `inferred`. That is what `ground`, `bound` and `broke` each were.
+    @Test func noIrregularFormEverProducesAConfidentlyWrongLemma() {
+        for (form, base) in Self.irregulars {
+            let lemma = Lemmatizer.lemma(of: form, in: "They \(form) it yesterday.")
+            if lemma.text == base { continue }
+            let complaint: Comment = "\(form) → \(lemma.text) (basis \(lemma.basis.name)); expected \(base), or the surface form admitted as uncertain"
+            #expect(lemma.basis == .ambiguous || lemma.basis == .surface, complaint)
+        }
+    }
+
+    /// Every irregular English form probed on macOS 27, 2026-09-24, with the verb it belongs to.
+    static let irregulars: [(String, String)] = [
+        ("saw", "see"), ("found", "find"), ("felt", "feel"), ("fell", "fall"), ("rose", "rise"),
+        ("lay", "lie"), ("bore", "bear"), ("wound", "wind"), ("ground", "grind"), ("bound", "bind"),
+        ("left", "leave"), ("spoke", "speak"), ("lit", "light"), ("cast", "cast"), ("beat", "beat"),
+        ("read", "read"), ("shed", "shed"), ("fit", "fit"), ("sped", "speed"), ("stuck", "stick"),
+        ("struck", "strike"), ("hung", "hang"), ("bred", "breed"), ("fled", "flee"),
+        ("rang", "ring"), ("sang", "sing"), ("sank", "sink"), ("drew", "draw"), ("blew", "blow"),
+        ("grew", "grow"), ("knew", "know"), ("threw", "throw"), ("flew", "fly"), ("wore", "wear"),
+        ("tore", "tear"), ("stole", "steal"), ("broke", "break"), ("chose", "choose"),
+        ("froze", "freeze"), ("held", "hold"), ("meant", "mean"), ("kept", "keep"),
+        ("slept", "sleep"), ("swept", "sweep"), ("taught", "teach"), ("caught", "catch"),
+        ("brought", "bring"), ("bought", "buy"), ("sought", "seek"), ("thought", "think"),
+        ("fought", "fight"), ("went", "go"), ("ate", "eat"), ("wrote", "write"),
+        ("drove", "drive"), ("rode", "ride"), ("took", "take"), ("gave", "give"),
+        ("came", "come"), ("ran", "run"), ("began", "begin"), ("drank", "drink"), ("swam", "swim"),
+    ]
+
+    /// **The participle-only forms, which the tagger leaves alone and the table did not know.**
+    /// Probed across 189 irregular forms on 2026-09-24: nineteen come back unchanged, and only ten
+    /// were here. `driven`, `spoken`, `sworn`, `burnt` and `spat` are the five of the remaining
+    /// nine that this mechanism can reach — the others are tagged noun or adjective, where the
+    /// table never fires, or are genuinely ambiguous words in their own right.
+    @Test func participleFormsResolveWhereTheGrammarShowsThem() {
+        #expect(Lemmatizer.lemma(of: "driven", in: "They had driven all night.").text == "drive")
+        #expect(Lemmatizer.lemma(of: "spoken", in: "She had spoken to him already.").text == "speak")
+        #expect(Lemmatizer.lemma(of: "sworn", in: "He had sworn an oath.").text == "swear")
+        #expect(Lemmatizer.lemma(of: "burnt", in: "The fire had burnt the house.").text == "burn")
+        #expect(Lemmatizer.lemma(of: "spat", in: "He spat on the ground.").text == "spit")
+    }
+
+    /// And where the grammar does **not** show a participle, they stay as they are rather than
+    /// being guessed at — which is the whole reason `pastUsuallyMeant` is false for these three.
+    ///
+    /// **Two different routes reach that answer, and both are correct here.** After a determiner,
+    /// `endsNounPhrase` claims the word for its noun-or-adjective reading: "a driven man" keeps
+    /// *driven*, which is the dictionary form of the adjective a reader would be looking up. With
+    /// no grammar at all — a sentence opening on the participle — it falls through to the surface
+    /// form marked `ambiguous`. What must never happen is either one answering "drive" confidently.
+    @Test func aParticipleWithNoGrammarBehindItIsNotGuessed() {
+        #expect(Lemmatizer.lemma(of: "driven", in: "He is a driven man.").text == "driven")
+
+        let opening = Lemmatizer.lemma(of: "Driven", in: "Driven by hunger, he ate it.")
+        #expect(opening.text == "driven")
+        #expect(opening.basis == .ambiguous, "an unresolved participle was recorded as certain")
+    }
+
+    /// `broken` is the second half of the `broke` defect and needs the correction table, not the
+    /// ambiguous one: the tagger answers `brake` here too, so it never looks unchanged.
+    @Test func bothHalvesOfTheBreakDefectAreCorrected() {
+        #expect(Lemmatizer.lemma(of: "broke", in: "He broke the window.").text == "break")
+        #expect(Lemmatizer.lemma(of: "broken", in: "The window had broken.").text == "break")
+    }
+
+    /// **The forms the tagger has no lemma for at all.** Four of the 189 answer `nil`: `swore`,
+    /// `sprang`, `leant`, `learnt`. That is honest — they landed on `surface`, which says "not
+    /// known" — but a study item keyed to *swore* never joins the one keyed to *swear*, which is
+    /// the entire job of a lemma. All four are unambiguous: no other verb has them as a form.
+    ///
+    /// They need the correction consulted *before* the nil guard, which is where it now sits.
+    @Test func formsTheTaggerHasNoLemmaForAreStillResolved() {
+        #expect(Lemmatizer.lemma(of: "swore", in: "He swore an oath.").text == "swear")
+        #expect(Lemmatizer.lemma(of: "sprang", in: "The cat sprang at it.").text == "spring")
+        #expect(Lemmatizer.lemma(of: "leant", in: "She leant on the door.").text == "lean")
+        #expect(Lemmatizer.lemma(of: "learnt", in: "They learnt it quickly.").text == "learn")
+    }
 }

@@ -295,6 +295,14 @@ public enum Lemmatizer {
 
     private static func resolve(_ index: Int, in tokens: [LemmaToken]) -> Lemma {
         let token = tokens[index]
+        // **Before the nil guard, because "no lemma" is one of the answers being corrected.** Four
+        // of the 189 forms probed answer nothing at all — `swore`, `sprang`, `leant`, `learnt` —
+        // and landing on `surface` is honest but useless: a study item keyed to *swore* never joins
+        // the one keyed to *swear*, which is the whole job of a lemma. Consulted after the guard,
+        // the correction could never see them.
+        if token.lexicalClass == .verb, let corrected = TaggerCorrection.table[token.word] {
+            return Lemma(text: corrected, basis: .inferred)
+        }
         guard let tagged = token.lemma, !tagged.isEmpty else { return Lemma(text: token.word, basis: .surface) }
         // **A lemma the tagger got wrong, which the table above cannot reach.** `AmbiguousPastForm`
         // is consulted only where the tagger returned the word *unchanged* — a form it declined to
@@ -303,9 +311,6 @@ public enum Lemmatizer {
         // so it arrived as a confident dictionary form for a word the reader never read. Kept as a
         // separate table because the two are different facts about the tagger, and because this one
         // needs no grammar: "broke" is the past of "break" and of nothing else.
-        if token.lexicalClass == .verb, let corrected = TaggerCorrection.table[token.word] {
-            return Lemma(text: corrected, basis: .inferred)
-        }
         guard tagged == token.word, token.lexicalClass == .verb, let form = AmbiguousPastForm.table[token.word] else {
             return Lemma(text: tagged, basis: .tagger)
         }
@@ -336,6 +341,16 @@ private enum TaggerCorrection {
         // "brake" in all five sentences probed, tagged Verb each time. The past of "brake" is
         // "braked", so "broke" has no reading that leads there.
         "broke": "break",
+        // The same defect in the participle: `broken` also answers `brake`, so it never looks
+        // unchanged and the ambiguous table can never see it.
+        "broken": "break",
+        // These four answer `nil` rather than a wrong word — the other way the tagger fails. Each
+        // is unambiguous: no other verb has them as a form, so no grammar is needed to choose.
+        // `leant` and `learnt` are the British spellings, which a reader of British text meets.
+        "swore": "swear",
+        "sprang": "spring",
+        "leant": "lean",
+        "learnt": "learn",
     ]
 }
 
@@ -375,6 +390,22 @@ private struct AmbiguousPastForm {
         // so where the grammar is silent this stays the surface form and is reported ambiguous —
         // which is the table's whole discipline, and the reason it is not a replacement list.
         "bound": .init(pastOf: "bind", participleOf: "bind", pastUsuallyMeant: false),
+        // **The participle-only forms.** Probed across 189 irregular forms, 2026-09-24: nineteen
+        // come back from the tagger unchanged, not the ten a 63-form sample had suggested. These
+        // five are the ones this mechanism can reach. `pastUsuallyMeant: false` where the form is
+        // never a simple past — "driven", "spoken", "sworn" — so with no participle marker in front
+        // they stay as they are and are reported ambiguous: "a driven man" is an adjective a reader
+        // may well be looking up, and guessing "drive" there would be a confident wrong answer of
+        // exactly the kind this table exists to prevent.
+        "driven": .init(pastOf: "drive", participleOf: "drive", pastUsuallyMeant: false),
+        "spoken": .init(pastOf: "speak", participleOf: "speak", pastUsuallyMeant: false),
+        "sworn": .init(pastOf: "swear", participleOf: "swear", pastUsuallyMeant: false),
+        // Both a past and a participle, and the adjective reading ("burnt toast") is tagged
+        // adjective, where this table never fires — so the past reading can be taken where the
+        // grammar is silent.
+        "burnt": .init(pastOf: "burn", participleOf: "burn", pastUsuallyMeant: true),
+        // Past of spit. The noun ("a spat about it") is tagged noun and so never reaches here.
+        "spat": .init(pastOf: "spit", participleOf: "spit", pastUsuallyMeant: true),
     ]
 
     /// Before a base form: "will found", "to lay", "did lay".
