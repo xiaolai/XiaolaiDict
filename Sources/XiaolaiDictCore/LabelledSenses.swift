@@ -46,6 +46,49 @@ public enum LabelledSenses {
             why: "the verb “moderate”, against “harden steel” and “tune a piano”"),
     ]
 
+    /// **The inflected set**, for ADR-0004: does knowing the word class find the right *entry*?
+    ///
+    /// Separate from `hardCases` and not merged into it, because `hardCases` is what the recorded
+    /// ladder order rests on — 6/0, 5/1, 3/1 — and folding six more cases in would silently make
+    /// that number mean something else.
+    ///
+    /// **Paired on purpose.** Each spelling appears twice, once where the reader means the verb the
+    /// form inflects and once where they mean the noun the spelling *is*. A resolver that always
+    /// prefers the lemma's entry, or always prefers the surface's, scores exactly half — so the
+    /// pairing is what stops a bias reading as an improvement. `ground` alone is 20 NOAD senses
+    /// across the two entries; the class narrows it to 6 or to 14.
+    ///
+    /// The sentences are written here rather than taken from NOAD's own examples.
+    /// `dictionary-research/oracle-contamination` measured a local model reproducing eleven
+    /// consecutive words of Oxford's definition of *run* from memory, so a case built from Oxford's
+    /// own text would measure the model's memory rather than its reading.
+    public static let inflectedCases: [LabelledCase] = [
+        LabelledCase(
+            word: "ground", sentence: "She ground the coffee beans before breakfast.",
+            correct: "m_en_gbus0434260.010",
+            why: "the past of grind, against the 14 senses of the earth underfoot"),
+        LabelledCase(
+            word: "ground", sentence: "He sat down on the cold wet ground.",
+            correct: "m_en_gbus0435410.008",
+            why: "the same spelling, and here the noun is what was read"),
+        LabelledCase(
+            word: "saw", sentence: "From the ridge he saw the whole valley below.",
+            correct: "m_en_gbus0917420.011",
+            why: "the past of see, against the cutting tool that owns the spelling"),
+        LabelledCase(
+            word: "saw", sentence: "He cut the plank in two with a saw.",
+            correct: "m_en_gbus0903150.005",
+            why: "the tool, which is the headword the surface form is"),
+        LabelledCase(
+            word: "rose", sentence: "The sun rose over the hills a little after six.",
+            correct: "m_en_gbus0875650.019",
+            why: "the past of rise; the flower is a noun entry of its own"),
+        LabelledCase(
+            word: "rose", sentence: "She gave him a single red rose.",
+            correct: "m_en_gbus0882370.015",
+            why: "the flower, and the pair is what stops a lemma-preferring bias scoring well"),
+    ]
+
     /// Which bucket one answer falls in. **Five, because an ambiguous answer is two facts**: a sense
     /// shown under an *ambiguous* badge is not a confident answer and is not scored as one, and it is
     /// split by whether the sense it led with was the right one — a hedge that is usually right and

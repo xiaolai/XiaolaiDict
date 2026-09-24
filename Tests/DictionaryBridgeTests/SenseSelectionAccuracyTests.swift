@@ -519,3 +519,62 @@ struct SelectorConfigurationTests {
         try? report.write(toFile: "/tmp/xiaolaidict-probe/prompt-size.txt", atomically: true, encoding: .utf8)
     }
 }
+
+/// **Does knowing the word class find the right entry?** — the measurement ADR-0004 turns on.
+///
+/// The cases are paired: each spelling appears once where the lemma's entry is right and once where
+/// the surface's own entry is, so a resolver that always prefers one scores exactly half and a bias
+/// cannot read as an improvement.
+///
+/// Scored on the embedding rung. Not the model rungs, and deliberately:
+/// `dictionary-research/oracle-contamination` measured a local model reproducing eleven consecutive
+/// words of Oxford's definition of *run* from memory, and these candidates *are* Oxford's text. The
+/// embedding compares the reader's sentence against the sense wording — it has no memory of which
+/// sense NOAD numbers what.
+struct InflectedEntryChoiceTests {
+    /// Prints both numbers rather than asserting one. What narrowing is worth is a measurement to
+    /// be read and argued with, not a threshold to be defended — and a bar set from the first run
+    /// would only ever record what this Mac did that day.
+    @Test func narrowingByWordClassIsMeasuredOnBothHalvesOfEachPair() async throws {
+        let selector = EmbeddingSenseSelector()
+        var report = "\ninflected entry choice — \(LabelledSenses.inflectedCases.count) paired cases\n"
+        var narrowedRight = 0, wideRight = 0, narrowedCandidates = 0, wideCandidates = 0
+
+        for labelled in LabelledSenses.inflectedCases {
+            let candidates = try SenseSelectionAccuracyTests.candidates(for: labelled.word)
+            let partOfSpeech = Lemmatizer.partOfSpeech(
+                of: labelled.word, in: labelled.sentence, at: nil)
+
+            let wide = await selector.choose(
+                from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: nil)
+            let narrow = await selector.choose(
+                from: candidates, reading: labelled.sentence, context: .complete,
+                partOfSpeech: partOfSpeech)
+
+            let wideOK = LabelledSenses.bucket(wide, correct: labelled.correct) == .right
+            let narrowOK = LabelledSenses.bucket(narrow, correct: labelled.correct) == .right
+            if wideOK { wideRight += 1 }
+            if narrowOK { narrowedRight += 1 }
+            wideCandidates += candidates.count
+            narrowedCandidates += candidates.filter {
+                guard let partOfSpeech, let its = $0.partOfSpeech else { return true }
+                return its.split(separator: " ").contains(Substring(partOfSpeech))
+            }.count
+
+            report += "  \(labelled.word.padded(8)) [\(partOfSpeech ?? "?")]"
+                + "  all: \(wideOK ? "✓" : "✗")   narrowed: \(narrowOK ? "✓" : "✗")"
+                + "   \(labelled.why)\n"
+        }
+        report += "  ——\n"
+        report += "  right without narrowing: \(wideRight)/\(LabelledSenses.inflectedCases.count)"
+            + "   candidates seen: \(wideCandidates)\n"
+        report += "  right with narrowing:    \(narrowedRight)/\(LabelledSenses.inflectedCases.count)"
+            + "   candidates seen: \(narrowedCandidates)\n"
+        print(report)
+
+        // The one thing that must hold however the numbers land: narrowing must not make the
+        // reader worse off. A filter that loses answers is worse than no filter.
+        #expect(narrowedRight >= wideRight,
+                "narrowing by word class lost answers it should have kept")
+    }
+}

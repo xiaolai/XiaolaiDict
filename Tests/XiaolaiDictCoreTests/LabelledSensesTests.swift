@@ -47,4 +47,27 @@ struct LabelledSensesTests {
             #expect(labelled.sentence.localizedCaseInsensitiveContains(labelled.word.prefix(4)))
         }
     }
+
+    /// **The inflected set is paired, and the pairing is the measurement.** Each spelling appears
+    /// once where the lemma's entry is right and once where the surface's own entry is — so a
+    /// resolver that always prefers one of the two scores exactly half, and a bias cannot read as
+    /// an improvement. Losing the pairing would make the set say the opposite of what it is for.
+    @Test func everyInflectedCaseIsPaired() {
+        let byWord = Dictionary(grouping: LabelledSenses.inflectedCases, by: \.word)
+        #expect(!byWord.isEmpty)
+        for (word, cases) in byWord {
+            #expect(cases.count == 2, "\(word) is not paired: \(cases.count) case(s)")
+            #expect(Set(cases.map(\.correct)).count == 2, "\(word)'s two cases share an answer")
+        }
+    }
+
+    /// The two sets stay apart: `hardCases` is what the recorded ladder order rests on.
+    @Test func theInflectedSetIsNotFoldedIntoTheHardCases() {
+        let hard = Set(LabelledSenses.hardCases.map(\.sentence))
+        for labelled in LabelledSenses.inflectedCases {
+            #expect(!hard.contains(labelled.sentence))
+            #expect(!labelled.why.isEmpty, "\(labelled.word) does not say what makes it hard")
+            #expect(labelled.correct != nil, "an inflected case with no answer measures nothing")
+        }
+    }
 }
