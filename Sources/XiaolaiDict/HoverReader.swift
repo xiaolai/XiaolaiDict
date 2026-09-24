@@ -49,7 +49,12 @@ final class HoverReader {
 
     private let capturing = CaptureGuard()
     /// The word the last hover looked up, so resting on it does not look it up again.
-    private var lastLookedUp: String?
+    ///
+    /// **Cleared when the modifier is released**, because that is what ends a hover. It used to be
+    /// cleared only by a *different* successful lookup, so a reader who looked a word up, let go,
+    /// and reached for the same word again got nothing — and the only way out was to look
+    /// something else up first, which nobody would guess was the rule.
+    var lastLookedUp: String?
 
     init(
         policy: @escaping @MainActor () -> HoverPolicy = { .shipped },
@@ -81,7 +86,13 @@ final class HoverReader {
             at: HoverSite(bundleID: nil), modifiersHeld: modifiersHeld,
             pointerStillFor: pointerStillFor, pausedUntil: pause().until, lastLookedUp: nil,
             captureInFlight: capturing.isHeld, now: .now)
-        if case .stayQuiet(let refusal) = ungated { return .quiet(refusal) }
+        if case .stayQuiet(let refusal) = ungated {
+            // Letting go of the modifier ends the hover, and with it the suppression: the next
+            // hold may look the same word up again. Every other refusal here is a pause in one
+            // continuing hover and leaves it alone.
+            if refusal == .modifierNotHeld { lastLookedUp = nil }
+            return .quiet(refusal)
+        }
 
         // Now who owns the pixel — resolved **before** any text is read. The frontmost app is a
         // different question: hovering a visible background terminal while a browser is active
@@ -111,14 +122,7 @@ final class HoverReader {
                 ScreenWordReader.read(at: point, in: target)
             }).value {
             case .hit(let hit):
-                guard let selection = Self.selection(from: hit) else {
-                    return .nothing("no word under the pointer")
-                }
-                if let refusal = repeatOrExcluded(selection, policy: policy, point: point) {
-                    return .quiet(refusal)
-                }
-                lastLookedUp = Self.key(selection, at: point)
-                return .selection(selection)
+                return accept(Self.selection(from: hit), policy: policy, point: point)
             case .miss(let reason):
                 log.debug("accessibility missed: \(reason, privacy: .public)")
             }
@@ -136,15 +140,33 @@ final class HoverReader {
             let recognition = try await bounded { [recogniser] in
                 try await recogniser.read(at: point, excluding: excluded)
             }
-            guard let selection = Self.selection(from: recognition) else {
-                return .nothing("no word under the pointer")
-            }
-            if let refusal = repeatOrExcluded(selection, policy: policy, point: point) { return .quiet(refusal) }
-            lastLookedUp = Self.key(selection, at: point)
-            return .selection(selection)
+            return accept(Self.selection(from: recognition), policy: policy, point: point)
         } catch {
             return .nothing(error.localizedDescription)
         }
+    }
+
+    /// The one place a read becomes an answer.
+    ///
+    /// **Written once because both capture paths reach it.** Accessibility and OCR each had their
+    /// own copy of "is there a word, is it refused, remember it, return it" — four lines apiece,
+    /// and any change to what acceptance means had to be made twice or drift.
+    ///
+    /// **Cancellation is checked here, after the read and before anything is remembered.** The
+    /// capture runs on a detached task, which does not inherit this call's cancellation — so a
+    /// reader who switches hover off, or a watcher that tears down mid-read, still had a selection
+    /// delivered and `lastLookedUp` written under them. The work cannot be stopped; accepting its
+    /// result can be.
+    private func accept(
+        _ selection: Selection?, policy: HoverPolicy, point: CGPoint
+    ) -> Outcome {
+        guard !Task.isCancelled else { return .quiet(.cancelled) }
+        guard let selection else { return .nothing("no word under the pointer") }
+        if let refusal = postReadRefusal(selection, policy: policy, point: point) {
+            return .quiet(refusal)
+        }
+        lastLookedUp = Self.key(selection, at: point)
+        return .selection(selection)
     }
 
     /// Runs `work` under the capture deadline, and **releases the capture guard only when `work`
@@ -159,22 +181,27 @@ final class HoverReader {
     /// So the guard is released by the work's own continuation. A capture that never finishes holds
     /// it forever, and that is the correct outcome: while one is wedged, no other may start.
     private func bounded<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        // **The guard is released by the work's own continuation, not by this function's return.**
+        // A capture that never finishes holds it forever, and that is the correct outcome: while
+        // one is wedged, no other may start. Nothing is caught here — an earlier version wrapped
+        // the call in a `do/catch` that only rethrew, under a comment asserting the deadline had
+        // won. It had not necessarily: a capture error and a cancellation arrive by the same path,
+        // and the comment claimed to know which.
         let finished = Task { [capturing] () async throws -> T in
             defer { capturing.release() }
             return try await work()
         }
-        do {
-            return try await withDeadline(captureDeadline) { try await finished.value }
-        } catch {
-            // The deadline won. `finished` keeps running and will release the guard itself.
-            throw error
-        }
+        return try await withDeadline(captureDeadline) { try await finished.value }
     }
 
-    /// The checks that need the reading itself. Exclusion is enforced before the read as well —
-    /// this is the second line, not the only one: the recogniser reports the *window's* owner,
-    /// which is not always the owner of the element the pointer is over.
-    private func repeatOrExcluded(
+    /// The refusals that need the reading itself, so they cannot be part of the gate.
+    ///
+    /// Named for *when* it runs rather than for what it happened to check first: it began as
+    /// `repeatOrExcluded`, then grew the script filter, and the name went on describing two of its
+    /// three reasons. Exclusion is enforced before the read as well — this is the second line, not
+    /// the only one: the recogniser reports the *window's* owner, which is not always the owner of
+    /// the element the pointer is over.
+    private func postReadRefusal(
         _ selection: Selection, policy: HoverPolicy, point: CGPoint
     ) -> HoverRefusal? {
         if let bundleID = selection.place.bundleID, policy.excludedApps.contains(bundleID) {
@@ -196,8 +223,29 @@ final class HoverReader {
 
     /// Identifies the word *and* roughly where it was, so the same word twice in a sentence is two
     /// hovers but resting on one is one.
-    private static func key(_ selection: Selection, at point: CGPoint) -> String {
-        "\(selection.text)@\(Int(point.x / 8))x\(Int(point.y / 8))"
+    /// **The app is part of the identity, not just the word and the place.** The key was the word
+    /// and an 8-point cell, so `run` in a terminal and `run` at the same screen position in a
+    /// browser were one lookup and the second was dropped in silence — the likeliest way to meet
+    /// this being a reader comparing the same word in two windows.
+    ///
+    /// Not `private`, so the identity can be asserted directly rather than inferred from a hover
+    /// that needs a real screen to fire.
+    /// `nonisolated` for the reason `HoverWatcher`'s helpers are: it reads its arguments and
+    /// nothing else, and inheriting the class's isolation would cost a test an actor hop for no
+    /// safety it needs.
+    nonisolated static func key(_ selection: Selection, at point: CGPoint) -> String {
+        let place = selection.place.bundleID ?? "—"
+        // The sentence as well, because the same word at the same point in the same app can
+        // still be a different lookup: the page scrolled, or the pane behind the pointer was
+        // replaced. Hashed rather than carried whole — this is an identity, not a record, and
+        // a sentence held here would keep a copy of the reader's text alive in the reader.
+        //
+        // `hashValue` is allowed *here* and banned for the word colours, and the difference
+        // is lifetime: `Hasher` is seeded per process, so a value that outlives the run is
+        // unusable. This key is compared only against `lastLookedUp`, which is memory and
+        // dies with the process. Nothing derived from it is stored or drawn.
+        let context = selection.sentence.map { String($0.hashValue, radix: 16) } ?? "—"
+        return "\(place)|\(context)|\(selection.text)@\(Int(point.x / 8))x\(Int(point.y / 8))"
     }
 
     private static func selection(from hit: ScreenWordReader.Hit) -> Selection? {

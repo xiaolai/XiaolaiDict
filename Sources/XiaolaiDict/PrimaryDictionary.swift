@@ -12,7 +12,7 @@ import XiaolaiDictCore
 ///
 /// It also bounds the card: without it, one lookup of *fine* could leave seven study items behind
 /// for a single meaning.
-struct PrimaryDictionary: Equatable {
+struct PrimaryDictionary: Equatable, Sendable {
     /// `DictionaryIdentity.key` of the dictionary the reader chose, or nil until they choose one.
     let chosen: String?
 
@@ -109,7 +109,7 @@ extension PrimaryDictionary {
 }
 
 
-struct SenseResolution: Equatable {
+struct SenseResolution: Equatable, Sendable {
     let mark: SenseMark?
     let encounter: SenseEncounter?
 
@@ -124,7 +124,11 @@ struct SenseResolution: Equatable {
 ///
 /// The ladder, cheapest first — a rung that cannot beat the one below it on a labelled set does not
 /// ship (decision D6).
-struct SenseResolver {
+/// Sendable because it travels into the task group that resolves the sense: `SenseSelecting` is
+/// already `Sendable` and `PrimaryDictionary` is a `String?`. What must *not* travel is the closure
+/// that reads the reader's chosen dictionary — that is called on this actor and the resolved value
+/// is what goes with the work.
+struct SenseResolver: Sendable {
     let primary: PrimaryDictionary
     let selector: any SenseSelecting
 

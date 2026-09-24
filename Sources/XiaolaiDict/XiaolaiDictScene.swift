@@ -135,7 +135,8 @@ struct XiaolaiDictSettings: View {
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
                 hasAsked: app.dictionariesAsked,
-                choose: { app.choosePrimaryDictionary($0) }),
+                choose: { app.choosePrimaryDictionary($0) },
+                reask: { Task { await app.refreshDictionaries() } }),
             shortcut: app.shortcutChoice,
             openSetup: { app.showSetup() },
             modelLicence: app.models.licenceURL)
@@ -158,7 +159,8 @@ struct XiaolaiDictSetup: View {
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
                 hasAsked: app.dictionariesAsked,
-                choose: { app.choosePrimaryDictionary($0) }),
+                choose: { app.choosePrimaryDictionary($0) },
+                reask: { Task { await app.refreshDictionaries() } }),
             shortcut: app.shortcutChoice,
             // Whether the hot key actually registered, not merely whether the combination is
             // well-formed: another app can hold it exclusively, and the row drew "Ready" over a

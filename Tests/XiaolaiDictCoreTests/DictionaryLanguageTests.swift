@@ -119,6 +119,83 @@ struct DictionaryLanguageTests {
         #expect(ProbeScript.dominant(in: "×÷") == nil, "a division sign is a symbol, not a letter")
     }
 
+    /// **Punctuation inside a script's block is not that script.** `U+30FB ・` sits in the
+    /// Katakana block and is a separator, so a range-only classifier counted it as kana — and
+    /// because any kana absorbs han, `水・` came back Japanese. A reader studying Chinese would
+    /// have had it refused and filed under a script they had not ticked. Letterhood is asked of
+    /// Unicode now, not inferred from a block.
+    @Test func punctuationInsideAScriptsBlockDoesNotVote() {
+        #expect(ProbeScript.dominant(in: "水・") == .han)
+        #expect(ProbeScript.dominant(in: "・") == nil)
+        #expect(ProbeScript.dominant(in: "。、「」") == nil)
+        // The prolonged sound mark *is* a letter and stays kana: ラーメン is one word.
+        #expect(ProbeScript.dominant(in: "ラーメン") == .kana)
+    }
+
+    /// **A script this cannot name is a word that escapes the filter**, because unclassified text
+    /// is deliberately looked up. So the coverage gaps were not cosmetic: halfwidth katakana, the
+    /// han beyond the basic plane, and Latin past `0x024F` all answered nil and walked straight
+    /// through a filter set to exclude them.
+    @Test func theScriptsAreRecognisedWhereverUnicodePutsThem() {
+        #expect(ProbeScript.dominant(in: "ｶﾀｶﾅ") == .kana, "halfwidth katakana")
+        #expect(ProbeScript.dominant(in: "𠮷") == .han, "han beyond the basic plane")
+        #expect(ProbeScript.dominant(in: "ế") == .latin, "Latin Extended Additional")
+        #expect(ProbeScript.dominant(in: "Ɓ") == .latin, "Latin Extended-B")
+        #expect(ProbeScript.dominant(in: "ﾊﾝｸﾞﾙ") == .kana)
+        #expect(ProbeScript.dominant(in: "한글") == .hangul)
+    }
+
+    /// **One word must not classify two ways depending on how it was typed.** Composed `ế` is a
+    /// single scalar and decomposed `ế` is `e` plus two combining marks; before normalising, the
+    /// first answered nil and the second Latin. A capture from the screen can be either.
+    @Test func composedAndDecomposedTextAgree() {
+        let composed = "ế"
+        let decomposed = "e\u{0302}\u{0301}"
+        // **Compared as scalars, not as strings.** Swift's `String` equality is canonical, so the
+        // two compare equal and `composed != decomposed` is false — the premise has to be stated
+        // at the level the classifier actually reads.
+        #expect(Array(composed.unicodeScalars) != Array(decomposed.unicodeScalars),
+                "the fixture must actually differ, or this proves nothing")
+        #expect(ProbeScript.dominant(in: composed) == ProbeScript.dominant(in: decomposed))
+        #expect(ProbeScript.dominant(in: composed) == .latin)
+    }
+
+    /// `of` and `dominant` differ in how they *traverse*, never in what a scalar is. They shared a
+    /// switch by copy at first, and the copies had already drifted — `of` was missing every range
+    /// the other had gained.
+    @Test func bothClassifiersAgreeAboutWhatAScalarIs() {
+        for word in ["fine", "水", "하다", "する", "ế", "𠮷"] {
+            #expect(ProbeScript.of(word) == ProbeScript.dominant(in: word), "disagreed about \(word)")
+        }
+    }
+
+    /// **A block named for a script still holds other scripts' letters.** `U+AB65 ꭥ` is GREEK
+    /// LETTER SMALL CAPITAL OMEGA and it lives in *Latin* Extended-E — so widening the Latin
+    /// ranges to cover `ế` swept it in, and a Latin-only reader would have had Greek looked up and
+    /// filed under Latin. Verified against the character's own Unicode name. The lesson is the one
+    /// that made `・` kana: a block is a range of code points, not a statement about script.
+    @Test func aBlockNamedForOneScriptCanHoldAnother() {
+        #expect(ProbeScript.dominant(in: "\u{AB65}") == nil, "Greek inside Latin Extended-E")
+    }
+
+    /// **Compatibility normalisation is what stops the block list growing for ever.** Ligatures,
+    /// halfwidth kana and fullwidth Latin are the same letters wearing presentation forms, and
+    /// folding them first removes three whole families of gaps instead of chasing them one block
+    /// at a time — which is what the first two rounds of this classifier did.
+    @Test func presentationFormsFoldToTheLettersTheyAre() {
+        #expect(ProbeScript.dominant(in: "ﬀ") == .latin, "the ff ligature is two Latin letters")
+        #expect(ProbeScript.dominant(in: "ｶﾀｶﾅ") == .kana, "halfwidth katakana")
+        #expect(ProbeScript.dominant(in: "ＡＢＣ") == .latin, "fullwidth Latin")
+        #expect(ProbeScript.dominant(in: "㌍") == .kana, "a squared katakana word")
+    }
+
+    /// Kana past the original blocks. These do not decompose, so normalisation cannot reach them
+    /// and the blocks have to be named.
+    @Test func kanaBeyondTheOriginalBlocksIsStillKana() {
+        #expect(ProbeScript.dominant(in: "\u{1B001}") == .kana, "Kana Supplement")
+        #expect(ProbeScript.dominant(in: "\u{1B150}") == .kana, "Small Kana Extension")
+    }
+
     /// A mixed capture takes the script most of its letters are in. The case this is for is a word
     /// picked up with a stray neighbour — OCR returning `the 水` — where refusing to classify at
     /// all would be worse than naming the majority.

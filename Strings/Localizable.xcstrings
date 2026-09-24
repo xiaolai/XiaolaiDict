@@ -45,7 +45,7 @@
     "A guess — not confirmed" : {
 
     },
-    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing. Words in a script you have not ticked are not looked up, and do not appear in your reading history — untick nothing and everything is looked up." : {
+    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
 
     },
     "A menu-bar dictionary for macOS." : {
@@ -72,6 +72,9 @@
     "Always" : {
 
     },
+    "Ask again" : {
+
+    },
     "Ask macOS…" : {
 
     },
@@ -79,6 +82,9 @@
 
     },
     "Asking which dictionaries are enabled…" : {
+
+    },
+    "At least one script has to stay ticked." : {
 
     },
     "Author" : {
@@ -102,7 +108,7 @@
     "Checking…" : {
       "comment" : "While the permissions are being probed"
     },
-    "Chinese characters" : {
+    "Chinese characters / Japanese kanji" : {
 
     },
     "Choose…" : {
@@ -509,6 +515,9 @@
 
     },
     "The dictionary service did not answer, so no dictionary can be suggested." : {
+
+    },
+    "The dictionary service did not answer." : {
 
     },
     "The dictionary you study from is no longer enabled in Dictionary. Senses are being marked against whichever dictionary answers instead, and study history is kept per dictionary — so those marks build up apart from yours." : {

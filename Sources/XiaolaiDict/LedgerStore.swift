@@ -43,9 +43,9 @@ actor LedgerStore {
     /// end up in the ledger without the lookup it belongs to.
     @discardableResult
     func record(_ recording: LookupRecording) throws -> Int {
-        let lookup = try ledger.record(recording.record)
-        if let encounter = recording.encounter { try ledger.record(encounter, for: lookup) }
-        return lookup
+        // One transaction, so a sense that cannot be written takes its lookup with it rather than
+        // leaving a row the caller has been told does not exist.
+        try ledger.record(recording.record, with: recording.encounter)
     }
 
     /// A sense the reader picked, hung off a lookup already recorded. Kept apart from the model's

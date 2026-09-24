@@ -19,14 +19,23 @@ public struct DictionaryChoice {
     /// nothing is a state that does not. Without this the setup board said "asking" for the life
     /// of the window.
     public var hasAsked: Bool
+    /// Asks the service again, discarding its last answer.
+    ///
+    /// **The failure state needs an action, not just a sentence.** Telling the reader the
+    /// service did not answer, with nothing to do about it, leaves them to guess that
+    /// reopening the window might help — and nothing guarantees it does: the dictionary list
+    /// is asked once and handed in, and the window's own polling `.task` refreshes
+    /// permissions, not this.
+    public var reask: () -> Void
 
     public init(
         available: [DictionaryCapability]?, chosen: String?, hasAsked: Bool = false,
-        choose: @escaping (String?) -> Void
+        choose: @escaping (String?) -> Void, reask: @escaping () -> Void = {}
     ) {
         self.available = available
         self.chosen = chosen
         self.hasAsked = hasAsked
+        self.reask = reask
         self.choose = choose
     }
 }
@@ -203,7 +212,17 @@ struct LookupPane: View {
             // hover path often has no sentence to offer it. Naming the writing system says
             // exactly what is checked.
             ForEach(ProbeScript.allCases, id: \.self) { script in
+                // **The last remaining box is disabled, not silently refused.** The binding
+                // still guards — an empty set looks up almost nothing — but a control that
+                // accepts a click and does nothing reads as a broken switch. Disabled, the
+                // reason is visible before the click rather than inferred after it.
                 Toggle(isOn: binding(for: script)) { Self.label(for: script) }
+                    .disabled(isTheOnlyScriptChosen(script))
+            }
+            if policy.scripts.count == 1 {
+                Text("At least one script has to stay ticked.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         } header: {
             Text("The gate")
@@ -216,8 +235,10 @@ struct LookupPane: View {
             Text("""
                  A hover only fires while the key is held and the pointer has stopped. \
                  There is no setting for holding nothing. \
-                 Words in a script you have not ticked are not looked up, and do not \
-                 appear in your reading history — untick nothing and everything is looked up.
+                 Hovering a word in a script you have not ticked looks nothing up, and your \
+                 reading history shows only the scripts ticked here. Looking a word up from \
+                 a selection still works whatever it is written in. Nothing is deleted: \
+                 ticking a script back shows its words again.
                  """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -314,10 +335,19 @@ struct LookupPane: View {
     static func label(for script: ProbeScript) -> Text {
         switch script {
         case .latin: Text("Latin — English and most European languages")
-        case .han: Text("Chinese characters")
+        // **Named for what it governs, not for what Unicode calls it.** `日本語` is written
+        // entirely in kanji and classifies as han, so a Japanese reader who ticks only
+        // "Japanese kana" is refused most of their own language. "Chinese characters" alone
+        // hid that, and the reader had no way to find out except by it not working.
+        case .han: Text("Chinese characters / Japanese kanji")
         case .hangul: Text("Korean")
         case .kana: Text("Japanese kana")
         }
+    }
+
+    /// Whether `script` is the only one left ticked, which is what makes its box read-only.
+    private func isTheOnlyScriptChosen(_ script: ProbeScript) -> Bool {
+        policy.scripts == [script]
     }
 
     /// One box per script, and **the last one cannot be unticked**.
@@ -418,8 +448,20 @@ struct DictionaryPane: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.inline)
-                } else if choice != nil {
+                } else if let choice, !choice.hasAsked {
                     Text("Asking the dictionary service…").foregroundStyle(.secondary)
+                } else if choice != nil {
+                    // **Asked and answered with nothing is not still asking.** The pane said
+                    // "Asking…" for as long as it was open whenever discovery finished without
+                    // a list — a spinner that never resolves, describing a request that had
+                    // already come back. `hasAsked` is the flag the app already sets and
+                    // `SetupView` already reads; this pane was simply not looking at it.
+                    VStack(alignment: .leading) {
+                        Text("The dictionary service did not answer.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let choice { Button("Ask again") { choice.reask() } }
+                    }
                 } else {
                     Text("This pane is not connected to the dictionary service.")
                         .foregroundStyle(.secondary)

@@ -46,6 +46,13 @@ struct LedgerSchema7Tests {
                 try ledger.recentLookups(since: now.addingTimeInterval(-60), limit: 5,
                                          studying: Set(ProbeScript.allCases)).first)
             #expect(back.surface == "水")
+
+            // **Read back through the other reader too.** Checking `surface` alone is what let the
+            // column go missing from `history(of:)` entirely: the write worked, the drawer worked,
+            // and every record that reader returned carried `script: nil` — a value that reads
+            // exactly like a row from before the schema. The assertion has to name the column.
+            let recorded = try #require(try ledger.history(of: "水").first)
+            #expect(recorded.script == .han, "history(of:) dropped the script it was written with")
         }
     }
 
@@ -90,6 +97,39 @@ struct LedgerSchema7Tests {
             let drawn = try ledger.recentLookups(
                 since: now.addingTimeInterval(-600), limit: 10, studying: [.latin])
             #expect(drawn.count == 5, "the han rows were counted against the limit before being dropped")
+        }
+    }
+
+    /// **A lookup and the sense it met are one write or neither.**
+    ///
+    /// They were two statements with nothing around them, so an encounter that failed left the
+    /// lookup persisted while the caller was told the recording had failed — and the caller's
+    /// answer to that is to drop the lookup id, which is what a reader's later tap would have been
+    /// hung off. The row survives unreachable: a lookup with no sense and no way to give it one.
+    ///
+    /// **The rollback itself has no test, and that is a statement about the schema rather than an
+    /// omission.** Every column on `sense_encounters` is `NOT NULL` over a Swift type that cannot
+    /// be nil, there is no unique index, and the foreign key is satisfied by construction because
+    /// the transaction supplies the id it just inserted — so no value reachable through this API
+    /// makes the *second* insert fail while the first succeeds. Opening the ledger read-only fails
+    /// both and proves nothing about ordering. What is asserted here is the success path: both
+    /// rows land together, and the id returned is the one the sense is attached to. The savepoint
+    /// is insurance against a schema that grows a constraint later, and if one is ever added, the
+    /// failure it introduces is what should bring a rollback test with it.
+    @Test func aLookupAndItsSenseAreWrittenTogether() throws {
+        try withLedger { ledger in
+            let encounter = SenseEncounter(
+                dictionary: DictionaryIdentity(name: "NOAD"), entryID: "m_en_1",
+                senseKey: "m_en_1.001", senseKeyKind: .publisher, sensePath: nil,
+                entrySenseCount: 3, senseHash: nil, gloss: "a penalty", chosenBy: .model,
+                chosenAt: now)
+            let id = try ledger.record(record("fine", script: .latin), with: encounter)
+
+            let recorded = try ledger.history(of: "fine")
+            #expect(recorded.count == 1)
+            let met = try ledger.encounters(ofLookup: id)
+            #expect(met.map(\.senseKey) == ["m_en_1.001"],
+                    "the sense was not attached to the id the lookup came back with")
         }
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the panel says about the sense, once something is known about it.
-public enum SenseMark: Equatable {
+public enum SenseMark: Equatable, Sendable {
     /// `by` is the difference between a fact and a hypothesis, and the panel shows which.
     case chosen(key: String, by: SenseChoice)
     /// Nothing was chosen, and this is why — the other half of "the popup can mark a sense, and

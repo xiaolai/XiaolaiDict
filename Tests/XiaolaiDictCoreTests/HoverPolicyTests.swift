@@ -298,4 +298,44 @@ extension HoverPolicyTests {
         #expect(!HoverRefusal.scriptNotStudied.reason.isEmpty)
         #expect(HoverRefusal.scriptNotStudied.reason != HoverRefusal.excludedApp.reason)
     }
+
+    /// **A pause is a duration, not a whole number of seconds.** `Duration.components` splits into
+    /// seconds and attoseconds, and reading only the first threw the remainder away: a pause of
+    /// 1.5 s lasted 1 s, and anything under a second expired the instant it was set. The shipped
+    /// menu offers 15 minutes and up, so nothing reachable today is wrong — which is exactly why
+    /// it would have gone on being wrong the day a shorter one was offered.
+    @Test func aPauseKeepsTheFractionOfASecondItWasGiven() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var pause = HoverPause()
+        pause.pause(for: .milliseconds(1_500), from: start)
+        #expect(pause.until == start.addingTimeInterval(1.5))
+
+        pause.pause(for: .milliseconds(500), from: start)
+        #expect(pause.until == start.addingTimeInterval(0.5), "a sub-second pause expired at once")
+    }
+
+    /// **The gaps in the classifier were holes in this gate**, so the regression belongs here too
+    /// and not only where the classifier is tested. Text the classifier cannot name is looked up on
+    /// purpose, which means every script it failed to recognise walked through a filter set to
+    /// exclude it: halfwidth katakana, han past the basic plane, and Latin beyond `0x024F`.
+    @Test func theFilterHoldsForEveryFormOfTheScriptsItNames() {
+        var latinOnly = HoverPolicy.shipped
+        latinOnly.scripts = [.latin]
+        for refused in ["ｶﾀｶﾅ", "𠮷", "한글", "水", "\u{1B001}", "㌍"] {
+            #expect(!latinOnly.studies(refused), "\(refused) walked through a Latin-only filter")
+        }
+        for allowed in ["hold", "ế", "naïve", "ﬀ", "ＡＢＣ"] {
+            #expect(latinOnly.studies(allowed), "\(allowed) is Latin and was refused")
+        }
+    }
+
+    /// Greek is not Latin, however close its block sits. A reader who ticks Latin alone has not
+    /// asked for Greek, and the widened Latin ranges briefly gave it to them.
+    @Test func widerLatinDidNotQuietlyAdmitGreek() {
+        var latinOnly = HoverPolicy.shipped
+        latinOnly.scripts = [.latin]
+        // Unclassified, so it is looked up — the permissive default, not a Latin match. What must
+        // never happen is it being *counted* as Latin, which is what the block sweep did.
+        #expect(ProbeScript.dominant(in: "\u{AB65}") != .latin)
+    }
 }

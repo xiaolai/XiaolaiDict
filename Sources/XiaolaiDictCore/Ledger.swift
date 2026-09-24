@@ -188,24 +188,22 @@ public final class Ledger {
             sqlite3_close(handle)
             throw LedgerError.sqlite(code: status, message: message)
         }
+        // **Nothing is closed on a throw below, and there is no `catch` to say so.** Once
+        // `connection` is assigned the ledger is fully initialised, and Swift runs `deinit` for a
+        // fully initialised instance even when its initialiser then throws — so a `catch` that
+        // closed the handle closed it twice. Measured 2026-09-22: that pattern segfaults on the
+        // first failed open under Guard Malloc, and closing once survives 200. `Connection` owns
+        // the handle and releases it exactly once; a `catch` here that only rethrows is scaffolding
+        // left from the version that did close, and reads as though cleanup were happening.
         connection = Connection(handle)
-        do {
-            guard sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds) == SQLITE_OK else { throw error() }
-            // Off by default in SQLite, which would make `sense_encounters`' reference to `lookups`
-            // decorative: a sense could be hung off a lookup that does not exist and nothing would
-            // say so. Fail loudly instead.
-            try run("PRAGMA foreign_keys = ON", bind: []) { _ in }
-            // Readers no longer block the writer, nor it them. A no-op for ":memory:".
-            try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
-            try migrate()
-        } catch {
-            // **Not closed here.** Once `connection` is assigned the ledger is fully initialised, and
-            // Swift runs `deinit` for a fully initialised instance even when its initialiser then
-            // throws — so a close here and another at teardown closed one handle twice. Measured
-            // 2026-09-22: that pattern segfaults on the first failed open under Guard Malloc, and
-            // closing once survives 200. Released with the ledger, `Connection` closes it exactly once.
-            throw error
-        }
+        guard sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds) == SQLITE_OK else { throw error() }
+        // Off by default in SQLite, which would make `sense_encounters`' reference to `lookups`
+        // decorative: a sense could be hung off a lookup that does not exist and nothing would
+        // say so. Fail loudly instead.
+        try run("PRAGMA foreign_keys = ON", bind: []) { _ in }
+        // Readers no longer block the writer, nor it them. A no-op for ":memory:".
+        try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
+        try migrate()
     }
 
     /// Returns the row's id, so a sense encounter can be hung off the lookup that produced it.
@@ -249,6 +247,35 @@ public final class Ledger {
     }
 
     /// One meeting with one sense, hung off the lookup that produced it.
+    /// A lookup and the sense it met, written as **one transaction**.
+    ///
+    /// The two inserts used to be two calls with nothing around them, so an encounter that failed
+    /// left the lookup persisted while the caller was told nothing had been recorded. The caller's
+    /// answer to that is to drop the lookup id — and the id is what a reader's later tap would have
+    /// been hung off, so the row survived unreachable, holding a lookup with no sense and no way to
+    /// give it one. Actor isolation does not make two statements atomic; only a transaction does.
+    ///
+    /// `SAVEPOINT` rather than `BEGIN`, because `migrate()` already runs inside a transaction on
+    /// the same connection and SQLite has no nested `BEGIN`. A savepoint nests, and rolls back to
+    /// exactly this point.
+    @discardableResult
+    public func record(_ record: LookupRecord, with encounter: SenseEncounter?) throws -> Int {
+        guard let encounter else { return try self.record(record) }
+        try execute("SAVEPOINT lookup_with_sense")
+        do {
+            let lookup = try self.record(record)
+            try self.record(encounter, for: lookup)
+            try execute("RELEASE lookup_with_sense")
+            return lookup
+        } catch {
+            // Rolled back *and* released: `ROLLBACK TO` rewinds the savepoint without removing it,
+            // so a release that never came would leave it on the stack for the connection's life.
+            try? execute("ROLLBACK TO lookup_with_sense")
+            try? execute("RELEASE lookup_with_sense")
+            throw error
+        }
+    }
+
     public func record(_ encounter: SenseEncounter, for lookupID: Int) throws {
         try run(
             """
@@ -482,7 +509,7 @@ public final class Ledger {
                    result, answered_by, capture_source, capture_confidence, context_quality,
                    lemma_basis, language, context_range_location, context_range_length,
                    source_name, source_document, source_page, source_title, source_title_raw,
-                   part_of_speech, sense_abstention
+                   part_of_speech, sense_abstention, script
             -- Numbered, not bare: a bare `?` is parameter 1, so `?1` beside it would alias the
             -- lemma rather than the language.
             FROM lookups WHERE lemma = ?1 AND (?2 IS NULL OR language = ?2)
@@ -502,9 +529,17 @@ public final class Ledger {
                     title: row.optionalText(18), rawTitle: row.optionalText(19)),
                 lookedUpAt: Date(timeIntervalSince1970: row.real(5)),
                 result: try row.result(6), answeredBy: try row.answerSource(7), quality: try row.quality(8),
-                legacySourceURL: row.optionalText(4), senseAbstention: try row.abstention(21)))
+                legacySourceURL: row.optionalText(4), senseAbstention: try row.abstention(21),
+                script: row.optionalText(22).flatMap(ProbeScript.init(rawValue:))))
         }
         return records
+    }
+
+    /// A JSON array of strings, for a bound `json_each` parameter. Written here rather than with
+    /// `JSONEncoder` because the values are a closed enum's raw values — no escaping is reachable —
+    /// and a throwing encoder inside a query builder would have to invent a failure mode.
+    static func jsonArray(of values: [String]) -> String {
+        "[" + values.sorted().map { "\"\($0)\"" }.joined(separator: ",") + "]"
     }
 
     /// What the history drawer reads: lookups since `since`, newest first, at most `limit` of them.
@@ -526,13 +561,6 @@ public final class Ledger {
     /// reader wants to see. A default of "everything" would be the quiet option: a surface that
     /// forgot to pass the setting would go on showing rows the reader had filtered out, and look
     /// exactly like a setting that does not work.
-    /// A JSON array of strings, for a bound `json_each` parameter. Written here rather than with
-    /// `JSONEncoder` because the values are a closed enum's raw values — no escaping is reachable —
-    /// and a throwing encoder inside a query builder would have to invent a failure mode.
-    static func jsonArray(of values: [String]) -> String {
-        "[" + values.sorted().map { "\"\($0)\"" }.joined(separator: ",") + "]"
-    }
-
     public func recentLookups(
         since: Date, limit: Int, studying: Set<ProbeScript>
     ) throws -> [ReadingEntry] {

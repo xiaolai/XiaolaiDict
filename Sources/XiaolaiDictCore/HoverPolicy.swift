@@ -59,6 +59,11 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     /// The word is not written in a script the reader studies. Unlike every other refusal here,
     /// this one is a setting the reader chose and can change, so its text has to say so.
     case scriptNotStudied
+    /// The reader moved on while the capture was running. The capture itself cannot be stopped —
+    /// it is a detached task and a `SCScreenshotManager` call that does not honour cancellation —
+    /// so what is refused is *accepting its answer*, which is the part that would otherwise deliver
+    /// a panel and remember a word for a hover nobody was waiting for.
+    case cancelled
 
     public var reason: String {
         switch self {
@@ -70,6 +75,7 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
         case .samePlace: "This word was just looked up."
         case .captureInFlight: "A capture is already running."
         case .scriptNotStudied: "This word is not in a script you study. Change that under Hover in Settings."
+        case .cancelled: "The pointer moved on before the word could be read."
         }
     }
 }
@@ -289,8 +295,14 @@ public struct HoverPause: Sendable, Equatable {
         return now < until
     }
 
+    /// **Both components, not just the seconds.** `Duration.components` splits into whole seconds
+    /// and attoseconds, and taking the first alone silently truncated: 1.5 s became 1 s and
+    /// anything under a second expired the moment it was set. Every duration the menu offers today
+    /// is a whole number of seconds, which is what kept it invisible.
     public mutating func pause(for duration: Duration, from now: Date) {
-        until = now.addingTimeInterval(TimeInterval(duration.components.seconds))
+        let parts = duration.components
+        until = now.addingTimeInterval(
+            TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18)
     }
 
     public mutating func resume() {

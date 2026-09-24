@@ -95,15 +95,14 @@ public enum ProbeScript: String, Codable, Sendable, CaseIterable, Comparable {
 
     /// The script a probe word is written in. Every word in `DictionaryBridge.probeWords` must map
     /// to one, which `everyProbeWordHasAScript` holds.
+    ///
+    /// **The first scalar, deliberately.** A probe word is single-script by construction, so its
+    /// opening letter settles it. Captured text is not; that is `dominant(in:)`. The two differ in
+    /// how they traverse and never in what a scalar *is* — they share `letterScript`, because the
+    /// copy they started as had already drifted, `of` missing every block the other had gained.
     public static func of(_ word: String) -> ProbeScript? {
         guard let first = word.unicodeScalars.first else { return nil }
-        switch first.value {
-        case 0x3040...0x30FF: return .kana
-        case 0x1100...0x11FF, 0xAC00...0xD7AF: return .hangul
-        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF: return .han
-        case 0x0041...0x005A, 0x0061...0x007A: return .latin
-        default: return nil
-        }
+        return letterScript(of: first)
     }
 
     /// The script `text` is mostly written in, or nil where it is written in none.
@@ -124,12 +123,21 @@ public enum ProbeScript: String, Codable, Sendable, CaseIterable, Comparable {
     /// kana makes the han beside it Japanese too — otherwise `勉強する` is 2 han against 2 kana and
     /// comes out a tie, and `漢字を勉強する` comes out Chinese on a majority of kanji.
     ///
+    /// **Compatibility-normalised first** (NFKC), which does two jobs. It settles composed against
+    /// decomposed — `ế` as one scalar and as `e` plus two combining marks answered nil and Latin
+    /// respectively, and a screen capture can be either. And it folds the presentation forms —
+    /// ligatures, halfwidth kana, fullwidth Latin, squared words — into the letters they stand for,
+    /// which is what stops the block list below growing every time a new corner of Unicode turns
+    /// up. Two rounds of this classifier were spent adding blocks one at a time; `ﬀ` and `ｶ` are
+    /// not new scripts, they are `ff` and `カ` in costume. The text is normalised for the reading
+    /// only — nothing normalised is stored or shown.
+    ///
     /// A tie among the rest goes to whichever appeared first, so the answer does not depend on the
     /// order a dictionary happens to enumerate.
     public static func dominant(in text: String) -> ProbeScript? {
         var counts: [ProbeScript: Int] = [:]
         var order: [ProbeScript] = []
-        for scalar in text.unicodeScalars {
+        for scalar in text.precomposedStringWithCompatibilityMapping.unicodeScalars {
             guard let script = letterScript(of: scalar) else { continue }
             if counts[script] == nil { order.append(script) }
             counts[script, default: 0] += 1
@@ -142,21 +150,53 @@ public enum ProbeScript: String, Codable, Sendable, CaseIterable, Comparable {
         return order.first { counts[$0] == best }
     }
 
-    /// The script one scalar is a letter of. Nil for punctuation, digits, spaces and symbols —
-    /// they are skipped by `dominant`, never counted as a script of their own.
+    /// The script one scalar is a letter of. Nil for punctuation, digits, spaces and symbols.
     ///
-    /// Latin reaches past ASCII on purpose: *naïve* and *café* are Latin words, and a range that
-    /// stopped at `z` would leave them unclassified in exactly the European text this is meant to
-    /// let through. The two division signs sitting inside that block are symbols, not letters.
+    /// **Letterhood is asked of Unicode, never inferred from the block.** A block holds a script's
+    /// punctuation too: `U+30FB ・` is a separator sitting inside Katakana, and counting it as kana
+    /// made `水・` Japanese — which, through the han-absorption rule, refused a Chinese word for a
+    /// reader who studies Chinese. `isAlphabetic` is what separates the letters from the furniture,
+    /// and it keeps `U+30FC ー`, a modifier letter, where it belongs: ラーメン is one word.
+    ///
+    /// **The blocks are listed in full rather than approximately.** Text a scalar classifier cannot
+    /// name is looked up — unknown is permissive on purpose — so every block left out is a hole in
+    /// the reader's filter rather than a missing nicety. The first pass covered ASCII, one Latin
+    /// range, the basic CJK planes and the main kana blocks, and let halfwidth katakana `ｶﾀｶﾅ`,
+    /// supplementary han `𠮷` and `ế` through a filter set to exclude them.
     static func letterScript(of scalar: Unicode.Scalar) -> ProbeScript? {
+        guard scalar.properties.isAlphabetic else { return nil }
         switch scalar.value {
-        case 0x3040...0x30FF, 0x31F0...0x31FF: return .kana
-        case 0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF: return .hangul
-        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF: return .han
-        case 0x0041...0x005A, 0x0061...0x007A: return .latin
-        case 0x00D7, 0x00F7: return nil
-        case 0x00C0...0x024F: return .latin
-        default: return nil
+        // Hiragana, Katakana, their phonetic extensions, and the supplements past the basic
+        // plane. The halfwidth forms are not listed: NFKC has already folded them to fullwidth.
+        case 0x3040...0x30FF, 0x31F0...0x31FF,
+             0x1B000...0x1B0FF, 0x1B100...0x1B12F, 0x1B130...0x1B16F:
+            return .kana
+        // Jamo, compatibility jamo, the syllable block, both jamo extensions, halfwidth jamo.
+        case 0x1100...0x11FF, 0x3130...0x318F, 0xA960...0xA97F,
+             0xAC00...0xD7AF, 0xFFA0...0xFFDC:
+            return .hangul
+        // CJK unified ideographs, extensions A through H, and both compatibility blocks. The
+        // extensions past B live in the supplementary planes, which a `UInt32` range reaches and
+        // a `UInt16`-shaped assumption does not.
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+             0x20000...0x2A6DF, 0x2A700...0x2EBEF, 0x2F800...0x2FA1F,
+             0x30000...0x323AF:
+            return .han
+        // **Greek, sitting inside Latin Extended-E.** `U+AB65` is GREEK LETTER SMALL CAPITAL
+        // OMEGA and it does not decompose, so nothing upstream removes it: covering the block
+        // whole swept Greek into Latin and would have looked it up for a Latin-only reader. The
+        // same lesson as `・` in the Katakana block — a block is a range of code points, never a
+        // claim about script — and the reason each range below is bounded rather than rounded off.
+        case 0xAB65:
+            return nil
+        // Basic Latin, Latin-1 Supplement, Extended-A and -B, IPA, Extended Additional,
+        // Extended-C, -D and -E. The fullwidth forms and the ligatures are not listed: NFKC has
+        // already folded them to plain letters.
+        case 0x0041...0x005A, 0x0061...0x007A, 0x00C0...0x024F, 0x0250...0x02AF,
+             0x1E00...0x1EFF, 0x2C60...0x2C7F, 0xA720...0xA7FF, 0xAB30...0xAB6F:
+            return .latin
+        default:
+            return nil
         }
     }
 }

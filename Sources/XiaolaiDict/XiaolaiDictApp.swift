@@ -43,6 +43,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Read rather than loaded on each use on purpose: `HoverWatcher` asks for the policy on every
     /// pointer change to get `settleMilliseconds`, so decoding it there would put a JSON decode on
     /// the mouse-move path. One decode at launch, one write when the reader changes something.
+    /// The suite this app was built with — the reader's own, or a test's temporary one.
+    /// **Kept, not just passed through.** Every store below was handed it at init while
+    /// `hoverEnabled` went on reading `UserDefaults.standard`, which is how a unit test came
+    /// to be able to switch the reader's hover off.
+    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let hoverPolicyStore: HoverPolicyStore
     private(set) var hoverPolicy: HoverPolicy
 
@@ -73,6 +78,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
+        self.defaults = defaults
         let store = HoverPolicyStore(defaults: defaults)
         hoverPolicyStore = store
         hoverPolicy = store.load()
@@ -279,9 +285,16 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private static let hoverEnabledKey = "hoverLookupEnabled"
 
     /// Defaults to on for a reader who has never chosen, and remembers a reader who has.
+    ///
+    /// **Read and written through the injected suite**, like every other setting this class
+    /// owns. It reached for `UserDefaults.standard` directly, so an instance built with a
+    /// temporary suite — which is every instance a test builds, and the whole reason
+    /// `init(defaults:)` exists — still read the reader's real preference and could turn
+    /// their hover off. The other stores on this line were already passed `defaults`; this
+    /// one was simply missed.
     private var hoverEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: Self.hoverEnabledKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: Self.hoverEnabledKey) }
+        get { defaults.object(forKey: Self.hoverEnabledKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Self.hoverEnabledKey) }
     }
 
     func toggleHover() {
@@ -495,10 +508,19 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         let previous = currentShortcut
         guard chosen != previous || hotkey == nil else { return nil }
         if let refusal = registerShortcut(chosen) {
-            // Keep the problem with the new one in view, and the old one working.
+            // Keep the problem with the new one in view, and the old one working — but only
+            // say so if it *is* working. The rollback's own result was discarded, so when
+            // both registrations failed the reader was told XiaolaiDict was "still using" a
+            // shortcut that no longer existed: no hot key registered, and a message naming
+            // one. The second failure also overwrote the first, so the error shown described
+            // the recovery rather than the choice that caused it.
             let problem = hotkeyProblem
-            registerShortcut(previous)
-            hotkeyProblem = problem.map { "\($0) — still using \(previous.label())" }
+            let restored = registerShortcut(previous) == nil
+            hotkeyProblem = problem.map {
+                restored
+                    ? "\($0) — still using \(previous.label())"
+                    : "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered"
+            }
             return refusal
         }
         do {

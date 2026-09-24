@@ -114,4 +114,60 @@ struct ScriptFilterWiringTests {
         #expect(app.contains("hoverPolicy.scripts"),
                 "the drawer's filter is not the setting the hover gate reads")
     }
+
+    /// **Two apps showing the same word at the same place are two hovers.** The suppression key was
+    /// the word and an 8-point cell and nothing else, so resting on `run` in a terminal and then on
+    /// `run` at the same screen position in a browser looked like the same lookup, and the second
+    /// was silently dropped.
+    @Test func theSuppressionKeyTellsTwoAppsApart() {
+        let point = CGPoint(x: 100, y: 200)
+        let terminal = Self.selection("run", in: "com.apple.Terminal")
+        let browser = Self.selection("run", in: "com.apple.Safari")
+        #expect(HoverReader.key(terminal, at: point) != HoverReader.key(browser, at: point))
+        #expect(HoverReader.key(terminal, at: point) == HoverReader.key(terminal, at: point))
+    }
+
+    /// **Letting go of the modifier ends the hover, so the next one may repeat the word.**
+    /// Suppression was only ever cleared by a *different* successful lookup, so a reader who looked
+    /// a word up, released the key, and reached for the same word again got nothing — and the way
+    /// out was to look up something else first, which nobody would guess.
+    ///
+    /// Safe to drive directly: with no modifier held the gate refuses before any Accessibility or
+    /// capture work, which is the ordering the gate exists for.
+    @MainActor
+    @Test func releasingTheModifierClearsTheSuppressedWord() async {
+        let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() })
+        reader.lastLookedUp = "run@12x25"
+        let outcome = await reader.read(
+            at: CGPoint(x: 100, y: 200), modifiersHeld: [], pointerStillFor: .seconds(1))
+        guard case .quiet(.modifierNotHeld) = outcome else {
+            Issue.record("expected the modifier gate to refuse, got \(outcome)")
+            return
+        }
+        #expect(reader.lastLookedUp == nil, "the word stayed suppressed after the hover ended")
+    }
+
+    private static func selection(_ text: String, in bundleID: String) -> Selection {
+        Selection(
+            text: text, sentence: text, rangeInSentence: NSRange(location: 0, length: text.utf16.count),
+            quality: .accessibility(.accessibilityTextMarkers, context: .complete),
+            place: ReadingPlace(bundleID: bundleID, name: bundleID))
+    }
+
+    /// **`XiaolaiDictApp` reads the suite it was given and no other.**
+    ///
+    /// `init(defaults:)` exists so a test never touches the reader's own preferences, and every
+    /// store in the initialiser was handed it — while `hoverEnabled` went on reading and *writing*
+    /// `UserDefaults.standard`. So a test that toggled hover switched it off for the person using
+    /// the Mac, which is the unit-test form of the objection this project makes to driving the GUI
+    /// on the building machine.
+    ///
+    /// Mechanical rather than a test of that one property, because the next setting added is the
+    /// one that would slip. Comments are stripped first: the fix's own explanation names the thing
+    /// it bans, and a scanner that cannot tell an explanation from a call is satisfied by prose.
+    @Test func theAppReadsOnlyTheDefaultsSuiteItWasGiven() throws {
+        let source = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        #expect(!source.contains("UserDefaults.standard"),
+                "a setting is reaching past the injected suite to the reader's own preferences")
+    }
 }

@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import XiaolaiDictCore
 import XiaolaiDictUI
 
@@ -87,32 +87,65 @@ final class LookupRunner {
         // **Started before the ledger is awaited**, because the two have nothing to do with each
         // other: the selector can take seconds on the model's rung, and waiting for a disk read
         // first would add its time to the mark for nothing.
-        var entries: [DictionaryEntry] = []
-        if case .entries(let found, _) = outcome { entries = Array(found) }
+        // `let`, so it can travel into the group's child. A `var` captured by a sending closure is
+        // refused — correctly: the compiler cannot know the actor will not write it again.
+        let entries: [DictionaryEntry]
+        if case .entries(let found, _) = outcome {
+            entries = Array(found)
+        } else {
+            entries = []
+        }
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
         let resolver = SenseResolver(primary: primary(), selector: selector)
-        async let resolved = resolver.resolve(
-            entries: entries, sentence: selection.sentence, context: selection.quality.context,
-            partOfSpeech: Lemmatizer.partOfSpeech(
-                of: selection.text, in: selection.sentence, at: selection.rangeInSentence),
-            at: .now)
+        let partOfSpeech = Lemmatizer.partOfSpeech(
+            of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
 
-        // **The memory strip, and the senses already met.** The entry is on screen; this arrives
-        // when the ledger answers, which is the container-fills-in pattern again. Absent on a first
-        // lookup, so a reader meeting a word for the first time is shown nothing rather than "0
-        // previous".
-        let prior = await history.value
-        if panel.isCurrent(ticket), prior != PriorEncounters() {
-            presentation.memory = MemoryStrip(prior)
-            presentation.met = prior.met
-            panel.update(.lookup(presentation), for: ticket)
+        // **Each arrives when it is ready, and neither waits for the other.** Both were already
+        // started side by side, and then awaited in a fixed order — so a sense the selector had
+        // *already* decided sat behind the ledger read before it could be drawn. Starting two
+        // pieces of work concurrently does not make their answers independent; awaiting them in
+        // order puts them back in series at the last step.
+        //
+        // The group yields in completion order, and every mutation of `presentation` stays here on
+        // the actor rather than travelling into a child — which is what keeps two arrivals from
+        // racing over one value. A group awaits both children before it returns, which is exactly
+        // what is wanted: the row below needs the resolution.
+        //
+        // The memory strip is absent on a first lookup, so a reader meeting a word for the first
+        // time is shown nothing rather than "0 previous".
+        enum Arrival: Sendable {
+            case memory(PriorEncounters)
+            case sense(SenseResolution)
         }
-
-        let resolution = await resolved
-        if let mark = resolution.mark, panel.isCurrent(ticket) {
-            presentation.sense = mark
-            panel.update(.lookup(presentation), for: ticket)
+        var resolution = SenseResolution(mark: nil, encounter: nil)
+        await withTaskGroup(of: Arrival.self) { group in
+            group.addTask { .memory(await history.value) }
+            // **A child of the group, never a `Task` of its own.** An unstructured task does not
+            // inherit cancellation, so superseding a lookup left the sense resolver running — and
+            // on the model's rung that is the GPU still answering a question nobody is waiting for.
+            // `async let` had that property and an earlier version of this merge threw it away by
+            // reaching for `Task { }`; a group child has it back, and the group is what allows the
+            // two answers to arrive in either order.
+            group.addTask {
+                .sense(await resolver.resolve(
+                    entries: entries, sentence: selection.sentence,
+                    context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
+            }
+            for await arrival in group {
+                switch arrival {
+                case .memory(let prior):
+                    guard panel.isCurrent(ticket), prior != PriorEncounters() else { continue }
+                    presentation.memory = MemoryStrip(prior)
+                    presentation.met = prior.met
+                    panel.update(.lookup(presentation), for: ticket)
+                case .sense(let answered):
+                    resolution = answered
+                    guard let mark = answered.mark, panel.isCurrent(ticket) else { continue }
+                    presentation.sense = mark
+                    panel.update(.lookup(presentation), for: ticket)
+                }
+            }
         }
         // **Recorded even if superseded while the sense was decided**, and on purpose: the entry was
         // already on screen, so this is a lookup the reader made. The rule is "a lookup nobody saw is
@@ -120,7 +153,8 @@ final class LookupRunner {
         // superseded lookup never showed is the *mark* — and a model's mark is recorded as the
         // hypothesis it is (`chosen_by: model`), not as something the reader confirmed.
         return LookupRecording(
-            record: Self.record(of: selection, lemma: lemma, outcome: outcome, requestedAt: requestedAt,
+            record: Self.record(of: selection, lemma: lemma, language: language, outcome: outcome,
+                                requestedAt: requestedAt,
                                 // **A lookup the reader walked away from did not get declined and
                                 // did not find no model.** Superseding it cancels this task, and the
                                 // ladder reports a cancelled run as an abstention like any other —
@@ -133,12 +167,17 @@ final class LookupRunner {
     /// The ledger row for a lookup — what was read, where, how it was captured, what answered, and
     /// why no sense was marked where none was.
     private static func record(
-        of selection: Selection, lemma: Lemma, outcome: LookupOutcome, requestedAt: Date, abstention: Abstention?
+        of selection: Selection, lemma: Lemma, language: String?, outcome: LookupOutcome,
+        requestedAt: Date, abstention: Abstention?
     ) -> LookupRecord {
         LookupRecord(
             surface: selection.text, lemma: lemma.text, context: selection.sentence ?? selection.text,
             // All four were computed at every lookup and thrown away at the ledger before schema 4.
-            lemmaBasis: lemma.basis, language: Lemmatizer.language(of: selection.text, in: selection.sentence),
+            // **The language is passed in, not recognised again.** `run` already built an
+            // `NLLanguageRecognizer` for the ledger read; a second one per lookup answered the same
+            // question twice, and two recognisers could in principle disagree — the row and the
+            // history query would then be keyed on different languages for one word.
+            lemmaBasis: lemma.basis, language: language,
             contextRange: selection.rangeInSentence, place: selection.place,
             lookedUpAt: requestedAt, result: outcome.result, answeredBy: outcome.answeredBy,
             quality: selection.quality,
