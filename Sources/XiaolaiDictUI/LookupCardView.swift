@@ -17,8 +17,6 @@ public struct LookupCardView: View {
     /// ledger learns something it can stand behind.
     public var onChoose: ((SensePresentation) -> Void)?
     @State private var showingAlternatives = false
-    /// Open from the start where XiaolaiDict has admitted it cannot tell — see `opensAlternatives`.
-    @State private var openedOnce = false
     @State private var showingMemory = false
 
     public init(card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil) {
@@ -107,7 +105,12 @@ public struct LookupCardView: View {
     private var memoryDetail: some View {
         if showingMemory, let memory = card.memory {
             VStack(alignment: .leading, spacing: scale.space.line) {
-                ForEach(memory.lines, id: \.self) { line in
+                // **By position, not by the text.** These are formatted lines — "two days ago, in
+                // Safari: A page" — so two encounters on the same page inside one relative-time
+                // bucket are the same string, and `id: \.self` gives SwiftUI duplicate identities
+                // for rows that are genuinely two. The list is immutable and drawn in one pass, so
+                // the index is a true identity here rather than a workaround.
+                ForEach(Array(memory.lines.enumerated()), id: \.offset) { _, line in
                     Text(line)
                         .font(.system(size: scale.text.small))
                         .foregroundStyle(.tertiary)
@@ -235,7 +238,7 @@ public struct LookupCardView: View {
     /// The word's own colour, the same one the history card will give it — the hash is stable, so
     /// a word met in the panel and later seen in the drawer is the same colour both times.
     private var accent: Color {
-        ReadingPalette.accent(for: card.term).color(in: scheme)
+        ReadingPalette.accent(for: card.lemma).color(in: scheme)
     }
 
     // MARK: - The way out
@@ -265,9 +268,15 @@ public struct LookupCardView: View {
                     }
                 }
             }
-            .onAppear {
-                guard !openedOnce else { return }
-                openedOnce = true
+            // **Keyed to the entry, not to `onAppear`.** SwiftUI keeps this child's identity when
+            // the reader switches dictionary, so `openedOnce` stayed true and the alternatives
+            // stayed however the *previous* entry had left them: an entry the selector could not
+            // decide came up collapsed, against `opensAlternatives`, because a different entry's
+            // list had been closed by hand.
+            //
+            // `task(id:)` rather than `onChange`: it runs on first appearance too, so one rule
+            // covers both and there is no `openedOnce` to get out of step.
+            .task(id: card.heading) {
                 showingAlternatives = card.opensAlternatives
             }
         }
@@ -403,7 +412,7 @@ public struct LookupPanelContent: View {
     /// The word's own colour, which the card's shadow is thrown in. The same accent the marked
     /// word in the sentence wears, so the glow under the card and the word inside it agree.
     private var accent: Color {
-        ReadingPalette.accent(for: presentation.term).color(in: scheme)
+        ReadingPalette.accent(for: presentation.lemma.text).color(in: scheme)
     }
 
     private var entries: [DictionaryEntry] {
@@ -511,7 +520,10 @@ public struct LookupPanelContent: View {
                     if !unreadable.isEmpty {
                         // Named once however many of its records failed: claiming all of them, or
                         // only one, would both be guesses.
-                        Notice(text: "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it.")
+                        // The dictionary names are data, so they are interpolated into a
+                        // localizable format string rather than concatenated into one.
+                        Notice(text: Text(
+                            "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it."))
                     }
                     LookupCardView(card: card(for: entry), onChoose: { choose($0, in: entry) })
                         // A different dictionary is a different card: what was translated for the
@@ -543,7 +555,8 @@ public struct LookupPanelContent: View {
         let mark = mark(for: entry)
         return LookupCard(
             presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
-            term: presentation.term, sentence: presentation.sentence, mark: mark,
+            term: presentation.term, lemma: presentation.lemma.text,
+            sentence: presentation.sentence, mark: mark,
             memory: presentation.memory)
     }
 
@@ -553,7 +566,8 @@ public struct LookupPanelContent: View {
     /// card and not the other.
     private func cardWithoutAnEntry(_ answer: LookupCard.Answer) -> LookupCard {
         LookupCard(
-            term: presentation.term, heading: presentation.term, partOfSpeech: nil,
+            term: presentation.term, lemma: presentation.lemma.text,
+            heading: presentation.term, partOfSpeech: nil,
             pronunciation: nil, answer: answer,
             sentence: presentation.sentence, alternatives: [], memory: presentation.memory)
     }

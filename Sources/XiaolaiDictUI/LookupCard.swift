@@ -60,6 +60,12 @@ public struct LookupCard: Equatable {
     }
 
     public let term: String
+    /// The word's dictionary form, and **what its colour is hashed from**. The drawer hashes
+    /// `ReadingEntry.lemma`; this hashed `term`, the surface — so one encounter changed colour
+    /// between the panel and the history: *tempered* lands on palette index 6 and *temper* on 5.
+    /// Falls back to the surface where no lemma was worked out, which is what the ledger stores
+    /// too.
+    public let lemma: String
     public let heading: String
     public let partOfSpeech: String?
     public let pronunciation: String?
@@ -103,11 +109,12 @@ public struct LookupCard: Equatable {
     }
 
     public init(
-        term: String, heading: String, partOfSpeech: String?, pronunciation: String?,
+        term: String, lemma: String? = nil, heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil
     ) {
         self.term = term
+        self.lemma = lemma ?? term
         self.heading = heading
         self.partOfSpeech = partOfSpeech
         self.pronunciation = pronunciation
@@ -125,7 +132,7 @@ public extension LookupCard {
     /// not merged in: across seven dictionaries *hold* offers a hundred near-duplicate senses, and
     /// a card that led with one of them would be picking from a pile nobody can check.
     init(
-        presentation: EntryPresentation, term: String, sentence: String?, mark: SenseMark?,
+        presentation: EntryPresentation, term: String, lemma: String? = nil, sentence: String?, mark: SenseMark?,
         memory: MemoryStrip? = nil
     ) {
         let chosen = presentation.senses.first { sense in
@@ -174,6 +181,7 @@ public extension LookupCard {
         }()
         self.init(
             term: term,
+            lemma: lemma,
             heading: presentation.heading,
             // The chosen sense's own part of speech where there is one: an entry's list of every
             // part of speech it covers says less than the one the reader is actually in.

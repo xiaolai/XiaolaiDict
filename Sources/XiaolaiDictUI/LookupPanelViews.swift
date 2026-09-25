@@ -48,13 +48,23 @@ struct WaitingView: View {
 }
 
 /// A result that is less than it looks must say so, in the result.
+///
+/// **`text` is a `Text`, not a `String`, and that is the whole repair** — the same one
+/// `LookupCardView.action(_:help:)` already carries. `Label(someString, …)` takes the verbatim
+/// overload, so a caller that interpolated its message handed this English in a translated build
+/// and the sentence never reached the catalog at all.
 public struct Notice: View {
     @Environment(\.scale) private var scale
-    public let text: String
+    public let text: Text
     public var symbol = "exclamationmark.triangle"
 
+    public init(text: Text, symbol: String = "exclamationmark.triangle") {
+        self.text = text
+        self.symbol = symbol
+    }
+
     public var body: some View {
-        Label(text, systemImage: symbol)
+        Label { text } icon: { Image(systemName: symbol) }
             .font(.callout)
             .foregroundStyle(.orange)
             .padding(scale.space.pad)
@@ -100,7 +110,9 @@ struct SentencePaneView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.accentColor.opacity(Token.Opacity.senseWash))
         case .unavailable(let why):
-            Notice(text: why, symbol: "text.bubble")
+            // `why` is already a localised sentence from the model layer, so it is shown verbatim
+            // rather than re-keyed — which is what `Text(verbatim:)` says out loud.
+            Notice(text: Text(verbatim: why), symbol: "text.bubble")
         }
     }
 }

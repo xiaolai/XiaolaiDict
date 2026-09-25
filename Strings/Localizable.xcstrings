@@ -72,6 +72,9 @@
     "Always" : {
 
     },
+    "An entry in %@ could not be read, so what is shown is not all of it." : {
+
+    },
     "Ask again" : {
 
     },

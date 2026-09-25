@@ -240,3 +240,32 @@ struct SenselessEntryTests {
         #expect(text.contains("does not mark senses"))
     }
 }
+
+/// A word keeps one colour wherever it appears.
+struct AccentConsistencyTests {
+    /// **The panel hashed the surface and the drawer hashes the lemma**, so one encounter changed
+    /// colour between the two: *tempered* lands on a different palette entry from *temper*. The
+    /// card carries the lemma now and both hash it.
+    @Test func thePanelAndTheDrawerColourOneWordTheSame() {
+        let card = LookupCard(
+            term: "tempered", lemma: "temper", heading: "temper", partOfSpeech: nil,
+            pronunciation: nil, answer: .undecided(reason: nil), sentence: nil,
+            alternatives: [], memory: nil)
+        #expect(card.lemma == "temper")
+        #expect(
+            ReadingPalette.accent(for: card.lemma) == ReadingPalette.accent(for: "temper"),
+            "the panel would colour this word differently from its own history row")
+        #expect(
+            ReadingPalette.accent(for: card.lemma) != ReadingPalette.accent(for: card.term),
+            "the fixture picked a surface and lemma that hash alike, so it proves nothing")
+    }
+
+    /// With no lemma worked out the surface is the fallback — which is what the ledger stores too,
+    /// so the two still agree.
+    @Test func withNoLemmaTheSurfaceIsUsed() {
+        let card = LookupCard(
+            term: "fine", heading: "fine", partOfSpeech: nil, pronunciation: nil,
+            answer: .undecided(reason: nil), sentence: nil, alternatives: [], memory: nil)
+        #expect(card.lemma == "fine")
+    }
+}
