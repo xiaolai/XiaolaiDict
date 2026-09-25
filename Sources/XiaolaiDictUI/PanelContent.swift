@@ -17,6 +17,14 @@ public struct LookupPresentation: Equatable {
     /// The reader's own sentence, where one was captured. The sentence pane explains this, and it
     /// is the only text the remote tier would ever be allowed to see.
     public var sentence: String?
+    /// Where the word sits in `sentence`, UTF-16 — the range the capture actually recorded.
+    ///
+    /// **The card searched for the word instead**, taking the first case-insensitive substring
+    /// match: looking up *he* in "The man said he was fine" marked the *he* inside "The", and a
+    /// word repeated in its own sentence marked the wrong occurrence. `Selection.rangeInSentence`
+    /// was captured and thrown away at this boundary; the history drawer never had that bug
+    /// because the ledger stores the range.
+    public var sentenceRange: NSRange?
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?

@@ -227,11 +227,23 @@ public struct LookupCardView: View {
     /// used to ignore, hardcoding semibold in `.primary` while the drawer honoured the preference
     /// and coloured by the word's own accent.
     private func marked(_ sentence: String) -> AttributedString {
-        MarkedSentence.text(
+        // **The captured range, and a search only where there is none.** Searching took the first
+        // case-insensitive substring, so looking up *he* in "The man said he was fine" marked the
+        // *he* inside "The", and a word appearing twice in its own sentence marked whichever came
+        // first. The range is checked against the sentence before it is trusted: one from another
+        // sentence would otherwise bracket whatever sits at that offset.
+        let text = sentence as NSString
+        let captured = card.sentenceRange.flatMap { range -> NSRange? in
+            guard range.location >= 0, NSMaxRange(range) <= text.length,
+                  text.substring(with: range).compare(card.term, options: .caseInsensitive) == .orderedSame
+            else { return nil }
+            return range
+        }
+        return MarkedSentence.text(
             sentence,
             marking: Lemmatizer.parts(
                 of: card.term, surface: card.term, in: sentence,
-                at: (sentence as NSString).range(of: card.term, options: .caseInsensitive)),
+                at: captured ?? text.range(of: card.term, options: .caseInsensitive)),
             size: scale.text.body, emphasis: options.emphasis, accent: accent)
     }
 
@@ -599,6 +611,7 @@ public struct LookupPanelContent: View {
         return LookupCard(
             presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
             term: presentation.term, lemma: presentation.lemma.text,
+            sentenceRange: presentation.sentenceRange,
             sentence: presentation.sentence, mark: mark,
             memory: presentation.memory)
     }

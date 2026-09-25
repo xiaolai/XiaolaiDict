@@ -57,6 +57,10 @@ final class LookupRunner {
         var presentation = LookupPresentation(
             request: ticket.number, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
             sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
+        // Kept beside the sentence it indexes: without it the card has to search, and a search
+        // finds the wrong occurrence of a word that appears twice.
+        presentation.sentenceRange =
+            selection.quality.context == .complete ? selection.rangeInSentence : nil
         panel.show(.lookup(presentation), near: pointer, for: ticket)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with

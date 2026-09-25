@@ -1,3 +1,4 @@
+import Foundation
 import XiaolaiDictCore
 
 /// What the panel says when a reader points at a word.
@@ -66,6 +67,8 @@ public struct LookupCard: Equatable {
     /// Falls back to the surface where no lemma was worked out, which is what the ledger stores
     /// too.
     public let lemma: String
+    /// Where `term` sits in `sentence`, from the capture rather than from a search of it.
+    public let sentenceRange: NSRange?
     public let heading: String
     public let partOfSpeech: String?
     public let pronunciation: String?
@@ -109,12 +112,14 @@ public struct LookupCard: Equatable {
     }
 
     public init(
-        term: String, lemma: String? = nil, heading: String, partOfSpeech: String?, pronunciation: String?,
+        term: String, lemma: String? = nil, sentenceRange: NSRange? = nil,
+        heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil
     ) {
         self.term = term
         self.lemma = lemma ?? term
+        self.sentenceRange = sentenceRange
         self.heading = heading
         self.partOfSpeech = partOfSpeech
         self.pronunciation = pronunciation
@@ -132,7 +137,8 @@ public extension LookupCard {
     /// not merged in: across seven dictionaries *hold* offers a hundred near-duplicate senses, and
     /// a card that led with one of them would be picking from a pile nobody can check.
     init(
-        presentation: EntryPresentation, term: String, lemma: String? = nil, sentence: String?, mark: SenseMark?,
+        presentation: EntryPresentation, term: String, lemma: String? = nil,
+        sentenceRange: NSRange? = nil, sentence: String?, mark: SenseMark?,
         memory: MemoryStrip? = nil
     ) {
         let chosen = presentation.senses.first { sense in
@@ -182,6 +188,7 @@ public extension LookupCard {
         self.init(
             term: term,
             lemma: lemma,
+            sentenceRange: sentenceRange,
             heading: presentation.heading,
             // The chosen sense's own part of speech where there is one: an entry's list of every
             // part of speech it covers says less than the one the reader is actually in.

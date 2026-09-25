@@ -121,3 +121,38 @@ struct MarkedSentenceTests {
         #expect(ReadingPalette.accent(for: entry) == ReadingPalette.accent(for: "temper"))
     }
 }
+
+/// Which occurrence of the word the card marks.
+@MainActor
+struct CardMarkedRangeTests {
+    private func card(range: NSRange?) -> LookupCard {
+        LookupCard(
+            term: "he", lemma: "he", sentenceRange: range, heading: "he", partOfSpeech: nil,
+            pronunciation: nil, answer: .undecided(reason: nil),
+            sentence: "The man said he was fine.", alternatives: [], memory: nil)
+    }
+
+    /// **The defect's own example.** Searching for "he" case-insensitively finds it at offset 1,
+    /// inside "The" — so the card underlined the wrong two letters of the reader's own sentence.
+    @Test func theSearchTheCardUsedToDoFindsTheWrongOccurrence() {
+        let sentence = "The man said he was fine." as NSString
+        #expect(sentence.range(of: "he", options: .caseInsensitive).location == 1,
+                "the fixture no longer reproduces the defect it exists for")
+    }
+
+    /// The captured range wins, and it is the real one — offset 14, the standalone word.
+    @Test func theCapturedRangeIsUsed() {
+        let real = ("The man said he was fine." as NSString).range(of: "he was")
+        let marked = card(range: NSRange(location: real.location, length: 2))
+        #expect(marked.sentenceRange?.location == 13, "the standalone he sits at 13, not inside The at 1")
+    }
+
+    /// A range that does not land on the word it claims is refused rather than used — one from
+    /// another sentence would bracket whatever happens to sit at that offset.
+    @Test func aRangeThatDoesNotMatchTheWordIsNotTrusted() {
+        let sentence = "The man said he was fine." as NSString
+        let wrong = NSRange(location: 4, length: 3)  // "man"
+        #expect(sentence.substring(with: wrong).compare("he", options: .caseInsensitive) != .orderedSame,
+                "the fixture's wrong range accidentally matches, so it checks nothing")
+    }
+}
