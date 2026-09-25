@@ -4,6 +4,23 @@ import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
+/// What a permission probe found, three-valued because two values are what caused the defect.
+///
+/// `granted` and `declined` are claims about the reader's consent. `couldNotTell` is a claim about
+/// the probe, and folding it into either neighbour is wrong in a way that shows: folded into
+/// `declined` it raises a prompt that grants nothing, folded into `granted` it promises a capture
+/// that then fails.
+///
+/// The same shape, and for the same reason, as `ModelServiceProcess.Presence` — a scan that
+/// answered nothing is a failure carrying its own reason, never the other side's answer.
+public enum PermissionProbe: Sendable, Equatable {
+    case granted
+    /// The reader said no. macOS prompts only once, so there is somewhere to send them instead.
+    case declined
+    /// The probe failed for a reason that is not a refusal — so it says nothing about consent.
+    case couldNotTell
+}
+
 /// A permission XiaolaiDict needs from macOS.
 ///
 /// Both are silent when missing, which is the whole reason this type exists. Accessibility was
@@ -78,11 +95,51 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     /// The cost is the recogniser's own: ~70 ms for on-screen windows only.
     public var isGranted: Bool {
         get async {
+            let answer: PermissionProbe = await probe
+            return answer == .granted
+        }
+    }
+
+    /// The same question, three-valued — **and the third value is the point.**
+    ///
+    /// `isGranted` above collapses this, which is safe for a checklist (an unknown draws as *not
+    /// ready*, and the reader is told where to look) and is **not** safe for deciding whether to
+    /// prompt. `try?` used to do the collapsing here, so any failure of the probe — not just a
+    /// refusal — reached `ScreenRecordingAccess.ensure()` as "no grant" and raised a system dialog.
+    ///
+    /// Measured 2026-09-25 on a Mac whose grant had stood since 2026-09-22: the first hover after a
+    /// fresh launch raised the Screen Recording dialog, and **nothing in the system TCC database
+    /// changed** — not `auth_value`, not `last_modified`, not `last_reminded`, not `reminder_count`.
+    /// A dialog that grants nothing is a dialog that should never have been raised. The first
+    /// `SCShareableContent` call in a cold process is where that non-refusal failure lives; this
+    /// project already measured the capture subsystem at 14.8 s for a first read against ~0.5 s
+    /// after.
+    ///
+    /// So a refusal is `SCStreamErrorUserDeclined` and nothing else. Anything else is
+    /// `couldNotTell`, which is not an answer about the reader's consent and must not be reported
+    /// as one.
+    public var probe: PermissionProbe {
+        get async {
             switch self {
             case .accessibility:
-                AXIsProcessTrusted()
+                // Genuinely two-valued: the API returns a Bool and cannot say why.
+                return AXIsProcessTrusted() ? .granted : .declined
             case .screenRecording:
-                await (try? SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)) != nil
+                do {
+                    _ = try await SCShareableContent.excludingDesktopWindows(
+                        false, onScreenWindowsOnly: true)
+                    return .granted
+                // The SDK's own symbol, never the number behind it: `SCStreamErrorUserDeclined`
+                // is the one code in that domain that is a statement about the reader's consent —
+                // every other code there is about the capture — and spelling it out keeps this
+                // tied to the SDK rather than to a literal that has to be re-checked.
+                } catch let error as NSError
+                            where error.domain == SCStreamErrorDomain
+                            && error.code == SCStreamError.Code.userDeclined.rawValue {
+                    return .declined
+                } catch {
+                    return .couldNotTell
+                }
             }
         }
     }

@@ -27,6 +27,10 @@ enum RecognitionError: LocalizedError {
     case unattributable
     /// Screen Recording is off for XiaolaiDict, and asking produced no grant.
     case screenRecordingDenied
+    /// The grant could not be read — which is **not** the same as its being absent, and must not be
+    /// reported as one. A cold `SCShareableContent` call fails this way, and the next hover will
+    /// find the subsystem warm.
+    case screenRecordingUnreadable
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +47,10 @@ enum RecognitionError: LocalizedError {
         case .screenRecordingDenied:
             "XiaolaiDict needs Screen Recording to read words off the screen. Allow it in "
                 + "\(PrivacySettings.screenRecordingLocation), then try again."
+        // Says nothing about consent, and names no settings pane, because the permission may well
+        // be granted — sending the reader to a list where the switch is already on is how a
+        // transient failure becomes a support question.
+        case .screenRecordingUnreadable: "could not tell whether Screen Recording is allowed"
         }
     }
 }
@@ -78,7 +86,11 @@ final class ScreenTextRecogniser: Sendable {
         // without it every call below fails with a message about capture rather than about consent
         // — which is exactly how a machine with Accessibility granted and Screen Recording not
         // reported "no word under the pointer" and hid the real answer.
-        guard await access.ensure() else { throw RecognitionError.screenRecordingDenied }
+        switch await access.ensure() {
+        case .granted: break
+        case .declined: throw RecognitionError.screenRecordingDenied
+        case .couldNotTell: throw RecognitionError.screenRecordingUnreadable
+        }
         let target = try await target(at: point)
         // An owner XiaolaiDict cannot name cannot be checked against the exclusion list, and a region it
         // cannot attribute is a region it must not read: a display-scoped capture could contain a

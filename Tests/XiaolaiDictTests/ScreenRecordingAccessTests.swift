@@ -11,10 +11,12 @@ import Testing
 /// it gets nothing from the recogniser and is never told why. Measured on the E2E machine, where
 /// every Accessibility stage passed and the one capture path could not run.
 struct ScreenRecordingAccessTests {
-    private func access(granted: Bool, grantedByAsking: Bool = false) -> (ScreenRecordingAccess, Counter) {
+    private func access(
+        _ found: PermissionProbe, grantedByAsking: Bool = false
+    ) -> (ScreenRecordingAccess, Counter) {
         let counter = Counter()
         return (ScreenRecordingAccess(
-            isGranted: { granted },
+            probe: { found },
             request: { counter.bump(); return grantedByAsking }), counter)
     }
 
@@ -24,23 +26,43 @@ struct ScreenRecordingAccessTests {
     }
 
     @Test func alreadyGrantedIsAllowedWithoutAsking() async {
-        let (permission, counter) = access(granted: true)
-        #expect(await permission.ensure())
+        let (permission, counter) = access(.granted)
+        #expect(await permission.ensure() == .granted)
         #expect(counter.asks == 0, "a granted permission must not raise a prompt")
     }
 
-    @Test func notGrantedAsksAndIsAllowedWhenTheReaderAgrees() async {
-        let (permission, counter) = access(granted: false, grantedByAsking: true)
-        #expect(await permission.ensure())
+    @Test func aDeclinedPermissionAsksAndIsAllowedWhenTheReaderAgrees() async {
+        let (permission, counter) = access(.declined, grantedByAsking: true)
+        #expect(await permission.ensure() == .granted)
         #expect(counter.asks == 1)
     }
 
     /// A refusal that stays refused. The prompt appears once; afterwards macOS shows nothing and
     /// the reader has to be sent to Settings, which is why the refusal carries a location.
     @Test func aRefusalIsReportedRatherThanRetriedForever() async {
-        let (permission, counter) = access(granted: false, grantedByAsking: false)
-        #expect(await !permission.ensure())
+        let (permission, counter) = access(.declined, grantedByAsking: false)
+        #expect(await permission.ensure() == .declined)
         #expect(counter.asks == 1)
+    }
+
+    /// **The regression.** A probe that could not tell is not a refusal, and asking the system about
+    /// it raises a dialog that grants nothing — measured 2026-09-25 against a Mac whose grant had
+    /// stood for three days and whose TCC rows the dialog left untouched.
+    ///
+    /// The assertion is the *count*, not the answer: returning `couldNotTell` while still prompting
+    /// would satisfy a test that only read the result, and the prompt is the thing the reader saw.
+    @Test func anUnreadableGrantNeverRaisesAPrompt() async {
+        let (permission, counter) = access(.couldNotTell, grantedByAsking: true)
+        #expect(await permission.ensure() == .couldNotTell)
+        #expect(counter.asks == 0, "a probe that could not tell must not raise a system dialog")
+    }
+
+    /// And it must not be laundered into a grant either — the capture would then fail with a
+    /// message about capture rather than about consent, which is the older defect this file opens
+    /// by describing.
+    @Test func anUnreadableGrantIsNotTreatedAsPermission() async {
+        let (permission, _) = access(.couldNotTell)
+        #expect(await permission.ensure() != .granted)
     }
 }
 
@@ -61,6 +83,14 @@ struct ScreenRecordingLocationTests {
         let message = RecognitionError.screenRecordingDenied.errorDescription ?? ""
         #expect(message.contains("Screen"))
         #expect(message.contains("System Settings"))
+    }
+
+    /// The unreadable case must *not* name it. Sending a reader to a list where the switch is
+    /// already on is how a transient failure turns into a support question.
+    @Test func theUnreadableCaseSendsTheReaderNowhere() {
+        let message = RecognitionError.screenRecordingUnreadable.errorDescription ?? ""
+        #expect(!message.contains("System Settings"))
+        #expect(!message.isEmpty, "a failure still has to say something")
     }
 }
 

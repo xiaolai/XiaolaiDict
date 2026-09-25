@@ -19,19 +19,35 @@ import XiaolaiDictUI
 /// The two calls are closures so the decision can be tested without the system's answer; nothing
 /// else about this is testable, and the decision is the part that was wrong.
 struct ScreenRecordingAccess: Sendable {
-    var isGranted: @Sendable () async -> Bool
+    var probe: @Sendable () async -> PermissionProbe
     var request: @Sendable () -> Bool
 
     static let system = ScreenRecordingAccess(
-        isGranted: { await granted.value { await Permission.screenRecording.isGranted } },
+        probe: { await granted.value { await Permission.screenRecording.probe } },
         request: { Permission.screenRecording.request() })
 
-    /// True when XiaolaiDict may capture, asking once if it has not been asked before.
+    /// Whether XiaolaiDict may capture, asking once if the reader has actually declined.
     ///
     /// macOS shows the prompt only from a GUI session and only while the status is undetermined.
-    /// After a refusal there is no second prompt, which is why a false answer has to be reported to
-    /// the reader with somewhere to go rather than retried.
-    func ensure() async -> Bool { await isGranted() || request() }
+    /// After a refusal there is no second prompt, which is why a refusal has to be reported to the
+    /// reader with somewhere to go rather than retried.
+    ///
+    /// **`couldNotTell` never asks**, and that is the whole of the fix here. It used to: the probe
+    /// was a Bool, so a first `SCShareableContent` call that failed in a cold process was
+    /// indistinguishable from a refusal, and `ensure()` raised a system dialog on a Mac that had
+    /// granted the permission three days earlier. Measured 2026-09-25 — the dialog appeared and
+    /// **nothing in the system TCC database changed**, which is what a prompt that grants nothing
+    /// looks like from the outside.
+    ///
+    /// The caller gets the third value rather than a `false`, because "we could not tell" and "you
+    /// declined" send the reader to different places, and only one of them is about consent.
+    func ensure() async -> PermissionProbe {
+        switch await probe() {
+        case .granted: return .granted
+        case .declined: return request() ? .granted : .declined
+        case .couldNotTell: return .couldNotTell
+        }
+    }
 
     private static let granted = GrantMemo()
 }
@@ -52,11 +68,11 @@ struct ScreenRecordingAccess: Sendable {
 private final class GrantMemo: Sendable {
     private let granted = Mutex(false)
 
-    func value(asking probe: @Sendable () async -> Bool) async -> Bool {
-        if granted.withLock({ $0 }) { return true }
+    func value(asking probe: @Sendable () async -> PermissionProbe) async -> PermissionProbe {
+        if granted.withLock({ $0 }) { return .granted }
 
         let answer = await probe()
-        if answer { granted.withLock { $0 = true } }
+        if answer == .granted { granted.withLock { $0 = true } }
         return answer
     }
 }
