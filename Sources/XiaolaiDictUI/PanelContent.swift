@@ -78,6 +78,18 @@ public enum PanelContent {
     /// it moves the moment a new lookup starts, which is before the reader's selection has even
     /// been read — so a tap on the card still on screen would be attributed to a lookup that has
     /// not happened yet, and the ledger would hang the sense off the wrong word.
+    /// **Whether the dictionaries have answered yet.**
+    ///
+    /// The panel is a container that fills in, not a payload that is awaited — it is on screen before
+    /// anything is asked. So "listed by the compositor" and "showing an answer" are different moments,
+    /// and an instrument that reads the window between them measures the waiting state: measured
+    /// 2026-09-26, `--panel-report` settled on a 73-point window holding "Looking up…" and reported it
+    /// as the card's height.
+    public var hasAnswered: Bool {
+        guard case .lookup(let presentation) = self else { return true }
+        return presentation.outcome != nil
+    }
+
     public var request: Int? {
         guard case .lookup(let presentation) = self else { return nil }
         return presentation.request
@@ -150,3 +162,19 @@ public enum PanelContent {
     }
 }
 
+/// **What the lookup panel's window is measured against**, for the instrument that measures it.
+///
+/// Public because `--panel-report` lives in the app module and these numbers live here. Two copies of
+/// one bound is how a report comes to pass against a rule the product no longer has, so the report
+/// reads these rather than keeping its own.
+///
+/// `Scale.standard` is the right reading here and nowhere in a view: the instrument runs at the
+/// default text size, and a bound that moved with the reader's setting would make two runs
+/// incomparable.
+public enum PanelWindow {
+    /// Where the window opens, before its content has any say.
+    public static let openingHeight = Token.Panel.cardOpeningHeight
+    /// The tallest it may become: the cap its scrolling region is bounded at, plus the chrome the
+    /// card draws outside that frame. Past this the answer is to scroll, not to grow.
+    public static let tallest = Scale.standard.space.cardMaxHeight + Token.Panel.cardChrome
+}
