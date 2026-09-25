@@ -27,6 +27,10 @@ public struct LookupPresentation: Equatable {
     /// ever reads the primary dictionary's entries, so a mark shown on any other entry is borrowed;
     /// the card compares this before drawing one.
     public var senseOwner: String?
+    /// The primary dictionary's own entry, in `PanelSelection.identity(of:)`'s spelling — what the
+    /// card opens on. Nil where the primary answered with nothing, which is when service order is
+    /// the only order there is.
+    public var primaryEntry: String?
     /// Nil on a first lookup, and until the ledger has been read. Prior encounters, never prior
     /// meanings.
     public var memory: MemoryStrip?

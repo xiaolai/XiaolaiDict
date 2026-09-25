@@ -366,9 +366,12 @@ public struct LookupPanelContent: View {
     public let presentation: LookupPresentation
     /// What it is waiting for, in words. Nil once the dictionaries have answered.
     public let waiting: String?
-    /// Which dictionary's entry the card is showing. The primary's is first, and switching is the
+    /// Which dictionary's entry the **reader switched to**. The card opens on the primary's — see
+    /// `opening` — and switching is the
     /// reader asking — which is what makes an auxiliary sense studiable under D8.
-    @State private var showing = 0
+    /// Which entry the **reader** switched to. Nil until they do, so the card follows `opening`
+    /// — and a primary that arrives after the first draw is still where the card lands.
+    @State private var showing: Int?
     @State private var explanation: SentenceExplanation?
     /// The explanation in flight — **held, like the translation, rather than started and
     /// forgotten**. A bare task outlives the card that started it, and the answer it eventually
@@ -408,8 +411,25 @@ public struct LookupPanelContent: View {
         return Array(found)
     }
 
+    /// Where the card opens: **the primary dictionary's entry**, not the first the service
+    /// happened to return.
+    ///
+    /// `showing` is an index into the service's order, and it started at 0 under a comment
+    /// promising the primary came first. Nothing put it there — the resolver chooses the primary
+    /// independently, so the dictionary on screen and the dictionary whose sense was resolved and
+    /// recorded could be different ones, with the reader shown an entry that had no mark and no
+    /// explanation of why.
+    // Not private: the defect was that nothing chose this, so it is asserted directly.
+    var opening: Int {
+        guard let primaryEntry = presentation.primaryEntry,
+              let index = entries.firstIndex(where: { PanelSelection.identity(of: $0) == primaryEntry })
+        else { return 0 }
+        return index
+    }
+
     private var entry: DictionaryEntry? {
-        entries.indices.contains(showing) ? entries[showing] : entries.first
+        let index = showing ?? opening
+        return entries.indices.contains(index) ? entries[index] : entries.first
     }
 
     public var body: some View {
@@ -605,8 +625,8 @@ public struct LookupPanelContent: View {
                         .padding(.horizontal, scale.space.inline)
                         .padding(.vertical, scale.space.tight)
                         .background(Capsule().fill(Color.primary.opacity(
-                            index == showing ? Token.Opacity.countToday : Token.Opacity.count)))
-                        .foregroundStyle(index == showing ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                            index == (showing ?? opening) ? Token.Opacity.countToday : Token.Opacity.count)))
+                        .foregroundStyle(index == (showing ?? opening) ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 }
                 .buttonStyle(.plain)
                 .help(Text(found.dictionary.name))

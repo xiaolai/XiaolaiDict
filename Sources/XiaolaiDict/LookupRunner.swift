@@ -97,7 +97,13 @@ final class LookupRunner {
         }
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
-        let resolver = SenseResolver(primary: primary(), selector: selector)
+        let chosenPrimary = primary()
+        // **Which entry the card opens on.** Set here, from the same `PrimaryDictionary` the
+        // resolver is built with, so the dictionary shown and the dictionary whose sense is
+        // resolved and recorded cannot be different ones.
+        presentation.primaryEntry = chosenPrimary.entries(among: entries).first
+            .map { PanelSelection.identity(of: $0) }
+        let resolver = SenseResolver(primary: chosenPrimary, selector: selector)
         let partOfSpeech = Lemmatizer.partOfSpeech(
             of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
 

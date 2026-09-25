@@ -121,3 +121,34 @@ struct PanelSelectionTests {
         #expect(selection.mark(for: Self.primary, proposing: Self.proposal, ownedBy: PanelSelection.identity(of: Self.primary)) == Self.proposal)
     }
 }
+
+/// Which entry the card opens on.
+@MainActor
+struct OpeningEntryTests {
+    private func presentation(primaryIsSecond: Bool) -> LookupPresentation {
+        let first = sampleEntry("Oxford Thesaurus")
+        let second = sampleEntry("New Oxford American Dictionary")
+        var presentation = LookupPresentation(
+            request: 1, term: "fine", lemma: Lemma(text: "fine", basis: .tagger), source: nil,
+            capture: .accessibility(.accessibilityTextRange, context: .complete), outcome: nil)
+        presentation.outcome = .entries(NonEmpty([first, second])!, unreadable: [])
+        if primaryIsSecond { presentation.primaryEntry = PanelSelection.identity(of: second) }
+        return presentation
+    }
+
+    /// **The defect's exact shape.** The service returns the thesaurus first; the reader's primary
+    /// is NOAD. The card used to open on index 0 under a comment promising the primary came first,
+    /// so the dictionary on screen and the dictionary whose sense was resolved and written to the
+    /// ledger were different ones.
+    @Test func theCardOpensOnThePrimaryEvenWhenTheServiceReturnsItSecond() {
+        let view = LookupPanelContent(presentation: presentation(primaryIsSecond: true))
+        #expect(view.opening == 1, "the card opened on the service's first entry, not the primary's")
+    }
+
+    /// With no primary named — the primary answered with nothing — service order is the only order
+    /// there is, and the card says so by opening at the front rather than guessing.
+    @Test func withNoPrimaryTheCardOpensAtTheFront() {
+        let view = LookupPanelContent(presentation: presentation(primaryIsSecond: false))
+        #expect(view.opening == 0)
+    }
+}
