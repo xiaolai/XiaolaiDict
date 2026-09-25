@@ -1,4 +1,5 @@
 import AVFoundation
+import DictionaryModel
 import SwiftUI
 import XiaolaiDictBase
 import XiaolaiDictCore

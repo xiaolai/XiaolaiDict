@@ -1,3 +1,4 @@
+import DictionaryModel
 import XiaolaiDictCore
 
 /// **Which entries the reader can turn to, named so no two read alike.**

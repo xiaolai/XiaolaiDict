@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import DictionaryModel
 import Foundation
 import SwiftUI
 import Testing

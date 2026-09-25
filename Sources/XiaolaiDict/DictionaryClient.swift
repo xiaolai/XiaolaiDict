@@ -1,3 +1,4 @@
+import DictionaryModel
 import XiaolaiDictBase
 import XiaolaiDictCore
 
