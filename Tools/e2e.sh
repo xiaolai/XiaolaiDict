@@ -55,35 +55,77 @@ awk -v dir="$heredocs" '
 # string — so the far machine finds it ten minutes into a run, after the report it was meant to
 # judge has already been produced. Measured 2026-09-23: an f-string whose escaped quotes were valid
 # shell and not valid Python, in the check that reads the translation.
+#
+# **Two spellings, because for a while it only knew one.** This looked for `python3 -c '` alone,
+# and every report validator in this file is written the other way — `python3 - <<'MARKER'`. Six
+# blocks, including the three that judge the drawer, the settings window and the panel, were never
+# compiled by the guard written to compile them: a scan is only as wide as the spelling it searches
+# for. Both counts are reported below, so either form falling to zero is loud rather than silent.
 python3 - "$SELF" <<'GUARD' || fail "the inline Python in this script does not compile"
 import ast
+import re
 import sys
 
-# A block opens with a line ending `python3 -c '` and closes at the next apostrophe, which cannot
-# appear inside it: the body is a single-quoted shell string, so an apostrophe would end it there
-# too. That is what makes the extraction exact rather than a guess at the shape of the closing line.
-lines = open(sys.argv[1]).read().split("\n")
-blocks, current = [], None
-for line in lines:
+# **Comment lines are not openers.** This file explains both forms in prose, and a sentence naming
+# `python3 - <<'"'"'MARKER'"'"'` matched the search for one — opening a block that was never closed, which
+# failed the guard on its own documentation. Only the opener is filtered: a `#` inside a block is
+# Python'"'"'s own comment and must reach the parser.
+lines = [line for line in open(sys.argv[1]).read().split("\n")]
+def isComment(line): return line.lstrip().startswith("#")
+blocks = []          # (first line number, what kind, the body)
+
+# **Form one: `python3 -c '…'`.** It opens with a line ending in that quote and closes at the next
+# apostrophe, which cannot appear inside it — the body is a single-quoted shell string, so an
+# apostrophe would end it there too. That is what makes the extraction exact rather than a guess at
+# the shape of the closing line.
+current, started = None, 0
+for number, line in enumerate(lines, 1):
     if current is None:
-        if line.rstrip().endswith("python3 -c '"):
-            current = []
+        if not isComment(line) and line.rstrip().endswith("python3 -c '"):
+            current, started = [], number
     elif "'" in line:
         current.append(line[:line.index("'")])
-        blocks.append("\n".join(current))
+        blocks.append((started, "python3 -c", "\n".join(current)))
         current = None
     else:
         current.append(line)
 if current is not None:
     sys.exit("a python3 -c block is never closed")
-if not blocks:
-    sys.exit("no inline Python was found, so this check has stopped covering anything")
-for block in blocks:
+dashC = len(blocks)
+
+# **Form two: `python3 - <<'MARKER'`.** Every report validator in this file is written this way, and
+# the guard did not know the spelling. A quoted delimiter is required by the match: an unquoted one
+# would have the shell substitute into the body before Python ever saw it, which is a different
+# defect and one this file forbids elsewhere.
+opener = re.compile(r"""python3 .*<<'([A-Za-z_][A-Za-z0-9_]*)'""")
+current, marker, started = None, None, 0
+for number, line in enumerate(lines, 1):
+    if current is None:
+        found = None if isComment(line) else opener.search(line)
+        if found:
+            marker, current, started = found.group(1), [], number
+    elif line.rstrip() == marker:
+        blocks.append((started, f"heredoc {marker}", "\n".join(current)))
+        current = None
+    else:
+        current.append(line)
+if current is not None:
+    sys.exit(f"the python3 heredoc opened at line {started} is never closed by {marker}")
+heredocs = len(blocks) - dashC
+
+# Each form counted, so one of them falling to zero says so. A single total would let this go on
+# reporting a healthy number while half the file stopped being covered.
+if not dashC:
+    sys.exit("no `python3 -c` block was found, so that half of this check covers nothing")
+if not heredocs:
+    sys.exit("no `python3 - <<MARKER` block was found, so that half of this check covers nothing")
+for started, kind, block in blocks:
     try:
         ast.parse(block)
     except SyntaxError as error:
-        sys.exit(f"line {error.lineno} of a python3 -c block: {error.msg}\n    {(error.text or '').rstrip()}")
-print(f"{len(blocks)} inline Python block(s) compile")
+        sys.exit(f"the {kind} block at line {started}, line {error.lineno} of it: {error.msg}"
+                 f"\n    {(error.text or '').rstrip()}")
+print(f"{dashC} `python3 -c` and {heredocs} heredoc Python block(s) compile")
 GUARD
 
 checked=0
@@ -206,7 +248,7 @@ WANTED=("${@:2}")
 # exited 0 — a green mark for a run that tested nothing, which is the one thing this file is written
 # to make impossible. This is the only list of the names; the header points at it rather than
 # naming them again, because two lists of one thing are one list nobody keeps.
-KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes model)
+KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model)
 for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
     found=""
     for known in "${KNOWN_STAGES[@]}"; do [ "$wanted" = "$known" ] && { found=yes; break; }; done
@@ -644,8 +686,15 @@ view = json.loads(sys.argv[1])
 # on failing a panel that had answered.
 # Not merely the heading: a card that says "No entry for “meeting”" carries the word too, and a
 # check for the heading alone passed one. So an answer is the word's card with no failure on it.
+#
+# **The word is looked for *within* the card's text, not as an element equal to it.** The card heads
+# itself with the dictionary's own headword — 牛津英汉汉英词典 answers a lookup of "meeting" with an
+# entry headed "meet" — so an exact match asserted something the product never promised, and passed
+# only while the primary dictionary happened to head the entry with the selected string. It failed
+# the day the primary was one that lemmatises, with the card on screen and correct. The reader's own
+# sentence carries the surface form either way, which is what this now matches.
 failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
-panels = [w for w in view["windows"] if "meeting" in w["texts"]
+panels = [w for w in view["windows"] if any("meeting" in t for t in w["texts"])
           and not any(m in t for t in w["texts"] for m in failed)]
 problems = []
 if view["frontmost"] != "com.apple.TextEdit": problems.append(f"focus moved to {view['frontmost']}")
@@ -728,7 +777,10 @@ else
         for _ in $(seq 1 100); do
             view=$("$helpers/panel" com.xiaolaidict)
             # The word's card, and no failure on it — "No entry for" carries the word too.
-            if printf '%s' "$view" | grep -q '"meeting"' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not be asked'; then
+            # Not `"meeting"` as a whole JSON element: the card heads itself with the dictionary's
+            # headword, so a primary that lemmatises answers "meeting" with a card headed "meet".
+            # The reader's own sentence carries the surface form, and that is what is matched.
+            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not be asked'; then
                 filled=$view; break
             fi
             sleep 0.1
@@ -1644,8 +1696,130 @@ for surface in "Reading History" "Settings…"; do
 done
 fi
 
+if want panel; then
+# 13. **What the lookup panel's window is, and what clicking it costs the reader.**
+#
+#     The panel is the one surface the reader clicks into while they are mid-sentence somewhere else,
+#     and nothing measured what that click does. The drawer's report asserts `activatedTheApp` for the
+#     *drawer* — a surface nobody clicks into — and the panel had no equivalent, so three claims rested
+#     on the gap: that `becomesKeyOnlyIfNeeded` is applied at all (it is guarded by
+#     `window as? NSPanel`, and a SwiftUI `Window` scene may not be one), that text on the card could
+#     ever be selected (selection needs a key window), and that a footer menu is usable (the
+#     click-away monitor closes the panel on any mouse-down outside its frame, and a menu is another
+#     window).
+#
+#     **Part gate, part probe, and the two are kept apart.** What is already an invariant is asserted;
+#     what nobody has decided yet is printed as a NOTE and decides a design question instead of this
+#     stage's colour. A probe that failed on a discovery would be a stage that fails for telling us
+#     something.
+# 90 s: a cold process pays for the XPC service starting before the first lookup answers.
+report=$(run_report --panel-report 90)
+if [ -z "$report" ]; then
+    flunk "panel: --panel-report printed nothing ($(head -c 160 $reports/panel-report.err 2>/dev/null))"
+else
+    verdicts=$(python3 - "$report" 2>&1 <<'PYCHECK' || true
+import json, sys
+r = json.loads(sys.argv[1])
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def note(text): print("NOTE\t" + text)
+
+if not r.get("appeared"):
+    say(False, "", f"panel: the panel was never drawn ({r.get('problem', '?')})")
+else:
+    w, before, after, menu = r["window"], r["beforeClick"], r["afterClick"], r["menu"]
+
+    # --- the invariants, asserted ------------------------------------------------------------
+    # "No panel may activate XiaolaiDict": showing it must leave the reader where they were.
+    say(not before["showingTookTheFront"],
+        f"panel: showing it left {before['frontmostBefore']} in front",
+        f"panel: showing it took the front from {before['frontmostBefore']} to {before['frontmostNow']}")
+    # The measurement's own positive control. A click that was never posted measures nothing about
+    # clicking, and must not read as a click that changed nothing.
+    say(after["clickPosted"],
+        "panel: a click was posted inside the panel",
+        "panel: no click could be posted — is Accessibility granted to this bundle?")
+    # The click-away monitor hit-tests the panel's own frame, so a click inside it belongs to the
+    # card. This is the half of that rule a test can reach.
+    say(after["survivedTheClick"],
+        "panel: a click inside the panel did not dismiss it",
+        "panel: a click inside the panel dismissed it — the click-away hit test is not holding")
+    # Without this the menu reading is vacuous: a click that missed the item and a click the
+    # monitors swallowed look identical, and they are opposite findings.
+    if menu.get("measured") and menu.get("clickPosted") and menu.get("menuTracked"):
+        say(menu["itemWasChosen"],
+            "panel: the menu click reached the menu item",
+            "panel: the menu click never reached the item, so the survival reading below means nothing")
+    else:
+        say(False, "", "panel: the menu could not be tracked "
+            f"({menu.get('problem', 'tracked=' + str(menu.get('menuTracked')) + ', clickPosted=' + str(menu.get('clickPosted')))})")
+
+    # **The window is the height of the card.** It was the opening default for every card — 240,
+    # with the whole footer below a fold the panel gives no sign of having. Three assertions,
+    # because each alone passes on a defect: settled (a height read while it is still growing is
+    # not the height the reader gets), within the ceiling (growing must stop where scrolling
+    # starts), and taller than the opening default for a card that wants more (which is the fit
+    # actually having happened rather than the default happening to be right).
+    say(w["windowSettled"],
+        f"panel: the window came to rest at {w['windowHeight']:g} pt",
+        f"panel: the window was still resizing after {w['windowHeight']:g} pt — the height below means nothing")
+    say(w["windowHeight"] <= w["heightCeiling"],
+        f"panel: the window is within the cap ({w['windowHeight']:g} of {w['heightCeiling']:g} pt)",
+        f"panel: the window is {w['windowHeight']:g} pt against a ceiling of {w['heightCeiling']:g} — it grew past what its content is clipped to")
+    say(w["windowHeight"] != w["openingHeight"],
+        f"panel: the window is the card's height, not the opening default ({w['openingHeight']:g} pt)",
+        f"panel: the window is exactly the opening default ({w['openingHeight']:g} pt) — it is not being fitted to the card")
+
+    # --- the discoveries, reported ----------------------------------------------------------
+    note(f"panel: the window is a {w['class']}; isPanel={w['isPanel']}, "
+         f"becomesKeyOnlyIfNeeded={w['becomesKeyOnlyIfNeeded']}, "
+         f"nonactivatingPanel={w['isNonactivatingPanel']}, styleMask={w['styleMask']}, level={w['level']}")
+    # WI-6 turns on this one number: a window that cannot become key cannot hold a text selection,
+    # and no modifier changes that.
+    # What the height was computed from. A window of the wrong height and a window asked for the
+    # wrong height look identical from outside, and they have different causes — the card's surface
+    # is drawn on its scroll view's frame, so a window asked for more than the content wants shows
+    # the difference as empty card under the last control.
+    note(f"panel: the fit saw wanted={w['fitWanted']:g} given={w['fitGiven']:g} "
+         f"→ dead space {max(0.0, w['fitWanted'] - w['fitGiven']):g} pt")
+    note(f"panel: resizableByHand={w['resizableByHand']} — the window has no edge to drag, which is "
+         "why no size a reader chose is remembered")
+    note(f"panel: canBecomeKey={w['canBecomeKey']} — text selection on the card is "
+         + ("possible" if w["canBecomeKey"] else "IMPOSSIBLE on this surface"))
+    # The cost of every control on the card, stated plainly whichever way it went.
+    note(f"panel: after a click — appIsActive={after['appIsActive']}, isKeyWindow={after['isKeyWindow']}, "
+         f"frontmost={after['frontmost']}, tookTheFront={after['tookTheFront']}")
+    if after["tookTheFront"]:
+        note("panel: clicking a control takes the front, so typing goes to XiaolaiDict afterwards — "
+             "every footer action costs the reader their focus")
+    else:
+        note("panel: clicking a control left the front where it was, so typing still goes to the reader's app")
+    # WI-2 turns on this one. A menu is another window, and the monitors may or may not see it.
+    if menu.get("measured"):
+        note(f"panel: tracked an {menu['menuKind']} outside the panel's frame — "
+             f"panelSurvivedTheMenuClick={menu['panelSurvivedTheMenuClick']}")
+        if not menu["panelSurvivedTheMenuClick"]:
+            note("panel: a menu click dismissed the panel — a footer menu needs the click-away "
+                 "predicate to know its own popup before WI-2 can use one")
+print("DONE")
+PYCHECK
+)
+    # A here-string, never a pipe: `flunk` increments a counter, and a pipe would run it in a
+    # subshell where the increment is thrown away — a stage that reported its failures and then
+    # passed. The settings stage above reads its verdicts the same way, for the same reason.
+    while IFS=$'\t' read -r verdict text; do
+        case "$verdict" in
+            PASS) pass "$text" ;;
+            NOTE) echo "NOTE  $text" ;;
+            FAIL) flunk "$text" ;;
+        esac
+    done <<<"$verdicts"
+    printf '%s' "$verdicts" | grep -qx DONE \
+        || flunk "panel: the report's validator stopped before it finished: $(printf '%s' "$verdicts" | tail -3)"
+fi
+fi
+
 if want model; then
-# 13. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
+# 14. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
 #     downloader, a sense answer and a translation through the model service, the service's
 #     footprint, and the service ending itself when idle — which is how the model unloads.
 #
