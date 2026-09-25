@@ -1,5 +1,6 @@
-import AppKit
 import ApplicationServices
+import OSLog
+import XiaolaiDictCore
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
@@ -32,6 +33,12 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     case screenRecording
 
     public var id: String { rawValue }
+
+
+    /// The option key that makes `AXIsProcessTrustedWithOptions` show its prompt. Spelled out
+    /// because the SDK's constant is a global `var` Swift 6 will not let this read; a test holds
+    /// the two equal.
+    static let promptKey = "AXTrustedCheckOptionPrompt" 
 
     /// The name macOS gives it, and the name the reader is looking for in System Settings — so a
     /// translation has to be the running system's own word for the list, not a fresh rendering of
@@ -82,7 +89,14 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
-    /// Whether macOS has granted it, asked **the way the feature asks**. Neither path prompts.
+    /// Whether macOS has granted it, asked **the way the feature asks**.
+    ///
+    /// **It does not prompt once the question has been answered, which is not the same as never
+    /// prompting.** `SCShareableContent` is what the recogniser captures through, and on a Mac
+    /// where the reader has never been asked, macOS may put its consent dialog up for it. That is
+    /// correct behaviour for a capture and wrong for a status check that runs on a menu refresh —
+    /// recorded here rather than claimed away, because the previous wording said "Neither path
+    /// prompts" and an audit was right to call it.
     ///
     /// Screen Recording is checked by calling `SCShareableContent` — the same API the recogniser
     /// uses — rather than `CGPreflightScreenCaptureAccess()`. Not because the two were seen to
@@ -126,8 +140,18 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
                 return AXIsProcessTrusted() ? .granted : .declined
             case .screenRecording:
                 do {
-                    _ = try await SCShareableContent.excludingDesktopWindows(
-                        false, onScreenWindowsOnly: true)
+                    // **Bounded.** This is a call into another process, and it has no timeout of its
+                    // own. `PermissionsReport.probe` is awaited by the menu's refresh, by the setup
+                    // board's polling, and by `askForDictionaries()` before dictionary discovery —
+                    // so a capture service that stops answering used to stall all three with no
+                    // way out. A probe that does not return in time has not said anything about
+                    // consent, which is exactly `couldNotTell`.
+                    try await withDeadline(Token.Timing.permissionProbe) {
+                        // Answers `Void`, not the content: `SCShareableContent` is not `Sendable`,
+                        // and nothing here wants it — only that the call was allowed to return.
+                        _ = try await SCShareableContent.excludingDesktopWindows(
+                            false, onScreenWindowsOnly: true)
+                    }
                     return .granted
                 // The SDK's own symbol, never the number behind it: `SCStreamErrorUserDeclined`
                 // is the one code in that domain that is a statement about the reader's consent —
@@ -138,6 +162,13 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
                             && error.code == SCStreamError.Code.userDeclined.rawValue {
                     return .declined
                 } catch {
+                    // **Kept, not swallowed.** `couldNotTell` preserves that something went wrong
+                    // and loses what — which is the one thing worth knowing when this fires. The
+                    // domain and code are the diagnosis; the message may carry a path, so it is
+                    // not logged.
+                    let failure = error as NSError
+                    Logger(subsystem: XiaolaiDictIdentity.app, category: "permissions").error(
+                        "screen-recording probe failed: \(failure.domain, privacy: .public) \(failure.code, privacy: .public)")
                     return .couldNotTell
                 }
             }
@@ -151,7 +182,18 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     public func request() -> Bool {
         switch self {
         case .accessibility:
-            AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            // The literal, and **not** because nobody thought of the constant. An audit asked for
+            // `kAXTrustedCheckOptionPrompt`; it cannot be used. The SDK declares it as a global
+            // `var`, so Swift 6 refuses to read it from this module at all — "not concurrency-safe
+            // because it involves shared mutable state" — and that refusal extends to a
+            // `nonisolated(unsafe)` binding in a test, which was tried. So there is no compile-time
+            // check of this string and no test that can make one.
+            //
+            // **The gap is real and is left visible rather than papered over.** A mistyped key is
+            // not an error: `AXIsProcessTrustedWithOptions` simply never prompts, and the reader is
+            // left on a permission screen that does nothing. If this ever needs proving, the route
+            // is `dlsym` against the framework at runtime — deliberately not taken for one string.
+            AXIsProcessTrustedWithOptions([Self.promptKey: true] as CFDictionary)
         case .screenRecording:
             CGRequestScreenCaptureAccess()
         }
@@ -160,13 +202,29 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
 
 public struct PermissionState: Equatable, Sendable, Identifiable {
     public let permission: Permission
-    public let isGranted: Bool
+    /// **What the probe found, all three of it.** This used to be a `Bool`, and an audit was right
+    /// about what that cost: `couldNotTell` arrived as `false`, so the Settings pane drew "Off" in
+    /// warning orange and offered *Ask macOS…* for a permission that may well be granted. Telling
+    /// a reader to grant something they already granted is worse than saying nothing, because they
+    /// will go and look and find it already on.
+    public let found: PermissionProbe
+
+    /// For the surfaces that genuinely have two renderings — the setup board's tick, and `missing`.
+    /// **Unknown counts as not-granted here on purpose**: the board asking the reader to look is
+    /// harmless, where the Settings pane asserting "Off" is not.
+    public var isGranted: Bool { found == .granted }
 
     public var id: String { permission.id }
 
-    public init(permission: Permission, isGranted: Bool) {
+    public init(permission: Permission, found: PermissionProbe) {
         self.permission = permission
-        self.isGranted = isGranted
+        self.found = found
+    }
+
+    /// The two-valued form, for call sites that genuinely know — previews, and tests that are not
+    /// about the third state.
+    public init(permission: Permission, isGranted: Bool) {
+        self.init(permission: permission, found: isGranted ? .granted : .declined)
     }
 }
 
@@ -207,10 +265,10 @@ public struct PermissionsReport: Equatable, Sendable {
 
     /// Asks about every permission, every time. Caching which were missing last time is how a probe
     /// comes to report a permission the reader has since granted.
-    public static func probe(_ isGranted: (Permission) async -> Bool = { await $0.isGranted }) async -> PermissionsReport {
+    public static func probe(_ probe: (Permission) async -> PermissionProbe = { await $0.probe }) async -> PermissionsReport {
         var states: [PermissionState] = []
         for permission in Permission.allCases {
-            states.append(PermissionState(permission: permission, isGranted: await isGranted(permission)))
+            states.append(PermissionState(permission: permission, found: await probe(permission)))
         }
         return PermissionsReport(states: states)
     }

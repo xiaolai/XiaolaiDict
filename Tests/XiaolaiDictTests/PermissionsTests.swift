@@ -1,3 +1,5 @@
+import ApplicationServices
+import ScreenCaptureKit
 import Testing
 
 @testable import XiaolaiDict
@@ -69,7 +71,7 @@ struct PermissionsTests {
 
     /// The report is ordered so the window reads the same way twice.
     @Test func theReportIsInAStableOrder() async {
-        let report = await PermissionsReport.probe { _ in true }
+        let report = await PermissionsReport.probe { _ in .granted }
         #expect(report.states.map(\.permission) == Permission.allCases)
     }
 
@@ -78,7 +80,7 @@ struct PermissionsTests {
         let asked = Asked()
         _ = await PermissionsReport.probe { permission in
             asked.note(permission)
-            return permission == .accessibility
+            return permission == .accessibility ? .granted : .declined
         }
         #expect(asked.all == Permission.allCases)
     }
@@ -89,7 +91,39 @@ struct PermissionsTests {
     }
 
     @Test func probeReportsWhatItWasTold() async {
-        let report = await PermissionsReport.probe { $0 == .accessibility }
+        let report = await PermissionsReport.probe { $0 == .accessibility ? .granted : .declined }
         #expect(report.missing.map(\.permission) == [.screenRecording])
+    }
+}
+
+/// The constants a permission depends on.
+struct PermissionConstantsTests {
+    /// `SCStreamErrorUserDeclined` is read from the SDK rather than written as -3801, but the
+    /// domain is matched as a string, so this pins the pair the probe decides on.
+    @Test func theRefusalCodeIsTheOneScreenCaptureKitSends() {
+        #expect(SCStreamError.Code.userDeclined.rawValue == -3801)
+        #expect(SCStreamErrorDomain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain")
+    }
+}
+
+
+/// The third state reaching the reader, which is what the change was for.
+struct UnknownPermissionStateTests {
+    /// **Unknown is not "Off".** It used to be: the probe's `couldNotTell` arrived at the Settings
+    /// pane as `false`, which drew a warning triangle, the word "Off", and an *Ask macOS…* button
+    /// for a permission that may already be granted.
+    @Test func anUnknownGrantIsNotReportedAsRefused() async {
+        let report = await PermissionsReport.probe { _ in .couldNotTell }
+        for state in report.states {
+            #expect(state.found == .couldNotTell)
+            #expect(state.isGranted == false, "unknown must not be mistaken for granted either")
+        }
+    }
+
+    /// And it still counts as missing, so the setup board keeps asking the reader to look —
+    /// harmless there, unlike asserting "Off" in Settings.
+    @Test func anUnknownGrantStillCountsAsMissing() async {
+        let report = await PermissionsReport.probe { _ in .couldNotTell }
+        #expect(report.missing.count == Permission.allCases.count)
     }
 }

@@ -563,6 +563,9 @@
     "This board was opened without the model's state, so it cannot say what is here." : {
 
     },
+    "This could not be checked just now. It will be asked again." : {
+
+    },
     "This dictionary does not mark its senses, so the one you read cannot be identified." : {
       "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
     },
@@ -613,6 +616,9 @@
 
     },
     "Undo" : {
+
+    },
+    "Unknown" : {
 
     },
     "Until then, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {

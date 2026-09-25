@@ -541,15 +541,43 @@ struct PermissionRow: View {
     @Environment(\.scale) private var scale
     let state: PermissionState
 
+    /// Three states, three marks. Unknown is neither a tick nor a warning: it is the question mark
+    /// it actually is, and it does not wear the orange that means *you need to do something*.
+    private var symbol: String {
+        switch state.found {
+        case .granted: "checkmark.circle.fill"
+        case .declined: "exclamationmark.triangle.fill"
+        case .couldNotTell: "questionmark.circle.fill"
+        }
+    }
+
+    private var tint: AnyShapeStyle {
+        switch state.found {
+        case .granted: AnyShapeStyle(.green)
+        case .declined: AnyShapeStyle(.orange)
+        case .couldNotTell: AnyShapeStyle(.secondary)
+        }
+    }
+
+    private var status: Text {
+        switch state.found {
+        case .granted: Text("On")
+        case .declined: Text("Off")
+        // Never "Off": that is a claim about the reader's consent, and this is a claim about the
+        // check.
+        case .couldNotTell: Text("Unknown")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             HStack(spacing: scale.space.inline) {
-                Image(systemName: state.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(state.isGranted ? AnyShapeStyle(.green) : AnyShapeStyle(.orange))
+                Image(systemName: symbol)
+                    .foregroundStyle(tint)
                 Text(verbatim: state.permission.name)
                     .font(.system(size: scale.text.heading, weight: .medium))
                 Spacer(minLength: scale.space.inline)
-                Text(state.isGranted ? "On" : "Off")
+                status
                     .font(.system(size: scale.text.body, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -559,7 +587,10 @@ struct PermissionRow: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !state.isGranted {
+            // **Only where the reader has actually been refused.** An unknown grant gets the line
+            // below instead: naming a settings list, and offering to prompt for something that may
+            // already be on, sends them to look at a switch that is already where it should be.
+            if state.found == .declined {
                 Text(verbatim: state.permission.location)
                     .font(.system(size: scale.text.label))
                     .foregroundStyle(.tertiary)
@@ -573,6 +604,13 @@ struct PermissionRow: View {
                         .buttonStyle(.glass)
                 }
                 .controlSize(.small)
+            }
+            // Says what happened and asks for nothing. A check that could not run is a fact about
+            // this moment, not about the reader's consent, and the next refresh usually answers.
+            if state.found == .couldNotTell {
+                Text("This could not be checked just now. It will be asked again.")
+                    .font(.system(size: scale.text.label))
+                    .foregroundStyle(.tertiary)
             }
         }
         // No glass here. A grouped `Form` section already *is* the raised surface, and the
