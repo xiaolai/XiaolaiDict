@@ -10,10 +10,14 @@ import SwiftUI
 /// never lists it and Accessibility never sees it, so it is drawn nowhere and readable by nothing.
 /// A `Window` is composited, is listed by Accessibility, and still does not activate the app.
 ///
-/// What a `Window` lacks is panel behaviour — floating level, `becomesKeyOnlyIfNeeded`,
-/// `collectionBehavior` — and SwiftUI exposes none of it. `WindowAccessor` sets it on the window
-/// SwiftUI made. That is the only AppKit left in this layer, and it is there for reasons that were
-/// measured rather than guessed.
+/// What a `Window` lacks is panel behaviour — floating level, `collectionBehavior` — and SwiftUI
+/// exposes none of it. `WindowAccessor` sets it on the window SwiftUI made. That is the only AppKit
+/// left in this layer, and it is there for reasons that were measured rather than guessed.
+///
+/// **`becomesKeyOnlyIfNeeded` is not among them, and used to be named here.** A `Window` scene is a
+/// `SwiftUI.AppKitWindow`, never an `NSPanel`, so the line that set it could not run — see
+/// `xiaolaiDictPanelBehaviour`. Whether these windows take the keyboard is `canBecomeKey`'s answer
+/// instead: false for `.plain`, true for `.hiddenTitleBar`, both measured.
 ///
 /// `main()` is called from `main.swift` rather than `@main`, because XiaolaiDict's other launch modes —
 /// the lookup, the reports, the instruments — must be able to run without a scene at all.
@@ -231,7 +235,19 @@ extension View {
             // behave like a panel.
             window.level = .floating
             window.hidesOnDeactivate = false
-            if let panel = window as? NSPanel { panel.becomesKeyOnlyIfNeeded = true }
+            // **`becomesKeyOnlyIfNeeded` is not reachable from here, and the line that set it never
+            // ran.** Measured 2026-09-25 with a throwaway SwiftUI app: a `Window` scene is a
+            // `SwiftUI.AppKitWindow` and **not** an `NSPanel` under either style this app uses —
+            // `.plain` gives style mask 0 with `canBecomeKey` false, `.hiddenTitleBar` gives 32775
+            // with it true. So `if let panel = window as? NSPanel { … }` stood here doing nothing
+            // since it was written: a line whose whole purpose was to soften focus-stealing, and
+            // never once applied.
+            //
+            // Deleted rather than repaired because the property does not exist on the class SwiftUI
+            // hands us, and there is nothing to set in its place. What actually decides whether these
+            // surfaces take the reader's keyboard is `canBecomeKey`, which is the window's own and is
+            // what `--panel-report` reads. The doc comment above this function no longer claims
+            // otherwise.
             extra(window)
         })
     }
