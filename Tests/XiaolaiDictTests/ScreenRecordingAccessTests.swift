@@ -1,5 +1,7 @@
 import Foundation
+import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
@@ -20,9 +22,13 @@ struct ScreenRecordingAccessTests {
             request: { counter.bump(); return grantedByAsking }), counter)
     }
 
-    final class Counter: @unchecked Sendable {
-        private(set) var asks = 0
-        func bump() { asks += 1 }
+    /// Checked `Sendable`, with a lock. It is read from the test and written from an `@Sendable`
+    /// closure, and `@unchecked` asserted a safety nothing provided — harmless while every test
+    /// awaits one call, and an unsafe contract for the next one that does not.
+    final class Counter: Sendable {
+        private let count = Mutex(0)
+        var asks: Int { count.withLock { $0 } }
+        func bump() { count.withLock { $0 += 1 } }
     }
 
     @Test func alreadyGrantedIsAllowedWithoutAsking() async {
@@ -95,8 +101,9 @@ struct ScreenRecordingLocationTests {
     /// The refusal has to say where to go, because after the first prompt there is no second one.
     @Test func theRefusalNamesTheList() {
         let message = RecognitionError.screenRecordingDenied.errorDescription ?? ""
-        #expect(message.contains("Screen"))
-        #expect(message.contains("System Settings"))
+        // The whole location, not two words that happen to appear in it. "Screen: open System
+        // Settings" satisfied the old pair while naming neither the permission nor the path.
+        #expect(message.contains(PrivacySettings.screenRecordingLocation))
     }
 
     /// The unreadable case must *not* name it. Sending a reader to a list where the switch is
@@ -129,36 +136,16 @@ struct ScreenRecordingProbeTests {
     }
 
     @Test func theGrantCheckNeverAsksCoreGraphics() throws {
-        let root = sources
-        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-        else { throw ProbeScanFailure.unreadable(root.path) }
+        let (offenders, scanned) = try SourceScan.offenders(
+            of: "CGPreflightScreenCaptureAccess", under: sources)
 
-        var scanned = 0
-        var offenders: [String] = []
-        for case let file as URL in walk where file.pathExtension == "swift" {
-            scanned += 1
-            // Thrown rather than defaulted to "": a scanner that silently reads nothing passes
-            // forever and guards nothing.
-            let text = try String(contentsOf: file, encoding: .utf8)
-            // Comment lines are dropped first. `Permissions.swift` names this API in prose,
-            // explaining why it is *not* the one that decides — and a scanner that cannot tell a
-            // call from an explanation would report the explanation as the offence.
-            let code = text.split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-                .joined(separator: "\n")
-            if code.contains("CGPreflightScreenCaptureAccess") {
-                offenders.append(file.lastPathComponent)
-            }
-        }
-
-        // The positive control. If the walk ever stops finding files, this test would pass while
-        // scanning nothing at all.
-        #expect(scanned > 20, "scanned only \(scanned) files — the source walk is broken")
-        let named = offenders.joined(separator: ", ")
+        // The positive control, and a floor this tree justifies rather than a round number: the
+        // package ships well over a hundred Swift files across its four modules, so anything near
+        // 100 means a subtree went unread. `SourceScan` throws on a traversal error, which is the
+        // other half — this used to skip an unreadable directory in silence.
+        #expect(scanned > 100, "scanned only \(scanned) files — the source walk is broken")
         #expect(
             offenders.isEmpty,
-            "CGPreflightScreenCaptureAccess does not match the API the capture uses, so it must not decide the grant: \(named)")
+            "CGPreflightScreenCaptureAccess does not match the API the capture uses, so it must not decide the grant: \(offenders.joined(separator: ", "))")
     }
 }
-
-enum ProbeScanFailure: Error { case unreadable(String) }

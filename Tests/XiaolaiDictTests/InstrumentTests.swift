@@ -59,34 +59,17 @@ struct InstrumentSerialisationTests {
     }
 
     @Test func onlyInstrumentSerialisesAReport() throws {
-        let root = Self.app
-        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-        else { throw ScanFailure.unreadable(root.path) }
+        let found = try SourceScan.offenders(of: "JSONSerialization", under: Self.app)
+        // `Instrument.swift` is the one place allowed to serialise, which is the rule this asserts.
+        let offenders = found.names.filter { $0 != "Instrument.swift" }
+        let scanned = found.scanned
 
-        var scanned = 0
-        var offenders: [String] = []
-        for case let file as URL in walk where file.pathExtension == "swift" {
-            scanned += 1
-            // Thrown rather than defaulted to "": a scanner that silently reads nothing passes
-            // forever and guards nothing.
-            let text = try String(contentsOf: file, encoding: .utf8)
-            // Comment lines are dropped first, so the paragraph above explaining the rule is not
-            // itself reported as a breach of it.
-            let code = text.split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-                .joined(separator: "\n")
-            guard code.contains("JSONSerialization"), file.lastPathComponent != "Instrument.swift"
-            else { continue }
-            offenders.append(file.lastPathComponent)
-        }
-
-        // The positive control. If the walk ever stops finding files this test would pass while
-        // reading nothing at all.
+        // The positive control, and `SourceScan` throws rather than skipping a directory it cannot
+        // read — this used to walk with no error handler, so an unreadable subtree passed in
+        // silence while the floor below still held on whatever remained.
         #expect(scanned > 20, "the scan found \(scanned) Swift files, so it is not reading the sources")
         #expect(offenders.isEmpty, "a report is serialised outside Instrument.write: \(offenders)")
     }
 
-    enum ScanFailure: Error {
-        case unreadable(String)
-    }
+
 }
