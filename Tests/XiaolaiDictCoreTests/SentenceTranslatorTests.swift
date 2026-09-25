@@ -137,3 +137,57 @@ struct SentenceTranslatorTests {
         #expect(TranslationCheck.isTranslation(output, of: source) == isTranslation)
     }
 }
+
+/// **A control that can never answer must not be drawn live**, and the only honest way to know that
+/// in advance is to ask the translator the same question it asks itself first.
+///
+/// `translate` returns `.sameLanguage` on its first line, so for a reader whose own language is the
+/// sentence's the translate button is a guaranteed dead end on every card with a sentence. The
+/// predicate is exposed rather than reimplemented in the view: two copies of this condition would
+/// drift, and the drift is a button that lies.
+struct AlreadyInTheReadersLanguageTests {
+    private func translator(readingEverythingAs language: String?) -> SentenceTranslator {
+        SentenceTranslator(
+            local: { _ in nil }, apple: { _, _, _ in .failed }, language: { _ in language })
+    }
+
+    /// **Through the translator's own detector, not a static one.** The recogniser is injected, so a
+    /// view calling `SentenceTranslator.dominantLanguage` directly could disagree with the translator
+    /// that is about to answer — in tests, and in any configuration that injects another.
+    @Test func theSourceComesFromTheTranslatorsOwnDetector() {
+        #expect(translator(readingEverythingAs: "de").sourceLanguage(of: "anything at all") == "de")
+        #expect(translator(readingEverythingAs: nil).sourceLanguage(of: "anything at all") == nil)
+    }
+
+    /// The dead end: English into English.
+    @Test func aSentenceInTheReadersOwnLanguageIsAlreadyThere() {
+        let english = translator(readingEverythingAs: "en")
+        #expect(english.isAlreadyInTheReadersLanguage("The die was cast.", target: "en"))
+        #expect(english.isAlreadyInTheReadersLanguage("The die was cast.", target: "en-GB"),
+                "a region is not a different language to a reader")
+        #expect(!english.isAlreadyInTheReadersLanguage("The die was cast.", target: "zh-Hans"))
+    }
+
+    /// **Unknown stays translatable.** An undetermined source must not disable a button that might
+    /// have worked — `translate` itself falls through to the local model in that case, and only
+    /// Apple's framework needs the source named.
+    @Test func anUnknownLanguageIsNotTheReadersOwn() {
+        #expect(!translator(readingEverythingAs: nil).isAlreadyInTheReadersLanguage("???", target: "en"))
+    }
+
+    /// The script matters and the language code alone does not: a reader of Traditional Chinese must
+    /// not be told a Simplified sentence is already in their language.
+    @Test func chineseScriptsAreNotOneLanguage() {
+        let simplified = translator(readingEverythingAs: "zh-Hans")
+        #expect(simplified.isAlreadyInTheReadersLanguage("货舱装满了。", target: "zh-Hans"))
+        #expect(!simplified.isAlreadyInTheReadersLanguage("货舱装满了。", target: "zh-Hant"))
+    }
+
+    /// And the predicate is the one `translate` acts on, not a second opinion beside it.
+    @Test func theAnswerAgreesWithWhatTranslateDoes() async {
+        let english = translator(readingEverythingAs: "en")
+        let question = TranslationQuestion(sentence: "The die was cast.", target: "en", met: nil)
+        #expect(english.isAlreadyInTheReadersLanguage(question.sentence, target: question.target))
+        #expect(await english.translate(question) == .sameLanguage)
+    }
+}
