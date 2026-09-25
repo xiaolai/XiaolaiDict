@@ -38,6 +38,14 @@ enum LaunchMode: Equatable {
     case modelReport
     /// `--sense-report`: every rung of the sense ladder scored on the labelled set, in the bundle.
     case senseReport
+
+    /// `--panel-report`: what the lookup panel's window actually is, and what an ordinary click on
+    /// it costs the reader. The scene type, whether it can become key, and whether clicking a
+    /// control inside it activates XiaolaiDict and takes focus out of the app the reader is reading.
+    /// Only a running bundle has that window, and nothing in this repository measured it — the
+    /// drawer's report asserts non-activation for the *drawer*, and the panel is the surface the
+    /// reader clicks.
+    case panelReport
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -59,6 +67,7 @@ enum LaunchArguments {
                XiaolaiDict --model-status
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
+               XiaolaiDict --panel-report
         """
 
     static let repeatRange = 1...1_000
@@ -80,6 +89,7 @@ enum LaunchArguments {
         case "--model-status": alone(arguments, is: .modelStatus)
         case "--model-report": alone(arguments, is: .modelReport)
         case "--sense-report": alone(arguments, is: .senseReport)
+        case "--panel-report": alone(arguments, is: .panelReport)
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }

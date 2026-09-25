@@ -215,16 +215,20 @@ struct PanelRequestIdentityTests {
 /// line beside it; no API reports what a notification centre is observing.
 @MainActor
 struct PanelResizeWatchTests {
+    /// **Written against the drag-resize observer, which no longer exists.** The panel's window is
+    /// borderless and `isResizable` false — measured — so `didEndLiveResizeNotification` could never
+    /// be posted and the size it remembered could never be written. The property this test is really
+    /// about is the churn guard, which belongs to the observer that remains.
     @Test func watchingAgainIsANoOpAndADifferentWindowReplacesIt() throws {
         let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
-        #expect(panel.resizeObserver == nil)
+        #expect(panel.fitObserver == nil)
         panel.watchForResize(of: window)
-        let first = try #require(panel.resizeObserver)
+        let first = try #require(panel.fitObserver)
         panel.watchForResize(of: window)
-        let second = try #require(panel.resizeObserver)
+        let second = try #require(panel.fitObserver)
         // **The contract changed, so the assertion did.** It used to demand a *different* token,
         // which proved only that the old one had been replaced — and an inert guard satisfies it.
         // Watching a window already watched is now a no-op, so the same token surviving is the
@@ -236,7 +240,7 @@ struct PanelResizeWatchTests {
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
         panel.watchForResize(of: other)
-        let moved = try #require(panel.resizeObserver)
+        let moved = try #require(panel.fitObserver)
         #expect(moved !== second, "the panel kept watching the window it was moved away from")
 
         // And the watch ends with the panel: registered still, it holds a closed window alive and
@@ -245,7 +249,7 @@ struct PanelResizeWatchTests {
             .message(title: "anything", detail: "so that closing it is a real close"),
             near: UpPoint(.zero), for: panel.newRequest())
         panel.closed()
-        #expect(panel.resizeObserver == nil, "the panel went on watching a window that had closed")
+        #expect(panel.fitObserver == nil, "the panel went on watching a window that had closed")
     }
 
     /// **The wire, not the value.** `PanelPlacement.fitted` is tested exhaustively above and was

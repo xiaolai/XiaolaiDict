@@ -127,6 +127,9 @@
     "Chinese characters / Japanese kanji" : {
 
     },
+    "Choose a dictionary that marks senses…" : {
+
+    },
     "Choose…" : {
 
     },
@@ -140,6 +143,9 @@
 
     },
     "Copy the word and this sense" : {
+
+    },
+    "Copy this definition" : {
 
     },
     "Device Control and Data Access" : {
@@ -303,6 +309,12 @@
     "No sense in this entry clearly fits this sentence." : {
       "comment" : "Shown on the lookup card when no sense is close enough to claim"
     },
+    "No sense was identified, so there is nothing to copy" : {
+
+    },
+    "No sense was identified, so there is nothing to keep" : {
+
+    },
     "No sentence was captured around the word, so its senses cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
@@ -403,6 +415,9 @@
       "comment" : "What stops working without the Screen Recording permission"
     },
     "Ready" : {
+
+    },
+    "Record this as the sense you met" : {
 
     },
     "Remove" : {
@@ -688,6 +703,9 @@
     "XiaolaiDict needs Accessibility access" : {
       "comment" : "Lookup panel, when Accessibility has not been granted"
     },
+    "Yes, that’s it" : {
+
+    },
     "Yesterday" : {
 
     },
@@ -702,6 +720,9 @@
     },
     "Your reading history is unavailable" : {
       "comment" : "Drawer notice when the ledger could not be read"
+    },
+    "^[%lld other dictionary](inflect: true)" : {
+
     },
     "^[%lld other sense](inflect: true)" : {
 

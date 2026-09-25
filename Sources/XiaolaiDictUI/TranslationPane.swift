@@ -106,8 +106,7 @@ extension TranslationQuestion {
 
     /// The sense a card leads with, where it leads with one.
     static func metSense(of card: LookupCard) -> MetSense? {
-        guard case .sense(let shown) = card.answer else { return nil }
-        return MetSense(term: card.term, sense: shown.label)
+        card.leadingSense.map { MetSense(term: card.term, sense: $0.label) }
     }
 }
 
@@ -118,22 +117,37 @@ public struct TranslationActions: Sendable {
     public var translate: @Sendable (TranslationQuestion) async -> TranslationOutcome
     /// The reader's own language, which is what a translation is into.
     public var target: String
+    /// **The sentence's own language, as the translator that would answer reads it.**
+    ///
+    /// The translate control is hidden where translating could say nothing — `translate` answers
+    /// `.sameLanguage` on its first line, so for a reader whose language is the sentence's it is a
+    /// guaranteed dead end on every card. The *source* travels rather than a yes/no, so the view can
+    /// compare it against `target` at the moment it draws: cached as a Bool, the answer went stale the
+    /// moment the reader changed their language, and the button stayed hidden.
+    ///
+    /// Through the translator's own recogniser, never a static one: two detectors can disagree, and
+    /// the disagreement is a control that lies about what the translator is about to do.
+    public var sourceLanguage: @Sendable (String) -> String?
     public var canDownloadModel: Bool
     public var downloadModel: @MainActor () -> Void
 
     public init(
         translate: @escaping @Sendable (TranslationQuestion) async -> TranslationOutcome,
-        target: String, canDownloadModel: Bool, downloadModel: @escaping @MainActor () -> Void
+        target: String, sourceLanguage: @escaping @Sendable (String) -> String?,
+        canDownloadModel: Bool, downloadModel: @escaping @MainActor () -> Void
     ) {
         self.translate = translate
         self.target = target
+        self.sourceLanguage = sourceLanguage
         self.canDownloadModel = canDownloadModel
         self.downloadModel = downloadModel
     }
 
+    /// **`nil` rather than a language, so a view built without the app still offers to translate.**
+    /// An unknown source is not the reader's own — the same rule the translator applies.
     public static let none = TranslationActions(
-        translate: { _ in .unavailable }, target: ReaderLanguage.preferred, canDownloadModel: false,
-        downloadModel: {})
+        translate: { _ in .unavailable }, target: ReaderLanguage.preferred,
+        sourceLanguage: { _ in nil }, canDownloadModel: false, downloadModel: {})
 }
 
 private struct TranslationActionsKey: EnvironmentKey {

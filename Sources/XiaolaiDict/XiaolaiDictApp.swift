@@ -208,6 +208,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel.onStudySense = { [weak self] encounter, request in self?.study(encounter, request: request) }
+        panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
         let opening = Task { try await LedgerStore.openDefault() }
         ledger = opening
         Task {
@@ -233,14 +234,26 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
         // fired meanwhile would capture too — two captures at once deadlock, measured six trials
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
-        if hoverEnabled, !HistoryReport.isWanted, !SettingsReport.isWanted { hover.start() }
+        if hoverEnabled, !Self.isInstrumented { hover.start() }
         registerShortcut(shortcuts.load())
         // **Not in an instrument run.** An instrument measures the app; a window opening at it
         // unasked is a window in front of whatever it was about to capture.
-        if !HistoryReport.isWanted, !SettingsReport.isWanted { openSetupOnFirstLaunch() }
+        if !Self.isInstrumented { openSetupOnFirstLaunch() }
         quitOnTerminationSignal()
         if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
         if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
+        if PanelReport.isWanted { Task { exit(await PanelReport.run(in: self).rawValue) } }
+    }
+
+    /// **Whether this process is an instrument rather than the reader's app.**
+    ///
+    /// One predicate, because it was a list repeated at each site and each new instrument had to
+    /// remember to join every one of them: `--panel-report` shows the lookup panel and posts mouse
+    /// events at it, so a hover firing meanwhile is a second capture (two at once deadlock, measured
+    /// six trials of six) and a setup board opening unasked is a window in front of what is being
+    /// measured. An instrument measures the app; it has no reader whose pointer needs watching.
+    static var isInstrumented: Bool {
+        HistoryReport.isWanted || SettingsReport.isWanted || PanelReport.isWanted
     }
 
     // MARK: - Looking up
@@ -273,7 +286,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// A word the reader rested on. The same path as the shortcut from here: one lookup at a
     /// time, and a newer one supersedes whatever was still arriving.
-    private func lookUpHovered(_ selection: Selection, at pointer: UpPoint) {
+    /// **Not private: `--panel-report` drives it.** That report measures the panel's window and the
+    /// cost of clicking it, and a panel filled by a presentation the report made up would be a
+    /// different card from the one the reader gets — the footer's controls exist only where a
+    /// dictionary answered. So the instrument goes in by the same door hover does.
+    func lookUpHovered(_ selection: Selection, at pointer: UpPoint) {
         let requestedAt = Date.now
         let ticket = panel.newRequest()
         lookup?.cancel()
@@ -374,6 +391,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Selected before the window opens, so the reader never sees the pane they did not ask for
         // and then a switch. `SettingsModel` owns the selection for exactly this reason.
         if let pane { settings.pane = pane }
+        // **The Dictionary pane lists what the service reports, and nothing asks the service until a
+        // menu is opened.** So a route that opens it directly could leave the pane reading "Asking the
+        // dictionary service…" for good. Started here rather than at each call site: the menu and the
+        // setup board happen to ask before they get here, `--settings-report` had to remember to, and
+        // the panel's new route would have been the third place to forget. Fire-and-forget on purpose —
+        // opening the window must not wait on a probe that parses real entries.
+        if pane == .dictionary { Task { await askForDictionaries() } }
         NSApplication.shared.activate()
         WindowActions.shared.settings?()
     }

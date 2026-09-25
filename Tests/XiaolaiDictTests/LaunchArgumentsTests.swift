@@ -169,6 +169,7 @@ struct CommandCoverageTests {
         ("--model-status", LaunchMode.modelStatus),
         ("--model-report", LaunchMode.modelReport),
         ("--sense-report", LaunchMode.senseReport),
+        ("--panel-report", LaunchMode.panelReport),
     ])
     func aCommandParsesToItsOwnModeAndTakesNothingElse(command: String, mode: LaunchMode) {
         #expect(LaunchArguments.parse([command]) == .success(mode))

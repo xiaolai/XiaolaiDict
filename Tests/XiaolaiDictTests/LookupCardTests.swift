@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import Foundation
 import SwiftUI
 import Testing
@@ -267,5 +269,341 @@ struct AccentConsistencyTests {
             term: "fine", heading: "fine", partOfSpeech: nil, pronunciation: nil,
             answer: .undecided(reason: nil), sentence: nil, alternatives: [], memory: nil)
         #expect(card.lemma == "fine")
+    }
+}
+
+/// **What the two buttons that outlive the panel are allowed to act on.**
+///
+/// `copyButton` and `pinButton` each carried their own `switch` over the answer and each ended in a
+/// silent `default`, so on a card leading with no sense they were drawn enabled, took the click, and
+/// left the pasteboard and the notes untouched. That is the project's own rule — a control that
+/// refuses a click is a broken switch — at the two controls whose result the reader keeps.
+struct SenseToKeepTests {
+    private let entry = sampleEntry("New Oxford American Dictionary")
+
+    private func card(_ mark: SenseMark?) -> LookupCard {
+        LookupCard(
+            presentation: EntryPresentation(entry: entry, mark: mark, met: []),
+            term: "fine", sentence: "It was a fine piece of filmmaking.", mark: mark)
+    }
+
+    private func cardWithout(_ answer: LookupCard.Answer) -> LookupCard {
+        LookupCard(
+            term: "fine", heading: "fine", partOfSpeech: nil, pronunciation: nil,
+            answer: answer, sentence: nil, alternatives: [])
+    }
+
+    /// The reader's own tap and the entry's only sense are facts, and are kept as facts.
+    @Test func aSenseTheCardLeadsWithCanBeCopiedAndKept() throws {
+        let keep = try #require(card(.chosen(key: "m_en_gbus0362750.005", by: .reader)).senseToKeep)
+        #expect(keep.sense.key == "m_en_gbus0362750.005")
+        #expect(keep.standing == .confirmed)
+    }
+
+    /// **A guess kept is kept as a guess.** The panel's caveat does not travel with a note, so the
+    /// standing has to.
+    @Test func aGuessIsKeptAsAGuess() throws {
+        let keep = try #require(card(.chosen(key: "m_en_gbus0362750.020", by: .model)).senseToKeep)
+        #expect(keep.standing == .proposed)
+    }
+
+    /// The near miss the ambiguous card leads with is offered, and says it was one of several.
+    @Test func aNearMissIsKeptAsOneOfSeveral() throws {
+        let nearest = NearMiss(key: "m_en_gbus0362750.024", margin: 0.01, among: 3)
+        let keep = try #require(card(.couldNot(.tooClose, nearest: nearest)).senseToKeep)
+        #expect(keep.sense.key == "m_en_gbus0362750.024")
+        #expect(keep.standing == .ambiguous)
+    }
+
+    /// **The case both buttons got wrong.** An abstention with no near miss, an entry whose
+    /// dictionary marks no senses, a prose answer and a miss all lead with no sense — and three of
+    /// the seven dictionaries enabled here mark none at all, so this is the ordinary card for a
+    /// reader studying from one of them rather than an edge case.
+    @Test func aCardWithNoSenseOffersNothingToCopyOrKeep() {
+        #expect(card(.couldNot(.nothingFits)).senseToKeep == nil)
+        #expect(card(nil).senseToKeep == nil, "a card nothing has marked yet promised a sense")
+        #expect(cardWithout(.undecided(reason: nil)).senseToKeep == nil)
+        #expect(cardWithout(.prose("of very high quality")).senseToKeep == nil)
+        #expect(cardWithout(.absent).senseToKeep == nil)
+    }
+}
+
+/// **A card that is claiming a guess has to say so, whether or not a sentence was captured.**
+///
+/// `standing` — "A guess — not confirmed", drawn in orange — was rendered from inside
+/// `evidence(_:)`, which the card draws only `if let sentence = card.sentence, !sentence.isEmpty`.
+/// So on a card with no sentence the caveat did not exist, and the selector's hypothesis rendered
+/// exactly as confidently as the reader's own tap. That is "a failure must never render as
+/// confidently as a success" and D2's *a wrong mark is visible and recoverable*, both broken in the
+/// one state where the reader has least to check the claim against.
+///
+/// **The state is reachable, and not by an exotic path.** `SenseSelector.preflight` answers
+/// `.chose` as soon as the part-of-speech filter leaves one candidate — *before* it checks for a
+/// sentence — and `SenseResolver` files that as `by: .model` on purpose ("`.model` covers a choice
+/// no model made"). `LookupRunner` passes no sentence whenever the capture's context is not
+/// `.complete`, which is the ordinary hover and optical case. So: a degraded capture, a tagger that
+/// answers, one sense of that part of speech, and the card claims a sense with nothing saying it
+/// is a guess.
+///
+/// Read in pixels because the defect is *absence* in the view while every value behind it was
+/// right — `isHypothesis` was true throughout. Orange is the signal: on a `.sense` card nothing
+/// else is orange (the ambiguity badge is, and that is a different answer), so "is there any orange
+/// in this card" is exactly the question.
+@MainActor
+struct StandingIsAlwaysShownTests {
+    private let width: CGFloat = 400
+    private let entry = sampleEntry("New Oxford American Dictionary")
+
+    private func card(_ mark: SenseMark?, sentence: String?) -> LookupCard {
+        LookupCard(
+            presentation: EntryPresentation(entry: entry, mark: mark, met: []),
+            term: "fine", sentence: sentence, mark: mark)
+    }
+
+    /// How much of the card is orange, as a count of pixels that are clearly warmer than they are
+    /// cool. A text colour antialiases, so this counts pixels rather than looking for one value.
+    private func orangePixels(_ view: some View) throws -> Int {
+        let renderer = ImageRenderer(
+            content: view.frame(width: width, alignment: .topLeading).background(Color.white))
+        renderer.scale = 2
+        let image = try #require(renderer.cgImage, "the card did not rasterise")
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try #require(CGContext(
+            data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        var orange = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Int(pixels[index]), green = Int(pixels[index + 1]), blue = Int(pixels[index + 2])
+            // Orange text on white: red well ahead of blue, and green between them. A grey has all
+            // three within a few points of each other, so the gap is what separates them.
+            if red - blue > 60, green > blue, red > 120 { orange += 1 }
+        }
+        return orange
+    }
+
+    /// The control case: with a sentence, the caveat has always been drawn.
+    @Test func aGuessWithASentenceSaysSo() throws {
+        let guess = card(.chosen(key: "m_en_gbus0362750.020", by: .model),
+                         sentence: "It was a fine piece of filmmaking.")
+        try #require(guess.isHypothesis, "the fixture is not a guess, so it tests nothing")
+        #expect(try orangePixels(LookupCardView(card: guess)) > 0)
+    }
+
+    /// The defect: the same guess, with nothing captured around the word.
+    @Test func aGuessWithNoSentenceStillSaysSo() throws {
+        let guess = card(.chosen(key: "m_en_gbus0362750.020", by: .model), sentence: nil)
+        try #require(guess.isHypothesis, "the fixture is not a guess, so it tests nothing")
+        #expect(
+            try orangePixels(LookupCardView(card: guess)) > 0,
+            "a sense the selector guessed was drawn with nothing saying it is a guess")
+    }
+
+    /// And the other direction, so the check above cannot be satisfied by painting every card
+    /// orange: the reader's own tap is a fact and is not caveated.
+    @Test func theReadersOwnTapIsNotCaveated() throws {
+        let chosen = card(.chosen(key: "m_en_gbus0362750.005", by: .reader), sentence: nil)
+        try #require(chosen.isHypothesis == false)
+        #expect(try orangePixels(LookupCardView(card: chosen)) == 0)
+    }
+}
+
+/// **What confirming the card's own guess may and may not take away.**
+///
+/// A tap on an *alternative* sense clears the translation and the explanation, because promoting a
+/// different sense makes everything said about the old one wrong. Confirming the sense already on
+/// screen is not that: the reader agreed, and clearing their translation as the reward for agreeing
+/// would be the worst possible answer to the most valuable thing they can do here.
+///
+/// So the rule is per-pane and not per-sense: **a pane survives exactly as long as its own inputs
+/// are unchanged.** These tests are the inputs, compared across each transition — which is checkable,
+/// where "did the pane disappear" inside a view's `@State` is not.
+struct ConfirmingASenseTests {
+    private let entry = sampleEntry("New Oxford American Dictionary")
+    private let sentence = "It was a fine piece of filmmaking, and the weather held."
+    private let key = "m_en_gbus0362750.020"
+
+    private func card(_ mark: SenseMark?) -> LookupCard {
+        LookupCard(
+            presentation: EntryPresentation(entry: entry, mark: mark, met: []),
+            term: "fine", sentence: sentence, mark: mark)
+    }
+
+    private func translationKey(_ card: LookupCard) -> TranslationPane.Key {
+        TranslationPane.Key(
+            sentence: sentence, target: "zh-Hans", dictionary: entry.dictionary.key,
+            sense: TranslationQuestion.metSense(of: card)?.sense)
+    }
+
+    /// The ordinary confirmation: the selector proposed a sense, the reader agreed. Nothing about
+    /// either question changed, so nothing on screen may be taken away.
+    @Test func confirmingAProposedSenseChangesNeitherQuestion() {
+        let proposed = card(.chosen(key: key, by: .model))
+        let confirmed = card(.chosen(key: key, by: .reader))
+        try? #require(proposed.isHypothesis && !confirmed.isHypothesis)
+        #expect(translationKey(proposed) == translationKey(confirmed),
+                "a translation asked before confirming would be discarded")
+        #expect(SentenceQuestion.reading(proposed, sentence: sentence)
+                == SentenceQuestion.reading(confirmed, sentence: sentence),
+                "an explanation asked before confirming would be about a different question")
+    }
+
+    /// **And the case that makes the rule per-pane rather than per-sense.** An ambiguous card leads
+    /// with a favourite it has *not* claimed, so neither question is told the sense. Confirming it
+    /// tells them both — so both answers are about a question nobody asked, and both must go.
+    @Test func confirmingAnAmbiguousFavouriteChangesBothQuestions() throws {
+        let nearest = NearMiss(key: key, margin: 0.01, among: 3)
+        let ambiguous = card(.couldNot(.tooClose, nearest: nearest))
+        let confirmed = card(.chosen(key: key, by: .reader))
+        guard case .ambiguous = ambiguous.answer else {
+            Issue.record("the fixture is not an ambiguous card, so it tests nothing")
+            return
+        }
+        #expect(TranslationQuestion.metSense(of: ambiguous) == nil,
+                "an ambiguous card handed its favourite to the translator")
+        #expect(translationKey(ambiguous) != translationKey(confirmed))
+        #expect(SentenceQuestion.reading(ambiguous, sentence: sentence)
+                != SentenceQuestion.reading(confirmed, sentence: sentence),
+                "the explanation has no key of its own, so this is the only thing that can notice")
+    }
+
+    /// The sense a card *leads with as an answer* — never the ambiguous favourite, which is the
+    /// distinction both questions above rest on, and which was written out three times before it
+    /// was a property.
+    @Test func onlyAnAnsweredSenseLeadsTheCard() {
+        #expect(card(.chosen(key: key, by: .model)).leadingSense?.key == key)
+        #expect(card(.couldNot(.tooClose, nearest: NearMiss(key: key, margin: 0.01, among: 3))).leadingSense == nil)
+        #expect(card(.couldNot(.nothingFits)).leadingSense == nil)
+    }
+}
+
+/// **What the copy button puts on the pasteboard, as a value rather than as a string built inside a
+/// button's action.**
+///
+/// It was assembled at the call site, so nothing could ask what a paste would say — and a paste has
+/// no badge beside it, which is the whole reason the caveat is in the text.
+///
+/// It also answers WI-6. A public-fallback definition is prose: the card shows it, the panel draws no
+/// footer for it, `senseToKeep` is nil because prose is not a sense and a note made from it would have
+/// no standing — and the lookup window cannot become key (`.plain` gives a borderless window,
+/// measured), so `textSelection` could not give the reader the text either. Copy can, and needs no
+/// key window.
+struct CopyableTextTests {
+    private let entry = sampleEntry("New Oxford American Dictionary")
+
+    private func card(_ mark: SenseMark?) -> LookupCard {
+        LookupCard(
+            presentation: EntryPresentation(entry: entry, mark: mark, met: []),
+            term: "fine", sentence: nil, mark: mark)
+    }
+
+    private func cardWithout(_ answer: LookupCard.Answer) -> LookupCard {
+        LookupCard(
+            term: "fine", heading: "fine", partOfSpeech: nil, pronunciation: nil,
+            answer: answer, sentence: nil, alternatives: [])
+    }
+
+    /// The reader's own tap copies cleanly: it is a fact, and a fact needs no disclaimer.
+    @Test func aConfirmedSenseCopiesWithoutACaveat() throws {
+        let card = card(.chosen(key: "m_en_gbus0362750.005", by: .reader))
+        let text = try #require(card.copyableText)
+        // The *heading*, not the term: NOAD prints "fine¹" for the first homograph, and what the card
+        // shows is what a paste should say.
+        #expect(text.hasPrefix("\(card.heading) — "), "the copied text does not lead with the headword")
+        #expect(text.contains("of high quality"))
+        #expect(!text.contains("guess"))
+    }
+
+    /// **A guess says so in the copied text.** The panel's orange does not travel with a paste.
+    @Test func aGuessCarriesItsCaveatIntoThePasteboard() throws {
+        let text = try #require(card(.chosen(key: "m_en_gbus0362750.020", by: .model)).copyableText)
+        #expect(text.contains("a guess — not confirmed"))
+    }
+
+    /// And so does the near miss the ambiguous card leads with.
+    @Test func anAmbiguousFavouriteCarriesOneToo() throws {
+        let nearest = NearMiss(key: "m_en_gbus0362750.024", margin: 0.01, among: 3)
+        let text = try #require(card(.couldNot(.tooClose, nearest: nearest)).copyableText)
+        #expect(text.contains("a guess — not confirmed"))
+    }
+
+    /// **Prose is copyable and un-pinnable, and that is the distinction.** A dictionary that answered
+    /// in prose gave the reader something to take away; it did not give them a sense, so it cannot
+    /// become a note.
+    @Test func proseCanBeCopiedButNotKept() throws {
+        let prose = cardWithout(.prose("of very high quality"))
+        let text = try #require(prose.copyableText, "a prose answer could not be copied")
+        #expect(text.contains("of very high quality"))
+        #expect(prose.senseToKeep == nil, "prose became a note with no standing")
+    }
+
+    /// Nothing to copy where there is nothing: an abstention, and a word that is not there.
+    @Test func thereIsNothingToCopyWhereTheCardNamesNothing() {
+        #expect(card(.couldNot(.nothingFits)).copyableText == nil)
+        #expect(cardWithout(.absent).copyableText == nil)
+        #expect(cardWithout(.undecided(reason: nil)).copyableText == nil)
+    }
+}
+
+/// **The card ends one `padDown` under its last control, and no further.**
+///
+/// Reported from a real screen: 70 pt of empty card under the footer, against the 15 pt the token
+/// asks for. This is what told the two apart — the view's own layout leaves exactly
+/// `padDown + glowAfter` (the second being the transparent margin the shadow falls in, outside the
+/// card), so the view was never at fault and the window fit was overshooting, stretching the card's
+/// surface past its own content.
+///
+/// Asserted as a **composition of the tokens** rather than against a number: the padding may be
+/// retuned, and this must keep meaning "one padDown, exactly" after it is.
+@MainActor
+struct PanelBottomPaddingTests {
+    @Test func theCardEndsJustUnderItsLastControl() throws {
+        var presentation = LookupPresentation(
+            request: 1, term: "fine", lemma: Lemma(text: "fine", basis: .tagger), source: nil,
+            capture: .accessibility(.accessibilityTextRange, context: .complete), outcome: nil)
+        presentation.sentence = "It was a fine piece of filmmaking."
+        presentation.outcome = .entries(
+            NonEmpty([sampleEntry("New Oxford American Dictionary")])!, unreadable: [])
+        let view = NSHostingView(
+            rootView: LookupPanelContent(presentation: presentation).environment(\.scale, Scale.standard))
+        view.layoutSubtreeIfNeeded()
+        let wanted = view.fittingSize
+        view.frame = NSRect(origin: .zero, size: wanted)
+        view.layoutSubtreeIfNeeded()
+
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        // Walk up from the bottom for the last row holding any ink at all.
+        var lastInk: Int?
+        for y in stride(from: rep.pixelsHigh - 1, through: 0, by: -1) {
+            var found = false
+            for x in stride(from: 8, to: rep.pixelsWide - 8, by: 2) {
+                guard let colour = rep.colorAt(x: x, y: y) else { continue }
+                if colour.brightnessComponent < 0.72, colour.alphaComponent > 0.5 { found = true; break }
+            }
+            if found { lastInk = y; break }
+        }
+        let ink = try #require(lastInk, "the panel drew nothing")
+        let perPoint = CGFloat(rep.pixelsHigh) / wanted.height
+        let gap = (CGFloat(rep.pixelsHigh - ink)) / perPoint
+        let scale = Scale.standard
+        // **Measured to the last *ink*, which is not the last control.** An icon button is a 28 pt
+        // target around a glyph of about 15, so roughly 6 pt of its own frame sits under the mark —
+        // real, deliberate, and not padding. So the bound is a band rather than an equality: at least
+        // the card's own bottom padding plus the transparent margin the shadow falls in, and at most
+        // that plus one whole target's height. Anything past that is dead space.
+        let floor = scale.space.padDown + scale.shadow.glowAfter
+        let ceiling = floor + Token.Target.minimum
+        #expect(
+            gap >= floor - 1 && gap <= ceiling,
+            """
+            the card leaves \(gap) pt under its last control, outside \(floor)…\(ceiling) — \
+            padDown \(scale.space.padDown), shadow margin \(scale.shadow.glowAfter), \
+            target \(Token.Target.minimum)
+            """)
+        // **And the padding itself is at least an em**, which is the reading that prompted this: a
+        // control sitting on the card's edge looks like a mistake whatever the arithmetic says.
+        #expect(scale.space.padDown >= scale.em, "the card's bottom padding is under one em")
     }
 }

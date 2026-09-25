@@ -537,51 +537,54 @@ struct ReadingCardView: View {
 
     private var revealAvailable: Bool { entry.sense?.canReveal == true }
 
+    /// **Already named before `IconButton` existed** — it was the one of eight that was, with a `Label`
+    /// and `.labelStyle(.iconOnly)`. It goes through the component anyway, for the target floor and so
+    /// the scan has nothing to make an exception for.
     private var revealButton: some View {
-        Button {
+        IconButton(
+            title: revealed ? "Hide meaning" : "Reveal meaning",
+            symbol: revealed ? "eye.slash" : "eye",
+            help: revealed ? Text("Hide the meaning") : Text("Reveal the meaning"),
+            size: scale.text.small
+        ) {
             withAnimation(.easeOut(duration: Token.Motion.hover)) { revealed.toggle() }
-        } label: {
-            Label(
-                revealed ? "Hide meaning" : "Reveal meaning",
-                systemImage: revealed ? "eye.slash" : "eye")
-                .labelStyle(.iconOnly)
-                .font(.system(size: scale.text.small))
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
-        .help(revealed ? Text("Hide the meaning") : Text("Reveal the meaning"))
     }
 
     private var speakButton: some View {
-        Button { Speech.say(entry.surface) } label: {
-            Image(systemName: "speaker.wave.2")
-                .font(.system(size: scale.text.small))
+        IconButton(
+            title: "Say it aloud", symbol: "speaker.wave.2",
+            help: Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence),
+            size: scale.text.small
+        ) {
+            Speech.say(entry.surface, in: entry.sentence)
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
-        .help(Speech.sayItAloudHelp(for: entry.surface))
     }
 
     /// No confirmation dialog. The reason a reader reaches for this is a word they did not mean
     /// to look up — noticed at once, worth nothing — so a dialog would put friction on the common
     /// case and still not catch a misclick. The undo row that replaces the card catches that.
+    /// **`role: .destructive`, which it never carried.** This removes a lookup, and it sat 6 pt from
+    /// open-in-Dictionary at 14 × 16 pt — the two controls most worth not confusing, at less than half
+    /// the platform's target size. The floor is `IconButton`'s; the role is so VoiceOver and the
+    /// platform both know what kind of button this is.
     private func removeButton(_ remove: @escaping () -> Void) -> some View {
-        Button(action: remove) {
-            Image(systemName: "trash").font(.system(size: scale.text.small))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.tertiary)
-        .help(Text("Remove from history"))
+        IconButton(
+            title: "Remove from history", symbol: "trash",
+            size: scale.text.small, role: .destructive, action: remove)
+            .foregroundStyle(.tertiary)
     }
 
     private var dictionaryButton: some View {
-        Button { SystemDictionary.open(entry.lemma) } label: {
-            Image(systemName: "character.book.closed")
-                .font(.system(size: scale.text.small))
+        IconButton(
+            title: "Open in Dictionary", symbol: "character.book.closed",
+            help: SystemDictionary.openHelp, size: scale.text.small
+        ) {
+            SystemDictionary.open(entry.lemma)
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.tertiary)
-        .help(SystemDictionary.openHelp)
     }
 
     /// The sentence, whole when it fits the card's lines and cut to a window around the word when

@@ -100,6 +100,80 @@ public struct LookupCard: Equatable {
         }
     }
 
+    /// **The sense the card leads with *as an answer*.** Nil for the ambiguous favourite, which the
+    /// card shows without claiming, and nil where there is no sense at all.
+    ///
+    /// The distinction is the one every question built from this card turns on — the translator and
+    /// the sentence pane are told the sense only where the card is answering with one, because
+    /// handing over a favourite the card has just admitted it is unsure of would present the guess
+    /// twice. It was written out as `if case .sense(let x) = card.answer` in three places, one of
+    /// which is a view body that no test can ask anything.
+    public var leadingSense: SensePresentation? {
+        guard case .sense(let sense) = answer else { return nil }
+        return sense
+    }
+
+    /// **What the card is claiming about the sense it leads with**, or nil where it leads with no
+    /// sense — and nil for the ambiguous card, which says the same thing in its own badge and would
+    /// otherwise admit it twice.
+    ///
+    /// A property rather than a condition inside the view because the view drew it from inside the
+    /// block it draws the reader's *sentence* in, so a card with no sentence claimed a sense with
+    /// nothing saying the claim was a guess. Every value behind it was right — `isHypothesis` was
+    /// true throughout — which is why nothing failed.
+    public var claim: SenseStanding? { leadingSense?.standing }
+
+    /// **The sense a reader can copy or keep as a note, and how much the card is claiming about
+    /// it.** Nil where the card leads with no sense at all: an abstention, a dictionary that marks
+    /// none, a prose entry, a miss.
+    ///
+    /// One accessor because the two buttons that use it had a `switch` each and both ended in a
+    /// silent fall-through — so on a card with no sense they were drawn enabled, took the click, and
+    /// left the pasteboard and the notes untouched. **Three of the seven dictionaries enabled on
+    /// this developer's Mac mark no senses at all**, so that is the ordinary card for a reader
+    /// studying from one of them rather than an edge case. `nil` is what lets the buttons be
+    /// disabled and say why, which is the rule that a control refusing a click is a broken switch.
+    ///
+    /// The standing travels because a note outlives the panel and carries none of its badges: a
+    /// guess kept as a note that reads like a confirmed sense is `chosen_by` thrown away at the one
+    /// surface that lasts longest.
+    public var senseToKeep: (sense: SensePresentation, standing: PinnedNote.Standing)? {
+        switch answer {
+        case .sense(let sense): (sense, isHypothesis ? .proposed : .confirmed)
+        case .ambiguous(let sense, _): (sense, .ambiguous)
+        case .undecided, .prose, .absent: nil
+        }
+    }
+
+    /// **What a copy of this card puts on the pasteboard, or nil where there is nothing to take.**
+    ///
+    /// Built here rather than inside the copy button's action, where it was: nothing could ask what a
+    /// paste would say, and the caveat is the part that matters — a paste has no badge beside it, so an
+    /// uncertain sense has to carry its own doubt in the text.
+    ///
+    /// **Prose is copyable and `senseToKeep` is not.** A dictionary that answered in prose gave the
+    /// reader something to take away but not a sense, so it can be copied and cannot become a note —
+    /// `PinnedNote.Standing` exists precisely so a note cannot claim a standing nothing established.
+    /// This is also the whole of WI-6: the lookup window is borderless and cannot become key
+    /// (measured), so `textSelection` could never have given the reader that text, and copy does.
+    public var copyableText: String? {
+        // One literal per branch, never a concatenation: `" " + String(localized:)` puts a bare space
+        // through the view layer's prose scan, and the space belongs to the sentence anyway — a
+        // translator decides whether their language wants one.
+        let caveat = String(localized: " (a guess — not confirmed)",
+                            comment: "Appended to copied text where the sense was not confirmed")
+        switch answer {
+        case .sense(let sense):
+            return "\(heading) — \(sense.label)\(isHypothesis ? caveat : "")"
+        case .ambiguous(let sense, _):
+            return "\(heading) — \(sense.label)\(caveat)"
+        case .prose(let text):
+            return "\(heading) — \(text)"
+        case .undecided, .absent:
+            return nil
+        }
+    }
+
     /// Whether the alternatives are open the moment the card appears. They are when XiaolaiDict has
     /// admitted it cannot tell: leaving the reader to discover a disclosure before they can
     /// resolve the thing the card just told them is unresolved would be the non-answer again,
