@@ -577,7 +577,7 @@ public struct LookupPanelContent: View {
     /// changed their language, leaving the control hidden for a sentence it could have translated.
     private var alreadyInTheReadersLanguage: Bool {
         guard let sourceLanguage else { return false }
-        return SentenceTranslator.sameLanguage(sourceLanguage, translator.target)
+        return SentenceLanguage.same(sourceLanguage, translator.target)
     }
 
     private var shape: RoundedRectangle {
