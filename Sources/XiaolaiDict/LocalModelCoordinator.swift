@@ -89,6 +89,9 @@ final class LocalModelCoordinator {
         return TranslationActions(
             translate: { [access] question in await access.translator.translate(question) },
             target: ReaderLanguage.preferred,
+            // The translator's own, so the control and the answer cannot disagree about whether this
+            // sentence was worth asking about.
+            sourceLanguage: { [access] sentence in access.translator.sourceLanguage(of: sentence) },
             canDownloadModel: choice.canDownload,
             // **What the row would download, read at the click** — which is the size a stopped
             // download was of, not the recommended one. Started from `recommended`, a stopped 9B

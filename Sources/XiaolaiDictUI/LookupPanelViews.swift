@@ -117,6 +117,35 @@ struct SentencePaneView: View {
     }
 }
 
+/// **An explanation, with the question it answers.**
+///
+/// The pane had no key, so an answer could outlive its own question: it was cleared by hand at the two
+/// places someone remembered, and a third transition — confirming an ambiguous favourite, which tells
+/// both panes the sense for the first time — was missed. `TranslationPane` has carried a key since it
+/// was written, and this is the same idea. A value rather than a bare `SentenceExplanation` because
+/// the pairing is the point: an answer and a question that have drifted apart are exactly what this
+/// prevents.
+struct SentencePane: Equatable {
+    let answer: SentenceExplanation
+    let of: SentenceQuestion
+}
+
+extension SentenceQuestion {
+    /// **What the sentence pane is asked about a card, as a value the pane can be compared against.**
+    ///
+    /// Written out inside the explain button's action, where nothing could ask what it had been asked
+    /// — so an answer stayed on screen after its own question changed. The translation pane has
+    /// carried a key since it was written; this is the same idea, arrived at the hard way: confirming
+    /// an ambiguous favourite changes the sense both panes were told, and only the translation
+    /// noticed.
+    ///
+    /// The sense travels only where the card **answers** with one: an ambiguous card has admitted it
+    /// does not know, and telling the model its favourite would present the guess twice.
+    static func reading(_ card: LookupCard, sentence: String) -> SentenceQuestion {
+        SentenceQuestion(sentence: sentence, term: card.term, senseText: card.leadingSense?.label)
+    }
+}
+
 /// Pinning is the app's job, not the view's; the panel is handed a way to do it.
 private struct PinNoteKey: EnvironmentKey {
     public static let defaultValue: @MainActor (PinnedNote) -> Void = { _ in }
@@ -128,7 +157,36 @@ private struct StudySenseKey: EnvironmentKey {
     public static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
 }
 
+/// Opening Settings is the app's job too — and it is the one window the panel may bring forward:
+/// "a window the reader *chose* must come forward; only panels must not."
+/// Where the panel's window fit reports the two numbers it was computed from. The app supplies one
+/// for `--panel-report`; everywhere else this is inert, as a measurement hook should be.
+private struct ReportPanelFitKey: EnvironmentKey {
+    public static let defaultValue: @MainActor (CGFloat, CGFloat) -> Void = { _, _ in }
+}
+
+private struct OpenDictionarySettingsKey: EnvironmentKey {
+    public static let defaultValue: @MainActor () -> Void = {}
+}
+
 extension EnvironmentValues {
+    /// Settings, on its Dictionary pane, **with the dictionary discovery its destination depends on
+    /// already started.** Nothing asks the service until a menu is opened, so a route that opened the
+    /// pane directly could leave it reading "Asking the dictionary service…" for good — the app's own
+    /// action is injected rather than rebuilt here, so this route cannot be the one that forgets.
+    /// What the panel's window was sized from: what its content wanted, and what its scroll view was
+    /// given. Read by `--panel-report` so a window of the wrong height can be told from a window
+    /// asked for the wrong height.
+    public var reportPanelFit: @MainActor (CGFloat, CGFloat) -> Void {
+        get { self[ReportPanelFitKey.self] }
+        set { self[ReportPanelFitKey.self] = newValue }
+    }
+
+    public var openDictionarySettings: @MainActor () -> Void {
+        get { self[OpenDictionarySettingsKey.self] }
+        set { self[OpenDictionarySettingsKey.self] = newValue }
+    }
+
     public var pinNote: @MainActor (PinnedNote) -> Void {
         get { self[PinNoteKey.self] }
         set { self[PinNoteKey.self] = newValue }

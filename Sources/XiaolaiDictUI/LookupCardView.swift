@@ -16,12 +16,25 @@ public struct LookupCardView: View {
     /// most valuable thing they can do here — it is how a wrong guess gets corrected and how the
     /// ledger learns something it can stand behind.
     public var onChoose: ((SensePresentation) -> Void)?
+    /// **Agreeing with the card's own guess.** Non-nil only where the sense on screen is a hypothesis
+    /// *and* can actually be recorded — the panel works that out, because only it holds the entry the
+    /// encounter is built from, and it passes nothing where there is nothing to write. So the control
+    /// exists exactly where it can act, rather than being drawn and then refusing.
+    ///
+    /// Without it, `chosen_by: reader` could only ever be recorded for a *correction*: the only
+    /// tappable senses were the other ones, so every answer the selector got right stayed a hypothesis
+    /// for good and a reader who agreed had no way to say so.
+    public var onConfirm: (() -> Void)?
     @State private var showingAlternatives = false
     @State private var showingMemory = false
 
-    public init(card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil) {
+    public init(
+        card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil,
+        onConfirm: (() -> Void)? = nil
+    ) {
         self.card = card
         self.onChoose = onChoose
+        self.onConfirm = onConfirm
     }
 
     public var body: some View {
@@ -29,7 +42,7 @@ public struct LookupCardView: View {
             heading
             memoryDetail
             answer
-            if let sentence = card.sentence, !sentence.isEmpty { evidence(sentence) }
+            evidence
             wayOut
         }
         .padding(scale.space.pad)
@@ -65,13 +78,21 @@ public struct LookupCardView: View {
             if let memory = card.memory { memoryBadge(memory) }
             // The help says what the voice will be where that is worth saying: only a compact one
             // installed, or none at all for this language.
-            action("speaker.wave.2", help: Speech.sayItAloudHelp(for: card.term)) {
-                Speech.say(card.term)
+            IconButton(
+                title: "Say it aloud", symbol: "speaker.wave.2",
+                help: Speech.sayItAloudHelp(for: card.term, in: card.sentence)
+            ) {
+                Speech.say(card.term, in: card.sentence)
             }
-            action("character.book.closed", help: SystemDictionary.openHelp) {
+            IconButton(
+                title: "Open in Dictionary", symbol: "character.book.closed",
+                help: SystemDictionary.openHelp
+            ) {
                 SystemDictionary.open(card.term)
             }
         }
+        // Both heading actions, one colour: they are the card's chrome, not its answer.
+        .foregroundStyle(.secondary)
     }
 
     /// How many times before, as a digit.
@@ -125,18 +146,6 @@ public struct LookupCardView: View {
         }
     }
 
-    /// `help` is a `Text` and not a `String`, and that is the whole repair: `Text(someString)`
-    /// takes the *verbatim* overload, so every tooltip that reached this as a `String` was English
-    /// in a translated build while the drawer's own copy of the same sentence was translated.
-    private func action(_ symbol: String, help: Text, _ act: @escaping () -> Void) -> some View {
-        Button(action: act) {
-            Image(systemName: symbol).font(.system(size: scale.text.body))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(help)
-    }
-
     // MARK: - The answer
 
     @ViewBuilder
@@ -158,7 +167,14 @@ public struct LookupCardView: View {
                     .font(.system(size: scale.text.strong))
                     .lineSpacing(scale.text.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                ambiguousBadge(among: among)
+                // **The badge is this card's standing line**, so the confirmation goes beside it for
+                // the same reason it goes beside the other. `standing` is nil here — `LookupCard.claim`
+                // deliberately says nothing for an ambiguous card — so without this the one state that
+                // most needs resolving would have no way to resolve it.
+                HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                    ambiguousBadge(among: among)
+                    confirmControl
+                }
             }
         case .undecided(let reason):
             // An abstention is the selector working, so it reads as a statement rather than as an
@@ -186,29 +202,72 @@ public struct LookupCardView: View {
     // MARK: - The evidence
 
     /// The reader's own sentence, and how much XiaolaiDict is claiming. Together these are what let a
-    /// wrong answer be spotted: the claim sits directly above the text it was made from.
-    private func evidence(_ sentence: String) -> some View {
-        VStack(alignment: .leading, spacing: scale.space.line) {
-            Text(marked(sentence))
-                .font(.system(size: scale.text.body))
-                .foregroundStyle(.secondary)
-                .lineSpacing(scale.text.leading)
-                .fixedSize(horizontal: false, vertical: true)
-            standing
+    /// wrong answer be spotted: the claim sits directly under the text it was made from.
+    ///
+    /// **The claim is drawn whether or not there is a sentence, and that is the repair.** This took
+    /// the sentence as a parameter and was called only where there was one, so the "A guess — not
+    /// confirmed" line did not exist on a card with no captured context — the selector's hypothesis
+    /// rendered exactly as confidently as the reader's own tap, in the one state where the reader has
+    /// least to check it against. The state is ordinary rather than exotic:
+    /// `SenseSelector.preflight` answers `.chose` as soon as the part-of-speech filter leaves one
+    /// candidate, *before* it looks for a sentence, and `LookupRunner` passes no sentence whenever
+    /// the capture's context is not `.complete`.
+    ///
+    /// `setApart()` now marks the sentence alone, which is also what it is for: the hairline says
+    /// *this is not the same kind of text as the thing above it*, and the reader's own words are that
+    /// — the claim underneath is the app speaking about them.
+    @ViewBuilder
+    private var evidence: some View {
+        let sentence = card.sentence.flatMap { $0.isEmpty ? nil : $0 }
+        if sentence != nil || card.claim != nil {
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                if let sentence {
+                    Text(marked(sentence))
+                        .font(.system(size: scale.text.body))
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(scale.text.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .setApart()
+                }
+                standing
+            }
         }
-        .setApart()
     }
 
     /// Said plainly. "XiaolaiDict's guess" and "you chose this" are different claims and the reader is
     /// entitled to know which one they are looking at before they believe it.
     @ViewBuilder
     private var standing: some View {
-        if case .sense(let sense) = card.answer {
-            // The ambiguous card says so in its own badge; repeating it here would be the same
-            // admission twice on one card.
-            Text(sense.standing.explanation)
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(card.isHypothesis ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+        // `LookupCard.claim` is nil for the ambiguous card, which says so in its own badge:
+        // repeating it here would be the same admission twice on one card.
+        if let claim = card.claim {
+            HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                Text(claim.explanation)
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(card.isHypothesis ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                // Beside the claim it resolves: the reader reads "A guess — not confirmed" and the
+                // remedy is the next thing their eye lands on.
+                confirmControl
+            }
+        }
+    }
+
+    /// **The one gesture that turns the card's guess into a fact.** Drawn where the doubt is said —
+    /// beside the standing line for a proposed sense, beside the badge for the ambiguous card — and
+    /// only where the panel has handed over something to do.
+    ///
+    /// It says *what it will mean*, not what it does mechanically: "Yes, that's it" is the reader's
+    /// own sentence about the answer, where "Confirm" is the app's word for a database write.
+    @ViewBuilder
+    private var confirmControl: some View {
+        if let onConfirm {
+            Button(action: onConfirm) {
+                Label("Yes, that’s it", systemImage: "checkmark")
+                    .font(.system(size: scale.text.small, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .help(Text("Record this as the sense you met"))
         }
     }
 
@@ -326,48 +385,6 @@ public struct LookupCardView: View {
     }
 }
 
-// MARK: - Previews
-
-#if DEBUG
-/// The card at its three real states, at the width it is meant to be — ~400, not the 760×520
-/// document window the panel used to open at. An answer is not a document.
-private func card(_ mark: SenseMark?) -> LookupCard {
-    let entry = sampleEntry("New Oxford American Dictionary")
-    return LookupCard(
-        presentation: EntryPresentation(entry: entry, mark: mark, met: []),
-        term: "fine",
-        sentence: "It was a fine piece of filmmaking, and the weather held.",
-        mark: mark)
-}
-
-#Preview("The reader chose it") {
-    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.005", by: .reader)))
-        .frame(width: 400)
-        .background(.background)
-}
-
-/// The state the design exists for: XiaolaiDict guessed, says so, and the way to correct it is one click.
-#Preview("XiaolaiDict guessed it") {
-    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.020", by: .model)))
-        .frame(width: 400)
-        .background(.background)
-}
-
-/// An abstention — the selector working, not failing.
-#Preview("XiaolaiDict could not tell") {
-    LookupCardView(card: card(.couldNot(.tooClose)))
-        .frame(width: 400)
-        .background(.background)
-}
-
-#Preview("XiaolaiDict guessed it, dark") {
-    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.020", by: .model)))
-        .frame(width: 400)
-        .background(.background)
-        .preferredColorScheme(.dark)
-}
-#endif
-
 /// One lookup, as the panel shows it: the card, and the few things that belong around it.
 ///
 /// **What this replaced, and why each piece went.** The panel used to be a 260 pt sidebar listing
@@ -385,6 +402,8 @@ public struct LookupPanelContent: View {
     @Environment(\.scale) private var scale
     @Environment(\.pinNote) private var pin
     @Environment(\.studySense) private var studySense
+    @Environment(\.openDictionarySettings) private var openDictionarySettings
+    @Environment(\.reportPanelFit) private var reportPanelFit
     @Environment(\.translation) private var translator
     @Environment(\.explainer) private var explainer
     @Environment(\.cardOptions) private var options
@@ -398,7 +417,11 @@ public struct LookupPanelContent: View {
     /// Which entry the **reader** switched to. Nil until they do, so the card follows `opening`
     /// — and a primary that arrives after the first draw is still where the card lands.
     @State private var showing: Int?
-    @State private var explanation: SentenceExplanation?
+    /// **The explanation, with the question it answers.** It had no key at all, so an answer stayed
+    /// on screen after its own question changed — confirming an ambiguous favourite tells both panes
+    /// the sense, and only the translation noticed. Same shape as `TranslationPane`, arrived at the
+    /// hard way.
+    @State private var explanation: SentencePane?
     /// The explanation in flight — **held, like the translation, rather than started and
     /// forgotten**. A bare task outlives the card that started it, and the answer it eventually
     /// writes lands on whatever card is there by then. Cancelling stops this side waiting; a
@@ -411,6 +434,17 @@ public struct LookupPanelContent: View {
     /// client can stop, and the service's own watchdog is what bounds that.
     @State private var translating: Task<Void, Never>?
     @State private var copied = false
+    /// **The sentence's own language, read once per sentence and off the layout path.**
+    ///
+    /// `NLLanguageRecognizer` is the same cost that forced `Speech.caveat` to memoise at 43 ms a call,
+    /// so it must not be asked from a view body. The *source* is cached rather than the verdict:
+    /// compared against `translator.target` at draw time the comparison is free, and a reader who
+    /// changes their language is answered immediately — a cached Bool would have kept the translate
+    /// control hidden.
+    @State private var sourceLanguage: String?
+    /// Whether the list of entries is open. Closed by default and closed again on landing somewhere
+    /// else: the card leads with the primary dictionary (D7), and the others are there to be looked at.
+    @State private var showingDictionaries = false
     /// **The sense the reader tapped, per entry.** `choose` used to write to the ledger and nothing
     /// else, so the card went on drawing the selector's proposal as its mark and — worse — a
     /// translation asked afterwards was still told the sense the reader had just rejected. A tap is
@@ -453,9 +487,12 @@ public struct LookupPanelContent: View {
         return index
     }
 
-    private var entry: DictionaryEntry? {
-        let index = showing ?? opening
-        return entries.indices.contains(index) ? entries[index] : entries.first
+    private var entry: DictionaryEntry? { entry(at: showing ?? opening) ?? entries.first }
+
+    /// One entry by index, bounds-checked. Named because three places index this list, and an index
+    /// into a collection that may have changed is the kind of thing that wants one spelling.
+    private func entry(at index: Int) -> DictionaryEntry? {
+        entries.indices.contains(index) ? entries[index] : nil
     }
 
     public var body: some View {
@@ -489,6 +526,17 @@ public struct LookupPanelContent: View {
         // a size vertically is the opposite of letting a scroll view bound it, and the scroll view
         // is what bounds it now. The horizontal half is gone with it because it was already false.
         .frame(maxHeight: scale.space.cardMaxHeight)
+        // **And the window is as tall as that.** The cap bounds the scrolling region; nothing made
+        // the *window* take the height the content asked for, so it stayed at the opening default —
+        // measured 398 × 240 for every card, three runs, with the dictionary control, translate,
+        // explain, copy and pin all below a fold the panel gives no sign of having. The view was
+        // never at fault: `PanelHeightTests` measures its `fittingSize` at 267 pt for a one-line
+        // answer and 405 for a long one. `LookupPanelController.show` writes the frame by hand, on
+        // open and on every reuse, and a frame set by hand is not one SwiftUI revisits.
+        //
+        // Bounded by the same cap, so growing stops exactly where scrolling starts: a taller window
+        // would hold empty space under the content.
+        .fitsItsContent(upTo: scale.space.cardMaxHeight, report: reportPanelFit)
         // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
         // the surface, the edge and the lift are the card's own — and they live here, in the
         // layer that has the tokens, rather than as literals in the scene that hosts it.
@@ -516,6 +564,20 @@ public struct LookupPanelContent: View {
         // The panel has gone: nothing is waiting for this answer, and a generation running for a
         // closed panel is one the reader is paying for twice.
         .onDisappear { translating?.cancel(); explaining?.cancel() }
+        // **Off the layout path, and keyed by the sentence.** `NLLanguageRecognizer` is the same cost
+        // that forced `Speech.caveat` to memoise at 43 ms a call, so a view body may not ask it.
+        .task(id: presentation.sentence) {
+            let sentence = presentation.sentence ?? ""
+            sourceLanguage = sentence.isEmpty ? nil : translator.sourceLanguage(sentence)
+        }
+    }
+
+    /// Whether the sentence is already in the reader's own language — compared **now**, against a
+    /// source detected once. Cached as a verdict it would have gone stale the moment the reader
+    /// changed their language, leaving the control hidden for a sentence it could have translated.
+    private var alreadyInTheReadersLanguage: Bool {
+        guard let sourceLanguage else { return false }
+        return SentenceTranslator.sameLanguage(sourceLanguage, translator.target)
     }
 
     private var shape: RoundedRectangle {
@@ -538,8 +600,19 @@ public struct LookupPanelContent: View {
             }
         case .plainText(let text, _):
             VStack(alignment: .leading, spacing: scale.space.stack) {
-                LookupCardView(card: cardWithoutAnEntry(.prose(text)))
+                let card = cardWithoutAnEntry(.prose(text))
+                LookupCardView(card: card)
                 if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+                // **A way to take the text away, because there is no other.** This branch is the
+                // public fallback's answer — prose rather than senses — and it drew no footer at all,
+                // so the only text on the card could be neither copied nor selected. Selecting it was
+                // never possible: the panel's scene is `.plain`, which gives a borderless window with
+                // `canBecomeKey` false (measured 2026-09-25), and `textSelection` needs a key window.
+                // Copy needs none.
+                //
+                // Copy alone, and no pin: prose is not a sense, so a note made from it would carry no
+                // standing — which is the one thing `PinnedNote.Standing` exists to prevent.
+                proseFooter(card)
             }
         case .entries(_, let unreadable):
             if let entry {
@@ -553,7 +626,14 @@ public struct LookupPanelContent: View {
                         Notice(text: Text(
                             "An entry in \(unreadable.joined(separator: ", ")) could not be read, so what is shown is not all of it."))
                     }
-                    LookupCardView(card: card(for: entry), onChoose: { choose($0, in: entry) })
+                    LookupCardView(
+                        card: card(for: entry), onChoose: { choose($0, in: entry) },
+                        // Nil where there is nothing to record, so the control is never drawn over a
+                        // sense it could not write — the encounter that would be written *is* the
+                        // condition for drawing it.
+                        onConfirm: confirmable(entry).map { encounter in
+                            { confirm(encounter, in: entry) }
+                        })
                         // A different dictionary is a different card: what was translated for the
                         // last one is neither shown nor still being worked on.
                         // A different dictionary is a different card — and so is the same card once
@@ -572,8 +652,15 @@ public struct LookupPanelContent: View {
                     if let translation, translation.of == translationKey(for: entry) {
                         TranslationPaneView(pane: translation)
                     }
-                    if let explanation { SentencePaneView(explanation: explanation) }
+                    // Beside the card it was asked about, like the translation. An explanation and a
+                    // translation are two answers to two questions, and each is drawn only while its
+                    // own question still stands.
+                    if let explanation, let sentence = presentation.sentence,
+                       explanation.of == SentenceQuestion.reading(card(for: entry), sentence: sentence) {
+                        SentencePaneView(explanation: explanation.answer)
+                    }
                     matchCaveat(entry)
+                    senseKeyCaveat(entry)
                     footer(entry)
                 }
             }
@@ -609,6 +696,32 @@ public struct LookupPanelContent: View {
             Notice(
                 text: Text("\(entry.dictionary.name) answered with \(entry.headword), which is not the word you looked up."),
                 symbol: "arrow.triangle.branch")
+        }
+    }
+
+    /// **A dictionary that marks no senses says so on the card, and the cure goes beside it.**
+    ///
+    /// The card already says "This dictionary does not mark senses, so none can be pointed at here."
+    /// — a condition with a two-click cure, and no way to reach it. One row below, the translation
+    /// pane sends the reader to a missing language pack; this is the same courtesy for the setting
+    /// that decides whether the whole sense path can work at all (D7).
+    ///
+    /// Asked of `entry.senseKeyKind`, never of the message: matching the reader's own sentence to
+    /// decide whether to offer a fix would break the first time anyone reworded it.
+    ///
+    /// **Not gated on how many dictionaries answered.** The footer's chips are, and that gate would
+    /// have hidden this in exactly the case that needs it — one entry, no senses, nothing to switch
+    /// between.
+    @ViewBuilder
+    private func senseKeyCaveat(_ entry: DictionaryEntry) -> some View {
+        if entry.senseKeyKind == SenseKeyKind.none {
+            HStack(spacing: scale.space.inline) {
+                Spacer(minLength: 0)
+                Button("Choose a dictionary that marks senses…") { openDictionarySettings() }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, scale.space.padAcross)
         }
     }
 
@@ -649,6 +762,49 @@ public struct LookupPanelContent: View {
         clearPanes()
     }
 
+    /// **What confirming the card's own guess would record, or nil where nothing can be.**
+    ///
+    /// One function, answering both "may this be offered?" and "what is written if it is" — because two
+    /// conditions that must agree are the arrangement that produced every broken switch on this card.
+    /// Nil where the card is not claiming a guess (there is nothing to confirm), where the reader has
+    /// already chosen here, and where the sense cannot be keyed: "a sense a dictionary cannot key is
+    /// never presented as confirmed, however it was marked".
+    ///
+    /// The ambiguous favourite counts. It is the state that most needs resolving, and the card draws
+    /// the control beside its badge for that reason.
+    private func confirmable(_ entry: DictionaryEntry) -> SenseEncounter? {
+        guard !selection.hasChosen(in: entry) else { return nil }
+        let card = card(for: entry)
+        guard card.isHypothesis else { return nil }
+        let sense: SensePresentation? = {
+            if let leading = card.leadingSense { return leading }
+            if case .ambiguous(let favourite, _) = card.answer { return favourite }
+            return nil
+        }()
+        guard let sense, let key = sense.key else { return nil }
+        return SenseEncounter.of(entry, senseKey: key, chosenBy: .reader, at: .now)
+    }
+
+    /// The reader agreed with the sense already on screen. Recorded as theirs, exactly as a tap on an
+    /// alternative is — the ledger keeps `model` and `reader` apart and never merges them, so this
+    /// adds the reader's row rather than rewriting the selector's.
+    ///
+    /// **It clears no pane, and that is the whole difference from `choose`.** Promoting a *different*
+    /// sense makes everything said about the old one wrong; agreeing with this one changes what the
+    /// card claims and not what it says, so a translation the reader asked for stays. Where a pane's
+    /// own question really did change — the ambiguous favourite, which neither pane was told — the
+    /// pane is dropped by its own key rather than by a blanket clear here. `ConfirmingASenseTests`
+    /// is that rule in both directions.
+    ///
+    /// The copy indicator *is* reset: the pasteboard holds "(a guess — not confirmed)", and after this
+    /// the card no longer says that, so a standing checkmark would promise a clipboard the reader does
+    /// not have.
+    private func confirm(_ encounter: SenseEncounter, in entry: DictionaryEntry) {
+        studySense(encounter)
+        selection.choose(encounter.senseKey ?? "", in: entry)
+        copied = false
+    }
+
     /// Whatever was said about the card as it was is not about the card as it is: a translation in
     /// flight was told the old sense, and an answer already on screen was written for it.
     private func clearPanes() {
@@ -675,38 +831,120 @@ public struct LookupPanelContent: View {
     /// The actions that are about this lookup rather than about this word, and — where there is
     /// more than one — which dictionary answered.
     private func footer(_ entry: DictionaryEntry) -> some View {
-        HStack(spacing: scale.space.inline) {
-            if entries.count > 1 { dictionaries }
-            Spacer(minLength: scale.space.inline)
-            if presentation.sentence?.isEmpty == false {
-                translateButton
-                explainButton
-            }
-            copyButton(entry)
-            pinButton(entry)
+        // **It wraps.** Measured 2026-09-25: at the card's 312 pt minimum the usable width is 276 pt,
+        // and four 28 pt targets with their gaps leave 128 pt for a dictionary control against NOAD's
+        // name at 164.1 pt — one row cannot hold both. Of the ways out, wrapping is the only one whose
+        // correctness does not depend on how long a dictionary's name or a headword happens to be.
+        VStack(alignment: .leading, spacing: scale.space.inline) {
+            dictionaryRow
+            actions(entry)
         }
         .padding(.horizontal, scale.space.padAcross)
         .padding(.bottom, scale.space.padDown)
     }
 
-    /// One line where the sidebar was a column. The reader studies from one dictionary (D7); the
-    /// others are here to be looked at, and looking is a click.
-    private var dictionaries: some View {
-        HStack(spacing: scale.space.line) {
-            ForEach(Array(entries.enumerated()), id: \.offset) { index, found in
-                Button { showing = index } label: {
-                    Text(found.dictionary.name)
-                        .font(.system(size: scale.text.micro, weight: .medium))
-                        .lineLimit(1)
-                        .padding(.horizontal, scale.space.inline)
-                        .padding(.vertical, scale.space.tight)
-                        .background(Capsule().fill(Color.primary.opacity(
-                            index == (showing ?? opening) ? Token.Opacity.countToday : Token.Opacity.count)))
-                        .foregroundStyle(index == (showing ?? opening) ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+    /// **Which entry the reader is reading, and the way to another — as a disclosure, not a menu.**
+    ///
+    /// The same gesture the card already uses for "12 other senses", so it is a vocabulary the reader
+    /// has already met here. Two things follow from it being a disclosure rather than a popup: each
+    /// entry gets a full row, which is what makes room for a label that tells *fine¹* from *fine²*;
+    /// and it opens no second window, so it cannot meet the click-away dismissal that a menu extending
+    /// outside the panel's frame might. `--panel-report` measures that, and this control does not wait
+    /// on the answer.
+    @ViewBuilder
+    private var dictionaryRow: some View {
+        let list = DictionaryList(of: entries)
+        if list.isWorthShowing {
+            VStack(alignment: .leading, spacing: scale.space.inline) {
+                Button {
+                    withAnimation(.easeOut(duration: Token.Motion.hover)) {
+                        showingDictionaries.toggle()
+                    }
+                } label: {
+                    HStack(spacing: scale.space.line) {
+                        Image(systemName: showingDictionaries ? "chevron.down" : "chevron.right")
+                            .font(.system(size: scale.text.micro))
+                        Text(verbatim: list.rows[showing ?? opening].label)
+                            .font(.system(size: scale.text.micro, weight: .medium))
+                            .lineLimit(1)
+                        if list.otherDictionaries > 0 {
+                            // Dictionaries, never entries: NOAD answering four times is one other
+                            // dictionary, and counting entries would say four.
+                            Text("^[\(list.otherDictionaries) other dictionary](inflect: true)")
+                                .font(.system(size: scale.text.micro))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
-                .help(Text(found.dictionary.name))
+                .foregroundStyle(.secondary)
+
+                if showingDictionaries {
+                    ForEach(list.rows) { row in
+                        Button { showing = row.index } label: {
+                            HStack(spacing: scale.space.line) {
+                                Image(systemName: row.index == (showing ?? opening)
+                                      ? "largecircle.fill.circle" : "circle")
+                                    .font(.system(size: scale.text.micro))
+                                Text(verbatim: row.label)
+                                    .font(.system(size: scale.text.micro))
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(row.index == (showing ?? opening)
+                                         ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    }
+                }
             }
+            // **Closed whenever the reader lands somewhere else**, so choosing a row closes the list
+            // it was chosen from and a late-arriving primary does not leave it hanging open over a card
+            // it is no longer about. `task(id:)` rather than `onChange` so first appearance is covered
+            // by the same rule — the same reason the alternatives use it.
+            .task(id: showing ?? opening) { showingDictionaries = false }
+        }
+    }
+
+    /// The one action a prose answer has. Built from `LookupCard.copyableText` like the footer's copy
+    /// button, so the two cannot put different things on the pasteboard for the same card.
+    @ViewBuilder
+    private func proseFooter(_ card: LookupCard) -> some View {
+        if let copyable = card.copyableText {
+            HStack(spacing: scale.space.inline) {
+                Spacer(minLength: 0)
+                IconButton(
+                    title: "Copy this definition",
+                    symbol: copied ? "checkmark" : "doc.on.doc"
+                ) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(copyable, forType: .string)
+                    copied = true
+                }
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, scale.space.padAcross)
+            .padding(.bottom, scale.space.padDown)
+        }
+    }
+
+    /// The actions, on their own row under the dictionary control.
+    private func actions(_ entry: DictionaryEntry) -> some View {
+        HStack(spacing: scale.space.inline) {
+            Spacer(minLength: 0)
+            if presentation.sentence?.isEmpty == false {
+                // **Absent, not disabled, where translating could say nothing.** `translate` answers
+                // `.sameLanguage` on its first line, so for a reader whose own language is the
+                // sentence's this was a guaranteed dead end on every card. Hidden rather than dimmed:
+                // on a card this dense a control that can never activate on their machine is clutter
+                // explaining something they will never need. The cost, accepted: for a reader of two
+                // languages it comes and goes between lookups, unexplained.
+                if !alreadyInTheReadersLanguage { translateButton }
+                explainButton
+            }
+            copyButton(entry)
+            pinButton(entry)
         }
     }
 
@@ -718,14 +956,11 @@ public struct LookupPanelContent: View {
     private func footerAction(
         _ symbol: String, running: Bool, help: LocalizedStringKey, act: @escaping () -> Void
     ) -> some View {
-        Button(action: act) {
-            Image(systemName: running ? "ellipsis" : symbol)
-                .font(.system(size: scale.text.body))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .disabled(running)
-        .help(Text(help))
+        // The *symbol* swaps while it runs; the name does not. "ellipsis" is what waiting looks like,
+        // not what the control is called, and VoiceOver needs the latter.
+        IconButton(
+            title: help, symbol: running ? "ellipsis" : symbol, isEnabled: !running, action: act)
+            .foregroundStyle(.secondary)
     }
 
     private var translateButton: some View {
@@ -756,12 +991,11 @@ public struct LookupPanelContent: View {
 
     private var explainButton: some View {
         footerAction("text.bubble", running: explaining != nil, help: "Explain this sentence") {
-            let sense: String? = {
-                guard let entry, case .sense(let shown) = card(for: entry).answer else { return nil }
-                return shown.label
-            }()
-            let question = SentenceQuestion(
-                sentence: presentation.sentence ?? "", term: presentation.term, senseText: sense)
+            // Built from the card, by the same function the pane is compared against — so what was
+            // asked and what is drawn cannot be two different questions. It used to be assembled here
+            // and thrown away, which is how an answer came to outlive its own question.
+            guard let entry, let sentence = presentation.sentence else { return }
+            let question = SentenceQuestion.reading(card(for: entry), sentence: sentence)
             explaining?.cancel()
             let explain = explainer.explain
             explaining = Task {
@@ -770,77 +1004,72 @@ public struct LookupPanelContent: View {
                 // says it must not.
                 let answer = await explain(question)
                 guard !Task.isCancelled else { return }
-                explanation = answer
+                explanation = SentencePane(answer: answer, of: question)
                 explaining = nil
             }
         }
     }
 
+    /// Copy takes the sense on screen, ambiguous included — but an uncertain one says so in the
+    /// copied text, because a paste has no badge beside it.
+    ///
+    /// **Disabled where there is no sense, rather than silently doing nothing.** It used to switch
+    /// over the answer here and fall through: on a card the selector abstained on — and on every
+    /// card from a dictionary that marks no senses, which is three of the seven enabled here — the
+    /// button was drawn enabled, took the click and left the pasteboard untouched. What it is
+    /// allowed to act on is `LookupCard.senseToKeep`, which can be asked that question from a test.
     private func copyButton(_ entry: DictionaryEntry) -> some View {
-        Button {
-            // The card as it is drawn — including a sense the reader tapped, which is the one
-            // they mean to copy.
-            let card = card(for: entry)
-            // Copy takes the sense on screen, ambiguous included — but an uncertain one says so in
-            // the copied text, because a paste has no badge beside it.
-            let copyable: (sense: SensePresentation, uncertain: Bool)? = {
-                switch card.answer {
-                case .sense(let sense): (sense, card.isHypothesis)
-                case .ambiguous(let sense, _): (sense, true)
-                default: nil
-                }
-            }()
-            if let copyable {
-                // One literal, not a concatenation: `" " + String(localized:)` puts a bare space
-                // through the view layer's prose scan, and the space belongs to the sentence
-                // anyway — a translator decides whether their language wants one.
-                let caveat = copyable.uncertain
-                    ? String(localized: " (a guess — not confirmed)",
-                             comment: "Appended to copied text where the sense was not confirmed")
-                    : ""
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(
-                    "\(card.heading) — \(copyable.sense.label)\(caveat)", forType: .string)
-                copied = true
-            }
-        } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: scale.text.body))
+        let copyable = card(for: entry).copyableText
+        return IconButton(
+            title: "Copy the word and this sense",
+            // The checkmark is what *was copied*, so it is the symbol and never the name.
+            symbol: copied ? "checkmark" : "doc.on.doc",
+            help: copyable == nil
+                ? Text("No sense was identified, so there is nothing to copy")
+                : Text("Copy the word and this sense"),
+            isEnabled: copyable != nil
+        ) {
+            guard let copyable else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(copyable, forType: .string)
+            copied = true
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(Text("Copy the word and this sense"))
+        // **Drawn as disabled, not merely disabled — and still legible.** A `.plain` button's label
+        // keeps whatever foreground style it was given, so `.secondary` here would look identical
+        // enabled or not, which is the broken switch one layer further in. `.quaternary` was the
+        // first answer and went too far the other way: on the card, on screen, it reads as *absent*,
+        // and a control the reader cannot see is one they never hover — so the tooltip saying why it
+        // is off is unreachable, which was the whole point of disabling it rather than hiding it.
+        .foregroundStyle(copyable == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
     }
 
+    /// **A guess may be kept, and it is kept as a guess.** The proposal once was to enable this for
+    /// `.ambiguous` because the panel badges it — and the badge is the *panel's*, not the note's. A
+    /// note carries no standing of its own, so pinning one laundered a sense the selector was unsure
+    /// of into a note that reads exactly like a confirmed one: a failure rendering as confidently as
+    /// a success, at the one surface that outlives the panel. `senseToKeep` carries the standing for
+    /// exactly that reason.
+    ///
+    /// **Disabled where there is no sense**, for the same reason as copy: the `default: return` this
+    /// replaces made it a button that took a click and did nothing.
     private func pinButton(_ entry: DictionaryEntry) -> some View {
-        Button {
+        let keep = card(for: entry).senseToKeep
+        return IconButton(
+            title: "Keep this sense as a note", symbol: "pin",
+            help: keep == nil
+                ? Text("No sense was identified, so there is nothing to keep")
+                : Text("Keep this sense as a note"),
+            isEnabled: keep != nil
+        ) {
+            guard let keep else { return }
             let card = card(for: entry)
-            // **A guess may be kept, and it is kept as a guess.** The proposal here was to enable
-            // this for `.ambiguous` because the panel badges it — and the badge is the *panel's*,
-            // not the note's. A note carries no standing, so pinning one laundered a sense the
-            // selector was unsure of into a note that reads exactly like a confirmed one, which is
-            // the rule that a failure never renders as confidently as a success, broken at the one
-            // surface that outlives the panel.
-            switch card.answer {
-            case .sense(let sense):
-                pin(PinnedNote(
-                    heading: card.heading, dictionary: entry.dictionary,
-                    partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
-                    text: sense.label, standing: card.isHypothesis ? .proposed : .confirmed))
-            case .ambiguous(let sense, _):
-                pin(PinnedNote(
-                    heading: card.heading, dictionary: entry.dictionary,
-                    partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
-                    text: sense.label, standing: .ambiguous))
-            default:
-                return
-            }
-        } label: {
-            Image(systemName: "pin").font(.system(size: scale.text.body))
+            pin(PinnedNote(
+                heading: card.heading, dictionary: entry.dictionary,
+                partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
+                text: keep.sense.label, standing: keep.standing))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(Text("Keep this sense as a note"))
+        // Legible when off, for the reason spelled out on the copy button above.
+        .foregroundStyle(keep == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
     }
 }
 
@@ -876,3 +1105,45 @@ public enum PanelCaveats {
         entry.match == .otherHeadword
     }
 }
+
+// MARK: - Previews
+
+#if DEBUG
+/// The card at its three real states, at the width it is meant to be — ~400, not the 760×520
+/// document window the panel used to open at. An answer is not a document.
+private func card(_ mark: SenseMark?) -> LookupCard {
+    let entry = sampleEntry("New Oxford American Dictionary")
+    return LookupCard(
+        presentation: EntryPresentation(entry: entry, mark: mark, met: []),
+        term: "fine",
+        sentence: "It was a fine piece of filmmaking, and the weather held.",
+        mark: mark)
+}
+
+#Preview("The reader chose it") {
+    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.005", by: .reader)))
+        .frame(width: 400)
+        .background(.background)
+}
+
+/// The state the design exists for: XiaolaiDict guessed, says so, and the way to correct it is one click.
+#Preview("XiaolaiDict guessed it") {
+    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.020", by: .model)))
+        .frame(width: 400)
+        .background(.background)
+}
+
+/// An abstention — the selector working, not failing.
+#Preview("XiaolaiDict could not tell") {
+    LookupCardView(card: card(.couldNot(.tooClose)))
+        .frame(width: 400)
+        .background(.background)
+}
+
+#Preview("XiaolaiDict guessed it, dark") {
+    LookupCardView(card: card(.chosen(key: "m_en_gbus0362750.020", by: .model)))
+        .frame(width: 400)
+        .background(.background)
+        .preferredColorScheme(.dark)
+}
+#endif

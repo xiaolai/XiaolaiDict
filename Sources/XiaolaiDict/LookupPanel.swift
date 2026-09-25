@@ -44,8 +44,6 @@ final class LookupPanelController: LookupPanelPresenting {
     private var current = 0
     private var shownKind: PanelContent.Kind?
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
-    /// Sizes the reader chose by resizing, per kind of content; kept for the next panel of that kind.
-    private var chosenSizes: [PanelContent.Kind: NSSize] = [:]
     private let escape: EscapeKey
     /// Held only while the panel is on screen — a monitor that outlived it would dismiss a panel
     /// that is not there and keep a closure alive for every lookup the reader ever made.
@@ -53,14 +51,17 @@ final class LookupPanelController: LookupPanelPresenting {
     /// The local half of the same watch. A global monitor is never offered its own application's
     /// events, so without this a click in Settings or the drawer left the panel up.
     private var clickAwayLocal: Any?
-    /// The one resize observer, kept so it can be **replaced** rather than added to. The window
+    /// The resize observer, kept so it can be **replaced** rather than added to. The window
     /// accessor's closure runs on every update of the view it is attached to, and the panel's body
     /// reads the model download's progress — so a 3 GB download registered a fresh observer a few
     /// hundred times, each one outliving its window and calling back for every resize after.
-    private(set) var resizeObserver: (any NSObjectProtocol)?
-    /// Separate from `resizeObserver` because they watch different notifications for opposite
-    /// reasons: that one fires only when the reader finishes a drag, this one on every resize
-    /// including the ones the content causes — which are exactly the ones nothing used to notice.
+    ///
+    /// **There used to be two.** The other watched `didEndLiveResizeNotification` to remember a size
+    /// the reader had chosen by dragging, per kind of panel. The panel's window is borderless — style
+    /// mask 0, and `isResizable` false, both measured by `--panel-report` on 2026-09-25 — so it has no
+    /// edge to drag and that notification could never be posted. A memory nothing could write, feeding
+    /// a placement nothing could vary: deleted rather than repaired, because there is no drag to
+    /// remember and the window's height is the content's to decide now.
     private(set) var fitObserver: (any NSObjectProtocol)?
     /// Which window the two observers above are registered on, held weakly so a closed window is
     /// not kept alive by the bookkeeping that exists to avoid re-registering on it.
@@ -83,13 +84,25 @@ final class LookupPanelController: LookupPanelPresenting {
     /// made the panel, and the app holds it until that row is written rather than hanging it off
     /// whichever lookup happens to have been recorded last.
     var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
+    /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
+    var onOpenDictionarySettings: (@MainActor () -> Void)?
+    /// The last two numbers the window fit was computed from: what the card's content wanted, and
+    /// what its scroll view was given. Read by `--panel-report`, and by nothing else — the window's
+    /// height can be seen from outside, but not what it was asked for.
+    private(set) var lastFit: (wanted: CGFloat, given: CGFloat)?
 
 
     /// The window SwiftUI made for the panel's scene, or nil when it is not up.
     ///
     /// `NSApplication.shared`, never `NSApp`: the latter is implicitly unwrapped and nil in a
     /// process that has not made one, where it traps instead of answering "no window".
-    private var window: NSWindow? {
+    ///
+    /// **Not private: `--panel-report` reads it.** What this window *is* — its class, its style mask,
+    /// whether it can become key — is the thing that report exists to establish, and it cannot be
+    /// asserted from the source: `xiaolaiDictPanelBehaviour` applies panel behaviour only
+    /// `if let panel = window as? NSPanel`, and whether a SwiftUI `Window` scene with
+    /// `.windowStyle(.plain)` satisfies that has never been measured.
+    var window: NSWindow? {
         NSApplication.shared.windows.first { $0.identifier?.rawValue.contains(XiaolaiDictScene.lookupID) == true }
             ?? NSApplication.shared.windows.first { $0.title == XiaolaiDictScene.lookupTitle }
     }
@@ -108,7 +121,7 @@ final class LookupPanelController: LookupPanelPresenting {
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
         let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize))
         placement = PanelPlacement.frame(
-            for: chosenSizes[kind] ?? kind.defaultSize, near: pointer, within: visible)
+            for: kind.defaultSize, near: pointer, within: visible)
 
         model.minimumSize = kind.minimumSize
         model.content = content
@@ -220,19 +233,13 @@ final class LookupPanelController: LookupPanelPresenting {
         // and the panel's download progress is observable — so this ran repeatedly for one window,
         // tearing both observers down and building them again each time. Replacement stopped them
         // accumulating; it did not stop the churn.
-        if let watched, watched === window, resizeObserver != nil, fitObserver != nil { return }
+        if let watched, watched === window, fitObserver != nil { return }
         // Teardown first, then record: `stopWatchingForResize` clears `watched`, so assigning
         // before it left the guard above permanently unable to fire. The suite did not catch that
         // — it asserted the two registrations differ, which an inert guard satisfies — so the
         // assertion changed with the contract.
         stopWatchingForResize()
         watched = window
-        resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
-        ) { [weak self, weak window] _ in
-            guard let window else { return }
-            MainActor.assumeIsolated { self?.rememberChosenSize(window.frame.size) }
-        }
         fitObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: window, queue: .main
         ) { [weak self, weak window] _ in
@@ -243,10 +250,17 @@ final class LookupPanelController: LookupPanelPresenting {
 
     /// Puts a window the **content** resized back onto the screen it is on.
     ///
-    /// The scene is `.windowResizability(.contentSize)`, so the window grows when the entry fills in
-    /// and again when the reader opens the other senses — while `show()` placed it once, against a
-    /// size chosen before any of that existed, and `update()` deliberately does not re-place it.
-    /// A lookup near the bottom of the display therefore drew its sense list past the edge.
+    /// `fitsItsContent(upTo:)` grows the window when the entry fills in and again when the reader
+    /// opens the other senses — while `show()` placed it once, against the opening size, and
+    /// `update()` deliberately does not re-place it. A lookup near the bottom of the display
+    /// therefore drew its sense list past the edge.
+    ///
+    /// **This used to credit `.windowResizability(.contentSize)` with the growing, and that was not
+    /// true.** The scene has always carried it and the window was the opening height for every card —
+    /// 398 × 240, measured three runs — because `show()` writes the frame by hand and a frame set by
+    /// hand is not one SwiftUI revisits. The fit is what grows it now; this still has to put the
+    /// result back on the screen, and the two agree because the fit never asks for more than
+    /// `visibleFrame.minY` allows.
     ///
     /// **A reader's drag is left alone.** `inLiveResize` is the whole of that test: a panel dragged
     /// half off the screen on purpose is the reader's business, and snapping it back mid-drag would
@@ -270,11 +284,11 @@ final class LookupPanelController: LookupPanelPresenting {
         window.setFrame(fitted, display: true)
     }
 
+    func recordFit(wanted: CGFloat, given: CGFloat) { lastFit = (wanted, given) }
+
     func stopWatchingForResize() {
-        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
-        resizeObserver = nil
-        // Removed together with it: an observer left registered holds the closed window alive and
-        // waits for a resize that cannot come.
+        // An observer left registered holds the closed window alive and waits for a resize that
+        // cannot come.
         if let fitObserver { NotificationCenter.default.removeObserver(fitObserver) }
         fitObserver = nil
         watched = nil
@@ -292,12 +306,6 @@ final class LookupPanelController: LookupPanelPresenting {
         stopWatchingForClicksAway()
     }
 
-    /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
-    /// shrunk to, to fit a smaller screen.
-    func rememberChosenSize(_ size: NSSize) {
-        guard let shownKind else { return }
-        chosenSizes[shownKind] = size
-    }
 }
 
 /// The lookup panel's scene content.
@@ -325,6 +333,13 @@ struct LookupPanelSceneView: View {
                     .environment(\.studySense) { [controller] encounter in
                         guard let request = content.request else { return }
                         controller.onStudySense?(encounter, request)
+                    }
+                    // The one window the panel may bring forward: a window the reader chose. The
+                    // app's own action, so the dictionary discovery that pane depends on is started
+                    // by the same code path every other route uses.
+                    .environment(\.openDictionarySettings) { [controller] in controller.onOpenDictionarySettings?() }
+                    .environment(\.reportPanelFit) { [controller] wanted, given in
+                        controller.recordFit(wanted: wanted, given: given)
                     }
                     .environment(\.translation, translation())
                     .environment(\.explainer, explainer())
@@ -364,7 +379,11 @@ final class EscapeKey {
         do {
             held = try hotkeys.register(Self.shortcut, action: action)
         } catch {
-            // The panel still has its close button; Escape stays with the app being read.
+            // **Not "the panel still has its close button".** It has none: the scene is
+            // `.windowStyle(.plain)`, which draws no title bar and no traffic lights. What is left is
+            // the click-away dismissal — a click anywhere outside the panel — and Escape stays with
+            // the app being read. Worth logging loudly for that reason: the reader keeps one way out
+            // rather than two, and nothing on screen says so.
             log.error("Escape not claimed for the panel: \(String(describing: error), privacy: .public)")
         }
     }

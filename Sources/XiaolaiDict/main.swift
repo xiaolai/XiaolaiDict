@@ -76,6 +76,13 @@ case .success(.modelReport):
 case .success(.senseReport):
     runHeadlessReport { await SenseReport.run() }
 
+// Shows the lookup panel, so AppKit's runloop and `.accessory` — the same two reasons
+// `--history-report` and `--settings-report` need them. It also posts mouse events, which need a
+// window-server connection for the same reason a capture does.
+case .success(.panelReport):
+    PanelReport.isWanted = true
+    XiaolaiDictScene.main()
+
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.
 case .success(.app):

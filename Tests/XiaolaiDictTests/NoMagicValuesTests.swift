@@ -123,6 +123,43 @@ struct NoMagicValuesTests {
             "views are declaring values instead of reading tokens:\n\(offenders.joined(separator: "\n"))")
     }
 
+    /// **Whatever the scan skips must really be previews.**
+    ///
+    /// `source(of:)` cuts a file at its first `// MARK: - Previews` and scans what is above. That is
+    /// right where previews are last and silently wrong where they are not: `LookupCardView.swift`
+    /// had its preview block in the middle, so `LookupPanelContent` — the panel, its footer and
+    /// every one of its four actions, about 550 lines of production view code — was **not scanned at
+    /// all**, under a rule whose whole claim is that it globs the view layer. Nothing was violating
+    /// it, which is exactly why nothing said so; the next value written into the footer would simply
+    /// have passed.
+    ///
+    /// Found on 2026-09-25 by a review that read the scanner rather than trusting it. The previews
+    /// were moved to the end of that file, and this is the assertion that stops the arrangement
+    /// coming back — because a rule that quietly stops covering new code still reads as one.
+    @Test func nothingProductionSitsBelowThePreviewsTheScanSkips() throws {
+        let files = try FileManager.default
+            .contentsOfDirectory(at: viewLayer, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        var checked = 0
+        for file in files {
+            let whole = try String(contentsOf: file, encoding: .utf8)
+            guard let marker = whole.range(of: "// MARK: - Previews") else { continue }
+            checked += 1
+            let below = whole[marker.upperBound...]
+            // A `View` declared below the cut is production code the scan never reads. `: View` is
+            // the marker because that is what every offending declaration has in common, and it
+            // cannot appear in a `#Preview` body.
+            #expect(
+                !below.contains(": View {"),
+                """
+                \(file.lastPathComponent) declares a View below its previews, so the magic-value                 scan does not read it. Move the previews to the end of the file.
+                """)
+        }
+        // A scan of nothing passes, so the count is named: every file that has previews at all was
+        // looked at, and today that is most of the view layer.
+        #expect(checked >= 4, "only \(checked) files with previews were checked")
+    }
+
     /// The exemptions have to stay reasons. A file that no longer exists is how the rule turns
     /// into a formality.
     @Test func everyExemptionNamesAFileThatIsStillThere() throws {

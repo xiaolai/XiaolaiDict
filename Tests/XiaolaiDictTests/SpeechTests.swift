@@ -64,7 +64,7 @@ struct SpeechTests {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
-        #expect(source.contains("help: Speech.sayItAloudHelp(for: card.term)"),
+        #expect(source.contains("help: Speech.sayItAloudHelp(for: card.term, in: card.sentence)"),
                 "the speak button says nothing about the voice it will use")
     }
 
@@ -73,8 +73,9 @@ struct SpeechTests {
     /// is the plain key a translator gets. The two `Text`s are built differently on purpose, which
     /// is what lets this tell them apart.
     @Test func theHelpIsTheCaveatWhereThereIsOne() {
-        let help = Speech.sayItAloudHelp(for: "hold")
-        if let caveat = Speech.caveat(forSpeaking: "hold") {
+        let sentence = "They could not hold the line."
+        let help = Speech.sayItAloudHelp(for: "hold", in: sentence)
+        if let caveat = Speech.caveat(forSpeaking: "hold", in: sentence) {
             #expect(help == Text(verbatim: caveat), "the caveat did not reach the button's help")
         } else {
             #expect(help == Text("Say it aloud"), "a good voice was apologised for")
@@ -87,4 +88,48 @@ struct SpeechTests {
         #expect(caveat == String(localized: "No voice is installed for this language."))
     }
 
+    /// **A word alone does not say what language it is in, and the cost is the wrong voice rather
+    /// than silence.** Measured on this Mac with `NLLanguageRecognizer`, 14 of 17 common English
+    /// headwords are misread on their own — *fine* as Italian, *hold* as Danish, *sanction* as
+    /// French, *gift* as Swedish, *die* and *bald* and *war* and *man* as German — and this Mac has
+    /// a voice for every one of those, so nothing reports a failure: the word is simply pronounced
+    /// in Italian. The reader's own sentence is on the card, and both call sites passed `nil`.
+    ///
+    /// `#require` on the premise rather than an `#expect`: if this Mac's recogniser ever reads the
+    /// bare word as English, the fixture can no longer show the sentence mattering, and the test
+    /// must refuse to run rather than pass while proving nothing.
+    @Test func theSentenceDecidesWhichLanguageAWordIsSpokenIn() throws {
+        for (word, sentence) in [
+            ("fine", "It was a fine piece of filmmaking, and the weather held."),
+            ("die", "The die was cast before anyone spoke."),
+            ("gift", "She sent the book as a gift to her brother."),
+        ] {
+            try #require(
+                Speech.language(forSpeaking: word, in: nil) != "en",
+                "this Mac reads “\(word)” alone as English, so it cannot show the sentence mattering")
+            #expect(
+                Speech.language(forSpeaking: word, in: sentence) == "en",
+                "“\(word)” would be spoken in \(Speech.language(forSpeaking: word, in: sentence))")
+        }
+    }
+
+    /// With no sentence there is still a voice: the word is all there is, and guessing from it beats
+    /// refusing to speak.
+    @Test func withNoSentenceTheWordIsAllThereIs() {
+        #expect(Speech.language(forSpeaking: "filmmaking", in: nil).isEmpty == false)
+        #expect(Speech.language(forSpeaking: "", in: nil) == "en", "an empty word still needs a voice to fall back on")
+    }
+
+    /// The drawer's speak button is the second call site, and it had the same `nil`.
+    @Test func theDrawersSpeakButtonAlsoReadsTheSentence() throws {
+        let drawer = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDictUI/HistoryDrawerViews.swift")
+        let source = try String(contentsOf: drawer, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        #expect(source.contains("Speech.say(entry.surface, in: entry.sentence)"))
+        #expect(source.contains("Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence)"))
+    }
 }

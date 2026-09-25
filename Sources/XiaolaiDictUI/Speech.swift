@@ -82,7 +82,8 @@ public enum Speech {
             """)
     }
 
-    /// The caveat for the text that would be spoken, found the way `say` finds its voice.
+    /// The caveat for the text that would be spoken, found the way `say` finds its voice — from
+    /// the reader's own sentence where there is one.
     ///
     /// **Restored 2026-09-23, having stopped reaching the reader when the card replaced the
     /// panel.** The old panel asked for this; the card had no caller, so the whole thing — the
@@ -90,10 +91,29 @@ public enum Speech {
     /// suite, which is the failure class this project has recorded twice. It rides on the speak
     /// button's own help text: that is where the reader already is when the voice matters, and it
     /// costs no layout. Nil where there is nothing worth saying.
-    public static func caveat(forSpeaking text: String) -> String? {
+    public static func caveat(forSpeaking text: String, in sentence: String?) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return caveat(for: Lemmatizer.language(of: trimmed, in: nil) ?? "en")
+        return caveat(for: language(forSpeaking: trimmed, in: sentence))
+    }
+
+    /// **Which language a word will be spoken in, decided from the sentence it was read in.**
+    ///
+    /// A single word tells `NLLanguageRecognizer` far too little, and the cost is not silence — it
+    /// is the wrong voice, confidently. Measured on this Mac, 14 of 17 common English headwords are
+    /// misread on their own: *fine* as Italian, *hold* as Danish, *sanction* as French, *gift* as
+    /// Swedish, *die* and *bald* and *war* and *man* as German. This Mac has a voice for every one
+    /// of those, so nothing reports a failure and nothing is caveated — the word is simply
+    /// pronounced in Italian. The reader's own sentence settles it: *die* alone reads as German,
+    /// *die* in "The die was cast…" as English.
+    ///
+    /// This is ADR-0001's rule about scripts, arriving at the other end of the app: one word gives
+    /// the recogniser too little to work with, so never ask it about one where a sentence is at hand.
+    ///
+    /// **`sentence` has no default.** A default is exactly what let both call sites pass nothing
+    /// while the sentence sat one property away on the value they already held.
+    public static func language(forSpeaking text: String, in sentence: String?) -> String {
+        Lemmatizer.language(of: text, in: sentence) ?? "en"
     }
 
     /// **The tooltip on a speak button, wherever one is drawn.**
@@ -106,22 +126,22 @@ public enum Speech {
     ///
     /// The caveat, where there is one, is a sentence this type has already localized, so it arrives
     /// verbatim; the ordinary case is a key.
-    public static func sayItAloudHelp(for text: String) -> Text {
-        caveat(forSpeaking: text).map { Text(verbatim: $0) } ?? Text("Say it aloud")
+    public static func sayItAloudHelp(for text: String, in sentence: String?) -> Text {
+        caveat(forSpeaking: text, in: sentence).map { Text(verbatim: $0) } ?? Text("Say it aloud")
     }
 
     /// Says `text` in the language it appears to be in. Silence is reported to the log rather than
     /// to the reader: a word that will not speak is a small failure, and interrupting a lookup to
     /// say so would be a larger one.
-    public static func say(_ text: String) {
+    public static func say(_ text: String, in sentence: String?) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         let utterance = AVSpeechUtterance(string: trimmed)
-        let language = Lemmatizer.language(of: trimmed, in: nil) ?? "en"
-        utterance.voice = bestVoice(for: language)
+        let spoken = language(forSpeaking: trimmed, in: sentence)
+        utterance.voice = bestVoice(for: spoken)
         guard utterance.voice != nil else {
-            log.notice("no voice installed for \(language, privacy: .public); nothing spoken")
+            log.notice("no voice installed for \(spoken, privacy: .public); nothing spoken")
             return
         }
         synthesizer.speak(utterance)
