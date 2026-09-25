@@ -38,8 +38,6 @@ import XiaolaiDictUI
 /// kind of menu was tracked, so nobody reads this as having measured a SwiftUI `Menu`.
 @MainActor
 enum PanelReport {
-    /// Set before the scene starts, so the delegate measures instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     /// How long to wait for the panel to be listed by the compositor. Generous: the first lookup in a
     /// cold process pays for the XPC service starting.

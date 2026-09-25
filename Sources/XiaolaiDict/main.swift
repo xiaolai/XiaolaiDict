@@ -58,12 +58,12 @@ case .success(.translationReport):
 // dispatchMain(). `.accessory` for the same reason the app uses it: no Dock icon, and nothing
 // here may activate XiaolaiDict.
 case .success(.historyReport):
-    HistoryReport.isWanted = true
+    Instruments.run(.history)
     XiaolaiDictScene.main()
 
 // Shows a window too, so the same rule applies: AppKit's runloop, and `.accessory`.
 case .success(.settingsReport):
-    SettingsReport.isWanted = true
+    Instruments.run(.settings)
     XiaolaiDictScene.main()
 
 // The local model's instruments. No window, so no AppKit runloop: they talk to services.
@@ -80,7 +80,7 @@ case .success(.senseReport):
 // `--history-report` and `--settings-report` need them. It also posts mouse events, which need a
 // window-server connection for the same reason a capture does.
 case .success(.panelReport):
-    PanelReport.isWanted = true
+    Instruments.run(.panel)
     XiaolaiDictScene.main()
 
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the

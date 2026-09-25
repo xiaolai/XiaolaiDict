@@ -245,9 +245,19 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // unasked is a window in front of whatever it was about to capture.
         if !Self.isInstrumented { openSetupOnFirstLaunch() }
         quitOnTerminationSignal()
-        if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
-        if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
-        if PanelReport.isWanted { Task { exit(await PanelReport.run(in: self).rawValue) } }
+        // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
+        // line somebody has to remember to add here as well as in three other places.
+        if let instrument = Instruments.wanted {
+            Task { [weak self] in
+                guard let self else { return }
+                let status: CommandStatus = switch instrument {
+                case .history: await HistoryReport.run(in: self)
+                case .settings: await SettingsReport.run(in: self)
+                case .panel: await PanelReport.run(in: self)
+                }
+                exit(status.rawValue)
+            }
+        }
     }
 
     /// Whether the triggers have been armed, so a second capture does not arm them twice.
@@ -303,16 +313,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         if hotkey == nil, !shortcutIsSuspended { registerShortcut(shortcuts.load()) }
     }
 
-    /// **Whether this process is an instrument rather than the reader's app.**
-    ///
-    /// One predicate, because it was a list repeated at each site and each new instrument had to
-    /// remember to join every one of them: `--panel-report` shows the lookup panel and posts mouse
-    /// events at it, so a hover firing meanwhile is a second capture (two at once deadlock, measured
-    /// six trials of six) and a setup board opening unasked is a window in front of what is being
-    /// measured. An instrument measures the app; it has no reader whose pointer needs watching.
-    static var isInstrumented: Bool {
-        HistoryReport.isWanted || SettingsReport.isWanted || PanelReport.isWanted
-    }
+    /// Whether this process is an instrument rather than the reader's app — see `Instruments`.
+    static var isInstrumented: Bool { Instruments.isInstrumented }
 
     // MARK: - Looking up
 
