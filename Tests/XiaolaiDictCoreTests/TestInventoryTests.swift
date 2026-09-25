@@ -28,12 +28,16 @@ import XiaolaiDictTestSupport
 struct TestInventoryTests {
     /// Per target: the fewest `@Test` declarations that may be present.
     ///
-    /// Set to the count on 2026-09-26, the day the split landed — this file's own three included,
-    /// which is why `XiaolaiDictCoreTests` reads 543 and not the 540 the incident was measured
-    /// against. `Support` is absent because it holds no tests; it is the shared fixture target.
+    /// Set to the count on 2026-09-26, the day the split landed. `Support` is absent because it
+    /// holds no tests; it is the shared fixture target.
+    ///
+    /// **A floor is allowed to lag the real count, and raising one is optional.** That is the
+    /// trade: requiring an edit here for every test added would make this a line people bump
+    /// without reading, and a floor that lags by a handful still catches what it is for — the
+    /// incident it was written for was 47 to 4.
     static let floors = [
-        "XiaolaiDictTests": 609,
-        "XiaolaiDictCoreTests": 543,
+        "XiaolaiDictTests": 611,
+        "XiaolaiDictCoreTests": 547,
         "DictionaryBridgeTests": 54,
         "LocalModelTests": 47,
     ]
