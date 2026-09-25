@@ -32,7 +32,7 @@ struct CardOptionsTests {
 
     @Test func bothChoicesSurviveTheNextLaunch() {
         let defaults = TemporaryDefaults.suite()
-        let store = TextSizeStore(defaults: defaults)
+        let store = AppearanceStore(defaults: defaults)
         #expect(store.loadShowsTime() == false)
         #expect(store.loadEmphasis() == .italic)
 
@@ -41,7 +41,7 @@ struct CardOptionsTests {
         store.save(showsTime: true)
         store.save(showsPlaceName: true)
         store.save(WordEmphasis.boldItalic)
-        let reopened = TextSizeStore(defaults: defaults)
+        let reopened = AppearanceStore(defaults: defaults)
         #expect(reopened.loadShowsTime())
         #expect(reopened.loadShowsPlaceName())
         #expect(reopened.loadEmphasis() == .boldItalic)
@@ -49,13 +49,13 @@ struct CardOptionsTests {
 
     @Test func anUnrecognisedEmphasisFallsBackRatherThanFailing() {
         let defaults = TemporaryDefaults.suite()
-        defaults.set("engraved", forKey: TextSizeStore.emphasisKey)
-        #expect(TextSizeStore(defaults: defaults).loadEmphasis() == .italic)
+        defaults.set("engraved", forKey: AppearanceStore.emphasisKey)
+        #expect(AppearanceStore(defaults: defaults).loadEmphasis() == .italic)
     }
 
     @MainActor
     @Test func theAppearanceCarriesThemToTheCard() {
-        let appearance = Appearance(store: TextSizeStore(defaults: TemporaryDefaults.suite()))
+        let appearance = Appearance(store: AppearanceStore(defaults: TemporaryDefaults.suite()))
         appearance.showsTime = true
         appearance.showsPlaceName = true
         appearance.emphasis = .bold

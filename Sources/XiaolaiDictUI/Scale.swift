@@ -324,11 +324,11 @@ public final class Appearance {
         didSet { if drawerGlass != oldValue { store.save(drawerGlass) } }
     }
 
-    private let store: TextSizeStore
+    private let store: AppearanceStore
 
-    public init(store: TextSizeStore = TextSizeStore()) {
+    public init(store: AppearanceStore = AppearanceStore()) {
         self.store = store
-        textSize = store.load()
+        textSize = store.loadTextSize()
         showsTime = store.loadShowsTime()
         showsPlaceName = store.loadShowsPlaceName()
         emphasis = store.loadEmphasis()
@@ -342,7 +342,7 @@ public final class Appearance {
 }
 
 /// The reader's appearance choices, kept across launches.
-public struct TextSizeStore {
+public struct AppearanceStore {
     static let defaultsKey = "TextSize"
     static let showsTimeKey = "CardShowsTime"
     static let showsPlaceNameKey = "CardShowsPlaceName"
@@ -357,7 +357,7 @@ public struct TextSizeStore {
 
     /// An unset — or unrecognised — value is `.standard` rather than a failure. A preference file
     /// written by a later version must not leave the reader with no text at all.
-    func load() -> TextSize {
+    func loadTextSize() -> TextSize {
         defaults.string(forKey: Self.defaultsKey).flatMap(TextSize.init(rawValue:)) ?? .standard
     }
 

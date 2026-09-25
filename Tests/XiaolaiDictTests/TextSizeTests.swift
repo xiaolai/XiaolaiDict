@@ -70,28 +70,28 @@ struct TextSizeTests {
     // MARK: - Remembering it
 
     @Test func aReaderWhoHasNeverChosenGetsTheDefault() {
-        #expect(TextSizeStore(defaults: TemporaryDefaults.suite()).load() == .standard)
+        #expect(AppearanceStore(defaults: TemporaryDefaults.suite()).loadTextSize() == .standard)
     }
 
     @Test func aChosenSizeSurvivesTheNextLaunch() {
         let defaults = TemporaryDefaults.suite()
-        TextSizeStore(defaults: defaults).save(.large)
-        #expect(TextSizeStore(defaults: defaults).load() == .large)
+        AppearanceStore(defaults: defaults).save(.large)
+        #expect(AppearanceStore(defaults: defaults).loadTextSize() == .large)
     }
 
     /// A preference file written by a later version must not leave the reader with no text at all.
     @Test func anUnrecognisedSizeFallsBackRatherThanFailing() {
         let defaults = TemporaryDefaults.suite()
-        defaults.set("enormous", forKey: TextSizeStore.defaultsKey)
-        #expect(TextSizeStore(defaults: defaults).load() == .standard)
+        defaults.set("enormous", forKey: AppearanceStore.defaultsKey)
+        #expect(AppearanceStore(defaults: defaults).loadTextSize() == .standard)
     }
 
     @MainActor
     @Test func changingTheSizeWritesItDownWithoutBeingAsked() {
         let defaults = TemporaryDefaults.suite()
-        let appearance = Appearance(store: TextSizeStore(defaults: defaults))
+        let appearance = Appearance(store: AppearanceStore(defaults: defaults))
         appearance.textSize = .comfortable
-        #expect(TextSizeStore(defaults: defaults).load() == .comfortable)
+        #expect(AppearanceStore(defaults: defaults).loadTextSize() == .comfortable)
         #expect(appearance.scale.em == TextSize.comfortable.em)
     }
 }

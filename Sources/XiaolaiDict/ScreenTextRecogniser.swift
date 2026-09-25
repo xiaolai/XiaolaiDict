@@ -38,9 +38,11 @@ enum RecognitionError: LocalizedError {
         // straight from a caller — `--read-point 1e100 0` passes a finite-number check.
         case .noDisplay(let point):
             "no display contains (\(String(format: "%.0f", point.x)), \(String(format: "%.0f", point.y)))"
-        // No longer "or Screen Recording is off": that is its own case now, checked before the
-        // capture, so this one means what it says.
-        case .displayNotCapturable: "the screen is locked"
+        // **Says what was established, which is absence and not a reason.** It read "the screen is
+        // locked" — a lock is one way a display leaves `SCShareableContent`, and this branch only
+        // ever knew that it was not in the list. Naming the likeliest cause as the cause is how an
+        // instrument comes to report something it never checked.
+        case .displayNotCapturable: "that display is not available for capture"
         case .nothingUnderPointer: "no word under the pointer"
         case .excludedApp(let name): "words are not looked up in \(name)"
         case .unattributable: "no window under the pointer"
@@ -73,8 +75,10 @@ final class ScreenTextRecogniser: Sendable {
     /// `excluding` is checked against the window's owner **before any pixel is captured**. The
     /// Accessibility path cannot vet an app that exposes no element, and that is exactly the case
     /// this path serves — so the exclusion has to be enforced here too, not only afterwards.
-    /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system` asks
-    /// CoreGraphics.
+    /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system`
+    /// asks through `Permission.screenRecording`, which probes with `SCShareableContent` — the API
+    /// this file captures through. **Not CoreGraphics**, which is what this said and what the rule
+    /// in `AGENTS.md` exists to prevent.
     let access: ScreenRecordingAccess
 
     init(access: ScreenRecordingAccess = .system) {

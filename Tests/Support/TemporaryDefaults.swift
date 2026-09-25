@@ -21,7 +21,7 @@ import Synchronization
 /// removed.
 ///
 /// Every suite a test makes is registered here and removed when the test process exits, because
-/// the tests build them inline — `TextSizeStore(defaults: TemporaryDefaults.suite())` — where no
+/// the tests build them inline — `AppearanceStore(defaults: TemporaryDefaults.suite())` — where no
 /// per-test `defer` fits, and a per-test `defer` is what the old tests already got wrong.
 ///
 /// A name carries its process's pid. A run that dies before it exits cannot clean up after
