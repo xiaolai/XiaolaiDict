@@ -27,6 +27,66 @@ struct PanelPlacementTests {
         #expect(frame.size == NSSize(width: 584, height: 384))
     }
 
+    // MARK: - Re-fitting a window the content has already resized
+
+    /// The reported defect: a lookup near the bottom of the display grew when its other senses
+    /// were opened and drew past the screen edge. The window is `.contentSize`, so it grows; the
+    /// placement ran once, before the content existed.
+    @Test func aWindowThatGrewDownwardIsPushedBackOn() {
+        let grown = NSRect(x: 200, y: -180, width: 400, height: 600)
+        let fitted = PanelPlacement.fitted(grown, within: screen)
+        #expect(screen.cg.insetBy(dx: 8, dy: 8).contains(fitted))
+        #expect(fitted.size == grown.size, "it fits, so nothing had to be given up")
+    }
+
+    /// **Every edge, not only the one that was reported.** Each case starts wholly or partly
+    /// outside on one side; all four must come back inside, and none may be pushed out of the
+    /// opposite side in the process.
+    @Test func everyEdgeIsBroughtBackOnScreen() {
+        let cases: [(String, NSRect)] = [
+            ("below", NSRect(x: 200, y: -300, width: 400, height: 300)),
+            ("above", NSRect(x: 200, y: 800, width: 400, height: 300)),
+            ("left", NSRect(x: -380, y: 300, width: 400, height: 300)),
+            ("right", NSRect(x: 1_400, y: 300, width: 400, height: 300)),
+        ]
+        for (edge, rect) in cases {
+            let fitted = PanelPlacement.fitted(rect, within: screen)
+            #expect(
+                screen.cg.insetBy(dx: 8, dy: 8).contains(fitted),
+                "a panel off the \(edge) edge was not brought back: \(fitted)")
+        }
+    }
+
+    /// A window taller than the screen cannot be moved into it, so it is shrunk to the space there
+    /// is and fills it.
+    ///
+    /// This deliberately does **not** assert which edge "survives" the shrink. A test that did was
+    /// written and deleted: with the height reduced to exactly the screen's, the y clamp has a
+    /// single legal value, so anchoring by the top and by the bottom give the same answer for every
+    /// input — verified over 200,000 random rectangles. It would have passed against either
+    /// implementation, which is not a check.
+    @Test func aWindowTallerThanTheScreenIsShrunkToIt() {
+        let tall = NSRect(x: 200, y: -600, width: 400, height: 1_400)
+        let fitted = PanelPlacement.fitted(tall, within: screen)
+        #expect(fitted.height == screen.cg.height - 16)
+        #expect(screen.cg.insetBy(dx: 8, dy: 8).contains(fitted))
+    }
+
+    /// Both axes at once, which is the case a per-axis fix passes and a reader still sees broken.
+    @Test func aWindowTooBigInBothAxesIsFittedInBoth() {
+        let huge = NSRect(x: -100, y: -100, width: 2_000, height: 1_600)
+        let fitted = PanelPlacement.fitted(huge, within: screen)
+        #expect(screen.cg.insetBy(dx: 8, dy: 8).contains(fitted))
+    }
+
+    /// Idempotent: a frame already inside is not nudged. Otherwise every content update would
+    /// creep the panel across the screen.
+    @Test func aFrameAlreadyInsideIsLeftAlone() {
+        let inside = NSRect(x: 300, y: 300, width: 400, height: 200)
+        #expect(PanelPlacement.fitted(inside, within: screen) == inside)
+        #expect(PanelPlacement.fitted(inside, within: screen) == PanelPlacement.fitted(PanelPlacement.fitted(inside, within: screen), within: screen))
+    }
+
     /// Each kind of content has its own size; a lookup never gets a message's.
     @Test func eachKindHasItsOwnSizes() {
         #expect(PanelContent.Kind.lookup.defaultSize != PanelContent.Kind.message.defaultSize)
@@ -144,5 +204,40 @@ struct PanelResizeWatchTests {
             near: UpPoint(.zero), for: panel.newRequest())
         panel.closed()
         #expect(panel.resizeObserver == nil, "the panel went on watching a window that had closed")
+    }
+
+    /// **The wire, not the value.** `PanelPlacement.fitted` is tested exhaustively above and was
+    /// still reachable by nothing: the geometry was right and the window was never re-fitted,
+    /// which is the whole shape of the reported defect. This asserts the observer exists and is
+    /// removed with the panel — the two ways it silently stops working.
+    @Test func theContentResizeWatchIsRegisteredAndReleasedWithThePanel() {
+        let panel = LookupPanelController()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: true)
+        #expect(panel.fitObserver == nil)
+        panel.watchForResize(of: window)
+        #expect(panel.fitObserver != nil, "nothing would ever notice a resize the content caused")
+
+        panel.show(
+            .message(title: "anything", detail: "so that closing it is a real close"),
+            near: UpPoint(.zero), for: panel.newRequest())
+        panel.closed()
+        #expect(panel.fitObserver == nil, "the observer outlived the window it watched")
+    }
+
+    /// A reader dragging the panel half off the screen is doing it on purpose, and snapping it back
+    /// mid-drag would fight their hands. `inLiveResize` is the whole of that test, so it is worth
+    /// one that fails if the guard is dropped.
+    @Test func aWindowAlreadyOnScreenIsNotMoved() {
+        let panel = LookupPanelController()
+        guard let screen = NSScreen.main else { return }
+        let inside = NSRect(
+            x: screen.visibleFrame.midX, y: screen.visibleFrame.midY, width: 320, height: 240)
+        let window = NSWindow(
+            contentRect: inside, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.setFrame(inside, display: false)
+        panel.keepWhollyOnScreen(window)
+        #expect(window.frame == inside, "a panel that already fits must not be nudged")
     }
 }

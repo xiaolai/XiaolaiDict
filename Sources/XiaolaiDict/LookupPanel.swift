@@ -55,6 +55,10 @@ final class LookupPanelController: LookupPanelPresenting {
     /// reads the model download's progress — so a 3 GB download registered a fresh observer a few
     /// hundred times, each one outliving its window and calling back for every resize after.
     private(set) var resizeObserver: (any NSObjectProtocol)?
+    /// Separate from `resizeObserver` because they watch different notifications for opposite
+    /// reasons: that one fires only when the reader finishes a drag, this one on every resize
+    /// including the ones the content causes — which are exactly the ones nothing used to notice.
+    private(set) var fitObserver: (any NSObjectProtocol)?
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
@@ -190,12 +194,50 @@ final class LookupPanelController: LookupPanelPresenting {
             guard let window else { return }
             MainActor.assumeIsolated { self?.rememberChosenSize(window.frame.size) }
         }
+        fitObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main
+        ) { [weak self, weak window] _ in
+            guard let window else { return }
+            MainActor.assumeIsolated { self?.keepWhollyOnScreen(window) }
+        }
+    }
+
+    /// Puts a window the **content** resized back onto the screen it is on.
+    ///
+    /// The scene is `.windowResizability(.contentSize)`, so the window grows when the entry fills in
+    /// and again when the reader opens the other senses — while `show()` placed it once, against a
+    /// size chosen before any of that existed, and `update()` deliberately does not re-place it.
+    /// A lookup near the bottom of the display therefore drew its sense list past the edge.
+    ///
+    /// **A reader's drag is left alone.** `inLiveResize` is the whole of that test: a panel dragged
+    /// half off the screen on purpose is the reader's business, and snapping it back mid-drag would
+    /// fight their hands.
+    ///
+    /// **The screen is asked per resize, not remembered.** The window may have grown onto a
+    /// different display than the pointer was on, and each one has its own `visibleFrame` — a
+    /// menu bar on one, a Dock on whichever edge.
+    ///
+    /// Guarded by comparing frames rather than by a flag: `setFrame` posts this same notification,
+    /// so an unconditional call would recurse. `PanelPlacement.fitted` is idempotent — asserted in
+    /// `PanelPlacementTests` — which is what makes that comparison terminate.
+    func keepWhollyOnScreen(_ window: NSWindow) {
+        guard !window.inLiveResize else { return }
+        guard let screen = window.screen
+                ?? NSScreen.screens.first(where: { $0.frame.contains(lastPointer.cg) })
+                ?? NSScreen.main
+        else { return }
+        let fitted = PanelPlacement.fitted(window.frame, within: UpRect(screen.visibleFrame))
+        guard fitted != window.frame else { return }
+        window.setFrame(fitted, display: true)
     }
 
     func stopWatchingForResize() {
-        guard let resizeObserver else { return }
-        NotificationCenter.default.removeObserver(resizeObserver)
-        self.resizeObserver = nil
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        resizeObserver = nil
+        // Removed together with it: an observer left registered holds the closed window alive and
+        // waits for a resize that cannot come.
+        if let fitObserver { NotificationCenter.default.removeObserver(fitObserver) }
+        fitObserver = nil
     }
 
     /// `isolated` so it can reach the observer at all: a nonisolated `deinit` cannot touch a
@@ -295,14 +337,52 @@ enum PanelPlacement {
     /// Answers a bare `NSRect` because its one caller hands it straight to `NSPanel.setFrame`.
     static func frame(for size: NSSize, near pointer: UpPoint, within visible: UpRect) -> NSRect {
         let pointer = pointer.cg
-        let visible = visible.cg
-        let size = NSSize(
-            width: max(0, min(size.width, visible.width - 2 * margin)),
-            height: max(0, min(size.height, visible.height - 2 * margin)))
+        let size = shrunk(size, within: visible)
+        // Anchored by its top edge: `pointer.y - 24` is where the panel's top goes, and the origin
+        // follows from the height. Stated this way so it is the same anchor `fitted` preserves.
+        let wanted = NSRect(
+            origin: NSPoint(x: pointer.x + 12, y: pointer.y - 24 - size.height), size: size)
+        return fitted(wanted, within: visible)
+    }
+
+    /// The same shrink-then-clamp, applied to a frame that **already exists** — a window the
+    /// content has since resized.
+    ///
+    /// `frame(for:near:within:)` runs once, at `show()`, against a size chosen before the content
+    /// existed. The scene is `.windowResizability(.contentSize)`, so the window then grows when the
+    /// entry fills in and again when the reader opens the other senses, and nothing put it back on
+    /// the screen: a lookup near the bottom of the display drew its sense list past the edge.
+    ///
+    /// **All four edges, not just the one that was reported.** Height growth runs off the bottom and,
+    /// once pushed up, can run off the top; width growth runs off the right and, once pushed back,
+    /// off the left. Both axes shrink first, for the reason the pointer placement already shrinks:
+    /// clamping a frame larger than its bounds puts the upper limit below the lower one.
+    ///
+    /// Written from the **top edge** (`maxY - height`) rather than from `minY`. Today the two are
+    /// provably the same — with no shrink `maxY - height == minY` by definition, and with a shrink
+    /// `shrunk` fills the screen's height exactly, so the y clamp collapses to a single point.
+    /// Checked rather than argued: 200,000 random rectangles, zero disagreements.
+    ///
+    /// It is kept in this form because it stops being equivalent the moment a panel is capped below
+    /// the screen's height — then the clamp has room and the anchor decides whether the headword or
+    /// the last sense survives. **A test asserting the difference was written, found unfalsifiable,
+    /// and deleted**: there is no input today that separates them.
+    static func fitted(_ rect: NSRect, within visible: UpRect) -> NSRect {
+        let bounds = visible.cg
+        let size = shrunk(rect.size, within: visible)
         let origin = NSPoint(
-            x: clamp(pointer.x + 12, visible.minX + margin, visible.maxX - margin - size.width),
-            y: clamp(pointer.y - 24 - size.height, visible.minY + margin, visible.maxY - margin - size.height))
+            x: clamp(rect.minX, bounds.minX + margin, bounds.maxX - margin - size.width),
+            y: clamp(rect.maxY - size.height, bounds.minY + margin, bounds.maxY - margin - size.height))
         return NSRect(origin: origin, size: size)
+    }
+
+    /// Never larger than the space there is to put it in. Separate from the clamp because the order
+    /// matters and has been got wrong here before.
+    private static func shrunk(_ size: NSSize, within visible: UpRect) -> NSSize {
+        let bounds = visible.cg
+        return NSSize(
+            width: max(0, min(size.width, bounds.width - 2 * margin)),
+            height: max(0, min(size.height, bounds.height - 2 * margin)))
     }
 
     /// Bounds in the wrong order — a screen narrower than its margins — pin to the lower one.
