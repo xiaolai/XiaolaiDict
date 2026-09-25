@@ -92,9 +92,29 @@ public struct SentenceTranslator: Sendable {
         self.language = language
     }
 
+    /// **The sentence's own language, as this translator reads it.**
+    ///
+    /// Exposed so a control can ask the same question `translate` asks on its first line, through the
+    /// same injected recogniser. A view reaching for the static `dominantLanguage` instead would be a
+    /// second opinion that can disagree with the translator about to answer.
+    public func sourceLanguage(of sentence: String) -> String? { language(sentence) }
+
+    /// **Whether translating this sentence could tell the reader anything they do not already have.**
+    ///
+    /// `translate` answers `.sameLanguage` for exactly this, on its first line — so a translate
+    /// control drawn live here is a guaranteed dead end, on every card with a sentence, for a reader
+    /// whose own language is the one they are reading. An unknown source is **not** the reader's own:
+    /// the local model may still answer, and only Apple's framework needs the source named.
+    public func isAlreadyInTheReadersLanguage(_ sentence: String, target: String) -> Bool {
+        guard let source = sourceLanguage(of: sentence) else { return false }
+        return Self.sameLanguage(source, target)
+    }
+
     public func translate(_ question: TranslationQuestion) async -> TranslationOutcome {
         let source = language(question.sentence)
-        if let source, Self.sameLanguage(source, question.target) { return .sameLanguage }
+        // The same predicate the control above reads, so the two can never disagree about whether
+        // this sentence was worth asking about.
+        if isAlreadyInTheReadersLanguage(question.sentence, target: question.target) { return .sameLanguage }
         guard !Task.isCancelled else { return .unavailable }
         let answer = await local(question)
         // Checked after the await as well as before it: a reader who has moved on is not shown a
@@ -130,7 +150,10 @@ public struct SentenceTranslator: Sendable {
     /// count as the same language, and a reader of Traditional Chinese would have been told their
     /// Simplified sentence was already in their language. `maximalIdentifier` is what the system
     /// would assume for an unqualified tag, which is the same assumption the translator makes.
-    static func sameLanguage(_ source: String, _ target: String) -> Bool {
+    /// Public because the panel compares a cached source against the reader's *current* target: the
+    /// detection is what costs, and it is cached; the comparison is free and must be made at the
+    /// moment the control is drawn, or a reader who changes their language keeps a hidden button.
+    public static func sameLanguage(_ source: String, _ target: String) -> Bool {
         let a = Locale.Language(identifier: source), b = Locale.Language(identifier: target)
         guard a.languageCode == b.languageCode else { return false }
         return script(of: a) == script(of: b)
