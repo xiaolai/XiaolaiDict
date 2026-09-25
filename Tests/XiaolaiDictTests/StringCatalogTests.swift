@@ -256,15 +256,82 @@ struct StringCatalogTests {
         #expect(strings.count > 50, "only \(strings.count) strings — extraction is not finding the source")
     }
 
-    /// **No display text in the core.** It has no view layer, so a sentence there can be shown but
-    /// never extracted, and `Tools/strings.sh` would not find it.
-    @Test func theCoreHoldsNoDisplayText() throws {
+    /// Every target below the view layer. **A list, because this scan named one directory and the
+    /// module split moved two thirds of that directory's files out from under it** — on 2026-09-26,
+    /// `DictionaryModel` and `ModelKit` took 19 files with them, and this check would have gone on
+    /// passing over a shrinking subject with the test count unchanged. That is the failure
+    /// `AGENTS.md` describes as worse than no rule, because it still reads as one.
+    static let targetsBelowTheViewLayer = [
+        "Sources/XiaolaiDictBase", "Sources/DictionaryModel", "Sources/ModelKit",
+        "Sources/XiaolaiDictCore", "Sources/LocalModel", "Sources/DictionaryBridge",
+    ]
+
+    /// **No display text below the view layer.** None of these targets has one, so a sentence there
+    /// can be shown and never extracted — `Tools/strings.sh` would not find it.
+    @Test func noTargetBelowTheViewLayerHoldsDisplayText() throws {
         var offenders: [String] = []
-        for file in try swiftFiles(under: "Sources/XiaolaiDictCore") {
-            let source = try String(contentsOf: file, encoding: .utf8)
-            if source.contains("String(localized:") { offenders.append(file.lastPathComponent) }
+        for directory in Self.targetsBelowTheViewLayer {
+            let target = directory.replacingOccurrences(of: "Sources/", with: "")
+            for name in try Self.filesHoldingDisplayText(under: repository.appending(path: directory)) {
+                offenders.append("\(target)/\(name)")
+            }
         }
         #expect(offenders.isEmpty, "these belong in the view layer: \(offenders)")
+    }
+
+    /// **And the list has to name every target that has no view layer.** Read off `Package.swift`
+    /// rather than kept by hand: a target added later and left off the list above is a target the
+    /// scan silently does not cover, which is the same defect one directory deep.
+    ///
+    /// `XiaolaiDictUI` and `XiaolaiDict` are the view layer and are excluded by name;
+    /// the two service executables carry no reader text and are excluded for the reason
+    /// `HoverRefusal` stays in the core — what they print is instrument output.
+    @Test func everyTargetBelowTheViewLayerIsScanned() throws {
+        let manifest = try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
+        let declared = try Regex(#"\.(?:executableT|t)arget\(\s*name: "([A-Za-z]+)""#)
+        let viewLayerOrAnExecutable = [
+            "XiaolaiDictUI", "XiaolaiDict", "XiaolaiDictService", "XiaolaiDictModelService",
+            "XiaolaiDictTestSupport",
+        ]
+        let shouldScan = manifest.matches(of: declared)
+            .map { String($0.output[1].substring ?? "") }
+            .filter { !viewLayerOrAnExecutable.contains($0) }
+        let scanned = Self.targetsBelowTheViewLayer.map { $0.replacingOccurrences(of: "Sources/", with: "") }
+        #expect(Set(shouldScan) == Set(scanned), """
+            targets in Package.swift that have no view layer: \(shouldScan.sorted()); \
+            targets this scan covers: \(scanned.sorted())
+            """)
+    }
+
+    /// **The scan has to be able to fail, and nothing else proves that** — the check Codex named
+    /// when it pointed out that moving files preserves a test count while shrinking what a rule
+    /// covers.
+    ///
+    /// **It plants into a temporary directory, never into `Sources/`.** The first version wrote a
+    /// forbidden file into each scanned target in turn, and it failed at once — against itself:
+    /// tests in a suite run in parallel, so the plant was on disk while
+    /// `noTargetBelowTheViewLayerHoldsDisplayText` was reading the same tree, and that check
+    /// reported a target holding display text when none does. Worse than a flake: a planted file
+    /// left behind by a crash is a file `swift build` then compiles. The predicate is what needs
+    /// exercising, and a directory of its own is enough to exercise it; that the *roots* are
+    /// complete is `everyTargetBelowTheViewLayerIsScanned`'s job, above.
+    @Test func theDisplayTextScanCatchesAPlantedLiteral() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-display-text")
+        // Split so this file does not match the search it is testing.
+        let forbidden = "String(" + "localized:"
+        try "let innocent = 1\n".write(to: scratch.appending("Innocent.swift"), atomically: true, encoding: .utf8)
+        var caught = try Self.filesHoldingDisplayText(under: scratch.url)
+        #expect(caught.isEmpty, "the scan reported display text in a directory that has none: \(caught)")
+
+        try "let planted = \(forbidden) \"planted\", comment: \"a scan that cannot fail is not a scan\")\n"
+            .write(to: scratch.appending("Planted.swift"), atomically: true, encoding: .utf8)
+        caught = try Self.filesHoldingDisplayText(under: scratch.url)
+        #expect(caught == ["Planted.swift"], "the scan did not see a planted literal: \(caught)")
+    }
+
+    /// The one predicate both checks above use, so neither can drift from the other.
+    private static func filesHoldingDisplayText(under root: URL) throws -> [String] {
+        try SourceScan.offenders(of: "String(localized:", under: root).names.sorted()
     }
 
     /// **And a translation in the catalog reaches the reader.** The bundle carries compiled

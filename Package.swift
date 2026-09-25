@@ -36,7 +36,7 @@ let package = Package(
         // the store the weights are downloaded into. Linked by the model service and by the app;
         // **never by the dictionary service**, which is the point of it being here and not in the
         // core. No MLX — that is the executable's alone.
-        .target(name: "ModelKit", dependencies: ["XiaolaiDictBase"]),
+        .target(name: "ModelKit"),
 
         // The reader's side: the lookup ledger, the sense ladder, reading history, hover policy,
         // screen geometry. No AppKit and no private API — the part that has to be exhaustively
@@ -54,7 +54,7 @@ let package = Package(
         // What the model service does with a request — the prompts, the session, what a refusal
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
         // and need no GPU. No MLX here: that is the executable's alone.
-        .target(name: "LocalModel", dependencies: ["XiaolaiDictBase", "ModelKit"]),
+        .target(name: "LocalModel", dependencies: ["ModelKit"]),
         // The local model, behind its own XPC boundary. A GPU fault or an out-of-memory kill takes
         // this process and not the app, and unloading is ending it — which is exact, where MLX's
         // own release is not. Never linked by the app: the app talks to it in typed messages, the
