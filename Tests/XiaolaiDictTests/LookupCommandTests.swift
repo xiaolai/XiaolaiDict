@@ -111,4 +111,29 @@ struct LookupCommandTests {
         #expect(object["lemma"] as? String == "see")
         #expect(object["lemmaBasis"] as? String == "inferred")
     }
+
+    /// **The two capture instruments are absent from a release, asserted here as well as in the
+    /// bundle.**
+    ///
+    /// `verify_bundle` checks the built artifact in both directions and is the gate that decides a
+    /// release — but it runs at build time, and `BundleVerificationTests` disables itself against a
+    /// stale bundle. This is the same fact at unit level, in every bare `swift test`.
+    ///
+    /// Why they are gated at all: from an SSH session on the E2E Mac holding neither TCC grant, the
+    /// binary exec'd directly is refused, while the same session going through `open -n --args
+    /// --read-point` read a sentinel string out of TextEdit and OCR'd a terminal — measured
+    /// 2026-09-26. No dialog appears, so the bypass removes the one visible, refusable step between
+    /// local code and the reader's screen.
+    @Test func theCaptureInstrumentsRefuseWhereTheyAreNotBuiltIn() async {
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        // A development build: they are present, and exercising them belongs to `e2e.sh` — reading
+        // the screen from a unit test would measure this machine's grants, not this code.
+        #expect(Bool(true))
+#else
+        #expect(await LookupCommand.readPoint(x: 0, y: 0) == .usage,
+                "a release must refuse --read-point rather than read the screen")
+        #expect(await LookupCommand.readSelection(bundleID: "com.apple.Finder") == .usage,
+                "a release must refuse --read-selection rather than read another app's selection")
+#endif
+    }
 }
