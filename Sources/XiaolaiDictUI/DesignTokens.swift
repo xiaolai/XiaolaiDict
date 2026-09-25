@@ -48,9 +48,22 @@ enum Token {
         /// 400 pt is the right measure at one size and too narrow at every larger one. This is
         /// `Scale.standard`'s, which is what a reader who has never changed the setting gets.
         static let cardOpeningWidth = Scale.standard.space.cardWidth
-        /// A two-line answer with its sentence, roughly. Wrong for a long one and wrong for a
-        /// short one — which is why the window hugs its content rather than trusting this.
+        /// A two-line answer with its sentence, roughly — **the size the window opens at, before its
+        /// content has any say.** Wrong for a long answer and wrong for a short one, which is why
+        /// `fitsItsContent(upTo:)` then moves the window to the height the card actually wants.
+        ///
+        /// This comment used to claim the window already hugged its content. It did not: measured
+        /// 2026-09-25, three runs and three different cards, the window was 398 × 240 every time, with
+        /// the whole footer below the fold. A claim in a comment is not a mechanism, and there was
+        /// none behind this one.
         static let cardOpeningHeight: CGFloat = 240
+        /// What the card adds outside the frame its scrolling region is capped at — its surface,
+        /// border and shadow padding. Measured at 21 pt at `standard`; 32 is that rounded up rather
+        /// than fitted to it, so the allowance says "the chrome, generously" instead of pretending to
+        /// a precision it has not got. The panel's window may be this much taller than the cap and no
+        /// more, which is what `theHeightStopsGrowingOnceTheCapIsReached` and `--panel-report` both
+        /// measure against.
+        static let cardChrome: CGFloat = 32
         static let messageWidth: CGFloat = 420
         static let messageHeight: CGFloat = 150
         static let messageMinWidth: CGFloat = 320
@@ -85,6 +98,24 @@ enum Token {
         /// Clears a transparent title bar's own controls. A structural offset, not a padding, and
         /// not scaled: the traffic lights are where they are whatever size the reader's text is.
         static let titleBarClearance: CGFloat = 28
+    }
+
+    /// **How small a thing a pointer can be asked to hit.**
+    ///
+    /// A new role rather than a new number: none of the existing tokens is about *aim*. And in `Token`
+    /// rather than `Scale`, which is a claim about the value and a deliberate one — a reader asking for
+    /// larger text is not asking for a larger mouse, so this does not grow with the type. The glyph
+    /// inside it does, which is why it is applied as a **minimum** and not as a size: at
+    /// `TextSize.large` a symbol wider than the floor keeps its own width.
+    ///
+    /// Measured before it existed: the card's and the drawer's icon buttons were **13 to 19 pt**
+    /// (`NSImage.SymbolConfiguration` at `text.body`, per symbol), six of them 6 pt apart, with no
+    /// padding and no `contentShape` — so the clickable region was the glyph's own box. On a history
+    /// card the destructive trash sat 6 pt from open-in-Dictionary at 14 × 16 pt.
+    enum Target {
+        /// macOS's own default control size, from Apple's accessibility guidance. Not derived from the
+        /// em for the reason above: it is a property of pointing, not of reading.
+        static let minimum: CGFloat = 28
     }
 
     enum Stroke {
