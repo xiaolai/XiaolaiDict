@@ -185,17 +185,29 @@ struct PanelRequestIdentityTests {
 /// line beside it; no API reports what a notification centre is observing.
 @MainActor
 struct PanelResizeWatchTests {
-    @Test func watchingAgainReplacesTheWatchRatherThanAddingOne() {
+    @Test func watchingAgainIsANoOpAndADifferentWindowReplacesIt() throws {
         let panel = LookupPanelController()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
         #expect(panel.resizeObserver == nil)
         panel.watchForResize(of: window)
-        let first = try? #require(panel.resizeObserver)
+        let first = try #require(panel.resizeObserver)
         panel.watchForResize(of: window)
-        let second = try? #require(panel.resizeObserver)
-        #expect(first !== second, "the panel kept watching through its previous observer as well")
+        let second = try #require(panel.resizeObserver)
+        // **The contract changed, so the assertion did.** It used to demand a *different* token,
+        // which proved only that the old one had been replaced — and an inert guard satisfies it.
+        // Watching a window already watched is now a no-op, so the same token surviving is the
+        // property, and a second registration is what would break it.
+        #expect(first === second, "the panel re-registered on a window it was already watching")
+
+        // A different window does replace, or the panel would go on watching the one it left.
+        let other = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: true)
+        panel.watchForResize(of: other)
+        let moved = try #require(panel.resizeObserver)
+        #expect(moved !== second, "the panel kept watching the window it was moved away from")
 
         // And the watch ends with the panel: registered still, it holds a closed window alive and
         // waits for a resize that cannot come.

@@ -50,6 +50,9 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Held only while the panel is on screen — a monitor that outlived it would dismiss a panel
     /// that is not there and keep a closure alive for every lookup the reader ever made.
     private var clickAway: Any?
+    /// The local half of the same watch. A global monitor is never offered its own application's
+    /// events, so without this a click in Settings or the drawer left the panel up.
+    private var clickAwayLocal: Any?
     /// The one resize observer, kept so it can be **replaced** rather than added to. The window
     /// accessor's closure runs on every update of the view it is attached to, and the panel's body
     /// reads the model download's progress — so a 3 GB download registered a fresh observer a few
@@ -59,6 +62,9 @@ final class LookupPanelController: LookupPanelPresenting {
     /// reasons: that one fires only when the reader finishes a drag, this one on every resize
     /// including the ones the content causes — which are exactly the ones nothing used to notice.
     private(set) var fitObserver: (any NSObjectProtocol)?
+    /// Which window the two observers above are registered on, held weakly so a closed window is
+    /// not kept alive by the bookkeeping that exists to avoid re-registering on it.
+    private weak var watched: NSWindow?
     /// Pinned notes outlive the panel that made them, so they are owned here rather than by a view.
     let notes = PinnedNoteController()
     /// Where the last panel was put, so a note pinned from it lands beside it.
@@ -147,24 +153,47 @@ final class LookupPanelController: LookupPanelPresenting {
     /// The click that *opened* the panel must not close it, and a click inside it belongs to the
     /// card — so the panel's own frame is hit-tested rather than starting a cooldown. The drawer
     /// spike learned that one: a timer to outrun a race leaves the race there.
+    /// **Two monitors, because one of them cannot see half the clicks.** A global monitor is not
+    /// offered events delivered to its own application, so a click in Settings, the history drawer
+    /// or a pinned note left the lookup panel sitting there. The local monitor covers those and
+    /// **returns the event** — swallowing it would stop the click reaching the control it was aimed
+    /// at.
+    ///
+    /// `.otherMouseDown` is in the mask for the same reason the other two are: a middle click is a
+    /// click somewhere else.
     private func watchForClicksAway() {
         stopWatchingForClicksAway()
-        clickAway = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, let window = self.window, window.isVisible else { return }
-                // `NSEvent.mouseLocation` rather than the event's own: a global monitor's event
-                // carries coordinates in the window it landed in, which is not this one.
-                guard !window.frame.contains(NSEvent.mouseLocation) else { return }
-                self.close()
-            }
+        let kinds: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        clickAway = NSEvent.addGlobalMonitorForEvents(matching: kinds) { [weak self] event in
+            MainActor.assumeIsolated { self?.closeIfClickWasAway(event) }
         }
+        clickAwayLocal = NSEvent.addLocalMonitorForEvents(matching: kinds) { [weak self] event in
+            MainActor.assumeIsolated { self?.closeIfClickWasAway(event) }
+            return event
+        }
+    }
+
+    /// Where the click actually landed, which is not always where the pointer is now.
+    ///
+    /// A global monitor's event arrives asynchronously, so a reader who clicks outside and moves
+    /// into the panel before delivery used to have the click ignored — the position was read from
+    /// `NSEvent.mouseLocation` at handling time rather than from the event. For a monitor event
+    /// there is no window to be relative to and `locationInWindow` is already in screen
+    /// coordinates; where there is one, the window converts it. The live pointer stays as the last
+    /// resort, which is what this used to be first.
+    private func closeIfClickWasAway(_ event: NSEvent) {
+        guard let window, window.isVisible else { return }
+        let point = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) }
+            ?? (event.locationInWindow == .zero ? NSEvent.mouseLocation : event.locationInWindow)
+        guard !window.frame.contains(point) else { return }
+        close()
     }
 
     private func stopWatchingForClicksAway() {
         if let clickAway { NSEvent.removeMonitor(clickAway) }
         clickAway = nil
+        if let clickAwayLocal { NSEvent.removeMonitor(clickAwayLocal) }
+        clickAwayLocal = nil
     }
 
     /// Everything still running for the panel is now stale. Also called when the reader closes the
@@ -187,7 +216,17 @@ final class LookupPanelController: LookupPanelPresenting {
     /// The window is held **weakly**: a notification closure is kept by the notification centre, so
     /// capturing it strongly would keep a closed window alive for as long as the app runs.
     func watchForResize(of window: NSWindow) {
+        // **Nothing to do for a window already watched.** `WindowAccessor` reports on every update,
+        // and the panel's download progress is observable — so this ran repeatedly for one window,
+        // tearing both observers down and building them again each time. Replacement stopped them
+        // accumulating; it did not stop the churn.
+        if let watched, watched === window, resizeObserver != nil, fitObserver != nil { return }
+        // Teardown first, then record: `stopWatchingForResize` clears `watched`, so assigning
+        // before it left the guard above permanently unable to fire. The suite did not catch that
+        // — it asserted the two registrations differ, which an inert guard satisfies — so the
+        // assertion changed with the contract.
         stopWatchingForResize()
+        watched = window
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
         ) { [weak self, weak window] _ in
@@ -238,6 +277,7 @@ final class LookupPanelController: LookupPanelPresenting {
         // waits for a resize that cannot come.
         if let fitObserver { NotificationCenter.default.removeObserver(fitObserver) }
         fitObserver = nil
+        watched = nil
     }
 
     /// `isolated` so it can reach the observer at all: a nonisolated `deinit` cannot touch a
@@ -245,6 +285,11 @@ final class LookupPanelController: LookupPanelPresenting {
     /// belt to `closed()`'s braces.
     isolated deinit {
         stopWatchingForResize()
+        // **Both watches, not one.** This removed only the resize observers, so a controller
+        // released without `closed()` left its click monitor registered — AppKit goes on holding
+        // and invoking it, and the weak capture that stops it retaining the controller is exactly
+        // what stops anyone noticing.
+        stopWatchingForClicksAway()
     }
 
     /// Only a size the reader chose by dragging is remembered — not one the panel was given, or
