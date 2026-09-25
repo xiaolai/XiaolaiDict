@@ -319,6 +319,20 @@ public final class Appearance {
         didSet { if emphasis != oldValue { store.save(emphasis) } }
     }
 
+    /// Whether the panel says when a word was read off the screen rather than from an app's own
+    /// text. **On by default**: an optically recognised word is the one capture path that can be
+    /// *wrong* rather than merely absent, and a reader who does not know that cannot account for
+    /// it. A choice rather than a constant because the reader can usually check it themselves —
+    /// the word it read is the headword, and their sentence is under it — so somebody reading
+    /// mostly from a terminal may reasonably want it out of the way.
+    public var warnsAboutScreenReading: Bool {
+        didSet {
+            if warnsAboutScreenReading != oldValue {
+                store.save(warnsAboutScreenReading: warnsAboutScreenReading)
+            }
+        }
+    }
+
     /// How much of what is behind the history drawer shows through it.
     public var drawerGlass: DrawerGlass {
         didSet { if drawerGlass != oldValue { store.save(drawerGlass) } }
@@ -332,12 +346,15 @@ public final class Appearance {
         showsTime = store.loadShowsTime()
         showsPlaceName = store.loadShowsPlaceName()
         emphasis = store.loadEmphasis()
+        warnsAboutScreenReading = store.loadWarnsAboutScreenReading()
         drawerGlass = store.loadDrawerGlass()
     }
 
     var scale: Scale { Scale(textSize) }
     var cardOptions: CardOptions {
-        CardOptions(showsTime: showsTime, showsPlaceName: showsPlaceName, emphasis: emphasis)
+        CardOptions(
+            showsTime: showsTime, showsPlaceName: showsPlaceName, emphasis: emphasis,
+            warnsAboutScreenReading: warnsAboutScreenReading)
     }
 }
 
@@ -345,6 +362,7 @@ public final class Appearance {
 public struct AppearanceStore {
     static let defaultsKey = "TextSize"
     static let showsTimeKey = "CardShowsTime"
+    static let warnsAboutScreenReadingKey = "WarnsAboutScreenReading"
     static let showsPlaceNameKey = "CardShowsPlaceName"
     static let emphasisKey = "WordEmphasis"
     static let drawerGlassKey = "DrawerGlass"
@@ -377,6 +395,14 @@ public struct AppearanceStore {
 
     func save(showsTime: Bool) {
         defaults.set(showsTime, forKey: Self.showsTimeKey)
+    }
+
+    func loadWarnsAboutScreenReading() -> Bool {
+        defaults.object(forKey: Self.warnsAboutScreenReadingKey) as? Bool ?? true
+    }
+
+    func save(warnsAboutScreenReading: Bool) {
+        defaults.set(warnsAboutScreenReading, forKey: Self.warnsAboutScreenReadingKey)
     }
 
     func loadShowsPlaceName() -> Bool {

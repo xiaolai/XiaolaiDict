@@ -216,6 +216,9 @@
     "Hover Lookup    hold %@" : {
 
     },
+    "In the panel" : {
+
+    },
     "It reads your selection through Accessibility. Allow XiaolaiDict in %@, then press the shortcut again." : {
       "comment" : "The placeholder is the System Settings list to grant it in"
     },
@@ -424,6 +427,9 @@
 
     },
     "Say it aloud" : {
+
+    },
+    "Say when a word was read off the screen" : {
 
     },
     "Screen & System Audio Recording" : {
@@ -668,6 +674,9 @@
 
     },
     "Without a local model, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+
+    },
+    "Words in a terminal, a canvas or an image are read from the pixels. That is the one way of reading a word that can be wrong rather than simply missing — and you can check it yourself, because the word it read is the one shown." : {
 
     },
     "Words you look up appear here, grouped by the day you met them." : {

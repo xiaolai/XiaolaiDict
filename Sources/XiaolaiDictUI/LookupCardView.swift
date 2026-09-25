@@ -387,6 +387,7 @@ public struct LookupPanelContent: View {
     @Environment(\.studySense) private var studySense
     @Environment(\.translation) private var translator
     @Environment(\.explainer) private var explainer
+    @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
     public let presentation: LookupPresentation
     /// What it is waiting for, in words. Nil once the dictionaries have answered.
@@ -592,7 +593,8 @@ public struct LookupPanelContent: View {
     /// carries its own quality signal.
     @ViewBuilder
     private var captureCaveat: some View {
-        if PanelCaveats.readOffTheScreen(presentation.capture) {
+        if PanelCaveats.readOffTheScreen(
+            presentation.capture, warning: options.warnsAboutScreenReading) {
             Notice(
                 text: Text("This word was read off the screen, so it may not be exactly right."),
                 symbol: "eye.trianglebadge.exclamationmark")
@@ -864,8 +866,9 @@ public enum PanelCaveats {
 
     /// Read off the pixels with Vision, which unlike every Accessibility path can be *wrong*
     /// rather than merely absent.
-    public static func readOffTheScreen(_ capture: CaptureQuality?) -> Bool {
-        capture?.source == .opticalRecognition
+    public static func readOffTheScreen(_ capture: CaptureQuality?, warning: Bool = true) -> Bool {
+        guard warning else { return false }
+        return capture?.isDoubtful == true
     }
 
     /// The dictionary answered with a different headword altogether.
