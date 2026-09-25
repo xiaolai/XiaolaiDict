@@ -27,6 +27,22 @@ public struct LookupCardView: View {
     }
 
     public var body: some View {
+        // **Scrolls rather than growing past `cardMaxHeight`.** A sense list is unbounded — 49 for
+        // *hold* in the bilingual Oxford, 73 for *run* in NOAD — and the panel's window follows its
+        // content (`.windowResizability(.contentSize)`), so without this the window grew until it
+        // ran off the display. `PanelPlacement.fitted` then puts it back on screen, which without a
+        // scroll view would only move the clipping from the screen's edge to the window's.
+        //
+        // `.scrollBounceBehavior(.basedOnSize)` so a short card does not rubber-band: a two-line
+        // answer is not a scrollable thing and must not behave like one.
+        ScrollView {
+            content
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxHeight: scale.space.cardMaxHeight)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             heading
             memoryDetail

@@ -173,6 +173,23 @@ struct Scale: Equatable, Sendable {
         let cardMinWidth: CGFloat
         let cardMaxWidth: CGFloat
 
+        /// **How tall the card may grow before it scrolls instead.**
+        ///
+        /// In ems and not a share of the screen, for the reason the width is: a reader at `large`
+        /// needs more points to show the same eight senses, so a height fixed in points would show
+        /// fewer of them at exactly the size that asked for more. `Token.Panel`'s sizes are measured
+        /// against the screen; this one is measured against the text, so it lives here.
+        ///
+        /// The number is a proportion rather than a count: the card may grow until it is about as
+        /// tall as it is wide at `cardWidth` (33 em), and past that it is a column rather than a
+        /// card. At `standard` that is 384 pt — under half the visible height of the smallest
+        /// display XiaolaiDict runs on, so the reader keeps most of the text they looked the word up
+        /// from.
+        ///
+        /// It is a default and not a ceiling: the reader can drag the panel taller and
+        /// `rememberChosenSize` keeps that size for the next lookup of the same kind.
+        let cardMaxHeight: CGFloat
+
         /// How a pile of cards is offset behind its front card. Smaller than `stack`: these are
         /// the same cards shown stacked rather than listed, so the gap has to read as depth
         /// rather than as separation.
@@ -197,6 +214,7 @@ struct Scale: Equatable, Sendable {
             cardWidth = em * 33
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
+            cardMaxHeight = em * 32
             peek = em * 0.625
             // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
             // side step was larger than the vertical one, so the second plate gave up 19.2 pt of
