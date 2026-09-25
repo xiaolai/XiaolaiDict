@@ -569,6 +569,9 @@
     "This dictionary does not mark its senses, so the one you read cannot be identified." : {
       "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
     },
+    "This dictionary does not mark senses, so none can be pointed at here." : {
+      "comment" : "Shown where a dictionary's entries carry no sense structure at all"
+    },
     "This pane is not connected to the dictionary service." : {
 
     },

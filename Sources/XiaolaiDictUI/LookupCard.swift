@@ -148,6 +148,20 @@ public extension LookupCard {
             } else {
                 answer = .undecided(reason: why.reason)
             }
+        } else if presentation.senses.isEmpty {
+            // **Nothing was identified because there was nothing to identify.** Three of the seven
+            // dictionaries enabled on this developer's Mac mark senses with nothing a parser can
+            // key to — `senseKeyKind == .none` — so their entries arrive with an empty sense list
+            // and fell through to "the sense you read could not be identified". That reads as a
+            // failure of the selector on an entry the selector was never asked about, and it is
+            // the dictionary's shape rather than anything that went wrong.
+            //
+            // It still shows no definition: this card renders senses, and rendering the entry's
+            // own prose needs plain text `EntryDocument` does not keep. What changes here is that
+            // the reader is no longer told something untrue about it.
+            answer = .undecided(reason: String(
+                localized: "This dictionary does not mark senses, so none can be pointed at here.",
+                comment: "Shown where a dictionary's entries carry no sense structure at all"))
         } else {
             answer = .undecided(reason: nil)
         }

@@ -205,3 +205,38 @@ struct PanelHeightTests {
             "a short panel was padded out to the cap: \(value) of \(scale.space.cardMaxHeight)")
     }
 }
+
+/// What a card says about a dictionary that structures no senses.
+struct SenselessEntryTests {
+    /// **Three of the seven dictionaries enabled on this Mac are in this state** — Collins COBUILD,
+    /// Longman and the Oxford Collocation Dictionary all report `senseKeyKind == .none`, so their
+    /// entries arrive with an empty sense list. The card told the reader "the sense you read could
+    /// not be identified", which reads as the selector failing on an entry it was never asked
+    /// about.
+    @Test func anEntryWithNoSensesSaysSoRatherThanBlamingTheSelector() throws {
+        // Markup with no sense structure at all — no `x_xd1`, no `d:def` — which is the shape the
+        // three sideloaded dictionaries here actually return.
+        let markup = """
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rfc" id="x" d:title="fine">
+            <span class="hw">fine</span><span class="body">of very high quality</span>
+            </d:entry>
+            """
+        let entry = DictionaryEntry(
+            dictionary: DictionaryIdentity(name: "Collins COBUILD", identifier: "collins", version: "1"),
+            headword: "fine", lookedUp: "fine", html: markup,
+            document: EntryDocument.parse(markup))
+        let presentation = EntryPresentation(entry: entry, mark: nil, met: [])
+        try #require(presentation.senses.isEmpty, "the fixture parsed senses, so it tests nothing")
+        let card = LookupCard(
+            presentation: presentation, term: "fine", sentence: nil, mark: nil)
+        guard case .undecided(let reason) = card.answer else {
+            Issue.record("a senseless entry did not produce an undecided answer")
+            return
+        }
+        let text = try #require(reason, "the reader was given no reason at all")
+        #expect(
+            !text.contains("could not be identified"),
+            "a dictionary that marks no senses was reported as a failure to identify one")
+        #expect(text.contains("does not mark senses"))
+    }
+}
