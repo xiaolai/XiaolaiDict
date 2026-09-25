@@ -320,11 +320,8 @@ public final class Appearance {
     }
 
     /// Whether the panel says when a word was read off the screen rather than from an app's own
-    /// text. **On by default**: an optically recognised word is the one capture path that can be
-    /// *wrong* rather than merely absent, and a reader who does not know that cannot account for
-    /// it. A choice rather than a constant because the reader can usually check it themselves —
-    /// the word it read is the headword, and their sentence is under it — so somebody reading
-    /// mostly from a terminal may reasonably want it out of the way.
+    /// text. **Off by default** — see `CardOptions.warnsAboutScreenReading` for why the measured
+    /// rate does not support interrupting for it, and who it is still worth turning on for.
     public var warnsAboutScreenReading: Bool {
         didSet {
             if warnsAboutScreenReading != oldValue {
@@ -398,7 +395,7 @@ public struct AppearanceStore {
     }
 
     func loadWarnsAboutScreenReading() -> Bool {
-        defaults.object(forKey: Self.warnsAboutScreenReadingKey) as? Bool ?? true
+        defaults.object(forKey: Self.warnsAboutScreenReadingKey) as? Bool ?? CardOptions().warnsAboutScreenReading
     }
 
     func save(warnsAboutScreenReading: Bool) {

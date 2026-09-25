@@ -35,11 +35,19 @@ struct CardOptions: Equatable, Sendable {
     /// or who has two browsers.
     var showsPlaceName = false
     var emphasis = WordEmphasis.italic
-    /// **On by default.** Whether the panel says a word was read off the screen rather than from
-    /// an app's own text. It rides here rather than in a second environment value because it is
-    /// the same kind of choice as the two above — what a surface shows — and the panel already
-    /// reads this one.
-    var warnsAboutScreenReading = true
+    /// **Off by default.** Whether the panel says a word was read off the screen rather than from
+    /// an app's own text.
+    ///
+    /// Off because the measurement does not support interrupting for it. Of 20 optical reads,
+    /// five came back doubted — and three of those five were *correct* (`git`, `4`, `16` at 0.5).
+    /// So even after the confidence threshold, more than half the warnings would be about a word
+    /// the panel got right, and the reader can see that for themselves: the word it read is the
+    /// headword, with their own sentence under it.
+    ///
+    /// The evidence is already on the card, in other words, and this only names it. Kept as a
+    /// switch rather than deleted because for a reader working mostly in a terminal — where every
+    /// word comes through OCR — knowing which reads were doubted is worth having.
+    var warnsAboutScreenReading = false
 }
 
 extension EnvironmentValues {

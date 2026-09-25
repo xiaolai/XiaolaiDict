@@ -293,3 +293,25 @@ struct PartOfSpeechLabelTests {
         #expect(PartOfSpeechLabel.reader("preposition") == "preposition")
     }
 }
+
+/// The default a reader gets before they touch anything.
+struct ScreenReadingWarningDefaultTests {
+    /// **Off, and asserted in both places it is decided.** A default stated twice is a default that
+    /// drifts: `CardOptions` holds it and `AppearanceStore` falls back to it, so the store reads
+    /// the struct rather than repeating the value.
+    @Test func theWarningIsOffUntilTheReaderAsksForIt() {
+        #expect(CardOptions().warnsAboutScreenReading == false)
+        #expect(
+            AppearanceStore(defaults: TemporaryDefaults.suite()).loadWarnsAboutScreenReading()
+                == CardOptions().warnsAboutScreenReading,
+            "the store's default drifted from the one CardOptions declares")
+    }
+
+    /// And it survives a round trip, or the switch would appear to do nothing across a relaunch.
+    @Test func theReadersChoiceIsKept() {
+        let defaults = TemporaryDefaults.suite()
+        AppearanceStore(defaults: defaults).save(warnsAboutScreenReading: true)
+        #expect(AppearanceStore(defaults: defaults).loadWarnsAboutScreenReading())
+
+    }
+}
