@@ -44,7 +44,14 @@ struct ScreenRecordingAccess: Sendable {
     func ensure() async -> PermissionProbe {
         switch await probe() {
         case .granted: return .granted
-        case .declined: return request() ? .granted : .declined
+        // **A hover the reader walked away from must not raise a dialog.** `HoverReader` starts the
+        // capture in a task it stops waiting for on its deadline, and giving up on the answer does
+        // not stop this side: without the check, a probe that resolves `.declined` after the reader
+        // has moved on still puts a system prompt on their screen, attached to nothing they asked
+        // for. The probe itself is cheap and harmless to finish; only the prompt is.
+        case .declined:
+            guard !Task.isCancelled else { return .declined }
+            return request() ? .granted : .declined
         case .couldNotTell: return .couldNotTell
         }
     }

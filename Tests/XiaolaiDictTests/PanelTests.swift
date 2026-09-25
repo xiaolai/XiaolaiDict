@@ -210,7 +210,7 @@ struct PanelResizeWatchTests {
     /// still reachable by nothing: the geometry was right and the window was never re-fitted,
     /// which is the whole shape of the reported defect. This asserts the observer exists and is
     /// removed with the panel — the two ways it silently stops working.
-    @Test func theContentResizeWatchIsRegisteredAndReleasedWithThePanel() {
+    @Test func theContentResizeWatchIsRegisteredAndReleasedWithThePanel() throws {
         let panel = LookupPanelController()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
@@ -219,6 +219,20 @@ struct PanelResizeWatchTests {
         panel.watchForResize(of: window)
         #expect(panel.fitObserver != nil, "nothing would ever notice a resize the content caused")
 
+        // **And the notification actually reaches the fitting code.** A non-nil token proves only
+        // that something was registered — an empty callback, the wrong notification name, or the
+        // wrong observed window would all leave it non-nil. Posting the real notification for a
+        // window placed off the screen is what distinguishes those.
+        // Required, not `if let`: wrapped in a conditional this silently falls back to checking a
+        // token, which is the assertion it exists to replace.
+        let screen = try #require(NSScreen.main)
+        let outside = NSRect(
+            x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
+            width: 320, height: 240)
+        window.setFrame(outside, display: false)
+        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: window)
+        #expect(window.frame != outside, "the resize notification did not reach keepWhollyOnScreen")
+
         panel.show(
             .message(title: "anything", detail: "so that closing it is a real close"),
             near: UpPoint(.zero), for: panel.newRequest())
@@ -226,12 +240,48 @@ struct PanelResizeWatchTests {
         #expect(panel.fitObserver == nil, "the observer outlived the window it watched")
     }
 
-    /// A reader dragging the panel half off the screen is doing it on purpose, and snapping it back
-    /// mid-drag would fight their hands. `inLiveResize` is the whole of that test, so it is worth
-    /// one that fails if the guard is dropped.
-    @Test func aWindowAlreadyOnScreenIsNotMoved() {
+    /// **The positive control first.** An earlier version of this test started from a frame that
+    /// already fitted, so it asserted that nothing happened to a window nothing needed to happen
+    /// to — and passed with `keepWhollyOnScreen` emptied out entirely. A window placed off the
+    /// screen must actually be moved back, or the two assertions below mean nothing.
+    @Test func aWindowOffTheScreenIsBroughtBack() throws {
         let panel = LookupPanelController()
-        guard let screen = NSScreen.main else { return }
+        let screen = try #require(NSScreen.main)
+        let outside = NSRect(
+            x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
+            width: 320, height: 240)
+        let window = NSWindow(
+            contentRect: outside, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.setFrame(outside, display: false)
+        panel.keepWhollyOnScreen(window)
+        #expect(window.frame != outside, "an off-screen panel was left off the screen")
+        #expect(screen.visibleFrame.insetBy(dx: 8, dy: 8).contains(window.frame))
+    }
+
+    /// A reader dragging the panel half off the screen is doing it on purpose, and snapping it back
+    /// mid-drag would fight their hands. `inLiveResize` is the whole of that guard, and it cannot
+    /// be exercised with a plain `NSWindow` — the property is read-only — so the window is
+    /// subclassed. Without this the guard could be deleted and every other test here would pass.
+    @Test func aWindowTheReaderIsDraggingIsLeftAlone() throws {
+        let panel = LookupPanelController()
+        let screen = try #require(NSScreen.main)
+        let outside = NSRect(
+            x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
+            width: 320, height: 240)
+        let window = DraggingWindow(
+            contentRect: outside, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.setFrame(outside, display: false)
+        panel.keepWhollyOnScreen(window)
+        #expect(
+            window.frame == outside,
+            "a window the reader is dragging was snapped back under their hands")
+    }
+
+    /// A panel that already fits is not nudged — otherwise every content update would creep it
+    /// across the screen.
+    @Test func aWindowAlreadyOnScreenIsNotMoved() throws {
+        let panel = LookupPanelController()
+        let screen = try #require(NSScreen.main)
         let inside = NSRect(
             x: screen.visibleFrame.midX, y: screen.visibleFrame.midY, width: 320, height: 240)
         let window = NSWindow(
@@ -240,4 +290,12 @@ struct PanelResizeWatchTests {
         panel.keepWhollyOnScreen(window)
         #expect(window.frame == inside, "a panel that already fits must not be nudged")
     }
+}
+
+
+/// An `NSWindow` that reports itself mid-drag. `inLiveResize` is read-only on the real class, and
+/// the guard that reads it is the difference between respecting the reader's hands and fighting
+/// them — so it needs a window that can say yes.
+private final class DraggingWindow: NSWindow {
+    override var inLiveResize: Bool { true }
 }

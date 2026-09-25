@@ -57,6 +57,20 @@ struct ScreenRecordingAccessTests {
         #expect(counter.asks == 0, "a probe that could not tell must not raise a system dialog")
     }
 
+    /// **A hover the reader walked away from must not raise a dialog.** The prompt is a system
+    /// window that appears attached to nothing they asked for, and — measured on 2026-09-25 — it
+    /// can grant nothing, because the permission was already granted.
+    ///
+    /// The count is the assertion. Returning `.declined` while still prompting satisfies any test
+    /// that reads only the result, and the prompt is the whole of what the reader sees.
+    @Test func acancelledLookupNeverRaisesAPrompt() async {
+        let (permission, counter) = access(.declined, grantedByAsking: true)
+        let task = Task { await permission.ensure() }
+        task.cancel()
+        _ = await task.value
+        #expect(counter.asks == 0, "an abandoned hover put a permission dialog on the screen")
+    }
+
     /// And it must not be laundered into a grant either — the capture would then fail with a
     /// message about capture rather than about consent, which is the older defect this file opens
     /// by describing.

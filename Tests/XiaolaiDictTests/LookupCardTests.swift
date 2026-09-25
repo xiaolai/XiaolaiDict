@@ -128,53 +128,80 @@ struct LookupMemoryTests {
     }
 }
 
-/// **How tall the card is allowed to get, measured rather than reasoned about.**
+/// **How tall the panel is allowed to get, measured rather than reasoned about.**
 ///
 /// This project has twice been wrong predicting SwiftUI's sizing from the documentation — the
 /// settings window ("every pane at 450") and the setup board ("933 points of content in a window
-/// ending at 800"), both found only in the running app. The specific risk here is the rule
-/// `CardPile` records: *a frame with only an upper bound can grow but never shrink*, and a
-/// `ScrollView` is greedy. If that applied, a two-line answer would sit in a card the full
-/// `cardMaxHeight` tall with the rest empty.
+/// ending at 800"), both found only in the running app. So this measures a real layout.
 ///
-/// So both directions are asserted, and the short case is the one that matters.
+/// **It measures `LookupPanelContent`, not `LookupCardView`, and that is the finding.** The cap
+/// was on the card first; the translation and explanation panes are the card's *siblings*, so a
+/// long generated answer grew the window past the cap with no scrolling path to its own end. The
+/// bound has to sit on everything the window is sized from.
 @MainActor
-struct CardHeightTests {
+struct PanelHeightTests {
     private let scale = Scale.standard
 
-    /// Lays the card out for real — `fittingSize` is AppKit asking the hosted SwiftUI view what it
-    /// wants, which is the number the window then takes because the scene is `.contentSize`.
+    /// `fittingSize` is AppKit asking the hosted SwiftUI view what it wants — the number the window
+    /// then takes, since the scene is `.windowResizability(.contentSize)`.
     private func height(sentence: String) -> CGFloat {
-        let entry = sampleEntry("New Oxford American Dictionary")
-        let card = LookupCard(
-            presentation: EntryPresentation(entry: entry, mark: nil, met: []),
-            term: "fine", sentence: sentence, mark: nil)
+        var presentation = LookupPresentation(
+            request: 1, term: "fine", lemma: Lemma(text: "fine", basis: .tagger), source: nil,
+            capture: .accessibility(.accessibilityTextRange, context: .complete), outcome: nil)
+        presentation.sentence = sentence
+        presentation.outcome = .entries(
+            NonEmpty([sampleEntry("New Oxford American Dictionary")])!, unreadable: [])
         let view = NSHostingView(
-            rootView: LookupCardView(card: card).environment(\.scale, scale))
+            rootView: LookupPanelContent(presentation: presentation).environment(\.scale, scale))
         view.layoutSubtreeIfNeeded()
         return view.fittingSize.height
     }
 
-    /// The cap is real: nothing may render taller than it, whatever the card holds. The sentence
-    /// is the part that grows without bound here — `SelectionReader` falls back to the whole
-    /// captured value where it finds no sentence boundary, so a card really can be handed text the
-    /// size of the document it came from.
-    @Test func noCardIsTallerThanTheCap() {
-        let long = String(repeating: "It was a fine piece of filmmaking. ", count: 60)
-        let tall = height(sentence: long)
-        #expect(
-            tall <= scale.space.cardMaxHeight,
-            "a long card was not capped: \(tall) against \(scale.space.cardMaxHeight)")
+    private var short: String { "It was a fine piece of filmmaking." }
+    private var long: String { String(repeating: "It was a fine piece of filmmaking. ", count: 60) }
+
+    /// **The measurement responds to content at all.** Without this the two tests below are
+    /// satisfied by a panel of constant height — which is exactly what a broken cap produces, and
+    /// what the first version of this suite accepted.
+    @Test func aLongerSentenceMakesATallerPanel() {
+        let a = height(sentence: short), b = height(sentence: long)
+        #expect(a > 0, "the panel laid out to nothing, so nothing below measures anything")
+        #expect(b > a, "height does not track content: \(a) then \(b)")
     }
 
-    /// **And the cap is not a floor.** A card with little to say must not be padded out to it —
-    /// that is the `ScrollView`-is-greedy failure, and it would look like a bug rather than a
-    /// design, because the panel would open the same size for every word.
-    @Test func aShortCardIsShorterThanTheCap() {
-        let short = height(sentence: "It was a fine piece of filmmaking.")
-        #expect(short > 0, "the card laid out to nothing, so this measures nothing")
+    /// **The cap is real, and the assertion is that growth *stops* — not a number.**
+    ///
+    /// Measured at `standard`: 267 pt for a one-line sentence, 405 for a sixty-fold one, and 405
+    /// again for a six-hundred-fold one. Content stops moving the height, which is the invariant.
+    ///
+    /// It is not `<= cardMaxHeight` because it cannot be: the cap bounds the **scrolling region**,
+    /// and the panel's own chrome — surface, border, shadow — is applied outside that frame and
+    /// adds 21 pt on top. Asserting against the raw token failed here, and the first reading of
+    /// that failure was that the cap did not work. Tripling the content settled it in one run:
+    /// a cap that does not work grows, and this did not.
+    @Test func theHeightStopsGrowingOnceTheCapIsReached() {
+        let long = height(sentence: long)
+        let tenfold = height(sentence: String(repeating: self.long, count: 10))
+        #expect(long > 0)
         #expect(
-            short < scale.space.cardMaxHeight,
-            "a short card was padded out to the cap: \(short) of \(scale.space.cardMaxHeight)")
+            tenfold == long,
+            "content still moves the height past the cap: \(long) then \(tenfold)")
+        // **And the plateau is at the cap, not merely somewhere.** Equality alone is satisfied by a
+        // panel that stops growing at any height at all, including one far past the cap. The
+        // allowance is the panel's own chrome — surface, border, shadow — applied outside the
+        // bounded frame, measured at 21 pt; 32 is that rounded up rather than fitted to it.
+        #expect(
+            long <= scale.space.cardMaxHeight + 32,
+            "the panel plateaus well above the cap: \(long) against \(scale.space.cardMaxHeight)")
+    }
+
+    /// **And the cap is not a floor.** A panel with little to say must not be padded out to it —
+    /// that is the `ScrollView`-is-greedy failure, and it would open every word at the same size.
+    @Test func aShortPanelIsShorterThanTheCap() {
+        let value = height(sentence: short)
+        #expect(value > 0)
+        #expect(
+            value < scale.space.cardMaxHeight,
+            "a short panel was padded out to the cap: \(value) of \(scale.space.cardMaxHeight)")
     }
 }

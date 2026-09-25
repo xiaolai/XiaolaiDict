@@ -191,6 +191,18 @@ final class HoverReader {
             defer { capturing.release() }
             return try await work()
         }
+        // **Cancelled when the deadline wins, and that is not the same as stopping it.**
+        // `withDeadline` cancels the task *waiting* on `finished.value`, never `finished` itself —
+        // `Task { }` does not inherit cancellation, which this project already records. So work
+        // abandoned by the reader ran on with `Task.isCancelled == false`, and anything downstream
+        // that asks — `ScreenRecordingAccess.ensure()`, which must not raise a permission dialog
+        // for a hover nobody is waiting for — was told it was still wanted.
+        //
+        // The guard's contract is untouched. A capture that cannot be stopped still holds
+        // `capturing` until it finishes, because the release is in the work's own `defer` and
+        // ScreenCaptureKit does not honour cancellation anyway. All this changes is that the
+        // abandoned work can now *find out* it was abandoned.
+        defer { finished.cancel() }
         return try await withDeadline(captureDeadline) { try await finished.value }
     }
 

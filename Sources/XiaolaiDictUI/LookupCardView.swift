@@ -27,22 +27,6 @@ public struct LookupCardView: View {
     }
 
     public var body: some View {
-        // **Scrolls rather than growing past `cardMaxHeight`.** A sense list is unbounded — 49 for
-        // *hold* in the bilingual Oxford, 73 for *run* in NOAD — and the panel's window follows its
-        // content (`.windowResizability(.contentSize)`), so without this the window grew until it
-        // ran off the display. `PanelPlacement.fitted` then puts it back on screen, which without a
-        // scroll view would only move the clipping from the screen's edge to the window's.
-        //
-        // `.scrollBounceBehavior(.basedOnSize)` so a short card does not rubber-band: a two-line
-        // answer is not a scrollable thing and must not behave like one.
-        ScrollView {
-            content
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(maxHeight: scale.space.cardMaxHeight)
-    }
-
-    private var content: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             heading
             memoryDetail
@@ -431,13 +415,34 @@ public struct LookupPanelContent: View {
     public var body: some View {
         // No memory strip across the top any more — the count is a badge in the card's own
         // heading, where it is a fact rather than a remark.
-        content
+        //
+        // **Scrolls rather than growing past `cardMaxHeight`, and the bound is here rather than on
+        // the card.** A sense list is unbounded — 49 for *hold* in the bilingual Oxford, 73 for
+        // *run* in NOAD — and the panel's window follows its content
+        // (`.windowResizability(.contentSize)`), so without this the window grew until it ran off
+        // the display. `PanelPlacement.fitted` then puts it back on screen, which without a scroll
+        // view would only move the clipping from the screen's edge to the window's.
+        //
+        // It was on `LookupCardView` first, and that was wrong: the translation and explanation
+        // panes are siblings of the card, not children of it, so a long generated answer grew the
+        // window past the cap and then had no scrolling path to its own end. Everything the window
+        // is sized from has to be inside one scroll view, which is `content`.
+        //
+        // `.scrollBounceBehavior(.basedOnSize)` so a short panel does not rubber-band: a two-line
+        // answer is not a scrollable thing and must not behave like one.
+        ScrollView { content }
+        .scrollBounceBehavior(.basedOnSize)
         .frame(
             minWidth: scale.space.cardMinWidth,
             idealWidth: scale.space.cardWidth,
             maxWidth: scale.space.cardMaxWidth,
             alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
+        // **After the width frame, and `fixedSize` no longer fixes the height.** Measured: with
+        // `.fixedSize(vertical: true)` still in the chain the panel took its natural height and the
+        // cap did nothing — `noPanelIsTallerThanTheCap` failed against a 1,200-point panel. Fixing
+        // a size vertically is the opposite of letting a scroll view bound it, and the scroll view
+        // is what bounds it now. The horizontal half is gone with it because it was already false.
+        .frame(maxHeight: scale.space.cardMaxHeight)
         // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
         // the surface, the edge and the lift are the card's own — and they live here, in the
         // layer that has the tokens, rather than as literals in the scene that hosts it.

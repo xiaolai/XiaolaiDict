@@ -337,9 +337,12 @@ enum PanelPlacement {
     /// Answers a bare `NSRect` because its one caller hands it straight to `NSPanel.setFrame`.
     static func frame(for size: NSSize, near pointer: UpPoint, within visible: UpRect) -> NSRect {
         let pointer = pointer.cg
-        let size = shrunk(size, within: visible)
-        // Anchored by its top edge: `pointer.y - 24` is where the panel's top goes, and the origin
-        // follows from the height. Stated this way so it is the same anchor `fitted` preserves.
+        // **Shrinking belongs to `fitted` alone.** This used to shrink first and then call `fitted`,
+        // which shrank again — the same normalisation owned in two places, where a change to one is
+        // a silent divergence. Handing over the rectangle the pointer asks for, unshrunk, works
+        // because `fitted` anchors by the top edge: whatever height survives, the panel's top stays
+        // at `pointer.y - 24`. That is the case which makes the top anchor observable, and there
+        // was none when it was written.
         let wanted = NSRect(
             origin: NSPoint(x: pointer.x + 12, y: pointer.y - 24 - size.height), size: size)
         return fitted(wanted, within: visible)
