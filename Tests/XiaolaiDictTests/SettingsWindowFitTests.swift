@@ -106,3 +106,64 @@ import Testing
         #expect(window.frame.height == 400)
     }
 }
+
+/// **The lookup panel is the third surface to meet "a window does not take its content's height",
+/// and the first where the content was never the problem.**
+///
+/// `PanelHeightTests` measures the hosted view's `fittingSize` at 267 pt for a one-line sentence and
+/// 405 for a long one, capped — so the view reports what it wants perfectly well. The window did not
+/// take it: `LookupPanelController.show` sets the frame to `Token.Panel.cardOpeningHeight`, 240, on
+/// open **and again on every reuse**, and a frame set by hand is not a frame SwiftUI will revisit.
+/// Measured on this Mac 2026-09-25 by `--panel-report`, three runs, three different cards: 398 × 240
+/// every time, with the footer — the dictionary control, translate, explain, copy and pin — below a
+/// fold the panel gives no sign of having.
+///
+/// The fit is bounded by the same cap the scrolling region has, because past it the answer is to
+/// scroll rather than to grow: a window taller than the cap would be a window with empty space in it.
+@MainActor
+struct PanelFitTests {
+    /// Growing: the content wants more than the window gives, and the shortfall is the difference.
+    @Test func aWindowShorterThanItsContentGrowsByTheDifference() {
+        #expect(SettingsWindowFit.shortfall(wanted: 405, given: 240, ceiling: 500) == 165)
+    }
+
+    /// **Shrinking, which is the half a cap alone never covers.** A two-line answer must not be
+    /// padded out to the opening height — that is the same defect wearing the other sign.
+    @Test func aWindowTallerThanItsContentShrinks() {
+        #expect(SettingsWindowFit.shortfall(wanted: 180, given: 240, ceiling: 500) == -60)
+    }
+
+    /// **Growth stops at the ceiling.** Past it the scrolling region is capped, so a taller window
+    /// would hold empty space under the content — and the reader would have a window that grew for
+    /// nothing rather than a list that scrolls.
+    @Test func growthStopsAtTheCeiling() {
+        #expect(SettingsWindowFit.shortfall(wanted: 900, given: 240, ceiling: 384) == 144)
+        #expect(SettingsWindowFit.shortfall(wanted: 900, given: 384, ceiling: 384) == 0)
+    }
+
+    /// **It settles.** The window is resized, which changes what the content is given, which is read
+    /// again — so a fit that never reached zero would resize for ever. Applying it to its own answer
+    /// twice must reach nothing left to do.
+    @Test func theFitIsAFixedPoint() throws {
+        var given: CGFloat = 240
+        let wanted: CGFloat = 405, ceiling: CGFloat = 384
+        for _ in 0..<5 {
+            let delta = try #require(SettingsWindowFit.shortfall(wanted: wanted, given: given, ceiling: ceiling))
+            given += delta
+        }
+        #expect(SettingsWindowFit.shortfall(wanted: wanted, given: given, ceiling: ceiling) == 0)
+        #expect(given == ceiling)
+    }
+
+    /// A ceiling of nil is the settings window's case — no ceiling but the screen's, which `move`
+    /// applies rather than this.
+    @Test func withNoCeilingTheContentDecidesAlone() {
+        #expect(SettingsWindowFit.shortfall(wanted: 900, given: 240, ceiling: nil) == 660)
+    }
+
+    /// Still nil while the scroll view has not been given a height: fitting against that zero grew
+    /// the first pane by its whole height, measured.
+    @Test func nothingIsFittedBeforeTheContainerHasASize() {
+        #expect(SettingsWindowFit.shortfall(wanted: 405, given: 0, ceiling: 384) == nil)
+    }
+}
