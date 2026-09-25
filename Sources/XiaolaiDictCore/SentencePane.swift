@@ -1,5 +1,6 @@
 import FoundationModels
 import Foundation
+import ModelKit
 
 
 public enum SentenceExplanation: Sendable, Equatable {

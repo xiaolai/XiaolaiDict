@@ -31,11 +31,18 @@ let package = Package(
         // is on the XPC service's execution path and so cannot be moved out of it.
         .target(name: "DictionaryModel", dependencies: ["XiaolaiDictBase"]),
 
+        // Everything about the local model that is not running it: the model service's wire
+        // protocol, the prompts and the answer schema, the catalogue, what this Mac can hold, and
+        // the store the weights are downloaded into. Linked by the model service and by the app;
+        // **never by the dictionary service**, which is the point of it being here and not in the
+        // core. No MLX — that is the executable's alone.
+        .target(name: "ModelKit", dependencies: ["XiaolaiDictBase"]),
+
         // The reader's side: the lookup ledger, the sense ladder, reading history, hover policy,
         // screen geometry. No AppKit and no private API — the part that has to be exhaustively
         // testable. Not portable, and not meant to be: it binds CoreGraphics, NaturalLanguage,
         // SQLite3, CoreServices and FoundationModels.
-        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel"]),
+        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit"]),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
         // by the app: its failure mode is a segfault, and a crash must take down the service, not
@@ -47,7 +54,7 @@ let package = Package(
         // What the model service does with a request — the prompts, the session, what a refusal
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
         // and need no GPU. No MLX here: that is the executable's alone.
-        .target(name: "LocalModel", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore"]),
+        .target(name: "LocalModel", dependencies: ["XiaolaiDictBase", "ModelKit"]),
         // The local model, behind its own XPC boundary. A GPU fault or an out-of-memory kill takes
         // this process and not the app, and unloading is ending it — which is exact, where MLX's
         // own release is not. Never linked by the app: the app talks to it in typed messages, the
@@ -55,7 +62,7 @@ let package = Package(
         .executableTarget(
             name: "XiaolaiDictModelService",
             dependencies: [
-                "XiaolaiDictBase", "XiaolaiDictCore", "LocalModel",
+                "XiaolaiDictBase", "ModelKit", "LocalModel",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXFoundationModels", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
@@ -67,16 +74,16 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),
-        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
-        .testTarget(name: "DictionaryBridgeTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "DictionaryBridge"]),
-        .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "LocalModel", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "DictionaryBridgeTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "DictionaryBridge"]),
+        .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
     ]
 )

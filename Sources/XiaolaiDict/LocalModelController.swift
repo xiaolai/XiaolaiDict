@@ -1,4 +1,5 @@
 import Foundation
+import ModelKit
 import Observation
 import XiaolaiDictBase
 import XiaolaiDictCore
