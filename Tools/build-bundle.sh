@@ -509,12 +509,76 @@ verify_release_timestamps() {
     done
 }
 
+# **Each XPC service links the subject it serves, and nothing else.**
+#
+# The dictionary service exists to be the blast-radius container for a private API whose failure
+# mode is a segfault. Measured on 2026-09-26, before the module split, it was 2,184,944 bytes and
+# linked libsqlite3, CryptoKit, FoundationModels, Carbon, CoreGraphics and CoreServices, carrying 124
+# `Ledger` symbols, 55 `ModelDownloader`, 63 `RangeWriter`, 259 `HoverPolicy` and the whole LLM wire
+# protocol — 443 `ModelReply`, 367 `ModelRequest`. It calls none of it. The model service was the
+# mirror image: 237 `DictionaryEntry` symbols, 275 `LookupFailure`, and libsqlite3.
+#
+# **Here rather than only in `BundleVerificationTests`, and that is the load-bearing part.** That
+# suite disables itself whenever the published bundle does not match current inputs, and under a bare
+# `swift test` there is no signing identity so it skips by name — while `make` runs the tests *before*
+# it builds the replacement bundle. A regression could therefore land as: stale bundle, checks
+# skipped, new bundle built, verification passes, four green test lines. This runs on the staged
+# artifact every time, release or not.
+#
+# `otool -L` is load commands, not the runtime image closure: `DictionaryBridge` reaches
+# DictionaryServices by `dlopen` and always will. What is asserted is what is *linked*.
+#
+# CryptoKit is permitted to the dictionary service, deliberately. `DictionarySense.hash` keys a sense
+# the publisher gave no id by a SHA-256 of its own text and `DictionaryBridge` builds those values, so
+# it is on that service's real execution path. An earlier draft of this check forbade it and was
+# wrong; the algorithm cannot change without invalidating every `sense_hash` already in a reader's
+# ledger.
+verify_service_boundaries() {
+    local bundle=$1 binary problem=0
+    # service path : frameworks it must not link : module symbols it must not carry
+    local checks=(
+        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices!XiaolaiDictCore|ModelKit|Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply"
+        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3!XiaolaiDictCore|DictionaryModel|Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy"
+    )
+    local spec path frameworks symbols found
+    for spec in "${checks[@]}"; do
+        path=${spec%%|*}; spec=${spec#*|}
+        frameworks=${spec%%!*}; symbols=${spec#*!}
+        binary="$bundle/$path"
+        [ -f "$binary" ] || { echo "no binary to check at $path"; return 1; }
+
+        found=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' \
+            | grep -E "($(tr '|' '\n' <<<"$frameworks" | paste -sd'|' -))" || true)
+        if [ -n "$found" ]; then
+            echo "$(basename "$path") links what it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+        fi
+
+        # Demangled, because a mangled name spells a module differently and a scan is only as wide
+        # as the spelling it searches for.
+        found=$(nm "$binary" 2>/dev/null | xcrun swift-demangle 2>/dev/null \
+            | grep -oE "\b($(tr '|' '\n' <<<"$symbols" | paste -sd'|' -))\b" | sort -u || true)
+        if [ -n "$found" ]; then
+            echo "$(basename "$path") carries symbols it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+        fi
+
+        # **A scan that finds nothing because it read nothing passes.** `nm` on an unreadable or
+        # stripped binary is silent, and so is this check — so it asserts the tool answered at all.
+        found=$(nm "$binary" 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${found:-0}" -lt 100 ]; then
+            echo "$(basename "$path"): nm returned $found symbols — the boundary check read nothing"
+            problem=1
+        fi
+    done
+    [ "$problem" -eq 0 ]
+}
+
 verify_bundle() {
     local bundle=$1
     verify_required_files "$bundle" || return 1
     verify_bundle_metadata "$bundle" || return 1
     verify_signatures "$bundle" || return 1
     verify_release_timestamps "$bundle" || return 1
+    verify_service_boundaries "$bundle" || return 1
 }
 
 # A release is a build numbered by the release counter. Everything that differs for one — the
