@@ -108,7 +108,7 @@ final class HistoryDrawerController {
 
         // The environment's real action, captured from the menu-bar label. `EnvironmentValues()`
         // built on the spot is wired to nothing and silently opens no window at all.
-        WindowActions.shared.open?(id: XiaolaiDictScene.drawerID)
+        WindowActions.shared.openWindow(id: XiaolaiDictScene.drawerID)
         escape.claim { [weak self] in self?.hide() }
         installClickAway()
         refresh()
@@ -135,7 +135,7 @@ final class HistoryDrawerController {
             model.revealed = false
         } completion: { [weak self] in
             guard let self, !self.isVisible else { return }
-            WindowActions.shared.dismiss?(id: XiaolaiDictScene.drawerID)
+            WindowActions.shared.dismissWindow(id: XiaolaiDictScene.drawerID)
             self.activeScreen = nil
         }
     }

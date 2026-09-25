@@ -39,7 +39,7 @@ enum SettingsReport {
         // and this runs from `applicationDidFinishLaunching`, which is earlier. Calling first and
         // hoping would open nothing at all, silently, exactly as an `EnvironmentValues()` built on
         // the spot once did.
-        guard await Instrument.settle(until: appearance, { WindowActions.shared.settings != nil }) else {
+        guard await WindowActions.shared.ready(within: appearance) else {
             return finish(["appeared": false, "problem": "the scene's openSettings action never arrived"], .failure)
         }
         // The Dictionary pane lists what the service reports, and nothing asks the service until
