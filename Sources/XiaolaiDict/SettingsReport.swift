@@ -30,8 +30,6 @@ enum SettingsReport {
     /// How long to wait for that before reporting the window as never having settled.
     static let restDeadline: Duration = .seconds(3)
 
-    /// Set before the scene starts, so the delegate measures instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
         // **Asked for only once the environment's action exists.** `openSettings` is captured from

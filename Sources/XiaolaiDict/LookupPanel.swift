@@ -435,7 +435,11 @@ final class EscapeKey {
 /// Where the panel goes: below and to the right of the pointer, and wholly on the screen — shrunk
 /// first when the screen is smaller than the panel, so no clamp can push it off an edge.
 enum PanelPlacement {
+    /// The gap kept between the panel and the screen's edge.
     static let margin: CGFloat = 8
+    /// How far right of the pointer the panel's left edge sits — clear of the cursor's own bitmap
+    /// without putting the card somewhere the eye has to travel to.
+    static let pointerGap = NSSize(width: 12, height: 24)
 
     /// Answers a bare `NSRect` because its one caller hands it straight to `NSPanel.setFrame`.
     static func frame(for size: NSSize, near pointer: UpPoint, within visible: UpRect) -> NSRect {
@@ -444,10 +448,12 @@ enum PanelPlacement {
         // which shrank again — the same normalisation owned in two places, where a change to one is
         // a silent divergence. Handing over the rectangle the pointer asks for, unshrunk, works
         // because `fitted` anchors by the top edge: whatever height survives, the panel's top stays
-        // at `pointer.y - 24`. That is the case which makes the top anchor observable, and there
-        // was none when it was written.
+        // at `pointer.y - pointerGap.height`. That is the case which makes the top anchor
+        // observable, and there was none when it was written.
         let wanted = NSRect(
-            origin: NSPoint(x: pointer.x + 12, y: pointer.y - 24 - size.height), size: size)
+            origin: NSPoint(x: pointer.x + pointerGap.width,
+                            y: pointer.y - pointerGap.height - size.height),
+            size: size)
         return fitted(wanted, within: visible)
     }
 
@@ -487,8 +493,8 @@ enum PanelPlacement {
     private static func shrunk(_ size: NSSize, within visible: UpRect) -> NSSize {
         let bounds = visible.cg
         return NSSize(
-            width: max(0, min(size.width, bounds.width - 2 * margin)),
-            height: max(0, min(size.height, bounds.height - 2 * margin)))
+            width: max(0, min(size.width, bounds.width - margin - margin)),
+            height: max(0, min(size.height, bounds.height - margin - margin)))
     }
 
     /// Bounds in the wrong order — a screen narrower than its margins — pin to the lower one.

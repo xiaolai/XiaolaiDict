@@ -17,8 +17,6 @@ enum HistoryReport {
     /// How long the instrument will wait for the drawer to appear before calling it a failure.
     static let appearance: Duration = .seconds(3)
 
-    /// Set before the scene starts, so the delegate knows to measure instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     /// Measures **the running app**, not a controller built for the occasion. It has to: a scene
     /// exists only inside the app that declares it. It is a better instrument for it — what it

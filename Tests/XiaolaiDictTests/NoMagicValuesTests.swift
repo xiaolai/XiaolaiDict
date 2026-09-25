@@ -216,4 +216,79 @@ struct NoMagicValuesTests {
         #expect(Self.literals(in: Self.stripped("Text(\"7 words · 2 days\")")).isEmpty)
         #expect(Self.literals(in: Self.stripped("code(12) // and 34")) == ["12"])
     }
+
+    // MARK: - Outside the view layer
+
+    /// **The window-placing files, which the scan above cannot see and which hold design values
+    /// anyway.**
+    ///
+    /// `AGENTS.md` says a scan that quietly stops covering new code "is worse than no rule, because
+    /// it still reads as one" — and that had already happened here by module placement rather than
+    /// by a new file. Measured 2026-09-26: `PanelPlacement` put the panel at `pointer.x + 12,
+    /// pointer.y - 24` inline, `PinnedNoteController` cascaded notes by a bare `% 8) * 24` and
+    /// sized them `320 × 200`, and `DrawerLayout` — in `XiaolaiDictCore`, two modules away — carries
+    /// `shadowMargin = 48`, `thickness = 380` and `cornerRadius = 16`.
+    ///
+    /// **The rule here is weaker than the view layer's, deliberately.** These files cannot read
+    /// `Token`: it lives in `XiaolaiDictUI`, and `XiaolaiDictCore` importing the view layer would
+    /// invert the module boundary this branch just built. So what is required is not that a number
+    /// come from the scale, but that it be **a named constant with a role** rather than arithmetic
+    /// at a call site. That is the part that was actually going wrong, and it is checkable without
+    /// making a design decision on the reader's behalf.
+    static let placementFiles = [
+        "Sources/XiaolaiDict/LookupPanel.swift",
+        "Sources/XiaolaiDict/PinnedNoteController.swift",
+        "Sources/XiaolaiDict/HistoryDrawer.swift",
+        "Sources/XiaolaiDictCore/DrawerGeometry.swift",
+    ]
+
+    /// A line that *declares* something: `static let margin: CGFloat = 8` names its role, and
+    /// `pointer.x + 12` does not. Default arguments count as declarations — `thickness: CGFloat =
+    /// 380` is a named parameter with a stated default, which is the same thing one level in.
+    private static func declaresAName(_ line: String) -> Bool {
+        var code = line.trimmingCharacters(in: .whitespaces)
+        // **Access modifiers first.** The predicate looked for a leading `let`, so
+        // `private let openAnimation = Animation.spring(response: 0.34, …)` read as a call site and
+        // the scan reported a named constant as an offender — the check being wrong, not the code.
+        for modifier in ["public ", "package ", "internal ", "fileprivate ", "private ", "nonisolated ", "static "]
+        where code.hasPrefix(modifier) {
+            code = String(code.dropFirst(modifier.count)).trimmingCharacters(in: .whitespaces)
+        }
+        if code.hasPrefix("let ") || code.hasPrefix("var ") { return true }
+        // A default argument in a signature: `thickness: CGFloat = 380,`
+        return (try? Regex(#"^\w+:\s*[\w<>\[\]?.]+\s*="#)).map { code.contains($0) } ?? false
+    }
+
+    /// **Halving is centring, not a measurement.** `(visible.height - span) / 2` names no design
+    /// value — it is the arithmetic for "in the middle", which `AGENTS.md` lists among the numbers
+    /// that are not style along with English grammar and an algorithm's off-by-one. Removed before
+    /// the literals are read, and only in that exact shape, so a `/ 2` cannot launder a padding.
+    private static func withoutHalving(_ line: String) -> String {
+        line.replacingOccurrences(of: "/ 2", with: "/ half")
+    }
+
+    @Test func aPlacementValueOutsideTheViewLayerIsNamed() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var offenders: [String] = []
+        var scanned = 0
+        for path in Self.placementFiles {
+            let text = try String(contentsOf: root.appending(path: path), encoding: .utf8)
+            scanned += 1
+            for (offset, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let row = String(line)
+                guard !Self.declaresAName(row) else { continue }
+                for literal in Self.literals(in: Self.withoutHalving(Self.stripped(row)))
+                where !Self.identities.contains(literal) {
+                    offenders.append("\(path.split(separator: "/").last ?? ""):\(offset + 1): \(literal)"
+                        + " — \(row.trimmingCharacters(in: .whitespaces))")
+                }
+            }
+        }
+        #expect(scanned == Self.placementFiles.count, "the scan read \(scanned) of \(Self.placementFiles.count) files")
+        #expect(offenders.isEmpty, """
+            these are design values at a call site; give each one a name that says its role:
+            \(offenders.joined(separator: "\n"))
+            """)
+    }
 }
