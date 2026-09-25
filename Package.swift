@@ -25,17 +25,24 @@ let package = Package(
         // Dispatch and Synchronization, and nothing further.
         .target(name: "XiaolaiDictBase"),
 
-        // Entry models, the lookup ledger, lemmas. No AppKit and no private API — the part that
-        // has to be exhaustively testable. Not portable, and not meant to be: it binds
-        // CoreGraphics, NaturalLanguage, CryptoKit, CoreServices and FoundationModels.
-        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase"]),
+        // The dictionary itself: entries, senses, entry documents, lemmas, and the dictionary
+        // service's wire protocol. Foundation and NaturalLanguage — plus CryptoKit, because a sense
+        // a publisher gave no id is keyed by a hash of its own text (`DictionarySense.hash`), which
+        // is on the XPC service's execution path and so cannot be moved out of it.
+        .target(name: "DictionaryModel", dependencies: ["XiaolaiDictBase"]),
+
+        // The reader's side: the lookup ledger, the sense ladder, reading history, hover policy,
+        // screen geometry. No AppKit and no private API — the part that has to be exhaustively
+        // testable. Not portable, and not meant to be: it binds CoreGraphics, NaturalLanguage,
+        // SQLite3, CoreServices and FoundationModels.
+        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel"]),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
         // by the app: its failure mode is a segfault, and a crash must take down the service, not
         // the app the reader is using (design note §10).
-        .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore"]),
+        .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictBase", "DictionaryModel"]),
 
-        .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore", "DictionaryBridge"]),
+        .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictBase", "DictionaryModel", "DictionaryBridge"]),
 
         // What the model service does with a request — the prompts, the session, what a refusal
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
@@ -60,16 +67,16 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),
-        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
-        .testTarget(name: "DictionaryBridgeTests", dependencies: ["XiaolaiDictBase", "DictionaryBridge"]),
+        .testTarget(name: "DictionaryBridgeTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "XiaolaiDictCore", "DictionaryBridge"]),
         .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "LocalModel", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
     ]
 )

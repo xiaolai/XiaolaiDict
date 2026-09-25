@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import DictionaryModel
 import XiaolaiDictCore
 import Testing
 

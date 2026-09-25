@@ -1,3 +1,4 @@
+import DictionaryModel
 import XiaolaiDictCore
 
 /// What a fresh install still needs, read from live state every time it is asked.

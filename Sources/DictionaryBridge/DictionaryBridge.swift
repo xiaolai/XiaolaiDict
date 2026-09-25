@@ -1,6 +1,6 @@
+import DictionaryModel
 import Foundation
 import XiaolaiDictBase
-import XiaolaiDictCore
 import Synchronization
 
 /// A dictionary enabled in Dictionary.app's settings.

@@ -1,3 +1,4 @@
+@testable import DictionaryModel
 import Foundation
 @testable import XiaolaiDictCore
 import Testing

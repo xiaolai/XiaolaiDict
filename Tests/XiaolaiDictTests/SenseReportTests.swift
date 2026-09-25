@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import Synchronization
 import Testing

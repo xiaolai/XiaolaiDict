@@ -1,4 +1,5 @@
 @testable import DictionaryBridge
+import DictionaryModel
 import Foundation
 import Synchronization
 @testable import XiaolaiDictCore
