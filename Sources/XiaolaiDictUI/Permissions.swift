@@ -37,9 +37,17 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
 
 
     /// The option key that makes `AXIsProcessTrustedWithOptions` show its prompt. Spelled out
-    /// because the SDK's constant is a global `var` Swift 6 will not let this read; a test holds
-    /// the two equal.
-    static let promptKey = "AXTrustedCheckOptionPrompt" 
+    /// because the SDK's constant is a global `var` Swift 6 will not let this read.
+    ///
+    /// **`public`, because the app had its own copy of this literal** —
+    /// `XiaolaiDictApp.lookUpSelection` spelled it out a second time, which is the one thing a
+    /// named constant exists to prevent, and it could not do otherwise while this was `internal`.
+    /// Every gate goes through `AccessibilityAccess` now and this is the only spelling left.
+    ///
+    /// `theAccessibilityPromptKeyIsTheFrameworksOwn` holds it equal to the framework's own
+    /// constant, read out of HIServices at runtime. See `request()` below for why that took until
+    /// 2026-09-26.
+    public static let promptKey = "AXTrustedCheckOptionPrompt"
 
     /// The name macOS gives it, and the name the reader is looking for in System Settings — so a
     /// translation has to be the running system's own word for the list, not a fresh rendering of
@@ -137,8 +145,7 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
         get async {
             switch self {
             case .accessibility:
-                // Genuinely two-valued: the API returns a Bool and cannot say why.
-                return AXIsProcessTrusted() ? .granted : .declined
+                return Self.accessibilityTrust
             case .screenRecording:
                 do {
                     // **Bounded.** This is a call into another process, and it has no timeout of its
@@ -176,6 +183,19 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
+    /// Whether Accessibility is granted, synchronously — genuinely two-valued, because the API
+    /// returns a `Bool` and cannot say why.
+    ///
+    /// **The only `AXIsProcessTrusted()` call in the project.** There were three: this one for the
+    /// Settings pane and the setup board, one in `XiaolaiDictApp.lookUpSelection` (with a prompt,
+    /// and its own copy of the option key), and one in `ScreenWordReader.target`. Three call sites
+    /// answering one question is what `ScreenRecordingAccess` was written to end for the other
+    /// permission, and Accessibility was the second instance of that class. `AccessibilityAccess`
+    /// is the owner now and this is what it asks.
+    public static var accessibilityTrust: PermissionProbe {
+        AXIsProcessTrusted() ? .granted : .declined
+    }
+
     /// Asks macOS to prompt. It does so **only once per permission, ever** — after a refusal there
     /// is no second prompt and the reader has to use Settings, which is why every refusal here
     /// carries a location.
@@ -187,13 +207,18 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
             // `kAXTrustedCheckOptionPrompt`; it cannot be used. The SDK declares it as a global
             // `var`, so Swift 6 refuses to read it from this module at all — "not concurrency-safe
             // because it involves shared mutable state" — and that refusal extends to a
-            // `nonisolated(unsafe)` binding in a test, which was tried. So there is no compile-time
-            // check of this string and no test that can make one.
+            // `nonisolated(unsafe)` binding in a test, which was tried. So there is no *compile-time*
+            // check of this string.
             //
-            // **The gap is real and is left visible rather than papered over.** A mistyped key is
-            // not an error: `AXIsProcessTrustedWithOptions` simply never prompts, and the reader is
-            // left on a permission screen that does nothing. If this ever needs proving, the route
-            // is `dlsym` against the framework at runtime — deliberately not taken for one string.
+            // **There is a run-time one, and this comment used to say there could not be.** It said
+            // the `dlsym` route was "deliberately not taken for one string" — worth taking, as it
+            // turns out: `theAccessibilityPromptKeyIsTheFrameworksOwn` opens HIServices and reads
+            // the constant out of it in eight lines. The trap that makes the route look closed is
+            // that `RTLD_DEFAULT` does not find the symbol; it has to be a `dlopen` of the
+            // framework, and a first attempt answers "no symbol" and reads as proof.
+            //
+            // Worth having, because a mistyped key is not an error: `AXIsProcessTrustedWithOptions`
+            // simply never prompts, and the reader is left on a permission screen that does nothing.
             AXIsProcessTrustedWithOptions([Self.promptKey: true] as CFDictionary)
         case .screenRecording:
             CGRequestScreenCaptureAccess()

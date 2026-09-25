@@ -123,6 +123,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
 
+    /// Whether a selection may be read, and asking for it where the reader never has been.
+    /// Injected so a test can drive the refusal branch without touching this Mac's grant.
+    @ObservationIgnored var accessibility = AccessibilityAccess.system
+
     /// The history drawer reads the ledger itself, bounded in both directions, and reports a
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
@@ -266,8 +270,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         let ticket = panel.newRequest()
         lookup?.cancel()
         // Asked, not assumed: without Accessibility there is no selection to read, and saying so
-        // is better than an empty panel.
-        guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
+        // is better than an empty panel. **Through the one owner** — this line used to call
+        // `AXIsProcessTrustedWithOptions` with its own copy of the option key literal, which was
+        // the third implementation of one question and the second instance of the class
+        // `ScreenRecordingAccess` exists to close.
+        guard accessibility.ensure() == .granted else {
             panel.show(.accessibilityIsOff, near: pointer, for: ticket)
             return
         }
