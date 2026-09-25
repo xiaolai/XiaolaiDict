@@ -101,7 +101,7 @@ struct PanelPlacementTests {
 struct PanelTicketTests {
     /// A newer request supersedes an older one: the older one's late result is dropped.
     @Test func aNewerRequestSupersedesAnOlderOne() {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let older = panel.newRequest()
         let newer = panel.newRequest()
         #expect(!panel.isCurrent(older))
@@ -186,7 +186,7 @@ struct PanelRequestIdentityTests {
 @MainActor
 struct PanelResizeWatchTests {
     @Test func watchingAgainIsANoOpAndADifferentWindowReplacesIt() throws {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
@@ -223,7 +223,7 @@ struct PanelResizeWatchTests {
     /// which is the whole shape of the reported defect. This asserts the observer exists and is
     /// removed with the panel — the two ways it silently stops working.
     @Test func theContentResizeWatchIsRegisteredAndReleasedWithThePanel() throws {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
@@ -257,7 +257,7 @@ struct PanelResizeWatchTests {
     /// to — and passed with `keepWhollyOnScreen` emptied out entirely. A window placed off the
     /// screen must actually be moved back, or the two assertions below mean nothing.
     @Test func aWindowOffTheScreenIsBroughtBack() throws {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let screen = try #require(NSScreen.main)
         let outside = NSRect(
             x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
@@ -282,7 +282,7 @@ struct PanelResizeWatchTests {
     /// be exercised with a plain `NSWindow` — the property is read-only — so the window is
     /// subclassed. Without this the guard could be deleted and every other test here would pass.
     @Test func aWindowTheReaderIsDraggingIsLeftAlone() throws {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let screen = try #require(NSScreen.main)
         let outside = NSRect(
             x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
@@ -299,7 +299,7 @@ struct PanelResizeWatchTests {
     /// A panel that already fits is not nudged — otherwise every content update would creep it
     /// across the screen.
     @Test func aWindowAlreadyOnScreenIsNotMoved() throws {
-        let panel = LookupPanelController()
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let screen = try #require(NSScreen.main)
         let inside = NSRect(
             x: screen.visibleFrame.midX, y: screen.visibleFrame.midY, width: 320, height: 240)
@@ -317,4 +317,29 @@ struct PanelResizeWatchTests {
 /// them — so it needs a window that can say yes.
 private final class DraggingWindow: NSWindow {
     override var inLiveResize: Bool { true }
+}
+
+/// Tests must not reach for the machine's own input.
+struct PanelTestIsolationTests {
+    /// **A test that claims the real Escape takes it from the reader.** `LookupPanelController`
+    /// defaults `hotkeys` to `.shared`, so every bare `LookupPanelController()` in a test
+    /// registered a system-wide hot key and — through `show` — installed a global mouse monitor.
+    /// The suite is run on a machine somebody is using.
+    ///
+    /// Mechanical, because a behavioural check cannot fail here: registering succeeds either way,
+    /// and the damage is invisible from inside the process.
+    @Test func noPanelTestBuildsAControllerOnTheSharedHotkeyCentre() throws {
+        let file = URL(fileURLWithPath: #filePath)
+        let code = try String(contentsOf: file, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        // Split so the needle does not appear verbatim in the file it searches. The filter drops
+        // full-line comments only, not string literals — the same false positive the audit found
+        // in the CGPreflight scanner, met here on the first run of this one.
+        let bare = "LookupPanelController" + "()"
+        #expect(
+            !code.contains(bare),
+            "a bare controller defaults to HotkeyCenter.shared and claims the reader's own Escape")
+    }
 }
