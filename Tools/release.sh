@@ -103,6 +103,31 @@ notarize() {  # $1: the file to submit — a .zip of the app, or the .dmg
 # Retried too: stapling fetches the ticket from Apple, and drops the same way an upload does. TYPE
 # retries it for that reason. A ticket not yet propagated reads the same as a dropped connection,
 # which is a second reason to try again rather than fail at once.
+# **Signing with a secure timestamp is a network call, and it fails the way network calls fail.**
+#
+# The second instance of one defect, which is why it is a function rather than another retry loop
+# written out. `build-bundle.sh` signs five code objects and lost one to a transient timestamp
+# failure on the first release ever attempted; that got `sign_part`. The disk image is signed
+# *here*, by a different script, and the very next release failed on it with the identical message
+# — "A timestamp was expected but was not found" — after the app had already been notarised. Same
+# server, same flake, one place that had not been fixed.
+#
+# The last attempt keeps its stderr and is not guarded, so a bad identity or a malformed image
+# still fails loudly and immediately rather than after five silent tries.
+sign_with_timestamp() {  # $1: the artifact to sign
+    local artifact=$1 attempt
+    for (( attempt = 1; attempt <= TRIES; attempt++ )); do
+        if (( attempt == TRIES )); then
+            codesign --force --timestamp --sign "$XIAOLAIDICT_SIGN_ID" "$artifact" \
+                || fail "could not sign $artifact"
+            return
+        fi
+        codesign --force --timestamp --sign "$XIAOLAIDICT_SIGN_ID" "$artifact" >/dev/null 2>&1 && return
+        note "signing $(basename "$artifact") failed on attempt $attempt of $TRIES — retrying"
+        sleep $(( attempt * 2 ))
+    done
+}
+
 staple() {  # $1: the notarised artifact
     local attempt
     for (( attempt = 1; attempt <= TRIES; attempt++ )); do
@@ -177,7 +202,7 @@ hdiutil create -quiet -volname "XiaolaiDict $version" -srcfolder "$staging" -ov 
 
 # 4–5. Signed, then notarised and stapled in its own right. A .dmg is assessed on its own
 #      signature before anything inside it is looked at.
-codesign --force --timestamp --sign "$XIAOLAIDICT_SIGN_ID" "$dmg" || fail "could not sign $dmg"
+sign_with_timestamp "$dmg"
 notarize "$dmg"
 staple "$dmg"
 
