@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ModelKit
 import XiaolaiDictBase
 import XiaolaiDictCore
 

@@ -1,4 +1,5 @@
 import Foundation
+import ModelKit
 import XiaolaiDictCore
 
 /// The in-bundle instruments for the local model. **Only meaningful inside the signed bundle**:

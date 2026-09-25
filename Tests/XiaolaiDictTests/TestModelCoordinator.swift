@@ -1,5 +1,6 @@
 import Foundation
 @testable import XiaolaiDict
+import ModelKit
 import XiaolaiDictCore
 
 /// The model coordinator a test is given: a store in a directory of its own, and a client that can

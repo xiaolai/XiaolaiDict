@@ -1,6 +1,6 @@
 @testable import LocalModel
+import ModelKit
 import Testing
-import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 /// Unloading is ending the service, so when it ends is the whole of the lifecycle.

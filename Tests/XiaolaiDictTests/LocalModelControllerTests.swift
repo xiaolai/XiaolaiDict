@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@testable import ModelKit
 import Testing
 @testable import XiaolaiDict
 @testable import XiaolaiDictCore
