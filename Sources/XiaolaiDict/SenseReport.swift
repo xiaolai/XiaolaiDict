@@ -1,4 +1,5 @@
 import Foundation
+import XiaolaiDictBase
 import XiaolaiDictCore
 
 /// `--sense-report`: **the ladder's order, decided on the labelled set** — every rung scored on the

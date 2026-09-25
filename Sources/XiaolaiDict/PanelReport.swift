@@ -1,5 +1,6 @@
 import AppKit
 import os
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 

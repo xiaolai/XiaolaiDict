@@ -1,4 +1,5 @@
 
+import XiaolaiDictBase
 import XiaolaiDictCore
 import SwiftUI
 

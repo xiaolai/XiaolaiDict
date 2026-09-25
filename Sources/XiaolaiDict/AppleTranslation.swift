@@ -1,5 +1,6 @@
 import Foundation
 import Translation
+import XiaolaiDictBase
 import XiaolaiDictCore
 import os
 

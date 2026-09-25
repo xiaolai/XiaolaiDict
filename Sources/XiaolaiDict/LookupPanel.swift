@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import SwiftUI

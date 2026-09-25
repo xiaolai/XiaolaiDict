@@ -1,4 +1,5 @@
 import os
+import XiaolaiDictBase
 
 /// The top rung: Qwen, in the model service, guided to the candidate set.
 ///

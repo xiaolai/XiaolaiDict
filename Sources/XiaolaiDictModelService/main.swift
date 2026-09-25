@@ -11,6 +11,7 @@ import Synchronization
 // does not mark `Sendable`; under Swift 6 that is an error inside the expansion, where it cannot be
 // edited (the MLX-in-XPC spike, S4). Hence `@preconcurrency`.
 @preconcurrency import Tokenizers
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XPC
 import os

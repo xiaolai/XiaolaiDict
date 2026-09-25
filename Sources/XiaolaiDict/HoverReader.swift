@@ -1,4 +1,5 @@
 import AppKit
+import XiaolaiDictBase
 import XiaolaiDictCore
 import Synchronization
 import os
