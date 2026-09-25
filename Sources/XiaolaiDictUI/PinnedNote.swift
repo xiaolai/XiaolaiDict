@@ -17,6 +17,42 @@ public struct PinnedNote: Equatable, Identifiable {
     public let pronunciation: String?
     /// The sense's own words, copied at the moment of pinning.
     public let text: String
+    /// **How sure the panel was, kept with the words.** A note outlives the panel that made it,
+    /// and the panel's ambiguity badge does not travel — so a sense the selector was unsure of
+    /// became a note indistinguishable from one the reader confirmed. `chosen_by` never merges,
+    /// and this is the same distinction at the surface that lasts longest.
+    public let standing: Standing
+
+    public enum Standing: String, Equatable, Sendable {
+        /// The reader tapped it, or it was the entry's only sense.
+        case confirmed
+        /// The selector proposed it and nobody has confirmed it.
+        case proposed
+        /// Several senses fitted and this is the one it nearly picked.
+        case ambiguous
+
+        /// What the note says about itself. Empty for a confirmed sense: a note that announces its
+        /// own certainty is noise, and only the uncertain ones need saying.
+        /// Explicit `return`s, not a switch expression. `swiftc -emit-localized-strings`
+        /// extracted nothing from the expression form here — the catalog stayed at 239 across two
+        /// runs while the identical construct in `LookupCardView` extracted fine — and
+        /// `everyLiteralTheReaderSeesIsInTheCatalog` is what caught it. A sentence a translator
+        /// never sees is the defect that rule exists for.
+        public var caveat: String? {
+            switch self {
+            case .confirmed:
+                return nil
+            case .proposed:
+                return String(
+                    localized: "A guess — not confirmed",
+                    comment: "On a pinned note whose sense the selector proposed")
+            case .ambiguous:
+                return String(
+                    localized: "Several senses fitted — this is the nearest",
+                    comment: "On a pinned note whose sense was one of several that fitted")
+            }
+        }
+    }
 
     /// Where it came from, precisely enough to be checked later.
     public var provenance: String {
@@ -56,6 +92,13 @@ public struct PinnedNoteView: View {
                 }
                 Text(note.text).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                // **Where the panel's badge goes when the panel is gone.** Only the uncertain
+                // standings say anything; a note announcing its own certainty would be noise.
+                if let caveat = note.standing.caveat {
+                    Text(verbatim: caveat)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 Spacer(minLength: scale.space.line)
                 // What it is a copy of, and from when. A note that outlives its dictionary can
                 // still say where it came from.

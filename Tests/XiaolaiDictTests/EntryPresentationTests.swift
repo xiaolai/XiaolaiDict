@@ -197,7 +197,7 @@ struct PinnedNoteTests {
     private func note(_ dictionary: DictionaryIdentity, text: String) -> PinnedNote {
         PinnedNote(
             heading: "fine²", dictionary: dictionary, partOfSpeech: "noun",
-            pronunciation: "fīn", text: text)
+            pronunciation: "fīn", text: text, standing: .confirmed)
     }
 
     /// The words are held by value. Nothing reaches back into the dictionary to re-read them.

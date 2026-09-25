@@ -170,7 +170,11 @@ public struct LookupCardView: View {
         case .prose(let text):
             Text(text)
                 .font(.system(size: scale.text.body))
-                .lineLimit(Token.Limit.proseLines)
+                // **No line limit.** It was six, and `lineLimit` *discards* — nothing could reveal
+                // what it cut and there was no expansion control. The panel now wraps its content
+                // in a scroll view bounded by `cardMaxHeight`, so length is handled by scrolling
+                // and truncation only hides a public-fallback definition's end.
+                .fixedSize(horizontal: false, vertical: true)
                 .fixedSize(horizontal: false, vertical: true)
         case .absent:
             Text("No entry for “\(card.term)” in your dictionaries.")
@@ -775,9 +779,26 @@ public struct LookupPanelContent: View {
             // The card as it is drawn — including a sense the reader tapped, which is the one
             // they mean to copy.
             let card = card(for: entry)
-            if case .sense(let sense) = card.answer {
+            // Copy takes the sense on screen, ambiguous included — but an uncertain one says so in
+            // the copied text, because a paste has no badge beside it.
+            let copyable: (sense: SensePresentation, uncertain: Bool)? = {
+                switch card.answer {
+                case .sense(let sense): (sense, card.isHypothesis)
+                case .ambiguous(let sense, _): (sense, true)
+                default: nil
+                }
+            }()
+            if let copyable {
+                // One literal, not a concatenation: `" " + String(localized:)` puts a bare space
+                // through the view layer's prose scan, and the space belongs to the sentence
+                // anyway — a translator decides whether their language wants one.
+                let caveat = copyable.uncertain
+                    ? String(localized: " (a guess — not confirmed)",
+                             comment: "Appended to copied text where the sense was not confirmed")
+                    : ""
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("\(card.heading) — \(sense.label)", forType: .string)
+                NSPasteboard.general.setString(
+                    "\(card.heading) — \(copyable.sense.label)\(caveat)", forType: .string)
                 copied = true
             }
         } label: {
@@ -792,11 +813,26 @@ public struct LookupPanelContent: View {
     private func pinButton(_ entry: DictionaryEntry) -> some View {
         Button {
             let card = card(for: entry)
-            guard case .sense(let sense) = card.answer else { return }
-            pin(PinnedNote(
-                heading: card.heading, dictionary: entry.dictionary,
-                partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
-                text: sense.label))
+            // **A guess may be kept, and it is kept as a guess.** The proposal here was to enable
+            // this for `.ambiguous` because the panel badges it — and the badge is the *panel's*,
+            // not the note's. A note carries no standing, so pinning one laundered a sense the
+            // selector was unsure of into a note that reads exactly like a confirmed one, which is
+            // the rule that a failure never renders as confidently as a success, broken at the one
+            // surface that outlives the panel.
+            switch card.answer {
+            case .sense(let sense):
+                pin(PinnedNote(
+                    heading: card.heading, dictionary: entry.dictionary,
+                    partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
+                    text: sense.label, standing: card.isHypothesis ? .proposed : .confirmed))
+            case .ambiguous(let sense, _):
+                pin(PinnedNote(
+                    heading: card.heading, dictionary: entry.dictionary,
+                    partOfSpeech: card.partOfSpeech, pronunciation: card.pronunciation,
+                    text: sense.label, standing: .ambiguous))
+            default:
+                return
+            }
         } label: {
             Image(systemName: "pin").font(.system(size: scale.text.body))
         }

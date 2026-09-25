@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    " (a guess — not confirmed)" : {
+      "comment" : "Appended to copied text where the sense was not confirmed"
+    },
     "%@ answered with %@, which is not the word you looked up." : {
       "localizations" : {
         "en" : {
@@ -53,7 +56,7 @@
 
     },
     "A guess — not confirmed" : {
-
+      "comment" : "On a pinned note whose sense the selector proposed"
     },
     "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
 
@@ -446,6 +449,9 @@
     },
     "Several senses fit this sentence equally well." : {
       "comment" : "Shown on the lookup card when two senses cannot be separated"
+    },
+    "Several senses fitted — this is the nearest" : {
+      "comment" : "On a pinned note whose sense was one of several that fitted"
     },
     "Shortcut" : {
 

@@ -33,12 +33,28 @@ mkdir -p "$EXTRACTED" "$(dirname "$CATALOG")"
 # The app's product only — which is every module the reader sees text from: the app, the view layer
 # and the core. The two services carry no reader-facing text, and building the model service would
 # compile all of MLX again into this scratch path, minutes of it, to extract nothing.
+# **A basename collision loses one file's strings outright, silently.** `.stringsdata` files are
+# named after the *source file*, not its path, so two sources with one name write to one file and
+# the second clobbers the first. That was recorded here as a reason the count cannot be exact; it
+# is worse than that — `Sources/XiaolaiDictUI/PinnedNote.swift` was invisible to every extraction
+# because `Sources/XiaolaiDict/PinnedNote.swift` took its name. It cost nothing only because the
+# view had no literals, and the moment one was added it never reached a translator. Found by
+# `everyLiteralTheReaderSeesIsInTheCatalog`, confirmed by a probe string that did not appear.
+#
+# The cure is that no two sources in this package share a basename; the guard below is what
+# notices if that ever stops being true. `main.swift` is exempt — SwiftPM requires the name, and
+# the two services carry no reader-facing text, which is why this product does not build them.
+collisions=$(find Sources -name '*.swift' -exec basename {} \; | grep -v '^main\.swift$' | sort | uniq -d)
+if [ -n "$collisions" ]; then
+    echo "error: two sources share a basename, so one's .stringsdata overwrites the other's:" >&2
+    echo "$collisions" >&2
+    exit 1
+fi
+
 swift build --scratch-path .build/strings --product XiaolaiDict \
     -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc "$EXTRACTED" > /dev/null
 
-# Two guards, because a partial extraction silently empties the catalog. `.stringsdata` files are
-# named after the source file, and this package has two `main.swift` and two `PinnedNote.swift`, so
-# counting them against the sources can never be exact — the count catches only the total failure.
+# Two further guards, because a partial extraction silently empties the catalog.
 count=$(find "$EXTRACTED" -name '*.stringsdata' | wc -l | tr -d ' ')
 if [ "$count" -eq 0 ]; then
     echo "error: the build produced no .stringsdata, so nothing was extracted; the catalog is left alone." >&2
