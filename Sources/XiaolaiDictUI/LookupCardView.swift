@@ -511,12 +511,23 @@ public struct LookupPanelContent: View {
         case .none:
             WaitingView(detail: waiting)
         case .notFound:
-            LookupCardView(card: cardWithoutAnEntry(.absent))
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                LookupCardView(card: cardWithoutAnEntry(.absent))
+                // **A miss and an unanswered question are not the same result.** Both drew "No
+                // entry … in your dictionaries", which is a confirmed absence — so a crashed or
+                // unreachable XPC service, with the public fallback also finding nothing, told the
+                // reader their dictionaries do not have the word.
+                if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+            }
         case .plainText(let text, _):
-            LookupCardView(card: cardWithoutAnEntry(.prose(text)))
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                LookupCardView(card: cardWithoutAnEntry(.prose(text)))
+                if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+            }
         case .entries(_, let unreadable):
             if let entry {
                 VStack(alignment: .leading, spacing: scale.space.stack) {
+                    captureCaveat
                     if !unreadable.isEmpty {
                         // Named once however many of its records failed: claiming all of them, or
                         // only one, would both be guesses.
@@ -545,9 +556,41 @@ public struct LookupPanelContent: View {
                         TranslationPaneView(pane: translation)
                     }
                     if let explanation { SentencePaneView(explanation: explanation) }
+                    matchCaveat(entry)
                     footer(entry)
                 }
             }
+        }
+    }
+
+    /// Shown wherever the dictionary service could not be asked. It says the answer is incomplete
+    /// without guessing what the answer would have been.
+    private var serviceCaveat: some View {
+        Notice(text: Text("Your dictionaries could not all be asked, so this may not be the whole answer."))
+    }
+
+    /// **How the word was read, where that is worth doubting.** `presentation.capture` was carried
+    /// to the card and never consumed, so a word read off the pixels with Vision — which unlike
+    /// the Accessibility paths can be *wrong* rather than merely absent — was presented exactly
+    /// like an exact text-range capture. This is the panel's half of the rule that every capture
+    /// carries its own quality signal.
+    @ViewBuilder
+    private var captureCaveat: some View {
+        if PanelCaveats.readOffTheScreen(presentation.capture) {
+            Notice(
+                text: Text("This word was read off the screen, so it may not be exactly right."),
+                symbol: "eye.trianglebadge.exclamationmark")
+        }
+    }
+
+    /// A dictionary that answered with a different headword says so. `entry.match` was computed
+    /// and dropped, so a near match read as the term's own entry.
+    @ViewBuilder
+    private func matchCaveat(_ entry: DictionaryEntry) -> some View {
+        if PanelCaveats.answeredAnotherWord(entry) {
+            Notice(
+                text: Text("\(entry.dictionary.name) answered with \(entry.headword), which is not the word you looked up."),
+                symbol: "arrow.triangle.branch")
         }
     }
 
@@ -747,5 +790,37 @@ public struct LookupPanelContent: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(Text("Keep this sense as a note"))
+    }
+}
+
+
+/// **Which caveats a result needs, as decisions rather than as view code.**
+///
+/// Each of these was a signal the card was handed and dropped: a service failure rendered as a
+/// confirmed miss, an optically recognised word rendered like an exact capture, a near match
+/// rendered as the term's own entry. They live here because a `@ViewBuilder` condition cannot be
+/// asserted, and "a failure must never render as confidently as a success" is exactly the kind of
+/// rule that stops holding quietly.
+public enum PanelCaveats {
+    /// The dictionary service could not be asked, so the answer may be less than the whole one.
+    /// **Both outcomes that carry a failure count** — a miss and an unanswered question drew the
+    /// same "No entry … in your dictionaries".
+    public static func serviceUnanswered(_ outcome: LookupOutcome?) -> Bool {
+        switch outcome {
+        case .notFound(let why): why != nil
+        case .plainText(_, let why): !why.isEmpty
+        default: false
+        }
+    }
+
+    /// Read off the pixels with Vision, which unlike every Accessibility path can be *wrong*
+    /// rather than merely absent.
+    public static func readOffTheScreen(_ capture: CaptureQuality?) -> Bool {
+        capture?.source == .opticalRecognition
+    }
+
+    /// The dictionary answered with a different headword altogether.
+    public static func answeredAnotherWord(_ entry: DictionaryEntry) -> Bool {
+        entry.match == .otherHeadword
     }
 }

@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ answered with %@, which is not the word you looked up." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ answered with %2$@, which is not the word you looked up."
+          }
+        }
+      }
+    },
     "%@ can't be used: %@." : {
       "localizations" : {
         "en" : {
@@ -596,6 +606,9 @@
     "This sentence is already in your language." : {
 
     },
+    "This word was read off the screen, so it may not be exactly right." : {
+
+    },
     "Today" : {
 
     },
@@ -667,6 +680,9 @@
 
     },
     "You have met this sense before" : {
+
+    },
+    "Your dictionaries could not all be asked, so this may not be the whole answer." : {
 
     },
     "Your reading history is unavailable" : {

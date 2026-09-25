@@ -152,3 +152,32 @@ struct OpeningEntryTests {
         #expect(view.opening == 0)
     }
 }
+
+/// The signals the card holds and used to keep to itself.
+struct PanelCaveatTests {
+    /// **A miss and an unanswered question are not the same result.** Both drew "No entry … in
+    /// your dictionaries" — a confirmed absence — so a crashed service with the public fallback
+    /// also finding nothing told the reader their dictionaries do not have the word.
+    @Test func aServiceFailureIsNotAConfirmedMiss() {
+        #expect(PanelCaveats.serviceUnanswered(.notFound(serviceFailure: "the service crashed")))
+        #expect(!PanelCaveats.serviceUnanswered(.notFound(serviceFailure: nil)),
+                "a genuine miss must not be dressed up as a failure either")
+        #expect(PanelCaveats.serviceUnanswered(.plainText("fine", serviceFailure: "crashed")))
+        #expect(!PanelCaveats.serviceUnanswered(.plainText("fine", serviceFailure: "")))
+        #expect(!PanelCaveats.serviceUnanswered(nil))
+    }
+
+    /// An optically recognised word can be *wrong* rather than merely absent, unlike every
+    /// Accessibility path, and used to render identically to an exact text-range capture.
+    @Test func anOpticalCaptureIsMarkedAndTheAccessibilityOnesAreNot() {
+        #expect(PanelCaveats.readOffTheScreen(
+            CaptureQuality(source: .opticalRecognition, confidence: 0.9, context: .complete)))
+        for source in CaptureQuality.Source.allCases where source != .opticalRecognition {
+            #expect(
+                !PanelCaveats.readOffTheScreen(
+                    CaptureQuality(source: source, confidence: 1, context: .complete)),
+                "\(source) was marked as read off the screen")
+        }
+        #expect(!PanelCaveats.readOffTheScreen(nil))
+    }
+}
