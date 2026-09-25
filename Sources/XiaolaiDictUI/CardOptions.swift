@@ -35,6 +35,11 @@ struct CardOptions: Equatable, Sendable {
     /// or who has two browsers.
     var showsPlaceName = false
     var emphasis = WordEmphasis.italic
+    /// **On by default.** Whether the panel says a word was read off the screen rather than from
+    /// an app's own text. It rides here rather than in a second environment value because it is
+    /// the same kind of choice as the two above — what a surface shows — and the panel already
+    /// reads this one.
+    var warnsAboutScreenReading = true
 }
 
 extension EnvironmentValues {

@@ -99,6 +99,22 @@ struct ReadingPane: View {
                 Text("On a card")
             }
 
+            Section {
+                Toggle(
+                    "Say when a word was read off the screen",
+                    isOn: $appearance.warnsAboutScreenReading)
+            } header: {
+                Text("In the panel")
+            } footer: {
+                // One literal with backslash continuations, so it stays a literal: a `+` makes it
+                // a String and SwiftUI takes the verbatim overload, which extracts nothing.
+                Text("""
+                     Words in a terminal, a canvas or an image are read from the pixels. That is \
+                     the one way of reading a word that can be wrong rather than simply missing — \
+                     and you can check it yourself, because the word it read is the one shown.
+                     """)
+            }
+
             // Which glass is right depends on what is usually behind the drawer, and only the
             // reader knows that. Frosted over a black terminal is flat grey — working glass that
             // looks broken — which is why this is a choice rather than a constant.

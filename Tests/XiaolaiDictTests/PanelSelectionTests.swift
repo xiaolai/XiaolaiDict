@@ -167,17 +167,41 @@ struct PanelCaveatTests {
         #expect(!PanelCaveats.serviceUnanswered(nil))
     }
 
-    /// An optically recognised word can be *wrong* rather than merely absent, unlike every
-    /// Accessibility path, and used to render identically to an exact text-range capture.
-    @Test func anOpticalCaptureIsMarkedAndTheAccessibilityOnesAreNot() {
-        #expect(PanelCaveats.readOffTheScreen(
-            CaptureQuality(source: .opticalRecognition, confidence: 0.9, context: .complete)))
+    /// **A doubted optical read is marked; a confident one is not.**
+    ///
+    /// The first version of this keyed on source alone, so three quarters of optical reads — every
+    /// one of them correct in the measured sample — got a full-width orange banner above the
+    /// answer. Warning about those is how a reader learns to ignore the warning that matters.
+    ///
+    /// The measured pair: `xiaolai` misread as "xaiolai" at 0.5, and *Agentic* read correctly at
+    /// 1.0. Both are asserted, because a predicate that fired on neither would also pass a test
+    /// that only checked the first.
+    @Test func onlyADoubtedOpticalCaptureIsMarked() {
+        let misread = CaptureQuality(source: .opticalRecognition, confidence: 0.5, context: .complete)
+        let clean = CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete)
+        #expect(PanelCaveats.readOffTheScreen(misread))
+        #expect(!PanelCaveats.readOffTheScreen(clean), "a confident optical read was warned about")
+
         for source in CaptureQuality.Source.allCases where source != .opticalRecognition {
             #expect(
                 !PanelCaveats.readOffTheScreen(
-                    CaptureQuality(source: source, confidence: 1, context: .complete)),
+                    CaptureQuality(source: source, confidence: 0.5, context: .complete)),
                 "\(source) was marked as read off the screen")
         }
         #expect(!PanelCaveats.readOffTheScreen(nil))
+    }
+
+    /// The reader can turn it off, and then nothing is marked however doubtful.
+    @Test func theReaderCanSilenceIt() {
+        let misread = CaptureQuality(source: .opticalRecognition, confidence: 0.3, context: .complete)
+        #expect(PanelCaveats.readOffTheScreen(misread, warning: true))
+        #expect(!PanelCaveats.readOffTheScreen(misread, warning: false))
+    }
+
+    /// The threshold sits in an empty gap, which is what lets it be stated from twenty readings.
+    /// If a future distribution puts values between 0.5 and 1.0, this is the assumption to re-read.
+    @Test func theThresholdSitsBetweenTheTwoMeasuredClusters() {
+        #expect(CaptureQuality.doubtful > 0.5, "0.5 reads, where both misreads were, must be marked")
+        #expect(CaptureQuality.doubtful < 1.0, "1.0 reads, all correct in the sample, must not be")
     }
 }

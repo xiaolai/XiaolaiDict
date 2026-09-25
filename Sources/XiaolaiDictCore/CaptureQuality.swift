@@ -34,6 +34,36 @@ public struct CaptureQuality: Sendable, Equatable {
     /// 0...1. Accessibility hands over the app's own characters, so its captures are 1; recognised
     /// text reports the recogniser's own confidence in the line the word came from.
     public let confidence: Double
+
+    /// **Below this, a capture is worth telling the reader about.**
+    ///
+    /// Measured 2026-09-25 across a 12×16 grid of points on a 5120×1440 desktop — 20 optical
+    /// reads over a terminal and a chat window:
+    ///
+    ///     1.0   15   ███████████████
+    ///     0.5    4   ████
+    ///     0.3    1   █
+    ///
+    /// **Nothing landed between 0.5 and 1.0**, so the number is picked from an empty gap rather
+    /// than fitted to a boundary — 0.8 and 0.99 would behave identically on every sample. That is
+    /// the whole reason it can be stated at all from twenty readings.
+    ///
+    /// The two misreads in that set are both under it: `xiaolai` read as "xaiolai" and `Linode` as
+    /// "Linodeo", at 0.5. Every 1.0 read was correct — *New*, *Agentic*, *wiki*, *Show*, *Find*,
+    /// *to*. Low confidence does not mean wrong (`git`, `4` and `16` were right at 0.5); it means
+    /// doubt, which is what a caveat is for.
+    ///
+    /// **Twenty samples, and the labels are a reading of the words rather than ground truth**
+    /// against what was on the screen. The gap is wide enough that the threshold survives being
+    /// wrong about a few of them; a distribution that later shows values in between would not.
+    public static let doubtful = 0.9
+
+    /// Whether this capture is one to say something about: read off the pixels *and* doubted.
+    /// Source alone is not enough — three quarters of optical reads come back at full confidence,
+    /// and warning about those trains the reader to ignore the warning that matters.
+    public var isDoubtful: Bool {
+        source == .opticalRecognition && confidence < Self.doubtful
+    }
     public let context: Context
 
     /// Nil when `confidence` is outside 0...1 — including NaN.
