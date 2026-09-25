@@ -99,13 +99,39 @@ struct PanelPlacementTests {
 
 @MainActor
 struct PanelTicketTests {
-    /// A newer request supersedes an older one: the older one's late result is dropped.
-    @Test func aNewerRequestSupersedesAnOlderOne() {
+    /// `PanelContent` exposes no title, so the case is read here rather than widening the type for
+    /// a test's convenience.
+    static func title(of content: PanelContent?) -> String? {
+        guard case .message(let title, _)? = content else { return nil }
+        return title
+    }
+
+    /// A newer request supersedes an older one — **and the late result is actually dropped**.
+    ///
+    /// This used to check `isCurrent` alone, which compares two numbers. Removing the stale-ticket
+    /// guards from `show` and `update` would not have failed it, and those guards are the whole
+    /// point: a superseded lookup's answer arriving after the reader has moved on must not repaint
+    /// the panel with the previous word.
+    @Test func aNewerRequestSupersedesAnOlderOneAndItsLateResultIsDropped() {
         let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
         let older = panel.newRequest()
         let newer = panel.newRequest()
         #expect(!panel.isCurrent(older))
         #expect(panel.isCurrent(newer))
+
+        panel.show(.message(title: "current", detail: "the newer request"), near: UpPoint(.zero), for: newer)
+        #expect(Self.title(of: panel.model.content) == "current")
+
+        // The older request's late answer, arriving by both routes.
+        panel.show(.message(title: "stale", detail: "the older request"), near: UpPoint(.zero), for: older)
+        #expect(Self.title(of: panel.model.content) == "current", "a superseded show repainted the panel")
+        panel.update(.message(title: "stale", detail: "the older request"), for: older)
+        #expect(Self.title(of: panel.model.content) == "current", "a superseded update repainted the panel")
+
+        // And after the panel closes, nothing can put content back.
+        panel.closed()
+        panel.update(.message(title: "stale", detail: "after closing"), for: newer)
+        #expect(panel.model.content == nil, "a late answer restored a closed panel's content")
     }
 }
 
@@ -114,14 +140,18 @@ struct PanelTicketTests {
 /// the panel shows.
 @MainActor
 struct EscapeKeyTests {
-    @Test func escapeIsClaimedBareAndRoutedToThePanel() {
+    @Test func escapeIsClaimedBareAndRoutedToThePanel() throws {
         let backend = FakeBackend()
         let center = HotkeyCenter(backend: backend)
         let escape = EscapeKey(hotkeys: center)
         var closed = false
         escape.claim { closed = true }
         #expect(backend.shortcuts == [Shortcut(keyCode: UInt32(kVK_Escape), modifiers: 0)])
-        #expect(center.route(EventHotKeyID(signature: HotkeyCenter.signature, id: backend.registered[0].id)) == noErr)
+        // `try #require` rather than `registered[0]`: the `#expect` above records a failure and
+        // carries on, so a regression in registration reached a subscript on an empty array and
+        // took the test *process* down instead of failing this one test.
+        let registered = try #require(backend.registered.first)
+        #expect(center.route(EventHotKeyID(signature: HotkeyCenter.signature, id: registered.id)) == noErr)
         #expect(closed)
     }
 
