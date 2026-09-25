@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import XiaolaiDictBase
 import XiaolaiDictCore
 import os
 

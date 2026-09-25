@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import Testing
+import XiaolaiDictBase
 
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI

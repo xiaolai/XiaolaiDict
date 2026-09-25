@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import os

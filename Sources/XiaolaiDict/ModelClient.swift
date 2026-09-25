@@ -1,6 +1,7 @@
 import Synchronization
 import Darwin
 import Foundation
+import XiaolaiDictBase
 import XiaolaiDictCore
 
 /// One conversation with the model service — the seam tests replace.

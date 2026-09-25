@@ -1,3 +1,5 @@
+import XiaolaiDictBase
+
 /// The dictionary service's wire protocol — what the app asks and what the service answers.
 ///
 /// Its own file, and **beside the domain model rather than inside it**: these six types are what

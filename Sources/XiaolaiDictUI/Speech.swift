@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import XiaolaiDictBase
 import XiaolaiDictCore
 import os
 

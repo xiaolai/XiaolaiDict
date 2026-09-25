@@ -1,5 +1,6 @@
 import ApplicationServices
 import OSLog
+import XiaolaiDictBase
 import XiaolaiDictCore
 import CoreGraphics
 import Foundation
