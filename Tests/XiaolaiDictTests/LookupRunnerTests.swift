@@ -243,7 +243,7 @@ struct LookupRunnerTests {
 
 /// A transport that accepts the request and never answers — the hung service the deadline exists
 /// for. It must outlast the deadline, so it sleeps well past it rather than racing it.
-private struct NeverReplies: DictionaryTransport {
+struct NeverReplies: DictionaryTransport {
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
         try await Task.sleep(for: .seconds(60))
         return .lookup(.notFound)
@@ -279,7 +279,8 @@ private final class SupersedingSelector: SenseSelecting, @unchecked Sendable {
 
 /// Stands in for the panel and remembers what it was asked to do, and in which order.
 @MainActor
-private final class RecordingPanel: LookupPanelPresenting {
+/// Shared with `WindowActionsWiringTests`, which drives the same runner with `canShow` off.
+final class RecordingPanel: LookupPanelPresenting {
     private(set) var contents: [PanelContent] = []
     private(set) var updates: [PanelContent] = []
     private var current = 0
@@ -291,9 +292,15 @@ private final class RecordingPanel: LookupPanelPresenting {
 
     func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
 
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) {
-        guard isCurrent(ticket) else { return }
+    /// Whether the panel can be drawn at all. The real controller answers `false` when the window
+    /// actions have not been captured; a test sets this to drive that branch.
+    var canShow = true
+
+    @discardableResult
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+        guard isCurrent(ticket), canShow else { return false }
         contents.append(content)
+        return true
     }
 
     func update(_ content: PanelContent, for ticket: PanelTicket) {

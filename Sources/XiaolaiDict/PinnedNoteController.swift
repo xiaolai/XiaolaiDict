@@ -30,7 +30,7 @@ final class PinnedNoteController {
             size: size)
 
         notes[note.id] = note
-        WindowActions.shared.open?(value: note.id)
+        WindowActions.shared.openWindow(value: note.id)
     }
 }
 
