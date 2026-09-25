@@ -571,7 +571,7 @@ public struct LookupPanelContent: View {
     /// The mark the card draws and every question is built from: the reader's own tap **in this
     /// entry** where there is one, and the selector's proposal otherwise.
     private func mark(for entry: DictionaryEntry) -> SenseMark? {
-        selection.mark(for: entry, proposing: presentation.sense)
+        selection.mark(for: entry, proposing: presentation.sense, ownedBy: presentation.senseOwner)
     }
 
     // MARK: - The row under the card

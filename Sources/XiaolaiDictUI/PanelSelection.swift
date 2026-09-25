@@ -39,8 +39,22 @@ public struct PanelSelection: Equatable {
 
     /// What the card draws and every question is built from: the reader's own tap **in this entry**
     /// where there is one, and the selector's proposal otherwise.
-    public func mark(for entry: DictionaryEntry, proposing proposal: SenseMark?) -> SenseMark? {
-        choices[Self.identity(of: entry)] ?? proposal
+    /// **A proposal belongs to one entry, and reaches no other.**
+    ///
+    /// This used to return `proposal` for every entry the reader had not chosen in — so the
+    /// primary dictionary's answer was drawn on all of them. That is not merely untidy: a
+    /// position-based sense key is `block + ordinal + hash` and repeats across dictionaries, so an
+    /// unrelated entry could show the primary's key as its own, and `.onlySense` — the most
+    /// confirmed mark there is — could appear on an entry nothing was decided about.
+    ///
+    /// `owner` is nil only where nothing was proposed. A proposal whose owner does not match is
+    /// not this entry's business, and the entry says nothing rather than borrowing it.
+    public func mark(
+        for entry: DictionaryEntry, proposing proposal: SenseMark?, ownedBy owner: String?
+    ) -> SenseMark? {
+        if let chosen = choices[Self.identity(of: entry)] { return chosen }
+        guard let owner, owner == Self.identity(of: entry) else { return nil }
+        return proposal
     }
 
     /// Whether the selector's late answer still changes what this entry shows. Where the reader has

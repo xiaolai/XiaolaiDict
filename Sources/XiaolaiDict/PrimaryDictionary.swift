@@ -1,5 +1,6 @@
 import Foundation
 import XiaolaiDictCore
+import XiaolaiDictUI
 
 /// Which dictionary XiaolaiDict studies from (decision D7).
 ///
@@ -112,6 +113,11 @@ extension PrimaryDictionary {
 struct SenseResolution: Equatable, Sendable {
     let mark: SenseMark?
     let encounter: SenseEncounter?
+    /// Which entry the mark is about — `PanelSelection.identity(of:)`'s spelling, so the card can
+    /// compare without knowing how identity is built. Nil where nothing was marked. The resolver
+    /// only ever looks at the primary dictionary's entries, so a mark drawn on any other entry was
+    /// always borrowed.
+    var owner: String? = nil
 
     /// Why no sense was marked, where the selector said.
     var abstention: Abstention? {
@@ -174,7 +180,8 @@ struct SenseResolver: Sendable {
            only.keyKind != SenseKeyKind.none, !only.key.isEmpty {
             return SenseResolution(
                 mark: .chosen(key: only.key, by: .onlySense),
-                encounter: primary.encounter(among: entries, at: when))
+                encounter: primary.encounter(among: entries, at: when),
+                owner: mine.first.map { PanelSelection.identity(of: $0) })
         }
 
         let choice = await selector.choose(
@@ -205,13 +212,18 @@ struct SenseResolver: Sendable {
                 // The chosen key belongs to no entry XiaolaiDict can key — nothing is claimed.
                 return SenseResolution(mark: nil, encounter: primary.encounter(among: entries, at: when))
             }
-            return SenseResolution(mark: .chosen(key: key, by: .model), encounter: encounter)
+            return SenseResolution(
+                mark: .chosen(key: key, by: .model), encounter: encounter,
+                owner: PanelSelection.identity(of: entry))
         case .abstained(let why, let nearest):
             // It says why it did not choose, and falls back to whatever *is* a fact — the entry,
             // when the primary answered with exactly one.
+            // An abstention belongs to the primary's entry too: "could not tell" about *this*
+            // dictionary is not a statement about the thesaurus's entry beside it.
             return SenseResolution(
                 mark: .couldNot(why, nearest: nearest),
-                encounter: primary.encounter(among: entries, at: when))
+                encounter: primary.encounter(among: entries, at: when),
+                owner: mine.count == 1 ? mine.first.map { PanelSelection.identity(of: $0) } : nil)
         }
     }
 }

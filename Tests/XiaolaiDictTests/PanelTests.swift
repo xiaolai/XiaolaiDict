@@ -267,7 +267,14 @@ struct PanelResizeWatchTests {
         window.setFrame(outside, display: false)
         panel.keepWhollyOnScreen(window)
         #expect(window.frame != outside, "an off-screen panel was left off the screen")
-        #expect(screen.visibleFrame.insetBy(dx: 8, dy: 8).contains(window.frame))
+        // **Against every screen, not against `NSScreen.main`.** That property is whichever screen
+        // holds the focused window, and it moves under a parallel test run — this machine has two
+        // displays, so the assertion and the code under test could resolve different ones and the
+        // test failed in a full run while passing alone. "Wholly on a screen" is the invariant;
+        // "wholly on the screen this test happened to read first" is a property of the machine.
+        #expect(
+            NSScreen.screens.contains { $0.visibleFrame.insetBy(dx: 8, dy: 8).contains(window.frame) },
+            "the panel was not brought wholly onto any screen: \(window.frame)")
     }
 
     /// A reader dragging the panel half off the screen is doing it on purpose, and snapping it back

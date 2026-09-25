@@ -57,12 +57,30 @@ struct PanelSelectionTests {
         var selection = PanelSelection()
         selection.choose("1.1", in: Self.auxiliary)
 
-        #expect(selection.mark(for: Self.auxiliary, proposing: Self.proposal)
-            == .chosen(key: "1.1", by: .reader))
-        #expect(selection.mark(for: Self.primary, proposing: Self.proposal) == Self.proposal,
-                "the tap in the auxiliary entry became the primary entry's mark")
-        #expect(selection.mark(for: Self.homograph, proposing: Self.proposal) == Self.proposal,
-                "the tap reached another entry of the same dictionary")
+        let owner = PanelSelection.identity(of: Self.primary)
+        #expect(
+            selection.mark(for: Self.auxiliary, proposing: Self.proposal, ownedBy: owner)
+                == .chosen(key: "1.1", by: .reader),
+            "the reader's own tap must outrank a proposal, even one made elsewhere")
+        #expect(
+            selection.mark(for: Self.primary, proposing: Self.proposal, ownedBy: owner) == Self.proposal,
+            "the tap in the auxiliary entry became the primary entry's mark")
+        // **Changed with the contract.** This used to expect the proposal here as well, which was
+        // the defect written down as behaviour: a positional key is `block.ordinal`, so every
+        // entry has a `"1.1"`, and the primary's answer drawn on a homograph is the right sense of
+        // the wrong word — shown, and offered for study.
+        #expect(
+            selection.mark(for: Self.homograph, proposing: Self.proposal, ownedBy: owner) == nil,
+            "the primary entry's proposal was drawn on another entry of the same dictionary")
+    }
+
+    /// A proposal with no owner reaches nothing. Nil means the resolver marked nothing — there is
+    /// no entry it could be about.
+    @Test func anUnownedProposalIsShownNowhere() {
+        let selection = PanelSelection()
+        for entry in [Self.primary, Self.auxiliary, Self.homograph] {
+            #expect(selection.mark(for: entry, proposing: Self.proposal, ownedBy: nil) == nil)
+        }
     }
 
     /// Both halves of the identity do work, so neither can be dropped.
@@ -82,9 +100,9 @@ struct PanelSelectionTests {
         selection.choose("1.1", in: Self.primary)
 
         #expect(selection.hasChosen(in: Self.primary))
-        #expect(selection.mark(for: Self.primary, proposing: .chosen(key: "1.2", by: .model))
+        #expect(selection.mark(for: Self.primary, proposing: .chosen(key: "1.2", by: .model), ownedBy: PanelSelection.identity(of: Self.primary))
             == .chosen(key: "1.1", by: .reader))
-        #expect(selection.mark(for: Self.primary, proposing: .couldNot(.tooClose))
+        #expect(selection.mark(for: Self.primary, proposing: .couldNot(.tooClose), ownedBy: PanelSelection.identity(of: Self.primary))
             == .chosen(key: "1.1", by: .reader))
     }
 
@@ -93,13 +111,13 @@ struct PanelSelectionTests {
     @Test func withNoTapTheLateProposalIsWhatTheCardDraws() {
         var selection = PanelSelection()
         #expect(!PanelSelection().hasChosen(in: Self.primary))
-        #expect(PanelSelection().mark(for: Self.primary, proposing: Self.proposal) == Self.proposal)
-        #expect(PanelSelection().mark(for: Self.primary, proposing: nil) == nil,
+        #expect(PanelSelection().mark(for: Self.primary, proposing: Self.proposal, ownedBy: PanelSelection.identity(of: Self.primary)) == Self.proposal)
+        #expect(PanelSelection().mark(for: Self.primary, proposing: nil, ownedBy: PanelSelection.identity(of: Self.primary)) == nil,
                 "a mark appeared where neither the reader nor the selector had chosen one")
 
         // A tap somewhere else is not a tap here.
         selection.choose("1.1", in: Self.auxiliary)
         #expect(!selection.hasChosen(in: Self.primary))
-        #expect(selection.mark(for: Self.primary, proposing: Self.proposal) == Self.proposal)
+        #expect(selection.mark(for: Self.primary, proposing: Self.proposal, ownedBy: PanelSelection.identity(of: Self.primary)) == Self.proposal)
     }
 }

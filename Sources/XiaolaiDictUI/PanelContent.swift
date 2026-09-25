@@ -23,6 +23,10 @@ public struct LookupPresentation: Equatable {
     /// Nil while the selector is still deciding. The entry is readable with all of its senses long
     /// before this arrives — the mark is late, the entry is not.
     public var sense: SenseMark?
+    /// Which entry `sense` is about — `PanelSelection.identity(of:)`'s spelling. The resolver only
+    /// ever reads the primary dictionary's entries, so a mark shown on any other entry is borrowed;
+    /// the card compares this before drawing one.
+    public var senseOwner: String?
     /// Nil on a first lookup, and until the ledger has been read. Prior encounters, never prior
     /// meanings.
     public var memory: MemoryStrip?

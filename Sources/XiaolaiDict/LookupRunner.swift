@@ -143,6 +143,7 @@ final class LookupRunner {
                     resolution = answered
                     guard let mark = answered.mark, panel.isCurrent(ticket) else { continue }
                     presentation.sense = mark
+                    presentation.senseOwner = answered.owner
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
