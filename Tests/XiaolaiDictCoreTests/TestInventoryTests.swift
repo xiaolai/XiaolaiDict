@@ -36,7 +36,7 @@ struct TestInventoryTests {
     /// without reading, and a floor that lags by a handful still catches what it is for — the
     /// incident it was written for was 47 to 4.
     static let floors = [
-        "XiaolaiDictTests": 629,
+        "XiaolaiDictTests": 631,
         "XiaolaiDictCoreTests": 547,
         "DictionaryBridgeTests": 54,
         "LocalModelTests": 47,
