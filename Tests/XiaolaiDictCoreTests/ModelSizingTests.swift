@@ -13,10 +13,11 @@ struct ModelSizingTests {
     /// budget, and the peaks it is spent against are the measured process footprints at load — which
     /// is why 8 GB is offered nothing and 9B waits for 32 GB.
     ///
-    /// **18 and 36 are here because they exist** (M3 Pro, M4 Max) and because they are the two
-    /// configurations nearest each threshold from above: 18 GB clears 4B's floor by 1,023 MB and
-    /// 36 GB clears 9B's by 2,583. A table of round numbers alone would not have said which side of
-    /// a boundary a real Mac falls on.
+    /// **18 and 36 are here because they exist** — the M3 Pro and the M4 Max ship them, and a table
+    /// of round numbers would have covered neither. The tightest margins belong to the round ones:
+    /// 16 GB clears 4B's floor by 511 MB and 32 GB clears 9B's by 1,559, against 18's 1,023 and 36's
+    /// 2,583. So the boundary cases are 8/16 and 24/32, and these two say the odd configurations
+    /// land where the arithmetic says they should.
     @Test(arguments: [
         (8, [LocalModelSize]()),
         (16, [.standard]),
