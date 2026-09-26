@@ -1,5 +1,7 @@
 import AppKit
+import OSLog
 import SwiftUI
+import XiaolaiDictBase
 import XiaolaiDictCore
 
 /// The permission half of the setup board's live state.
@@ -136,7 +138,10 @@ public struct SetupView: View {
             // them — they answered — but saying everything needed is here would be saying they have
             // something they declined.
             case 0 where localModel?.declined == true && board.model?.answering == nil:
-                Text("Nothing is waiting on you. The local model is still one click away above.")
+                // "above" was wrong: this summary sits before every row, so the model row is below
+                // it. Named rather than pointed at, because which direction it is in depends on a
+                // layout this sentence should not have to know.
+                Text("Nothing is waiting on you. The local model is still one click away, in the translation row.")
             case 0: Text("Everything needed is in place. Anything here can still be changed.")
             case 1: Text("One thing is still needed.")
             default: Text("\(board.outstanding.count) things are still needed.")
@@ -314,12 +319,21 @@ public struct SetupView: View {
             }
         case .stopped(let reason, let size, let replacing):
             VStack(alignment: .leading, spacing: scale.space.line) {
-                Text("The \(size.displayName) download stopped: \(reason). What arrived is kept, and it resumes from there.")
+                // "What arrived" and not "everything that arrived": a file whose hash or size does
+                // not match its pin is discarded rather than resumed from, so the promise has to be
+                // about the bytes that are still good. Overstated, it tells a reader whose download
+                // failed an integrity check that nothing will be re-fetched, and then re-fetches it.
+                Text("The \(size.displayName) download stopped: \(reason). What arrived and still checks out is kept, and it resumes from there.")
                 if replacing == nil { fallbackDetail() }
             }
         case .tooLittleMemory:
             VStack(alignment: .leading, spacing: scale.space.line) {
-                Text("This Mac has too little memory for the local model.")
+                // **Names the requirement, because nothing here can be acted on otherwise.** The
+                // reader cannot add memory; what they can do is understand why the row is a dead end
+                // rather than wonder whether a retry would help. 16 GB is the real-world threshold:
+                // the model's measured peak is 3,585 MB against a quarter-of-RAM budget, so it needs
+                // 14.0 GB and no Apple Silicon Mac ships between 8 and 16.
+                Text("The local model needs 16 GB of memory. This Mac has less, so it cannot run it.")
                 // Nothing is coming later here, so nothing is said to be.
                 fallbackDetail(untilThen: false)
             }
@@ -504,9 +518,24 @@ public struct SetupView: View {
     /// Dictionary.app is where the reader enables one. XiaolaiDict cannot do it for them: the
     /// dictionaries it cannot see are undownloaded system assets, and the enabled list is that
     /// app's own preference.
+    ///
+    /// **Both failures are said out loud.** `return` on an unresolvable bundle identifier, and a
+    /// discarded completion on the launch, made this button a control that can do nothing while
+    /// looking like it worked — the same shape as the script box that refused a click in silence.
+    /// A reader who is being told to go and enable a dictionary, and whose button does nothing,
+    /// has no way to tell that from having missed the window.
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "setup")
+
     private func openDictionaryApp() {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Dictionary")
-        else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        else {
+            Self.log.fault("Dictionary.app could not be found by bundle identifier, so the reader's button did nothing")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if let error {
+                Self.log.fault("Dictionary.app would not open: \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 }

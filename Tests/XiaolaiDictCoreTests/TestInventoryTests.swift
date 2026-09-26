@@ -36,10 +36,10 @@ struct TestInventoryTests {
     /// without reading, and a floor that lags by a handful still catches what it is for — the
     /// incident it was written for was 47 to 4.
     static let floors = [
-        "XiaolaiDictTests": 625,
-        "XiaolaiDictCoreTests": 547,
+        "XiaolaiDictTests": 631,
+        "XiaolaiDictCoreTests": 548,
         "DictionaryBridgeTests": 54,
-        "LocalModelTests": 47,
+        "LocalModelTests": 48,
     ]
 
     private static let testsRoot = URL(fileURLWithPath: #filePath)

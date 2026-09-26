@@ -2,14 +2,19 @@ import Foundation
 
 /// Which Qwen3.5 the reader has, by the job its size does.
 ///
-/// Three, because that is what was measured on the MacBook Pro 16 on 2026-09-22 and what a Mac can
-/// be told apart by: **4B is the default** — every sense and every sentence right, 0.44 s a sense
-/// answer, 3.4 GB while loaded; **2B is the floor** for a Mac that cannot hold 4B, with one English
-/// leak seen in eight sentences; **9B is an opt-in** — a little more idiomatic at twice the time
-/// and memory. 0.8B is not here because it is not usable: *table … until next month* became
-/// "submit", the opposite.
+/// **4B is the model.** Measured on the MacBook Pro 16 on 2026-09-22: every sense and every sentence
+/// right, 0.44 s a sense answer, 3.4 GB while loaded. **9B is an opt-in** — a little more idiomatic
+/// at twice the time and memory, never recommended. 0.8B was measured and is not usable: *table …
+/// until next month* became "submit", the opposite.
+///
+/// **2B is gone, and its absence is the policy (decided 2026-09-26).** It was the floor for a Mac
+/// that could hold it and not 4B — physical memory from 8.20 to 14.00 GB, a window no Apple Silicon
+/// configuration falls in, so no reader could ever reach it. **A Mac that cannot hold 4B gets
+/// Apple's on-device model instead**, one rung down the ladder, and `NLEmbedding` below that. 8 GB
+/// is out of scope for the local model deliberately: 2B's own peak missed a quarter of 8 GB by 50 MB
+/// (2,098 against 2,048), so it never served the Mac it existed for. ADR-0012 has the reachability
+/// argument and the four call sites it was read off.
 public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable {
-    case small
     case standard
     case large
 
@@ -21,25 +26,23 @@ public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable 
     /// The parameter count, which is how the model is named everywhere else.
     public var parameters: String {
         switch self {
-        case .small: "2B"
         case .standard: "4B"
         case .large: "9B"
         }
     }
 
     /// The **process's** peak footprint, measured on the M4 Max (the Qwen benchmark's `raw` runs):
-    /// 2,098, 3,585 and 6,633 MB, all at load — the worst moment, when the weights are being mapped
-    /// and MLX's buffers are not yet trimmed. It settles lower afterwards (1,395 / 2,741 / 5,282, and
+    /// 3,585 and 6,633 MB, both at load — the worst moment, when the weights are being mapped
+    /// and MLX's buffers are not yet trimmed. It settles lower afterwards (2,741 / 5,282, and
     /// the E2E service measured 2,733 MB holding the 4B), but the moment that decides whether a Mac
     /// swaps is the peak, not what it relaxes to.
     ///
-    /// **Not MLX's own counters** (1,886 / 3,363 / 5,806): they leave out what the OS has mapped for
+    /// **Not MLX's own counters** (3,363 / 5,806): they leave out what the OS has mapped for
     /// the process, and sizing on them offered every size about 200–800 MB more cheaply than it costs.
     /// What sizing decides against — **before** loading, because neither MLX's memory limit nor the OS
     /// pressure handler stops a model too large for the Mac (the MLX-in-XPC spike, S3).
     public var peakMemory: UInt64 {
         switch self {
-        case .small: 2_098 * Self.megabyte
         case .standard: 3_585 * Self.megabyte
         case .large: 6_633 * Self.megabyte
         }
@@ -47,7 +50,6 @@ public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable 
 
     public var manifest: ModelManifest {
         switch self {
-        case .small: .qwen35Small
         case .standard: .qwen35Standard
         case .large: .qwen35Large
         }
@@ -164,14 +166,6 @@ extension ModelManifest {
         ("video_preprocessor_config.json", 385, "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"),
         ("vocab.json", 6_722_759, "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"),
     ]
-
-    static let qwen35Small = mirror(
-        .small, "mlx-community/Qwen3.5-2B-4bit", "ffa48c63955c56e22d76c1b2acd9b89e26310618", [
-            ("chat_template.jinja", 7_755, "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"),
-            ("config.json", 3_113, "beb7fc5a6e0405fe332821cf1a8ef7b69bb390a8c8933171647de5579debf949"),
-            ("model.safetensors", 1_722_271_785, "713fe7e5d3c3965f7106b0d0ee17615f7869c23c8d327996df8c1196fbcf07d5"),
-            ("model.safetensors.index.json", 81_722, "8294c05cca7d53a6c33e3db2b379539bd296d054e0b689711b16b6ac93c7e49d"),
-        ] + sharedTokenizer)
 
     static let qwen35Standard = mirror(
         .standard, "mlx-community/Qwen3.5-4B-4bit", "ab9c7a42fd31095a40634b3362317779dee9e7fa", [

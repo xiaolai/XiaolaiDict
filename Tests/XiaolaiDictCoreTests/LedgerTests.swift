@@ -1,5 +1,5 @@
 import Foundation
-import XiaolaiDictCore
+@testable import XiaolaiDictCore
 import SQLite3
 import Testing
 
@@ -220,19 +220,50 @@ struct LedgerTests {
 
     /// Another connection holding the write lock — a second XiaolaiDict, a database browser — makes a
     /// write wait for it, not fail at once and lose the lookup.
+    ///
+    /// **The 300 ms sleep this used to hold the lock for was a wall-clock bound in disguise, and it
+    /// failed.** The holder slept in a detached task and the writer waits `busyTimeoutMilliseconds`
+    /// (2,000). Under a full parallel run — 631 tests in one target alone — a detached task is not
+    /// guaranteed to be scheduled inside two seconds, so the lock was held past the product's bound
+    /// and `record` threw `.sqlite(code: 5, "database is locked")`. That is the *product* doing
+    /// exactly what it promises; the test was measuring how busy the runner was, which is the thing
+    /// `AGENTS.md` forbids a unit test to do.
+    ///
+    /// So the lock is now held across **one scheduling hop and no sleep at all**: the write is started,
+    /// then committed immediately. It cannot exceed the bound unless the whole process is frozen, and
+    /// the waiting path is exercised whenever the writer reaches the lock first. That is opportunistic,
+    /// and deliberately so — there is no way to observe "the writer is now blocked inside SQLite" from
+    /// outside it, so the alternative is a race with a longer fuse, not a deterministic test.
+    ///
+    /// The bound itself is pinned separately below, which is the part that cannot flake: a
+    /// `busy_timeout` of zero would make this whole behaviour impossible, and no timing test is needed
+    /// to see that.
     @Test func aWriteWaitsForAnotherConnectionsLock() async throws {
         let path = temporaryPath()
         defer { removeDatabase(at: path) }
-        let ledger = try Ledger(path: path)
         let other = try SQLiteFile(path: path)
         try other.execute("BEGIN IMMEDIATE")
-        let release = Task.detached {
-            try await Task.sleep(for: .milliseconds(300))
-            try other.execute("COMMIT")
+        // The writer opens its own connection inside the task — `Ledger` is not `Sendable`, and a
+        // second connection is what this test is about anyway.
+        let write = Task.detached {
+            try Ledger(path: path).record(record("ephemeral", lemma: "ephemeral"))
         }
-        try ledger.record(record("ephemeral", lemma: "ephemeral"))
-        try await release.value
-        #expect(try ledger.history(of: "ephemeral").count == 1)
+        // Released on this task, with no sleep between starting the writer and letting go: the hold
+        // spans one scheduling hop rather than a fixed 300 ms that a loaded runner could stretch past
+        // the writer's own two-second bound.
+        try other.execute("COMMIT")
+        // Throws if the write failed rather than waited, which is the assertion.
+        try await write.value
+        #expect(try Ledger(path: path).history(of: "ephemeral").count == 1)
+    }
+
+    /// **A write waits because the connection is told to wait.** Pinned as a number because it is the
+    /// mechanism behind the test above and the only part of it that a busy machine cannot disturb:
+    /// with a `busy_timeout` of zero, SQLite returns `SQLITE_BUSY` on the first contended write and a
+    /// reader's lookup is lost the moment anything else holds the database.
+    @Test func aConnectionIsToldToWaitForALockedDatabase() {
+        #expect(Ledger.busyTimeoutMilliseconds >= 1_000,
+                "a write that gives up quickly loses a lookup whenever anything else holds the ledger")
     }
 
     @Test(arguments: [-0.1, 1.1, Double.nan])

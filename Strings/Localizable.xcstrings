@@ -386,7 +386,7 @@
     "Not set" : {
 
     },
-    "Nothing is waiting on you. The local model is still one click away above." : {
+    "Nothing is waiting on you. The local model is still one click away, in the translation row." : {
 
     },
     "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
@@ -588,12 +588,12 @@
     "Text" : {
 
     },
-    "The %@ download stopped: %@. What arrived is kept, and it resumes from there." : {
+    "The %@ download stopped: %@. What arrived and still checks out is kept, and it resumes from there." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The %1$@ download stopped: %2$@. What arrived is kept, and it resumes from there."
+            "value" : "The %1$@ download stopped: %2$@. What arrived and still checks out is kept, and it resumes from there."
           }
         }
       }
@@ -632,6 +632,9 @@
         }
       }
     },
+    "The local model needs 16 GB of memory. This Mac has less, so it cannot run it." : {
+
+    },
     "The model declined to compare this sentence against the senses." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
     },
@@ -648,9 +651,6 @@
 
     },
     "Third-party notices" : {
-
-    },
-    "This Mac has too little memory for the local model." : {
 
     },
     "This board was opened without the model's state, so it cannot say what is here." : {
