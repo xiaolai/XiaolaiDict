@@ -72,6 +72,12 @@ enum ModelReport {
             return false
         }
         report["size"] = size.rawValue
+        // **The peak this size was sized against, so a check outside does not need its own copy of
+        // the catalogue.** `e2e.sh` bounded the footprint at a hard-coded 4,500 MB "with room for the
+        // process itself" — but 3,585 MB *is* the measured process peak, so the slack was arbitrary
+        // and double-counted, and the number only ever fitted 4B. This instrument already knows which
+        // size it chose; reporting its peak lets the bound be derived from it instead.
+        report["peakMB"] = Int(size.peakMemory / (1_024 * 1_024))
         let downloaded = try await install(size.manifest, into: store, report: &report)
         guard downloaded.installed else { return false }
 
