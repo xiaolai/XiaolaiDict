@@ -23,19 +23,19 @@ struct XiaolaiDictMenu: View {
         // while `HoverModifier` had four cases, which was correct only for as long as the reader
         // could not change it — and a menu naming the wrong key is worse than naming none, since
         // the reader holds it and nothing happens.
-        Toggle("Hover Lookup    hold \(app.hoverPolicy.modifier.symbol)", isOn: Binding(
-            get: { app.hoverIsWatching }, set: { _ in app.toggleHover() }))
+        Toggle("Hover Lookup    hold \(app.hover.policy.modifier.symbol)", isOn: Binding(
+            get: { app.hover.isWatching }, set: { _ in app.hover.toggle() }))
 
         // The pause switch (A5). It was specified, modelled, given three lengths and a label —
         // and never drawn, so `HoverPause.label(at:)`'s "what the menu says" described a menu that
         // did not exist. Resuming is one click; pausing picks a length, which is what having three
         // of them is for.
-        if app.hoverIsPaused {
-            Button(app.hoverPauseLabel) { app.resumeHover() }
+        if app.hover.isPaused {
+            Button(app.hover.pauseLabel) { app.hover.resume() }
         } else {
-            Menu(app.hoverPauseLabel) {
+            Menu(app.hover.pauseLabel) {
                 ForEach(HoverPause.durations, id: \.self) { duration in
-                    Button(HoverPause.name(of: duration)) { app.pauseHover(for: duration) }
+                    Button(HoverPause.name(of: duration)) { app.hover.pause(for: duration) }
                 }
             }
         }

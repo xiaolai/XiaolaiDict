@@ -112,7 +112,7 @@ struct ScriptFilterWiringTests {
     @Test func theDrawerFiltersByTheScriptsTheReaderStudies() throws {
         let app = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
         #expect(app.contains("studying: studying"), "the drawer does not pass the reader's scripts")
-        #expect(app.contains("hoverPolicy.scripts"),
+        #expect(app.contains("hover.policy.scripts"),
                 "the drawer's filter is not the setting the hover gate reads")
     }
 

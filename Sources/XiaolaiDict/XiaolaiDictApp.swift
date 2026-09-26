@@ -26,32 +26,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let setupPresentation: SetupPresentationStore
     @ObservationIgnored private lazy var runner = makeRunner()
     @ObservationIgnored private lazy var drawer = makeDrawer()
-    /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
-    /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
-    ///
-    /// Lazy so it can be handed a closure onto `hoverPause` below — a stored property cannot read
-    /// `self`, which is the mechanical reason the pause was never connected to anything.
-    @ObservationIgnored private(set) lazy var hover = makeHover()
-
-    /// **The pause the menu offers and the gate reads — one value, held here.** There was no such
-    /// value: `HoverReader`'s default built a fresh `HoverPause` on every call, so the gate asked
-    /// "is XiaolaiDict paused" of an object that had just been born and always answered no. Nothing in
-    /// the app or the suite ever supplied one, and the menu item `HoverPause.label(at:)` was
-    /// written for did not exist. The model was complete and unreachable.
-    private(set) var hoverPause = HoverPause()
-
-    /// The reader's hover policy, **held in memory and observed**, with the store behind it.
-    ///
-    /// Read rather than loaded on each use on purpose: `HoverWatcher` asks for the policy on every
-    /// pointer change to get `settleMilliseconds`, so decoding it there would put a JSON decode on
-    /// the mouse-move path. One decode at launch, one write when the reader changes something.
     /// The suite this app was built with — the reader's own, or a test's temporary one.
     /// **Kept, not just passed through.** Every store below was handed it at init while
     /// `hoverEnabled` went on reading `UserDefaults.standard`, which is how a unit test came
     /// to be able to switch the reader's hover off.
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let hoverPolicyStore: HoverPolicyStore
-    private(set) var hoverPolicy: HoverPolicy
+
+    /// Everything the reader can do to hover, and one value per thing — see `HoverControl`, where
+    /// every member has already been a defect about there being two copies or a fresh one per call.
+    let hover: HoverControl
 
     /// **`init()` must exist, and must be written out.** `@NSApplicationDelegateAdaptor`
     /// instantiates the delegate through the Objective-C runtime, which looks for `init` and finds
@@ -81,9 +64,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
         self.defaults = defaults
-        let store = HoverPolicyStore(defaults: defaults)
-        hoverPolicyStore = store
-        hoverPolicy = store.load()
+        hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
         // preferences while `init(defaults:)` existed for exactly this reason, so every test that
         // touched the shortcut rewrote the reader's own — the objection this project makes to
@@ -102,27 +83,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Changing it saves it and takes effect immediately — the watcher reads this property, so
-    /// there is nothing to restart and no second copy to keep in step.
-    func setHoverPolicy(_ policy: HoverPolicy) {
-        hoverPolicy = policy
-        hoverPolicyStore.save(policy)
-    }
-
-    /// What the pause control says. Observed, so pausing redraws the menu without being told to.
-    var hoverPauseLabel: String { hoverPause.label(at: .now) }
-    var hoverIsPaused: Bool { hoverPause.isPaused(at: .now) }
-
-    func pauseHover(for duration: Duration) { hoverPause.pause(for: duration, from: .now) }
-    func resumeHover() { hoverPause.resume() }
-
-    private func makeHover() -> HoverWatcher {
-        // `self` is read at decision time, not captured by value — a copy taken here would be the
-        // same never-changing pause this replaces.
-        HoverWatcher(
-            policy: { [weak self] in self?.hoverPolicy ?? .shipped },
-            pause: { [weak self] in self?.hoverPause ?? HoverPause() })
-    }
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
@@ -140,7 +100,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // scripts they study sees the words already in the ledger the next time they open the
             // drawer — the filter is on the reading, not on the recording, so nothing was thrown
             // away while the setting was narrow.
-            let studying = self?.hoverPolicy.scripts ?? HoverPolicy.defaultScripts
+            let studying = self?.hover.policy.scripts ?? HoverPolicy.defaultScripts
             do {
                 let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
                 return .entries(try await opening.value.recentLookups(
@@ -236,7 +196,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             NSApplication.shared.windows.first { $0.className.contains("StatusBar") }?.frame
         }
         Task { [weak self] in self?.permissions = await .probe() }
-        hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
+        hover.watcher.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
         // Watching the pointer is something the reader must be able to stop, so it is a setting
         // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
@@ -307,7 +267,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
         // fired meanwhile would capture too — two captures at once deadlock, measured six trials
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
-        if hoverEnabled, !Self.isInstrumented { hover.start() }
+        if !Self.isInstrumented { hover.startIfEnabled() }
         // **Only if nothing is registered and nothing is suspended.** A capture landing while the
         // reader has the shortcut recorder armed would otherwise take the combination back from the
         // field they are typing into — `suspend(true)` releases the hot key precisely so the key
@@ -363,26 +323,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Hover
-
-    private static let hoverEnabledKey = "hoverLookupEnabled"
-
-    /// Defaults to on for a reader who has never chosen, and remembers a reader who has.
-    ///
-    /// **Read and written through the injected suite**, like every other setting this class
-    /// owns. It reached for `UserDefaults.standard` directly, so an instance built with a
-    /// temporary suite — which is every instance a test builds, and the whole reason
-    /// `init(defaults:)` exists — still read the reader's real preference and could turn
-    /// their hover off. The other stores on this line were already passed `defaults`; this
-    /// one was simply missed.
-    private var hoverEnabled: Bool {
-        get { defaults.object(forKey: Self.hoverEnabledKey) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Self.hoverEnabledKey) }
-    }
-
-    func toggleHover() {
-        hoverEnabled.toggle()
-        if hoverEnabled { hover.start() } else { hover.stop() }
-    }
 
     /// Every answered lookup is recorded — a miss too, marked as one: it is usually a typo or a
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
@@ -569,7 +509,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// The shortcut as the reader set it, or nil while there is none.
     var shortcutLabel: String? { shortcuts.label }
-    var hoverIsWatching: Bool { hover.isWatching }
+
     var drawerIsVisible: Bool { drawer.isVisible }
     /// The primary dictionary's key, held as **stored** state rather than read from
     /// `UserDefaults` on each access.
