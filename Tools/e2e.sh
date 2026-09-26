@@ -509,6 +509,31 @@ run_bounded() {
     return "$status"
 }
 
+# **One place that ends an instrument, and it matches *this* bundle rather than any bundle.**
+#
+# `pkill -f "MacOS/XiaolaiDict $flag"` matched a substring of the command line, so a second checkout's
+# copy of the app, or another run on this machine, was a candidate for the kill — including `pkill -9`.
+# Anchored to `$exe`, the absolute path of the bundle under test, the pattern can only reach processes
+# this run started.
+#
+# And it is **waited for before it is killed, then insisted on**, because an instrument that is still
+# running is not finished with the screen: two simultaneous `SCScreenshotManager` captures deadlock,
+# 6 trials of 6. `read_point` returned as soon as output appeared and never reaped anything, so the
+# recogniser stage's grid started each capture beside the last one still running — the harness
+# breaking a rule this project measured and wrote down.
+end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument to end, then insist
+    local pattern="$exe $1"
+    for _ in $(seq 1 40); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    pkill -f "$pattern" 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    pkill -9 -f "$pattern" 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    # Said out loud: an instrument that survives its own killing can still capture the screen, and
+    # whatever runs next would be measuring against it.
+    echo "note: $1 would not die; what runs after this is running beside it"
+    return 1
+}
+
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
     local flag=$1 budget=$2 name=${1#--}
     local out="$reports/$name.json" err="$reports/$name.err"
@@ -518,19 +543,8 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     while [ ! -s "$out" ] && [ "$waited" -lt $((budget * 2)) ]; do sleep 0.5; waited=$((waited + 1)); done
     # Past its budget it is stopped; within it, it exits by itself once it has written. Waited for
     # either way, so no report outlives its stage.
-    [ -s "$out" ] || pkill -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
-    for _ in $(seq 1 40); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
-    # And if it ignored that, it is killed: a report still running can still capture the screen,
-    # and two captures at once deadlock.
-    if pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null; then
-        pkill -9 -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
-        for _ in $(seq 1 20); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
-        # Said out loud if it is still there: a report that survives its own killing can still
-        # capture the screen, and the next stage would be measuring against it.
-        pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null \
-            && echo "note: $flag would not die; the stage after this one is running beside it"
-    fi
-    true
+    [ -s "$out" ] || pkill -f "$exe $flag" 2>/dev/null || true
+    end_instrument "$flag" || true
     # **The contract in this function's own first line, now enforced: valid JSON, or nothing.**
     # An instrument launched through `open` has no exit status to read — LaunchServices returns as
     # soon as it has started the process — so the thing that *can* be checked is the product. A
@@ -724,19 +738,29 @@ else
     # than a second. A fixed wait turns load into a failure about rendering, which is what it did.
     # The assertion below is unchanged: a page that never arrives still fails, it just is not
     # declared missing while it is still on its way.
+    # **One list of "this panel has not answered yet" markers, shared by the poll and the assertion
+    # below.** Written twice, the two copies diverged in both possible ways at once. The poll asked
+    # for a text element *equal* to the word while the assertion looked for it *within* a text — and
+    # the long comment on the assertion explains exactly why the substring form is the correct one,
+    # so the fix had been applied to one copy of two. On a primary that lemmatises, the poll could
+    # therefore never succeed: it burned all 150 iterations and the assertion passed anyway, which is
+    # a poll measuring nothing. And both copies still named `could not be asked`, wording the app
+    # does not have — the same stale string already corrected in the grep at the deadline stage.
+    card_failure_markers='Looking up|No entry for|could not all be asked|needs Accessibility'
     view=""
     for _ in $(seq 1 150); do
         view=$("$helpers/panel" com.xiaolaidict)
         printf '%s' "$view" | python3 -c '
 import json, sys
-failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
-panels = [w for w in json.load(sys.stdin)["windows"] if "meeting" in w["texts"] and not any(m in t for t in w["texts"] for m in failed)]
+failed = sys.argv[1].split("|")
+panels = [w for w in json.load(sys.stdin)["windows"]
+          if any("meeting" in t for t in w["texts"]) and not any(m in t for t in w["texts"] for m in failed)]
 sys.exit(0 if panels else 1)
-' && break
+' "$card_failure_markers" && break
         sleep 0.1
     done
     view=$("$helpers/panel" com.xiaolaidict)
-    if why=$(python3 - "$view" 2>&1 <<'PY'
+    if why=$(python3 - "$view" "$card_failure_markers" 2>&1 <<'PY'
 import json, sys
 view = json.loads(sys.argv[1])
 # The answer card, headed by the word itself — an exact text element, so the waiting view's
@@ -752,7 +776,7 @@ view = json.loads(sys.argv[1])
 # only while the primary dictionary happened to head the entry with the selected string. It failed
 # the day the primary was one that lemmatises, with the card on screen and correct. The reader's own
 # sentence carries the surface form either way, which is what this now matches.
-failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
+failed = sys.argv[2].split("|")
 panels = [w for w in view["windows"] if any("meeting" in t for t in w["texts"])
           and not any(m in t for t in w["texts"] for m in failed)]
 problems = []
@@ -821,7 +845,10 @@ else
             sleep 0.05
         done
         if [ -z "$shown" ]; then
-            flunk "waiting panel: never appeared while the service was suspended"
+            # `$waiting` is what was captured and never read: the last panel seen, which is the whole
+            # evidence for why this failed — an empty window list reads very differently from a panel
+            # that came up with the wrong words in it.
+            flunk "waiting panel: never appeared while the service was suspended (last view: $(printf '%s' "${waiting:-$view}" | head -c 240))"
         else
             took=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$started" "$shown")
             if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)" "$took"; then
@@ -1059,6 +1086,9 @@ read_point() {  # read_point <x> <y>: the instrument's JSON on success, nothing 
         [ -s "$out" ] || [ -s "$err" ] || { sleep 0.5; continue; }
         break
     done
+    # **Reaped before returning.** Output appearing is not the process ending, and the caller's next
+    # move is another `--read-point` — a second screen capture, which deadlocks against a live one.
+    end_instrument --read-point || true
     cat "$out" 2>/dev/null
 }
 
@@ -1125,16 +1155,42 @@ if want setup; then
 # asking. Bounded, so a service that never answers is reported by the check that needs it.
 # Defined before anything below uses them: `settle_after_launch` calls `board_on_screen`, and
 # a helper defined after its first caller is "command not found" — under `|| return 0`, silently.
+# **A bounded wait that runs out is not the thing it was waiting for.** Both loops here fell through
+# in silence, and the second one made the first one's silence dangerous: `! is_running || break`
+# breaks when the app *is* running, so an app that never quit satisfied it on the first iteration.
+# `open` then did nothing to an already-running process and the function returned success, having
+# restarted nothing — while every assertion downstream believed it was reading a fresh launch. That
+# is the case the setup stage depends on most: it restarts the app precisely to reach the
+# fresh-reader branch of the model row.
+#
+# So the old process must be **gone**, and a **new** pid must be there afterwards. The new-pid check
+# is not redundant with the death check: it is what says `open` actually started something, rather
+# than the start loop having run out too.
 restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local before pid fresh=""
     find_pids "$exe"
+    before=" ${PIDS[*]+${PIDS[*]}} "
     [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}"
     for _ in $(seq 1 100); do is_running "$exe" || break; sleep 0.1; done
+    if is_running "$exe"; then
+        echo "restart_app: XiaolaiDict would not quit (pids$before), so nothing was restarted" >&2
+        return 1
+    fi
     open "$app"
     for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
+    find_pids "$exe"
+    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
+        case $before in *" $pid "*) ;; *) fresh=$pid ;; esac
+    done
+    if [ -z "$fresh" ]; then
+        echo "restart_app: no new XiaolaiDict process appeared after open (before:$before)" >&2
+        return 1
+    fi
     for _ in $(seq 1 100); do
         "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
         sleep 0.2
     done
+    echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
     return 1
 }
 board_on_screen() {  # board_on_screen: 0 drawn, 1 absent, 2 exists but not drawn
