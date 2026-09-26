@@ -1297,7 +1297,7 @@ else
             pass "setup: the model row says the model is ready"
         elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
             flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
-        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
+        elif printf '%s' "$shown" | grep -q "The local model needs 16 GB of memory."; then
             # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
             if printf '%s' "$shown" | grep -q "Without a local model"; then
                 pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
