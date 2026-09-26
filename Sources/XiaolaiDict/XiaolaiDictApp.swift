@@ -88,14 +88,18 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // preferences while `init(defaults:)` existed for exactly this reason, so every test that
         // touched the shortcut rewrote the reader's own — the objection this project makes to
         // driving the GUI on the building Mac, in a unit test.
-        shortcuts = ShortcutStore(defaults: defaults)
+
         setupPresentation = SetupPresentationStore(defaults: defaults)
         let primary = PrimaryDictionaryStore(defaults: defaults)
         primaryDictionary = primary
         chosenDictionary = primary.load().chosen
         self.models = models
-        self.hotkeys = hotkeys
         super.init()
+        // After `super.init()`: the registrar's press handler captures `self`, which an
+        // initialiser may not hand out before the object exists.
+        shortcuts = ShortcutRegistrar(defaults: defaults, hotkeys: hotkeys) { [weak self] in
+            self?.lookUpSelection()
+        }
     }
 
     /// Changing it saves it and takes effect immediately — the watcher reads this property, so
@@ -184,11 +188,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var dictionaries: [DictionaryCapability]?
     /// Whether the service has been asked and has finished answering — see `DictionaryChoice`.
     private(set) var dictionariesAsked = false
-    @ObservationIgnored private let shortcuts: ShortcutStore
+    /// The lookup shortcut and everything about registering it — see `ShortcutRegistrar`, which
+    /// holds the three-state machine this delegate used to carry as four adjacent properties.
+    @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
     /// Carbon's hot-key plumbing, injected so a test never registers a real global shortcut —
     /// which would take it from the reader for as long as the suite ran.
-    @ObservationIgnored private let hotkeys: HotkeyCenter
-    private var hotkey: Hotkey?
     /// Opened on a background task at launch: file and database work — a migration, on the first
     /// launch after an update — must not hold up the menu bar.
     private var ledger: Task<LedgerStore, any Error>?
@@ -196,8 +200,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private var lookup: Task<Void, Never>?
     private var termination: (any DispatchSourceSignal)?
 
-    /// Problems the reader should see, shown in the menu rather than swallowed.
-    private var hotkeyProblem: String?
     /// The ledger's state as of the newest request to finish recording — not of whichever write
     /// happened to finish last.
     private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
@@ -308,9 +310,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         if hoverEnabled, !Self.isInstrumented { hover.start() }
         // **Only if nothing is registered and nothing is suspended.** A capture landing while the
         // reader has the shortcut recorder armed would otherwise take the combination back from the
-        // field they are typing into — `suspendShortcut(true)` sets `hotkey` to nil precisely so the
-        // key reaches the field, and `registerShortcut` puts it back unconditionally.
-        if hotkey == nil, !shortcutIsSuspended { registerShortcut(shortcuts.load()) }
+        // field they are typing into — `suspend(true)` releases the hot key precisely so the key
+        // reaches the field, and registering puts it back unconditionally.
+        if !shortcuts.isRegistered, !shortcuts.isSuspended { shortcuts.registerSaved() }
     }
 
     /// Whether this process is an instrument rather than the reader's app — see `Instruments`.
@@ -424,21 +426,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - Shortcut
 
-    /// Nil when the shortcut is registered; otherwise why it could not be.
-    @discardableResult
-    private func registerShortcut(_ shortcut: Shortcut) -> Hotkey.RegistrationFailed? {
-        hotkey = nil  // released first: registration is exclusive, and would collide with itself
-        do {
-            hotkey = try hotkeys.register(shortcut) { [weak self] in self?.lookUpSelection() }
-            hotkeyProblem = nil
-            return nil
-        } catch {
-            hotkeyProblem = "\(shortcut.label()) is unavailable: \(error)"
-            log.error("hotkey unavailable: \(String(describing: error), privacy: .public)")
-            return error
-        }
-    }
-
     /// Opens Settings **and brings XiaolaiDict forward with it.**
     ///
     /// `SettingsLink` opens the window and leaves the app where it was, which for an accessory app
@@ -547,86 +534,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         setupPresentation.markOpened()
     }
 
-    /// The shortcut as it stands: the one registered, or — while the field in Settings is armed
-    /// and nothing is registered — the one on disk.
-    var currentShortcut: Shortcut { hotkey?.shortcut ?? shortcuts.load() }
-
-    /// Whether XiaolaiDict is answering its shortcut. Read by the wiring tests, because "the field drew
-    /// the right combination" and "the combination works" are different claims.
-    var shortcutIsRegistered: Bool { hotkey != nil }
-
-    /// Settings' shortcut control, as `XiaolaiDictUI` needs it.
-    ///
-    /// Handed over rather than reached for: registering a combination with the system is Carbon,
-    /// which lives here, and `XiaolaiDictUI` draws rather than registers.
-    var shortcutChoice: ShortcutChoice {
-        ShortcutChoice(
-            shortcut: currentShortcut,
-            choose: { [weak self] shortcut in
-                // An app that is gone registered nothing, and must not be reported as having done so.
-                guard let self else { return String(localized: "The app is not running") }
-                return chooseShortcut(shortcut)?.description
-            },
-            suspend: { [weak self] in self?.suspendShortcut($0) })
-    }
-
-    /// Stands the hot key down while the field is armed, and puts it back after.
-    ///
-    /// **Without this the one combination a reader most wants to change is the one they cannot.**
-    /// A registered hot key is handled below the Cocoa event stream, so pressing the shortcut
-    /// currently in use fires a lookup instead of reaching the field.
-    ///
-    /// Putting it back is conditional on nothing being registered, which makes it idempotent — the
-    /// field disarms after a successful choice, and a `suspend(false)` that re-registered whatever
-    /// was on disk would undo the choice a moment after the reader made it.
-    func suspendShortcut(_ suspended: Bool) {
-        // **Recorded, not inferred from `hotkey == nil`.** Those two states look identical and mean
-        // opposite things: "the reader is typing a new combination into the field" and "nothing has
-        // registered one yet". `armTriggers` asks this before it registers, because a window-action
-        // capture landing mid-recording would otherwise take the key back from the field.
-        shortcutIsSuspended = suspended
-        if suspended {
-            hotkey = nil
-        } else if hotkey == nil {
-            registerShortcut(shortcuts.load())
-        }
-    }
-
-    /// Whether the shortcut recorder is armed. See `suspendShortcut`.
-    private(set) var shortcutIsSuspended = false
-
-    /// Takes the reader's new shortcut: registers it, and saves it if it held. Nil means it held;
-    /// otherwise the refusal says why — another app holds it, XiaolaiDict holds it for something else, or
-    /// Carbon answered with a status — and the one that worked is left working.
-    @discardableResult
-    func chooseShortcut(_ chosen: Shortcut) -> Hotkey.RegistrationFailed? {
-        let previous = currentShortcut
-        guard chosen != previous || hotkey == nil else { return nil }
-        if let refusal = registerShortcut(chosen) {
-            // Keep the problem with the new one in view, and the old one working — but only
-            // say so if it *is* working. The rollback's own result was discarded, so when
-            // both registrations failed the reader was told XiaolaiDict was "still using" a
-            // shortcut that no longer existed: no hot key registered, and a message naming
-            // one. The second failure also overwrote the first, so the error shown described
-            // the recovery rather than the choice that caused it.
-            let problem = hotkeyProblem
-            let restored = registerShortcut(previous) == nil
-            hotkeyProblem = problem.map {
-                restored
-                    ? "\($0) — still using \(previous.label())"
-                    : "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered"
-            }
-            return refusal
-        }
-        do {
-            try shortcuts.save(chosen)
-        } catch {
-            log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
-            hotkeyProblem = "\(chosen.label()) works now but was not saved: \(error)"
-        }
-        return nil
-    }
-
     // MARK: - Menu
 
     // MARK: - What the scenes read
@@ -661,7 +568,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     // MARK: - What the menu reads
 
     /// The shortcut as the reader set it, or nil while there is none.
-    var shortcutLabel: String? { hotkey?.shortcut.label() }
+    var shortcutLabel: String? { shortcuts.label }
     var hoverIsWatching: Bool { hover.isWatching }
     var drawerIsVisible: Bool { drawer.isVisible }
     /// The primary dictionary's key, held as **stored** state rather than read from
@@ -675,7 +582,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
-        [permissions.menuWarning, hotkeyProblem, ledgerStatus.problem].compactMap { $0 }
+        [permissions.menuWarning, shortcuts.problem, ledgerStatus.problem].compactMap { $0 }
     }
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the

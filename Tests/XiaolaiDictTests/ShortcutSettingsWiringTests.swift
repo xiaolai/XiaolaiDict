@@ -31,10 +31,10 @@ import XiaolaiDictTestSupport
     /// not by comparing two properties that could both be reading the same dead value.
     @Test func choosingFromSettingsChangesTheAppsShortcut() {
         let app = app(FakeBackend())
-        #expect(app.shortcutChoice.shortcut == app.currentShortcut)
-        #expect(app.shortcutChoice.choose(Self.other) == nil)
-        #expect(app.currentShortcut == Self.other)
-        #expect(app.shortcutIsRegistered)
+        #expect(app.shortcuts.choice.shortcut == app.shortcuts.current)
+        #expect(app.shortcuts.choice.choose(Self.other) == nil)
+        #expect(app.shortcuts.current == Self.other)
+        #expect(app.shortcuts.isRegistered)
     }
 
     /// **The one combination a reader most wants to change is the one they cannot press.** A
@@ -42,15 +42,15 @@ import XiaolaiDictTestSupport
     /// the key press fires a lookup instead of arriving in the field. Arming stands it down.
     @Test func armingTheFieldStandsTheHotKeyDown() {
         let app = app(FakeBackend())
-        #expect(app.chooseShortcut(.defaultLookUp) == nil)
-        #expect(app.shortcutIsRegistered)
+        #expect(app.shortcuts.choose(.defaultLookUp) == nil)
+        #expect(app.shortcuts.isRegistered)
 
-        app.shortcutChoice.suspend(true)
-        #expect(!app.shortcutIsRegistered, "the field is armed and XiaolaiDict still answers the shortcut")
+        app.shortcuts.choice.suspend(true)
+        #expect(!app.shortcuts.isRegistered, "the field is armed and XiaolaiDict still answers the shortcut")
 
-        app.shortcutChoice.suspend(false)
-        #expect(app.shortcutIsRegistered, "the shortcut was not put back when the field disarmed")
-        #expect(app.currentShortcut == .defaultLookUp)
+        app.shortcuts.choice.suspend(false)
+        #expect(app.shortcuts.isRegistered, "the shortcut was not put back when the field disarmed")
+        #expect(app.shortcuts.current == .defaultLookUp)
     }
 
     /// Disarming after a successful choice must not undo it. The field calls `choose` and then
@@ -58,16 +58,16 @@ import XiaolaiDictTestSupport
     /// combination back a moment after the reader set the new one.
     @Test func disarmingAfterAChoiceKeepsTheNewShortcut() {
         let app = app(FakeBackend())
-        #expect(app.shortcutChoice.choose(Self.other) == nil)
-        app.shortcutChoice.suspend(false)
-        #expect(app.currentShortcut == Self.other)
+        #expect(app.shortcuts.choice.choose(Self.other) == nil)
+        app.shortcuts.choice.suspend(false)
+        #expect(app.shortcuts.current == Self.other)
     }
 
     /// What the reader chose is there next launch.
     @Test func theChosenShortcutSurvivesALaunch() {
         let suite = TemporaryDefaults.suite()
-        #expect(app(FakeBackend(), defaults: suite).chooseShortcut(Self.other) == nil)
-        #expect(app(FakeBackend(), defaults: suite).currentShortcut == Self.other)
+        #expect(app(FakeBackend(), defaults: suite).shortcuts.choose(Self.other) == nil)
+        #expect(app(FakeBackend(), defaults: suite).shortcuts.current == Self.other)
     }
 
     /// XiaolaiDict writes the reader's shortcut into the suite it was given, never into the real
@@ -76,7 +76,7 @@ import XiaolaiDictTestSupport
     /// the shortcut changed the machine it ran on.
     @Test func theShortcutIsSavedInTheSuiteTheAppWasGiven() {
         let suite = TemporaryDefaults.suite()
-        #expect(app(FakeBackend(), defaults: suite).chooseShortcut(Self.other) == nil)
+        #expect(app(FakeBackend(), defaults: suite).shortcuts.choose(Self.other) == nil)
         #expect(ShortcutStore(defaults: suite).load() == Self.other)
     }
 
@@ -87,12 +87,12 @@ import XiaolaiDictTestSupport
         let suite = TemporaryDefaults.suite()
         let backend = FakeBackend()
         let app = app(backend, defaults: suite)
-        #expect(app.chooseShortcut(.defaultLookUp) == nil)
+        #expect(app.shortcuts.choose(.defaultLookUp) == nil)
 
         backend.refused = [Self.other]
-        #expect(app.chooseShortcut(Self.other) != nil, "a combination another app holds must be refused")
-        #expect(app.currentShortcut == .defaultLookUp, "the reader lost the shortcut that worked")
-        #expect(app.shortcutIsRegistered)
+        #expect(app.shortcuts.choose(Self.other) != nil, "a combination another app holds must be refused")
+        #expect(app.shortcuts.current == .defaultLookUp, "the reader lost the shortcut that worked")
+        #expect(app.shortcuts.isRegistered)
         #expect(ShortcutStore(defaults: suite).load() == .defaultLookUp, "the refused shortcut was saved")
         #expect(app.problems.contains { $0.contains("still using") },
                 "a refusal the reader is never told about is a shortcut that silently did nothing")
@@ -107,12 +107,12 @@ import XiaolaiDictTestSupport
         let backend = FakeBackend()
         let app = app(backend)
         backend.refused = [Self.other]
-        let reason = app.shortcutChoice.choose(Self.other)
+        let reason = app.shortcuts.choice.choose(Self.other)
         #expect(reason?.contains("another app") == true, "the field was told \(String(describing: reason))")
 
         backend.refused = []
         backend.registerStatus = OSStatus(paramErr)
-        let other = app.shortcutChoice.choose(Shortcut(keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(cmdKey | optionKey)))
+        let other = app.shortcuts.choice.choose(Shortcut(keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(cmdKey | optionKey)))
         #expect(other?.contains("\(paramErr)") == true, "a Carbon status came back as \(String(describing: other))")
     }
 
