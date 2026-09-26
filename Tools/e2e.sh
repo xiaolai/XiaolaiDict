@@ -857,7 +857,28 @@ else
                 flunk "waiting panel: took ${took}s, over the 1 s budget"
             fi
         fi
-        # It fills in on its own once the deadline gives up: same panel, no second window.
+        # **What the deadline giving up actually produces, asserted before the service comes back.**
+        # `resume` used to be the line right after the waiting panel was confirmed, so the answer that
+        # filled the panel came from the service that had just been let go — the deadline expiring and
+        # the public `DCSCopyTextDefinition` fallback answering was never demonstrated at all, under a
+        # comment that said it was.
+        #
+        # The two claims turn out to conflict, which is why one check could not carry both: a fallback
+        # answer *carries the caveat* ("could not all be asked") that the fill-in check below excludes
+        # as a not-yet-answered marker. So the fallback is asserted here, while the service is still
+        # suspended, and the complete answer is asserted after it comes back.
+        fell_back=""
+        for _ in $(seq 1 200); do
+            view=$("$helpers/panel" com.xiaolaidict)
+            if printf '%s' "$view" | grep -q 'could not all be asked'; then fell_back=$view; break; fi
+            sleep 0.1
+        done
+        if [ -n "$fell_back" ]; then
+            pass "waiting panel: the deadline gave up and the public fallback answered, saying the answer may be incomplete"
+        else
+            flunk "waiting panel: the service stayed suspended and nothing fell back to the public API — the reader waits forever ($(printf '%s' "${view:-}" | head -c 200))"
+        fi
+        # It fills in on its own once the service is back: same panel, no second window.
         resume
         filled=""
         for _ in $(seq 1 100); do
@@ -2082,11 +2103,32 @@ else
     else
         flunk "model: the app went with its model service — was $app_pid_before, now ${app_pid_after:-gone}"
     fi
+    # **launchd restarting the service, which is not the same claim as the app recovering.** This asks
+    # a *separate* `--model-status` process: its client is brand new, so it says a new connection can
+    # be made and nothing at all about the surviving app's existing one. The check below is the one
+    # about the app.
     again=$("$exe" --model-status 2>/dev/null || true)
     if printf '%s' "$again" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("reachable") and d.get("gpu") else 1)' 2>/dev/null; then
-        pass "model: a fresh service answered after the kill"
+        pass "model: launchd gave a fresh process a working service after the kill"
     else
         flunk "model: nothing came back after the service was killed — $again"
+    fi
+    # **And the surviving app's own path still answers.** The two assertions above are about the app's
+    # *pid* and about a *new* process; between them they left the thing a reader would notice — whether
+    # the app that lived through the crash can still look a word up — untested. Driven the way a reader
+    # drives it, and read out of the ledger the lookup wrote.
+    ledger_after_kill=$(newest_row_id)
+    if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+        "$helpers/keys" 2 control option
+        waited_after=$(row_after "$ledger_after_kill" meeting com.apple.TextEdit)
+        "$helpers/keys" 53 2>/dev/null || true
+        if [ "$(row_id_of "$ledger_after_kill" meeting com.apple.TextEdit)" -ne 0 ]; then
+            pass "model: the app that survived the crash looked a word up again (${waited_after}s)"
+        else
+            flunk "model: the app survived but its own lookups no longer reach the ledger — its client did not reconnect (waited ${waited_after}s)"
+        fi
+    else
+        flunk "model: could not drive a lookup after the kill, so the app's own recovery was not exercised ($why)"
     fi
 fi
 
