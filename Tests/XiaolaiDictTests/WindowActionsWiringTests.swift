@@ -121,6 +121,6 @@ struct WindowActionsWiringTests {
             defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
             models: .temporary(defaults: suite))
         #expect(!app.shortcuts.isRegistered, "the hot key was registered before there was a panel to draw into")
-        #expect(!app.hoverIsWatching, "hover was started before there was a panel to draw into")
+        #expect(!app.hover.isWatching, "hover was started before there was a panel to draw into")
     }
 }

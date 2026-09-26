@@ -116,7 +116,7 @@ struct XiaolaiDictScene: App {
 /// XiaolaiDict's settings window, as a **view** rather than as scene-body code.
 ///
 /// **Reading observable state in an `App`'s `body` invalidates every scene in it.** Built inline
-/// in the `Settings` scene, this read `delegate.dictionaries` and `delegate.hoverPolicy` — and
+/// in the `Settings` scene, this read `delegate.dictionaries` and `delegate.hover.policy` — and
 /// `dictionaries` arrives asynchronously, when the XPC probe answers. That one late write
 /// re-evaluated `XiaolaiDictScene.body`, and a sibling `Window` scene went with it: its menu item was
 /// clicked, no window ever appeared, and the end-to-end assertions for it failed while the drawer
@@ -134,7 +134,7 @@ struct XiaolaiDictSettings: View {
         SettingsView(
             model: app.settings,
             appearance: app.appearance,
-            hover: Binding(get: { app.hoverPolicy }, set: { app.setHoverPolicy($0) }),
+            hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
             dictionary: DictionaryChoice(
                 available: app.dictionaries,
                 chosen: app.chosenDictionary,
