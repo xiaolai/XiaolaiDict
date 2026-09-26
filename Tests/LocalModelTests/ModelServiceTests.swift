@@ -17,7 +17,20 @@ struct ScriptedModel: LanguageModel {
     enum Behaviour: Sendable {
         case answer(String)
         /// Answers after a pause, counting how many generations run at once.
+        ///
+        /// **A pause is not a gate, and the difference decides whether the overlap tests mean
+        /// anything.** The pause is 100 ms; the tests reach the second request by polling until the
+        /// first has been *recorded*, which the executor does before pausing. Under parallel load
+        /// the 100 ms can therefore elapse before the second request arrives — and then nothing
+        /// overlapped, `mostAtOnce` is 1, and "two generations did not run at once" passes because
+        /// the second one was never attempted beside the first. Use `answerWhenReleased` for any
+        /// assertion about concurrency; this case is for tests that only need a generation to be
+        /// slow.
         case answerSlowly(String)
+        /// Answers only once the test calls `release()`, so the generation is **certainly** still
+        /// running when the test makes its second request. This is what makes `mostAtOnce == 1` a
+        /// measurement rather than a coincidence.
+        case answerWhenReleased(String)
         /// Hangs the **first** request for ten seconds — longer than anything in this suite waits —
         /// and answers every request after it at once: a prewarm the tests can treat as never
         /// coming back, in front of a question that would answer immediately if it were let
@@ -55,6 +68,10 @@ struct ScriptedModel: LanguageModel {
     static let running = Recorder<[UUID: (now: Int, most: Int)]>([:])
     /// The models whose one wedged request has already been taken.
     static let wedged = Recorder<Set<UUID>>([])
+    /// The models whose gated generation has been let go. Polled rather than resumed through a
+    /// continuation: a continuation held in a static and resumed twice traps, and these models are
+    /// reached from several tasks at once.
+    static let released = Recorder<Set<UUID>>([])
 
     init(_ behaviour: Behaviour) {
         id = UUID()
@@ -62,6 +79,10 @@ struct ScriptedModel: LanguageModel {
     }
 
     var requests: [String] { Self.heard.withLock { $0[id] ?? [] } }
+
+    /// Lets a gated generation finish. Called after the test has made the second request, so the
+    /// two are certainly in flight together.
+    func release() { Self.released.withLock { _ = $0.insert(id) } }
     var instructions: [String] { Self.heardInstructions.withLock { $0[id] ?? [] } }
     var budgets: [Int?] { Self.budgets.withLock { $0[id] ?? [] } }
     var temperatures: [Double?] { Self.temperatures.withLock { $0[id] ?? [] } }
@@ -95,9 +116,36 @@ struct ScriptedExecutor: LanguageModelExecutor {
                 counts.most = max(counts.most, counts.now)
                 $0[id] = counts
             }
+            // **Decremented after the answer is delivered, not before it.** Sending a response is an
+            // `await`, so the executor is still this generation's until `send` returns — and with the
+            // decrement above that line, an overlap that happened *during* delivery was invisible to
+            // `mostAtOnce`, which is the one number these tests read. `defer` rather than a second
+            // `withLock` at the end, so an error thrown out of `send` cannot leave the count high and
+            // make every later measurement in the same process read as an overlap.
+            defer {
+                ScriptedModel.running.withLock {
+                    if var counts = $0[id] { counts.now -= 1; $0[id] = counts }
+                }
+            }
             try? await Task.sleep(for: .milliseconds(100))
+            await channel.send(.response(action: .appendText(text, tokenCount: 1)))
+        case .answerWhenReleased(let text)?:
             ScriptedModel.running.withLock {
-                if var counts = $0[id] { counts.now -= 1; $0[id] = counts }
+                var counts = $0[id] ?? (now: 0, most: 0)
+                counts.now += 1
+                counts.most = max(counts.most, counts.now)
+                $0[id] = counts
+            }
+            defer {
+                ScriptedModel.running.withLock {
+                    if var counts = $0[id] { counts.now -= 1; $0[id] = counts }
+                }
+            }
+            // Bounded by a count of looks and not by the clock, for the reason `waitUntil` gives:
+            // these tests run in parallel, so an elapsed-time bound measures the runner's load. A
+            // gate nobody releases therefore fails the test that forgot to, rather than hanging it.
+            for _ in 0..<2_000 where !ScriptedModel.released.withLock({ $0.contains(id) }) {
+                try? await Task.sleep(for: .milliseconds(5))
             }
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .wedgeOnce(let text)?:
@@ -114,14 +162,19 @@ struct ScriptedExecutor: LanguageModelExecutor {
 
     /// Which role of a transcript to read back. A request's instructions and its prompt are
     /// different claims about the same words, so a test has to be able to ask for one of them.
-    enum Part { case instructions, prompt, both }
+    ///
+    /// **There is no `prompt` case, because nothing ever asked for one.** It existed with a branch of
+    /// its own in `text(of:_:)` and no caller, which is a test helper carrying untested behaviour —
+    /// the shape this project already records as "a model nothing calls is not a feature". Add it
+    /// back with the assertion that needs it.
+    enum Part { case instructions, both }
 
     /// Every text segment of the entries `part` names.
     static func text(of transcript: Transcript, _ part: Part) -> String {
         transcript.compactMap { entry -> String? in
             let segments: [Transcript.Segment]
             switch entry {
-            case .instructions(let instructions) where part != .prompt: segments = instructions.segments
+            case .instructions(let instructions): segments = instructions.segments
             case .prompt(let prompt) where part != .instructions: segments = prompt.segments
             default: return nil
             }
@@ -181,8 +234,13 @@ struct ModelServiceTests {
     /// removed when it ends — 2,291 had been left behind under the system's temporary directory.
     private let scratches = Recorder<[TemporaryDirectory]>([])
 
+    /// `physical` is a parameter because it was a constant, and a constant no test varied made one of
+    /// the two sizing gates untestable: at 48 GB both sizes clear the quarter-of-RAM rule, so a
+    /// service that consulted only *available* memory and ignored what the Mac has would have passed
+    /// every test in this file. `aMacIsNotOfferedASizeItsMemoryRulesOut` is what varies it.
     private func service(
         _ model: ScriptedModel, store: ModelStore? = nil, available: UInt64 = 40 * gigabyte,
+        physical: UInt64 = 48 * gigabyte,
         built: Recorder<Int> = Recorder(0), chose: Recorder<[LocalModelSize]> = Recorder([]),
         manifests: [ModelManifest] = [ModelServiceTests.manifest(.standard)],
         prewarmWait: Duration = .seconds(45)
@@ -193,7 +251,7 @@ struct ModelServiceTests {
             return made
         }()
         return ModelService(
-            store: store, manifests: manifests, physicalMemory: 48 * Self.gigabyte,
+            store: store, manifests: manifests, physicalMemory: physical,
             availableMemory: { available },
             makeModel: { _, size in
                 built.withLock { $0 += 1 }
@@ -334,6 +392,37 @@ struct ModelServiceTests {
             needed: LocalModelSize.standard.peakMemory + ModelSizing.headroom, available: Self.gigabyte)))
     }
 
+    /// **What the Mac *has*, not only what is free right now.** Both gates have to be consulted, and
+    /// until this test every fixture here used 48 GB physical — where 4B and 9B both clear the
+    /// quarter-of-RAM rule, so a service that dropped the physical check entirely would have passed
+    /// the whole file. A 9B model installed on a 16 GB Mac is the case that matters: there is plenty
+    /// free at this moment and the Mac still cannot hold it, which is exactly the model-copied-from-a
+    /// -larger-Mac situation the store's own rule is about.
+    @Test func aMacIsNotOfferedASizeItsMemoryRulesOut() async throws {
+        let (store, scratch) = try Self.installedStore([.standard, .large])
+        scratches.withLock { $0.append(scratch) }
+        let both = [Self.manifest(.standard), Self.manifest(.large)]
+
+        // 16 GB physical: 4B is offered (a quarter is 4,096 MB against a 3,585 MB peak), 9B is not
+        // (it would need 25.9 GB), and 12 GB free is more than enough for either — so only the
+        // physical gate can refuse it.
+        let chose = Recorder<[LocalModelSize]>([])
+        let sixteen = try service(
+            ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: 12 * Self.gigabyte,
+            physical: 16 * Self.gigabyte, chose: chose, manifests: both)
+        #expect(await sixteen.reply(to: .pickSense(Self.question)) == .sense(1))
+        #expect(chose.withLock { $0 } == [.standard], "a size this Mac is not offered was loaded")
+
+        // 8 GB physical: nothing is offered at all, however much is free.
+        let built = Recorder(0)
+        let eight = try service(
+            ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: 6 * Self.gigabyte,
+            physical: 8 * Self.gigabyte, built: built, manifests: both)
+        let reply = await eight.reply(to: .pickSense(Self.question))
+        #expect(reply != .sense(1), "a Mac offered no size answered from a model anyway")
+        #expect(built.withLock { $0 } == 0, "a model was built on a Mac offered nothing")
+    }
+
     /// Unknown free memory is not plenty.
     @Test func unknownFreeMemoryLoadsNothing() async throws {
         let built = Recorder(0)
@@ -384,29 +473,48 @@ struct ModelServiceTests {
     /// pausing is finished before the second request is made. The first is therefore slow, and the
     /// test waits until its request is recorded, which the executor does before it pauses.
     @Test func concurrentPrewarmsAskTheModelOnce() async throws {
-        let model = ScriptedModel(.answerSlowly(#"{"senseNumber": 1}"#))
+        let model = ScriptedModel(.answerWhenReleased(#"{"senseNumber": 1}"#))
         let service = try service(model)
         let first = Task { await service.reply(to: .prewarm) }
         await Self.waitUntil { !model.requests.isEmpty }
         #expect(!model.requests.isEmpty, "the prewarm's generation never started")
-        let second = await service.reply(to: .prewarm)
+        // **Both in flight before either is allowed to finish.** With a 100 ms pause instead of a
+        // gate, the first prewarm could return before this second one was made — and then "the model
+        // was asked once" held because the requests were sequential, not because the service
+        // coalesced them. The second is a task of its own so this test does not block on it.
+        let second = Task { await service.reply(to: .prewarm) }
+        model.release()
         #expect(await first.value == .prewarmed)
-        #expect(second == .prewarmed)
-        #expect(model.requests.count == 1)
+        #expect(await second.value == .prewarmed)
+        #expect(model.requests.count == 1, "the second prewarm started its own generation")
     }
 
     /// A question arriving while a prewarm runs waits for it instead of generating beside it — the
     /// prewarm is loading the weights and compiling the grammar that question needs.
     @Test func aQuestionWaitsForAPrewarmAlreadyRunning() async throws {
-        let model = ScriptedModel(.answerSlowly(#"{"senseNumber": 2}"#))
+        let model = ScriptedModel(.answerWhenReleased(#"{"senseNumber": 2}"#))
         let service = try service(model)
         async let warming = service.reply(to: .prewarm)
         // Not a fixed pause: under parallel load either ordering can invert, and the question would
         // then be the one the prewarm waits behind — the opposite of what this test is about. The
-        // executor records its request before it pauses, so this says the prewarm is generating.
+        // executor records its request before it waits, so this says the prewarm is generating.
         await Self.waitUntil { !model.requests.isEmpty }
         #expect(!model.requests.isEmpty, "the prewarm's generation never started")
         async let answer = service.reply(to: .pickSense(Self.question))
+        // **A window for the question to misbehave in — not a wait for it to.** `mostAtOnce == 1`
+        // cannot carry this test on its own: measured, it still passed with the question's
+        // `awaitPrewarm()` deleted outright, because releasing the gate before the question reached
+        // the model meant the two never overlapped either way. What the service actually promises is
+        // that the model is **not asked a second time** while the prewarm is generating, so that is
+        // what is asserted, with the first generation held open so the wrong behaviour has somewhere
+        // to happen.
+        //
+        // Bounded small and on purpose: a window that waits for the *correct* outcome would time out
+        // on every run. 100 looks of 5 ms is long enough for a request that is going to jump the
+        // queue to have done so — verified by deleting the wait, which fails this in 0.03 s.
+        for _ in 0..<100 where model.requests.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(model.requests.count == 1, "the question started a generation beside the running prewarm")
+        model.release()
         #expect(await warming == .prewarmed)
         #expect(await answer == .sense(2))
         #expect(model.mostAtOnce == 1, "two generations ran at once")
@@ -646,9 +754,10 @@ struct ModelServiceTests {
         let question = TranslationQuestion(sentence: "The ship's hold was full.", target: "zh-Hans")
         _ = try await service(model).reply(to: .translate(question))
         // The wiring, as above: this question's budget, from the one helper that computes it. The
-        // `budget < 200` beside it was the helper asked what it should have answered — it holds for
-        // every sentence a `min(1_024, …)` could produce. Where the cap itself is pinned as a
-        // number is the test below.
+        // `budget < 200` this replaced was not the tautology the comment here used to claim: the
+        // budget is `64 + 2 × utf16.count` capped at 1,024, so it passes 200 at **68 characters** and
+        // that bound held only for the short fixture it was written beside. It never established the
+        // cap at all. Where the cap is pinned as a number is the test below.
         #expect(try #require(model.budgets.first ?? nil) == ModelPrompt.translationTokens(for: question))
     }
 
@@ -662,8 +771,12 @@ struct ModelServiceTests {
         // which an explanation reaches its.
         let sentence = String(repeating: "The ship's hold was full of grain. ", count: 72)
 
-        // Answering in Chinese rather than echoing, because an echo is refused before the budget is
-        // read back — the test would then be measuring a request that was never made.
+        // Answering in Chinese rather than echoing, because an echo comes back as a failure and this
+        // test would then be reading a budget off a reply it had also decided to ignore. **Not
+        // because the request would be missing**, which is what this said: the executor records the
+        // budget when the request arrives, before any of it is generated, so an echoed answer has its
+        // budget recorded just the same. The reason is legibility of the test, not availability of
+        // the number.
         let translator = ScriptedModel(.answer("这艘船的货舱装满了谷物。"))
         _ = try await service(translator).reply(to: .translate(
             TranslationQuestion(sentence: sentence, target: "zh-Hans")))

@@ -1269,8 +1269,15 @@ stash_models() {
         # what "no model installed" means at this point, and **only** when that is all it holds: a
         # store with a completion marker in it is a real model, and this must not delete one.
         [ -d "$models" ] || return 0
+        # `-Fvx`: a fixed string, whole line, inverted — "everything that is not exactly `.staging`".
+        # Deliberately not `-v '^\.staging$'`: `EndToEndTextTests` refuses a quoted grep pattern
+        # containing `$`, because that is how `grep -q "$needle"` used to pass its inventory, and a
+        # regex anchor is indistinguishable from an expansion to a scanner that does not parse shell.
+        # An anchor-free fixed-string pattern is both stricter here and readable there. (`-F` is not
+        # `-f`: the guard excludes only the lower-case flag, which is the one that reads patterns
+        # from a file.)
         if [ -z "$(find "$models" -name '.complete' -print -quit 2>/dev/null)" ] \
-           && [ -z "$(ls -A "$models" 2>/dev/null | grep -v '^\.staging$' || true)" ]; then
+           && [ -z "$(ls -A "$models" 2>/dev/null | grep -Fvx '.staging' || true)" ]; then
             rm -rf "$models"
             return 0
         fi

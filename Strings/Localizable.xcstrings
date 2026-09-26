@@ -386,7 +386,7 @@
     "Not set" : {
 
     },
-    "Nothing is waiting on you. The local model is still one click away above." : {
+    "Nothing is waiting on you. The local model is still one click away, in the translation row." : {
 
     },
     "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
@@ -588,12 +588,12 @@
     "Text" : {
 
     },
-    "The %@ download stopped: %@. What arrived is kept, and it resumes from there." : {
+    "The %@ download stopped: %@. What arrived and still checks out is kept, and it resumes from there." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The %1$@ download stopped: %2$@. What arrived is kept, and it resumes from there."
+            "value" : "The %1$@ download stopped: %2$@. What arrived and still checks out is kept, and it resumes from there."
           }
         }
       }
