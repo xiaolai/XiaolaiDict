@@ -214,10 +214,10 @@ struct SetupWiringTests {
     @Test func theAppHandsTheBoardEveryPartOfItsState() throws {
         try expectArguments(
             [
-                ("model:", "app.setup"), ("dictionary:", "DictionaryChoice("),
-                ("shortcut:", "app.shortcutChoice"), ("shortcutIsRegistered:", "app.shortcutIsRegistered"),
+                ("model:", "app.setup"), ("dictionary:", "app.dictionary.choice"),
+                ("shortcut:", "app.shortcuts.choice"), ("shortcutIsRegistered:", "app.shortcuts.isRegistered"),
                 ("localModel:", "app.models.choice"), ("openSettings:", "app.showSettings("),
-                ("refreshDictionaries:", "app.refreshDictionaries("),
+                ("refreshDictionaries:", "app.dictionary.askAgain("),
             ],
             of: "SetupView", in: try code("Sources/XiaolaiDict/XiaolaiDictScene.swift"),
             "the board would silently lose what it carries")

@@ -1,5 +1,4 @@
 import AppKit
-import DictionaryModel
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -19,39 +18,22 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// **The suite the app was given, not `.standard`** — the same reason the shortcut store takes
     /// one. A test that chose a dictionary used to rewrite the reader's own choice, and switching
     /// the primary starts their study over.
-    private let primaryDictionary: PrimaryDictionaryStore
+    /// The dictionary the reader studies from and the list it was chosen out of — see
+    /// `StudyDictionary`. Not built here: it needs the client, which means after `super.init()`.
+    @ObservationIgnored private(set) var dictionary: StudyDictionary!
     /// Whether the setup window has opened by itself before. **The app's own suite, not
     /// `.standard`** — a test that flipped it would change whether the reader's next launch opens
     /// a window at them.
     private let setupPresentation: SetupPresentationStore
     @ObservationIgnored private lazy var runner = makeRunner()
     @ObservationIgnored private lazy var drawer = makeDrawer()
-    /// Milestone 2's trigger. Watches the pointer and reads the word under it when the reader
-    /// rests with the modifier held; the reading itself is `HoverReader`, already tested.
-    ///
-    /// Lazy so it can be handed a closure onto `hoverPause` below — a stored property cannot read
-    /// `self`, which is the mechanical reason the pause was never connected to anything.
-    @ObservationIgnored private(set) lazy var hover = makeHover()
-
-    /// **The pause the menu offers and the gate reads — one value, held here.** There was no such
-    /// value: `HoverReader`'s default built a fresh `HoverPause` on every call, so the gate asked
-    /// "is XiaolaiDict paused" of an object that had just been born and always answered no. Nothing in
-    /// the app or the suite ever supplied one, and the menu item `HoverPause.label(at:)` was
-    /// written for did not exist. The model was complete and unreachable.
-    private(set) var hoverPause = HoverPause()
-
-    /// The reader's hover policy, **held in memory and observed**, with the store behind it.
-    ///
-    /// Read rather than loaded on each use on purpose: `HoverWatcher` asks for the policy on every
-    /// pointer change to get `settleMilliseconds`, so decoding it there would put a JSON decode on
-    /// the mouse-move path. One decode at launch, one write when the reader changes something.
     /// The suite this app was built with — the reader's own, or a test's temporary one.
     /// **Kept, not just passed through.** Every store below was handed it at init while
     /// `hoverEnabled` went on reading `UserDefaults.standard`, which is how a unit test came
     /// to be able to switch the reader's hover off.
-    @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let hoverPolicyStore: HoverPolicyStore
-    private(set) var hoverPolicy: HoverPolicy
+    /// Everything the reader can do to hover, and one value per thing — see `HoverControl`, where
+    /// every member has already been a defect about there being two copies or a fresh one per call.
+    let hover: HoverControl
 
     /// **`init()` must exist, and must be written out.** `@NSApplicationDelegateAdaptor`
     /// instantiates the delegate through the Objective-C runtime, which looks for `init` and finds
@@ -80,45 +62,25 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
-        self.defaults = defaults
-        let store = HoverPolicyStore(defaults: defaults)
-        hoverPolicyStore = store
-        hoverPolicy = store.load()
+        hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
         // preferences while `init(defaults:)` existed for exactly this reason, so every test that
         // touched the shortcut rewrote the reader's own — the objection this project makes to
         // driving the GUI on the building Mac, in a unit test.
-        shortcuts = ShortcutStore(defaults: defaults)
+
         setupPresentation = SetupPresentationStore(defaults: defaults)
-        let primary = PrimaryDictionaryStore(defaults: defaults)
-        primaryDictionary = primary
-        chosenDictionary = primary.load().chosen
         self.models = models
-        self.hotkeys = hotkeys
         super.init()
+        // After `super.init()`: the registrar's press handler captures `self`, which an
+        // initialiser may not hand out before the object exists.
+        shortcuts = ShortcutRegistrar(defaults: defaults, hotkeys: hotkeys) { [weak self] in
+            self?.lookUpSelection()
+        }
+        dictionary = StudyDictionary(defaults: defaults) { [client] refreshing in
+            await client.dictionaries(reprobing: refreshing)
+        }
     }
 
-    /// Changing it saves it and takes effect immediately — the watcher reads this property, so
-    /// there is nothing to restart and no second copy to keep in step.
-    func setHoverPolicy(_ policy: HoverPolicy) {
-        hoverPolicy = policy
-        hoverPolicyStore.save(policy)
-    }
-
-    /// What the pause control says. Observed, so pausing redraws the menu without being told to.
-    var hoverPauseLabel: String { hoverPause.label(at: .now) }
-    var hoverIsPaused: Bool { hoverPause.isPaused(at: .now) }
-
-    func pauseHover(for duration: Duration) { hoverPause.pause(for: duration, from: .now) }
-    func resumeHover() { hoverPause.resume() }
-
-    private func makeHover() -> HoverWatcher {
-        // `self` is read at decision time, not captured by value — a copy taken here would be the
-        // same never-changing pause this replaces.
-        HoverWatcher(
-            policy: { [weak self] in self?.hoverPolicy ?? .shipped },
-            pause: { [weak self] in self?.hoverPause ?? HoverPause() })
-    }
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
@@ -131,12 +93,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
         let drawer = HistoryDrawerController { [weak self] in
-            guard let opening = self?.ledger else { return .unavailable("The ledger is not open yet.") }
+            guard let opening = self?.recorder.store else { return .unavailable("The ledger is not open yet.") }
             // **The same setting the hover gate asks, read at open time.** A reader who widens the
             // scripts they study sees the words already in the ledger the next time they open the
             // drawer — the filter is on the reading, not on the recording, so nothing was thrown
             // away while the setting was narrow.
-            let studying = self?.hoverPolicy.scripts ?? HoverPolicy.defaultScripts
+            let studying = self?.hover.policy.scripts ?? HoverPolicy.defaultScripts
             do {
                 let since = Date.now.addingTimeInterval(-HistoryDrawerController.window)
                 return .entries(try await opening.value.recentLookups(
@@ -148,7 +110,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Only reached once the reader's grace period has run out, so by the time this fires they
         // have had their chance to take it back.
         drawer.model.delete = { [weak self] entry in
-            guard let self, let opening = self.ledger else { return }
+            guard let self, let opening = self.recorder.store else { return }
             Task {
                 do { try await opening.value.delete(lookup: entry.id) }
                 // Logged, not surfaced: the card is already gone from a drawer the reader has
@@ -160,7 +122,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     private func makeRunner() -> LookupRunner {
-        let store = primaryDictionary
+        let store = dictionary.store
         // **The store is the truth for a lookup**, because a lookup can happen while no window is
         // open to have observed anything. The observable copy is what the windows draw, and
         // `askForDictionaries` re-reads it so the two cannot drift apart after a change made
@@ -172,38 +134,22 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // not — pending, declined, or too big for what is free now; `NLEmbedding` beneath both.
             selector: models.senseLadder,
             priorEncounters: { [weak self] lemma, before, language in
-                guard let opening = await MainActor.run(body: { self?.ledger }) else { return PriorEncounters() }
+                guard let opening = await MainActor.run(body: { self?.recorder.store }) else { return PriorEncounters() }
                 // A ledger that cannot be read costs the memory strip, never the lookup.
                 return (try? await opening.value.priorEncounters(
                     of: lemma, before: before, language: language)) ?? PriorEncounters()
             },
             prewarm: { await models.prewarm() })
     }
-    /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
-    /// the menu says it does not know rather than showing a list it made up.
-    var dictionaries: [DictionaryCapability]?
-    /// Whether the service has been asked and has finished answering — see `DictionaryChoice`.
-    private(set) var dictionariesAsked = false
-    @ObservationIgnored private let shortcuts: ShortcutStore
-    /// Carbon's hot-key plumbing, injected so a test never registers a real global shortcut —
-    /// which would take it from the reader for as long as the suite ran.
-    @ObservationIgnored private let hotkeys: HotkeyCenter
-    private var hotkey: Hotkey?
-    /// Opened on a background task at launch: file and database work — a migration, on the first
-    /// launch after an update — must not hold up the menu bar.
-    private var ledger: Task<LedgerStore, any Error>?
+    /// The lookup shortcut and everything about registering it — see `ShortcutRegistrar`, which
+    /// holds the three-state machine this delegate used to carry as four adjacent properties.
+    @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
+    /// What reaches the reader's ledger, and what to tell them when nothing did — see
+    /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
+    let recorder = LookupRecorder()
     /// The lookup in flight. A new shortcut press cancels it: one lookup at a time.
     private var lookup: Task<Void, Never>?
     private var termination: (any DispatchSourceSignal)?
-
-    /// Problems the reader should see, shown in the menu rather than swallowed.
-    private var hotkeyProblem: String?
-    /// The ledger's state as of the newest request to finish recording — not of whichever write
-    /// happened to finish last.
-    private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
-
-    /// Which lookup a reader's tap belongs to — see `SenseTapQueue`.
-    private var taps = SenseTapQueue()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside
@@ -213,20 +159,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.onStudySense = { [weak self] encounter, request in self?.study(encounter, request: request) }
-        panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
-        let opening = Task { try await LedgerStore.openDefault() }
-        ledger = opening
-        Task {
-            do {
-                _ = try await opening.value
-            } catch {
-                // Reported only if no lookup has reported since: a later lookup's own failure says
-                // more, and must not be overwritten by this older news.
-                if ledgerStatus.request == 0 { ledgerStatus = (0, "Lookups are not being recorded: \(error)") }
-                log.error("ledger unavailable: \(String(describing: error), privacy: .public)")
-            }
+        panel.onStudySense = { [weak self] encounter, request in
+            self?.recorder.study(encounter, request: request)
         }
+        panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
+        recorder.start()
         // Where the menu-bar item is, so a click on it is left for the menu rather than taken by
         // the drawer's click-away dismissal. `MenuBarExtra` exposes no frame, so it is found by its
         // window: a miss costs the guard, which is visible (the drawer reopens) and not silent.
@@ -234,7 +171,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             NSApplication.shared.windows.first { $0.className.contains("StatusBar") }?.frame
         }
         Task { [weak self] in self?.permissions = await .probe() }
-        hover.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
+        hover.watcher.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
         // Watching the pointer is something the reader must be able to stop, so it is a setting
         // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
@@ -305,12 +242,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
         // fired meanwhile would capture too — two captures at once deadlock, measured six trials
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
-        if hoverEnabled, !Self.isInstrumented { hover.start() }
+        if !Self.isInstrumented { hover.startIfEnabled() }
         // **Only if nothing is registered and nothing is suspended.** A capture landing while the
         // reader has the shortcut recorder armed would otherwise take the combination back from the
-        // field they are typing into — `suspendShortcut(true)` sets `hotkey` to nil precisely so the
-        // key reaches the field, and `registerShortcut` puts it back unconditionally.
-        if hotkey == nil, !shortcutIsSuspended { registerShortcut(shortcuts.load()) }
+        // field they are typing into — `suspend(true)` releases the hot key precisely so the key
+        // reaches the field, and registering puts it back unconditionally.
+        if !shortcuts.isRegistered, !shortcuts.isSuspended { shortcuts.registerSaved() }
     }
 
     /// Whether this process is an instrument rather than the reader's app — see `Instruments`.
@@ -362,82 +299,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - Hover
 
-    private static let hoverEnabledKey = "hoverLookupEnabled"
-
-    /// Defaults to on for a reader who has never chosen, and remembers a reader who has.
-    ///
-    /// **Read and written through the injected suite**, like every other setting this class
-    /// owns. It reached for `UserDefaults.standard` directly, so an instance built with a
-    /// temporary suite — which is every instance a test builds, and the whole reason
-    /// `init(defaults:)` exists — still read the reader's real preference and could turn
-    /// their hover off. The other stores on this line were already passed `defaults`; this
-    /// one was simply missed.
-    private var hoverEnabled: Bool {
-        get { defaults.object(forKey: Self.hoverEnabledKey) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Self.hoverEnabledKey) }
-    }
-
-    func toggleHover() {
-        hoverEnabled.toggle()
-        if hoverEnabled { hover.start() } else { hover.stop() }
-    }
-
     /// Every answered lookup is recorded — a miss too, marked as one: it is usually a typo or a
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
     /// answer arrived was never seen, and is not.
     private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket) async {
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) else { return }
-        await record(row, request: ticket.number)
-    }
-
-    /// A sense the reader tapped. Recorded as theirs — `chosen_by: reader` — which the ledger
-    /// keeps apart from the selector's guesses, because a hypothesis and a fact must never merge.
-    private func study(_ encounter: SenseEncounter, request: Int) {
-        guard ledger != nil, let lookup = taps.tapped(encounter, request: request) else { return }
-        write(encounter, for: lookup)
-    }
-
-    private func write(_ encounter: SenseEncounter, for lookup: Int) {
-        guard let ledger else { return }
-        Task {
-            do {
-                try await ledger.value.record(encounter, for: lookup)
-            } catch {
-                log.error("sense not recorded: \(String(describing: error), privacy: .public)")
-            }
-        }
-    }
-
-    private func record(_ record: LookupRecording, request: Int) async {
-        guard let ledger else { return }
-        var problem: String?
-        do {
-            let id = try await ledger.value.record(record)
-            // Whatever the reader tapped while this row was being written now has somewhere to go.
-            for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
-        } catch {
-            problem = "The last lookup was not recorded: \(error)"
-            log.error("ledger write failed: \(String(describing: error), privacy: .public)")
-        }
-        if request >= ledgerStatus.request { ledgerStatus = (request, problem) }
+        await recorder.record(row, request: ticket.number)
     }
 
     // MARK: - Shortcut
-
-    /// Nil when the shortcut is registered; otherwise why it could not be.
-    @discardableResult
-    private func registerShortcut(_ shortcut: Shortcut) -> Hotkey.RegistrationFailed? {
-        hotkey = nil  // released first: registration is exclusive, and would collide with itself
-        do {
-            hotkey = try hotkeys.register(shortcut) { [weak self] in self?.lookUpSelection() }
-            hotkeyProblem = nil
-            return nil
-        } catch {
-            hotkeyProblem = "\(shortcut.label()) is unavailable: \(error)"
-            log.error("hotkey unavailable: \(String(describing: error), privacy: .public)")
-            return error
-        }
-    }
 
     /// Opens Settings **and brings XiaolaiDict forward with it.**
     ///
@@ -547,86 +417,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         setupPresentation.markOpened()
     }
 
-    /// The shortcut as it stands: the one registered, or — while the field in Settings is armed
-    /// and nothing is registered — the one on disk.
-    var currentShortcut: Shortcut { hotkey?.shortcut ?? shortcuts.load() }
-
-    /// Whether XiaolaiDict is answering its shortcut. Read by the wiring tests, because "the field drew
-    /// the right combination" and "the combination works" are different claims.
-    var shortcutIsRegistered: Bool { hotkey != nil }
-
-    /// Settings' shortcut control, as `XiaolaiDictUI` needs it.
-    ///
-    /// Handed over rather than reached for: registering a combination with the system is Carbon,
-    /// which lives here, and `XiaolaiDictUI` draws rather than registers.
-    var shortcutChoice: ShortcutChoice {
-        ShortcutChoice(
-            shortcut: currentShortcut,
-            choose: { [weak self] shortcut in
-                // An app that is gone registered nothing, and must not be reported as having done so.
-                guard let self else { return String(localized: "The app is not running") }
-                return chooseShortcut(shortcut)?.description
-            },
-            suspend: { [weak self] in self?.suspendShortcut($0) })
-    }
-
-    /// Stands the hot key down while the field is armed, and puts it back after.
-    ///
-    /// **Without this the one combination a reader most wants to change is the one they cannot.**
-    /// A registered hot key is handled below the Cocoa event stream, so pressing the shortcut
-    /// currently in use fires a lookup instead of reaching the field.
-    ///
-    /// Putting it back is conditional on nothing being registered, which makes it idempotent — the
-    /// field disarms after a successful choice, and a `suspend(false)` that re-registered whatever
-    /// was on disk would undo the choice a moment after the reader made it.
-    func suspendShortcut(_ suspended: Bool) {
-        // **Recorded, not inferred from `hotkey == nil`.** Those two states look identical and mean
-        // opposite things: "the reader is typing a new combination into the field" and "nothing has
-        // registered one yet". `armTriggers` asks this before it registers, because a window-action
-        // capture landing mid-recording would otherwise take the key back from the field.
-        shortcutIsSuspended = suspended
-        if suspended {
-            hotkey = nil
-        } else if hotkey == nil {
-            registerShortcut(shortcuts.load())
-        }
-    }
-
-    /// Whether the shortcut recorder is armed. See `suspendShortcut`.
-    private(set) var shortcutIsSuspended = false
-
-    /// Takes the reader's new shortcut: registers it, and saves it if it held. Nil means it held;
-    /// otherwise the refusal says why — another app holds it, XiaolaiDict holds it for something else, or
-    /// Carbon answered with a status — and the one that worked is left working.
-    @discardableResult
-    func chooseShortcut(_ chosen: Shortcut) -> Hotkey.RegistrationFailed? {
-        let previous = currentShortcut
-        guard chosen != previous || hotkey == nil else { return nil }
-        if let refusal = registerShortcut(chosen) {
-            // Keep the problem with the new one in view, and the old one working — but only
-            // say so if it *is* working. The rollback's own result was discarded, so when
-            // both registrations failed the reader was told XiaolaiDict was "still using" a
-            // shortcut that no longer existed: no hot key registered, and a message naming
-            // one. The second failure also overwrote the first, so the error shown described
-            // the recovery rather than the choice that caused it.
-            let problem = hotkeyProblem
-            let restored = registerShortcut(previous) == nil
-            hotkeyProblem = problem.map {
-                restored
-                    ? "\($0) — still using \(previous.label())"
-                    : "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered"
-            }
-            return refusal
-        }
-        do {
-            try shortcuts.save(chosen)
-        } catch {
-            log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
-            hotkeyProblem = "\(chosen.label()) works now but was not saved: \(error)"
-        }
-        return nil
-    }
-
     // MARK: - Menu
 
     // MARK: - What the scenes read
@@ -660,76 +450,36 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the menu reads
 
-    /// The shortcut as the reader set it, or nil while there is none.
-    var shortcutLabel: String? { hotkey?.shortcut.label() }
-    var hoverIsWatching: Bool { hover.isWatching }
     var drawerIsVisible: Bool { drawer.isVisible }
-    /// The primary dictionary's key, held as **stored** state rather than read from
-    /// `UserDefaults` on each access.
-    ///
-    /// `@Observable` tracks stored properties; a computed one that reaches into the defaults
-    /// registers no dependency, so a view reading it is never invalidated when it changes. The
-    /// setup board is what exposed this: pressing "Use 牛津英汉汉英词典" saved the choice and the row
-    /// went on saying the seat was empty, because nothing told the view to look again.
-    private(set) var chosenDictionary: String?
-
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
-        [permissions.menuWarning, hotkeyProblem, ledgerStatus.problem].compactMap { $0 }
+        [permissions.menuWarning, shortcuts.problem, recorder.problem].compactMap { $0 }
     }
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
     /// menu is opened rather than at launch, and only once.
+    /// What a surface opening needs refreshed: the permission probe the menu warns from, and the
+    /// dictionary list and choice.
+    ///
+    /// **Composed here rather than inside one of them**, because "when the menu opens, refresh
+    /// these" is the delegate's job and nothing else's. It used to be one method named
+    /// `askForDictionaries` that also probed TCC — a caller wanting the list got a ScreenCaptureKit
+    /// round trip it never asked for, and nothing in the name said so.
     func askForDictionaries(refreshing: Bool = false) async {
+        let probed = await PermissionsReport.probe()
         // **Assigned only when it changed.** `@Observable` notifies on every assignment, equal or
         // not, and this runs each time the menu opens — so it re-rendered the open menu about 70 ms
-        // later, every time, for nothing. Measured on the E2E machine 2026-09-22: a click landing
-        // while the menu re-renders is dropped — `menu-click` reported the click, the app never saw
-        // it — 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
-        let probed = await PermissionsReport.probe()
+        // later, every time, for nothing. A click landing while the menu re-renders is dropped:
+        // measured 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
         if probed != permissions { permissions = probed }
-        // Re-read from the store, not just written to on choosing. A lookup takes the primary
-        // from disk, so a change made outside this process — a second copy, a `defaults write` —
-        // would otherwise leave every window naming a dictionary that is no longer the one marks
-        // are recorded against.
-        let onDisk = primaryDictionary.load().chosen
-        if onDisk != chosenDictionary { chosenDictionary = onDisk }
-        guard refreshing || dictionaries == nil else { return }
-        let found = await client.dictionaries(reprobing: refreshing)
-        // Same reason. A refresh that finds the same dictionaries must not re-render an open menu.
-        if found != dictionaries { dictionaries = found }
-        // Set whatever the answer was, including none. "Asked and got nothing" is a state that
-        // does not resolve, and a surface that cannot tell it from "still asking" waits forever.
-        dictionariesAsked = true
+        await dictionary.refresh(refreshing: refreshing)
     }
 
-    /// Asks again, discarding the last answer first.
-    ///
-    /// The setup board tells a reader with no suitable dictionary to enable one in Dictionary.app,
-    /// and then has to **notice when they come back** — which the once-only ask above could never
-    /// do. Clearing first so the row says "asking" rather than showing yesterday's list while the
-    /// question is in flight.
-    ///
-    /// **It reaches the service's cache too.** The probe runs once per service process, which is
-    /// right for a menu opening and wrong here: this is the path that has to see a dictionary the
-    /// reader has just enabled, so the request carries `reprobing` and the service discards its
-    /// answer before re-probing.
-    func refreshDictionaries() async {
-        dictionaries = nil
-        dictionariesAsked = false
-        await askForDictionaries(refreshing: true)
-    }
 
     func toggleHistory() {
         drawer.toggle()
     }
 
-    func choosePrimaryDictionary(_ key: String?) {
-        primaryDictionary.save(key)
-        // Written to the observable copy too, or every view reading it goes on showing the old
-        // choice until something else happens to invalidate it.
-        chosenDictionary = key
-    }
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's
     /// own colour; only its alpha is read. Outside the bundle (`swift run`) there is no resource,

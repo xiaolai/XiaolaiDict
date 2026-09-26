@@ -116,7 +116,7 @@ struct XiaolaiDictScene: App {
 /// XiaolaiDict's settings window, as a **view** rather than as scene-body code.
 ///
 /// **Reading observable state in an `App`'s `body` invalidates every scene in it.** Built inline
-/// in the `Settings` scene, this read `delegate.dictionaries` and `delegate.hoverPolicy` — and
+/// in the `Settings` scene, this read `delegate.dictionary.enabled` and `delegate.hover.policy` — and
 /// `dictionaries` arrives asynchronously, when the XPC probe answers. That one late write
 /// re-evaluated `XiaolaiDictScene.body`, and a sibling `Window` scene went with it: its menu item was
 /// clicked, no window ever appeared, and the end-to-end assertions for it failed while the drawer
@@ -134,14 +134,9 @@ struct XiaolaiDictSettings: View {
         SettingsView(
             model: app.settings,
             appearance: app.appearance,
-            hover: Binding(get: { app.hoverPolicy }, set: { app.setHoverPolicy($0) }),
-            dictionary: DictionaryChoice(
-                available: app.dictionaries,
-                chosen: app.chosenDictionary,
-                hasAsked: app.dictionariesAsked,
-                choose: { app.choosePrimaryDictionary($0) },
-                reask: { Task { await app.refreshDictionaries() } }),
-            shortcut: app.shortcutChoice,
+            hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
+            dictionary: app.dictionary.choice,
+            shortcut: app.shortcuts.choice,
             openSetup: { app.showSetup() },
             modelLicence: app.models.licenceURL)
         .xiaolaiDictAppearance(app.appearance)
@@ -151,7 +146,7 @@ struct XiaolaiDictSettings: View {
 }
 
 /// The setup board, as a **view** rather than as scene-body code — the same rule
-/// `XiaolaiDictSettings` above records. `app.dictionaries` arrives when the XPC probe answers, and
+/// `XiaolaiDictSettings` above records. `app.dictionary.enabled` arrives when the XPC probe answers, and
 /// reading it in `XiaolaiDictScene.body` would re-evaluate every scene in the app.
 struct XiaolaiDictSetup: View {
     let app: XiaolaiDictApp
@@ -159,17 +154,12 @@ struct XiaolaiDictSetup: View {
     var body: some View {
         SetupView(
             model: app.setup,
-            dictionary: DictionaryChoice(
-                available: app.dictionaries,
-                chosen: app.chosenDictionary,
-                hasAsked: app.dictionariesAsked,
-                choose: { app.choosePrimaryDictionary($0) },
-                reask: { Task { await app.refreshDictionaries() } }),
-            shortcut: app.shortcutChoice,
+            dictionary: app.dictionary.choice,
+            shortcut: app.shortcuts.choice,
             // Whether the hot key actually registered, not merely whether the combination is
             // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
             // shortcut that answered nothing.
-            shortcutIsRegistered: app.shortcutIsRegistered,
+            shortcutIsRegistered: app.shortcuts.isRegistered,
             // The model row: its state from the store and the download in flight, and the
             // download the reader can agree to or decline.
             localModel: app.models.choice,
@@ -177,7 +167,7 @@ struct XiaolaiDictSetup: View {
             // was last looked at — Reading, on a fresh install — so "Choose…" under the dictionary
             // row landed the reader on text size.
             openSettings: { pane in app.showSettings(on: pane) },
-            refreshDictionaries: { await app.refreshDictionaries() })
+            refreshDictionaries: { await app.dictionary.askAgain() })
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, so the app can tell when the reader has actually seen the board
         // — its window becoming key — rather than merely that it was opened.
