@@ -319,7 +319,12 @@ public struct SetupView: View {
             }
         case .tooLittleMemory:
             VStack(alignment: .leading, spacing: scale.space.line) {
-                Text("This Mac has too little memory for the local model.")
+                // **Names the requirement, because nothing here can be acted on otherwise.** The
+                // reader cannot add memory; what they can do is understand why the row is a dead end
+                // rather than wonder whether a retry would help. 16 GB is the real-world threshold:
+                // the model's measured peak is 3,585 MB against a quarter-of-RAM budget, so it needs
+                // 14.0 GB and no Apple Silicon Mac ships between 8 and 16.
+                Text("The local model needs 16 GB of memory. This Mac has less, so it cannot run it.")
                 // Nothing is coming later here, so nothing is said to be.
                 fallbackDetail(untilThen: false)
             }
