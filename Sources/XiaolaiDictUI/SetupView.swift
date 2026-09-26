@@ -524,7 +524,13 @@ public struct SetupView: View {
     /// looking like it worked — the same shape as the script box that refused a click in silence.
     /// A reader who is being told to go and enable a dictionary, and whose button does nothing,
     /// has no way to tell that from having missed the window.
-    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "setup")
+    /// **`nonisolated`, because the completion handler below is not on the main actor.** A `View` is
+    /// implicitly `@MainActor`, so its statics inherit that isolation and reading one from
+    /// `openApplication`'s Sendable completion handler warned — "main actor-isolated static property
+    /// 'log' can not be referenced from a Sendable closure", which a later language mode makes an
+    /// error. `Logger` is `Sendable` and thread-safe, so there was never a race to fix; what was wrong
+    /// was claiming an isolation the value does not need.
+    nonisolated private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "setup")
 
     private func openDictionaryApp() {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Dictionary")
