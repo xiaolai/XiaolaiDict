@@ -37,9 +37,9 @@ struct TestInventoryTests {
     /// incident it was written for was 47 to 4.
     static let floors = [
         "XiaolaiDictTests": 631,
-        "XiaolaiDictCoreTests": 547,
+        "XiaolaiDictCoreTests": 548,
         "DictionaryBridgeTests": 54,
-        "LocalModelTests": 47,
+        "LocalModelTests": 48,
     ]
 
     private static let testsRoot = URL(fileURLWithPath: #filePath)
