@@ -1,10 +1,12 @@
 import ModelKit
-import XiaolaiDictCore
 
 /// Where the local model stands on this Mac, as the setup board and the translation pane read it.
 ///
-/// Read from the store and the running download every time it is asked, never remembered: a board
-/// that stored "downloaded" would go on saying so after the reader deleted the folder.
+/// **Recomputed from the store and the running download whenever the controller refreshes** — not
+/// read from disk on each access, which is what an earlier version of this sentence implied. A board
+/// that *stored* "downloaded" would go on saying so after the reader deleted the folder, so the value
+/// a view holds is a snapshot with a known refresh point rather than a cache with none. `refresh()`
+/// is that point; `answering` reports what is installed, not that the service can answer right now.
 public enum LocalModelState: Equatable, Sendable {
     /// Nothing is downloaded, and the Mac can take a model.
     case notDownloaded
@@ -47,8 +49,10 @@ public struct LocalModelChoice {
     public var declined: Bool
     /// The sizes this Mac is offered, smallest first; empty where memory rules the model out.
     public var offered: [LocalModelSize]
-    /// What the row's main button downloads: 4B where the Mac takes it, and nothing below that —
-    /// a Mac too small for 4B reads with Apple's on-device model instead.
+    /// What the row's main button downloads: 4B where the Mac takes it, and nothing below that. A Mac
+    /// too small for 4B falls to the next rung of the ladder — Apple's on-device model where there is
+    /// one, and `NLEmbedding` below that. **Not "Apple's model instead"**, which is what this said
+    /// first: on a Mac with no Apple Intelligence that names an engine the reader does not have.
     public var recommended: LocalModelSize?
     public var download: @MainActor (LocalModelSize) -> Void
     public var decline: @MainActor () -> Void
@@ -69,7 +73,9 @@ public struct LocalModelChoice {
     }
 
     /// The next size up this Mac is offered, where a model is on disk and there is a larger one to
-    /// move to. A larger model is an opt-in — a little more idiom for twice the time and memory.
+    /// move to. A larger model is an opt-in — a little more idiom for roughly twice the time and
+    /// **1.85× the peak memory** (6,633 against 3,585 MB), which is where "twice" comes from and is
+    /// worth stating as the measured ratio rather than as a round word.
     ///
     /// **The next one, not the largest** — `min` over what is bigger, never `offered.max()`.
     /// Written in terms of 9B alone, a reader with 2B on a 16 GB Mac was offered nothing: 9B does
@@ -98,7 +104,10 @@ public struct LocalModelChoice {
         }
     }
 
-    /// Whether a download can be offered from here: the Mac takes a model, none is on disk, and none
-    /// is already on its way. **Not now does not take it away** — the row keeps it one click away.
+    /// Whether a download can be offered from here: the Mac takes a model and there is something to
+    /// fetch — either a first download, or **the resumption of a stopped one, which includes a
+    /// stopped upgrade**. So this is true while a working 4B sits on disk and a 9B download is
+    /// half-finished; "none is on disk", which this said first, describes only the first of the two.
+    /// **Not now does not take it away** — the row keeps it one click away.
     public var canDownload: Bool { downloadable != nil }
 }

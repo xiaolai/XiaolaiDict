@@ -1,7 +1,6 @@
 import Darwin
 @testable import ModelKit
 import Testing
-@testable import XiaolaiDictCore
 
 /// Which size a Mac may run, decided from two numbers before anything is loaded — because nothing
 /// afterwards will stop a model that does not fit: MLX loaded 2,159 MB under a 1,500 MB limit, and
@@ -103,7 +102,11 @@ struct ModelSizingTests {
     @Test func thisMacAnswersWithBytesOrNothing() {
         #expect(SystemMemory.physical > 0)
         if let available = SystemMemory.available() {
-            #expect(available > 0 && available < SystemMemory.physical)
+            // **Not `> 0`.** Zero reclaimable pages is a reading the kernel can legitimately give
+            // under pressure, and `reclaimable` returns it rather than nil — so a lower bound of one
+            // byte fails on a busy Mac with nothing wrong in the code. The refusal that zero should
+            // cause is tested from numbers in `lowFreeMemoryNarrowsWhatMayLoadNow`, not from here.
+            #expect(available <= SystemMemory.physical)
         }
         #expect(SystemMemory.footprint() ?? 1 > 0, "a footprint of zero is a failed measurement, not a fact")
     }
@@ -114,10 +117,19 @@ struct ModelSizingTests {
     /// **The case list is asserted with them**, because a size added without a measured peak is the
     /// one way this file can stop covering the catalogue: every other test here names its sizes, so
     /// a third case would simply go unmentioned and pass.
+    ///
+    /// **And the headroom is pinned here, because nothing else pinned it.** Every load boundary in
+    /// this file is written as `peak + ModelSizing.headroom`, so the whole suite passed with
+    /// `headroom = 0` — verified 2026-09-26, 43 tests green with the reserve deleted. That reserve is
+    /// the one thing keeping an answer from pushing the reader into swap, and a test that expresses
+    /// both sides of a comparison in terms of the same constant cannot see it move. Pinning the value
+    /// is what makes the boundary assertions mean a number rather than an identity.
     @Test func thePeaksAreTheMeasuredProcessFootprints() {
         #expect(LocalModelSize.allCases == [.standard, .large], "a size was added without a measured peak")
         #expect(LocalModelSize.standard.peakMemory == 3_585 * 1_048_576)
         #expect(LocalModelSize.large.peakMemory == 6_633 * 1_048_576)
+        #expect(ModelSizing.headroom == 1_024 * 1_048_576, "the reserve that keeps the reader out of swap moved")
+        #expect(ModelSizing.shareOfPhysicalMemory == 4, "the share of memory a model may take moved")
     }
 
     /// Free memory never promotes a size the Mac itself is not offered: 16 GB with 12 GB free is

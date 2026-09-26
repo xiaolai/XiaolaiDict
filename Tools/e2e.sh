@@ -780,7 +780,7 @@ else
             # Not `"meeting"` as a whole JSON element: the card heads itself with the dictionary's
             # headword, so a primary that lemmatises answers "meeting" with a card headed "meet".
             # The reader's own sentence carries the surface form, and that is what is matched.
-            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not be asked'; then
+            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not all be asked'; then
                 filled=$view; break
             fi
             sleep 0.1
