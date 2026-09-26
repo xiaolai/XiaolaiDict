@@ -85,17 +85,17 @@ struct WindowActionsWiringTests {
             models: .temporary(defaults: suite))
 
         app.armTriggers(because: "launch")
-        #expect(app.shortcutIsRegistered)
+        #expect(app.shortcuts.isRegistered)
 
-        app.suspendShortcut(true)
-        #expect(!app.shortcutIsRegistered, "the recorder cannot receive keys while a hot key holds them")
+        app.shortcuts.suspend(true)
+        #expect(!app.shortcuts.isRegistered, "the recorder cannot receive keys while a hot key holds them")
         let registeredSoFar = backend.registered.count
         app.armTriggers(because: "a capture arrived while the reader was recording")
-        #expect(!app.shortcutIsRegistered, "arming took the combination back from the field")
+        #expect(!app.shortcuts.isRegistered, "arming took the combination back from the field")
         #expect(backend.registered.count == registeredSoFar)
 
-        app.suspendShortcut(false)
-        #expect(app.shortcutIsRegistered, "the hot key was not put back when the recorder disarmed")
+        app.shortcuts.suspend(false)
+        #expect(app.shortcuts.isRegistered, "the hot key was not put back when the recorder disarmed")
     }
 
     /// Arming twice is arming once — `.task` is tied to a view's lifetime, not to any documented
@@ -120,7 +120,7 @@ struct WindowActionsWiringTests {
         let app = XiaolaiDictApp(
             defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
             models: .temporary(defaults: suite))
-        #expect(!app.shortcutIsRegistered, "the hot key was registered before there was a panel to draw into")
-        #expect(!app.hoverIsWatching, "hover was started before there was a panel to draw into")
+        #expect(!app.shortcuts.isRegistered, "the hot key was registered before there was a panel to draw into")
+        #expect(!app.hover.isWatching, "hover was started before there was a panel to draw into")
     }
 }

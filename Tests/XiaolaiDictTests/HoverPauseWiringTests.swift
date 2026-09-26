@@ -29,8 +29,8 @@ import XiaolaiDictTestSupport
         // **The watcher is built first, on purpose.** If the pause were captured by value when
         // the watcher is made, this ordering is what exposes it: the pause arrives afterwards and
         // must still be seen. Pausing first would pass either way.
-        let watcher = app.hover
-        app.pauseHover(for: .seconds(900))
+        let watcher = app.hover.watcher
+        app.hover.pause(for: .seconds(900))
 
         let outcome = await watcher.reader.read(
             at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], pointerStillFor: .seconds(10))
@@ -44,19 +44,19 @@ import XiaolaiDictTestSupport
     /// quietly stopped working.
     @Test func resumingTakesItBack() {
         let app = app()
-        app.pauseHover(for: .seconds(900))
-        #expect(app.hoverIsPaused)
-        app.resumeHover()
-        #expect(!app.hoverIsPaused)
+        app.hover.pause(for: .seconds(900))
+        #expect(app.hover.isPaused)
+        app.hover.resume()
+        #expect(!app.hover.isPaused)
     }
 
     /// A paused XiaolaiDict says so where the reader is looking. "Never *silently* paused" is the claim
     /// `HoverPause.label(at:)` was written to keep, and until now no surface read it.
     @Test func thePausedStateIsVisibleInTheMenu() {
         let app = app()
-        #expect(app.hoverPauseLabel == "Pause Hover…")
-        app.pauseHover(for: .seconds(900))
-        #expect(app.hoverPauseLabel.hasPrefix("Paused"), "the menu read \(app.hoverPauseLabel)")
+        #expect(app.hover.pauseLabel == "Pause Hover…")
+        app.hover.pause(for: .seconds(900))
+        #expect(app.hover.pauseLabel.hasPrefix("Paused"), "the menu read \(app.hover.pauseLabel)")
     }
 
     /// **And the policy, by the same argument as the pause.** `HoverPolicy` was taken as a closure
@@ -69,11 +69,11 @@ import XiaolaiDictTestSupport
     /// case that refuses either way keeps a failure from walking into a real screen capture.
     @Test func theReadersOwnPolicyIsTheOneTheGateUses() async {
         let app = app()
-        let watcher = app.hover
+        let watcher = app.hover.watcher
         var chosen = HoverPolicy.shipped
         chosen.modifier = .shift
         chosen.settleMilliseconds = 5_000
-        app.setHoverPolicy(chosen)
+        app.hover.setPolicy(chosen)
 
         let outcome = await watcher.reader.read(
             at: .zero, modifiersHeld: [.shift], pointerStillFor: .zero)
@@ -88,8 +88,8 @@ import XiaolaiDictTestSupport
         let suite = TemporaryDefaults.suite()
         var chosen = HoverPolicy.shipped
         chosen.modifier = .command
-        XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).setHoverPolicy(chosen)
-        #expect(XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).hoverPolicy.modifier == .command)
+        XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).hover.setPolicy(chosen)
+        #expect(XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite)).hover.policy.modifier == .command)
     }
 
     /// **Built the way the app actually builds it**, which is not the way a test does.

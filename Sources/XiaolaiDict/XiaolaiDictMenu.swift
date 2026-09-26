@@ -14,8 +14,18 @@ struct XiaolaiDictMenu: View {
     let app: XiaolaiDictApp
 
     var body: some View {
-        Button(app.shortcutLabel.map { "Look Up Selection    \($0)" } ?? "Look Up Selection") {
+        // **Two literal branches, not `map` + `??`.** Those produce a runtime `String`, which
+        // selects `Button`'s verbatim title overload — so this title was invisible to the
+        // extractor while the catalog already held entries for it. The same defect
+        // `Text("a " + "b")` has, and the same cure: keep each complete sentence a literal.
+        Button {
             app.lookUpSelection()
+        } label: {
+            if let shortcut = app.shortcuts.label {
+                Text("Look Up Selection    \(shortcut)")
+            } else {
+                Text("Look Up Selection")
+            }
         }
 
         // Read from the watcher, not from the setting: if starting it failed, the menu says off.
@@ -23,19 +33,19 @@ struct XiaolaiDictMenu: View {
         // while `HoverModifier` had four cases, which was correct only for as long as the reader
         // could not change it — and a menu naming the wrong key is worse than naming none, since
         // the reader holds it and nothing happens.
-        Toggle("Hover Lookup    hold \(app.hoverPolicy.modifier.symbol)", isOn: Binding(
-            get: { app.hoverIsWatching }, set: { _ in app.toggleHover() }))
+        Toggle("Hover Lookup    hold \(app.hover.policy.modifier.symbol)", isOn: Binding(
+            get: { app.hover.isWatching }, set: { app.hover.setEnabled($0) }))
 
         // The pause switch (A5). It was specified, modelled, given three lengths and a label —
         // and never drawn, so `HoverPause.label(at:)`'s "what the menu says" described a menu that
         // did not exist. Resuming is one click; pausing picks a length, which is what having three
         // of them is for.
-        if app.hoverIsPaused {
-            Button(app.hoverPauseLabel) { app.resumeHover() }
+        if app.hover.isPaused {
+            Button(app.hover.pauseLabel) { app.hover.resume() }
         } else {
-            Menu(app.hoverPauseLabel) {
+            Menu(app.hover.pauseLabel) {
                 ForEach(HoverPause.durations, id: \.self) { duration in
-                    Button(HoverPause.name(of: duration)) { app.pauseHover(for: duration) }
+                    Button(HoverPause.name(of: duration)) { app.hover.pause(for: duration) }
                 }
             }
         }
@@ -64,23 +74,33 @@ struct XiaolaiDictMenu: View {
     /// cards, and the reader should see that before choosing it, not afterwards.
     private var studyFrom: some View {
         Menu("Study From") {
-            Button { app.choosePrimaryDictionary(nil) } label: {
-                Text(app.chosenDictionary == nil
+            Button { app.dictionary.choose(nil) } label: {
+                Text(app.dictionary.chosen == nil
                      ? "\u{2713} First that marks senses" : "First that marks senses")
             }
             Divider()
-            if let dictionaries = app.dictionaries {
+            if let dictionaries = app.dictionary.enabled {
                 ForEach(dictionaries, id: \.identity.key) { capability in
                     Button {
-                        app.choosePrimaryDictionary(capability.identity.key)
+                        app.dictionary.choose(capability.identity.key)
                     } label: {
-                        Text(verbatim: app.chosenDictionary == capability.identity.key
+                        Text(verbatim: app.dictionary.chosen == capability.identity.key
                              ? "\u{2713} \(capability.identity.name)    · \(capability.note)"
                              : "\(capability.identity.name)    · \(capability.note)")
                     }
                 }
-            } else {
+            } else if !app.dictionary.hasAsked {
                 Text("Asking the dictionary service…")
+            } else {
+                // **Asked and answered with nothing is not still asking.** This menu said
+                // "Asking…" for as long as it was open whenever discovery finished without a
+                // list — a spinner that never resolves, describing a request that had already
+                // come back. It is the *third* surface with this defect: `SetupView` read
+                // `hasAsked` from the start, the Dictionary pane was fixed when it was found
+                // there, and this one was never looked at. The flag the app already sets is what
+                // tells failure from loading.
+                Text("The dictionary service did not answer.")
+                Button("Ask Again") { Task { await app.dictionary.askAgain() } }
             }
         }
         // Asked when the menu is built rather than at launch: probing parses real entries, and
