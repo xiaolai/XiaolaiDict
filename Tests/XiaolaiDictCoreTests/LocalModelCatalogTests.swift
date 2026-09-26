@@ -3,15 +3,19 @@ import Testing
 @testable import XiaolaiDictCore
 
 /// **The pins themselves, checked mechanically.** These manifests are hand-transcribed from what
-/// the mirror published: a path, a byte count and a hash per file, three sizes over. A typo in one
-/// is a download that fails hours in, or — for a path — a write outside the model's own directory.
-/// Nothing decodes a manifest, so this is where a bad pin is caught.
+/// the mirror published: a path, a byte count and a hash per file, for each size the catalogue
+/// carries. A typo in one is a download that fails hours in, or — for a path — a write outside the
+/// model's own directory. Nothing decodes a manifest, so this is where a bad pin is caught.
 struct LocalModelCatalogPinTests {
     /// A parameterised test over an empty list passes every assertion in it, which is the vacuous
     /// green this project has been bitten by — so the list is asserted before it is walked.
+    ///
+    /// **The floor is 2, lowered from 3 on 2026-09-26 when 2B was removed from the catalogue.** It
+    /// is not `LocalModelSize.allCases.count` twice over: the line above already ties the two
+    /// together, and this one has to be a number so that *both* going to zero is caught.
     @Test func everySizeHasAPinnedManifest() {
         #expect(ModelManifest.all.count == LocalModelSize.allCases.count)
-        #expect(ModelManifest.all.count >= 3)
+        #expect(ModelManifest.all.count >= 2)
         #expect(Set(ModelManifest.all.map(\.identifier)).count == ModelManifest.all.count)
     }
 

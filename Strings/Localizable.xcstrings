@@ -632,6 +632,9 @@
         }
       }
     },
+    "The local model needs 16 GB of memory. This Mac has less, so it cannot run it." : {
+
+    },
     "The model declined to compare this sentence against the senses." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
     },
@@ -648,9 +651,6 @@
 
     },
     "Third-party notices" : {
-
-    },
-    "This Mac has too little memory for the local model." : {
 
     },
     "This board was opened without the model's state, so it cannot say what is here." : {

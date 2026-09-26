@@ -306,32 +306,32 @@ struct ModelServiceTests {
     /// size installed neither could be wrong: a `max` and a `min` over one entry both answer it,
     /// so the two rules were untested for as long as the fixture held only 4B.
     @Test func theSizeChosenIsTheLargestThatFitsAndTheSmallestIsWhatIsMissed() async throws {
-        let (store, scratch) = try Self.installedStore([.small, .standard])
+        let (store, scratch) = try Self.installedStore([.standard, .large])
         scratches.withLock { $0.append(scratch) }
-        let both = [Self.manifest(.small), Self.manifest(.standard)]
+        let both = [Self.manifest(.standard), Self.manifest(.large)]
 
         let roomy = Recorder<[LocalModelSize]>([])
         let plenty = try service(
             ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: 40 * Self.gigabyte,
             chose: roomy, manifests: both)
         #expect(await plenty.reply(to: .pickSense(Self.question)) == .sense(1))
-        #expect(roomy.withLock { $0 } == [.standard], "a Mac with room for 4B was given 2B")
+        #expect(roomy.withLock { $0 } == [.large], "a Mac with room for 9B was given 4B")
 
-        // 4 GB holds 2B and its headroom (3,122 MB) and not 4B's (4,609 MB).
+        // 6 GB holds 4B and its headroom (4,609 MB) and not 9B's (7,657 MB).
         let tight = Recorder<[LocalModelSize]>([])
         let little = try service(
-            ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: 4 * Self.gigabyte,
+            ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: 6 * Self.gigabyte,
             chose: tight, manifests: both)
         #expect(await little.reply(to: .pickSense(Self.question)) == .sense(1))
-        #expect(tight.withLock { $0 } == [.small], "a size that does not fit in what is free was built")
+        #expect(tight.withLock { $0 } == [.standard], "a size that does not fit in what is free was built")
 
-        // Where neither fits, the reader is told what the *smallest* one needed — quoting 4B's
-        // figure would tell a 2B-sized Mac it needs a gigabyte and a half more than it does.
+        // Where neither fits, the reader is told what the *smallest* one needed — quoting 9B's
+        // figure would tell a 4B-sized Mac it needs three gigabytes more than it does.
         let none = try service(
             ScriptedModel(.answer(#"{"senseNumber": 1}"#)), store: store, available: Self.gigabyte,
             manifests: both)
         #expect(await none.reply(to: .pickSense(Self.question)) == .failure(.insufficientMemory(
-            needed: LocalModelSize.small.peakMemory + ModelSizing.headroom, available: Self.gigabyte)))
+            needed: LocalModelSize.standard.peakMemory + ModelSizing.headroom, available: Self.gigabyte)))
     }
 
     /// Unknown free memory is not plenty.

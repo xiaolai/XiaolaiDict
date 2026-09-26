@@ -47,7 +47,8 @@ public struct LocalModelChoice {
     public var declined: Bool
     /// The sizes this Mac is offered, smallest first; empty where memory rules the model out.
     public var offered: [LocalModelSize]
-    /// What the row's main button downloads: 4B where the Mac takes it, 2B below that.
+    /// What the row's main button downloads: 4B where the Mac takes it, and nothing below that —
+    /// a Mac too small for 4B reads with Apple's on-device model instead.
     public var recommended: LocalModelSize?
     public var download: @MainActor (LocalModelSize) -> Void
     public var decline: @MainActor () -> Void
@@ -70,9 +71,15 @@ public struct LocalModelChoice {
     /// The next size up this Mac is offered, where a model is on disk and there is a larger one to
     /// move to. A larger model is an opt-in — a little more idiom for twice the time and memory.
     ///
-    /// **The next one, not the largest.** Written in terms of 9B alone, a reader with 2B on a 16 GB
-    /// Mac was offered nothing: 9B does not fit there, so the row said their model was the biggest
-    /// they could have while 4B — the recommended size, which does fit — sat unoffered.
+    /// **The next one, not the largest** — `min` over what is bigger, never `offered.max()`.
+    /// Written in terms of 9B alone, a reader with 2B on a 16 GB Mac was offered nothing: 9B does
+    /// not fit there, so the row said their model was the biggest they could have while 4B — the
+    /// recommended size, which does fit — sat unoffered.
+    ///
+    /// **With 2B gone there are two sizes, so `min` and `max` cannot be told apart by any test**,
+    /// and the shape is kept because it is the correct one rather than because something proves it.
+    /// A third size makes the distinction observable again, and `theUpgradeOfferedIsTheNextSizeThisMacCanHold`
+    /// — deleted in the same change — is the test to bring back with it.
     public var larger: LocalModelSize? {
         guard case .ready(let size) = state else { return nil }
         return offered.filter { $0 > size }.min()
