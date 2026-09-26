@@ -1,8 +1,11 @@
+import DictionaryModel
 import Foundation
+@testable import ModelKit
 import Synchronization
 import Testing
 @testable import XiaolaiDict
 @testable import XiaolaiDictCore
+import XiaolaiDictBase
 import XiaolaiDictTestSupport
 
 /// The instrument that decided the ladder's order, exercised with scripted rungs.

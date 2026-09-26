@@ -1,4 +1,5 @@
 import AppKit
+import DictionaryModel
 import Foundation
 import SwiftUI
 import Testing

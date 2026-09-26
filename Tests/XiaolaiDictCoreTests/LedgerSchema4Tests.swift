@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 import SQLite3

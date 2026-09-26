@@ -1,4 +1,5 @@
 import AppKit
+import DictionaryModel
 import XiaolaiDictCore
 import SwiftUI
 

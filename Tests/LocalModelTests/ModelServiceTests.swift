@@ -2,9 +2,9 @@ import CryptoKit
 import Foundation
 import FoundationModels
 @testable import LocalModel
+@testable import ModelKit
 import XiaolaiDictTestSupport
 import Testing
-@testable import XiaolaiDictCore
 
 /// A language model that answers from a script and records what it was asked — the injected
 /// executor the plan calls for, so the service's handling is tested with no GPU and no weights.

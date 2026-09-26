@@ -1,5 +1,7 @@
 import AppKit
 import ApplicationServices
+import DictionaryModel
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import Synchronization

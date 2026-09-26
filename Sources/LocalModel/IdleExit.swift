@@ -1,6 +1,6 @@
 import Foundation
+import ModelKit
 import Synchronization
-import XiaolaiDictCore
 
 /// Ends the model service once nothing has asked it anything for `interval` — which is how the model
 /// is unloaded.

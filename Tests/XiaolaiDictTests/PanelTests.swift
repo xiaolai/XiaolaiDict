@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import DictionaryModel
 import XiaolaiDictCore
 import Testing
 
@@ -113,7 +114,7 @@ struct PanelTicketTests {
     /// point: a superseded lookup's answer arriving after the reader has moved on must not repaint
     /// the panel with the previous word.
     @Test func aNewerRequestSupersedesAnOlderOneAndItsLateResultIsDropped() {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let older = panel.newRequest()
         let newer = panel.newRequest()
         #expect(!panel.isCurrent(older))
@@ -220,7 +221,7 @@ struct PanelResizeWatchTests {
     /// be posted and the size it remembered could never be written. The property this test is really
     /// about is the churn guard, which belongs to the observer that remains.
     @Test func watchingAgainIsANoOpAndADifferentWindowReplacesIt() throws {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
@@ -257,7 +258,7 @@ struct PanelResizeWatchTests {
     /// which is the whole shape of the reported defect. This asserts the observer exists and is
     /// removed with the panel — the two ways it silently stops working.
     @Test func theContentResizeWatchIsRegisteredAndReleasedWithThePanel() throws {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.borderless], backing: .buffered, defer: true)
@@ -291,7 +292,7 @@ struct PanelResizeWatchTests {
     /// to — and passed with `keepWhollyOnScreen` emptied out entirely. A window placed off the
     /// screen must actually be moved back, or the two assertions below mean nothing.
     @Test func aWindowOffTheScreenIsBroughtBack() throws {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let screen = try #require(NSScreen.main)
         let outside = NSRect(
             x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
@@ -316,7 +317,7 @@ struct PanelResizeWatchTests {
     /// be exercised with a plain `NSWindow` — the property is read-only — so the window is
     /// subclassed. Without this the guard could be deleted and every other test here would pass.
     @Test func aWindowTheReaderIsDraggingIsLeftAlone() throws {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let screen = try #require(NSScreen.main)
         let outside = NSRect(
             x: screen.visibleFrame.minX - 400, y: screen.visibleFrame.minY - 400,
@@ -333,7 +334,7 @@ struct PanelResizeWatchTests {
     /// A panel that already fits is not nudged — otherwise every content update would creep it
     /// across the screen.
     @Test func aWindowAlreadyOnScreenIsNotMoved() throws {
-        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()))
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         let screen = try #require(NSScreen.main)
         let inside = NSRect(
             x: screen.visibleFrame.midX, y: screen.visibleFrame.midY, width: 320, height: 240)

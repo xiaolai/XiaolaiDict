@@ -1,5 +1,6 @@
 import FoundationModels
 import Foundation
+import ModelKit
 
 /// Rung 2: Apple's on-device model, guided to the candidate set — below the local model, which is
 /// the top rung wherever it is downloaded, and above `NLEmbedding`.

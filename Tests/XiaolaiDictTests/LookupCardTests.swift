@@ -1,8 +1,11 @@
 import AppKit
 import CoreGraphics
+import DictionaryModel
 import Foundation
+import ModelKit
 import SwiftUI
 import Testing
+import XiaolaiDictBase
 
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI

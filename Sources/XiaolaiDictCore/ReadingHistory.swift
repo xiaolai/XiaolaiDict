@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 
 /// One lookup, as the history drawer shows it.

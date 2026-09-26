@@ -1,7 +1,9 @@
 import AppKit
 import ApplicationServices
+import DictionaryModel
 import XiaolaiDictCore
 import Synchronization
+import XiaolaiDictUI
 
 /// The word under a screen point, read through Accessibility — the fast path, and the one that
 /// gets the **whole sentence** because it reads text rather than pixels.
@@ -63,8 +65,12 @@ enum ScreenWordReader {
         case ourOwnWindow
     }
 
-    static func target(at point: CGPoint) -> TargetOutcome {
-        guard AXIsProcessTrusted() else { return .none("Accessibility access for XiaolaiDict is off") }
+    /// `access` is a parameter so a test can drive the refusal without this Mac's grant deciding
+    /// the answer. **`granted()` and never `ensure()`**: a hover the reader walked away from must
+    /// not raise a permission dialog, which is the rule `ScreenRecordingAccess` already keeps for
+    /// the other permission.
+    static func target(at point: CGPoint, access: AccessibilityAccess = .system) -> TargetOutcome {
+        guard access.granted() else { return .none("Accessibility access for XiaolaiDict is off") }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, messagingTimeout)
 

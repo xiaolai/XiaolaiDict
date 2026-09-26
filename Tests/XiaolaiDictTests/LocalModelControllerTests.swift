@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@testable import ModelKit
 import Testing
 @testable import XiaolaiDict
 @testable import XiaolaiDictCore
@@ -112,7 +113,7 @@ struct LocalModelControllerTests {
 
     /// A stopped download keeps saying why when the board re-reads the store.
     @Test func aRefreshKeepsTheReasonADownloadStopped() async {
-        let (controller, store) = controller(fails: true)
+        let (controller, _) = controller(fails: true)
         controller.startDownload(.standard)
         await settle(controller)
         controller.refresh()

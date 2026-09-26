@@ -1,5 +1,7 @@
 @testable import XiaolaiDict
+import DictionaryModel
 import Foundation
+import XiaolaiDictBase
 import XiaolaiDictCore
 import Synchronization
 import Testing

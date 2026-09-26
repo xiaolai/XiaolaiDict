@@ -1,3 +1,4 @@
+import ModelKit
 import XiaolaiDictCore
 
 /// Where the local model stands on this Mac, as the setup board and the translation pane read it.

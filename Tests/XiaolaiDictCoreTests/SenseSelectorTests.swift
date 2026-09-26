@@ -1,3 +1,4 @@
+import DictionaryModel
 import Synchronization
 import XiaolaiDictCore
 import Testing

@@ -1,3 +1,5 @@
+import DictionaryModel
+import ModelKit
 import XiaolaiDictCore
 import XPC
 

@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import SwiftUI
@@ -13,7 +14,10 @@ import os
 protocol LookupPanelPresenting: AnyObject {
     func newRequest() -> PanelTicket
     func isCurrent(_ ticket: PanelTicket) -> Bool
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket)
+    /// Shows the panel; answers whether it is on screen. `LookupRunner` stops on `false`, so a
+    /// panel that could not be drawn never becomes a ledger row.
+    @discardableResult
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool
     /// Replaces a shown panel's content without moving or resizing it. A panel the reader has
     /// dragged somewhere must not jump when its entry arrives.
     func update(_ content: PanelContent, for ticket: PanelTicket)
@@ -74,8 +78,28 @@ final class LookupPanelController: LookupPanelPresenting {
     /// frame, so `defaultWindowPlacement` reads this back.
     private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize)
 
-    init(hotkeys: HotkeyCenter = .shared) {
+    /// How the panel's window is opened and dismissed.
+    ///
+    /// **Injected, because it is a seam and was a global.** `WindowActions.shared` is filled in by
+    /// a view's `.task`, so in a unit test it is never wired and `show` correctly refuses — which is
+    /// right for the product and made three existing panel tests assert against a panel that had
+    /// declined to open. A test hands in a pair that succeeds; the app hands in the real one.
+    struct Windows: Sendable {
+        var open: @MainActor (String) -> Bool
+        var dismiss: @MainActor (String) -> Bool
+
+        static let shared = Windows(
+            open: { WindowActions.shared.openWindow(id: $0) },
+            dismiss: { WindowActions.shared.dismissWindow(id: $0) })
+        /// For a test that is about the panel rather than about whether a window exists.
+        static let alwaysOpen = Windows(open: { _ in true }, dismiss: { _ in true })
+    }
+
+    private let windows: Windows
+
+    init(hotkeys: HotkeyCenter = .shared, windows: Windows = .shared) {
         escape = EscapeKey(hotkeys: hotkeys)
+        self.windows = windows
     }
 
     /// What the reader asked to study, as they ask for it. Set by the app, which owns the ledger.
@@ -114,8 +138,15 @@ final class LookupPanelController: LookupPanelPresenting {
 
     func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
 
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) {
-        guard isCurrent(ticket) else { return }
+    /// Shows the panel, and **says whether it is actually on screen**.
+    ///
+    /// The answer is not decoration: `LookupRunner` stops on `false`, so no lookup is recorded for a
+    /// panel the reader never saw. Before this the window action was optional-chained, so a nil
+    /// action made this a silent no-op while `isCurrent(ticket)` went on answering true — the whole
+    /// lookup ran, a sense was resolved, and a ledger row was written for nothing.
+    @discardableResult
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+        guard isCurrent(ticket) else { return false }
         lastPointer = pointer
         let kind = content.kind
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
@@ -128,11 +159,19 @@ final class LookupPanelController: LookupPanelPresenting {
         shownKind = kind
         // The environment's real action, captured from the menu-bar label. An `EnvironmentValues()`
         // built on the spot is wired to nothing and silently opens no window at all.
-        WindowActions.shared.open?(id: XiaolaiDictScene.lookupID)
+        guard windows.open(XiaolaiDictScene.lookupID) else {
+            // **Unwound, not left half-shown.** `shownKind` set with no window makes `update` accept
+            // content for a panel that does not exist, and `closed()` would then be the only thing
+            // able to clear it — from a close nothing will ask for.
+            shownKind = nil
+            model.content = nil
+            return false
+        }
         // A scene already on screen is not re-placed, so a panel being reused is moved by hand.
         if let window, window.isVisible { window.setFrame(placement, display: true) }
         escape.claim { [weak self] in self?.close() }
         watchForClicksAway()
+        return true
     }
 
     /// Fills in a panel already on screen. Same kind, so the size and the minimum stay as they
@@ -152,7 +191,7 @@ final class LookupPanelController: LookupPanelPresenting {
     }
 
     func close() {
-        WindowActions.shared.dismiss?(id: XiaolaiDictScene.lookupID)
+        _ = windows.dismiss(XiaolaiDictScene.lookupID)
         closed()
     }
 
@@ -396,7 +435,11 @@ final class EscapeKey {
 /// Where the panel goes: below and to the right of the pointer, and wholly on the screen — shrunk
 /// first when the screen is smaller than the panel, so no clamp can push it off an edge.
 enum PanelPlacement {
+    /// The gap kept between the panel and the screen's edge.
     static let margin: CGFloat = 8
+    /// How far right of the pointer the panel's left edge sits — clear of the cursor's own bitmap
+    /// without putting the card somewhere the eye has to travel to.
+    static let pointerGap = NSSize(width: 12, height: 24)
 
     /// Answers a bare `NSRect` because its one caller hands it straight to `NSPanel.setFrame`.
     static func frame(for size: NSSize, near pointer: UpPoint, within visible: UpRect) -> NSRect {
@@ -405,10 +448,12 @@ enum PanelPlacement {
         // which shrank again — the same normalisation owned in two places, where a change to one is
         // a silent divergence. Handing over the rectangle the pointer asks for, unshrunk, works
         // because `fitted` anchors by the top edge: whatever height survives, the panel's top stays
-        // at `pointer.y - 24`. That is the case which makes the top anchor observable, and there
-        // was none when it was written.
+        // at `pointer.y - pointerGap.height`. That is the case which makes the top anchor
+        // observable, and there was none when it was written.
         let wanted = NSRect(
-            origin: NSPoint(x: pointer.x + 12, y: pointer.y - 24 - size.height), size: size)
+            origin: NSPoint(x: pointer.x + pointerGap.width,
+                            y: pointer.y - pointerGap.height - size.height),
+            size: size)
         return fitted(wanted, within: visible)
     }
 
@@ -448,8 +493,8 @@ enum PanelPlacement {
     private static func shrunk(_ size: NSSize, within visible: UpRect) -> NSSize {
         let bounds = visible.cg
         return NSSize(
-            width: max(0, min(size.width, bounds.width - 2 * margin)),
-            height: max(0, min(size.height, bounds.height - 2 * margin)))
+            width: max(0, min(size.width, bounds.width - margin - margin)),
+            height: max(0, min(size.height, bounds.height - margin - margin)))
     }
 
     /// Bounds in the wrong order — a screen narrower than its margins — pin to the lower one.

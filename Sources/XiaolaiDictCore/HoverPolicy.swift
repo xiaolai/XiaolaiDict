@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 
 /// The modifier the reader must hold before the pointer does anything at all.
