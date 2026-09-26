@@ -218,7 +218,7 @@ struct SetupBoardTests {
     /// Settled two ways, and both are the reader's answer: the model is here, or they said Not now.
     @Test func downloadedOrDeclinedSettlesTheRow() {
         #expect(board(model: .ready(.standard)).isSettled(.localModel))
-        #expect(board(model: .ready(.small)).isComplete)
+        #expect(board(model: .ready(.large)).isComplete)
         let declined = board(model: .notDownloaded, modelDeclined: true)
         #expect(declined.isSettled(.localModel))
         #expect(declined.isComplete)
@@ -232,7 +232,7 @@ struct SetupBoardTests {
         #expect(!board(model: .stopped(reason: "the connection failed", size: .standard)).isSettled(.localModel))
     }
 
-    /// A Mac that cannot hold even 2B has nothing to ask of its reader — a row that stayed needed
+    /// A Mac that cannot hold 4B has nothing to ask of its reader — a row that stayed needed
     /// there could never be settled, and the board would be unfinished forever. **But it is not
     /// settled either**: a tick would claim the reader had got something they have not.
     @Test func aMacWithTooLittleMemoryIsNotAskedForAnythingAndIsNotTicked() {

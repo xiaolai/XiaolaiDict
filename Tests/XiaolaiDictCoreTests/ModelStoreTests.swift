@@ -551,7 +551,7 @@ struct ModelStoreTests {
         // commit that ignored the lock outright. A second model is staged whole and installed while
         // the lock is held; nothing may appear at its destination until the lock is given back.
         let second = ModelManifest(
-            size: .small, repository: manifest.repository, revision: "second",
+            size: .standard, repository: manifest.repository, revision: "second",
             files: manifest.files.map {
                 ModelFile(repository: $0.repository, revision: "second", path: $0.path,
                           size: $0.size, sha256: $0.sha256)

@@ -307,8 +307,28 @@ trap 'died_at=$LINENO' ERR
 cleanups=()
 at_exit() { cleanups+=("$1"); }
 on_exit() {
-    local cleanup
-    for cleanup in ${cleanups[@]+"${cleanups[@]}"}; do "$cleanup" || true; done
+    local cleanup i
+    # **Reverse registration order, and a failure is recorded rather than swallowed.**
+    #
+    # *Reverse* because a later cleanup can depend on an earlier one not having run yet:
+    # `restore_setup_shown` is registered before any launch, `unstash_models` inside the setup
+    # stage — and unstashing restarts the app, which writes that very flag. In registration order
+    # the flag was restored and then overwritten by the restart that followed it, so the machine
+    # kept this run's value under a green mark. Releasing in the reverse of acquisition is the
+    # ordering that makes a dependency between two cleanups expressible at all.
+    #
+    # *Recorded* because `|| true` made an unsuccessful restoration indistinguishable from a
+    # successful one: `unstash_models` could fail to put three gigabytes of weights back and the run
+    # still exited 0. Each is still allowed to fail without stopping the others — a cleanup that
+    # gives up must not strand the ones after it — but the run is no longer called a pass.
+    for (( i = ${#cleanups[@]} - 1; i >= 0; i-- )); do
+        cleanup=${cleanups[$i]}
+        "$cleanup" || {
+            echo "FAIL  cleanup: $cleanup did not finish, so this machine may be left changed"
+            failures=$((failures + 1))
+            printf 'RESULT\tcleanup\tfail\n'
+        }
+    done
     if [ "$finished" != true ]; then
         echo "FAIL  $STAGE: the script stopped at line ${died_at:-?} before the stage finished"
         printf "RESULT\t%s\tfail\n" "$STAGE"
@@ -332,6 +352,15 @@ restore_default() {
     local key=$1 had=$2 wanted=$3 flag=${4:-} value=$3 now
     if [ "$had" != yes ] || [ -z "$wanted" ]; then
         defaults delete com.xiaolaidict "$key" 2>/dev/null || true
+        # **Read back, exactly as the write path does.** `defaults delete` on a key that cfprefsd is
+        # still holding exits 0 having changed nothing, so the branch that puts a *missing* setting
+        # back was the one branch of this function with no evidence behind it — the asymmetry is the
+        # defect, since "there was no such key" is the commonest case on a fresh machine.
+        if defaults read com.xiaolaidict "$key" >/dev/null 2>&1; then
+            echo "FAIL  cleanup: $key still exists after being deleted, so this machine keeps a setting this run made"
+            failures=$((failures + 1))
+            printf 'RESULT\tcleanup\tfail\n'
+        fi
         return 0
     fi
     # **`defaults read` prints a boolean as 1, and `defaults write -bool` does not accept 1.** Its
@@ -480,6 +509,31 @@ run_bounded() {
     return "$status"
 }
 
+# **One place that ends an instrument, and it matches *this* bundle rather than any bundle.**
+#
+# `pkill -f "MacOS/XiaolaiDict $flag"` matched a substring of the command line, so a second checkout's
+# copy of the app, or another run on this machine, was a candidate for the kill — including `pkill -9`.
+# Anchored to `$exe`, the absolute path of the bundle under test, the pattern can only reach processes
+# this run started.
+#
+# And it is **waited for before it is killed, then insisted on**, because an instrument that is still
+# running is not finished with the screen: two simultaneous `SCScreenshotManager` captures deadlock,
+# 6 trials of 6. `read_point` returned as soon as output appeared and never reaped anything, so the
+# recogniser stage's grid started each capture beside the last one still running — the harness
+# breaking a rule this project measured and wrote down.
+end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument to end, then insist
+    local pattern="$exe $1"
+    for _ in $(seq 1 40); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    pkill -f "$pattern" 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    pkill -9 -f "$pattern" 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
+    # Said out loud: an instrument that survives its own killing can still capture the screen, and
+    # whatever runs next would be measuring against it.
+    echo "note: $1 would not die; what runs after this is running beside it"
+    return 1
+}
+
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
     local flag=$1 budget=$2 name=${1#--}
     local out="$reports/$name.json" err="$reports/$name.err"
@@ -489,19 +543,22 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     while [ ! -s "$out" ] && [ "$waited" -lt $((budget * 2)) ]; do sleep 0.5; waited=$((waited + 1)); done
     # Past its budget it is stopped; within it, it exits by itself once it has written. Waited for
     # either way, so no report outlives its stage.
-    [ -s "$out" ] || pkill -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
-    for _ in $(seq 1 40); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
-    # And if it ignored that, it is killed: a report still running can still capture the screen,
-    # and two captures at once deadlock.
-    if pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null; then
-        pkill -9 -f "MacOS/XiaolaiDict $flag" 2>/dev/null || true
-        for _ in $(seq 1 20); do pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null || break; sleep 0.25; done
-        # Said out loud if it is still there: a report that survives its own killing can still
-        # capture the screen, and the next stage would be measuring against it.
-        pgrep -f "MacOS/XiaolaiDict $flag" >/dev/null \
-            && echo "note: $flag would not die; the stage after this one is running beside it"
+    [ -s "$out" ] || pkill -f "$exe $flag" 2>/dev/null || true
+    end_instrument "$flag" || true
+    # **The contract in this function's own first line, now enforced: valid JSON, or nothing.**
+    # An instrument launched through `open` has no exit status to read — LaunchServices returns as
+    # soon as it has started the process — so the thing that *can* be checked is the product. A
+    # report that printed a prefix and died, or wrote a diagnostic where JSON belongs, satisfied
+    # `[ -s "$out" ]` and reached the caller as text, where one caller parsed it and another only
+    # asked whether it was empty. That divergence is the defect: the drawer stage validated the JSON
+    # itself while the settings stage accepted anything non-empty.
+    #
+    # Nothing is printed and the status is non-zero when the report is not JSON, so every caller's
+    # existing empty check now covers a malformed report too. The reason stays in `$err`, which is
+    # what each caller tails into its failure message.
+    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+        return 1
     fi
-    true
     cat "$out" 2>/dev/null || true
 }
 # **The setup flag is captured before the app is launched, not inside the stage that uses it.**
@@ -616,7 +673,23 @@ fi
 
 if want accessibility; then
 # 4. Accessibility, which the selection tests need: said plainly either way.
-reading=$("$exe" --read-selection com.apple.finder 2>&1 || true)
+#
+# **A positive answer is required, not merely the absence of one sentence.** This read
+# `--read-selection` with `2>&1 || true` and passed unless the output held the words "Accessibility
+# access … is off" — so *every other* way of not answering passed too. A release bundle, where the
+# instrument is compiled out, prints "--read-selection is a development instrument" and would have
+# been recorded as Accessibility being granted; reproduced locally against the refusal string. So
+# would a crash, and so would silence.
+#
+# The instrument writes JSON on stdout in each of its three reachable outcomes — a selection, a
+# `{"nothing": reason}`, or an `{"error": …}` — so valid JSON *is* the positive signal: it says the
+# instrument ran and answered. stderr is captured apart from it rather than merged, because merging
+# lets a stray line on stderr corrupt an otherwise valid report and read as a permission failure.
+reading=$("$exe" --read-selection com.apple.finder 2>"$reports/read-selection.err" || true)
+if ! python3 -c 'import json,sys; json.loads(sys.stdin.read())' <<<"$reading" 2>/dev/null; then
+    flunk "accessibility: --read-selection gave no report, so whether Accessibility is granted is unknown ($(head -c 200 "$reports/read-selection.err" 2>/dev/null))"
+    echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
+fi
 if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off"; then
     flunk "accessibility: not granted to this session — the selection tests cannot run"
     echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
@@ -665,19 +738,29 @@ else
     # than a second. A fixed wait turns load into a failure about rendering, which is what it did.
     # The assertion below is unchanged: a page that never arrives still fails, it just is not
     # declared missing while it is still on its way.
+    # **One list of "this panel has not answered yet" markers, shared by the poll and the assertion
+    # below.** Written twice, the two copies diverged in both possible ways at once. The poll asked
+    # for a text element *equal* to the word while the assertion looked for it *within* a text — and
+    # the long comment on the assertion explains exactly why the substring form is the correct one,
+    # so the fix had been applied to one copy of two. On a primary that lemmatises, the poll could
+    # therefore never succeed: it burned all 150 iterations and the assertion passed anyway, which is
+    # a poll measuring nothing. And both copies still named `could not be asked`, wording the app
+    # does not have — the same stale string already corrected in the grep at the deadline stage.
+    card_failure_markers='Looking up|No entry for|could not all be asked|needs Accessibility'
     view=""
     for _ in $(seq 1 150); do
         view=$("$helpers/panel" com.xiaolaidict)
         printf '%s' "$view" | python3 -c '
 import json, sys
-failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
-panels = [w for w in json.load(sys.stdin)["windows"] if "meeting" in w["texts"] and not any(m in t for t in w["texts"] for m in failed)]
+failed = sys.argv[1].split("|")
+panels = [w for w in json.load(sys.stdin)["windows"]
+          if any("meeting" in t for t in w["texts"]) and not any(m in t for t in w["texts"] for m in failed)]
 sys.exit(0 if panels else 1)
-' && break
+' "$card_failure_markers" && break
         sleep 0.1
     done
     view=$("$helpers/panel" com.xiaolaidict)
-    if why=$(python3 - "$view" 2>&1 <<'PY'
+    if why=$(python3 - "$view" "$card_failure_markers" 2>&1 <<'PY'
 import json, sys
 view = json.loads(sys.argv[1])
 # The answer card, headed by the word itself — an exact text element, so the waiting view's
@@ -693,7 +776,7 @@ view = json.loads(sys.argv[1])
 # only while the primary dictionary happened to head the entry with the selected string. It failed
 # the day the primary was one that lemmatises, with the card on screen and correct. The reader's own
 # sentence carries the surface form either way, which is what this now matches.
-failed = ("Looking up", "No entry for", "could not be asked", "needs Accessibility")
+failed = sys.argv[2].split("|")
 panels = [w for w in view["windows"] if any("meeting" in t for t in w["texts"])
           and not any(m in t for t in w["texts"] for m in failed)]
 problems = []
@@ -762,7 +845,10 @@ else
             sleep 0.05
         done
         if [ -z "$shown" ]; then
-            flunk "waiting panel: never appeared while the service was suspended"
+            # `$waiting` is what was captured and never read: the last panel seen, which is the whole
+            # evidence for why this failed — an empty window list reads very differently from a panel
+            # that came up with the wrong words in it.
+            flunk "waiting panel: never appeared while the service was suspended (last view: $(printf '%s' "${waiting:-$view}" | head -c 240))"
         else
             took=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$started" "$shown")
             if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)" "$took"; then
@@ -771,20 +857,50 @@ else
                 flunk "waiting panel: took ${took}s, over the 1 s budget"
             fi
         fi
-        # It fills in on its own once the deadline gives up: same panel, no second window.
-        resume
+        # **What the deadline giving up actually produces, asserted before the service comes back.**
+        # `resume` used to be the line right after the waiting panel was confirmed, so the answer that
+        # filled the panel came from the service that had just been let go — the deadline expiring and
+        # the public `DCSCopyTextDefinition` fallback answering was never demonstrated at all, under a
+        # comment that said it was.
+        #
+        # The two claims turn out to conflict, which is why one check could not carry both: a fallback
+        # answer *carries the caveat* ("could not all be asked") that the fill-in check below excludes
+        # as a not-yet-answered marker. So the fallback is asserted here, while the service is still
+        # suspended, and the complete answer is asserted after it comes back.
+        fell_back=""
+        for _ in $(seq 1 200); do
+            view=$("$helpers/panel" com.xiaolaidict)
+            if printf '%s' "$view" | grep -q 'could not all be asked'; then fell_back=$view; break; fi
+            sleep 0.1
+        done
+        if [ -n "$fell_back" ]; then
+            pass "waiting panel: the deadline gave up and the public fallback answered, saying the answer may be incomplete"
+        else
+            flunk "waiting panel: the service stayed suspended and nothing fell back to the public API — the reader waits forever ($(printf '%s' "${view:-}" | head -c 200))"
+        fi
+        # **It filled the panel it already had, rather than opening a second one.** That is the claim
+        # here, and the fallback answer above is what filled it — so this must *accept* the caveat as
+        # an answer, not exclude it as a not-yet-answered marker.
+        #
+        # Measured 2026-09-26: splitting the fallback out and leaving this check as it was failed with
+        # "never filled in: nothing", because the panel was already complete and no later answer was
+        # coming. Resuming the service does not re-run a lookup that has finished — the original check
+        # only saw a caveat-free card because it resumed *before* the deadline expired, which is
+        # precisely why the fallback went untested. One lookup cannot show both answers, and this is
+        # the one it actually produces.
         filled=""
         for _ in $(seq 1 100); do
             view=$("$helpers/panel" com.xiaolaidict)
-            # The word's card, and no failure on it — "No entry for" carries the word too.
+            # The word's card, still not a miss — "No entry for" carries the word too.
             # Not `"meeting"` as a whole JSON element: the card heads itself with the dictionary's
             # headword, so a primary that lemmatises answers "meeting" with a card headed "meet".
             # The reader's own sentence carries the surface form, and that is what is matched.
-            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not be asked'; then
+            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for'; then
                 filled=$view; break
             fi
             sleep 0.1
         done
+        resume
         if [ -n "$filled" ] && [ "$(printf '%s' "$filled" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["windows"]))')" = 1 ]; then
             pass "waiting panel: filled itself in, in the one panel it already had"
         else
@@ -1000,6 +1116,9 @@ read_point() {  # read_point <x> <y>: the instrument's JSON on success, nothing 
         [ -s "$out" ] || [ -s "$err" ] || { sleep 0.5; continue; }
         break
     done
+    # **Reaped before returning.** Output appearing is not the process ending, and the caller's next
+    # move is another `--read-point` — a second screen capture, which deadlocks against a live one.
+    end_instrument --read-point || true
     cat "$out" 2>/dev/null
 }
 
@@ -1066,16 +1185,42 @@ if want setup; then
 # asking. Bounded, so a service that never answers is reported by the check that needs it.
 # Defined before anything below uses them: `settle_after_launch` calls `board_on_screen`, and
 # a helper defined after its first caller is "command not found" — under `|| return 0`, silently.
+# **A bounded wait that runs out is not the thing it was waiting for.** Both loops here fell through
+# in silence, and the second one made the first one's silence dangerous: `! is_running || break`
+# breaks when the app *is* running, so an app that never quit satisfied it on the first iteration.
+# `open` then did nothing to an already-running process and the function returned success, having
+# restarted nothing — while every assertion downstream believed it was reading a fresh launch. That
+# is the case the setup stage depends on most: it restarts the app precisely to reach the
+# fresh-reader branch of the model row.
+#
+# So the old process must be **gone**, and a **new** pid must be there afterwards. The new-pid check
+# is not redundant with the death check: it is what says `open` actually started something, rather
+# than the start loop having run out too.
 restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local before pid fresh=""
     find_pids "$exe"
+    before=" ${PIDS[*]+${PIDS[*]}} "
     [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}"
     for _ in $(seq 1 100); do is_running "$exe" || break; sleep 0.1; done
+    if is_running "$exe"; then
+        echo "restart_app: XiaolaiDict would not quit (pids$before), so nothing was restarted" >&2
+        return 1
+    fi
     open "$app"
     for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
+    find_pids "$exe"
+    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
+        case $before in *" $pid "*) ;; *) fresh=$pid ;; esac
+    done
+    if [ -z "$fresh" ]; then
+        echo "restart_app: no new XiaolaiDict process appeared after open (before:$before)" >&2
+        return 1
+    fi
     for _ in $(seq 1 100); do
         "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
         sleep 0.2
     done
+    echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
     return 1
 }
 board_on_screen() {  # board_on_screen: 0 drawn, 1 absent, 2 exists but not drawn
@@ -1135,9 +1280,48 @@ unstash_models() {
     restart_app || { echo "XiaolaiDict did not come back after the model store was put back" >&2; return 1; }
 }
 at_exit unstash_models
-if [ -d "$models" ]; then
+
+# **The store is stashed exactly once, and never onto an existing stash.**
+#
+# Two `mv "$models" "$models.e2e-stash"` lines stood in this stage, either side of a restart. `mv`
+# onto an existing *directory* moves the source **inside** it, so the second one buried the real
+# stash at `Models.e2e-stash/Models` whenever the app had recreated the root in between — which it
+# does, because opening the store creates `.staging` for its lock. The restore then put back a
+# directory with the weights one level too deep. An `Models.e2e-stash` left by an interrupted run
+# does the same thing to the first call.
+#
+# Refusing an unexpected stash rather than working around it: a stash this run did not make holds
+# somebody's weights, and guessing which of the two to keep is not a decision a test should take.
+stash_models() {
+    if [ "$stashed" = yes ]; then
+        # Already aside. The root reappearing is the app's own doing — it creates `.staging` to hold
+        # the install lock — so what is here is a lock directory and not weights. Removed, which is
+        # what "no model installed" means at this point, and **only** when that is all it holds: a
+        # store with a completion marker in it is a real model, and this must not delete one.
+        [ -d "$models" ] || return 0
+        # `-Fvx`: a fixed string, whole line, inverted — "everything that is not exactly `.staging`".
+        # Deliberately not `-v '^\.staging$'`: `EndToEndTextTests` refuses a quoted grep pattern
+        # containing `$`, because that is how `grep -q "$needle"` used to pass its inventory, and a
+        # regex anchor is indistinguishable from an expansion to a scanner that does not parse shell.
+        # An anchor-free fixed-string pattern is both stricter here and readable there. (`-F` is not
+        # `-f`: the guard excludes only the lower-case flag, which is the one that reads patterns
+        # from a file.)
+        if [ -z "$(find "$models" -name '.complete' -print -quit 2>/dev/null)" ] \
+           && [ -z "$(ls -A "$models" 2>/dev/null | grep -Fvx '.staging' || true)" ]; then
+            rm -rf "$models"
+            return 0
+        fi
+        flunk "setup: a model store reappeared with contents while the real one was stashed — not touching it"
+        return 1
+    fi
+    [ -d "$models" ] || return 0
+    if [ -e "$models.e2e-stash" ]; then
+        flunk "setup: $models.e2e-stash already exists, so an earlier run left a stash — moving the store onto it would nest one inside the other. Put it back by hand before re-running."
+        return 1
+    fi
     mv "$models" "$models.e2e-stash" && stashed=yes
-fi
+}
+stash_models || true
 # Opened from the menu, the way a reader reaches it after the first launch. The app was launched
 # moments ago by the set-up above, so the menu is not driven until the launch has settled.
 settle_after_launch
@@ -1257,10 +1441,9 @@ fi
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
 # The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
-# model. Put back at the end of the stage, before anything that needs the weights.
-if [ -d "$models" ]; then
-    mv "$models" "$models.e2e-stash" && stashed=yes
-fi
+# model. Put back at the end of the stage, before anything that needs the weights. Idempotent: the
+# first call above has usually already done it, and this one clears the root the restart recreated.
+stash_models || true
 if ! restart_app; then
     flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
 else
@@ -1293,11 +1476,17 @@ else
         # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
         # the board is first opened is the regression the rule exists to catch: it used to be one of
         # the accepted branches, two lines under a comment promising "nothing has begun downloading".
+        # **"Ready" is a failure here, because this run emptied the store on purpose.** The whole
+        # point of the restart above is to reach the fresh-reader branch, so a row reporting a model
+        # means one of two things went wrong: the stash did not take, or the app is still reporting
+        # the state it read before it. Accepting it as a pass is what let this stage stop measuring
+        # the consent controls on the machine it runs on most — the row's "ready" branch was taken on
+        # every run after the first, silently, for as long as the stash was not in place.
         if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
-            pass "setup: the model row says the model is ready"
+            flunk "setup: the store was emptied for this check and the row still reports a model — the stash did not take, or the board is showing state from before the restart ($(printf '%s' "$model_row" | head -c 300))"
         elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
             flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
-        elif printf '%s' "$shown" | grep -q "This Mac has too little memory for the local model."; then
+        elif printf '%s' "$shown" | grep -q "The local model needs 16 GB of memory."; then
             # Nothing to offer and nothing coming later, so the fallback must not say "Until then".
             if printf '%s' "$shown" | grep -q "Without a local model"; then
                 pass "setup: the model row says this Mac cannot hold the model, and what answers instead"
@@ -1328,6 +1517,11 @@ else
         else
             flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
         fi
+    else
+        # **A missing row is a failure, not a reason to check nothing.** Without this the branch
+        # chain above was skipped whole whenever the row could not be found, and a board that had
+        # lost its model row entirely reported no failures at all.
+        flunk "setup: the board has no model row, so none of its states were checked ($(printf '%s' "$shown" | head -c 200))"
     fi
 
     # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
@@ -1868,7 +2062,12 @@ if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     "$helpers/keys" 53 2>/dev/null || true
     lookup_driven=yes
 else
-    echo "model: could not drive a lookup to wake the service ($why)"
+    # **A flunk, not a note.** `lookup_driven=no` skipped the block below, which holds the stage's
+    # *only* assertion about the production path — everything else here asks an in-bundle instrument.
+    # So a selection that could not be made turned the one check that exercises the panel, the sense
+    # resolver and the ledger into no check at all, and the stage went on to pass on instrument
+    # output alone. The failure is the selection; saying so is what stops the silence.
+    flunk "model: could not drive a lookup, so the production path was not exercised at all ($why)"
 fi
 
 # **What the reader's own lookup left behind.** Everything else in this stage asks an in-bundle
@@ -1913,12 +2112,42 @@ else
     else
         flunk "model: the app went with its model service — was $app_pid_before, now ${app_pid_after:-gone}"
     fi
+    # **launchd restarting the service, which is not the same claim as the app recovering.** This asks
+    # a *separate* `--model-status` process: its client is brand new, so it says a new connection can
+    # be made and nothing at all about the surviving app's existing one. The check below is the one
+    # about the app.
     again=$("$exe" --model-status 2>/dev/null || true)
     if printf '%s' "$again" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("reachable") and d.get("gpu") else 1)' 2>/dev/null; then
-        pass "model: a fresh service answered after the kill"
+        pass "model: launchd gave a fresh process a working service after the kill"
     else
         flunk "model: nothing came back after the service was killed — $again"
     fi
+    # **And the surviving app's own path still answers.** The two assertions above are about the app's
+    # *pid* and about a *new* process; between them they left the thing a reader would notice — whether
+    # the app that lived through the crash can still look a word up — untested. Driven the way a reader
+    # drives it, and read out of the ledger the lookup wrote.
+    ledger_after_kill=$(newest_row_id)
+    if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+        "$helpers/keys" 2 control option
+        waited_after=$(row_after "$ledger_after_kill" meeting com.apple.TextEdit)
+        "$helpers/keys" 53 2>/dev/null || true
+        if [ "$(row_id_of "$ledger_after_kill" meeting com.apple.TextEdit)" -ne 0 ]; then
+            pass "model: the app that survived the crash looked a word up again (${waited_after}s)"
+        else
+            flunk "model: the app survived but its own lookups no longer reach the ledger — its client did not reconnect (waited ${waited_after}s)"
+        fi
+    else
+        flunk "model: could not drive a lookup after the kill, so the app's own recovery was not exercised ($why)"
+    fi
+    # **And the service that lookup started is ended again, because `--model-report` below refuses to
+    # measure a service it did not start.** Measured: without this, the report returned
+    # `endedTheRunningService: false` and six assertions failed on an empty report. The stage used to
+    # get this for free — the kill above was the last thing to touch the service — and adding a
+    # recovery check quietly removed that, which is the ordering dependency worth naming rather than
+    # rediscovering.
+    find_pids "$model_service"
+    [ "${#PIDS[@]}" -eq 0 ] || kill -9 "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
 fi
 
 # Bounded at 40 minutes: a first run downloads 3 GB, measured at ~10 MB/s from this network.
@@ -1972,18 +2201,32 @@ else
     flunk "model: $why ($(printf '%s' "$report" | sed -n 's/.*"explanationFailure":"\([^"]*\)".*/\1/p'))"
 fi
 footprint=$(printf '%s' "$report" | sed -n 's/.*"footprintMB":\([0-9]*\).*/\1/p')
-# **Both bounds.** A service holding a 4B model and answering is gigabytes, so a few megabytes means
-# nothing was loaded — and a lower bound alone passes a service that has leaked its way to twelve.
-# The upper one is the measured peak this project sizes against (3,585 MB for 4B) with room for the
-# process itself; past that, admission decisions made from those peaks are about the wrong number.
+peak=$(printf '%s' "$report" | sed -n 's/.*"peakMB":\([0-9]*\).*/\1/p')
+# **Both bounds, and the upper one is derived rather than typed.** A service holding a model and
+# answering is gigabytes, so a few megabytes means nothing was loaded; a lower bound alone would pass
+# a service that has leaked its way to twelve.
+#
+# The upper bound was a hard-coded 4,500 MB described as "the measured peak (3,585 MB for 4B) with
+# room for the process itself" — two mistakes in one sentence. 3,585 MB **is** the measured *process*
+# peak, so the extra 915 MB was slack counted twice: at 4B's admission minimum of 4,609 MB available
+# it left 109 MB of the promised gigabyte. And the number only ever described 4B, while
+# `--model-report` measures the largest eligible size installed — so a legitimate 9B run, peaking at
+# 6,633 MB, would have been failed against a 4B budget.
+#
+# The peak now comes from the report, for the size the report actually measured, and the bound is the
+# peak itself: this reading is taken *after* the answer, and a settled footprint is by definition at
+# or below the highest the process reached. That makes it stricter than 4,500 for 4B and correct for
+# 9B, with nothing to keep in sync.
 if [ -z "$footprint" ]; then
     flunk "model: the service reported no footprint"
+elif [ -z "$peak" ]; then
+    flunk "model: the report named no peak for its size, so the footprint cannot be judged"
 elif [ "$footprint" -le 1000 ]; then
     flunk "model: the service's footprint is ${footprint} MB — the model is not loaded"
-elif [ "$footprint" -gt 4500 ]; then
-    flunk "model: the service holds ${footprint} MB against a measured peak of 3,585 MB for this size"
+elif [ "$footprint" -gt "$peak" ]; then
+    flunk "model: the service holds ${footprint} MB, above the ${peak} MB peak this size is admitted on — admission is deciding from the wrong number"
 else
-    pass "model: the service holds the model — ${footprint} MB"
+    pass "model: the service holds the model — ${footprint} MB, within its ${peak} MB peak"
 fi
 
 # The labelled set, every rung, in this bundle — the measurement that decides the ladder's order.
@@ -2039,15 +2282,32 @@ stages_failed=$(echo $failed_stages | wc -w | tr -d ' ')
 SH
 set +e
 ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <"$remote_scripts/run.sh" | tee "$RUN_LOG" | grep -v "^RESULT	"
-remote_status=${PIPESTATUS[0]}
+pipeline=("${PIPESTATUS[@]}")
 set -e
+remote_status=${pipeline[0]}
+# **`tee`'s status is the log's, and the log is the evidence.** Only ssh's was read, so a `tee` that
+# could not write — a full disk, a read-only `.build` — left a truncated or empty `RUN_LOG` while the
+# run exited 0, and `record` below then filed whatever stages happened to have reached the file. The
+# evidence being incomplete is a failure of the run, not a detail of it.
+#
+# `grep`'s status is deliberately not checked: `grep -v` exits 1 when it selects no lines, which is
+# what a run consisting only of `RESULT` lines would legitimately produce.
+if [ "${pipeline[1]}" -ne 0 ]; then
+    echo "the run log could not be written ($RUN_LOG, tee exited ${pipeline[1]}), so nothing is recorded:" >&2
+    echo "the stage results for this run are lost, whatever the stages themselves did" >&2
+    exit 1
+fi
 
 # Recorded against the build it ran on. Without that a pass says only "it worked once", which is
 # not a claim anyone can act on — and a green mark that outlives what it tested is worse than none.
 # Filed and printed by `Tools/e2e-status.sh`, which `make e2e-status` also reads: the file, its
 # format and the staleness rule have one implementation, and a second copy of the table here had
 # already lost the timestamp column.
-Tools/e2e-status.sh record <"$RUN_LOG"
+# **Recorded against the build that was tested, passed in rather than re-read.** `record` used to
+# read `CFBundleVersion` off the local bundle at record time, so a `make` in another terminal during
+# a ten-minute run credited the new build with the old build's results — a green mark against a
+# bundle that was never on the test Mac.
+Tools/e2e-status.sh record "$remote_version" <"$RUN_LOG"
 echo
 Tools/e2e-status.sh show
 exit "$remote_status"

@@ -199,16 +199,22 @@ struct LocalModelControllerTests {
         #expect(sixteen.state == .ready(.standard), "a size the Mac is not offered was downloaded")
     }
 
-    /// **The next size up, not the largest.** A reader with 2B on a 16 GB Mac can move to 4B — the
-    /// recommended size, which fits there — and a row written in terms of 9B alone offered them
-    /// nothing at all, because 9B does not fit and was the only upgrade it knew about.
-    @Test func theUpgradeOfferedIsTheNextSizeThisMacCanHold() async throws {
-        let (controller, store) = controller(memory: 16 * Self.gigabyte)
-        try Self.install(.small, into: store)
+    /// **A model already on disk is found, and this is the positive control for the test below it.**
+    /// That one installs a model this Mac cannot load and asserts `.notDownloaded` — an answer a
+    /// broken `install` or a `refresh` that never read the store would give just as readily. Without
+    /// this pair, "the model was rejected" and "no model was ever seen" are the same green.
+    ///
+    /// **It used to be `theUpgradeOfferedIsTheNextSizeThisMacCanHold`**, installing 2B on a 16 GB
+    /// Mac to prove the upgrade offered was 4B and not 9B. With 2B gone there are two sizes, so
+    /// `min` over what is bigger and `max` over it cannot disagree, and no test can tell them
+    /// apart — see `LocalModelChoice.larger`, which keeps the `min` and says so.
+    @Test func aModelAlreadyOnDiskIsFoundAndItsUpgradeOffered() async throws {
+        let (controller, store) = controller(memory: 32 * Self.gigabyte)
+        try Self.install(.standard, into: store)
         controller.refresh()
         await controller.pruning?.value
-        #expect(controller.state == .ready(.small))
-        #expect(controller.choice.larger == .standard)
+        #expect(controller.state == .ready(.standard))
+        #expect(controller.choice.larger == .large)
     }
 
     /// **A model on disk this Mac cannot load is not a model it has.** One copied from a larger Mac,

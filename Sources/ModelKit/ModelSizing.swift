@@ -13,10 +13,11 @@ import Foundation
 public enum ModelSizing {
     /// A size is **offered** where its peak is at most a quarter of the Mac's memory. The reader's
     /// own apps are the other three quarters, and a dictionary is the smallest thing they are
-    /// running. Against the measured process peaks that is: **8 GB offers nothing** — 2B peaks at
-    /// 2,098 MB against a 2,048 MB budget, and a model that needs a quarter of a small Mac at the
-    /// moment it loads is one that puts the reader into swap; 16 GB offers 2B and 4B; 32 GB and up
-    /// offers 9B. A Mac that is offered nothing is told so, and reads with the engines it has.
+    /// running. Against the measured process peaks that is a floor of **14.0 GB** — 4B peaks at
+    /// 3,585 MB, so a quarter of 16 GB (4,096) holds it and a quarter of 12 (3,072) does not — and
+    /// **25.9 GB** for 9B, so 32 GB and up offers both. Of the memory sizes Apple Silicon actually
+    /// ships, only **8 GB is offered nothing**: it reads with the engines it has, which is the
+    /// decision recorded on `LocalModelSize` rather than a gap to close by loosening this share.
     public static let shareOfPhysicalMemory: UInt64 = 4
 
     /// What must be left free **after** loading, so the answer does not push the Mac into swap.
@@ -34,9 +35,13 @@ public enum ModelSizing {
         offered(physicalMemory: physicalMemory).filter { $0.peakMemory + headroom <= availableMemory }
     }
 
-    /// What a reader is offered first: 4B where the Mac offers it, otherwise the largest size below
-    /// it that it does. **Never 9B** — it is an opt-in, twice the time and memory for a little more
-    /// idiom, and a default the reader did not choose should not cost that.
+    /// What a reader is offered first: 4B where the Mac offers it, and otherwise nothing. **Never
+    /// 9B** — it is an opt-in, twice the time and memory for a little more idiom, and a default the
+    /// reader did not choose should not cost that.
+    ///
+    /// Written as a filter and a `max` rather than as "4B if offered", because that is the shape
+    /// that stays correct if a size is ever added between the two: the clause says *the largest the
+    /// Mac can hold that is no bigger than 4B*, which happens to have one answer today.
     public static func recommended(physicalMemory: UInt64) -> LocalModelSize? {
         offered(physicalMemory: physicalMemory).filter { $0 <= .standard }.max()
     }
