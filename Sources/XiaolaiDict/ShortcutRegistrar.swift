@@ -78,7 +78,8 @@ final class ShortcutRegistrar {
             problem = nil
             return nil
         } catch {
-            problem = "\(shortcut.label()) is unavailable: \(error)"
+            problem = String(localized: "\(shortcut.label()) is unavailable: \(String(describing: error))",
+                             comment: "Menu warning when the lookup shortcut could not be registered")
             log.error("hotkey unavailable: \(String(describing: error), privacy: .public)")
             return error
         }
@@ -116,8 +117,10 @@ final class ShortcutRegistrar {
             let restored = register(previous) == nil
             problem = refused.map {
                 restored
-                    ? "\($0) — still using \(previous.label())"
-                    : "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered"
+                    ? String(localized: "\($0) — still using \(previous.label())",
+                             comment: "The new shortcut was refused and the old one still works")
+                    : String(localized: "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered",
+                             comment: "Both the new shortcut and the old one were refused")
             }
             return refusal
         }
@@ -125,7 +128,8 @@ final class ShortcutRegistrar {
             try store.save(chosen)
         } catch {
             log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
-            problem = "\(chosen.label()) works now but was not saved: \(error)"
+            problem = String(localized: "\(chosen.label()) works now but was not saved: \(String(describing: error))",
+                             comment: "The shortcut registered but could not be written to disk")
         }
         return nil
     }

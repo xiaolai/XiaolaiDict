@@ -1,5 +1,4 @@
 import AppKit
-import DictionaryModel
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -32,8 +31,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// **Kept, not just passed through.** Every store below was handed it at init while
     /// `hoverEnabled` went on reading `UserDefaults.standard`, which is how a unit test came
     /// to be able to switch the reader's hover off.
-    @ObservationIgnored private let defaults: UserDefaults
-
     /// Everything the reader can do to hover, and one value per thing — see `HoverControl`, where
     /// every member has already been a defect about there being two copies or a fresh one per call.
     let hover: HoverControl
@@ -65,7 +62,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
-        self.defaults = defaults
         hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
         // preferences while `init(defaults:)` existed for exactly this reason, so every test that
@@ -454,19 +450,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the menu reads
 
-    /// The shortcut as the reader set it, or nil while there is none.
-    var shortcutLabel: String? { shortcuts.label }
-
     var drawerIsVisible: Bool { drawer.isVisible }
-    /// The primary dictionary's key, held as **stored** state rather than read from
-    /// `UserDefaults` on each access.
-    ///
-    /// `@Observable` tracks stored properties; a computed one that reaches into the defaults
-    /// registers no dependency, so a view reading it is never invalidated when it changes. The
-    /// setup board is what exposed this: pressing "Use 牛津英汉汉英词典" saved the choice and the row
-    /// went on saying the seat was empty, because nothing told the view to look again.
-    private(set) var chosenDictionary: String?
-
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
         [permissions.menuWarning, shortcuts.problem, recorder.problem].compactMap { $0 }

@@ -1,3 +1,4 @@
+import XiaolaiDictUI
 import Foundation
 import Observation
 import DictionaryModel
@@ -50,6 +51,16 @@ final class StudyDictionary {
     /// on saying the seat was empty, because nothing told the view to look again.
     private(set) var chosen: String?
 
+    /// Which request's answer may be published. **Incremented by every call**, because three
+    /// surfaces ask — the menu on open, the setup board, and the Settings pane — and their requests
+    /// overlap freely across the `await`.
+    ///
+    /// Without it, an older discovery completing *during* a newer `askAgain()` publishes its list
+    /// and sets `hasAsked`, which undoes exactly the cleared "asking" state `askAgain` exists to
+    /// show — and can leave the reader looking at the list from before they enabled a dictionary,
+    /// marked as a finished answer. Only the current generation writes.
+    @ObservationIgnored private var generation = 0
+
     init(defaults: UserDefaults, ask: @escaping (Bool) async -> [DictionaryCapability]?) {
         let store = PrimaryDictionaryStore(defaults: defaults)
         self.store = store
@@ -65,7 +76,12 @@ final class StudyDictionary {
         let onDisk = store.load().chosen
         if onDisk != chosen { chosen = onDisk }
         guard refreshing || enabled == nil else { return }
+        generation += 1
+        let mine = generation
         let found = await ask(refreshing)
+        // A newer request started while this one was in flight: its cleared state and its answer
+        // are the ones the reader is waiting for, so this one is dropped rather than published.
+        guard mine == generation else { return }
         if found != enabled { enabled = found }
         hasAsked = true
     }
@@ -85,6 +101,20 @@ final class StudyDictionary {
         enabled = nil
         hasAsked = false
         await refresh(refreshing: true)
+    }
+
+    /// What `SettingsView` and `SetupView` are handed. **One adapter, because two identical copies
+    /// of it stood in the two scenes**, closures and all — so a change to what discovery exposes, or
+    /// to how a retry is wired, had to be made twice and would compile either way if it were made
+    /// once.
+    @MainActor
+    var choice: DictionaryChoice {
+        DictionaryChoice(
+            available: enabled,
+            chosen: chosen,
+            hasAsked: hasAsked,
+            choose: { [weak self] in self?.choose($0) },
+            reask: { [weak self] in Task { await self?.askAgain() } })
     }
 
     func choose(_ key: String?) {

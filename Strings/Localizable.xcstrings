@@ -27,6 +27,17 @@
     "%@ is not registered, so it will not look anything up. Choose another combination, or look words up from the menu." : {
 
     },
+    "%@ is unavailable: %@" : {
+      "comment" : "Menu warning when the lookup shortcut could not be registered",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is unavailable: %2$@"
+          }
+        }
+      }
+    },
     "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
 
     },
@@ -45,6 +56,39 @@
     },
     "%@ translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere." : {
 
+    },
+    "%@ works now but was not saved: %@" : {
+      "comment" : "The shortcut registered but could not be written to disk",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ works now but was not saved: %2$@"
+          }
+        }
+      }
+    },
+    "%@ — and %@ could not be put back, so no shortcut is registered" : {
+      "comment" : "Both the new shortcut and the old one were refused",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ — and %2$@ could not be put back, so no shortcut is registered"
+          }
+        }
+      }
+    },
+    "%@ — still using %@" : {
+      "comment" : "The new shortcut was refused and the old one still works",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ — still using %2$@"
+          }
+        }
+      }
     },
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
 
@@ -86,6 +130,9 @@
 
     },
     "An entry in %@ could not be read, so what is shown is not all of it." : {
+
+    },
+    "Ask Again" : {
 
     },
     "Ask again" : {
@@ -275,6 +322,9 @@
     },
     "Lookup shortcut" : {
 
+    },
+    "Lookups are not being recorded: %@" : {
+      "comment" : "Menu warning when the ledger could not be opened"
     },
     "Made by" : {
 
@@ -568,6 +618,9 @@
     },
     "The gate" : {
 
+    },
+    "The last lookup was not recorded: %@" : {
+      "comment" : "Menu warning when a lookup could not be written to the ledger"
     },
     "The licence could not be opened. It is published under %@, at %@." : {
       "localizations" : {

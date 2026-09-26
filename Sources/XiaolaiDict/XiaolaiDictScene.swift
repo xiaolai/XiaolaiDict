@@ -135,12 +135,7 @@ struct XiaolaiDictSettings: View {
             model: app.settings,
             appearance: app.appearance,
             hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
-            dictionary: DictionaryChoice(
-                available: app.dictionary.enabled,
-                chosen: app.dictionary.chosen,
-                hasAsked: app.dictionary.hasAsked,
-                choose: { app.dictionary.choose($0) },
-                reask: { Task { await app.dictionary.askAgain() } }),
+            dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
             openSetup: { app.showSetup() },
             modelLicence: app.models.licenceURL)
@@ -159,12 +154,7 @@ struct XiaolaiDictSetup: View {
     var body: some View {
         SetupView(
             model: app.setup,
-            dictionary: DictionaryChoice(
-                available: app.dictionary.enabled,
-                chosen: app.dictionary.chosen,
-                hasAsked: app.dictionary.hasAsked,
-                choose: { app.dictionary.choose($0) },
-                reask: { Task { await app.dictionary.askAgain() } }),
+            dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
             // Whether the hot key actually registered, not merely whether the combination is
             // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
