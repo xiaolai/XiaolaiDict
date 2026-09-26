@@ -78,8 +78,10 @@ public struct LocalModelChoice {
     ///
     /// **With 2B gone there are two sizes, so `min` and `max` cannot be told apart by any test**,
     /// and the shape is kept because it is the correct one rather than because something proves it.
-    /// A third size makes the distinction observable again, and `theUpgradeOfferedIsTheNextSizeThisMacCanHold`
-    /// — deleted in the same change — is the test to bring back with it.
+    /// A third size makes the distinction observable again. The test that held it was
+    /// `theUpgradeOfferedIsTheNextSizeThisMacCanHold` in `LocalModelControllerTests`, which on
+    /// 2026-09-26 was repurposed as `aModelAlreadyOnDiskIsFoundAndItsUpgradeOffered` — the shape to
+    /// restore beside it, not to restore it to.
     public var larger: LocalModelSize? {
         guard case .ready(let size) = state else { return nil }
         return offered.filter { $0 > size }.min()

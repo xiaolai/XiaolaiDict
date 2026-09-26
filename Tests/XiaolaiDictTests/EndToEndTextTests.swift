@@ -175,25 +175,57 @@ struct EndToEndTextTests {
         #expect(phrases.contains("Not now"), "a phrase known to be asserted was not extracted")
     }
 
-    /// **And the matcher list must be as wide as the script.** Counted rather than assumed: a fourth
-    /// way of matching text — `awk`, `expr`, a bare `[[ … =~ … ]]` — would be invisible to the
-    /// extraction above, and every phrase behind it unguarded.
+    /// **Every `grep` in the script is accounted for exactly**, not as a ratio. A pattern the
+    /// extraction cannot read is a phrase nobody is guarding, and the interesting case is the one
+    /// that arrives later: a pattern moved into a shell variable, a `-f` file, or a switch to `awk`
+    /// or `[[ … =~ … ]]`.
     ///
-    /// The floor is the number of *matcher calls* the spellings account for, not the number of
-    /// phrases: most matchers test JSON or a flag rather than prose, and those are not this test's
-    /// business. A `grep` count that climbs well past what the patterns find is the signal that a
-    /// spelling has been added.
-    @Test func everyMatcherSpellingInTheScriptIsKnown() throws {
+    /// Two outcomes are allowed, and every other one is named in the failure:
+    ///
+    /// | Form | Why it is fine |
+    /// |---|---|
+    /// | a quoted pattern | `phrases(in:)` reads it |
+    /// | a bare literal token — `grep -q opticalRecognition` | it has no space, so it cannot be prose |
+    ///
+    /// Measured 2026-09-26: 53 greps, 49 quoted, 4 bare. The bare ones are `opticalRecognition` and
+    /// `DONE`, both twice.
+    ///
+    /// **A bare token must be a literal, and the first draft of this check got that wrong.** It
+    /// allowed any run of non-space characters, so `grep -q $needle` — a pattern moved into a
+    /// variable, which is the very case the check exists to catch — was counted as readable and
+    /// passed. Found by trying it. `$` and a backtick are therefore excluded from the bare form:
+    /// an expansion is not a literal, and what it expands to can be a whole sentence.
+    @Test func everyGrepInTheScriptIsOneThisTestCanRead() throws {
         let script = try Self.script()
-        let greps = script.components(separatedBy: "grep ").count - 1
-        let regex = try NSRegularExpression(pattern: Self.matchers[0])
-        let seen = regex.numberOfMatches(in: script, range: NSRange(script.startIndex..., in: script))
-        // Every `grep` in the script either takes a quoted pattern, a `-f` file of patterns, or a
-        // shell variable. If the quoted ones stop being the bulk of them, the extraction has gone
-        // blind to however they are being written now.
-        #expect(seen * 2 >= greps, """
-            \(greps) greps in Tools/e2e.sh but only \(seen) with a quoted pattern this test can read \
-            — a new spelling has appeared, and the phrases behind it are unguarded.
+        let quoted = try NSRegularExpression(pattern: Self.matchers[0])
+        // A bare *literal* pattern: flags, then one run of non-space characters carrying no quote,
+        // no pipe, and — the part the first draft missed — no `$` or backtick. An expansion is not a
+        // literal; `grep -q $needle` can match any sentence at all.
+        // The first character may not be `-`, or the flag group — which is `*` and so can match
+        // nothing — lets the flag itself be read as the pattern: that is the second way this check
+        // passed `grep -q $needle`, after excluding `$` fixed the first.
+        let bare = try NSRegularExpression(pattern: #"grep\s+(?:-[A-Za-z0-9]+\s+)*[^-\s"'|$`][^\s"'|$`]*"#)
+        let full = NSRange(script.startIndex..., in: script)
+
+        var unreadable: [String] = []
+        var readable = 0
+        for match in try NSRegularExpression(pattern: #"\bgrep\b"#).matches(in: script, range: full) {
+            let rest = NSRange(location: match.range.location, length: full.length - match.range.location)
+            let isQuoted = quoted.firstMatch(in: script, options: .anchored, range: rest) != nil
+            let isBare = bare.firstMatch(in: script, options: .anchored, range: rest) != nil
+            if isQuoted || isBare { readable += 1; continue }
+            // The whole line, so the failure says which call to look at.
+            let from = Range(rest, in: script)!.lowerBound
+            let line = script[from...].prefix(while: { $0 != "\n" })
+            unreadable.append(String(line.prefix(80)))
+        }
+
+        #expect(unreadable.isEmpty, """
+            Tools/e2e.sh matches text in a way this test cannot read, so the phrases behind it are \
+            unguarded: \(unreadable.joined(separator: " | ")).
+            Add the spelling to `matchers`, or say in the table above why it carries no reader text.
             """)
+        // A count that collapsed would make the loop above vacuous.
+        #expect(readable >= 40, "only \(readable) greps found in Tools/e2e.sh — has the script moved?")
     }
 }
