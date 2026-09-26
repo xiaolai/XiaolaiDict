@@ -47,7 +47,7 @@ enum SettingsReport {
         // Whether the service actually answered. Unanswered, the Dictionary pane shows "Asking the
         // dictionary service…" — a different pane from the one a reader sees, and a different
         // height. Reported rather than assumed, so a measurement of the placeholder says so.
-        let dictionariesKnown = app.dictionaries != nil
+        let dictionariesKnown = app.dictionary.enabled != nil
         app.showSettings()
         // The compositor, not `isVisible`: a window can say it is visible and be drawn nowhere.
         let appeared = await Instrument.settle(until: appearance) { Instrument.isOnScreen(app.settingsWindow) }

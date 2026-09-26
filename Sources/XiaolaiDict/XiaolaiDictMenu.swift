@@ -64,17 +64,17 @@ struct XiaolaiDictMenu: View {
     /// cards, and the reader should see that before choosing it, not afterwards.
     private var studyFrom: some View {
         Menu("Study From") {
-            Button { app.choosePrimaryDictionary(nil) } label: {
-                Text(app.chosenDictionary == nil
+            Button { app.dictionary.choose(nil) } label: {
+                Text(app.dictionary.chosen == nil
                      ? "\u{2713} First that marks senses" : "First that marks senses")
             }
             Divider()
-            if let dictionaries = app.dictionaries {
+            if let dictionaries = app.dictionary.enabled {
                 ForEach(dictionaries, id: \.identity.key) { capability in
                     Button {
-                        app.choosePrimaryDictionary(capability.identity.key)
+                        app.dictionary.choose(capability.identity.key)
                     } label: {
-                        Text(verbatim: app.chosenDictionary == capability.identity.key
+                        Text(verbatim: app.dictionary.chosen == capability.identity.key
                              ? "\u{2713} \(capability.identity.name)    · \(capability.note)"
                              : "\(capability.identity.name)    · \(capability.note)")
                     }
