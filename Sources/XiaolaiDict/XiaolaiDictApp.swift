@@ -19,7 +19,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// **The suite the app was given, not `.standard`** — the same reason the shortcut store takes
     /// one. A test that chose a dictionary used to rewrite the reader's own choice, and switching
     /// the primary starts their study over.
-    private let primaryDictionary: PrimaryDictionaryStore
+    /// The dictionary the reader studies from and the list it was chosen out of — see
+    /// `StudyDictionary`. Not built here: it needs the client, which means after `super.init()`.
+    @ObservationIgnored private(set) var dictionary: StudyDictionary!
     /// Whether the setup window has opened by itself before. **The app's own suite, not
     /// `.standard`** — a test that flipped it would change whether the reader's next launch opens
     /// a window at them.
@@ -71,15 +73,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // driving the GUI on the building Mac, in a unit test.
 
         setupPresentation = SetupPresentationStore(defaults: defaults)
-        let primary = PrimaryDictionaryStore(defaults: defaults)
-        primaryDictionary = primary
-        chosenDictionary = primary.load().chosen
         self.models = models
         super.init()
         // After `super.init()`: the registrar's press handler captures `self`, which an
         // initialiser may not hand out before the object exists.
         shortcuts = ShortcutRegistrar(defaults: defaults, hotkeys: hotkeys) { [weak self] in
             self?.lookUpSelection()
+        }
+        dictionary = StudyDictionary(defaults: defaults) { [client] refreshing in
+            await client.dictionaries(reprobing: refreshing)
         }
     }
 
@@ -124,7 +126,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     private func makeRunner() -> LookupRunner {
-        let store = primaryDictionary
+        let store = dictionary.store
         // **The store is the truth for a lookup**, because a lookup can happen while no window is
         // open to have observed anything. The observable copy is what the windows draw, and
         // `askForDictionaries` re-reads it so the two cannot drift apart after a change made
@@ -143,18 +145,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             },
             prewarm: { await models.prewarm() })
     }
-    /// The enabled dictionaries, as the service last reported them. Nil until it has been asked:
-    /// the menu says it does not know rather than showing a list it made up.
-    var dictionaries: [DictionaryCapability]?
-    /// Whether the service has been asked and has finished answering — see `DictionaryChoice`.
-    private(set) var dictionariesAsked = false
     /// The lookup shortcut and everything about registering it — see `ShortcutRegistrar`, which
     /// holds the three-state machine this delegate used to carry as four adjacent properties.
     @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
-    /// Carbon's hot-key plumbing, injected so a test never registers a real global shortcut —
-    /// which would take it from the reader for as long as the suite ran.
-    /// Opened on a background task at launch: file and database work — a migration, on the first
-    /// launch after an update — must not hold up the menu bar.
     /// What reaches the reader's ledger, and what to tell them when nothing did — see
     /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
     let recorder = LookupRecorder()
@@ -481,56 +474,28 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
     /// menu is opened rather than at launch, and only once.
+    /// What a surface opening needs refreshed: the permission probe the menu warns from, and the
+    /// dictionary list and choice.
+    ///
+    /// **Composed here rather than inside one of them**, because "when the menu opens, refresh
+    /// these" is the delegate's job and nothing else's. It used to be one method named
+    /// `askForDictionaries` that also probed TCC — a caller wanting the list got a ScreenCaptureKit
+    /// round trip it never asked for, and nothing in the name said so.
     func askForDictionaries(refreshing: Bool = false) async {
+        let probed = await PermissionsReport.probe()
         // **Assigned only when it changed.** `@Observable` notifies on every assignment, equal or
         // not, and this runs each time the menu opens — so it re-rendered the open menu about 70 ms
-        // later, every time, for nothing. Measured on the E2E machine 2026-09-22: a click landing
-        // while the menu re-renders is dropped — `menu-click` reported the click, the app never saw
-        // it — 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
-        let probed = await PermissionsReport.probe()
+        // later, every time, for nothing. A click landing while the menu re-renders is dropped:
+        // measured 2 lost of 6 on a cold start, 0 of 8 once nothing was changing under the menu.
         if probed != permissions { permissions = probed }
-        // Re-read from the store, not just written to on choosing. A lookup takes the primary
-        // from disk, so a change made outside this process — a second copy, a `defaults write` —
-        // would otherwise leave every window naming a dictionary that is no longer the one marks
-        // are recorded against.
-        let onDisk = primaryDictionary.load().chosen
-        if onDisk != chosenDictionary { chosenDictionary = onDisk }
-        guard refreshing || dictionaries == nil else { return }
-        let found = await client.dictionaries(reprobing: refreshing)
-        // Same reason. A refresh that finds the same dictionaries must not re-render an open menu.
-        if found != dictionaries { dictionaries = found }
-        // Set whatever the answer was, including none. "Asked and got nothing" is a state that
-        // does not resolve, and a surface that cannot tell it from "still asking" waits forever.
-        dictionariesAsked = true
+        await dictionary.refresh(refreshing: refreshing)
     }
 
-    /// Asks again, discarding the last answer first.
-    ///
-    /// The setup board tells a reader with no suitable dictionary to enable one in Dictionary.app,
-    /// and then has to **notice when they come back** — which the once-only ask above could never
-    /// do. Clearing first so the row says "asking" rather than showing yesterday's list while the
-    /// question is in flight.
-    ///
-    /// **It reaches the service's cache too.** The probe runs once per service process, which is
-    /// right for a menu opening and wrong here: this is the path that has to see a dictionary the
-    /// reader has just enabled, so the request carries `reprobing` and the service discards its
-    /// answer before re-probing.
-    func refreshDictionaries() async {
-        dictionaries = nil
-        dictionariesAsked = false
-        await askForDictionaries(refreshing: true)
-    }
 
     func toggleHistory() {
         drawer.toggle()
     }
 
-    func choosePrimaryDictionary(_ key: String?) {
-        primaryDictionary.save(key)
-        // Written to the observable copy too, or every view reading it goes on showing the old
-        // choice until something else happens to invalidate it.
-        chosenDictionary = key
-    }
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's
     /// own colour; only its alpha is read. Outside the bundle (`swift run`) there is no resource,
