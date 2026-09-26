@@ -95,7 +95,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
         let drawer = HistoryDrawerController { [weak self] in
-            guard let opening = self?.ledger else { return .unavailable("The ledger is not open yet.") }
+            guard let opening = self?.recorder.store else { return .unavailable("The ledger is not open yet.") }
             // **The same setting the hover gate asks, read at open time.** A reader who widens the
             // scripts they study sees the words already in the ledger the next time they open the
             // drawer — the filter is on the reading, not on the recording, so nothing was thrown
@@ -112,7 +112,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Only reached once the reader's grace period has run out, so by the time this fires they
         // have had their chance to take it back.
         drawer.model.delete = { [weak self] entry in
-            guard let self, let opening = self.ledger else { return }
+            guard let self, let opening = self.recorder.store else { return }
             Task {
                 do { try await opening.value.delete(lookup: entry.id) }
                 // Logged, not surfaced: the card is already gone from a drawer the reader has
@@ -136,7 +136,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // not — pending, declined, or too big for what is free now; `NLEmbedding` beneath both.
             selector: models.senseLadder,
             priorEncounters: { [weak self] lemma, before, language in
-                guard let opening = await MainActor.run(body: { self?.ledger }) else { return PriorEncounters() }
+                guard let opening = await MainActor.run(body: { self?.recorder.store }) else { return PriorEncounters() }
                 // A ledger that cannot be read costs the memory strip, never the lookup.
                 return (try? await opening.value.priorEncounters(
                     of: lemma, before: before, language: language)) ?? PriorEncounters()
@@ -155,17 +155,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// which would take it from the reader for as long as the suite ran.
     /// Opened on a background task at launch: file and database work — a migration, on the first
     /// launch after an update — must not hold up the menu bar.
-    private var ledger: Task<LedgerStore, any Error>?
+    /// What reaches the reader's ledger, and what to tell them when nothing did — see
+    /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
+    let recorder = LookupRecorder()
     /// The lookup in flight. A new shortcut press cancels it: one lookup at a time.
     private var lookup: Task<Void, Never>?
     private var termination: (any DispatchSourceSignal)?
-
-    /// The ledger's state as of the newest request to finish recording — not of whichever write
-    /// happened to finish last.
-    private var ledgerStatus: (request: Int, problem: String?) = (0, nil)
-
-    /// Which lookup a reader's tap belongs to — see `SenseTapQueue`.
-    private var taps = SenseTapQueue()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // LSUIElement in Info.plist makes XiaolaiDict a menu-bar app; set here too, so `swift run` outside
@@ -175,20 +170,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.onStudySense = { [weak self] encounter, request in self?.study(encounter, request: request) }
-        panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
-        let opening = Task { try await LedgerStore.openDefault() }
-        ledger = opening
-        Task {
-            do {
-                _ = try await opening.value
-            } catch {
-                // Reported only if no lookup has reported since: a later lookup's own failure says
-                // more, and must not be overwritten by this older news.
-                if ledgerStatus.request == 0 { ledgerStatus = (0, "Lookups are not being recorded: \(error)") }
-                log.error("ledger unavailable: \(String(describing: error), privacy: .public)")
-            }
+        panel.onStudySense = { [weak self] encounter, request in
+            self?.recorder.study(encounter, request: request)
         }
+        panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
+        recorder.start()
         // Where the menu-bar item is, so a click on it is left for the menu rather than taken by
         // the drawer's click-away dismissal. `MenuBarExtra` exposes no frame, so it is found by its
         // window: a miss costs the guard, which is visible (the drawer reopens) and not silent.
@@ -329,39 +315,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// answer arrived was never seen, and is not.
     private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket) async {
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) else { return }
-        await record(row, request: ticket.number)
-    }
-
-    /// A sense the reader tapped. Recorded as theirs — `chosen_by: reader` — which the ledger
-    /// keeps apart from the selector's guesses, because a hypothesis and a fact must never merge.
-    private func study(_ encounter: SenseEncounter, request: Int) {
-        guard ledger != nil, let lookup = taps.tapped(encounter, request: request) else { return }
-        write(encounter, for: lookup)
-    }
-
-    private func write(_ encounter: SenseEncounter, for lookup: Int) {
-        guard let ledger else { return }
-        Task {
-            do {
-                try await ledger.value.record(encounter, for: lookup)
-            } catch {
-                log.error("sense not recorded: \(String(describing: error), privacy: .public)")
-            }
-        }
-    }
-
-    private func record(_ record: LookupRecording, request: Int) async {
-        guard let ledger else { return }
-        var problem: String?
-        do {
-            let id = try await ledger.value.record(record)
-            // Whatever the reader tapped while this row was being written now has somewhere to go.
-            for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
-        } catch {
-            problem = "The last lookup was not recorded: \(error)"
-            log.error("ledger write failed: \(String(describing: error), privacy: .public)")
-        }
-        if request >= ledgerStatus.request { ledgerStatus = (request, problem) }
+        await recorder.record(row, request: ticket.number)
     }
 
     // MARK: - Shortcut
@@ -522,7 +476,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
-        [permissions.menuWarning, shortcuts.problem, ledgerStatus.problem].compactMap { $0 }
+        [permissions.menuWarning, shortcuts.problem, recorder.problem].compactMap { $0 }
     }
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
