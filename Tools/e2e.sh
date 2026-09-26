@@ -307,8 +307,28 @@ trap 'died_at=$LINENO' ERR
 cleanups=()
 at_exit() { cleanups+=("$1"); }
 on_exit() {
-    local cleanup
-    for cleanup in ${cleanups[@]+"${cleanups[@]}"}; do "$cleanup" || true; done
+    local cleanup i
+    # **Reverse registration order, and a failure is recorded rather than swallowed.**
+    #
+    # *Reverse* because a later cleanup can depend on an earlier one not having run yet:
+    # `restore_setup_shown` is registered before any launch, `unstash_models` inside the setup
+    # stage — and unstashing restarts the app, which writes that very flag. In registration order
+    # the flag was restored and then overwritten by the restart that followed it, so the machine
+    # kept this run's value under a green mark. Releasing in the reverse of acquisition is the
+    # ordering that makes a dependency between two cleanups expressible at all.
+    #
+    # *Recorded* because `|| true` made an unsuccessful restoration indistinguishable from a
+    # successful one: `unstash_models` could fail to put three gigabytes of weights back and the run
+    # still exited 0. Each is still allowed to fail without stopping the others — a cleanup that
+    # gives up must not strand the ones after it — but the run is no longer called a pass.
+    for (( i = ${#cleanups[@]} - 1; i >= 0; i-- )); do
+        cleanup=${cleanups[$i]}
+        "$cleanup" || {
+            echo "FAIL  cleanup: $cleanup did not finish, so this machine may be left changed"
+            failures=$((failures + 1))
+            printf 'RESULT\tcleanup\tfail\n'
+        }
+    done
     if [ "$finished" != true ]; then
         echo "FAIL  $STAGE: the script stopped at line ${died_at:-?} before the stage finished"
         printf "RESULT\t%s\tfail\n" "$STAGE"
@@ -332,6 +352,15 @@ restore_default() {
     local key=$1 had=$2 wanted=$3 flag=${4:-} value=$3 now
     if [ "$had" != yes ] || [ -z "$wanted" ]; then
         defaults delete com.xiaolaidict "$key" 2>/dev/null || true
+        # **Read back, exactly as the write path does.** `defaults delete` on a key that cfprefsd is
+        # still holding exits 0 having changed nothing, so the branch that puts a *missing* setting
+        # back was the one branch of this function with no evidence behind it — the asymmetry is the
+        # defect, since "there was no such key" is the commonest case on a fresh machine.
+        if defaults read com.xiaolaidict "$key" >/dev/null 2>&1; then
+            echo "FAIL  cleanup: $key still exists after being deleted, so this machine keeps a setting this run made"
+            failures=$((failures + 1))
+            printf 'RESULT\tcleanup\tfail\n'
+        fi
         return 0
     fi
     # **`defaults read` prints a boolean as 1, and `defaults write -bool` does not accept 1.** Its
@@ -502,6 +531,20 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
             && echo "note: $flag would not die; the stage after this one is running beside it"
     fi
     true
+    # **The contract in this function's own first line, now enforced: valid JSON, or nothing.**
+    # An instrument launched through `open` has no exit status to read — LaunchServices returns as
+    # soon as it has started the process — so the thing that *can* be checked is the product. A
+    # report that printed a prefix and died, or wrote a diagnostic where JSON belongs, satisfied
+    # `[ -s "$out" ]` and reached the caller as text, where one caller parsed it and another only
+    # asked whether it was empty. That divergence is the defect: the drawer stage validated the JSON
+    # itself while the settings stage accepted anything non-empty.
+    #
+    # Nothing is printed and the status is non-zero when the report is not JSON, so every caller's
+    # existing empty check now covers a malformed report too. The reason stays in `$err`, which is
+    # what each caller tails into its failure message.
+    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+        return 1
+    fi
     cat "$out" 2>/dev/null || true
 }
 # **The setup flag is captured before the app is launched, not inside the stage that uses it.**
@@ -616,7 +659,23 @@ fi
 
 if want accessibility; then
 # 4. Accessibility, which the selection tests need: said plainly either way.
-reading=$("$exe" --read-selection com.apple.finder 2>&1 || true)
+#
+# **A positive answer is required, not merely the absence of one sentence.** This read
+# `--read-selection` with `2>&1 || true` and passed unless the output held the words "Accessibility
+# access … is off" — so *every other* way of not answering passed too. A release bundle, where the
+# instrument is compiled out, prints "--read-selection is a development instrument" and would have
+# been recorded as Accessibility being granted; reproduced locally against the refusal string. So
+# would a crash, and so would silence.
+#
+# The instrument writes JSON on stdout in each of its three reachable outcomes — a selection, a
+# `{"nothing": reason}`, or an `{"error": …}` — so valid JSON *is* the positive signal: it says the
+# instrument ran and answered. stderr is captured apart from it rather than merged, because merging
+# lets a stray line on stderr corrupt an otherwise valid report and read as a permission failure.
+reading=$("$exe" --read-selection com.apple.finder 2>"$reports/read-selection.err" || true)
+if ! python3 -c 'import json,sys; json.loads(sys.stdin.read())' <<<"$reading" 2>/dev/null; then
+    flunk "accessibility: --read-selection gave no report, so whether Accessibility is granted is unknown ($(head -c 200 "$reports/read-selection.err" 2>/dev/null))"
+    echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
+fi
 if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off"; then
     flunk "accessibility: not granted to this session — the selection tests cannot run"
     echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
@@ -1135,9 +1194,41 @@ unstash_models() {
     restart_app || { echo "XiaolaiDict did not come back after the model store was put back" >&2; return 1; }
 }
 at_exit unstash_models
-if [ -d "$models" ]; then
+
+# **The store is stashed exactly once, and never onto an existing stash.**
+#
+# Two `mv "$models" "$models.e2e-stash"` lines stood in this stage, either side of a restart. `mv`
+# onto an existing *directory* moves the source **inside** it, so the second one buried the real
+# stash at `Models.e2e-stash/Models` whenever the app had recreated the root in between — which it
+# does, because opening the store creates `.staging` for its lock. The restore then put back a
+# directory with the weights one level too deep. An `Models.e2e-stash` left by an interrupted run
+# does the same thing to the first call.
+#
+# Refusing an unexpected stash rather than working around it: a stash this run did not make holds
+# somebody's weights, and guessing which of the two to keep is not a decision a test should take.
+stash_models() {
+    if [ "$stashed" = yes ]; then
+        # Already aside. The root reappearing is the app's own doing — it creates `.staging` to hold
+        # the install lock — so what is here is a lock directory and not weights. Removed, which is
+        # what "no model installed" means at this point, and **only** when that is all it holds: a
+        # store with a completion marker in it is a real model, and this must not delete one.
+        [ -d "$models" ] || return 0
+        if [ -z "$(find "$models" -name '.complete' -print -quit 2>/dev/null)" ] \
+           && [ -z "$(ls -A "$models" 2>/dev/null | grep -v '^\.staging$' || true)" ]; then
+            rm -rf "$models"
+            return 0
+        fi
+        flunk "setup: a model store reappeared with contents while the real one was stashed — not touching it"
+        return 1
+    fi
+    [ -d "$models" ] || return 0
+    if [ -e "$models.e2e-stash" ]; then
+        flunk "setup: $models.e2e-stash already exists, so an earlier run left a stash — moving the store onto it would nest one inside the other. Put it back by hand before re-running."
+        return 1
+    fi
     mv "$models" "$models.e2e-stash" && stashed=yes
-fi
+}
+stash_models || true
 # Opened from the menu, the way a reader reaches it after the first launch. The app was launched
 # moments ago by the set-up above, so the menu is not driven until the launch has settled.
 settle_after_launch
@@ -1257,10 +1348,9 @@ fi
 "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
 # The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
-# model. Put back at the end of the stage, before anything that needs the weights.
-if [ -d "$models" ]; then
-    mv "$models" "$models.e2e-stash" && stashed=yes
-fi
+# model. Put back at the end of the stage, before anything that needs the weights. Idempotent: the
+# first call above has usually already done it, and this one clears the root the restart recreated.
+stash_models || true
 if ! restart_app; then
     flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
 else
@@ -1293,8 +1383,14 @@ else
         # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
         # the board is first opened is the regression the rule exists to catch: it used to be one of
         # the accepted branches, two lines under a comment promising "nothing has begun downloading".
+        # **"Ready" is a failure here, because this run emptied the store on purpose.** The whole
+        # point of the restart above is to reach the fresh-reader branch, so a row reporting a model
+        # means one of two things went wrong: the stash did not take, or the app is still reporting
+        # the state it read before it. Accepting it as a pass is what let this stage stop measuring
+        # the consent controls on the machine it runs on most — the row's "ready" branch was taken on
+        # every run after the first, silently, for as long as the stash was not in place.
         if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
-            pass "setup: the model row says the model is ready"
+            flunk "setup: the store was emptied for this check and the row still reports a model — the stash did not take, or the board is showing state from before the restart ($(printf '%s' "$model_row" | head -c 300))"
         elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
             flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
         elif printf '%s' "$shown" | grep -q "The local model needs 16 GB of memory."; then
@@ -1328,6 +1424,11 @@ else
         else
             flunk "setup: the model row is in no state this check knows — $(printf '%s' "$model_row" | head -c 300)"
         fi
+    else
+        # **A missing row is a failure, not a reason to check nothing.** Without this the branch
+        # chain above was skipped whole whenever the row could not be found, and a board that had
+        # lost its model row entirely reported no failures at all.
+        flunk "setup: the board has no model row, so none of its states were checked ($(printf '%s' "$shown" | head -c 200))"
     fi
 
     # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
@@ -1868,7 +1969,12 @@ if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     "$helpers/keys" 53 2>/dev/null || true
     lookup_driven=yes
 else
-    echo "model: could not drive a lookup to wake the service ($why)"
+    # **A flunk, not a note.** `lookup_driven=no` skipped the block below, which holds the stage's
+    # *only* assertion about the production path — everything else here asks an in-bundle instrument.
+    # So a selection that could not be made turned the one check that exercises the panel, the sense
+    # resolver and the ledger into no check at all, and the stage went on to pass on instrument
+    # output alone. The failure is the selection; saying so is what stops the silence.
+    flunk "model: could not drive a lookup, so the production path was not exercised at all ($why)"
 fi
 
 # **What the reader's own lookup left behind.** Everything else in this stage asks an in-bundle
@@ -2039,15 +2145,32 @@ stages_failed=$(echo $failed_stages | wc -w | tr -d ' ')
 SH
 set +e
 ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <"$remote_scripts/run.sh" | tee "$RUN_LOG" | grep -v "^RESULT	"
-remote_status=${PIPESTATUS[0]}
+pipeline=("${PIPESTATUS[@]}")
 set -e
+remote_status=${pipeline[0]}
+# **`tee`'s status is the log's, and the log is the evidence.** Only ssh's was read, so a `tee` that
+# could not write — a full disk, a read-only `.build` — left a truncated or empty `RUN_LOG` while the
+# run exited 0, and `record` below then filed whatever stages happened to have reached the file. The
+# evidence being incomplete is a failure of the run, not a detail of it.
+#
+# `grep`'s status is deliberately not checked: `grep -v` exits 1 when it selects no lines, which is
+# what a run consisting only of `RESULT` lines would legitimately produce.
+if [ "${pipeline[1]}" -ne 0 ]; then
+    echo "the run log could not be written ($RUN_LOG, tee exited ${pipeline[1]}), so nothing is recorded:" >&2
+    echo "the stage results for this run are lost, whatever the stages themselves did" >&2
+    exit 1
+fi
 
 # Recorded against the build it ran on. Without that a pass says only "it worked once", which is
 # not a claim anyone can act on — and a green mark that outlives what it tested is worse than none.
 # Filed and printed by `Tools/e2e-status.sh`, which `make e2e-status` also reads: the file, its
 # format and the staleness rule have one implementation, and a second copy of the table here had
 # already lost the timestamp column.
-Tools/e2e-status.sh record <"$RUN_LOG"
+# **Recorded against the build that was tested, passed in rather than re-read.** `record` used to
+# read `CFBundleVersion` off the local bundle at record time, so a `make` in another terminal during
+# a ten-minute run credited the new build with the old build's results — a green mark against a
+# bundle that was never on the test Mac.
+Tools/e2e-status.sh record "$remote_version" <"$RUN_LOG"
 echo
 Tools/e2e-status.sh show
 exit "$remote_status"
