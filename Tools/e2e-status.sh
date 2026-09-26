@@ -28,9 +28,14 @@ build() {
     printf '%s\n' "${version:-none}"
 }
 
+# record [build]: the build the results belong to. **Passed in by the caller that ran them**, because
+# reading it here reads whatever bundle is on disk *now* — and a `make` during a ten-minute remote run
+# would then file this run's results against a build that never left this machine. Falls back to the
+# bundle on disk so a hand-run `record` still works, which is the only caller that legitimately has
+# nothing to pass.
 record() {
     local ran now name result
-    ran=$(build)
+    ran=${1:-$(build)}
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p "$(dirname "$STATUS")"
     # **A stage passes only if every assertion in it passed.** Taking the last result per stage
@@ -71,7 +76,7 @@ show() {
 }
 
 case ${1:-} in
-    record) record ;;
+    record) shift; record "${1:-}" ;;
     show) show ;;
     *) echo "usage: e2e-status.sh record|show" >&2; exit 64 ;;
 esac
