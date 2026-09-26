@@ -215,7 +215,7 @@ struct SetupWiringTests {
         try expectArguments(
             [
                 ("model:", "app.setup"), ("dictionary:", "DictionaryChoice("),
-                ("shortcut:", "app.shortcutChoice"), ("shortcutIsRegistered:", "app.shortcutIsRegistered"),
+                ("shortcut:", "app.shortcuts.choice"), ("shortcutIsRegistered:", "app.shortcuts.isRegistered"),
                 ("localModel:", "app.models.choice"), ("openSettings:", "app.showSettings("),
                 ("refreshDictionaries:", "app.refreshDictionaries("),
             ],
