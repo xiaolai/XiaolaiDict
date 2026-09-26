@@ -214,7 +214,7 @@ struct SetupWiringTests {
     @Test func theAppHandsTheBoardEveryPartOfItsState() throws {
         try expectArguments(
             [
-                ("model:", "app.setup"), ("dictionary:", "DictionaryChoice("),
+                ("model:", "app.setup"), ("dictionary:", "app.dictionary.choice"),
                 ("shortcut:", "app.shortcuts.choice"), ("shortcutIsRegistered:", "app.shortcuts.isRegistered"),
                 ("localModel:", "app.models.choice"), ("openSettings:", "app.showSettings("),
                 ("refreshDictionaries:", "app.dictionary.askAgain("),

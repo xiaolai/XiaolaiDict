@@ -66,7 +66,14 @@ final class HoverControl {
         set { defaults.set(newValue, forKey: Self.enabledKey) }
     }
 
-    var isWatching: Bool { watcher.isWatching }
+    /// Whether the watcher actually holds its monitors — **mirrored into observed state**, because
+    /// `HoverWatcher` is not `@Observable` and a menu reading through it was never invalidated when
+    /// hover started or stopped.
+    ///
+    /// **Read back from the watcher rather than assumed from the setting.** `start()` can fail to
+    /// register a global monitor, so a control showing the reader's preference would say "on" for a
+    /// hover that is not running — which is why the menu reads this and not `isEnabled`.
+    private(set) var isWatching = false
 
     /// What the pause control says. Observed, so pausing redraws the menu without being told to.
     var pauseLabel: String { pauseSwitch.label(at: .now) }
@@ -84,11 +91,20 @@ final class HoverControl {
     /// Starts watching where the reader has hover on. Called once there is a window to draw a
     /// lookup into — never at launch, and never in an instrument run.
     func startIfEnabled() {
-        if isEnabled { watcher.start() }
+        guard isEnabled else { return }
+        watcher.start()
+        isWatching = watcher.isWatching
     }
 
-    func toggle() {
-        isEnabled.toggle()
-        if isEnabled { watcher.start() } else { watcher.stop() }
+    /// **Takes the value asked for, rather than inverting what is stored.** The menu's toggle reads
+    /// `isWatching`, so when starting failed it draws off while the preference is on — and a `set`
+    /// that ignored its argument and flipped the preference would then save *off* and never retry.
+    /// Asked for `true` against a failed start, this tries again.
+    func setEnabled(_ on: Bool) {
+        isEnabled = on
+        if on { watcher.start() } else { watcher.stop() }
+        isWatching = watcher.isWatching
     }
+
+    func toggle() { setEnabled(!isEnabled) }
 }

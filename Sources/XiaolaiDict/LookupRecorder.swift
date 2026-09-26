@@ -58,7 +58,8 @@ final class LookupRecorder {
                 // Reported only if no lookup has reported since: a later lookup's own failure says
                 // more, and must not be overwritten by this older news.
                 if status.request == 0 {
-                    status = (0, "Lookups are not being recorded: \(error)")
+                    status = (0, String(localized: "Lookups are not being recorded: \(String(describing: error))",
+                                        comment: "Menu warning when the ledger could not be opened"))
                 }
                 log.error("ledger unavailable: \(String(describing: error), privacy: .public)")
             }
@@ -78,7 +79,8 @@ final class LookupRecorder {
             // Whatever the reader tapped while this row was being written now has somewhere to go.
             for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
         } catch {
-            problem = "The last lookup was not recorded: \(error)"
+            problem = String(localized: "The last lookup was not recorded: \(String(describing: error))",
+                             comment: "Menu warning when a lookup could not be written to the ledger")
             log.error("ledger write failed: \(String(describing: error), privacy: .public)")
         }
         if request >= status.request { status = (request, problem) }
