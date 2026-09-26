@@ -2141,18 +2141,32 @@ else
     flunk "model: $why ($(printf '%s' "$report" | sed -n 's/.*"explanationFailure":"\([^"]*\)".*/\1/p'))"
 fi
 footprint=$(printf '%s' "$report" | sed -n 's/.*"footprintMB":\([0-9]*\).*/\1/p')
-# **Both bounds.** A service holding a 4B model and answering is gigabytes, so a few megabytes means
-# nothing was loaded — and a lower bound alone passes a service that has leaked its way to twelve.
-# The upper one is the measured peak this project sizes against (3,585 MB for 4B) with room for the
-# process itself; past that, admission decisions made from those peaks are about the wrong number.
+peak=$(printf '%s' "$report" | sed -n 's/.*"peakMB":\([0-9]*\).*/\1/p')
+# **Both bounds, and the upper one is derived rather than typed.** A service holding a model and
+# answering is gigabytes, so a few megabytes means nothing was loaded; a lower bound alone would pass
+# a service that has leaked its way to twelve.
+#
+# The upper bound was a hard-coded 4,500 MB described as "the measured peak (3,585 MB for 4B) with
+# room for the process itself" — two mistakes in one sentence. 3,585 MB **is** the measured *process*
+# peak, so the extra 915 MB was slack counted twice: at 4B's admission minimum of 4,609 MB available
+# it left 109 MB of the promised gigabyte. And the number only ever described 4B, while
+# `--model-report` measures the largest eligible size installed — so a legitimate 9B run, peaking at
+# 6,633 MB, would have been failed against a 4B budget.
+#
+# The peak now comes from the report, for the size the report actually measured, and the bound is the
+# peak itself: this reading is taken *after* the answer, and a settled footprint is by definition at
+# or below the highest the process reached. That makes it stricter than 4,500 for 4B and correct for
+# 9B, with nothing to keep in sync.
 if [ -z "$footprint" ]; then
     flunk "model: the service reported no footprint"
+elif [ -z "$peak" ]; then
+    flunk "model: the report named no peak for its size, so the footprint cannot be judged"
 elif [ "$footprint" -le 1000 ]; then
     flunk "model: the service's footprint is ${footprint} MB — the model is not loaded"
-elif [ "$footprint" -gt 4500 ]; then
-    flunk "model: the service holds ${footprint} MB against a measured peak of 3,585 MB for this size"
+elif [ "$footprint" -gt "$peak" ]; then
+    flunk "model: the service holds ${footprint} MB, above the ${peak} MB peak this size is admitted on — admission is deciding from the wrong number"
 else
-    pass "model: the service holds the model — ${footprint} MB"
+    pass "model: the service holds the model — ${footprint} MB, within its ${peak} MB peak"
 fi
 
 # The labelled set, every rung, in this bundle — the measurement that decides the ladder's order.
