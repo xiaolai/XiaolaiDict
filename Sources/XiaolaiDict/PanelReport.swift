@@ -1,5 +1,6 @@
 import AppKit
 import os
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 
@@ -37,8 +38,6 @@ import XiaolaiDictUI
 /// kind of menu was tracked, so nobody reads this as having measured a SwiftUI `Menu`.
 @MainActor
 enum PanelReport {
-    /// Set before the scene starts, so the delegate measures instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     /// How long to wait for the panel to be listed by the compositor. Generous: the first lookup in a
     /// cold process pays for the XPC service starting.
@@ -64,6 +63,16 @@ enum PanelReport {
     static let sentence = "It was a fine piece of filmmaking, and the weather held."
 
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
+        // **The window actions first, or this measures nothing.** They are captured by
+        // `MenuBarLabel`'s `.task`, which runs after `applicationDidFinishLaunching` — and this is
+        // scheduled from there. Without the wait the instrument drives the app before there is a
+        // window to draw into: it used to read as a failure of the surface being measured, and once
+        // `WindowActions` became loud it reads as a reported failure, which is better and still not
+        // a working instrument. `--settings-report` always waited; these two never did.
+        guard await WindowActions.shared.ready() else {
+            _ = Instrument.write(["problem": "the window actions never arrived, so nothing could open"])
+            return .failure
+        }
         guard let bounded = try? await withDeadline(budget, { await measure(in: app) }) else {
             _ = Instrument.write(["problem": "the panel report exceeded its own \(budget) budget"])
             return .failure

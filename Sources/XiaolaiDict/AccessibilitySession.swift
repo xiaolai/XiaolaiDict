@@ -1,4 +1,5 @@
 import ApplicationServices
+import XiaolaiDictBase
 import XiaolaiDictCore
 import os
 

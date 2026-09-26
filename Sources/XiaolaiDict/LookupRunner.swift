@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -61,7 +62,12 @@ final class LookupRunner {
         // finds the wrong occurrence of a word that appears twice.
         presentation.sentenceRange =
             selection.quality.context == .complete ? selection.rangeInSentence : nil
-        panel.show(.lookup(presentation), near: pointer, for: ticket)
+        // **Stops here if the panel is not on screen.** Not a formality: the window action is
+        // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
+        // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
+        // never saw. The rule is "a lookup nobody saw is not recorded", and this is the only place
+        // that can tell.
+        guard panel.show(.lookup(presentation), near: pointer, for: ticket) else { return nil }
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
         // another wants the model that was being loaded for the first. Detached for that reason —

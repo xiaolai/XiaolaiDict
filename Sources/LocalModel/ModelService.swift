@@ -1,6 +1,6 @@
 import Foundation
 import FoundationModels
-import XiaolaiDictCore
+import ModelKit
 
 /// What the model service does with a request, against any `LanguageModel`.
 ///

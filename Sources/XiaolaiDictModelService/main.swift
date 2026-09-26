@@ -6,12 +6,13 @@ import MLXFoundationModels
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import ModelKit
 import Synchronization
 // `#huggingFaceTokenizerLoader()` expands to a type that stores `any Tokenizer`, which the package
 // does not mark `Sendable`; under Swift 6 that is an error inside the expansion, where it cannot be
 // edited (the MLX-in-XPC spike, S4). Hence `@preconcurrency`.
 @preconcurrency import Tokenizers
-import XiaolaiDictCore
+import XiaolaiDictBase
 import XPC
 import os
 

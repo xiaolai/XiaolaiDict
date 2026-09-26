@@ -1,7 +1,8 @@
 import DictionaryBridge
+import DictionaryModel
 import Dispatch
 import Foundation
-import XiaolaiDictCore
+import XiaolaiDictBase
 import os
 import XPC
 

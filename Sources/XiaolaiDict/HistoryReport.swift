@@ -1,4 +1,5 @@
 import AppKit
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import ScreenCaptureKit
@@ -16,13 +17,21 @@ enum HistoryReport {
     /// How long the instrument will wait for the drawer to appear before calling it a failure.
     static let appearance: Duration = .seconds(3)
 
-    /// Set before the scene starts, so the delegate knows to measure instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     /// Measures **the running app**, not a controller built for the occasion. It has to: a scene
     /// exists only inside the app that declares it. It is a better instrument for it — what it
     /// measures is what the reader gets.
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
+        // **The window actions first, or this measures nothing.** They are captured by
+        // `MenuBarLabel`'s `.task`, which runs after `applicationDidFinishLaunching` — and this is
+        // scheduled from there. Without the wait the instrument drives the app before there is a
+        // window to draw into: it used to read as a failure of the surface being measured, and once
+        // `WindowActions` became loud it reads as a reported failure, which is better and still not
+        // a working instrument. `--settings-report` always waited; these two never did.
+        guard await WindowActions.shared.ready() else {
+            _ = Instrument.write(["problem": "the window actions never arrived, so nothing could open"])
+            return .failure
+        }
         // **Before anything else**: a run that never gets as far as measuring — no drawer, no
         // display — must not leave the last run's images to be copied as this one's. A deletion
         // that fails is carried into the report, because the file left behind is what gets looked

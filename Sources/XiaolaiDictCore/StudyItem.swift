@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 
 /// What XiaolaiDict studies: a sense where the dictionary marks one, an entry where it does not

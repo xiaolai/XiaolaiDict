@@ -1,3 +1,4 @@
+import DictionaryModel
 import XiaolaiDictCore
 import XiaolaiDictUI
 @preconcurrency import ScreenCaptureKit

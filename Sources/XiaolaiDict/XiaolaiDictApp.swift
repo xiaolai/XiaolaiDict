@@ -1,4 +1,6 @@
 import AppKit
+import DictionaryModel
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 import Observation
@@ -121,6 +123,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
     private var permissions = PermissionsReport(states: [])
 
+    /// Whether a selection may be read, and asking for it where the reader never has been.
+    /// Injected so a test can drive the refusal branch without touching this Mac's grant.
+    @ObservationIgnored var accessibility = AccessibilityAccess.system
+
     /// The history drawer reads the ledger itself, bounded in both directions, and reports a
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
@@ -234,27 +240,81 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
         // fired meanwhile would capture too — two captures at once deadlock, measured six trials
         // of six. An instrument measures the app; it has no reader whose pointer needs watching.
-        if hoverEnabled, !Self.isInstrumented { hover.start() }
-        registerShortcut(shortcuts.load())
+        armTriggersWhenThereIsAWindowToDrawInto()
         // **Not in an instrument run.** An instrument measures the app; a window opening at it
         // unasked is a window in front of whatever it was about to capture.
         if !Self.isInstrumented { openSetupOnFirstLaunch() }
         quitOnTerminationSignal()
-        if HistoryReport.isWanted { Task { exit(await HistoryReport.run(in: self).rawValue) } }
-        if SettingsReport.isWanted { Task { exit(await SettingsReport.run(in: self).rawValue) } }
-        if PanelReport.isWanted { Task { exit(await PanelReport.run(in: self).rawValue) } }
+        // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
+        // line somebody has to remember to add here as well as in three other places.
+        if let instrument = Instruments.wanted {
+            Task { [weak self] in
+                guard let self else { return }
+                let status: CommandStatus = switch instrument {
+                case .history: await HistoryReport.run(in: self)
+                case .settings: await SettingsReport.run(in: self)
+                case .panel: await PanelReport.run(in: self)
+                }
+                exit(status.rawValue)
+            }
+        }
     }
 
-    /// **Whether this process is an instrument rather than the reader's app.**
+    /// Whether the triggers have been armed, so a second capture does not arm them twice.
+    private var triggersArmed = false
+
+    /// **The hot key and hover are armed once there is a window to draw into, never at launch.**
     ///
-    /// One predicate, because it was a list repeated at each site and each new instrument had to
-    /// remember to join every one of them: `--panel-report` shows the lookup panel and posts mouse
-    /// events at it, so a hover firing meanwhile is a second capture (two at once deadlock, measured
-    /// six trials of six) and a setup board opening unasked is a window in front of what is being
-    /// measured. An instrument measures the app; it has no reader whose pointer needs watching.
-    static var isInstrumented: Bool {
-        HistoryReport.isWanted || SettingsReport.isWanted || PanelReport.isWanted
+    /// `WindowActions` is captured by `MenuBarLabel`'s `.task`, which runs *after*
+    /// `applicationDidFinishLaunching` — the app already knew this, since `openSetupOnFirstLaunch`
+    /// waits five seconds for it. Registering the hot key before it meant a shortcut pressed in that
+    /// window opened no panel, and the lookup ran to completion and wrote a ledger row anyway.
+    ///
+    /// Four orderings have to be harmless, because `.task` is tied to a view's lifetime and not to
+    /// any documented contract with the app delegate:
+    ///
+    /// - **Capture before this runs.** `areWired` is checked here, so it arms immediately.
+    /// - **Capture after.** `onCapture` arms it.
+    /// - **Capture twice.** `triggersArmed` makes the second a no-op.
+    /// - **Capture never.** The fallback arms after five seconds, with a fault logged. The shortcut
+    ///   then registers against a panel that cannot draw — but `LookupPanelController.show` refuses
+    ///   and `LookupRunner` stops, so the cost is a fault in the log rather than a phantom lookup.
+    ///   A shortcut a reader has set and that silently does not exist is worse than one that fails
+    ///   loudly.
+    private func armTriggersWhenThereIsAWindowToDrawInto() {
+        WindowActions.shared.onCapture = { [weak self] in self?.armTriggers(because: "the window actions arrived") }
+        if WindowActions.shared.areWired { armTriggers(because: "the window actions were already there") }
+        Task { @MainActor [weak self] in
+            guard await WindowActions.shared.ready() else {
+                self?.log.fault("windows: no actions after 5 s; arming the shortcut anyway")
+                self?.armTriggers(because: "the fallback deadline passed")
+                return
+            }
+        }
     }
+
+    /// **Not private: `WindowActionsWiringTests` drives it.** What this method does is the wire,
+    /// and the lesson recorded twice in `AGENTS.md` is that only a test of the wire catches a
+    /// dependency nothing reads.
+    func armTriggers(because reason: String) {
+        guard !triggersArmed else { return }
+        triggersArmed = true
+        log.notice("triggers: arming because \(reason, privacy: .public)")
+        // Watching the pointer is something the reader must be able to stop, so it is a setting
+        // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
+        // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
+        // fired meanwhile would capture too — two captures at once deadlock, measured six trials
+        // of six. An instrument measures the app; it has no reader whose pointer needs watching.
+        if hoverEnabled, !Self.isInstrumented { hover.start() }
+        // **Only if nothing is registered and nothing is suspended.** A capture landing while the
+        // reader has the shortcut recorder armed would otherwise take the combination back from the
+        // field they are typing into — `suspendShortcut(true)` sets `hotkey` to nil precisely so the
+        // key reaches the field, and `registerShortcut` puts it back unconditionally.
+        if hotkey == nil, !shortcutIsSuspended { registerShortcut(shortcuts.load()) }
+    }
+
+    /// Whether this process is an instrument rather than the reader's app — see `Instruments`.
+    static var isInstrumented: Bool { Instruments.isInstrumented }
 
     // MARK: - Looking up
 
@@ -264,8 +324,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         let ticket = panel.newRequest()
         lookup?.cancel()
         // Asked, not assumed: without Accessibility there is no selection to read, and saying so
-        // is better than an empty panel.
-        guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
+        // is better than an empty panel. **Through the one owner** — this line used to call
+        // `AXIsProcessTrustedWithOptions` with its own copy of the option key literal, which was
+        // the third implementation of one question and the second instance of the class
+        // `ScreenRecordingAccess` exists to close.
+        guard accessibility.ensure() == .granted else {
             panel.show(.accessibilityIsOff, near: pointer, for: ticket)
             return
         }
@@ -399,7 +462,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // opening the window must not wait on a probe that parses real entries.
         if pane == .dictionary { Task { await askForDictionaries() } }
         NSApplication.shared.activate()
-        WindowActions.shared.settings?()
+        WindowActions.shared.openSettings()
     }
 
     /// Opens the setup board, bringing XiaolaiDict forward with it.
@@ -415,7 +478,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // say which. An end-to-end run could not tell them apart from outside.
         log.notice("setup: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
         NSApplication.shared.activate()
-        WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
+        WindowActions.shared.openWindow(id: XiaolaiDictScene.setupID)
     }
 
     /// Opens the board unasked, once in the life of an install.
@@ -452,7 +515,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // from here would only be a second, unasked request.
             guard self?.setupWindow?.isVisible != true else { return }
             self?.log.notice("setup: opened unasked at launch")
-            WindowActions.shared.open?(id: XiaolaiDictScene.setupID)
+            WindowActions.shared.openWindow(id: XiaolaiDictScene.setupID)
         }
     }
 
@@ -517,12 +580,20 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// field disarms after a successful choice, and a `suspend(false)` that re-registered whatever
     /// was on disk would undo the choice a moment after the reader made it.
     func suspendShortcut(_ suspended: Bool) {
+        // **Recorded, not inferred from `hotkey == nil`.** Those two states look identical and mean
+        // opposite things: "the reader is typing a new combination into the field" and "nothing has
+        // registered one yet". `armTriggers` asks this before it registers, because a window-action
+        // capture landing mid-recording would otherwise take the key back from the field.
+        shortcutIsSuspended = suspended
         if suspended {
             hotkey = nil
         } else if hotkey == nil {
             registerShortcut(shortcuts.load())
         }
     }
+
+    /// Whether the shortcut recorder is armed. See `suspendShortcut`.
+    private(set) var shortcutIsSuspended = false
 
     /// Takes the reader's new shortcut: registers it, and saves it if it held. Nil means it held;
     /// otherwise the refusal says why — another app holds it, XiaolaiDict holds it for something else, or

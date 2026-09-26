@@ -1,4 +1,6 @@
+import DictionaryModel
 import Foundation
+import XiaolaiDictBase
 
 /// What a lookup produced, and how it was obtained. A fallback must never render as confidently as
 /// the real thing, so the outcome says which it is.

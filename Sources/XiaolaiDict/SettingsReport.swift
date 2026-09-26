@@ -30,8 +30,6 @@ enum SettingsReport {
     /// How long to wait for that before reporting the window as never having settled.
     static let restDeadline: Duration = .seconds(3)
 
-    /// Set before the scene starts, so the delegate measures instead of just running.
-    nonisolated(unsafe) static var isWanted = false
 
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
         // **Asked for only once the environment's action exists.** `openSettings` is captured from
@@ -39,7 +37,7 @@ enum SettingsReport {
         // and this runs from `applicationDidFinishLaunching`, which is earlier. Calling first and
         // hoping would open nothing at all, silently, exactly as an `EnvironmentValues()` built on
         // the spot once did.
-        guard await Instrument.settle(until: appearance, { WindowActions.shared.settings != nil }) else {
+        guard await WindowActions.shared.ready(within: appearance) else {
             return finish(["appeared": false, "problem": "the scene's openSettings action never arrived"], .failure)
         }
         // The Dictionary pane lists what the service reports, and nothing asks the service until

@@ -1,5 +1,7 @@
 @testable import DictionaryBridge
+import DictionaryModel
 import Foundation
+import ModelKit
 import Synchronization
 @testable import XiaolaiDictCore
 import Testing

@@ -1,4 +1,5 @@
 import Darwin
+@testable import ModelKit
 import Testing
 @testable import XiaolaiDictCore
 

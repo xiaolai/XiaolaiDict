@@ -119,6 +119,32 @@ GRAPH
 PRODUCTS=""
 BUNDLES=""
 BUNDLE_LIST=()
+# **`swift build` for this bundle — a development one carries the capture instruments and a release
+# does not.**
+#
+# `--read-point` and `--read-selection` read another app's text and the screen, and `LookupCommand`
+# records the measurement that showed a release must not carry them: from an SSH session holding
+# neither TCC grant, the binary exec'd directly is refused, while the same session going through
+# `open -n --args` gets a sentinel string out of TextEdit and an OCR read of a terminal. Every other
+# instrument reports on XiaolaiDict's own behaviour and ships unchanged, so the difference between the
+# artifact end-to-end tests run against and the artifact a reader gets is these two commands.
+#
+# **The flag costs a full rebuild when it changes** — measured 2026-09-26: `-Xswiftc` applies to every
+# target, so switching recompiles MLX and everything else, about 22 minutes. That lands on releases,
+# which are rare and already cost that. The escape, if it ever bites, is a second `--scratch-path` for
+# the instrumented build: disk instead of time, and there is 1.1 TB of it.
+#
+# Nothing is added to the digest: the flag is derived from `XIAOLAIDICT_BUILD_NUMBER`, which
+# `inputs_digest` already covers, so a release and a development build of the same tree already
+# differ there.
+swift_build() {
+    if is_release; then
+        swift build -c "$CONFIG" "$@"
+    else
+        swift build -c "$CONFIG" -Xswiftc -DXIAOLAIDICT_CAPTURE_INSTRUMENTS "$@"
+    fi
+}
+
 resolve_products() {
     [ -z "$PRODUCTS" ] || return 0
     local products targets name
@@ -126,7 +152,7 @@ resolve_products() {
     # Verification is the one thing here that can be asked of a bundle without building it — and a
     # test that has to start SwiftPM to ask cannot run inside `swift test`, where SwiftPM is already
     # running. A build never sets it, so a build always asks the build.
-    products=${XIAOLAIDICT_PRODUCTS:-$(swift build -c "$CONFIG" --show-bin-path)} || return 1
+    products=${XIAOLAIDICT_PRODUCTS:-$(swift_build --show-bin-path)} || return 1
     targets=$(model_service_bundle_targets) || return 1
     # Matched whole-line against the graph's target names. Written with `grep -x` rather than a
     # `case` because bash 3.2 mis-parses a `case` nested inside a command substitution at run time,
@@ -509,12 +535,106 @@ verify_release_timestamps() {
     done
 }
 
+# **Each XPC service links the subject it serves, and nothing else.**
+#
+# The dictionary service exists to be the blast-radius container for a private API whose failure
+# mode is a segfault. Measured on 2026-09-26, before the module split, it was 2,184,944 bytes and
+# linked libsqlite3, CryptoKit, FoundationModels, Carbon, CoreGraphics and CoreServices, carrying 124
+# `Ledger` symbols, 55 `ModelDownloader`, 63 `RangeWriter`, 259 `HoverPolicy` and the whole LLM wire
+# protocol — 443 `ModelReply`, 367 `ModelRequest`. It calls none of it. The model service was the
+# mirror image: 237 `DictionaryEntry` symbols, 275 `LookupFailure`, and libsqlite3.
+#
+# **Here rather than only in `BundleVerificationTests`, and that is the load-bearing part.** That
+# suite disables itself whenever the published bundle does not match current inputs, and under a bare
+# `swift test` there is no signing identity so it skips by name — while `make` runs the tests *before*
+# it builds the replacement bundle. A regression could therefore land as: stale bundle, checks
+# skipped, new bundle built, verification passes, four green test lines. This runs on the staged
+# artifact every time, release or not.
+#
+# `otool -L` is load commands, not the runtime image closure: `DictionaryBridge` reaches
+# DictionaryServices by `dlopen` and always will. What is asserted is what is *linked*.
+#
+# CryptoKit is permitted to the dictionary service, deliberately. `DictionarySense.hash` keys a sense
+# the publisher gave no id by a SHA-256 of its own text and `DictionaryBridge` builds those values, so
+# it is on that service's real execution path. An earlier draft of this check forbade it and was
+# wrong; the algorithm cannot change without invalidating every `sense_hash` already in a reader's
+# ledger.
+verify_service_boundaries() {
+    local bundle=$1 binary problem=0
+    # service path : frameworks it must not link : module symbols it must not carry
+    local checks=(
+        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices!XiaolaiDictCore|ModelKit|Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply"
+        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3!XiaolaiDictCore|DictionaryModel|Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy"
+    )
+    local spec path frameworks symbols found
+    for spec in "${checks[@]}"; do
+        path=${spec%%|*}; spec=${spec#*|}
+        frameworks=${spec%%!*}; symbols=${spec#*!}
+        binary="$bundle/$path"
+        [ -f "$binary" ] || { echo "no binary to check at $path"; return 1; }
+
+        found=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' \
+            | grep -E "($(tr '|' '\n' <<<"$frameworks" | paste -sd'|' -))" || true)
+        if [ -n "$found" ]; then
+            echo "$(basename "$path") links what it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+        fi
+
+        # Demangled, because a mangled name spells a module differently and a scan is only as wide
+        # as the spelling it searches for.
+        found=$(nm "$binary" 2>/dev/null | xcrun swift-demangle 2>/dev/null \
+            | grep -oE "\b($(tr '|' '\n' <<<"$symbols" | paste -sd'|' -))\b" | sort -u || true)
+        if [ -n "$found" ]; then
+            echo "$(basename "$path") carries symbols it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+        fi
+
+        # **A scan that finds nothing because it read nothing passes.** `nm` on an unreadable or
+        # stripped binary is silent, and so is this check — so it asserts the tool answered at all.
+        found=$(nm "$binary" 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${found:-0}" -lt 100 ]; then
+            echo "$(basename "$path"): nm returned $found symbols — the boundary check read nothing"
+            problem=1
+        fi
+    done
+    [ "$problem" -eq 0 ]
+}
+
+# **A release must refuse the capture instruments, and a development bundle must offer them.**
+#
+# Both directions, because a gate only ever checked the safe way round is a gate that could be
+# inverted and still pass. The marker is the refusal sentence the `#if` compiles in, and the witness
+# for the live path is a message only its body contains — `nm` cannot tell them apart, because the
+# gate keeps each function's signature and replaces its body.
+verify_capture_instruments() {
+    # **Two statements, because one would read the caller's `bundle`, not this one's.** `local a=$1
+    # b="$a"` expands `$a` before assigning it, so `binary` was built from whatever `bundle` the
+    # caller happened to have in scope — it worked only because `verify_bundle` has one of the same
+    # name with the same value, and broke the moment this was called on its own.
+    local bundle=$1 refusals live binary
+    binary="$bundle/Contents/MacOS/$APP_NAME"
+    [ -f "$binary" ] || { echo "no app binary to check for the capture instruments"; return 1; }
+    refusals=$(strings -a "$binary" 2>/dev/null | grep -c 'is a development instrument and is not built into a release' || true)
+    live=$(strings -a "$binary" 2>/dev/null | grep -c 'has no window to find its process by' || true)
+    if is_release; then
+        [ "${refusals:-0}" -ge 1 ] \
+            || { echo "a release does not refuse --read-point/--read-selection: the gate did not compile in"; return 1; }
+        [ "${live:-0}" -eq 0 ] \
+            || { echo "a release still carries the capture instruments' own code"; return 1; }
+    else
+        [ "${live:-0}" -ge 1 ] \
+            || { echo "a development bundle has no capture instruments — the end-to-end hover and selection stages cannot run"; return 1; }
+        [ "${refusals:-0}" -eq 0 ] \
+            || { echo "a development bundle refuses its own instruments: the gate is inverted"; return 1; }
+    fi
+}
+
 verify_bundle() {
     local bundle=$1
     verify_required_files "$bundle" || return 1
     verify_bundle_metadata "$bundle" || return 1
     verify_signatures "$bundle" || return 1
     verify_release_timestamps "$bundle" || return 1
+    verify_service_boundaries "$bundle" || return 1
+    verify_capture_instruments "$bundle" || return 1
 }
 
 # A release is a build numbered by the release counter. Everything that differs for one — the
@@ -561,9 +681,9 @@ assemble() {
         || fail "signing identity not in the keychain: $XIAOLAIDICT_SIGN_ID — set SIGN_ID to another Developer ID Application identity"
 
     # One build for all three executable products: they share every module but their mains.
-    swift build -c "$CONFIG"
+    swift_build
     local products
-    products=$(swift build -c "$CONFIG" --show-bin-path)
+    products=$(swift_build --show-bin-path)
     [ -x "$products/$APP_NAME" ] && [ -x "$products/$SERVICE" ] && [ -x "$products/$MODEL_SERVICE" ] \
         || fail "swift build produced no $APP_NAME, $SERVICE or $MODEL_SERVICE"
     # Beside the products, where SwiftPM puts resource bundles. Fails closed: a service shipped

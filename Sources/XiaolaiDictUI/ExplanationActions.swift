@@ -1,3 +1,4 @@
+import ModelKit
 import SwiftUI
 import XiaolaiDictCore
 

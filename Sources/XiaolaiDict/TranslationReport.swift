@@ -1,4 +1,5 @@
 import Foundation
+import ModelKit
 import XiaolaiDictCore
 #if canImport(Translation)
 import Translation

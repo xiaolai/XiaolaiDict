@@ -1,3 +1,4 @@
+import ModelKit
 import XiaolaiDictTestSupport
 import Testing
 import XiaolaiDictCore

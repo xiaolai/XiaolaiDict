@@ -1,4 +1,5 @@
 import Foundation
+import ModelKit
 import Testing
 @testable import XiaolaiDictCore
 

@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 
@@ -62,8 +63,32 @@ enum LookupCommand {
     ///
     /// The modifier gate is bypassed here on purpose: this is the instrument, and a probe that
     /// needed a key held could not be driven over SSH.
+    ///
+    /// **Compiled out of a release, because it is a TCC deputy.** Measured 2026-09-26 on the E2E Mac
+    /// from an SSH session holding neither grant: exec'd directly the binary is refused ("XiaolaiDict
+    /// needs Screen Recording"), but the same session going through
+    /// `open -n --stdout <file> --args --read-point` read a sentinel string out of TextEdit
+    /// (`accessibilityTextRange`) and, aimed at a terminal, OCR'd the screen
+    /// (`opticalRecognition`) — on the first hit returning a login-keychain unlock prompt. The
+    /// caller cannot do it, this can, and the caller names the file the answer lands in. No dialog
+    /// appears, so what the bypass removes is the visible, refusable prompt that normally stands
+    /// between local code and the screen.
+    ///
+    /// So a reader's notarised copy does not carry it: `build-bundle.sh` defines
+    /// `XIAOLAIDICT_CAPTURE_INSTRUMENTS` for a development bundle only, and `verify_bundle` refuses a
+    /// release whose binary still holds this symbol — and a development bundle whose binary does
+    /// not, because a gate nobody has seen fail is a gate nobody has seen work.
+    ///
+    /// **`#if` and not a runtime check, measured rather than assumed.** A marker file in the bundle
+    /// or a value in `Info.plist` would be sealed by the resource signature and *not* by the main
+    /// executable's cdhash, which is what TCC keys on — so editing one back in would re-enable this
+    /// while keeping the grant that makes it worth doing. Absent code has no such hole.
     @MainActor
     static func readPoint(x: Double, y: Double) async -> CommandStatus {
+#if !XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        writeError("--read-point is a development instrument and is not built into a release")
+        return .usage
+#else
         let started = ContinuousClock.now
         // A generous deadline on purpose: this is the instrument, not the product. The shipped 5 s
         // protects a reader from a wedged capture; here it only hid how long the path actually
@@ -89,12 +114,21 @@ enum LookupCommand {
             writeError("nothing read: \(why)")
             return .failure
         }
+#endif
     }
 
     /// `XiaolaiDict --read-selection BUNDLE_ID`: what the reader would see from that app's selection. The
     /// app is found on the main actor; its Accessibility tree is read off it.
     @MainActor
+    ///
+    /// **Compiled out of a release for the same reason as `readPoint`** — it reports another app's
+    /// *selected text* on demand, and the measurement that established the deputy read a sentinel
+    /// out of TextEdit through this same Accessibility path.
     static func readSelection(bundleID: String, write: (String) -> Void = { _ = writeLine($0) }) async -> CommandStatus {
+#if !XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        writeError("--read-selection is a development instrument and is not built into a release")
+        return .usage
+#else
         let report: any Encodable
         let status: CommandStatus
         if let front = FrontApp.running(bundleID) {
@@ -117,6 +151,7 @@ enum LookupCommand {
             writeError("could not encode the report: \(error)")
             return .internalError
         }
+#endif
     }
 
     /// **False when the line did not leave this process.** Each lookup's line must survive whatever

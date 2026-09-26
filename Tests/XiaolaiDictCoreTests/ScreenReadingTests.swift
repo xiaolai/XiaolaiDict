@@ -1,4 +1,5 @@
 import CoreGraphics
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 import Testing
