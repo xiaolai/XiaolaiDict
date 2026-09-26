@@ -878,20 +878,29 @@ else
         else
             flunk "waiting panel: the service stayed suspended and nothing fell back to the public API — the reader waits forever ($(printf '%s' "${view:-}" | head -c 200))"
         fi
-        # It fills in on its own once the service is back: same panel, no second window.
-        resume
+        # **It filled the panel it already had, rather than opening a second one.** That is the claim
+        # here, and the fallback answer above is what filled it — so this must *accept* the caveat as
+        # an answer, not exclude it as a not-yet-answered marker.
+        #
+        # Measured 2026-09-26: splitting the fallback out and leaving this check as it was failed with
+        # "never filled in: nothing", because the panel was already complete and no later answer was
+        # coming. Resuming the service does not re-run a lookup that has finished — the original check
+        # only saw a caveat-free card because it resumed *before* the deadline expired, which is
+        # precisely why the fallback went untested. One lookup cannot show both answers, and this is
+        # the one it actually produces.
         filled=""
         for _ in $(seq 1 100); do
             view=$("$helpers/panel" com.xiaolaidict)
-            # The word's card, and no failure on it — "No entry for" carries the word too.
+            # The word's card, still not a miss — "No entry for" carries the word too.
             # Not `"meeting"` as a whole JSON element: the card heads itself with the dictionary's
             # headword, so a primary that lemmatises answers "meeting" with a card headed "meet".
             # The reader's own sentence carries the surface form, and that is what is matched.
-            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for|could not all be asked'; then
+            if printf '%s' "$view" | grep -q 'meeting' && ! printf '%s' "$view" | grep -qE 'Looking up|No entry for'; then
                 filled=$view; break
             fi
             sleep 0.1
         done
+        resume
         if [ -n "$filled" ] && [ "$(printf '%s' "$filled" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["windows"]))')" = 1 ]; then
             pass "waiting panel: filled itself in, in the one panel it already had"
         else
@@ -2130,6 +2139,15 @@ else
     else
         flunk "model: could not drive a lookup after the kill, so the app's own recovery was not exercised ($why)"
     fi
+    # **And the service that lookup started is ended again, because `--model-report` below refuses to
+    # measure a service it did not start.** Measured: without this, the report returned
+    # `endedTheRunningService: false` and six assertions failed on an empty report. The stage used to
+    # get this for free — the kill above was the last thing to touch the service — and adding a
+    # recovery check quietly removed that, which is the ordering dependency worth naming rather than
+    # rediscovering.
+    find_pids "$model_service"
+    [ "${#PIDS[@]}" -eq 0 ] || kill -9 "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
 fi
 
 # Bounded at 40 minutes: a first run downloads 3 GB, measured at ~10 MB/s from this network.
