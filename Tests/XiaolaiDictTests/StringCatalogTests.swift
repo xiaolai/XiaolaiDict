@@ -128,6 +128,47 @@ struct StringCatalogTests {
             }
             if trimmed.hasPrefix("//") { index += 1; continue }
 
+            // **A `"""` literal, which the quote walk below cannot see at all.** Its body lines hold
+            // no quote character, so `firstIndex(of: "\"")` finds nothing on them and the sentence
+            // never reaches the check — while `Text("""` itself reads as an empty literal and is
+            // dropped. That is not a corner: this project's own rule sends every long sentence here
+            // ("a long sentence is one multi-line literal with `\` continuations"), so the scan was
+            // blind to exactly the strings most likely to be reworded. Measured 2026-09-27: the
+            // hover footer was rewritten on 2026-09-27 and the catalog kept the old wording, with
+            // this check green throughout.
+            if let open = line.range(of: "\"\"\"") {
+                var at = index + 1
+                var body: [String] = []
+                // `hasPrefix`, not `==`: the closing delimiter carries whatever follows it on the
+                // line — `""")` for a `Text("""…` — and an equality test never matches, which made
+                // this whole branch bail out through the guard below. Caught by the positive control
+                // rather than by the check passing, which it did either way.
+                while at < lines.count,
+                      !lines[at].trimmingCharacters(in: .whitespaces).hasPrefix("\"\"\"") {
+                    body.append(lines[at])
+                    at += 1
+                }
+                guard at < lines.count else { index += 1; continue }
+                // Swift strips the closing delimiter's own indentation from every line.
+                let margin = lines[at].prefix { $0 == " " }.count
+                var text = ""
+                for raw in body {
+                    let strip = min(margin, raw.prefix { $0 == " " }.count)
+                    let stripped = String(raw.dropFirst(strip))
+                    // A trailing `\` joins the next line to this one; without it the lines are
+                    // separated by a newline, exactly as the compiler reads them.
+                    if stripped.hasSuffix("\\") {
+                        text += stripped.dropLast()
+                    } else {
+                        text += stripped + "\n"
+                    }
+                }
+                if text.hasSuffix("\n") { text.removeLast() }
+                found.append(Literal(line: index + 1, prefix: String(line[...open.lowerBound]), text: text))
+                index = at + 1
+                continue
+            }
+
             var cursor = line.startIndex
             var consumed = 0
             while let quote = line[cursor...].firstIndex(of: "\"") {
