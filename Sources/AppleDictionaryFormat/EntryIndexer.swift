@@ -81,6 +81,7 @@ public struct EntryIndexer {
         var senses: [RawSense] = []
 
         private var depth = 0
+        private var posBlockDepth: Int?
         private var headwordDepth: Int?
         private var senseDepth: Int?
         private var definitionDepth: Int?
@@ -123,6 +124,14 @@ public struct EntryIndexer {
             if headwordDepth != nil, homograph == nil, let marker = attributes["homograph"], !marker.isEmpty {
                 homograph = marker
             }
+            // **Part of speech is scoped to its own block.** `currentPOS` was set when a `d:pos` element
+            // closed and never cleared, so an `x_xd0` block declaring no part of speech inherited the
+            // previous block's — reporting a verb sense as a noun, silently, for any entry laid out that
+            // way. Entering a block clears it; `partOfSpeechIsScopedToItsOwnBlock` holds that.
+            if profile.marksPartOfSpeechBlock(classAttribute: classes) {
+                posBlockDepth = depth
+                currentPOS = nil
+            }
             if profile.marksSense(classAttribute: classes) {
                 senseDepth = depth
                 // Only the attribute the profile declares. Reading `lexid ?? id` regardless would let a
@@ -153,6 +162,10 @@ public struct EntryIndexer {
                 if !text.isEmpty { currentPOS = text }
                 posDepth = nil
                 buffer = ""
+            }
+            if let d = posBlockDepth, d == depth {
+                posBlockDepth = nil
+                currentPOS = nil
             }
             if let d = headwordDepth, d == depth {
                 headword = Self.collapsed(buffer)

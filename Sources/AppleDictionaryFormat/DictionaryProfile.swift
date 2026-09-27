@@ -110,6 +110,16 @@ public struct DictionaryProfile: Sendable, Equatable {
             identifier: "com.apple.dictionary.kn-en.oup", senseDepth: 2),
     ]
 
+    /// Whether a class token list opens a part-of-speech block.
+    ///
+    /// `x_xd0` is the part-of-speech block in every dictionary measured, independently of `senseDepth`.
+    /// Whole-token, for the same reason `marksSense` is: `class` is a space-separated list, and `x_xd0`
+    /// appears alongside `posg`, `se2` and others.
+    public func marksPartOfSpeechBlock(classAttribute: String?) -> Bool {
+        guard let classAttribute else { return false }
+        return classAttribute.split(whereSeparator: \.isWhitespace).contains("x_xd0")
+    }
+
     /// Whether a class token names a sense at this dictionary's depth — `x_xd<senseDepth>` and nothing
     /// else. `x_xd1sub` is excluded because `Int("1sub")` is nil, so subsenses fall out by
     /// construction rather than by a special case.
