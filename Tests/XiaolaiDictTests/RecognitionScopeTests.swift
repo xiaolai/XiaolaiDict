@@ -1,0 +1,142 @@
+import Foundation
+import Testing
+import XiaolaiDictCore
+@testable import XiaolaiDict
+
+/// **The quality signals must describe the sentence that is returned, and the CJK case is where
+/// the arithmetic for that broke.**
+///
+/// The first attempt located the sentence by subtracting the word's offset-within-the-sentence
+/// from the pointer's offset-within-the-block, assuming the pointer's offset is the word's start.
+/// Joining `学` to `习。` produces `学习。`, which the tokeniser reads as one word beginning in the
+/// *first* fragment — so the computed start fell inside the word, excluded the fragment the word
+/// began in, and reported the good fragment's confidence for a sentence that is half badly read.
+struct RecognitionScopeTests {
+    private static let region = CGSize(width: 1000, height: 1000)
+
+    private static func fragment(
+        _ text: String, x: CGFloat, width: CGFloat, confidence: Double
+    ) -> RecognisedLine {
+        let box = CGRect(x: x, y: 0, width: width, height: 10)
+        return RecognisedLine(
+            text: text, box: box,
+            words: [RecognisedWord(text: text, utf16Offset: 0, box: box)],
+            confidence: confidence)
+    }
+
+    /// Both fragments make up the returned sentence, so its confidence is the worse of the two.
+    @Test func aSentenceSpanningABadFragmentIsNotReportedAsGood() throws {
+        let lines = [
+            Self.fragment("学", x: 0, width: 10, confidence: 0.30),
+            Self.fragment("习。", x: 10.5, width: 20, confidence: 1.0),
+        ]
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text == "学习。", "the row did not join: \(read.word.sentence.text)")
+        #expect(read.confidence == 0.30, "reported \(read.confidence) for a sentence half read at 0.30")
+    }
+
+    /// And a neighbouring sentence's poor reading must not drag a good one down — the opposite
+    /// error, and the reason the scope is the sentence rather than the block.
+    @Test func aNeighbouringBadSentenceDoesNotMakeThisOneDoubtful() throws {
+        let bad = RecognisedLine(
+            text: "Rubbish here.", box: CGRect(x: 0, y: 0, width: 50, height: 10),
+            words: [RecognisedWord(text: "Rubbish", utf16Offset: 0,
+                                   box: CGRect(x: 0, y: 0, width: 20, height: 10))],
+            confidence: 0.30)
+        let good = RecognisedLine(
+            text: "The ship's hold was full.", box: CGRect(x: 0, y: 12, width: 50, height: 10),
+            words: [RecognisedWord(text: "hold", utf16Offset: 11,
+                                   box: CGRect(x: 20, y: 12, width: 10, height: 10))],
+            confidence: 1.0)
+        let read = try #require(ScreenTextRecogniser.reading(
+            [bad, good], pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text.contains("ship"), "\(read.word.sentence.text)")
+        #expect(read.confidence == 1.0, "a good sentence was marked \(read.confidence) by its neighbour")
+    }
+
+    /// **One clipping answer.** What `Recognition` reports and what the sentence itself carries are
+    /// the same fact; they used to be computed from different scopes and could disagree.
+    @Test func theSentenceAndTheRecognitionAgreeAboutClipping() throws {
+        let lines = [
+            Self.fragment("学", x: 0, width: 10, confidence: 1.0),
+            Self.fragment("习。", x: 10.5, width: 20, confidence: 1.0),
+        ]
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.mayBeCut == read.word.sentence.mayBeCut,
+                "Recognition says \(read.mayBeCut), the sentence says \(read.word.sentence.mayBeCut)")
+    }
+}
+
+/// The two defects the round-2 verification found in the round-1 fixes, each as its counterexample.
+extension RecognitionScopeTests {
+    /// **A repeated sentence must be located by the occurrence the pointer is *in*.** Accepting an
+    /// occurrence whose end equals the pointer's offset let the sentence *before* the pointer win:
+    /// in `学习。学习。`, pointing at the second sentence's first character matched the first
+    /// occurrence and reported its confidence.
+    @Test func aRepeatedSentenceIsLocatedByThePointer() throws {
+        let good = Self.fragment("学习。", x: 0, width: 30, confidence: 1.0)
+        let bad = RecognisedLine(
+            text: "学习。", box: CGRect(x: 30.5, y: 0, width: 30, height: 10),
+            words: [RecognisedWord(text: "学习", utf16Offset: 0,
+                                   box: CGRect(x: 30.5, y: 0, width: 20, height: 10))],
+            confidence: 0.30)
+        let read = try #require(ScreenTextRecogniser.reading(
+            [good, bad], pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.confidence == 0.30,
+                "the sentence before the pointer was scored instead: \(read.confidence)")
+    }
+
+    /// **An interior sentence of a clipped observation is not itself cut.** The geometric test says
+    /// the observation touches the capture's edge; the sentence plainly does not run to the text's
+    /// boundary. Reporting the geometric answer told the reader a whole interior sentence might be
+    /// missing words.
+    @Test func anInteriorSentenceOfAClippedLineIsNotMarkedCut() throws {
+        let text = "First sentence. Middle sentence. Last sentence."
+        let middle = (text as NSString).range(of: "Middle")
+        // A box flush with the capture's edge, so the geometric clipping test fires.
+        let box = CGRect(x: 0, y: 0, width: 1, height: 10)
+        let line = RecognisedLine(
+            text: text, box: box,
+            words: [RecognisedWord(text: "Middle", utf16Offset: middle.location, box: box)],
+            confidence: 1.0)
+        let read = try #require(ScreenTextRecogniser.reading(
+            [line], pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text.contains("Middle"), "\(read.word.sentence.text)")
+        #expect(read.mayBeCut == read.word.sentence.mayBeCut, "the two answers disagree")
+        #expect(!read.mayBeCut, "an interior sentence was reported as possibly cut")
+    }
+}
+
+extension RecognitionScopeTests {
+    /// **A sentence cut in its *middle* is still cut.** Making the two flags agree by taking the
+    /// textual answer lost this: the sentence runs across two observations and the first is cut at
+    /// its right edge, so words are missing between them — while the sentence touches neither end
+    /// of the block, which is the only thing the textual answer looks at.
+    @Test func aSentenceCutAtTheJunctionBetweenTwoLinesIsMarked() throws {
+        func line(_ text: String, y: CGFloat, word: String) -> RecognisedLine {
+            // Flush with the capture's right edge, which is what makes it clipped.
+            let box = CGRect(x: 0.1, y: y, width: 0.9, height: 0.02)
+            let at = (text as NSString).range(of: word)
+            return RecognisedLine(
+                text: text, box: box,
+                words: [RecognisedWord(text: word, utf16Offset: at.location, box: box)],
+                confidence: 1.0)
+        }
+        let lines = [
+            line("First sentence. The reader saw", y: 0.200, word: "reader"),
+            line("a sentence missing words. Last sentence.", y: 0.225, word: "sentence"),
+        ]
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text.contains("reader saw"), "\(read.word.sentence.text)")
+        #expect(read.mayBeCut, "a sentence spliced across a cut edge was reported whole")
+    }
+}

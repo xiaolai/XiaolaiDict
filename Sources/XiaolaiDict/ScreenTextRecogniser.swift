@@ -7,10 +7,13 @@ import XiaolaiDictUI
 /// What the recogniser saw: where it looked, what it read, and how far to trust it.
 struct Recognition: Sendable {
     let word: WordAtPoint
-    /// Vision's confidence in the line the word came from, 0...1.
+    /// Vision's lowest confidence among the observations that make up **the sentence in `word`**,
+    /// 0...1 — not the line the pointer landed on, and not the whole block the sentence was cut
+    /// out of. Both of those describe more or less text than the reader is actually shown.
     let confidence: Double
-    /// The recognised text ran into the edge of the capture, so the sentence may be cut — or
-    /// worse, spliced from two cut lines into one that reads fine and was never on screen.
+    /// The **sentence** ran into the edge of the capture, so it may be cut — or worse, spliced
+    /// from two cut lines into one that reads fine and was never on screen. Scoped the same way as
+    /// `confidence`: a neighbouring sentence touching the edge says nothing about this one.
     let mayBeCut: Bool
     let appName: String?
     let bundleID: String?
@@ -105,6 +108,13 @@ final class ScreenTextRecogniser: Sendable {
         if excluding.contains(bundleID) {
             throw RecognitionError.excludedApp(target.appName ?? bundleID)
         }
+        // **Nothing new is started for a reader who has moved on.** Resolving the target awaits
+        // shareable content, and a hover superseded during that wait would otherwise go on to take
+        // a screenshot and run Vision for an answer nobody is waiting for — holding the one-capture
+        // guard while it did, so the lookup that *is* wanted queues behind it. Two simultaneous
+        // captures deadlock, which is why that guard exists and why occupying it needlessly costs
+        // the next lookup rather than only this one.
+        try Task.checkCancellation()
         let config = SCStreamConfiguration()
         config.sourceRect = target.sourceRect
         config.width = Int(target.region.width * CGFloat(target.filter.pointPixelScale))
@@ -113,6 +123,9 @@ final class ScreenTextRecogniser: Sendable {
         config.captureResolution = .best
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: target.filter, configuration: config)
+        // Recognition is synchronous and the slowest step after the capture; a cancellation that
+        // arrived during the capture should not pay for it.
+        try Task.checkCancellation()
         let lines = try recognise(image)
 
         let cursor = CaptureGeometry.normalized(point, in: target.region)
@@ -124,20 +137,104 @@ final class ScreenTextRecogniser: Sendable {
             at: cursor, in: lines, slack: slack, region: target.region.size) else {
             throw RecognitionError.nothingUnderPointer
         }
-        // A sentence outruns its line, so segment over the whole block of lines around it.
-        let block = LineJoiner.block(around: pick.line, in: lines, region: target.region.size)
-        let clipped = CaptureEdge.clips(block.lineIndices.map { lines[$0].box })
-        guard let word = TextSegmenter.word(
-            in: block.text,
-            utf16Offset: block.offsetShift + lines[pick.line].words[pick.word].utf16Offset,
-            clipped: clipped ? [.start, .end] : [])
-        else { throw RecognitionError.nothingUnderPointer }
-
-        return Recognition(
-            // **The block's confidence, not the pointed-at line's.** The block is what becomes
-            // the sentence, so a low-confidence fragment joined into it has to reach the reader.
-            word: word, confidence: block.confidence, mayBeCut: clipped,
+        guard let read = Self.reading(
+            lines, pick: pick, region: target.region.size,
             appName: target.appName, bundleID: target.bundleID)
+        else { throw RecognitionError.nothingUnderPointer }
+        return read
+    }
+
+    /// **The deterministic half of `read`**, separated so it can be exercised without a screen.
+    ///
+    /// Everything above it is platform effect — consent, window choice, capture, Vision. From here
+    /// down it is recognised lines and a pointer, and the answer is a pure function of them. It was
+    /// inline, which meant the quality signals below could only be checked by capturing a real
+    /// screen, and so were not checked at all.
+    static func reading(
+        _ lines: [RecognisedLine], pick: RecognisedPick, region: CGSize,
+        appName: String?, bundleID: String?
+    ) -> Recognition? {
+        // A sentence outruns its line, so segment over the whole block of lines around it.
+        let block = LineJoiner.block(around: pick.line, in: lines, region: region)
+        let blockClipped = CaptureEdge.clips(block.lineIndices.map { lines[$0].box })
+        let offset = block.offsetShift + lines[pick.line].words[pick.word].utf16Offset
+        guard let word = TextSegmenter.word(
+            in: block.text, utf16Offset: offset,
+            clipped: blockClipped ? [.start, .end] : [])
+        else { return nil }
+
+        // **Both quality signals are scoped to the sentence that is actually returned.** The block
+        // may hold several sentences and only one of them reaches the reader; the block's minimum
+        // confidence marks a perfectly read sentence as doubtful because its neighbour was not,
+        // and the block's clipping says a whole interior sentence may be cut when it cannot be.
+        let span = Self.span(of: word.sentence, containing: offset, in: block.text)
+        let covering = block.lines(covering: span, in: lines)
+        let clipped = CaptureEdge.clips(covering.map { lines[$0].box })
+
+        // **One clipping answer, because the two were answering different questions.** The
+        // geometric test says an *observation* touches the capture's edge; `SentenceContext`
+        // says the *sentence* runs to the text's boundary. Both are needed and neither is the
+        // answer alone: one edge-touching observation reading "First sentence. Middle sentence.
+        // Last sentence." is clipped geometrically while its middle sentence plainly is not, and
+        // reporting the geometric answer told the reader an interior sentence might be cut.
+        //
+        // So the geometric result is an *input* to the segmenter and the segmenter's is the only
+        // output. Cutting again where it differs costs one more segmentation and removes the
+        // possibility of the two disagreeing, rather than relying on them not to.
+        let settled = clipped == blockClipped ? word : TextSegmenter.word(
+            in: block.text, utf16Offset: offset, clipped: clipped ? [.start, .end] : [])
+        guard let settled else { return nil }
+
+        // **And the junction, which neither answer sees.** A sentence running across two
+        // observations passes through the edge between them; if that observation was cut there,
+        // words are missing from the middle of the sentence — while the sentence touches neither
+        // end of the block, so the textual answer is `false`, and it is the *interior* that is
+        // damaged, so an answer scoped to the ends cannot find it. Erring towards warning is the
+        // only safe direction here: a sentence wrongly marked cut costs the reader a caveat, and
+        // one wrongly marked whole is the failure rendering as confidently as a success.
+        let spansAJunction = covering.count > 1 && clipped
+        return Recognition(
+            word: settled,
+            confidence: block.confidence(over: span, in: lines),
+            mayBeCut: settled.sentence.mayBeCut || spansAJunction,
+            appName: appName, bundleID: bundleID)
+    }
+
+    /// Where the returned sentence sits inside the block, UTF-16.
+    ///
+    /// **The occurrence that covers the pointer**, found by searching. An earlier version derived
+    /// it arithmetically — the pointer's offset minus the word's offset inside the sentence — on
+    /// the assumption that the offset handed to the segmenter *is* the word's start. It is not,
+    /// and Chinese is where that shows: joining the fragments `学` and `习。` produces `学习。`,
+    /// which the tokeniser reads as one word beginning in the *first* fragment. The computed start
+    /// then fell inside the word, excluded the fragment the word began in, and reported that
+    /// fragment's poor confidence as the good one's.
+    ///
+    /// Searching is exact here because the pointer disambiguates: a sentence repeated in the block
+    /// has several occurrences and only one of them contains the offset. Falls back to the whole
+    /// block when none does, which can only over-state how much text the quality signals cover —
+    /// the safe direction.
+    static func span(
+        of sentence: SentenceContext, containing offset: Int, in block: String
+    ) -> NSRange {
+        let whole = NSRange(location: 0, length: (block as NSString).length)
+        let text = block as NSString
+        let needle = sentence.text
+        guard !needle.isEmpty else { return whole }
+        var searched = NSRange(location: 0, length: text.length)
+        while searched.length > 0 {
+            let found = text.range(of: needle, options: [], range: searched)
+            guard found.location != NSNotFound else { break }
+            // **Half-open, and the exception that was here picked the wrong sentence.** Accepting
+            // `offset == NSMaxRange(found)` let the occurrence *ending* at the pointer win over the
+            // one starting there: in `学习。学习。`, pointing at offset 3 — the second sentence's
+            // first character — matched the first occurrence (0, 3) and reported its confidence.
+            if NSLocationInRange(offset, found) { return found }
+            let next = found.location + 1
+            guard next < text.length else { break }
+            searched = NSRange(location: next, length: text.length - next)
+        }
+        return whole
     }
 
     private struct Target {
