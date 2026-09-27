@@ -119,6 +119,12 @@ struct RecognisedTextPickerTests {
 }
 
 /// Joining lines back into the block a sentence runs across.
+/// **These fixtures are normalised for a square capture, and now say so.** `block` used to default
+/// its region to `.zero`, which compared a normalised horizontal gap against a normalised vertical
+/// height — right only where the capture is square, and silently wrong everywhere else. The default
+/// is gone; a square size keeps every fixture below meaning what it meant when it was written.
+let squareCapture = CGSize(width: 1000, height: 1000)
+
 struct LineJoinerTests {
     private static func line(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) -> RecognisedLine {
         RecognisedLine(text: text, box: CGRect(x: x, y: y, width: width, height: height), words: [], confidence: 1)
@@ -130,7 +136,7 @@ struct LineJoinerTests {
             Self.line("Serendipity favours the prepared mind,", x: 0.1, y: 0.1, width: 0.8, height: 0.04),
             Self.line("yet the prepared mind is itself", x: 0.1, y: 0.16, width: 0.8, height: 0.04),
         ]
-        let block = LineJoiner.block(around: 1, in: lines)
+        let block = LineJoiner.block(around: 1, in: lines, region: squareCapture)
         #expect(block.text == "Serendipity favours the prepared mind, yet the prepared mind is itself")
         #expect(block.offsetShift == 39)
         #expect(block.lineIndices == [0, 1])
@@ -143,7 +149,7 @@ struct LineJoinerTests {
             Self.line("fixture.txt", x: 0.42, y: 0.02, width: 0.16, height: 0.035),
             Self.line("An ephemeral beauty, soon gone.", x: 0.05, y: 0.09, width: 0.9, height: 0.04),
         ]
-        let block = LineJoiner.block(around: 1, in: lines)
+        let block = LineJoiner.block(around: 1, in: lines, region: squareCapture)
         #expect(block.text == "An ephemeral beauty, soon gone.", "the title bar joined the sentence")
         #expect(block.lineIndices == [1])
     }
@@ -154,7 +160,7 @@ struct LineJoinerTests {
             Self.line("The first paragraph ends here.", x: 0.1, y: 0.1, width: 0.8, height: 0.04),
             Self.line("A second one starts much later.", x: 0.1, y: 0.4, width: 0.8, height: 0.04),
         ]
-        #expect(LineJoiner.block(around: 0, in: lines).lineIndices == [0])
+        #expect(LineJoiner.block(around: 0, in: lines, region: squareCapture).lineIndices == [0])
     }
 
     /// Chinese has no inter-word spaces; inserting one corrupts the sentence.
@@ -163,7 +169,7 @@ struct LineJoinerTests {
             Self.line("船舱里装满了", x: 0.1, y: 0.1, width: 0.5, height: 0.04),
             Self.line("饼干和老鼠。", x: 0.1, y: 0.16, width: 0.5, height: 0.04),
         ]
-        #expect(LineJoiner.block(around: 0, in: lines).text == "船舱里装满了饼干和老鼠。")
+        #expect(LineJoiner.block(around: 0, in: lines, region: squareCapture).text == "船舱里装满了饼干和老鼠。")
     }
 
     /// A trailing hyphen joins without a space — and **keeps the hyphen**.
@@ -178,7 +184,7 @@ struct LineJoinerTests {
             Self.line("a well-", x: 0.1, y: 0.1, width: 0.3, height: 0.04),
             Self.line("known author", x: 0.1, y: 0.16, width: 0.3, height: 0.04),
         ]
-        #expect(LineJoiner.block(around: 0, in: compound).text == "a well-known author",
+        #expect(LineJoiner.block(around: 0, in: compound, region: squareCapture).text == "a well-known author",
                 "a real compound was destroyed")
 
         // The cost of that choice, stated rather than hidden: a word genuinely broken across lines
@@ -188,11 +194,11 @@ struct LineJoinerTests {
             Self.line("an unglamorous prepa-", x: 0.1, y: 0.1, width: 0.8, height: 0.04),
             Self.line("ration nobody witnesses", x: 0.1, y: 0.16, width: 0.8, height: 0.04),
         ]
-        #expect(LineJoiner.block(around: 0, in: broken).text == "an unglamorous prepa-ration nobody witnesses")
+        #expect(LineJoiner.block(around: 0, in: broken, region: squareCapture).text == "an unglamorous prepa-ration nobody witnesses")
     }
 
     @Test func anIndexOutsideTheLinesIsEmpty() {
-        #expect(LineJoiner.block(around: 5, in: []).text.isEmpty)
+        #expect(LineJoiner.block(around: 5, in: [], region: squareCapture).text.isEmpty)
     }
 }
 
@@ -334,7 +340,7 @@ struct ScreenReadingAuditTests {
             Self.line("the right column begins", x: 0.55, y: 0.11, width: 0.40, height: 0.04),
             Self.line("and the left one continues", x: 0.05, y: 0.16, width: 0.40, height: 0.04),
         ]
-        let block = LineJoiner.block(around: 0, in: lines)
+        let block = LineJoiner.block(around: 0, in: lines, region: squareCapture)
         #expect(block.text == "the left column begins and the left one continues")
         #expect(block.lineIndices == [0, 2], "the other column joined, or the continuation was lost")
     }
@@ -345,7 +351,7 @@ struct ScreenReadingAuditTests {
             Self.line("the first paragraph ends", x: 0.05, y: 0.10, width: 0.8, height: 0.04),
             Self.line("a second one starts later", x: 0.05, y: 0.60, width: 0.8, height: 0.04),
         ]
-        #expect(LineJoiner.block(around: 0, in: lines).lineIndices == [0])
+        #expect(LineJoiner.block(around: 0, in: lines, region: squareCapture).lineIndices == [0])
     }
 
     /// Found by the second verify pass: testing only the first scalar excluded a mixed-script word

@@ -44,11 +44,14 @@ struct LineJoinerSplitLineTests {
              x: 0.014, width: 0.351, top: 0.4954, height: 0.0209),
     ]
 
+    /// The full-screen probe these boxes came from, in points.
+    static let band = CGSize(width: 2560, height: 1440)
+
     /// The word the reader pointed at is in the right-hand fragment.
     private static let seed = 2
 
     @Test func theLeftHalfOfTheReadersOwnLineIsNotDropped() {
-        let block = LineJoiner.block(around: Self.seed, in: Self.capture)
+        let block = LineJoiner.block(around: Self.seed, in: Self.capture, region: Self.band)
         #expect(block.text.contains("relabelled"),
                 "the left half of the same screen line was dropped:\n\(block.text)")
     }
@@ -56,14 +59,14 @@ struct LineJoinerSplitLineTests {
     /// And the splice that replaced it is the visible half of the same defect: text from the line
     /// *above* runs straight into the seed, reading as one sentence that was never on screen.
     @Test func theLineAboveIsNotSplicedOntoTheSeed() {
-        let block = LineJoiner.block(around: Self.seed, in: Self.capture)
+        let block = LineJoiner.block(around: Self.seed, in: Self.capture, region: Self.band)
         #expect(!block.text.contains("because That includes"),
                 "two different lines were joined into a sentence nobody wrote:\n\(block.text)")
     }
 
     /// The offset the caller adds to a seed-line offset has to survive whatever the block does.
     @Test func theSeedStillLandsWhereTheShiftSaysItDoes() {
-        let block = LineJoiner.block(around: Self.seed, in: Self.capture)
+        let block = LineJoiner.block(around: Self.seed, in: Self.capture, region: Self.band)
         let text = block.text as NSString
         #expect(block.offsetShift >= 0 && block.offsetShift <= text.length)
         #expect(text.substring(from: block.offsetShift).hasPrefix(Self.capture[Self.seed].text),
@@ -151,5 +154,89 @@ struct RealCaptureBlockTests {
         #expect(block.text.utf16.count > 200, "only \(block.text.utf16.count) characters:\n\(block.text)")
         // Printed because this is the artifact: what the reader's sentence became.
         print("\n  real capture, block around the word:\n  \(block.text)\n")
+    }
+}
+
+/// The three row-grouping defects an audit found in the fix above, each as the geometry that
+/// produces it. All three were reachable; none was covered.
+struct RowGroupingTests {
+    private static let band = CGSize(width: 1000, height: 1000)
+
+    private static func line(_ text: String, _ x: CGFloat, _ y: CGFloat,
+                             _ w: CGFloat = 20, _ h: CGFloat = 10) -> RecognisedLine {
+        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: w, height: h), words: [])
+    }
+
+    /// **A fragment that bridges two others must join them, not pick one.** Grouping appended a
+    /// candidate to the *first* matching group, so with A and C too far apart to match directly,
+    /// B — which sits between them and matches both — joined A and left C stranded. The reader's
+    /// line then ended early.
+    @Test func aBridgingFragmentJoinsBothSides() {
+        let lines = [Self.line("A", 10, 10), Self.line("C", 60, 10.1), Self.line("B", 35, 10.2)]
+        let rows = LineJoiner.rows(in: lines, region: Self.band)
+        #expect(rows.count == 1, "\(rows.count) rows: \(rows.map(\.line.text))")
+        #expect(rows.first?.line.text == "A B C", "out of reading order: \(rows.first?.line.text ?? "")")
+    }
+
+    /// **And a chain must not drift off its own line.** Matching any member let A, B and C enter
+    /// one row although A and C share no band at all — and sorting that row by x then emitted them
+    /// in an order their vertical positions contradict.
+    @Test func aChainDoesNotDriftOntoAnotherLine() {
+        let lines = [Self.line("A", 40, 10, 60), Self.line("B", 20, 14, 15), Self.line("C", 0, 18, 15)]
+        let rows = LineJoiner.rows(in: lines, region: Self.band)
+        let together = rows.first { $0.members.contains(0) && $0.members.contains(2) }
+        #expect(together == nil, "two lines that share no band were made one row")
+    }
+
+    /// **Kana are written without spaces and were not treated as such**, so a line wrapping mid-word
+    /// gained a space that is not in the text.
+    @Test func kanaAreJoinedWithoutASpace() {
+        let lines = [Self.line("カタ", 10, 10), Self.line("カナ", 31, 10)]
+        #expect(LineJoiner.rows(in: lines, region: Self.band).first?.line.text == "カタカナ")
+    }
+
+    /// **And fullwidth Latin is Latin.** It sits inside the fullwidth block, so it was counted as
+    /// a script written without spaces and two words were run together.
+    @Test func fullwidthLatinKeepsItsSpace() {
+        let lines = [Self.line("ＨＥＬＬＯ", 10, 10), Self.line("ＷＯＲＬＤ", 31, 10)]
+        #expect(LineJoiner.rows(in: lines, region: Self.band).first?.line.text == "ＨＥＬＬＯ ＷＯＲＬＤ")
+    }
+
+    /// **A short fragment inside a long one must not block the row.** The first attempt walked
+    /// outwards from the current edge; stepping into B — which sits *within* A — left C, adjacent
+    /// to A, unreachable. It split a row the code before it had held together.
+    @Test func aFragmentInsideAnotherDoesNotStrandWhatIsBeyond() {
+        let lines = [Self.line("A", 10, 10, 100), Self.line("B", 20, 10.1, 10), Self.line("C", 100, 10.2, 20)]
+        let rows = LineJoiner.rows(in: lines, region: Self.band)
+        #expect(rows.count == 1, "\(rows.count) rows: \(rows.map(\.line.text))")
+    }
+
+    /// **A tall seed must not hold together two fragments that share no band with each other.**
+    /// Anchoring the vertical test to the seed alone let a fragment high on its left and one low
+    /// on its right into the same row.
+    @Test func aTallSeedDoesNotUniteTwoDisjointFragments() {
+        let lines = [Self.line("seed", 35, 10, 20, 20), Self.line("left", 10, 11, 20, 8),
+                     Self.line("right", 60, 21, 20, 8)]
+        let rows = LineJoiner.rows(in: lines, region: Self.band)
+        let together = rows.first { $0.members.contains(1) && $0.members.contains(2) }
+        #expect(together == nil, "two fragments with no shared band were made one row")
+    }
+
+    /// **A quality signal must describe the text it is attached to.** The block spans two
+    /// sentences; only one is returned. Scoring the returned one by the block's minimum marks a
+    /// perfectly read sentence doubtful because its neighbour was not.
+    @Test func confidenceIsScopedToTheSpanItDescribes() {
+        let lines = [
+            RecognisedLine(text: "A badly read sentence.", box: CGRect(x: 0, y: 0, width: 50, height: 10),
+                           words: [], confidence: 0.30),
+            RecognisedLine(text: "A perfectly read one.", box: CGRect(x: 0, y: 12, width: 50, height: 10),
+                           words: [], confidence: 1.0),
+        ]
+        let block = LineJoiner.block(around: 1, in: lines, region: Self.band)
+        let second = try! #require(block.offsets[1])
+        let span = NSRange(location: second, length: lines[1].text.utf16.count)
+        #expect(block.confidence == 0.30, "the block as a whole is still as weak as its worst line")
+        #expect(block.confidence(over: span, in: lines) == 1.0,
+                "the good sentence was marked doubtful by its neighbour")
     }
 }
