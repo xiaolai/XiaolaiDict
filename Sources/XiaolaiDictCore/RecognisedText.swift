@@ -99,11 +99,21 @@ public struct TextBlock: Equatable, Sendable {
     public let offsetShift: Int
     /// Indices of the lines joined, in the order they were read.
     public let lineIndices: [Int]
+    /// **The lowest confidence of any line in it**, because the whole block is what the reader is
+    /// shown and what the sense selector is asked about — not just the line the word sat on.
+    ///
+    /// Measured on a reader's capture 2026-09-27: the line they pointed at came back at 1.00 while
+    /// the fragment joined to it, standing where "because" was, came back at **0.30** as
+    /// `00C211٢0`. Reporting the pointed-at line's confidence would have rendered that sentence as
+    /// certain. `CaptureQuality.isDoubtful` is the reader's warning and it can only be as good as
+    /// the number it is given.
+    public let confidence: Double
 
-    public init(text: String, offsetShift: Int, lineIndices: [Int] = []) {
+    public init(text: String, offsetShift: Int, lineIndices: [Int] = [], confidence: Double = 1) {
         self.text = text
         self.offsetShift = offsetShift
         self.lineIndices = lineIndices
+        self.confidence = confidence
     }
 }
 
@@ -138,7 +148,9 @@ public enum LineJoiner {
         let ordered = rows.enumerated().map { (offset: $0.offset, element: $0.element.line) }
             .sorted { $0.element.box.minY < $1.element.box.minY }
         guard let seed = ordered.firstIndex(where: { rows[$0.offset].members.contains(index) }) else {
-            return TextBlock(text: lines[index].text, offsetShift: 0, lineIndices: [index])
+            return TextBlock(
+                text: lines[index].text, offsetShift: 0, lineIndices: [index],
+                confidence: lines[index].confidence)
         }
 
         // Which lines belong to the block, walking out from the seed. A line from *another column*
@@ -184,9 +196,10 @@ public enum LineJoiner {
             if position == seed { shift = text.utf16.count + separator.utf16.count + within }
             text += separator + line
         }
+        let joined = members.flatMap { rows[ordered[$0].offset].members }
         return TextBlock(
-            text: text, offsetShift: shift,
-            lineIndices: members.flatMap { rows[ordered[$0].offset].members })
+            text: text, offsetShift: shift, lineIndices: joined,
+            confidence: joined.map { lines[$0].confidence }.min() ?? 1)
     }
 
     /// One visual line, however many observations Vision made of it.

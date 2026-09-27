@@ -96,7 +96,11 @@ struct RealCaptureBlockTests {
     static let capture: [RecognisedLine] = [
         line("here - it lives in storage-cupboard and comes back with it.", x: 0.0145, width: 0.2776, top: 0.0000, height: 0.1316),
         line("What stored: Crates/spare/{lamps1.txt, tally.txt, shade_ledgers.txt} are still in bins,", x: 0.0145, width: 0.4099, top: 0.3421, height: 0.1849),
-        line("00C211٢0", x: 0.4230, width: 0.0378, top: 0.3947, height: 0.0526),
+        // Confidence 0.30 — this is the observation standing where "because" was misread.
+        RecognisedLine(
+            text: "00C211٢0",
+            box: CGRect(x: 0.4230, y: 0.3947, width: 0.0378, height: 0.0526),
+            words: [], confidence: 0.30),
         line("they're relabelled and all haven't moved them.", x: 0.0160, width: 0.2180, top: 0.5263, height: 0.1584),
         line("That includes our twelve spare lamp-shade frames,", x: 0.2340, width: 0.2326, top: 0.5263, height: 0.1584),
         line("which are therefore sitting untouched at home right now - worth knowing if", x: 0.0145, width: 0.3503, top: 0.6842, height: 0.1852),
@@ -129,6 +133,17 @@ struct RealCaptureBlockTests {
     }
 
     /// And the paragraph the reader is in comes back, not one line of it.
+    /// **A sentence is only as trustworthy as its least trustworthy fragment.** The reader pointed
+    /// at a line Vision read at 1.00; the block joined to it carries one read at 0.30. Reporting
+    /// the pointed-at line's number would render that sentence as certain, which is the one thing
+    /// `CaptureQuality.isDoubtful` exists to prevent.
+    @Test func theBlockIsOnlyAsConfidentAsItsWorstLine() {
+        let block = LineJoiner.block(around: Self.seed, in: Self.capture, region: Self.band)
+        #expect(block.text.contains("00C211"), "the low-confidence fragment is not even in the block")
+        #expect(block.confidence == 0.30, "the block reported \(block.confidence)")
+        #expect(block.confidence < CaptureQuality.doubtful, "this capture must read as doubtful")
+    }
+
     @Test func theParagraphAroundTheWordIsRecovered() {
         let block = LineJoiner.block(around: Self.seed, in: Self.capture, region: Self.band)
         #expect(block.text.contains("are still in bins"), "\(block.text)")

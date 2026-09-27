@@ -134,7 +134,9 @@ final class ScreenTextRecogniser: Sendable {
         else { throw RecognitionError.nothingUnderPointer }
 
         return Recognition(
-            word: word, confidence: lines[pick.line].confidence, mayBeCut: clipped,
+            // **The block's confidence, not the pointed-at line's.** The block is what becomes
+            // the sentence, so a low-confidence fragment joined into it has to reach the reader.
+            word: word, confidence: block.confidence, mayBeCut: clipped,
             appName: target.appName, bundleID: target.bundleID)
     }
 
