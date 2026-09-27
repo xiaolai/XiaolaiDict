@@ -50,6 +50,7 @@ not built. Every row cites the test or the measurement, not an intention.
 | Decompress `KeyText.data` chunks | Implemented | `theKeyIndexIsWalkedByStrideNotBySize`. Walked by the **fixed 8,192 stride**, because the per-chunk size field is **0 in some chunks** and a size-driven walk returns a partial index that looks complete |
 | Survey a dictionary against every fact known | Implemented | `DictionarySurvey.measure` returns `DictionaryFacts` in one pass: container, senses, depth retention, which id attribute actually carries ids, headword hygiene, keys, and a usability verdict. `DICTIONARIES.md` is generated from it over all 86 |
 | Parse `KeyText.data` into keys | Implemented | `KeyIndexReader`. **252,428 groups and 396,529 key strings** from NOAD, against the 271,029 records Apple's index reports. 39.0% of its groups hold a phrase; `KeyIndexReaderTests` covers the format on invented bytes |
+| Resolve an inflected or variant form to its entry | Implemented | Every form tested lands on the right base entry: `children`→`child`, `went`→`go`, `was`→`be`, `oxen`→`ox`, `feet`→`foot`, `mice`→`mouse`, plus regular forms. NOAD yields **259,497 distinct key strings for 111,579 entries**. Resolution is to the **entry**, never to the sense |
 | Resolve a key to its entry | Implemented, gated | `KeyIndexBuilder`. NOAD **250,196 of 252,428 (99.12%)**; four other dictionaries resolve 100%. The chunk table is *derived* by intersection, not reverse-engineered — see `RESEARCH.md` §5 |
 | Withhold a mapping that cannot be certified | Implemented | `KeyResolutionReport.confidence` over all 86: **64 verified, 10 unverified, 10 disagreeing, 2 without keys**. Agreement measures a chain — mapping, headword extraction, and whether the oracle can see that language — so a low score withholds rather than impeaches |
 | Split an entry into senses | Implemented | `EntryIndexer`. `x_xd0` is the part-of-speech block, `x_xdN` a sense at that dictionary's own depth, anything deeper belongs to the sense above. **Depth 1 for 79 of 84; five nest deeper** — see the depth row below |
@@ -71,7 +72,7 @@ they are listed rather than silently carried.
 |---|---|---|
 | Headword capture takes all text in `x_xh0` | Pronunciations, variants and homograph labels land in the headword | `EntryIndexer` §headword |
 | Headword, part-of-speech and definition share one capture buffer | A nested part-of-speech capture can reset text belonging to an open outer region | `EntryIndexer.Reader.buffer` |
-| Part of speech is not scoped to its `x_xd0` | A later block with no label inherits the previous block's part of speech | `EntryIndexer.Reader.currentPOS` |
+| Sense nesting is flattened and the numbering discarded | `x_xd1` is a numbered sense and `x_xd1sub` its subsenses. Several subsenses become one sense joined with `; `, so `1a`/`1b` cannot be told apart, and **nothing carries the sense number or a parent** — a UI wanting "sense 1: a, b" cannot get it here | `EntryIndexer`, `IndexedSense` |
 | Nested matching sense blocks overwrite `senseDepth`/`pendingID` | Closing an inner block clears the outer context | `EntryIndexer.Reader` |
 | CDATA is dropped | `foundCharacters` is implemented, `foundCDATA` is not, so a CDATA definition reads empty | `EntryIndexer.Reader` |
 | Namespace resolution is narrower than the docstring says | Only a literal `d:` prefix is matched, not the namespace URI | `EntryIndexer.Reader.dictionaryAttribute` |
@@ -90,6 +91,7 @@ capabilities in §2 are the foundation of a rebuild tool and are easy to mistake
 
 | Missing | Why it matters |
 |---|---|
+| **Sub-entry senses: phrasal verbs and idioms** | The largest gap measured. They live in `x_xo*` — `x_xo1` the sub-entry, `x_xo2` a numbered sense inside it, `x_xo2sub` the definition — and this module reads only `x_xd*`. NOAD declares **197,761 definitions and the indexer reaches 147,569, 74.6%**; ODE 75.5%. The missing quarter is **68,856 sub-entries** in NOAD, 72,590 in ODE. Their keys resolve fine — `give up` finds `give`'s entry — but the phrasal verb's own senses were never extracted, so nothing can say *which* sense it is |
 | A persistence layer | No database is written. `libsqlite3` ships with macOS, so this needs no dependency — but the on-disk shape is a decision, not an implementation detail |
 | The rebuild driver | Walk the installed set, report progress, rebuild on a dictionary update. The pieces exist; the orchestration does not |
 | Phrase matching on hover | Measured elsewhere at **39.2% coverage, 86.6% recall, 83.8% ranked first** from NOAD alone — but that was a different implementation, not this module |
@@ -123,5 +125,6 @@ Recorded because each produced a plausible, wrong number that survived a first l
 | `Tools/dictionary-depths` establishes the depth claim | **No such file.** The tests do |
 | A pointer that lands on a record resolved correctly | **Still no** — "resolved" and "correct" are different measurements. But the example this claim was made with was wrong: see the row below |
 | `zh_TW-en.DrEye` resolves 96.5% of its keys to the wrong entry | **False, and stated in a commit message before it was checked.** That came from an oracle asking whether the headword *contained* the key; DrEye interleaves Bopomofo between every character, so containment could never match. Under `KeyAgreement` it scores **100.0%** and is verified. The measurement was broken, not the dictionary |
+| Retention of 100% means every definition is read | **No.** It counts `d:def=`, and a sub-entry definition carries `class=\"df\"` with no `d:def` attribute. NOAD measured 100% retention while a quarter of its definitions were never reached, because they were not in the denominator either |
 | Low agreement means the key mapping is wrong | **No.** It means the mapping, the headword extraction, or the oracle's blind spot — three causes this module cannot tell apart. `he.oup` scores 6.0% and yields `Tranz.` as a headword |
 | An adapter may declare its dictionaries' sense depth | **No** — it declares the id attribute only. `LanguageAdapters.profile` consults adapters before the measured override table, so a hardcoded depth there silently outranks the retention measurement. Held by `anAdapterCannotOverrideAMeasuredDepth` |

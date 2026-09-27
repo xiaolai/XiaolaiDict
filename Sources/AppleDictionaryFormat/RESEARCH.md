@@ -164,14 +164,85 @@ oracle outside this module, and that is the honest next step rather than tuning 
 `hood`, `&c.` → `etc.` — inflections, elisions and variants. **39.0% of its groups hold a phrase.** This
 is the whole reason to read the file: scanning entries finds headwords, and a reader who meets `'roos` or
 `mass-produced` on a page is not looking up a headword.
-## 7. Method, stated once because it was earned five times
+## 7. What is indexed, and what is not — inflections, POS, nesting, phrases
+
+Asked directly, and measured rather than assumed. The answers differ sharply per question.
+
+### Inflections — yes, and completely
+
+Every form tested resolves to the right base entry. Irregulars: `children`→`child`, `went`→`go 1`,
+`was`→`be`, `oxen`→`ox`, `feet`→`foot`, `mice`→`mouse`, `geese`→`goose`, `ran`→`run`. Regulars: `dogs`,
+`running`, `happier`, `walked`, `studies` all land correctly. NOAD carries **259,497 distinct key strings
+for 111,579 entries** — 2.3 ways of finding an average entry.
+
+**But resolution is to the entry, never to the sense.** `ran` gives you `run`'s entry, not which of its
+senses is meant. That is what the sense ladder in the app is for; it is not something the index can answer.
+
+### Part of speech — present, and it was wrong
+
+Coverage is high: **median 98.8% of senses labelled**, 21 dictionaries at 100%. Seven label under half;
+`ja.Daijirin` labels 19.2%, and one Cantonese dictionary labels none, so anything narrowing by part of
+speech must treat its absence as "unknown" rather than as "no match".
+
+The label itself was **wrong** for a shape that occurs in real entries. `currentPOS` was set when a `d:pos`
+element closed and never cleared, so a second `x_xd0` block declaring no part of speech inherited the
+first's — a verb sense reported as a noun. Now scoped to its own block and held by
+`partOfSpeechIsScopedToItsOwnBlock`. Wrong in the worst direction: a narrowing filter would have selected
+the wrong senses rather than none, which looks like an answer.
+
+### Nested senses — flattened, and the hierarchy is gone
+
+The structure is `x_xd0` → `x_xd1` (a numbered sense) → `x_xd1sub` (the subsense actually holding
+`d:def`). Where a numbered sense holds several subsenses they are **joined with `; ` into one sense**.
+Joining is the right call — the alternative, keeping the first, destroyed five of six co-equal glosses in
+one real entry — but `1a` and `1b` become indistinguishable and **nothing carries the sense number or a
+parent**. In NOAD the counts happen to be equal (147,569 senses for 147,569 `d:def=`), so no joining
+occurs there in practice; in dictionaries that do nest, it does.
+
+### Phrases, idioms and phrasal verbs — the largest gap in the module
+
+Three different situations, and only one of them works.
+
+| kind | example | outcome |
+|---|---|---|
+| multi-word **entry** | `ice cream`, `hot dog`, `New York`, `point of view` | **works** — its own entry, its own senses |
+| **phrasal verb** | `give up`, `look after`, `put up with`, `take off` | key resolves to the *base* entry (`give`, `look`, `put`, `take`); the phrasal verb's senses are never read |
+| **idiom** | `kick the bucket`, `bite the bullet`, `under the weather` | same — resolves to `kick`, `bite`, `weather` |
+
+The reason is a namespace this module does not touch. A phrasal verb is written:
+
+```
+<span class="subEntry x_xo1"><span class="l x_xoh">give up </span>
+  <span class="se2 x_xo2 hasSn"><span class="gp sn">1</span>
+    <span class="msDict x_xo2sub"><span class="df">…</span>
+```
+
+`x_xo1` / `x_xo2` / `x_xo2sub` mirror `x_xd0` / `x_xd1` / `x_xd1sub`, and the indexer reads only `x_xd*`.
+The `give` entry holds **76 definition elements and 58 sense numbers; the indexer emits 8 senses**, none
+mentioning `give up`.
+
+Measured over whole dictionaries:
+
+| dictionary | definitions declared (`class="df"`) | senses read | reached | sub-entries |
+|---|---|---|---|---|
+| `NOAD` | 197,761 | 147,569 | **74.6%** | 68,856 |
+| `ODE` | 205,427 | 155,146 | **75.5%** | 72,590 |
+
+**A quarter of the two English dictionaries this project depends on is unread.** And the retention metric
+did not show it: a sub-entry definition carries `class="df"` with **no `d:def` attribute**, so it was absent
+from both sides of the ratio and retention reported a clean 100%.
+
+One key is missing even at the index level: `raining cats and dogs` is not there — stored under another
+form. Every other idiom tested was present as a key.
+
+## 8. Method, stated once because it was earned five times
 
 **Measure through the code that will ship, not through a side probe.** A side probe disagreed with the
 real extraction path five times during this work and the path was right every time. The corollary:
 a green gated test proves nothing when its bundles are absent, so the test prints what it measured and
 the count is read, not assumed.
 
-## 8. What licensing forbids
+## 9. What licensing forbids
 
 Dictionary text is licensed to the reader whose Mac it is on. **No bundle content is vendored into this
 repository and no test fixture quotes it** — fixtures are invented markup. The measurements above ran
