@@ -261,8 +261,8 @@ struct LookupPane: View {
             // opened this pane still gets the default, so the place they will go looking when
             // nothing happens over a Chinese word has to answer them.
             Text("""
-                 A hover only fires while the key is held and the pointer has stopped. \
-                 There is no setting for holding nothing. \
+                 A hover only fires when you ask with the key and the pointer has stopped. \
+                 There is no setting for asking with nothing. \
                  Hovering a word in a script you have not ticked looks nothing up, and your \
                  reading history shows only the scripts ticked here. Looking a word up from \
                  a selection still works whatever it is written in. Nothing is deleted: \
@@ -330,7 +330,19 @@ struct LookupPane: View {
         } header: {
             Text("Never look up on these sites")
         } footer: {
-            Text("Subdomains are covered too, so example.com also excludes docs.example.com.")
+            // **This says what is true, which is not what the header promises.** An audit found
+            // the list is never consulted: the one `HoverSite` built in the hover path carries no
+            // host, so `excludedHosts` cannot refuse anything. A control that quietly does nothing
+            // is worse than no control, and worst of all when a reader is relying on it to keep a
+            // site out of their history. Enforcing it means resolving the page's host *before*
+            // the capture — which the gate deliberately does not do today, because the cheapest
+            // refusal must not touch Accessibility — so it is a decision, not a patch, and until
+            // it is made the honest thing is to say so here rather than let the header imply it.
+            Text("""
+                 Not yet enforced — hovering is not refused on these sites. \
+                 What you add here is kept and will apply once it is. \
+                 Subdomains are covered too, so example.com also excludes docs.example.com.
+                 """)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
