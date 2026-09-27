@@ -416,47 +416,142 @@ struct HoverGestureTests {
     }
 }
 
-/// The detector itself: two presses of one key, close enough together, and nothing counted twice.
+/// The detector itself: two presses of one key, close enough together, with nothing in between.
 ///
-/// Each press is bound before it is asserted on: `#expect` captures its operands immutably, so a
-/// `mutating` call cannot go inside the macro.
+/// Times are the events' own, in seconds — `NSEvent.timestamp` — not a clock read when the
+/// callback runs. Each press is bound before it is asserted on, because `#expect` captures its
+/// operands immutably and a `mutating` call cannot go inside the macro.
 struct TapCounterTests {
-    private static let start = ContinuousClock.now
-
     @Test func twoPressesInsideTheWindowAreADoubleTap() {
         var counter = TapCounter()
-        let first = counter.pressed(at: Self.start)
-        let second = counter.pressed(at: Self.start + .milliseconds(150))
+        let first = counter.pressed(at: 100)
+        let second = counter.pressed(at: 100.15)
         #expect(!first)
         #expect(second)
     }
 
     @Test func twoPressesTooFarApartAreTwoSinglePresses() {
         var counter = TapCounter()
-        let first = counter.pressed(at: Self.start)
-        let late = counter.pressed(at: Self.start + TapCounter.window + .milliseconds(1))
-        #expect(!first)
+        _ = counter.pressed(at: 100)
+        let late = counter.pressed(at: 100 + TapCounter.window + 0.001)
         #expect(!late, "a press outside the window completed a double-tap")
     }
 
-    /// **A third press is not a second double-tap.** Without resetting, a key held down long
-    /// enough to auto-repeat — or an excited reader — would fire a lookup on every press after
-    /// the first, which is the accidental firing this gesture exists to avoid.
+    /// **A third press is not a second double-tap.** Without resetting, a key held long enough to
+    /// auto-repeat would fire a lookup on every press after the first.
     @Test func aThirdPressStartsOver() {
         var counter = TapCounter()
-        let one = counter.pressed(at: Self.start)
-        let two = counter.pressed(at: Self.start + .milliseconds(100))
-        let three = counter.pressed(at: Self.start + .milliseconds(200))
-        let four = counter.pressed(at: Self.start + .milliseconds(300))
-        #expect([one, two, three, four] == [false, true, false, true],
-                "presses read as \([one, two, three, four])")
+        let presses = [100.0, 100.1, 100.2, 100.3].map { counter.pressed(at: $0) }
+        #expect(presses == [false, true, false, true], "presses read as \(presses)")
     }
 
-    /// The far edge of the window counts, so the boundary is not a coin toss.
-    @Test func theWindowsOwnEdgeCounts() {
+    /// **The boundary is asserted on either side of itself, never on it.**
+    ///
+    /// `100 + 0.4 - 100` is not `0.4` in binary floating point, and `NSEvent.timestamp` is seconds
+    /// since boot — six figures, where the error is larger still. A test sitting exactly on the
+    /// edge decides on the last bit of a subtraction, which is the coin toss the window exists to
+    /// avoid. What matters, and what is checked, is that a press comfortably inside counts and one
+    /// comfortably outside does not; the reader cannot tell a millisecond either way.
+    @Test func pressesEitherSideOfTheWindowAreDecidedTheObviousWay() {
+        var inside = TapCounter()
+        _ = inside.pressed(at: 12_345.0)
+        let within = inside.pressed(at: 12_345.0 + TapCounter.window - 0.01)
+        #expect(within, "a press inside the window did not complete the pair")
+
+        var outside = TapCounter()
+        _ = outside.pressed(at: 12_345.0)
+        let beyond = outside.pressed(at: 12_345.0 + TapCounter.window + 0.01)
+        #expect(!beyond, "a press outside the window completed the pair")
+    }
+
+    /// **The finding this gesture would otherwise have reproduced.** Watching modifier
+    /// transitions alone, two ⌥-arrows inside the window are two presses of ⌥ — and the reader
+    /// gets a dictionary lookup for moving the caret. So is ⌘C then ⌘V. Anything between the
+    /// presses cancels the pair.
+    @Test func aKeystrokeBetweenThePressesCancelsThePair() {
         var counter = TapCounter()
-        _ = counter.pressed(at: Self.start)
-        let atTheEdge = counter.pressed(at: Self.start + TapCounter.window)
-        #expect(atTheEdge)
+        _ = counter.pressed(at: 100)      // ⌥ down for ⌥←
+        counter.invalidate()              // ← pressed
+        let second = counter.pressed(at: 100.1)  // ⌥ down for the next ⌥←
+        #expect(!second, "two ⌥-arrow shortcuts read as a double-tap")
+    }
+
+    /// And a cancelled pair is cancelled, not merely delayed: the next press starts a fresh one.
+    @Test func afterCancellingTheNextPairStillWorks() {
+        var counter = TapCounter()
+        _ = counter.pressed(at: 100)
+        counter.invalidate()
+        let first = counter.pressed(at: 100.1)
+        let second = counter.pressed(at: 100.2)
+        #expect(!first)
+        #expect(second, "a cancelled pair left the counter unable to recognise the next one")
+    }
+
+    /// An event delivered out of order must not complete a pair by arriving *before* the first.
+    @Test func aPressEarlierThanTheFirstDoesNotComplete() {
+        var counter = TapCounter()
+        _ = counter.pressed(at: 100)
+        let backwards = counter.pressed(at: 99.9)
+        #expect(!backwards)
+    }
+}
+
+/// **The gesture rule against event sequences**, which is what a grep of the watcher could not
+/// check — and what let a chord between two presses complete a pair.
+struct GestureRecogniserTests {
+    private static func asked(_ inputs: [GestureRecogniser.Input], gesture: HoverGesture = .doubleTap)
+        -> [Bool] {
+        var recogniser = GestureRecogniser()
+        return inputs.map { recogniser.saw($0, gesture: gesture, modifier: .option) }
+    }
+
+    private static func tap(_ at: TimeInterval) -> GestureRecogniser.Input { .modifiers([.option], at: at) }
+    private static func release(_ at: TimeInterval) -> GestureRecogniser.Input { .modifiers([], at: at) }
+
+    @Test func twoTapsAreTheGesture() {
+        let asked = Self.asked([Self.tap(100), Self.release(100.05), Self.tap(100.1)])
+        #expect(asked == [false, false, true], "read as \(asked)")
+    }
+
+    /// **The residual half of the shortcut finding.** Key and button events cancel a pair, but a
+    /// *chord* arrives as a modifier change: ⌥ down, ⌘ down, both up, ⌥ down is two presses of ⌥
+    /// inside the window with a ⌘V in the middle. Nothing about it is a request for a lookup.
+    @Test func aChordBetweenTheTapsCancelsThePair() {
+        let asked = Self.asked([
+            Self.tap(100),                                   // ⌥ down
+            .modifiers([.option, .command], at: 100.02),     // ⌘ joins — a shortcut, not a tap
+            Self.release(100.06),
+            Self.tap(100.1),                                 // ⌥ down again
+        ])
+        #expect(!asked.contains(true), "a chord between the presses completed the gesture: \(asked)")
+    }
+
+    /// A keystroke or a click between them cancels it too — the case already fixed, held here so
+    /// the two halves of the rule are checked in one place.
+    @Test func otherInputBetweenTheTapsCancelsThePair() {
+        let asked = Self.asked([Self.tap(100), .otherInput, Self.tap(100.1)])
+        #expect(!asked.contains(true), "read as \(asked)")
+    }
+
+    /// Under the hold gesture nothing is ever "asked" by a tap; holding is read elsewhere.
+    @Test func theTapRuleIsSilentUnderTheHoldGesture() {
+        let asked = Self.asked([Self.tap(100), Self.release(100.05), Self.tap(100.1)], gesture: .hold)
+        #expect(!asked.contains(true))
+    }
+
+    /// **A press is a transition, not a state.** Repeated events reporting the key still down —
+    /// which `flagsChanged` produces whenever any other modifier moves — are not presses.
+    @Test func repeatedHeldReportsAreNotPresses() {
+        let asked = Self.asked([Self.tap(100), Self.tap(100.05), Self.tap(100.1)])
+        #expect(!asked.contains(true), "a held key read as repeated presses: \(asked)")
+    }
+
+    @Test func resetForgetsAHalfMadePair() {
+        var recogniser = GestureRecogniser()
+        _ = recogniser.saw(Self.tap(100), gesture: .doubleTap, modifier: .option)
+        recogniser.reset()
+        _ = recogniser.saw(Self.release(100.05), gesture: .doubleTap, modifier: .option)
+        let after = recogniser.saw(Self.tap(100.1), gesture: .doubleTap, modifier: .option)
+        #expect(!after, "a pair survived the watcher being stopped")
     }
 }

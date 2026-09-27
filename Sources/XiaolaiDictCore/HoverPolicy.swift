@@ -1,12 +1,6 @@
 import DictionaryModel
 import Foundation
 
-/// The modifier the reader must hold before the pointer does anything at all.
-///
-/// Hover is **opt-in per lookup, not per session** (`feature-ledger-ux.md` A4): without this, the
-/// pointer resting anywhere is a lookup, and the reader cannot read a page without being helped.
-/// There is no "none" case on purpose — a hover with no modifier is the design this exists to
-/// prevent, and making it unrepresentable is cheaper than remembering not to configure it.
 /// **How the reader asks** — the gesture, which is a separate question from which key it uses.
 ///
 /// Holding is a weak statement of intent, because every modifier already means something: ⌥ is
@@ -40,35 +34,105 @@ public enum HoverGesture: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// Two presses of one key, close enough together to be one gesture.
+/// Two presses of one key, close enough together, **with nothing in between**.
 ///
-/// A value rather than a timer: it is handed the instant of each press and answers whether that
-/// press completed a double-tap, which makes the whole rule testable without a clock or a key.
+/// A value rather than a timer: it is handed each event and answers whether that press completed
+/// a double-tap, which makes the whole rule testable without a clock or a keyboard.
 public struct TapCounter: Sendable {
     /// **How long the second press has to arrive.** Long enough not to demand dexterity, short
     /// enough that two unrelated presses of a key as busy as ⌥ rarely fall inside it.
-    public static let window = Duration.milliseconds(400)
+    public static let window: TimeInterval = 0.4
 
-    private var first: ContinuousClock.Instant?
+    private var first: TimeInterval?
 
     public init() {}
 
     /// Whether this press completed a double-tap.
     ///
+    /// **Times come from the events themselves**, not from a clock read when the callback runs.
+    /// Global event monitors are delivered asynchronously, so `NSEvent.modifierFlags` and "now"
+    /// describe when this process got around to looking rather than when the reader pressed the
+    /// key — which mistimes the window under load, exactly when callbacks are late.
+    ///
     /// **A completed tap resets the count**, so a third press begins a new pair rather than
-    /// completing a second one. Without that, a key held down long enough to auto-repeat — or a
-    /// reader tapping three times — would fire a lookup on every press after the first, which is
-    /// the accidental firing this gesture exists to avoid.
-    public mutating func pressed(at instant: ContinuousClock.Instant) -> Bool {
-        if let first, instant - first <= Self.window {
+    /// completing a second. Without that, a key held down long enough to auto-repeat — or a
+    /// reader tapping three times — would fire a lookup on every press after the first.
+    public mutating func pressed(at instant: TimeInterval) -> Bool {
+        if let first, instant - first <= Self.window, instant >= first {
             self.first = nil
             return true
         }
         first = instant
         return false
     }
+
+    /// **Anything else the reader did cancels the pair**, and this is what makes the gesture mean
+    /// something. Watching modifier transitions alone, `⌥←` twice in quick succession is two
+    /// presses of ⌥ inside the window — so is `⌘C` then `⌘V` — and the reader gets a lookup for
+    /// editing text. That is precisely the accidental firing the gesture exists to remove, so
+    /// without this the feature argues against itself.
+    public mutating func invalidate() { first = nil }
 }
 
+/// **The whole of the gesture rule, as a value.** Events in, "did the reader just ask" out.
+///
+/// It exists because the rule was spread across a watcher that reads AppKit and the clock
+/// directly, so the only checks possible on it were greps of the source — which cannot see event
+/// ordering, and did not see that a chord between two presses still completed a pair.
+public struct GestureRecogniser: Sendable {
+    /// What the recogniser is told. Everything that is not a modifier change is `otherInput`:
+    /// which key or button it was does not matter, only that the reader did something else.
+    public enum Input: Sendable, Equatable {
+        /// The modifiers now held, and when the event says so.
+        case modifiers(Set<HoverModifier>, at: TimeInterval)
+        case otherInput
+    }
+
+    private var taps = TapCounter()
+    private var wasHeld = false
+
+    public init() {}
+
+    /// Whether this input completed the reader's gesture.
+    ///
+    /// **A chord is not a tap.** Holding ⌥ and pressing ⌘ leaves ⌥ down, so no press is seen —
+    /// but releasing both and pressing ⌥ again would otherwise complete a pair made of two
+    /// *shortcut* presses. Any other modifier joining the set cancels, which is the same rule
+    /// `otherInput` applies to keys and buttons, extended to the only input that arrives as a
+    /// modifier change.
+    public mutating func saw(
+        _ input: Input, gesture: HoverGesture, modifier: HoverModifier
+    ) -> Bool {
+        switch input {
+        case .otherInput:
+            taps.invalidate()
+            return false
+        case .modifiers(let held, let instant):
+            let isHeld = held.contains(modifier)
+            defer { wasHeld = isHeld }
+            if held.subtracting([modifier]).isEmpty == false { taps.invalidate(); return false }
+            guard gesture == .doubleTap, isHeld, !wasHeld else { return false }
+            return taps.pressed(at: instant)
+        }
+    }
+
+    /// **State does not outlive the watching.** Left set, a modifier released while stopped makes
+    /// the first press after a restart invisible, and a half-finished pair from minutes ago can
+    /// complete against an unrelated press.
+    public mutating func reset() {
+        taps = TapCounter()
+        wasHeld = false
+    }
+}
+
+/// The key the reader uses to ask, whether they hold it or tap it — see `HoverGesture`, which is
+/// the other half of the question.
+///
+/// Hover is **opt-in per lookup, not per session** (`feature-ledger-ux.md` A4): without this, the
+/// pointer resting anywhere is a lookup, and the reader cannot read a page without being helped.
+///
+/// There is no "none" case on purpose — a hover with no key is the design this exists to
+/// prevent, and making it unrepresentable is cheaper than remembering not to configure it.
 public enum HoverModifier: String, Codable, Sendable, CaseIterable {
     case option
     case control
@@ -178,9 +242,9 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     public var excludedApps: Set<String>
     /// Sites XiaolaiDict never looks things up on (A3), by host.
     public var excludedHosts: Set<String>
-    /// How long the pointer must be still. Debouncing is non-negotiable.
     /// How the reader asks for a lookup. `.hold` is what shipped and stays the default.
     public var gesture: HoverGesture
+    /// How long the pointer must be still. Debouncing is non-negotiable.
     public var settleMilliseconds: Int
     /// The scripts the reader studies. A word in any other is read and then dropped.
     ///

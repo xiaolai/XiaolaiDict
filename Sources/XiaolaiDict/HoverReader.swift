@@ -83,6 +83,13 @@ final class HoverReader {
     ) async -> Outcome {
         let policy = policy()
 
+        // **A completed double-tap is a new request, and says so.** Repeat suppression is lifted
+        // by the *absence* of the gesture — under `.hold` that is the key coming up, which happens
+        // constantly. Under `.doubleTap` the clearing read is skipped whenever a capture is in
+        // flight, so a reader who taps the same word twice in a row was refused as `.samePlace`
+        // for a request they had plainly just made.
+        if tappedTwice { lastLookedUp = nil }
+
         // **The cheap refusals first, before any IPC.** A reader who is simply reading pays one
         // set comparison and a clock read — not an Accessibility round trip into another process.
         // Resolving the target first, to learn which app owns the pixel, quietly undid that.

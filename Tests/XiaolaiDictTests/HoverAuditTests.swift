@@ -173,35 +173,65 @@ struct ScriptFilterWiringTests {
     }
 }
 
-/// **The gesture has to reach the watcher, not merely exist in the policy.**
+/// **The wire, and only the wire.**
 ///
-/// This project has been bitten twice by a setting that was complete, unit-tested and wired to
-/// nothing — `HoverPause`, whose `.paused` gate could not fire for months, and
-/// `LookupRunner.priorEncounters`, which was stored and never read. Both passed every test of the
-/// *value*. The check that catches the class is an assertion about the **wire**: that the thing
-/// downstream actually reads the setting.
+/// These read the watcher's source, which is a blunt instrument: an audit's finding #11 was that
+/// grepping cannot see event ordering, and it was right — a chord between two presses completed
+/// the gesture while every one of these passed. The rule now lives in `GestureRecogniser`, where
+/// `GestureRecogniserTests` drives it with event sequences. What is left here is the part a value
+/// test genuinely cannot reach: that the watcher *delegates* to it and hands it real events.
+///
+/// The class this guards is the one this project has been bitten by twice — `HoverPause` and
+/// `LookupRunner.priorEncounters`, both complete, both unit-tested, both wired to nothing.
 struct HoverGestureWiringTests {
-    /// The watcher asks the policy for its gesture, rather than assuming one.
-    @Test func theWatcherReadsTheGestureFromThePolicy() throws {
-        let source = try String(
+    private static func watcherSource() throws -> String {
+        try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appending(path: "Sources/XiaolaiDict/HoverWatcher.swift"),
             encoding: .utf8)
-        #expect(source.contains("policy().gesture == .doubleTap"),
-                "the watcher does not consult the reader's gesture")
-        #expect(source.contains("tappedTwice: tapped"),
-                "the watcher never tells the reader a tap happened")
     }
 
-    /// And the tap is spent, so one gesture is one lookup.
-    @Test func aTapIsConsumedByTheReadThatUsesIt() throws {
-        let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appending(path: "Sources/XiaolaiDict/HoverWatcher.swift"),
-            encoding: .utf8)
-        #expect(source.contains("pendingTap = false"),
-                "a completed double-tap is never cleared, so every later movement would re-fire it")
+    /// The watcher asks the recogniser, with the reader's own gesture and key.
+    @Test func theWatcherDelegatesTheRuleAndPassesTheReadersChoice() throws {
+        let source = try Self.watcherSource()
+        #expect(source.contains("gestures.saw("), "the watcher does not consult the gesture rule")
+        #expect(source.contains("gesture: policy.gesture, modifier: policy.modifier"),
+                "the rule is asked without the reader's gesture and key")
+    }
+
+    /// **From the event, not from current state.** Global monitors deliver asynchronously, so
+    /// `NSEvent.modifierFlags` and a clock read describe when this process looked, not when the
+    /// reader pressed.
+    @Test func theWatcherFeedsItTheEventsOwnFlagsAndTime() throws {
+        let source = try Self.watcherSource()
+        #expect(source.contains("event.modifierFlags"), "the flags are not the delivered event's")
+        #expect(source.contains("at: event.timestamp"), "the time is not the delivered event's")
+    }
+
+    /// Everything that is not a modifier or a movement reaches the rule as other input, so it can
+    /// cancel a half-made pair.
+    @Test func otherInputIsForwarded() throws {
+        let source = try Self.watcherSource()
+        #expect(source.contains(".otherInput"), "nothing tells the rule the reader did something else")
+        for watched in [".keyDown", ".leftMouseDown", ".scrollWheel"] {
+            #expect(source.contains(watched), "\(watched) is not watched, so it cannot cancel a pair")
+        }
+    }
+
+    /// **A tap is served at once or not at all.** It was held in a flag and spent by whichever
+    /// read came next — and a flag carries no position, so a gesture made over one word could be
+    /// spent by a later movement over another.
+    @Test func aTapIsServedAtOnceOrNotAtAll() throws {
+        let source = try Self.watcherSource()
+        #expect(!source.contains("pendingTap"),
+                "the tap is stored again, so it can be spent at a word the reader did not point at")
+        #expect(source.contains("check(tappedTwice: true)"), "the press does not act on its own tap")
+    }
+
+    /// And the rule's state does not outlive the watching.
+    @Test func stoppingResetsTheRule() throws {
+        #expect(try Self.watcherSource().contains("gestures.reset()"),
+                "a half-made pair survives the watcher being stopped")
     }
 }

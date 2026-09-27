@@ -96,7 +96,10 @@ enum LookupCommand {
         let reader = HoverReader(policy: { .shipped }, captureDeadline: .seconds(30))
         let outcome = await reader.read(
             at: CGPoint(x: x, y: y), modifiersHeld: [HoverPolicy.shipped.modifier],
-            pointerStillFor: .seconds(1))
+            // The instrument measures the *hold* path, which is what `--read-point` has always
+            // driven and what the shipped default is. A tap is the reader's gesture, not a
+            // measurement's: pretending one happened would report a path nobody asked about.
+            tappedTwice: false, pointerStillFor: .seconds(1))
         let took = (ContinuousClock.now - started).milliseconds
         switch outcome {
         case .selection(let selection):

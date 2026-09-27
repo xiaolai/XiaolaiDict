@@ -53,15 +53,9 @@ final class HoverWatcher {
         self.reader = HoverReader(policy: policy, pause: pause)
     }
 
-    /// Counts presses of the hover modifier, for the double-tap gesture.
-    private var taps = TapCounter()
-    /// Whether the modifier was down at the last `flagsChanged`, so a *press* can be told from a
-    /// release — `flagsChanged` fires for both and carries no direction of its own.
-    private var wasHeld = false
-    /// A completed double-tap, waiting to be spent. **Consumed by the read that uses it**, so one
-    /// gesture is one lookup: left set, every later pointer movement would look the word up again.
-    private var pendingTap = false
-
+    /// The gesture rule, which lives in the core so it can be tested against event sequences
+    /// rather than by reading this file.
+    private var gestures = GestureRecogniser()
     var isWatching: Bool { !monitors.isEmpty }
 
     func start() {
@@ -69,22 +63,42 @@ final class HoverWatcher {
         // Movement and modifiers both, because they are two ways to arrive at the same state.
         // Watching movement alone would never fire for a reader who parks the pointer on a word
         // and *then* presses Option, which is the natural way to use it.
-        for mask in [NSEvent.EventTypeMask.mouseMoved, .flagsChanged] {
+        for mask in [
+            NSEvent.EventTypeMask.mouseMoved, .flagsChanged,
+            // Watched only to cancel a pending tap; none of them starts a lookup.
+            .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+        ] {
             let isFlags = mask == .flagsChanged
-            guard let monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
+            let isMovement = mask == .mouseMoved
+            guard let monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
                 MainActor.assumeIsolated {
-                    if isFlags { self?.modifiersChanged() }
-                    self?.pointerChanged()
+                    if isFlags { self?.modifiersChanged(event) }
+                    // **Anything that is not a modifier or a movement cancels a pending pair.**
+                    // Two ⌥-arrows, or ⌘C then ⌘V, are two presses of one modifier inside the
+                    // window; without this they read as the gesture and the reader gets a lookup
+                    // for editing text.
+                    else if !isMovement { self?.otherInput() }
+                    if isFlags || isMovement { self?.pointerChanged() }
                 }
             }) else {
+                // **A partial install is a failure.** One surviving token makes `isWatching` true,
+                // so every later `start()` returns at once and the gap is permanent — and under
+                // the double-tap gesture a missing `.flagsChanged` monitor makes the reader's
+                // chosen gesture unreachable while hover reports itself as on. Rolling back is
+                // what lets a retry mean something.
                 log.error("hover: could not watch \(String(describing: mask), privacy: .public)")
-                continue
+                stop()
+                return
             }
             monitors.append(monitor)
         }
     }
 
     func stop() {
+        // **The gesture state does not outlive the watching.** Left set, a modifier released while
+        // stopped makes the first press after a restart invisible, and a half-finished pair from
+        // minutes ago can complete against an unrelated press.
+        gestures.reset()
         pending?.cancel()
         pending = nil
         inFlight?.cancel()
@@ -115,16 +129,24 @@ final class HoverWatcher {
     /// pointer where they want it and pressed a key to say so, and `pointerStillFor` is measured
     /// from `restingSince` either way — so waiting again would only add latency to a gesture that
     /// has already stated its intent.
-    private func modifiersChanged() {
-        let held = Self.modifiers(of: NSEvent.modifierFlags).contains(policy().modifier)
-        defer { wasHeld = held }
-        guard held, !wasHeld, policy().gesture == .doubleTap else { return }
-        guard taps.pressed(at: .now) else { return }
-        pendingTap = true
-        check()
+    private func otherInput() {
+        _ = gestures.saw(.otherInput, gesture: policy().gesture, modifier: policy().modifier)
     }
 
-    private func check() {
+    private func modifiersChanged(_ event: NSEvent) {
+        let policy = policy()
+        let asked = gestures.saw(
+            .modifiers(Self.modifiers(of: event.modifierFlags), at: event.timestamp),
+            gesture: policy.gesture, modifier: policy.modifier)
+        guard asked else { return }
+        // **Served now or not at all.** Storing the tap for later meant a gesture made over one
+        // word could be spent by a later movement over another — the intent has a position, and a
+        // bare flag does not carry it. A tap that arrives while a read is in flight is dropped,
+        // which is honest: the reader can tap again, and `.captureInFlight` already names that.
+        check(tappedTwice: true)
+    }
+
+    private func check(tappedTwice tapped: Bool = false) {
         guard inFlight == nil else { return }
         guard let height = Self.primaryHeight(among: screens()) else {
             log.error("hover: no display to measure from")
@@ -133,8 +155,6 @@ final class HoverWatcher {
         let at = UpPoint(NSEvent.mouseLocation)
         let held = Self.modifiers(of: NSEvent.modifierFlags)
         let resting = ContinuousClock.now - restingSince
-        let tapped = pendingTap
-        pendingTap = false
 
         inFlight = Task { [weak self] in
             guard let self else { return }
