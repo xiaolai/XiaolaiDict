@@ -102,7 +102,7 @@
     "A guess — not confirmed" : {
       "comment" : "On a pinned note whose sense the selector proposed"
     },
-    "A hover only fires while the key is held and the pointer has stopped. There is no setting for holding nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
+    "A hover only fires when you ask with the key and the pointer has stopped. There is no setting for asking with nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
 
     },
     "A menu-bar dictionary for macOS." : {
@@ -266,8 +266,15 @@
     "Hide the meaning" : {
 
     },
-    "Hover Lookup    hold %@" : {
-
+    "Hover Lookup    %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Hover Lookup    %1$@ %2$@"
+          }
+        }
+      }
     },
     "In the panel" : {
 
@@ -387,6 +394,9 @@
 
     },
     "Not set" : {
+
+    },
+    "Not yet enforced — hovering is not refused on these sites. What you add here is kept and will apply once it is. Subdomains are covered too, so example.com also excludes docs.example.com." : {
 
     },
     "Nothing is waiting on you. The local model is still one click away, in the translation row." : {
@@ -576,9 +586,6 @@
         }
       }
     },
-    "Subdomains are covered too, so example.com also excludes docs.example.com." : {
-
-    },
     "Switching dictionaries starts study over." : {
 
     },
@@ -721,6 +728,9 @@
 
     },
     "Unknown" : {
+
+    },
+    "Unpin this note" : {
 
     },
     "Until then, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {

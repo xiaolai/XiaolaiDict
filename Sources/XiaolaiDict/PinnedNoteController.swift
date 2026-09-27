@@ -71,20 +71,41 @@ final class PinnedNoteController {
     }
 }
 
+/// **A pinned note carries no window controls.**
+///
+/// `.hiddenTitleBar` hides the bar and leaves the three traffic lights floating over the content —
+/// which is why the note used to reserve room at its top for them, and why it did not look like the
+/// card it came from. A reader asked for the card's own chrome instead (2026-09-27), so the note is
+/// put away by its own button, revealed under the pointer.
+///
+/// A named type rather than a closure inside the scene: a window is configured in AppKit, where
+/// nothing about it is assertable from a view, and this is the one line standing between the reader
+/// and a note they cannot tell from a window.
+enum PinnedNoteWindow {
+    static func configure(_ window: NSWindow) {
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(button)?.isHidden = true
+        }
+    }
+}
+
 /// One pinned note's scene content.
 struct PinnedNoteSceneView: View {
     let controller: PinnedNoteController
     let id: UUID
+    /// Closes this note's window. `onDisappear` then takes it out of the set, which is the same
+    /// route the traffic-light close button used to take.
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if let note = controller.note(id) {
-                PinnedNoteView(note: note)
+                PinnedNoteView(note: note) { dismiss() }
             }
         }
         .frame(minWidth: PinnedNoteController.smallestNote.width,
                minHeight: PinnedNoteController.smallestNote.height)
-        .xiaolaiDictPanelBehaviour(transient: true)
+        .xiaolaiDictPanelBehaviour(transient: true) { PinnedNoteWindow.configure($0) }
         .onDisappear { controller.dismissed(id) }
     }
 }

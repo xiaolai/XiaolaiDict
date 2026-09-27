@@ -95,9 +95,6 @@ enum Token {
         /// nothing downscales from it. Fixed rather than scaled — the icon is the app's mark, and
         /// a reader asking for larger text is not asking for a larger logo.
         static let aboutIcon: CGFloat = 64
-        /// Clears a transparent title bar's own controls. A structural offset, not a padding, and
-        /// not scaled: the traffic lights are where they are whatever size the reader's text is.
-        static let titleBarClearance: CGFloat = 28
     }
 
     /// **How small a thing a pointer can be asked to hit.**

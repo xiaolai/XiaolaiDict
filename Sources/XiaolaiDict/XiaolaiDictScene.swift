@@ -45,8 +45,9 @@ struct XiaolaiDictScene: App {
         }
         // `.plain`, not `.hiddenTitleBar`. A reader pointing at a word asked a question; they did
         // not open a document. Traffic lights and a title bar say "this is yours to manage now",
-        // and the panel answered by padding 28 pt off the top to dodge controls it never wanted —
-        // `Token.Panel.titleBarClearance` existed for that and the lookup path no longer needs it.
+        // and the panel answered by padding 28 pt off the top to dodge controls it never wanted.
+        // `Token.Panel.titleBarClearance` existed for that; nothing needs it now that a pinned note
+        // hides its controls too, so it is gone rather than left as a value nobody reads.
         .windowStyle(.plain)
         // Hugs the card. The card is as tall as what it has to say, so the window has to be too.
         .windowResizability(.contentSize)

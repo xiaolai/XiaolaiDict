@@ -92,14 +92,24 @@ public struct PinnedNote: Equatable, Identifiable {
 public struct PinnedNoteView: View {
     @Environment(\.scale) private var scale
     public let note: PinnedNote
+    /// **How the reader puts it away, with no default.** The note's window carries no traffic lights
+    /// (`PinnedNoteWindow`), so this is the only way to close one — and a defaulted closure nobody
+    /// supplies is exactly how `HoverPause` and `LookupRunner`'s prior encounters shipped complete,
+    /// unit-tested and unreachable. Required, so the compiler is what asserts the wire.
+    let unpin: () -> Void
+    /// Revealed under the pointer rather than always drawn, so a note is its words and not a widget.
+    @State private var pointerIsOver = false
 
-    public init(note: PinnedNote) {
+    public init(note: PinnedNote, unpin: @escaping () -> Void) {
         self.note = note
+        self.unpin = unpin
     }
 
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: scale.space.stack) {
+                // The unpin button's own width, kept clear whether or not it is showing: a heading
+                // that reflowed when the pointer arrived would be worse than the button appearing.
                 HStack(alignment: .firstTextBaseline, spacing: scale.space.stack) {
                     Text(note.heading).font(.title3.weight(.semibold))
                     if let partOfSpeech = note.partOfSpeech {
@@ -109,6 +119,7 @@ public struct PinnedNoteView: View {
                         Text(pronunciation).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                .padding(.trailing, Token.Target.minimum)
                 Text(note.text).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 // **Where the panel's badge goes when the panel is gone.** Only the uncertain
@@ -124,9 +135,25 @@ public struct PinnedNoteView: View {
                 Text(note.provenance).font(.caption2).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, scale.space.padAcross)
-            .padding(.top, Token.Panel.titleBarClearance)
+            // Symmetric with the bottom, because nothing floats over the top any more. This was a
+            // 28 pt structural offset dodging the traffic lights; they are gone, and so is it — the
+            // note was that offset's last reader in the whole project.
+            .padding(.top, scale.space.padDown)
             .padding(.bottom, scale.space.padDown)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // On the scroll view, so it stays in the corner rather than scrolling away with the words.
+        .overlay(alignment: .topTrailing) {
+            if pointerIsOver {
+                IconButton(title: "Unpin this note", symbol: "xmark") { unpin() }
+                    .foregroundStyle(.secondary)
+                    .padding(.top, scale.space.padDown)
+                    .padding(.trailing, scale.space.padAcross)
+                    .transition(.opacity)
+            }
+        }
+        .onHover { isOver in
+            withAnimation(.easeInOut(duration: Token.Motion.hover)) { pointerIsOver = isOver }
         }
     }
 }
