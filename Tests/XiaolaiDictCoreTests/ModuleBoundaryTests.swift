@@ -49,6 +49,16 @@ struct ModuleBoundaryTests {
         "LocalModel": ["Foundation", "FoundationModels", "Synchronization"],
         // The private DictionaryServices API, reached by `dlopen` rather than by linking it.
         "DictionaryBridge": ["Foundation", "Synchronization"],
+        // Apple's `.dictionary` container, and the facts that differ between the 86 of them. It
+        // depends on no sibling target at all — not even `XiaolaiDictBase` — because it is a file
+        // format plus a table of measured facts, testable and reusable without the app. `Compression`
+        // decodes the body's zlib chunks and `CryptoKit` hashes a sense the publisher gave no id.
+        //
+        // **Absent until 2026-09-27, and the two tests below were right to say so.** The target was
+        // added to `Package.swift` without being registered here, so `everyLibraryTargetIsEitherChecked…`
+        // failed and — more to the point — `nothingBelowTheViewLayerBindsAppKitOrSwiftUI` was not
+        // checking it at all.
+        "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
