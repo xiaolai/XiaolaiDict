@@ -125,7 +125,7 @@ final class ScreenTextRecogniser: Sendable {
             throw RecognitionError.nothingUnderPointer
         }
         // A sentence outruns its line, so segment over the whole block of lines around it.
-        let block = LineJoiner.block(around: pick.line, in: lines)
+        let block = LineJoiner.block(around: pick.line, in: lines, region: target.region.size)
         let clipped = CaptureEdge.clips(block.lineIndices.map { lines[$0].box })
         guard let word = TextSegmenter.word(
             in: block.text,

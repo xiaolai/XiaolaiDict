@@ -114,8 +114,15 @@ public enum LineJoiner {
     /// vertically **and share a column**, so a following paragraph, a second column, or a window
     /// title is left out — a TextEdit band once produced the sentence "fixture.txt An ephemeral
     /// beauty…", with the title bar joined into it (finding 18).
+    /// `region` is the capture's size in points. **Given it, the row test compares points rather
+    /// than normalised units**, which are not square: a band is far wider than it is tall, so a
+    /// normalised horizontal gap and a normalised vertical height are simply different quantities.
+    /// `RecognisedTextPicker.pick` already says this about its own distances; comparing them
+    /// directly here folded the *other pane* of a split terminal into the reader's sentence —
+    /// a 122-point gutter read as 0.048 against a line height of 0.13. Passing `.zero` keeps the
+    /// normalised comparison, which is right only where the capture is roughly square.
     public static func block(
-        around index: Int, in lines: [RecognisedLine],
+        around index: Int, in lines: [RecognisedLine], region: CGSize = .zero,
         maximumGapRatio: CGFloat = 1.0, minimumOverlap: CGFloat = 0.2
     ) -> TextBlock {
         guard lines.indices.contains(index) else { return TextBlock(text: "", offsetShift: 0) }
@@ -127,7 +134,7 @@ public enum LineJoiner {
         // right-hand fragment ends where the line above ends. The reader's own line lost its left
         // half and the line above was spliced in its place. `LineJoinerSplitLineTests` holds the
         // measured geometry.
-        let rows = Self.rows(in: lines)
+        let rows = Self.rows(in: lines, region: region)
         let ordered = rows.enumerated().map { (offset: $0.offset, element: $0.element.line) }
             .sorted { $0.element.box.minY < $1.element.box.minY }
         guard let seed = ordered.firstIndex(where: { rows[$0.offset].members.contains(index) }) else {
@@ -212,12 +219,12 @@ public enum LineJoiner {
     /// gutter never is.
     static let sameRowGap: CGFloat = 1.0
 
-    static func rows(in lines: [RecognisedLine]) -> [Row] {
+    static func rows(in lines: [RecognisedLine], region: CGSize = .zero) -> [Row] {
         var groups: [[Int]] = []
         for index in lines.indices.sorted(by: { lines[$0].box.minY < lines[$1].box.minY }) {
             let box = lines[index].box
             if let existing = groups.firstIndex(where: { group in
-                group.contains { sameRow(lines[$0].box, box) }
+                group.contains { sameRow(lines[$0].box, box, region) }
             }) {
                 groups[existing].append(index)
             } else {
@@ -246,13 +253,16 @@ public enum LineJoiner {
         }
     }
 
-    static func sameRow(_ a: CGRect, _ b: CGRect) -> Bool {
+    static func sameRow(_ a: CGRect, _ b: CGRect, _ region: CGSize = .zero) -> Bool {
         let overlap = min(a.maxY, b.maxY) - max(a.minY, b.minY)
         let shorter = min(a.height, b.height)
         guard shorter > 0, overlap / shorter >= sameRowOverlap else { return false }
-        // Negative where the boxes overlap horizontally, which is nearer still.
+        // Negative where the boxes overlap horizontally, which is nearer still. Both sides are put
+        // into points before they are compared; see `block(around:in:region:)`.
         let gap = max(a.minX, b.minX) - min(a.maxX, b.maxX)
-        return gap <= shorter * sameRowGap
+        let width = region.width > 0 ? region.width : 1
+        let height = region.height > 0 ? region.height : 1
+        return gap * width <= shorter * height * sameRowGap
     }
 
     /// Lines of one paragraph sit close together, are set in the same size, and share a margin.
