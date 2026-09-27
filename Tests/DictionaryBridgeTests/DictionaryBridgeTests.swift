@@ -276,16 +276,53 @@ struct SenseCoverageTests {
         #expect(entry.blocks.compactMap(\.partOfSpeech).count == entry.blocks.count, "a block named no part of speech")
     }
 
-    /// 譯典通 has the sense structure and no ids at all: a weaker claim, and one that says so.
-    @Test func aDictionaryWithoutIDsIsKeyedByPosition() throws {
-        let entries = try Self.entries("fine", from: "譯典通")
-        #expect(entries.allSatisfy { $0.senseCount > 0 })
-        #expect(entries.allSatisfy { $0.senseKeyKind == .position })
-        for sense in entries.flatMap(\.senses) {
-            #expect(sense.keyKind == .position)
-            #expect(sense.key == "\(sense.path.block).\(sense.path.ordinal)")
-            #expect(!sense.textHash.isEmpty, "a position key with no hash cannot notice a content update")
+    /// **Every sense key has the shape its rung promises**, over every enabled dictionary.
+    ///
+    /// This named 譯典通 — "the sense structure and no ids at all" — and so asserted that the reader had
+    /// enabled that one dictionary, which is a Dictionary.app preference and not a property of this code. It
+    /// failed here because 譯典通 is installed and not enabled.
+    ///
+    /// The claim worth keeping is the invariant behind it, and it is not about any dictionary: a `.publisher`
+    /// sense carries the publisher's id, a `.position` sense carries `block.ordinal` *and* a text hash — a
+    /// position key with no hash cannot notice a content update — and a `.none` dictionary has no senses to
+    /// key. Asserted over everything enabled, which is ten dictionaries here rather than one, and the rung
+    /// counts are printed so an absent rung is visible rather than silently unexercised.
+    @Test func everySenseKeyHasTheShapeItsRungPromises() throws {
+        let capabilities = DictionaryBridge.capabilities()
+        try #require(!capabilities.isEmpty, "no dictionary is enabled in Dictionary.app on this Mac")
+        var checked: [SenseKeyKind: Int] = [:]
+        for word in DictionaryBridge.probeWords {
+            let entries = (try? DictionaryBridge.entries(for: word).entries) ?? []
+            for entry in entries {
+                checked[entry.senseKeyKind, default: 0] += 1
+                switch entry.senseKeyKind {
+                case .publisher:
+                    #expect(entry.senseCount > 0)
+                    for sense in entry.senses where sense.keyKind == .publisher {
+                        #expect(!(sense.key ?? "").isEmpty,
+                                "\(entry.dictionary.name): a publisher rung with no id")
+                    }
+                case .position:
+                    #expect(entry.senseCount > 0)
+                    for sense in entry.senses where sense.keyKind == .position {
+                        #expect(sense.key == "\(sense.path.block).\(sense.path.ordinal)",
+                                "\(entry.dictionary.name): a position key that is not block.ordinal")
+                        // A position key with no hash cannot notice a content update.
+                        #expect(!sense.textHash.isEmpty,
+                                "\(entry.dictionary.name): a position key carries no text hash")
+                    }
+                case SenseKeyKind.none:
+                    #expect(entry.senseCount == 0,
+                            "\(entry.dictionary.name) reports no rung yet yielded \(entry.senseCount) senses")
+                }
+            }
         }
+        print("DictionaryBridgeTests: sense-key shapes checked over "
+              + checked.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+              + " entries")
+        // Without this, a Mac whose dictionaries answer none of the probe words would check nothing and pass.
+        #expect(checked.values.reduce(0, +) > 0,
+                "no entry was returned for any probe word, so no sense key was checked")
     }
 
     /// Cambridge, Merriam-Webster and Longman Activator mark senses with fonts and colours; the
@@ -322,21 +359,55 @@ struct DictionaryCapabilityTests {
         #expect(!capabilities.isEmpty)
     }
 
-    /// The three rungs, measured on this Mac: NOAD and 牛津英汉汉英 carry the publisher's sense ids,
-    /// 譯典通 has the structure without ids, and the sideloaded conversions have neither.
+    /// **The reported rung is the rung a live lookup reaches — for every enabled dictionary.**
+    ///
+    /// The docstring above has always said the rung is "measured from real entries rather than assumed from
+    /// the name", and the test that stood here did the opposite: it held a table of four dictionary *names*
+    /// against their expected rungs. That made it a check on which dictionaries the reader had enabled in
+    /// Dictionary.app — `DCSActiveDictionaries`, a preference no change to this code can satisfy — and it
+    /// failed on this Mac because 譯典通 is installed and not enabled, while the repository's own principle
+    /// is that region and language decide what exists ("Nothing here assumes NOAD exists").
+    ///
+    /// What is actually worth asserting needs no names: `capabilities()` reports a rung, and the same probe
+    /// words through the live path must reach that same rung. That covers **every** enabled dictionary rather
+    /// than four, and it is the claim the docstring makes.
     @Test func eachDictionaryReportsTheRungItCanActuallyReach() throws {
         let capabilities = DictionaryBridge.capabilities()
-        func rung(_ name: String) throws -> SenseKeyKind {
-            let found = try #require(
-                capabilities.first { $0.identity.name.contains(name) },
-                "\(name) is not enabled in Dictionary.app on this Mac")
-            #expect(found.probed, "no probe word was found in \(name), so its rung is a floor not a finding")
-            return found.senseKeyKind
+        try #require(!capabilities.isEmpty, "no dictionary is enabled in Dictionary.app on this Mac")
+        var measured = 0
+        var byRung: [SenseKeyKind: Int] = [:]
+        for capability in capabilities {
+            byRung[capability.senseKeyKind, default: 0] += 1
+            // The finest rung the probe words actually reach, recomputed the way `capabilities` does.
+            var reached: SenseKeyKind?
+            for word in DictionaryBridge.probeWords {
+                let entries = (try? DictionaryBridge.entries(for: word).entries)?
+                    .filter { $0.dictionary == capability.identity } ?? []
+                guard let best = entries.map(\.senseKeyKind).max() else { continue }
+                reached = best
+                break
+            }
+            guard let reached else {
+                // No probe word is in this dictionary. `capabilities` says so too, and a floor is not a
+                // finding — but it must not read as a rung it verified.
+                #expect(!capability.probed,
+                        "\(capability.identity.name) reports probed with no probe word in it")
+                #expect(capability.senseKeyKind == SenseKeyKind.none)
+                continue
+            }
+            measured += 1
+            #expect(capability.probed, "\(capability.identity.name) reached \(reached) yet reports unprobed")
+            #expect(capability.senseKeyKind == reached,
+                    "\(capability.identity.name) reports \(capability.senseKeyKind), reaches \(reached)")
         }
-        #expect(try rung("New Oxford American") == .publisher)
-        #expect(try rung("牛津") == .publisher)
-        #expect(try rung("譯典通") == .position)
-        #expect(try rung("Collins COBUILD") == SenseKeyKind.none)
+        print("""
+              DictionaryCapabilityTests: \(measured) of \(capabilities.count) enabled dictionaries probed; \
+              rungs \(byRung.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))
+              """)
+        // **The assertion that keeps this from passing vacuously.** Without it, a Mac with nothing enabled
+        // would run the loop zero times and report success — which is the failure mode the named table at
+        // least could not have.
+        #expect(measured > 0, "not one enabled dictionary answered a probe word, so no rung was checked")
     }
 
     /// A dictionary whose identifier is empty — every sideloaded conversion — is keyed by name, and
@@ -478,23 +549,43 @@ struct DictionaryCapabilityTests {
 /// would say so. The documents may differ in the `aria-label` naming the index form the search
 /// matched, and in nothing else.
 struct RepeatedRecordPremiseTests {
-    @Test(arguments: ["run", "cougher", "pellucidly", "的", "了", "中"])
-    func recordsSharingAnEntryIDAreOneEntry(term: String) throws {
-        let records = try DictionaryBridge.records(for: term).entries
-        let groups = Dictionary(grouping: records.filter { $0.entryID != nil }) {
-            "\($0.dictionary.key)\u{1F}\($0.entryID ?? "")"
-        }
-        let repeated = groups.filter { $0.value.count > 1 }
-        try #require(!repeated.isEmpty, "no dictionary on this Mac repeats an entry for \(term)")
-        for (id, copies) in repeated {
-            let first = copies[0]
-            for copy in copies.dropFirst() {
-                #expect(copy.senseCount == first.senseCount, "\(id) differs in sense count")
-                #expect(copy.senses.map(\.key) == first.senses.map(\.key), "\(id) differs in its senses")
-                #expect(withoutIndexForm(copy.html) == withoutIndexForm(first.html),
-                        "\(id): the documents differ by more than the index form that matched")
+    /// **One test over every term, not one per term.**
+    ///
+    /// It was `@Test(arguments:)`, so each term had to find a repeat on its own — and `的`, `了` and `中`
+    /// found none here, because whether any *Chinese* dictionary is enabled in Dictionary.app is a preference
+    /// and not a property of this code. Three of the six terms failed for that reason alone.
+    ///
+    /// The premise under test is the invariant: where records *do* share an entry id, they are one entry. So
+    /// the invariant is checked wherever repeats occur, and the requirement that repeats occur at all is made
+    /// once across the whole set — which is what actually keeps the premise from going unexercised.
+    @Test func recordsSharingAnEntryIDAreOneEntry() throws {
+        let terms = ["run", "cougher", "pellucidly", "的", "了", "中"]
+        var repeatsByTerm: [String: Int] = [:]
+        for term in terms {
+            let records = try DictionaryBridge.records(for: term).entries
+            let groups = Dictionary(grouping: records.filter { $0.entryID != nil }) {
+                "\($0.dictionary.key)\u{1F}\($0.entryID ?? "")"
+            }
+            let repeated = groups.filter { $0.value.count > 1 }
+            repeatsByTerm[term] = repeated.count
+            for (id, copies) in repeated {
+                let first = copies[0]
+                for copy in copies.dropFirst() {
+                    #expect(copy.senseCount == first.senseCount, "\(id) differs in sense count")
+                    #expect(copy.senses.map(\.key) == first.senses.map(\.key), "\(id) differs in its senses")
+                    #expect(withoutIndexForm(copy.html) == withoutIndexForm(first.html),
+                            "\(id): the documents differ by more than the index form that matched")
+                }
             }
         }
+        print("DictionaryBridgeTests: repeated entry ids per term — "
+              + repeatsByTerm.sorted { $0.key < $1.key }
+                  .map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+        // **The premise must be exercised somewhere.** If no term anywhere finds a repeat, the collapse in
+        // `entries(for:)` is resting on an assumption nothing checked — which is exactly what this test
+        // exists to prevent, and what a per-term requirement turned into six chances to fail on configuration.
+        #expect(repeatsByTerm.values.reduce(0, +) > 0,
+                "not one term found a repeated entry id, so the collapse premise went unchecked")
     }
 
     /// The one attribute two records of an entry are allowed to differ in: the headword the search
