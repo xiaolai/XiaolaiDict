@@ -17,7 +17,7 @@ struct HoverPolicyTests {
         lastLookedUp: String? = nil, capturing: Bool = false, policy: HoverPolicy? = nil
     ) -> HoverDecision {
         (policy ?? self.policy).decide(
-            at: site ?? reading, modifiersHeld: held, pointerStillFor: still,
+            at: site ?? reading, modifiersHeld: held, tappedTwice: false, pointerStillFor: still,
             pausedUntil: pausedUntil, lastLookedUp: lastLookedUp, captureInFlight: capturing, now: now)
     }
 
@@ -39,7 +39,7 @@ struct HoverPolicyTests {
             let strict = HoverPolicy(
                 modifier: modifier, excludedApps: [], excludedHosts: [], settleMilliseconds: 0)
             #expect(strict.decide(
-                at: reading, modifiersHeld: [], pointerStillFor: .seconds(10), pausedUntil: nil,
+                at: reading, modifiersHeld: [], tappedTwice: false, pointerStillFor: .seconds(10), pausedUntil: nil,
                 lastLookedUp: nil, captureInFlight: false, now: now) == .stayQuiet(.modifierNotHeld))
         }
     }
@@ -174,7 +174,7 @@ struct HoverHostMatchingTests {
         var policy = HoverPolicy.shipped
         policy.excludedHosts = names
         return policy.decide(
-            at: HoverSite(bundleID: "com.apple.Safari", host: host), modifiersHeld: [.option],
+            at: HoverSite(bundleID: "com.apple.Safari", host: host), modifiersHeld: [.option], tappedTwice: false,
             pointerStillFor: .seconds(1), pausedUntil: nil, lastLookedUp: nil,
             captureInFlight: false, now: now) == .stayQuiet(.excludedSite)
     }
@@ -338,5 +338,125 @@ extension HoverPolicyTests {
         // Unclassified, so it is looked up — the permissive default, not a Latin match. What must
         // never happen is it being *counted* as Latin, which is what the block sweep did.
         #expect(ProbeScript.dominant(in: "\u{AB65}") != .latin)
+    }
+}
+
+/// **The second way to ask for a lookup: tap the modifier twice.**
+///
+/// Holding a modifier is a weak statement of intent, because every modifier already means
+/// something. ⌥ is Meta in a terminal, it types special characters, and it modifies clicks and
+/// drags — so a reader who holds it for any of those, with the pointer at rest over text, gets a
+/// lookup they did not ask for. Two presses inside a short window, with the pointer already still,
+/// is a thing nobody does by accident.
+///
+/// Tap-once was considered and refused: a bare modifier is *abandoned* constantly — pressed, then
+/// thought better of, then released — and that is indistinguishable from a deliberate tap without
+/// waiting to see whether a chord follows. It would fire more often than holding does, which is
+/// the opposite of the point.
+struct HoverGestureTests {
+    private static func policy(_ gesture: HoverGesture) -> HoverPolicy {
+        var policy = HoverPolicy.shipped
+        policy.gesture = gesture
+        return policy
+    }
+
+    private static let still = Duration.milliseconds(500)
+
+    private func decision(
+        _ gesture: HoverGesture, held: Set<HoverModifier>, tappedTwice: Bool
+    ) -> HoverDecision {
+        Self.policy(gesture).decide(
+            at: HoverSite(bundleID: nil), modifiersHeld: held, tappedTwice: tappedTwice,
+            pointerStillFor: Self.still, pausedUntil: nil, lastLookedUp: nil,
+            captureInFlight: false, now: .now)
+    }
+
+    @Test func holdingIsWhatTheDefaultGestureAsksFor() {
+        #expect(HoverPolicy.shipped.gesture == .hold, "the shipped gesture changed")
+        #expect(decision(.hold, held: [.option], tappedTwice: false) == .look)
+        #expect(decision(.hold, held: [], tappedTwice: false) == .stayQuiet(.modifierNotHeld))
+    }
+
+    /// **A tap is not a hold, and the key is released by the time the lookup runs.** Requiring the
+    /// modifier to still be down would make the gesture a hold with extra steps.
+    @Test func aDoubleTapDoesNotRequireTheKeyToStillBeDown() {
+        #expect(decision(.doubleTap, held: [], tappedTwice: true) == .look)
+    }
+
+    /// And merely holding the key does nothing when the reader asked for taps.
+    @Test func holdingAloneDoesNothingUnderTheTapGesture() {
+        #expect(decision(.doubleTap, held: [.option], tappedTwice: false) == .stayQuiet(.notTapped))
+    }
+
+    /// **The two gestures do not leak into each other.** A double-tap under the hold gesture is
+    /// just a key going up and down, and must not look anything up on its own.
+    @Test func aTapUnderTheHoldGestureIsNotATrigger() {
+        #expect(decision(.hold, held: [], tappedTwice: true) == .stayQuiet(.modifierNotHeld))
+    }
+
+    /// Every other refusal still applies — the gesture decides *whether the reader asked*, not
+    /// whether the answer may be given.
+    @Test func aDoubleTapIsStillSubjectToEveryOtherRefusal() {
+        var policy = Self.policy(.doubleTap)
+        policy.excludedApps = ["com.example.vault"]
+        let decision = policy.decide(
+            at: HoverSite(bundleID: "com.example.vault"), modifiersHeld: [], tappedTwice: true,
+            pointerStillFor: Self.still, pausedUntil: nil, lastLookedUp: nil,
+            captureInFlight: false, now: .now)
+        #expect(decision == .stayQuiet(.excludedApp))
+    }
+
+    /// A tap while the pointer is still moving is the reader repositioning, not asking.
+    @Test func aDoubleTapWhileThePointerIsMovingIsRefused() {
+        let decision = Self.policy(.doubleTap).decide(
+            at: HoverSite(bundleID: nil), modifiersHeld: [], tappedTwice: true,
+            pointerStillFor: .milliseconds(10), pausedUntil: nil, lastLookedUp: nil,
+            captureInFlight: false, now: .now)
+        #expect(decision == .stayQuiet(.stillMoving))
+    }
+}
+
+/// The detector itself: two presses of one key, close enough together, and nothing counted twice.
+///
+/// Each press is bound before it is asserted on: `#expect` captures its operands immutably, so a
+/// `mutating` call cannot go inside the macro.
+struct TapCounterTests {
+    private static let start = ContinuousClock.now
+
+    @Test func twoPressesInsideTheWindowAreADoubleTap() {
+        var counter = TapCounter()
+        let first = counter.pressed(at: Self.start)
+        let second = counter.pressed(at: Self.start + .milliseconds(150))
+        #expect(!first)
+        #expect(second)
+    }
+
+    @Test func twoPressesTooFarApartAreTwoSinglePresses() {
+        var counter = TapCounter()
+        let first = counter.pressed(at: Self.start)
+        let late = counter.pressed(at: Self.start + TapCounter.window + .milliseconds(1))
+        #expect(!first)
+        #expect(!late, "a press outside the window completed a double-tap")
+    }
+
+    /// **A third press is not a second double-tap.** Without resetting, a key held down long
+    /// enough to auto-repeat — or an excited reader — would fire a lookup on every press after
+    /// the first, which is the accidental firing this gesture exists to avoid.
+    @Test func aThirdPressStartsOver() {
+        var counter = TapCounter()
+        let one = counter.pressed(at: Self.start)
+        let two = counter.pressed(at: Self.start + .milliseconds(100))
+        let three = counter.pressed(at: Self.start + .milliseconds(200))
+        let four = counter.pressed(at: Self.start + .milliseconds(300))
+        #expect([one, two, three, four] == [false, true, false, true],
+                "presses read as \([one, two, three, four])")
+    }
+
+    /// The far edge of the window counts, so the boundary is not a coin toss.
+    @Test func theWindowsOwnEdgeCounts() {
+        var counter = TapCounter()
+        _ = counter.pressed(at: Self.start)
+        let atTheEdge = counter.pressed(at: Self.start + TapCounter.window)
+        #expect(atTheEdge)
     }
 }

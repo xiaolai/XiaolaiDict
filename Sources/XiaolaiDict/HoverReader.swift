@@ -77,21 +77,28 @@ final class HoverReader {
 
     /// `pointerStillFor` is how long the pointer has rested. Debouncing is the caller's clock;
     /// this only enforces it, so the policy stays pure and testable.
-    func read(at point: CGPoint, modifiersHeld: Set<HoverModifier>, pointerStillFor: Duration) async -> Outcome {
+    func read(
+        at point: CGPoint, modifiersHeld: Set<HoverModifier>, tappedTwice: Bool,
+        pointerStillFor: Duration
+    ) async -> Outcome {
         let policy = policy()
 
         // **The cheap refusals first, before any IPC.** A reader who is simply reading pays one
         // set comparison and a clock read — not an Accessibility round trip into another process.
         // Resolving the target first, to learn which app owns the pixel, quietly undid that.
         let ungated = policy.decide(
-            at: HoverSite(bundleID: nil), modifiersHeld: modifiersHeld,
+            at: HoverSite(bundleID: nil), modifiersHeld: modifiersHeld, tappedTwice: tappedTwice,
             pointerStillFor: pointerStillFor, pausedUntil: pause().until, lastLookedUp: nil,
             captureInFlight: capturing.isHeld, now: .now)
         if case .stayQuiet(let refusal) = ungated {
             // Letting go of the modifier ends the hover, and with it the suppression: the next
             // hold may look the same word up again. Every other refusal here is a pause in one
             // continuing hover and leaves it alone.
-            if refusal == .modifierNotHeld { lastLookedUp = nil }
+            // **Both gestures' "the reader is not asking" refusal.** Under `.hold` that is the
+            // key being up; under `.doubleTap` it is simply no tap, which is every moment between
+            // them. Either way the hover has ended, and the next ask may look the same word up
+            // again — every other refusal is a pause inside one continuing hover and leaves it.
+            if refusal == .modifierNotHeld || refusal == .notTapped { lastLookedUp = nil }
             return .quiet(refusal)
         }
 

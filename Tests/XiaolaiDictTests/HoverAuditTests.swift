@@ -140,7 +140,7 @@ struct ScriptFilterWiringTests {
         let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() })
         reader.lastLookedUp = "run@12x25"
         let outcome = await reader.read(
-            at: CGPoint(x: 100, y: 200), modifiersHeld: [], pointerStillFor: .seconds(1))
+            at: CGPoint(x: 100, y: 200), modifiersHeld: [], tappedTwice: false, pointerStillFor: .seconds(1))
         guard case .quiet(.modifierNotHeld) = outcome else {
             Issue.record("expected the modifier gate to refuse, got \(outcome)")
             return
@@ -170,5 +170,38 @@ struct ScriptFilterWiringTests {
         let source = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
         #expect(!source.contains("UserDefaults.standard"),
                 "a setting is reaching past the injected suite to the reader's own preferences")
+    }
+}
+
+/// **The gesture has to reach the watcher, not merely exist in the policy.**
+///
+/// This project has been bitten twice by a setting that was complete, unit-tested and wired to
+/// nothing — `HoverPause`, whose `.paused` gate could not fire for months, and
+/// `LookupRunner.priorEncounters`, which was stored and never read. Both passed every test of the
+/// *value*. The check that catches the class is an assertion about the **wire**: that the thing
+/// downstream actually reads the setting.
+struct HoverGestureWiringTests {
+    /// The watcher asks the policy for its gesture, rather than assuming one.
+    @Test func theWatcherReadsTheGestureFromThePolicy() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/XiaolaiDict/HoverWatcher.swift"),
+            encoding: .utf8)
+        #expect(source.contains("policy().gesture == .doubleTap"),
+                "the watcher does not consult the reader's gesture")
+        #expect(source.contains("tappedTwice: tapped"),
+                "the watcher never tells the reader a tap happened")
+    }
+
+    /// And the tap is spent, so one gesture is one lookup.
+    @Test func aTapIsConsumedByTheReadThatUsesIt() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/XiaolaiDict/HoverWatcher.swift"),
+            encoding: .utf8)
+        #expect(source.contains("pendingTap = false"),
+                "a completed double-tap is never cleared, so every later movement would re-fire it")
     }
 }

@@ -53,6 +53,15 @@ final class HoverWatcher {
         self.reader = HoverReader(policy: policy, pause: pause)
     }
 
+    /// Counts presses of the hover modifier, for the double-tap gesture.
+    private var taps = TapCounter()
+    /// Whether the modifier was down at the last `flagsChanged`, so a *press* can be told from a
+    /// release — `flagsChanged` fires for both and carries no direction of its own.
+    private var wasHeld = false
+    /// A completed double-tap, waiting to be spent. **Consumed by the read that uses it**, so one
+    /// gesture is one lookup: left set, every later pointer movement would look the word up again.
+    private var pendingTap = false
+
     var isWatching: Bool { !monitors.isEmpty }
 
     func start() {
@@ -61,8 +70,12 @@ final class HoverWatcher {
         // Watching movement alone would never fire for a reader who parks the pointer on a word
         // and *then* presses Option, which is the natural way to use it.
         for mask in [NSEvent.EventTypeMask.mouseMoved, .flagsChanged] {
+            let isFlags = mask == .flagsChanged
             guard let monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
-                MainActor.assumeIsolated { self?.pointerChanged() }
+                MainActor.assumeIsolated {
+                    if isFlags { self?.modifiersChanged() }
+                    self?.pointerChanged()
+                }
             }) else {
                 log.error("hover: could not watch \(String(describing: mask), privacy: .public)")
                 continue
@@ -95,6 +108,22 @@ final class HoverWatcher {
             deadline: .now() + .milliseconds(policy().settleMilliseconds), execute: work)
     }
 
+    /// A `flagsChanged`, read for a *press* of the hover modifier.
+    ///
+    /// **The check runs at once rather than after the settle delay.** For a hold, the delay is
+    /// what makes the pointer's stillness meaningful; for a tap, the reader has already put the
+    /// pointer where they want it and pressed a key to say so, and `pointerStillFor` is measured
+    /// from `restingSince` either way — so waiting again would only add latency to a gesture that
+    /// has already stated its intent.
+    private func modifiersChanged() {
+        let held = Self.modifiers(of: NSEvent.modifierFlags).contains(policy().modifier)
+        defer { wasHeld = held }
+        guard held, !wasHeld, policy().gesture == .doubleTap else { return }
+        guard taps.pressed(at: .now) else { return }
+        pendingTap = true
+        check()
+    }
+
     private func check() {
         guard inFlight == nil else { return }
         guard let height = Self.primaryHeight(among: screens()) else {
@@ -104,6 +133,8 @@ final class HoverWatcher {
         let at = UpPoint(NSEvent.mouseLocation)
         let held = Self.modifiers(of: NSEvent.modifierFlags)
         let resting = ContinuousClock.now - restingSince
+        let tapped = pendingTap
+        pendingTap = false
 
         inFlight = Task { [weak self] in
             guard let self else { return }
@@ -111,7 +142,8 @@ final class HoverWatcher {
             // `.cg` here is the y-**down** Accessibility point the reader works in, produced by the
             // one explicit conversion on the line above. The two spaces are only ever bridged here.
             let outcome = await self.reader.read(
-                at: at.flipped(aboutPrimaryHeight: height).cg, modifiersHeld: held, pointerStillFor: resting)
+                at: at.flipped(aboutPrimaryHeight: height).cg, modifiersHeld: held,
+                tappedTwice: tapped, pointerStillFor: resting)
             switch outcome {
             case .selection(let selection):
                 self.onWord?(selection, at)

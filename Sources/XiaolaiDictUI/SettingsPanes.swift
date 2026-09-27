@@ -212,11 +212,22 @@ struct LookupPane: View {
     /// What must be true before a hover looks anything up.
     private var gateSection: some View {
         Section {
-            Picker("Hold", selection: $policy.modifier) {
+            // **Which key, and what the reader does with it — two questions, two rows.** The row
+            // was labelled "Hold", which was right only while holding was the only gesture; a
+            // label that names the wrong action is worse than none, because the reader does it
+            // and nothing happens.
+            Picker("Key", selection: $policy.modifier) {
                 ForEach(HoverModifier.allCases, id: \.self) { modifier in
                     Text(verbatim: "\(modifier.name)  \(modifier.symbol)").tag(modifier)
                 }
             }
+
+            Picker("Gesture", selection: $policy.gesture) {
+                ForEach(HoverGesture.allCases, id: \.self) { gesture in
+                    Text(verbatim: "\(gesture.name)  \(gesture.label(policy.modifier))").tag(gesture)
+                }
+            }
+            .pickerStyle(.segmented)
 
             Picker("Rest the pointer", selection: $policy.settleMilliseconds) {
                 ForEach(HoverPolicy.settleChoices) { Text($0.name).tag($0.milliseconds) }

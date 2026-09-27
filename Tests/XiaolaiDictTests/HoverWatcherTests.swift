@@ -99,7 +99,7 @@ struct HoverWatcherTests {
         paused.pause(for: .seconds(600), from: .now)
         let watcher = HoverWatcher(pause: { paused })
         let outcome = await watcher.reader.read(
-            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], pointerStillFor: .seconds(10))
+            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], tappedTwice: false, pointerStillFor: .seconds(10))
         guard case .quiet(.paused) = outcome else {
             Issue.record("a paused XiaolaiDict answered \(outcome) — the pause never reached the reader")
             return

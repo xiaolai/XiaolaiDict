@@ -33,7 +33,7 @@ import XiaolaiDictTestSupport
         app.hover.pause(for: .seconds(900))
 
         let outcome = await watcher.reader.read(
-            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], pointerStillFor: .seconds(10))
+            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], tappedTwice: false, pointerStillFor: .seconds(10))
         guard case .quiet(.paused) = outcome else {
             Issue.record("the app answered \(outcome) while paused — the menu is not wired to the gate")
             return
@@ -76,7 +76,7 @@ import XiaolaiDictTestSupport
         app.hover.setPolicy(chosen)
 
         let outcome = await watcher.reader.read(
-            at: .zero, modifiersHeld: [.shift], pointerStillFor: .zero)
+            at: .zero, modifiersHeld: [.shift], tappedTwice: false, pointerStillFor: .zero)
         guard case .quiet(.stillMoving) = outcome else {
             Issue.record("the gate answered \(outcome) — it is still using the shipped policy")
             return

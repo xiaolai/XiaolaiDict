@@ -7,6 +7,68 @@ import Foundation
 /// pointer resting anywhere is a lookup, and the reader cannot read a page without being helped.
 /// There is no "none" case on purpose — a hover with no modifier is the design this exists to
 /// prevent, and making it unrepresentable is cheaper than remembering not to configure it.
+/// **How the reader asks** — the gesture, which is a separate question from which key it uses.
+///
+/// Holding is a weak statement of intent, because every modifier already means something: ⌥ is
+/// Meta in a terminal, types special characters, and modifies clicks and drags. A reader holding
+/// it for any of those, with the pointer at rest over text, gets a lookup they did not ask for.
+///
+/// **Tap-once is deliberately not offered.** A bare modifier is abandoned constantly — pressed,
+/// then thought better of, then released — and that cannot be told from a deliberate tap without
+/// waiting to see whether a chord follows. It would fire more often than holding does, which is
+/// the opposite of why the gesture exists.
+public enum HoverGesture: String, Codable, Sendable, CaseIterable {
+    /// Hold the key while the pointer rests. The shipped default.
+    case hold
+    /// Tap the key twice, quickly. The key is released by the time the lookup runs.
+    case doubleTap
+
+    /// The written name, for the picker.
+    public var name: String {
+        switch self {
+        case .hold: "Hold"
+        case .doubleTap: "Double-tap"
+        }
+    }
+
+    /// What the reader does, shown with the key they chose: `⌥` against `⌥⌥`.
+    public func label(_ modifier: HoverModifier) -> String {
+        switch self {
+        case .hold: modifier.symbol
+        case .doubleTap: modifier.symbol + modifier.symbol
+        }
+    }
+}
+
+/// Two presses of one key, close enough together to be one gesture.
+///
+/// A value rather than a timer: it is handed the instant of each press and answers whether that
+/// press completed a double-tap, which makes the whole rule testable without a clock or a key.
+public struct TapCounter: Sendable {
+    /// **How long the second press has to arrive.** Long enough not to demand dexterity, short
+    /// enough that two unrelated presses of a key as busy as ⌥ rarely fall inside it.
+    public static let window = Duration.milliseconds(400)
+
+    private var first: ContinuousClock.Instant?
+
+    public init() {}
+
+    /// Whether this press completed a double-tap.
+    ///
+    /// **A completed tap resets the count**, so a third press begins a new pair rather than
+    /// completing a second one. Without that, a key held down long enough to auto-repeat — or a
+    /// reader tapping three times — would fire a lookup on every press after the first, which is
+    /// the accidental firing this gesture exists to avoid.
+    public mutating func pressed(at instant: ContinuousClock.Instant) -> Bool {
+        if let first, instant - first <= Self.window {
+            self.first = nil
+            return true
+        }
+        first = instant
+        return false
+    }
+}
+
 public enum HoverModifier: String, Codable, Sendable, CaseIterable {
     case option
     case control
@@ -44,6 +106,8 @@ public enum HoverModifier: String, Codable, Sendable, CaseIterable {
 public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     /// The modifier is not held. The ordinary case, and not a problem.
     case modifierNotHeld
+    /// The reader asked for the double-tap gesture and has not tapped.
+    case notTapped
     /// This app is excluded — a password manager, a terminal (A3).
     case excludedApp
     /// This site is excluded (A3).
@@ -69,6 +133,7 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     public var reason: String {
         switch self {
         case .modifierNotHeld: "Hold the hover modifier to look up the word under the pointer."
+        case .notTapped: "Tap the hover modifier twice to look up the word under the pointer."
         case .excludedApp: "Words are not looked up in this app."
         case .excludedSite: "Words are not looked up on this site."
         case .paused: "Lookups are paused."
@@ -114,6 +179,8 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// Sites XiaolaiDict never looks things up on (A3), by host.
     public var excludedHosts: Set<String>
     /// How long the pointer must be still. Debouncing is non-negotiable.
+    /// How the reader asks for a lookup. `.hold` is what shipped and stays the default.
+    public var gesture: HoverGesture
     public var settleMilliseconds: Int
     /// The scripts the reader studies. A word in any other is read and then dropped.
     ///
@@ -189,13 +256,15 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
 
     public init(
         modifier: HoverModifier, excludedApps: Set<String>, excludedHosts: Set<String>,
-        settleMilliseconds: Int, scripts: Set<ProbeScript> = HoverPolicy.defaultScripts
+        settleMilliseconds: Int, scripts: Set<ProbeScript> = HoverPolicy.defaultScripts,
+        gesture: HoverGesture = .hold
     ) {
         self.modifier = modifier
         self.excludedApps = excludedApps
         self.excludedHosts = excludedHosts
         self.settleMilliseconds = settleMilliseconds
         self.scripts = scripts
+        self.gesture = gesture
     }
 
     /// **Decoded with a default, because the policy is stored as one blob.** A value written
@@ -211,15 +280,31 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
         settleMilliseconds = try values.decode(Int.self, forKey: .settleMilliseconds)
         scripts = try values.decodeIfPresent(Set<ProbeScript>.self, forKey: .scripts)
             ?? HoverPolicy.defaultScripts
+        // Added after readers already had a stored policy. The synthesised decoder throws on a
+        // blob written before a field existed, and `HoverPolicyStore.load` turns a throw into
+        // `.shipped` — silently discarding every exclusion the reader had set.
+        gesture = try values.decodeIfPresent(HoverGesture.self, forKey: .gesture) ?? .hold
     }
 
     /// The order is deliberate: the cheapest and commonest refusal first, so the ordinary case —
     /// the reader is just reading — costs one comparison and never touches Accessibility.
+    /// `tappedTwice` says a double-tap of the hover modifier just completed. **It has no default**
+    /// — a caller that forgets it would silently make the double-tap gesture unreachable, and a
+    /// parameter nobody supplies is invisible to every unit test that exercises the value directly.
     public func decide(
-        at site: HoverSite, modifiersHeld: Set<HoverModifier>, pointerStillFor: Duration,
-        pausedUntil: Date?, lastLookedUp: String?, captureInFlight: Bool, now: Date
+        at site: HoverSite, modifiersHeld: Set<HoverModifier>, tappedTwice: Bool,
+        pointerStillFor: Duration, pausedUntil: Date?, lastLookedUp: String?,
+        captureInFlight: Bool, now: Date
     ) -> HoverDecision {
-        guard modifiersHeld.contains(modifier) else { return .stayQuiet(.modifierNotHeld) }
+        // **The gesture decides whether the reader asked; everything below decides whether the
+        // answer may be given.** A tap does not require the key to still be down — requiring it
+        // would make the gesture a hold with extra steps.
+        switch gesture {
+        case .hold:
+            guard modifiersHeld.contains(modifier) else { return .stayQuiet(.modifierNotHeld) }
+        case .doubleTap:
+            guard tappedTwice else { return .stayQuiet(.notTapped) }
+        }
         if let pausedUntil, now < pausedUntil { return .stayQuiet(.paused) }
         if let bundleID = site.bundleID, excludedApps.contains(bundleID) { return .stayQuiet(.excludedApp) }
         if let host = site.host, Self.isExcluded(host, by: excludedHosts) { return .stayQuiet(.excludedSite) }
