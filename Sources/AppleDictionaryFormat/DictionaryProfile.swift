@@ -36,8 +36,13 @@ public struct DictionaryProfile: Sendable, Equatable {
 
     /// The attributes that may carry the publisher's own sense id, in order of preference.
     ///
-    /// **This is the field that genuinely varies.** Measured over 84 dictionaries: `lexid` in 33,
-    /// `id` in 24, and **none at all in 27**. Those 27 are why `SenseKey` has a content-addressed form.
+    /// **This is the field that genuinely varies.** Measured over the 84 readable dictionaries by indexing
+    /// each one twice, once with each attribute pinned: **`lexid` only in 27, `id` only in 24, both in 10,
+    /// and neither in 23.** Those 23 are why `SenseKey` has a content-addressed form.
+    ///
+    /// An earlier probe reported 33 / 24 / 27 by looking for the attribute in the markup. It agreed on `id`
+    /// exactly and was wrong on the other two, because `lexid=` also appears on elements that are not
+    /// senses and because it could not represent a dictionary carrying both.
     ///
     /// **An array, and empty is a real value.** A language adapter that has measured its dictionaries
     /// pins this to exactly one attribute, or to none; the default accepts either, because for a

@@ -65,7 +65,7 @@ measured, bounded, and not yet explained. Carried in the ledger §3.
 |---|---|---|
 | Does a publisher id map to exactly one content key? | **100.00%, forward and reverse, over 75,401 pairs from 50 dictionaries** | `SenseKeyValidityTests`, through `EntryIndexer` — not a side probe. Both directions over **full keys, entry included** |
 | Why does entry identity matter to the reverse figure? | A digest is unique only *within* its entry by construction. An earlier reverse figure of 97.55% compared bare digests across entries and measured nothing the scheme claims | See `AUDIT.md` §3 |
-| Which attribute carries the publisher id? | `lexid` in **33** dictionaries, `id` in **24**, **none in 27** | `DictionaryProfile.senseIDAttributes`, read back through the indexer |
+| Which attribute carries the publisher id? | Measured by indexing each dictionary both ways: `lexid` only **27**, `id` only **24**, **both 10**, neither **23** | `DictionarySurvey`. An earlier probe said 33/24/27 — it agreed on `id` exactly, and could not represent a dictionary carrying both |
 
 ## 4. Authorship
 
@@ -125,30 +125,38 @@ Two things had to be got right for that to work:
 
 ### What it yields, and what it refuses
 
-| dictionary | groups | resolved | ids pinned / chunks | offset alone | agreement | verdict |
-|---|---|---|---|---|---|---|
-| `zh_CN-en.OCD` | 311,243 | 100.00% | 227 / 589 | 69.8% | 100.0% | verified |
-| `zh_CN.thes` | 772 | 100.00% | 10 / 19 | 98.5% | 99.1% | verified |
-| `zh_CN.SDCC` | 216,793 | 100.00% | 248 / 256 | 80.8% | 96.3% | verified |
-| `ko-en.NewAce` | 166,859 | 100.00% | 387 / 1,207 | 36.5% | 93.5% | verified |
-| `OAWT` | 30,676 | 100.00% | 165 / 179 | 95.3% | 85.9% | verified |
-| `NOAD` | 252,428 | 99.12% | 774 / 799 | 68.3% | 82.4% | verified |
-| `zh_CN.idioms` | 16,648 | 100.00% | 65 / 85 | 93.5% | 61.2% | **unverified** |
-| `ko.NewAce` | 536,455 | 98.56% | 1,791 / 1,980 | 31.7% | 56.8% | **unverified** |
-| `zh_TW-en.DrEye` | 213,018 | **100.00%** | 110 / 430 | 80.4% | **3.5%** | **rejected** |
+Measured over all 86. **64 verified, 10 unverified, 10 disagreeing, 2 with no keys at all.** The full
+per-dictionary table is in `DICTIONARIES.md` §4; what belongs here is what the numbers mean.
 
-**`resolved` and `correct` are different measurements, and conflating them was the defect.** DrEye's
-pointer lands on a real record for every one of its 213,018 keys, and 96.5% of them are the wrong record.
-Its group header differs — the key-length field is a constant 161 — and 110 chunk ids cannot address 430
-chunks, so `chunkID` does not name a chunk there at all.
+Agreement is the share of resolved groups whose key and headword **share an opening** once pronunciation
+is stripped. The obvious test — does the headword *contain* the key — does not work, and believing it cost
+a wrong conclusion that reached a commit message:
 
-Agreement is measured against the only oracle available inside this module: the group's display form
-should appear in the headword it resolved to. That is a **floor, not a proof** — a variant or an
-inflection legitimately does not appear, which is why a correct dictionary scores 82% and not 100%. The
-thresholds (0.80 usable, 0.50 refused) sit in the wide empty gap between the observed populations.
+| dictionary | containment | shared opening | |
+|---|---|---|---|
+| `zh_TW-en.DrEye` | 3.5% | **100.0%** | headwords interleave Bopomofo between every character |
+| `ru.oup` | 7.9% | **93.6%** | suffix inflection: `вое`, `вои`, `воя` all belong to `вой` |
+| `zh_TW.wn` | 6.9% | **96.5%** | Bopomofo again |
+| `bn-en.oup` | 64.4% | **90.5%** | compounds: `অংশ করা` belongs under `অংশ` |
+| `da-en.oup` | 77.5% | **97.1%** | `a aktier` against the headword `A-aktier` |
+| `NOAD` | 82.4% | **92.9%** | |
 
-**A refusal is the deliverable, not a failure.** Six dictionaries give a verified key index; two are
-withheld as unverified; one is refused. A wrong mapping a reader cannot see is worse than a missing one.
+**DrEye was described as resolving 96.5% of its keys to the wrong entry. It resolves them correctly.**
+Containment could never have matched a headword written `三ㄙㄢ言ㄧㄢˊ`. The measurement was broken, not
+the dictionary — and the test standing over it asserted the wrong dictionary was bad, which would have
+blocked the fix.
+
+**What a low score still cannot tell you.** Agreement measures a chain of three things, and fails if any
+one of them fails:
+
+1. the key mapping is wrong;
+2. the **headword extraction** is wrong — `he.oup` scores 6.0% and yields `Tranz.` as a headword, which is
+   this module's own recorded `x_xh0` defect and has nothing to do with keys;
+3. the oracle is blind to that language — a kana key against a kanji headword shares no opening, and
+   neither does a prefix-inflecting morphology.
+
+So the 20 uncertified dictionaries are **withheld, not impeached.** Separating the three causes needs an
+oracle outside this module, and that is the honest next step rather than tuning the threshold.
 
 ## 6. What the keys add that entries do not
 
