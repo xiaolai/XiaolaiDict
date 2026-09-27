@@ -47,6 +47,9 @@ not built. Every row cites the test or the measurement, not an intention.
 | Find installed bundles and identify each by `CFBundleIdentifier` | Implemented | `DictionaryLocator.installed`. Identity from `Info.plist`, never the path: `Simplified Chinese - English.dictionary` contains `…zh_CN-en.OCD`, the Oxford Chinese Dictionary, and Apple re-points generic package names between releases |
 | Read every entry from `Body.data` | Implemented | `ContainerReaderTests.everyBundleYieldsWellFormedEntries` — **85 of 86 bundles**, each first record a whole `d:entry`. The miss is `com.apple.dictionary.AppleDictionary`, Apple's software glossary, which fails on **compression, not path** — it has about thirty `Body.data` files, one per locale, whose chunks are not zlib-wrapped deflate |
 | Decompress `KeyText.data` chunks | Implemented | `theKeyIndexIsWalkedByStrideNotBySize`. Walked by the **fixed 8,192 stride**, because the per-chunk size field is **0 in some chunks** and a size-driven walk returns a partial index that looks complete |
+| Parse `KeyText.data` into keys | Implemented | `KeyIndexReader`. **252,428 groups and 396,529 key strings** from NOAD, against the 271,029 records Apple's index reports. 39.0% of its groups hold a phrase; `KeyIndexReaderTests` covers the format on invented bytes |
+| Resolve a key to its entry | Implemented, gated | `KeyIndexBuilder`. NOAD **250,196 of 252,428 (99.12%)**; four other dictionaries resolve 100%. The chunk table is *derived* by intersection, not reverse-engineered — see `RESEARCH.md` §5 |
+| Refuse a mapping that cannot be verified | Implemented | `KeyResolutionReport.confidence`. `zh_TW-en.DrEye` resolves every pointer and **96.5% of them are the wrong entry**; it is `rejected` and unusable. `keysResolveToAnEntryOrTheDictionaryIsRefused` fails if it ever passes |
 | Split an entry into senses | Implemented | `EntryIndexer`. `x_xd0` is the part-of-speech block, `x_xdN` a sense at that dictionary's own depth, anything deeper belongs to the sense above. **Depth 1 for 79 of 84; five nest deeper** — see the depth row below |
 | Sense depth declared per dictionary, chosen by retention | Implemented | `DepthRetentionTests` re-measures **every installed dictionary** and fails if a declared depth loses definitions: *84 measured, 0 declaring a lossy depth*. Five need a deeper one — Vietnamese keeps only **23%** of its `d:def` elements at depth 1 and 103% at depth 2, Greek **48%** against 100% at depth 3, plus `ml-en`, `as-en`, `kn-en` at depth 2 |
 | One sense per sense block | Implemented | `noSenseBlockYieldsTwoSensesUnderOnePublisherID`, over **34,068 id-bearing entries**. A block can hold several `d:def`; the extras are cross-references — "American English = rappel" — and emitting one sense each gave 1,112 publisher ids two identities |
@@ -71,6 +74,8 @@ they are listed rather than silently carried.
 | CDATA is dropped | `foundCharacters` is implemented, `foundCDATA` is not, so a CDATA definition reads empty | `EntryIndexer.Reader` |
 | Namespace resolution is narrower than the docstring says | Only a literal `d:` prefix is matched, not the namespace URI | `EntryIndexer.Reader.dictionaryAttribute` |
 | Adler-32 is never checked | The zlib header is stripped and raw deflate decoded, so wrapper and checksum corruption pass | `ContainerReader.inflate` |
+| Two dictionaries' key mappings are unverified | `ko.NewAce` agrees 56.8% and `zh_CN.idioms` 61.2% — above the 50% floor that catches a wrong mapping, below the 80% that clears one. Neither is usable, and neither is demonstrably broken | `KeyResolutionReport.confidence` |
+| `zh_TW-en.DrEye`'s key pointers cannot be followed | Its group header differs — the key-length field is a constant 161 — and it uses 110 chunk ids for 430 chunks, so a chunk id cannot name a chunk there. Refused rather than resolved wrongly | `KeyIndexReader`, `KeyResolver` |
 | Some definitions are still lost at the best available depth | The worst case is **18.3% in `com.apple.dictionary.or-en.oup`**, and no depth recovers it — the loss is not depth choice but definitions the reader does not reach at all. Measured, bounded, and not yet explained | `SenseKeyValidityTests` reports it every run |
 | A failed key chunk is skipped silently | One surviving chunk makes the whole read look successful | `ContainerReader.keyChunks` |
 
@@ -83,12 +88,11 @@ capabilities in §2 are the foundation of a rebuild tool and are easy to mistake
 
 | Missing | Why it matters |
 |---|---|
-| Parse `KeyText.data` chunks into **keys** | `keyChunks` returns decompressed bytes, not the search keys inside them. NOAD's index holds **271,029 records, 146,535 of them multi-word** — the phrase hover depends entirely on reading those, and Dictionary Services cannot enumerate them (no `DCSCopyKeys`, symbol-probed) |
 | A persistence layer | No database is written. `libsqlite3` ships with macOS, so this needs no dependency — but the on-disk shape is a decision, not an implementation detail |
 | The rebuild driver | Walk the installed set, report progress, rebuild on a dictionary update. The pieces exist; the orchestration does not |
 | Phrase matching on hover | Measured elsewhere at **39.2% coverage, 86.6% recall, 83.8% ranked first** from NOAD alone — but that was a different implementation, not this module |
 | Cross-dictionary sense alignment | Direct alignments exist at **0.952 mean confidence** (thesaurus→NOAD, 31,828 pairs) and **44% by arithmetic** for Oxford Chinese→NOAD, but computed elsewhere and not by this module |
-| Inflection resolution | The bundles carry it — NOAD's index resolves `children → child` — and `keyChunks` has the bytes, but nothing reads them yet |
+| Inflection resolution | **The keys are now readable and they carry it** — `'roos` resolves to `roo`, `&c.` to `etc.` — but nothing yet turns a reader's inflected word into a lookup. 60.1% of NOAD's resolved keys are a form its headword does not contain, so the material is there and unexploited |
 
 ---
 
@@ -115,4 +119,5 @@ Recorded because each produced a plausible, wrong number that survived a first l
 | Reverse mapping is 97.55% | **Meaningless as measured** — it compared bare digests across entries, and a digest is unique only within its entry. Exact once entry identity is included |
 | 牛津英汉汉英 has 68,123 entries | That is another project's database count. The installed bundle has **136,288** |
 | `Tools/dictionary-depths` establishes the depth claim | **No such file.** The tests do |
+| A pointer that lands on a record resolved correctly | **No.** `zh_TW-en.DrEye` lands on a real record for 100% of its 213,018 keys and 96.5% of them are the wrong record. "Resolved" and "correct" are different measurements, and only the second one matters |
 | An adapter may declare its dictionaries' sense depth | **No** — it declares the id attribute only. `LanguageAdapters.profile` consults adapters before the measured override table, so a hardcoded depth there silently outranks the retention measurement. Held by `anAdapterCannotOverrideAMeasuredDepth` |

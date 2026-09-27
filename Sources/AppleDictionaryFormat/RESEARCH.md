@@ -79,14 +79,91 @@ Three adapter declarations originally claimed an `id` attribute where the indexe
 installed dictionaries, which is how all three were caught — and why the check had to stop being
 circular (`AUDIT.md` #25).
 
-## 5. Method, stated once because it was earned five times
+## 5. The key index — format, and why the chunk table is derived
+
+`KeyText.data` holds the search keys. Nothing else does: NOAD's entries contain **0 `d:index` elements**,
+so Apple strips them at build time and the keys exist only here. Dictionary Services cannot enumerate
+them either, which is why this file has to be read.
+
+### The group layout, measured
+
+| field | width | meaning |
+|---|---|---|
+| `groupSize` | UInt32 | bytes after this field; groups chain by it |
+| — | UInt32 | 1 in every group seen |
+| — | UInt16 | always `groupSize - 6` |
+| `offset` | UInt32 | the entry's offset **inside its decompressed body chunk** |
+| `chunkID` | UInt16 | Apple's identifier for that chunk |
+| `keyBytes` | UInt32 | length of the key block; **not reliable in every dictionary** |
+| keys | — | `UInt16 byteLength` + UTF-16LE text, until a zero length |
+
+**The trap that cost the most.** The two bytes after a key's length field look like a tag. They are not:
+for `čapek` they are `0d 01`, which is U+010D, `č`. Read as a tag they truncate the first character of
+every key — `čapek` becomes `apek`, `české budějovice` becomes `eske budejovic`. Both still look like
+words, which is exactly why it survived a first look.
+
+`offset` was confirmed directly rather than assumed: for the key `čapek` it is 172749, and the record at
+byte 172749 of body chunk 104 is entry `m_en_gbus0149730`, "Čapek, Karel".
+
+### Why the chunk table is derived rather than decoded
+
+`chunkID` has **no arithmetic relation to anything**. Checked against the chunk's index, its file offset,
+its compressed size and its decompressed size — none correlates. Chunk 21 is id 35546, chunk 50 is id
+8594, chunk 104 is id 22015.
+
+It does not need decoding, because it is *implied*. Every group carrying id X points into one chunk, so
+that chunk must appear in the candidate set for **every** group with id X. Intersecting those sets cannot
+admit a wrong answer. On NOAD it pins 774 ids, leaving 1 ambiguous.
+
+Two things had to be got right for that to work:
+
+- **An offset alone is not enough.** Only **68.3%** of NOAD's records sit at an offset no other record
+  shares, so a join on offset alone silently mismatches a third of the dictionary.
+- **One group must not be able to erase a chunk id.** Intersecting blindly let a single group whose offset
+  matched no record anywhere empty the set for its whole id, losing 4,829 groups across 7 ids. A group
+  that cannot be satisfied is dropped; it is that group's problem, not the chunk's.
+
+### What it yields, and what it refuses
+
+| dictionary | groups | resolved | ids pinned / chunks | offset alone | agreement | verdict |
+|---|---|---|---|---|---|---|
+| `zh_CN-en.OCD` | 311,243 | 100.00% | 227 / 589 | 69.8% | 100.0% | verified |
+| `zh_CN.thes` | 772 | 100.00% | 10 / 19 | 98.5% | 99.1% | verified |
+| `zh_CN.SDCC` | 216,793 | 100.00% | 248 / 256 | 80.8% | 96.3% | verified |
+| `ko-en.NewAce` | 166,859 | 100.00% | 387 / 1,207 | 36.5% | 93.5% | verified |
+| `OAWT` | 30,676 | 100.00% | 165 / 179 | 95.3% | 85.9% | verified |
+| `NOAD` | 252,428 | 99.12% | 774 / 799 | 68.3% | 82.4% | verified |
+| `zh_CN.idioms` | 16,648 | 100.00% | 65 / 85 | 93.5% | 61.2% | **unverified** |
+| `ko.NewAce` | 536,455 | 98.56% | 1,791 / 1,980 | 31.7% | 56.8% | **unverified** |
+| `zh_TW-en.DrEye` | 213,018 | **100.00%** | 110 / 430 | 80.4% | **3.5%** | **rejected** |
+
+**`resolved` and `correct` are different measurements, and conflating them was the defect.** DrEye's
+pointer lands on a real record for every one of its 213,018 keys, and 96.5% of them are the wrong record.
+Its group header differs — the key-length field is a constant 161 — and 110 chunk ids cannot address 430
+chunks, so `chunkID` does not name a chunk there at all.
+
+Agreement is measured against the only oracle available inside this module: the group's display form
+should appear in the headword it resolved to. That is a **floor, not a proof** — a variant or an
+inflection legitimately does not appear, which is why a correct dictionary scores 82% and not 100%. The
+thresholds (0.80 usable, 0.50 refused) sit in the wide empty gap between the observed populations.
+
+**A refusal is the deliverable, not a failure.** Six dictionaries give a verified key index; two are
+withheld as unverified; one is refused. A wrong mapping a reader cannot see is worse than a missing one.
+
+## 6. What the keys add that entries do not
+
+**60.1% of NOAD's resolved keys are a form its headword does not contain.** `'roos` → `roo`, `'hood` →
+`hood`, `&c.` → `etc.` — inflections, elisions and variants. **39.0% of its groups hold a phrase.** This
+is the whole reason to read the file: scanning entries finds headwords, and a reader who meets `'roos` or
+`mass-produced` on a page is not looking up a headword.
+## 7. Method, stated once because it was earned five times
 
 **Measure through the code that will ship, not through a side probe.** A side probe disagreed with the
 real extraction path five times during this work and the path was right every time. The corollary:
 a green gated test proves nothing when its bundles are absent, so the test prints what it measured and
 the count is read, not assumed.
 
-## 6. What licensing forbids
+## 8. What licensing forbids
 
 Dictionary text is licensed to the reader whose Mac it is on. **No bundle content is vendored into this
 repository and no test fixture quotes it** — fixtures are invented markup. The measurements above ran
