@@ -119,9 +119,18 @@ public enum LineJoiner {
         maximumGapRatio: CGFloat = 1.0, minimumOverlap: CGFloat = 0.2
     ) -> TextBlock {
         guard lines.indices.contains(index) else { return TextBlock(text: "", offsetShift: 0) }
-        // Vision's order is reading order in practice, but the geometry is what this relies on.
-        let ordered = lines.enumerated().sorted { $0.element.box.minY < $1.element.box.minY }
-        guard let seed = ordered.firstIndex(where: { $0.offset == index }) else {
+        // **Rows first: Vision does not return one observation per visual line.** Measured
+        // 2026-09-27 on a terminal, it split one line at a sentence boundary — the wide gap after
+        // "them." — into two observations at the same `minY`. Sorted by `minY` alone those are two
+        // lines, `joins` sees a *negative* gap between them and passes it, and `sharesColumn` then
+        // matched the right-hand fragment with the line *above* on their right edges, because a
+        // right-hand fragment ends where the line above ends. The reader's own line lost its left
+        // half and the line above was spliced in its place. `LineJoinerSplitLineTests` holds the
+        // measured geometry.
+        let rows = Self.rows(in: lines)
+        let ordered = rows.enumerated().map { (offset: $0.offset, element: $0.element.line) }
+            .sorted { $0.element.box.minY < $1.element.box.minY }
+        guard let seed = ordered.firstIndex(where: { rows[$0.offset].members.contains(index) }) else {
             return TextBlock(text: lines[index].text, offsetShift: 0, lineIndices: [index])
         }
 
@@ -153,17 +162,97 @@ public enum LineJoiner {
         var text = ""
         var shift = 0
         for position in members {
-            let line = ordered[position].element.text
+            let row = rows[ordered[position].offset]
+            let line = row.line.text
+            // The seed is an *observation*, and its row may hold fragments before it — so the shift
+            // is where the row starts plus where the observation starts inside the row. Pointing at
+            // the row would put the word's offset before text that precedes it on the same line.
+            let within = row.offset(of: index)
             guard !text.isEmpty else {
-                if position == seed { shift = 0 }
+                if position == seed { shift = within }
                 text = line
                 continue
             }
             let separator = separator(between: text, and: line)
-            if position == seed { shift = text.utf16.count + separator.utf16.count }
+            if position == seed { shift = text.utf16.count + separator.utf16.count + within }
             text += separator + line
         }
-        return TextBlock(text: text, offsetShift: shift, lineIndices: members.map { ordered[$0].offset })
+        return TextBlock(
+            text: text, offsetShift: shift,
+            lineIndices: members.flatMap { rows[ordered[$0].offset].members })
+    }
+
+    /// One visual line, however many observations Vision made of it.
+    struct Row {
+        /// The observations that make it up, in reading order — left to right.
+        let members: [Int]
+        /// Their union: one box spanning the whole line, which is what `joins` and `sharesColumn`
+        /// were written for and what a half-line box quietly breaks.
+        let line: RecognisedLine
+
+        /// Where observation `index` starts inside this row's text, UTF-16. Zero where it is not
+        /// in this row.
+        func offset(of index: Int) -> Int { offsets[index] ?? 0 }
+        let offsets: [Int: Int]
+    }
+
+    /// **Two observations are the same visual line when their boxes overlap vertically *and* sit
+    /// beside each other.** Measured on the capture this was found in, the two halves of one line
+    /// overlap by 1.00 of the shorter box and the lines above and below by 0.22 and 0.04.
+    static let sameRowOverlap: CGFloat = 0.5
+
+    /// **Vertical overlap alone is not enough, and a two-column capture is why.** Side-by-side
+    /// columns overlap vertically as completely as the two halves of one line do, so merging on
+    /// overlap alone folded a second column into the reader's sentence — which is the defect
+    /// `asecondColumnDoesNotEndTheBlock` already existed to prevent, reintroduced one layer lower.
+    ///
+    /// What separates them is the white space between: measured, the split line's halves are
+    /// **0.22** line-heights apart and the two columns **2.5**. One line-height is a few
+    /// characters, which is what a sentence break inside a line looks like and what a column
+    /// gutter never is.
+    static let sameRowGap: CGFloat = 1.0
+
+    static func rows(in lines: [RecognisedLine]) -> [Row] {
+        var groups: [[Int]] = []
+        for index in lines.indices.sorted(by: { lines[$0].box.minY < lines[$1].box.minY }) {
+            let box = lines[index].box
+            if let existing = groups.firstIndex(where: { group in
+                group.contains { sameRow(lines[$0].box, box) }
+            }) {
+                groups[existing].append(index)
+            } else {
+                groups.append([index])
+            }
+        }
+        return groups.map { group in
+            let members = group.sorted { lines[$0].box.minX < lines[$1].box.minX }
+            var text = ""
+            var offsets: [Int: Int] = [:]
+            var union = lines[members[0]].box
+            for member in members {
+                let fragment = lines[member].text
+                let separator = text.isEmpty ? "" : separator(between: text, and: fragment)
+                offsets[member] = text.utf16.count + separator.utf16.count
+                text += separator + fragment
+                union = union.union(lines[member].box)
+            }
+            let widest = members.max { lines[$0].box.height < lines[$1].box.height }!
+            return Row(
+                members: members,
+                line: RecognisedLine(
+                    text: text, box: union, words: members.flatMap { lines[$0].words },
+                    confidence: members.map { lines[$0].confidence }.min() ?? 1),
+                offsets: offsets.merging([widest: offsets[widest] ?? 0]) { a, _ in a })
+        }
+    }
+
+    static func sameRow(_ a: CGRect, _ b: CGRect) -> Bool {
+        let overlap = min(a.maxY, b.maxY) - max(a.minY, b.minY)
+        let shorter = min(a.height, b.height)
+        guard shorter > 0, overlap / shorter >= sameRowOverlap else { return false }
+        // Negative where the boxes overlap horizontally, which is nearer still.
+        let gap = max(a.minX, b.minX) - min(a.maxX, b.maxX)
+        return gap <= shorter * sameRowGap
     }
 
     /// Lines of one paragraph sit close together, are set in the same size, and share a margin.
