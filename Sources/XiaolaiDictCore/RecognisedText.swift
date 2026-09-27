@@ -180,45 +180,70 @@ public enum LineJoiner {
         // right-hand fragment ends where the line above ends. The reader's own line lost its left
         // half and the line above was spliced in its place. `LineJoinerSplitLineTests` holds the
         // measured geometry.
+        // **Rows first: Vision does not return one observation per visual line.** Measured
+        // 2026-09-27 on a terminal, it split one line at a sentence boundary — the wide gap after
+        // "them." — into two observations at the same `minY`. Sorted by `minY` alone those are two
+        // lines, `joins` sees a *negative* gap between them and passes it, and `sharesColumn` then
+        // matched the right-hand fragment with the line *above* on their right edges, because a
+        // right-hand fragment ends where the line above ends. The reader's own line lost its left
+        // half and the line above was spliced in its place. `LineJoinerSplitLineTests` holds the
+        // measured geometry.
+        //
+        // **Sorted once and kept sorted**, so there are two index spaces here and not three: a
+        // position in `rows`, and an observation's index in `lines`. The earlier shape carried a
+        // third — a position in a separate y-ordering that had to be mapped back through — and
+        // every read of it was a chance to map the wrong way.
         let rows = Self.rows(in: lines, region: region)
-        let ordered = rows.enumerated().map { (offset: $0.offset, element: $0.element.line) }
-            .sorted { $0.element.box.minY < $1.element.box.minY }
-        guard let seed = ordered.firstIndex(where: { rows[$0.offset].members.contains(index) }) else {
+            .sorted { $0.line.box.minY < $1.line.box.minY }
+        guard let seed = rows.firstIndex(where: { $0.members.contains(index) }) else {
             return TextBlock(
                 text: lines[index].text, offsetShift: 0, lineIndices: [index],
                 confidence: lines[index].confidence, offsets: [index: 0])
         }
+        let members = Self.members(
+            around: seed, in: rows, maximumGapRatio: maximumGapRatio, minimumOverlap: minimumOverlap)
+        return Self.assemble(members, of: rows, seed: seed, pointingAt: index, in: lines)
+    }
 
-        // Which lines belong to the block, walking out from the seed. A line from *another column*
-        // is skipped rather than treated as the end: sorted by y, a two-column capture interleaves
-        // left₁, right₁, left₂ …, and stopping at right₁ dropped left₁'s own continuation. A line
-        // that *does* share the column and still fails the gap test is a different paragraph, and
-        // does end the block.
-        var members: [Int] = [seed]
+    /// Which rows belong to the block, walking out from the seed.
+    ///
+    /// A row from *another column* is skipped rather than treated as the end: sorted by y, a
+    /// two-column capture interleaves left₁, right₁, left₂ …, and stopping at right₁ dropped
+    /// left₁'s own continuation. A row that *does* share the column and still fails the gap test
+    /// is a different paragraph, and does end the block.
+    private static func members(
+        around seed: Int, in rows: [Row], maximumGapRatio: CGFloat, minimumOverlap: CGFloat
+    ) -> [Int] {
+        var members = [seed]
         for step in [-1, 1] {
             var edge = seed
             var position = seed + step
-            while ordered.indices.contains(position) {
-                let candidate = ordered[position].element
+            while rows.indices.contains(position) {
+                let candidate = rows[position].line
                 if joins(
-                    step < 0 ? candidate : ordered[edge].element,
-                    step < 0 ? ordered[edge].element : candidate,
+                    step < 0 ? candidate : rows[edge].line,
+                    step < 0 ? rows[edge].line : candidate,
                     maximumGapRatio, minimumOverlap) {
                     members.append(position)
                     edge = position
-                } else if sharesColumn(ordered[seed].element, candidate) {
+                } else if sharesColumn(rows[seed].line, candidate) {
                     break  // same column, too far away: another paragraph
                 }
                 position += step
             }
         }
-        members.sort()
+        return members.sorted()
+    }
 
+    /// The chosen rows as one run of text, with everything a caller needs to point back into it.
+    private static func assemble(
+        _ members: [Int], of rows: [Row], seed: Int, pointingAt index: Int, in lines: [RecognisedLine]
+    ) -> TextBlock {
         var text = ""
         var shift = 0
         var offsets: [Int: Int] = [:]
         for position in members {
-            let row = rows[ordered[position].offset]
+            let row = rows[position]
             let at = append(row.line.text, to: &text)
             for member in row.members { offsets[member] = at + row.offset(of: member) }
             // The seed is an *observation*, and its row may hold fragments before it — so the shift
@@ -226,7 +251,7 @@ public enum LineJoiner {
             // the row would put the word's offset before text that precedes it on the same line.
             if position == seed { shift = at + row.offset(of: index) }
         }
-        let joined = members.flatMap { rows[ordered[$0].offset].members }
+        let joined = members.flatMap { rows[$0].members }
         return TextBlock(
             text: text, offsetShift: shift, lineIndices: joined,
             confidence: joined.map { lines[$0].confidence }.min() ?? 1,
