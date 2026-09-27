@@ -91,7 +91,8 @@ capabilities in §2 are the foundation of a rebuild tool and are easy to mistake
 
 | Missing | Why it matters |
 |---|---|
-| **Sub-entry senses: phrasal verbs and idioms** | The largest gap measured. They live in `x_xo*` — `x_xo1` the sub-entry, `x_xo2` a numbered sense inside it, `x_xo2sub` the definition — and this module reads only `x_xd*`. NOAD declares **197,761 definitions and the indexer reaches 147,569, 74.6%**; ODE 75.5%. The missing quarter is **68,856 sub-entries** in NOAD, 72,590 in ODE. Their keys resolve fine — `give up` finds `give`'s entry — but the phrasal verb's own senses were never extracted, so nothing can say *which* sense it is |
+| **Definitions with no `d:def` attribute** | The largest gap measured. NOAD declares 197,761 `class="df"` definitions and the indexer reaches **147,569, 74.6%**; ODE 75.5%. Of the 55,730 missed, **43,074 (77%) are ordinary main-sense definitions carrying no `d:def` attribute** and only 12,610 (6.4% of all definitions) are sub-entries. Accepting `class="df"` inside any sense region reaches **99.98%** — a predicate change, not a new reader. See `RESEARCH.md` §7 |
+| Sub-entry senses: phrasal verbs and idioms | `x_xo1` the sub-entry, `x_xo2` a sense inside it, `x_xo2sub` the definition; this module reads only `x_xd*`. **6.4% of NOAD's definitions.** Keys resolve — `give up` finds `give`'s entry — but the phrasal verb's senses are never extracted, so nothing says *which* sense it is |
 | A persistence layer | No database is written. `libsqlite3` ships with macOS, so this needs no dependency — but the on-disk shape is a decision, not an implementation detail |
 | The rebuild driver | Walk the installed set, report progress, rebuild on a dictionary update. The pieces exist; the orchestration does not |
 | Phrase matching on hover | Measured elsewhere at **39.2% coverage, 86.6% recall, 83.8% ranked first** from NOAD alone — but that was a different implementation, not this module |

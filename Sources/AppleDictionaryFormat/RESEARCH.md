@@ -223,14 +223,33 @@ mentioning `give up`.
 
 Measured over whole dictionaries:
 
-| dictionary | definitions declared (`class="df"`) | senses read | reached | sub-entries |
-|---|---|---|---|---|
-| `NOAD` | 197,761 | 147,569 | **74.6%** | 68,856 |
-| `ODE` | 205,427 | 155,146 | **75.5%** | 72,590 |
+| dictionary | definitions declared (`class="df"`) | senses read | reached |
+|---|---|---|---|
+| `NOAD` | 197,761 | 147,569 | **74.6%** |
+| `ODE` | 205,427 | 155,146 | **75.5%** |
 
-**A quarter of the two English dictionaries this project depends on is unread.** And the retention metric
-did not show it: a sub-entry definition carries `class="df"` with **no `d:def` attribute**, so it was absent
-from both sides of the ratio and retention reported a clean 100%.
+**A quarter of the two English dictionaries this project depends on is unread** — but attributing that
+quarter to sub-entries was wrong, and a second model's refutation caught it. Classifying every `class="df"`
+element in NOAD by its **ancestry** rather than dividing senses by definitions:
+
+| where the `class="df"` element sits | count | share |
+|---|---|---|
+| carries `d:def` — reached today | 142,031 | 71.8% |
+| under `x_xd*`, no `d:def`, not a subsense | 23,494 | 11.9% |
+| under `x_xdNsub`, no `d:def` | 19,580 | 9.9% |
+| under `x_xo*` — a sub-entry | 12,610 | **6.4%** |
+| under neither | 46 | 0.0% |
+
+**Sub-entries are 6.4% of definitions, not 25%.** Of the 55,730 unread, 43,074 — 77% — are ordinary
+main-sense definitions that simply **carry no `d:def` attribute**. The `give` entry is unrepresentative:
+phrasal verbs dominate it and not the dictionary.
+
+So the recovery does not need a new namespace reader. Accepting `class="df"` as a definition **wherever it
+appears inside a sense region**, rather than only when it carries `d:def`, has structural access to
+197,715 of 197,761 elements — **99.98%**. That is a predicate change.
+
+The retention metric hid all of it: it counted `d:def=` on both sides of the ratio, so anything without the
+attribute was in neither numerator nor denominator, and NOAD reported a clean 100%.
 
 One key is missing even at the index level: `raining cats and dogs` is not there — stored under another
 form. Every other idiom tested was present as a key.
