@@ -23,11 +23,33 @@ final class PinnedNoteController {
 
     func note(_ id: UUID) -> PinnedNote? { notes[id] }
 
+    /// How many notes are on screen. Read by the tests that hold "one sticky per sense", because the
+    /// rule is about the size of this set and nothing else could see it.
+    var count: Int { notes.count }
+
     /// The reader dismissed one. Reported by the scene's `onDisappear`, since SwiftUI owns the
     /// window and there is no `willClose` to observe.
     func dismissed(_ id: UUID) { notes[id] = nil }
 
-    func pin(_ note: PinnedNote, near pointer: UpPoint) {
+    /// Keeps a sense as a note, and answers with the id of the note now on screen.
+    ///
+    /// **The same sense pins once.** Every `PinnedNote` value carries a fresh `UUID`, so inserting
+    /// unconditionally put an identical sticky on screen per press — a dozen for a held button
+    /// (reported 2026-09-27). Asked again for a sense already kept, this opens *that* note rather
+    /// than a second one: `openWindow` with a value a window already exists for brings it forward,
+    /// and if it does not, nothing visible happens, which is still the bug fixed. The guarantee is
+    /// the early return, not the framework's focus behaviour.
+    ///
+    /// Returning the id is what makes the rule assertable — two presses answering with the same id
+    /// is the wire, where a count alone would pass for a controller that had quietly stopped
+    /// opening anything.
+    @discardableResult
+    func pin(_ note: PinnedNote, near pointer: UpPoint) -> UUID {
+        // At most one can match, because this check is what keeps the set that way.
+        if let kept = notes.first(where: { $0.value.holdsTheSameSense(as: note) }) {
+            WindowActions.shared.openWindow(value: kept.key)
+            return kept.key
+        }
         // Unwrapped once for the placement math below, which is all in AppKit's space.
         let pointer = pointer.cg
         let size = placement.size
@@ -45,6 +67,7 @@ final class PinnedNoteController {
 
         notes[note.id] = note
         WindowActions.shared.openWindow(value: note.id)
+        return note.id
     }
 }
 

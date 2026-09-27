@@ -219,8 +219,30 @@ struct PinnedNoteTests {
         #expect(note(collins, text: "x").provenance == "Collins COBUILD")
     }
 
-    /// Two notes pinned from the same sense are still two notes, so closing one cannot close both.
+    /// Two notes built from the same sense are still two *values*, so closing one cannot close
+    /// both. **This is not the rule the reader met**, and the distinction is the whole point: what
+    /// stops two copies appearing is `PinnedNoteController`, which keeps one note per sense
+    /// (`PinnedNoteControllerTests`). Value identity and what is on screen are separate questions,
+    /// and reading `id` as the answer to both is what let one sense become a dozen stickies.
     @Test func everyNoteIsItsOwn() {
         #expect(note(noad, text: "x") != note(noad, text: "x"))
+    }
+
+    /// The question `==` deliberately does not answer, and the one the controller asks.
+    @Test func theSameWordsFromTheSameDictionaryAreTheSameSense() {
+        #expect(note(noad, text: "x").holdsTheSameSense(as: note(noad, text: "x")))
+        #expect(!note(noad, text: "x").holdsTheSameSense(as: note(noad, text: "y")))
+        #expect(!note(noad, text: "x")
+            .holdsTheSameSense(as: note(DictionaryIdentity(name: "Collins COBUILD"), text: "x")))
+    }
+
+    /// **Standing is deliberately not part of it.** A sense the selector guessed, kept, and later
+    /// confirmed is the same words in the same place — a second sticky saying so would be the pin
+    /// button failing again in a way that looks like it worked.
+    @Test func aSenseConfirmedLaterIsStillTheSameSense() {
+        let guessed = PinnedNote(
+            heading: "fine²", dictionary: noad, partOfSpeech: "noun",
+            pronunciation: "fīn", text: "x", standing: .proposed)
+        #expect(guessed.holdsTheSameSense(as: note(noad, text: "x")))
     }
 }

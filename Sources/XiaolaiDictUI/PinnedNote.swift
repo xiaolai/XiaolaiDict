@@ -62,6 +62,24 @@ public struct PinnedNote: Equatable, Identifiable {
     }
 
     public static func == (a: PinnedNote, b: PinnedNote) -> Bool { a.id == b.id }
+
+    /// **Whether two notes hold the same sense — the question `==` deliberately does not answer.**
+    ///
+    /// `id` is a fresh `UUID` per value and stays that way: one window per value, so closing a note
+    /// can never close another. But nothing asked whether a sense was *already* kept, so a reader
+    /// pressing pin twice got two identical stickies, and holding it got a dozen (reported
+    /// 2026-09-27). A note is a copy and not a live reference (D3), so it **is** its content: the
+    /// same words under the same headword from the same dictionary are the same note.
+    ///
+    /// `standing` is deliberately excluded. A guess the reader kept and later confirmed is the same
+    /// words in the same place; a second sticky announcing so would be this button failing again in
+    /// a way that looks like it worked.
+    ///
+    /// The set on screen is `PinnedNoteController`'s, and it is what enforces one of each — a value
+    /// cannot know what else is open.
+    public func holdsTheSameSense(as other: PinnedNote) -> Bool {
+        heading == other.heading && text == other.text && dictionary == other.dictionary
+    }
 }
 
 /// The pinned notes on screen. Each is its own always-on-top window, closed by its own button — a
