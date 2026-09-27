@@ -22,11 +22,38 @@ public struct DictionaryFacts: Sendable {
     // MARK: Senses
     public let senses: Int
     public let sensesWithPublisherID: Int
+    /// Senses whose content key fell back to an ordinal, because another sense of the same entry had both
+    /// the same definition and the same declared position.
+    ///
+    /// **The one place the keying scheme is still order-dependent, counted rather than assumed away.**
+    /// Everything else about a content key is a function of the sense alone; these are the senses for
+    /// which that is not true, so a dictionary where this number is large is one whose content keys will
+    /// move if the publisher reorders. 0 is the intended value.
+    public let sensesNeedingOrdinals: Int
     public let senseDepth: Int
     public let senseIDAttributes: [String]
-    /// Share of the `d:def` elements the markup declares that survive into a sense at `senseDepth`.
-    /// Below 1.0 means definitions are being lost; above means one sense joins several, which is correct.
+    /// Share of the definition-marked elements the markup declares that reached a sense at `senseDepth`.
+    ///
+    /// **Counts `d:def` *and* `class="df"`, and is counted by the parser.** Counting only `d:def=` put a
+    /// definition without that attribute in neither numerator nor denominator, so NOAD read a clean 100%
+    /// while a quarter of its definitions were never reached. Bounded in [0, 1] by construction now —
+    /// `declared` counts maximal definition regions — where the earlier ratio could exceed 1 and did.
     public let definitionRetention: Double
+    /// The two sides of `definitionRetention`, carried so a share is never reported without the counts it
+    /// came from. A denominator that quietly shrinks is the failure mode this makes visible.
+    ///
+    /// `declaredDefinitions` **includes records the indexer refused**. NOAD has 27 records with no headword
+    /// block holding 46 definition-marked elements; counting only accepted entries made retention read
+    /// exactly 100.00% while those 46 were unreachable.
+    public let declaredDefinitions: Int
+    public let capturedDefinitions: Int
+    /// Records that are not entries, by reason. A dictionary refusing many is one whose definitions are
+    /// going somewhere this module cannot see, and a ratio alone would not say so.
+    public let refusedRecords: [String: Int]
+    /// Records whose bytes are not UTF-8, so nothing in them could be read. Their lengths and bounds were
+    /// valid; they are counted rather than skipped, because a survey that drops them reports complete
+    /// measurements over incomplete input.
+    public let undecodableRecords: Int
 
     // MARK: What an adapter would have to clean up
     /// Entries whose headword carries a pronunciation — Apple delimits it with `|`, so `roo | ro͞oru |`.
@@ -84,7 +111,10 @@ public struct DictionaryFacts: Sendable {
     }
 
     public var usability: Usability {
-        guard bodyChunks != nil, entries > 0 else { return .unreadable }
+        // **Senses, not merely entries.** `EntryIndexer` accepts an entry with an id and a headword even
+        // when it extracts no sense, so a dictionary supplying none was reported `sensesOnly` — or `full`
+        // when its key agreement passed — while having nothing a reader could be shown.
+        guard bodyChunks != nil, entries > 0, senses > 0 else { return .unreadable }
         return resolution?.isUsable == true ? .full : .sensesOnly
     }
 }
@@ -102,8 +132,10 @@ public enum DictionarySurvey {
 
         // Container and senses, one pass.
         var chunks: Int?
-        var entries = 0, senses = 0, withID = 0
-        var declaredDefinitions = 0
+        var entries = 0, senses = 0, withID = 0, needingOrdinals = 0
+        var declaredDefinitions = 0, capturedDefinitions = 0
+        var refused: [String: Int] = [:]
+        var undecodable = 0
         var pronounced = 0, homographs = 0, withPOS = 0, inlineIndex = 0
         var lexidSenses = 0, idSenses = 0
         let indexer = EntryIndexer(dictionary: bundle.identifier, profile: profile)
@@ -116,25 +148,37 @@ public enum DictionarySurvey {
             try ContainerReader.forEachBodyChunk(at: ContainerReader.bodyURL(of: bundle.url)) { _, chunk in
                 count += 1
                 for offset in BodyLayout.recordOffsets(in: chunk) {
-                    guard let xhtml = BodyLayout.record(in: chunk, at: offset) else { continue }
-                    // What the markup declares, counted before indexing, so retention is measured
-                    // against the source and not against the reader's own output.
-                    //
-                    // **Count the attribute, not the string.** A definition is written
-                    // `<span d:def="1" ...>text<d:def></d:def></span>`, so the substring `d:def` occurs
-                    // three times for every one definition — as the attribute, as an empty element, and as
-                    // its closing tag. Counting the substring made every dictionary in the catalogue report
-                    // exactly 33.3% retention, and *exactly* one third is what gave it away.
-                    declaredDefinitions += xhtml.components(separatedBy: "d:def=").count - 1
+                    guard let xhtml = BodyLayout.record(in: chunk, at: offset) else {
+                        // A record whose bytes are not UTF-8. Its length and bounds were already valid, so
+                        // this is content the reader cannot see — counted, because a survey that drops it
+                        // reports complete measurements over incomplete input.
+                        undecodable += 1
+                        continue
+                    }
+                    // Retention is read off the indexer's own counts rather than searched for in the
+                    // text. Two string-counting versions of this were wrong in ways that read as success:
+                    // the substring `d:def` occurs three times per definition and gave every dictionary
+                    // exactly 33.3%, and `d:def=` omitted every definition marked only by `class="df"` —
+                    // a quarter of NOAD — from numerator and denominator alike. `IndexedEntry` explains it.
                     // Indexed a second and third time with each attribute pinned, so "which attribute
                     // does this dictionary use" is answered by the reader that will actually read it.
                     lexidSenses += byLexid.index(xhtml)?.senses.count { $0.key.origin == .publisher } ?? 0
                     idSenses += byID.index(xhtml)?.senses.count { $0.key.origin == .publisher } ?? 0
-                    let inline = xhtml.components(separatedBy: "d:index").count - 1
-                    guard let entry = indexer.index(xhtml) else { continue }
+                    let outcome = indexer.outcome(for: xhtml)
+                    let inline = outcome.inlineIndexElements
+                    guard let entry = outcome.entry else {
+                        // A refused record still declared whatever it declared. Dropping that from the
+                        // denominator is how retention read 100% with definitions unreachable.
+                        declaredDefinitions += outcome.declaredDefinitions
+                        if let why = outcome.rejection { refused[why.rawValue, default: 0] += 1 }
+                        continue
+                    }
                     entries += 1
+                    declaredDefinitions += entry.declaredDefinitions
+                    capturedDefinitions += entry.capturedDefinitions
                     senses += entry.senses.count
                     withID += entry.senses.count { $0.key.origin == .publisher }
+                    needingOrdinals += entry.sensesNeedingOrdinals.count
                     withPOS += entry.senses.count { $0.partOfSpeech != nil }
                     if inline > 0 { inlineIndex += 1 }
                     if entry.headword.contains("|") { pronounced += 1 }
@@ -167,8 +211,12 @@ public enum DictionarySurvey {
         return DictionaryFacts(
             identifier: bundle.identifier, displayName: bundle.displayName,
             bodyChunks: chunks, entries: entries, senses: senses, sensesWithPublisherID: withID,
+            sensesNeedingOrdinals: needingOrdinals,
             senseDepth: profile.senseDepth, senseIDAttributes: profile.senseIDAttributes,
-            definitionRetention: declaredDefinitions > 0 ? Double(senses) / Double(declaredDefinitions) : 0,
+            definitionRetention: declaredDefinitions > 0
+                ? Double(capturedDefinitions) / Double(declaredDefinitions) : 0,
+            declaredDefinitions: declaredDefinitions, capturedDefinitions: capturedDefinitions,
+            refusedRecords: refused, undecodableRecords: undecodable,
             headwordsWithPronunciation: pronounced, homographs: homographs,
             sensesWithPartOfSpeech: withPOS,
             sensesKeyedByLexid: lexidSenses, sensesKeyedByID: idSenses,

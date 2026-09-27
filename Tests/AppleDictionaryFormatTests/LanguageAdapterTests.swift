@@ -73,7 +73,8 @@ import Testing
         var checked = 0
         for adapter in LanguageAdapters.all {
             for (descriptor, bundle) in adapter.installed(from: bundles) {
-                let entries = try ContainerReader.entries(in: bundle.url).prefix(200)
+                var entries: [String] = []
+                try ContainerReader.forEachEntry(in: bundle.url, limit: 200) { entries.append($0) }
                 let indexer = EntryIndexer(dictionary: bundle.identifier, profile: descriptor.profile)
                 let indexed = entries.compactMap(indexer.index)
                 let senses = indexed.flatMap(\.senses)

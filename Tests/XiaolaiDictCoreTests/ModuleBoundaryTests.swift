@@ -52,13 +52,15 @@ struct ModuleBoundaryTests {
         // Apple's `.dictionary` container, and the facts that differ between the 86 of them. It
         // depends on no sibling target at all — not even `XiaolaiDictBase` — because it is a file
         // format plus a table of measured facts, testable and reusable without the app. `Compression`
-        // decodes the body's zlib chunks and `CryptoKit` hashes a sense the publisher gave no id.
+        // decodes the body's zlib chunks, `CryptoKit` hashes a sense the publisher gave no id, and
+        // `SQLite3` is the index it writes; `libsqlite3` ships with macOS, so none of this is a
+        // dependency in the manifest sense.
         //
         // **Absent until 2026-09-27, and the two tests below were right to say so.** The target was
         // added to `Package.swift` without being registered here, so `everyLibraryTargetIsEitherChecked…`
         // failed and — more to the point — `nothingBelowTheViewLayerBindsAppKitOrSwiftUI` was not
         // checking it at all.
-        "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit"],
+        "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit", "SQLite3"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.

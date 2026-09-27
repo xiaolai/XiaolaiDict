@@ -168,6 +168,20 @@ is the whole reason to read the file: scanning entries finds headwords, and a re
 
 Asked directly, and measured rather than assumed. The answers differ sharply per question.
 
+> **Superseded in part, 2026-09-27, by `PLAN.md` steps 2 and 3.** Three statements below were true of the
+> reader when they were measured and are no longer true of it. They are kept, because the measurement is the
+> point of this file and the ancestry table further down is what redirected the plan — but do not read them
+> as current:
+>
+> | recorded below | now |
+> |---|---|
+> | "nothing carries the sense number or a parent" | `SensePosition.senseNumber` carries it and feeds the key; `IndexedSubsense` carries the parts under their sense |
+> | "the phrasal verb's senses are never read"; "the indexer reads only `x_xd*`" | sub-entries are read. NOAD yields **9,777** sub-entry senses, each with its own label |
+> | `NOAD` 197,761 declared / 147,569 reached / **74.6%** | **203,253 of 203,299 · 99.98%.** The denominator was also wrong: 5,538 elements carry `d:def` with no `df` class, so the honest count is the union |
+>
+> The ancestry table in this section reproduced **exactly** when re-measured independently — 142,031 /
+> 23,494 / 19,580 / 12,610 / 46 of 197,761 — which is why the predicate was built the way it describes.
+
 ### Inflections — yes, and completely
 
 Every form tested resolves to the right base entry. Irregulars: `children`→`child`, `went`→`go 1`,

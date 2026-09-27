@@ -24,10 +24,18 @@ public struct DictionaryProfile: Sendable, Equatable {
     /// 2. *Shallowest `x_xdN` carrying a definition* — reported depth 1 for all 84. Also wrong, and more
     ///    dangerously so, because it asks whether *a* block at that depth holds *a* definition. A
     ///    dictionary can satisfy that while most of its definitions sit deeper.
-    /// 3. **Retention**: indexing at this depth, what share of the `d:def` elements the markup declares
-    ///    survive into a sense? That is the question, because losing them is the actual harm. Measured
-    ///    through `EntryIndexer` itself — Vietnamese kept **23%** at depth 1 and 103% at depth 2; Greek
-    ///    48% against 100% at depth 3.
+    /// 3. **Retention**: indexing at this depth, what share of the definitions the markup declares reach a
+    ///    sense? That is the question, because losing them is the actual harm. Measured through
+    ///    `EntryIndexer` itself — Vietnamese kept **23%** at depth 1 against 103% at depth 2; Greek 48%
+    ///    against 100% at depth 3.
+    ///
+    /// **Those figures are from the superseded metric, and one of them is now an impossible value.** It
+    /// counted `d:def=` against the joined definition split on `"; "`, so a definition containing that
+    /// sequence inflated the numerator and the share could exceed 1 — which is what "103%" is. The metric
+    /// now counts maximal definition regions on both sides, over the union of `d:def` and `class="df"`, so
+    /// it is bounded in [0, 1] and `DepthRetentionTests` asserts that. **The depths below are still the
+    /// right ones by the old ranking and have not been re-ranked under the new one**, because that needs the
+    /// full catalogue and none of the five is installed here.
     ///
     /// `x_xd0` is always the part-of-speech block, and anything deeper than `senseDepth` belongs to the
     /// sense above it. A rule accepting *any* `x_xdN` is wrong in the other direction: it broke
@@ -90,6 +98,11 @@ public struct DictionaryProfile: Sendable, Equatable {
     /// installed dictionary and fails if any declared depth is clearly not the best one, so this table
     /// cannot quietly drift and a new dictionary cannot be guessed into it.
     ///
+    /// **Every figure below is from the superseded metric** — see `senseDepth` — which is why several read
+    /// above 100%, a value the corrected metric cannot produce. The *ranking* is what put each row here and
+    /// the ranking is what matters; the shares are kept as the historical evidence rather than re-stated as
+    /// current. None of the five is installed on this Mac, so re-ranking them needs the full catalogue.
+    ///
     /// Odia and Sanskrit nest deeply too but did not clear the margin the test requires, so they are
     /// absent — a dictionary belongs here on evidence, not on resemblance to one that does.
     public static let overrides: [String: DictionaryProfile] = [
@@ -110,29 +123,129 @@ public struct DictionaryProfile: Sendable, Equatable {
             identifier: "com.apple.dictionary.kn-en.oup", senseDepth: 2),
     ]
 
+    /// `class` split into whole tokens. One place, because `class` is a space-separated list and every
+    /// predicate in this module must agree on what a token is: substring matching reads `x_xd1sub` as a
+    /// sense and `tg_df` as a definition.
+    static func tokens(_ classAttribute: String?) -> [String] {
+        guard let classAttribute else { return [] }
+        return classAttribute.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
     /// Whether a class token list opens a part-of-speech block.
     ///
     /// `x_xd0` is the part-of-speech block in every dictionary measured, independently of `senseDepth`.
     /// Whole-token, for the same reason `marksSense` is: `class` is a space-separated list, and `x_xd0`
     /// appears alongside `posg`, `se2` and others.
     public func marksPartOfSpeechBlock(classAttribute: String?) -> Bool {
-        guard let classAttribute else { return false }
-        return classAttribute.split(whereSeparator: \.isWhitespace).contains("x_xd0")
+        marksPartOfSpeechBlock(classes: Self.tokens(classAttribute))
+    }
+
+    /// The same question of an already-split token list. The tree walk asks every predicate here once per
+    /// node, and re-splitting the `class` string each time was the only cost of asking.
+    public func marksPartOfSpeechBlock(classes: [String]) -> Bool {
+        classes.contains("x_xd0")
     }
 
     /// Whether a class token names a sense at this dictionary's depth — `x_xd<senseDepth>` and nothing
     /// else. `x_xd1sub` is excluded because `Int("1sub")` is nil, so subsenses fall out by
     /// construction rather than by a special case.
     public func isSenseClass(_ token: some StringProtocol) -> Bool {
-        guard token.hasPrefix("x_xd"), let depth = Int(token.dropFirst(4)) else { return false }
-        return depth == senseDepth
+        // **Compared as a string, not parsed as a number.** `Int("01") == 1` and `Int("+1") == 1`, so
+        // `x_xd01` and `x_xd+1` matched depth 1 — distinct class names opening a sense region. Comparing
+        // against the one token that means this depth cannot admit a variant spelling.
+        token == "x_xd\(senseDepth)"
     }
 
     /// Whether a `class` attribute lists this dictionary's sense token. Matched as a whole token: the
     /// attribute is a space-separated list, `class="se2 x_xd1 hasSn"`, and substring matching reads
     /// `x_xd1sub` as a sense.
     public func marksSense(classAttribute: String?) -> Bool {
-        guard let classAttribute else { return false }
-        return classAttribute.split(whereSeparator: \.isWhitespace).contains(where: isSenseClass)
+        marksSense(classes: Self.tokens(classAttribute))
+    }
+
+    public func marksSense(classes: [String]) -> Bool {
+        classes.contains(where: isSenseClass)
+    }
+
+    /// Whether a `class` attribute marks a definition.
+    ///
+    /// **`d:def` is not how a definition is marked; it is how *some* definitions are marked.** Classifying
+    /// every `class="df"` element in NOAD by ancestry: 142,031 carry `d:def` (71.8%), 23,494 sit under
+    /// `x_xd*` without it (11.9%), 19,580 under `x_xdNsub` (9.9%), 12,610 under a sub-entry (6.4%), and 46
+    /// under none. Reading only the attribute reached 74.6% of them.
+    ///
+    /// **A union with `d:def`, never a replacement for it.** Three of the nine dictionaries on this Mac —
+    /// the Oxford thesaurus, 뉴에이스 영한사전 and 牛津英汉汉英 — carry **no `class="df"` at all** and mark
+    /// every definition with the attribute alone. Swapping one test for the other would have taken them
+    /// from every definition to none.
+    ///
+    /// Whole-token, like `marksSense`: `class="gp tg_df"` is guide punctuation, not a definition, and
+    /// substring matching reads it as one.
+    public func marksDefinition(classAttribute: String?) -> Bool {
+        marksDefinition(classes: Self.tokens(classAttribute))
+    }
+
+    public func marksDefinition(classes: [String]) -> Bool {
+        classes.contains("df")
+    }
+
+    /// Whether a `class` attribute opens a sub-entry — a phrasal verb, idiom or derivative carrying its
+    /// own label and its own senses.
+    ///
+    /// **`x_xo<N>` for N ≥ 1, and the 0 is excluded deliberately.** `x_xo0` is the *block* that wraps
+    /// several sub-entries — `class="subEntryBlock x_xo0 t_derivatives"` holds `abjection`, `abjectly` and
+    /// `abjectness` as three `x_xo1` siblings — so opening a region at `x_xo0` would merge them into one
+    /// sense. `x_xo0` is also what NOAD labels its etymology with, which is not a sub-entry at all; that
+    /// block carries no definition-marked element, so the definition predicate is what keeps its prose out
+    /// rather than a special case here.
+    ///
+    /// Deeper tokens are not tested separately because a region opens only when none is already open:
+    /// `x_xo2` and `x_xo3` sit inside `x_xo1` and belong to the sub-entry it opened.
+    public func marksSubEntry(classAttribute: String?) -> Bool {
+        marksSubEntry(classes: Self.tokens(classAttribute))
+    }
+
+    /// The `x_xo` depth this class list opens, or nil if it opens no sub-entry.
+    ///
+    /// Needed because a sub-entry's *senses* sit one level below it — `x_xo1` the phrasal verb, `x_xo2` each
+    /// of its numbered senses — so reading them means knowing which level the sub-entry itself was at.
+    public func subEntryDepth(classes: [String]) -> Int? {
+        for token in classes where token.hasPrefix("x_xo") {
+            let suffix = token.dropFirst(4)
+            guard let first = suffix.first, first != "0",
+                  suffix.count <= 2, suffix.allSatisfy(\.isASCII), suffix.allSatisfy(\.isNumber),
+                  let depth = Int(suffix), depth <= maximumMarkupDepth else { continue }
+            return depth
+        }
+        return nil
+    }
+
+    /// The deepest `x_xo`/`x_xd` level this module will read.
+    ///
+    /// **Bounded because the number comes out of a file.** `x_xo9223372036854775807` parsed to `Int.max`,
+    /// and the indexer's `depth + 1` then trapped on overflow — a crash from markup. The deepest level
+    /// measured anywhere in the catalogue is 5 (`zh_CN-en.OCD`), so 16 refuses the pathological case without
+    /// coming near a real one.
+    public static let maximumMarkupDepth = 16
+    var maximumMarkupDepth: Int { Self.maximumMarkupDepth }
+
+    /// **Defined as `subEntryDepth != nil`, because two copies of one rule disagreed.** `marksSubEntry`
+    /// accepted `x_xo9223372036854775808` while `subEntryDepth` returned nil for it, so the main-sense walk
+    /// treated that subtree as a sub-entry boundary and excluded it while nothing ever read it as one — the
+    /// definitions inside were reachable by neither path.
+    public func marksSubEntry(classes: [String]) -> Bool {
+        subEntryDepth(classes: classes) != nil
+    }
+
+    /// Whether a `class` attribute marks a sub-entry's own label — `x_xoh`, or the `l` span inside it.
+    ///
+    /// `l` is preferred where both appear: NOAD writes `<span class="x_xoh"><span class="l">abjection
+    /// </span><span class="prx"> | əbˈdʒɛkʃən | </span>…</span>`, so the `x_xoh` block's text carries the
+    /// pronunciation and the part of speech while `l` carries the label alone.
+    public func marksSubEntryLabel(classAttribute: String?) -> (matches: Bool, isPreferred: Bool) {
+        guard let classAttribute else { return (false, false) }
+        let tokens = classAttribute.split(whereSeparator: \.isWhitespace)
+        if tokens.contains("l") { return (true, true) }
+        return (tokens.contains("x_xoh"), false)
     }
 }

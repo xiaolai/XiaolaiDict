@@ -52,8 +52,25 @@ public enum ContainerReader {
     static let payloadSizeOffset = 0x40
     static let firstBodyChunk = 0x60
     static let chunkHeader = 12
+    /// Bytes of the `compressed` field that are **not** the zlib stream.
+    ///
+    /// **Measured, because the field is inclusive of the decompressed-size word that follows it.** Over
+    /// NOAD's body, `size - compressed` is a constant **4** in every chunk, and every chunk decompresses
+    /// correctly from `compressed - 4` bytes with its Adler-32 trailer in the last four of those. The same
+    /// holds for `KeyText.data` in NOAD, the Oxford thesaurus and 牛津英汉汉英 — 460 key chunks checked, all
+    /// of them. Slicing the whole field read four bytes of the *next* chunk's header; zlib stops at the end
+    /// of its stream and ignored them, so nothing failed and every bounds check was four bytes too lax.
+    static let compressedFieldOverhead = 4
     static let firstKeyChunk = 0x44
     static let keyStride = 8192
+    /// The largest decompressed chunk this reader will allocate for.
+    ///
+    /// **A file-controlled size was allocated unchecked.** `Data(count: expecting + 1)` where `expecting`
+    /// is four bytes read off disk means a corrupt chunk declaring `0xffffffff` asks for 4 GiB before
+    /// decompression can reject it. Measured across the catalogue, the largest real chunk is well under a
+    /// megabyte — Apple's are about 290 KB — so 64 MiB refuses the malformed case without coming near a
+    /// legitimate one.
+    static let maximumChunkSize = 64 << 20
 
     /// `Body.data`, in either bundle layout Apple has shipped.
     public static func bodyURL(of bundle: URL) throws -> URL {
@@ -122,10 +139,17 @@ public enum ContainerReader {
             let compressed = Int(data.uint32(at: position + 4))
             let expected = Int(data.uint32(at: position + 8))
             let start = position + chunkHeader
-            guard start + compressed <= data.count else {
+            // **Checked before the copy, not inside `inflate`.** `subdata` copies a file-controlled length,
+            // so a malformed chunk forced the allocation before anything could reject it.
+            guard compressed <= maximumChunkSize, expected <= maximumChunkSize else {
+                throw Failure.badChunk("\(url.lastPathComponent): chunk at \(position) declares "
+                                       + "\(compressed)/\(expected) bytes, over the \(maximumChunkSize) cap")
+            }
+            let streamLength = compressed - compressedFieldOverhead
+            guard streamLength > 0, start + streamLength <= data.count else {
                 throw Failure.truncated("\(url.lastPathComponent): chunk at \(position) runs past the file")
             }
-            let block = try inflate(data.subdata(in: start ..< start + compressed), expecting: expected)
+            let block = try inflate(data.subdata(in: start ..< start + streamLength), expecting: expected)
             guard block.count == expected else {
                 throw Failure.badChunk(
                     "\(url.lastPathComponent): chunk at \(position) gave \(block.count) bytes, header says \(expected)")
@@ -138,19 +162,43 @@ public enum ContainerReader {
         }
     }
 
-    /// Every entry's XHTML, in file order. Each chunk holds a run of length-prefixed UTF-8 records.
+    /// Every entry's XHTML, handed over one at a time and kept none.
+    ///
+    /// **Prefer this to `entries(in:)` for any pass over a whole dictionary.** That one materialises every
+    /// record: NOAD's body is 230 MB decompressed across 111,606 records, and a caller that wanted the
+    /// first 200 still paid for all of them. Here the file is memory-mapped and one decompressed chunk is
+    /// live at a time, so peak memory is about 290 KB whatever the dictionary's size.
+    ///
+    /// `limit` stops the walk after that many entries, without decompressing the rest.
+    public static func forEachEntry(in bundle: URL, limit: Int? = nil,
+                                    _ body: (String) throws -> Void) throws {
+        /// Thrown to leave `forEachBodyChunk`, which has no other way to stop early, and never escapes.
+        struct Enough: Error {}
+        // **`limit: 0` must deliver nothing.** The check below fires after a record is handed over, so zero
+        // used to yield one — and a negative limit behaved the same way.
+        if let limit, limit <= 0 { return }
+        var delivered = 0
+        do {
+            try forEachBodyChunk(at: try bodyURL(of: bundle)) { _, chunk in
+                for offset in BodyLayout.recordOffsets(in: chunk) {
+                    guard let text = BodyLayout.record(in: chunk, at: offset) else { continue }
+                    try body(text)
+                    delivered += 1
+                    if let limit, delivered >= limit { throw Enough() }
+                }
+            }
+        } catch is Enough {
+            return
+        }
+    }
+
+    /// Every entry's XHTML, in file order, all of it in memory at once.
+    ///
+    /// Kept for callers that genuinely want the array; anything walking a whole dictionary should use
+    /// `forEachEntry(in:limit:_:)` instead.
     public static func entries(in bundle: URL) throws -> [String] {
         var out: [String] = []
-        for chunk in try bodyChunks(at: try bodyURL(of: bundle)) {
-            var offset = 0
-            while offset + 4 <= chunk.count {
-                let length = Int(chunk.uint32(at: offset))
-                guard length > 0, offset + 4 + length <= chunk.count else { break }
-                let slice = chunk.subdata(in: offset + 4 ..< offset + 4 + length)
-                if let text = String(data: slice, encoding: .utf8) { out.append(text) }
-                offset += 4 + length
-            }
-        }
+        try forEachEntry(in: bundle) { out.append($0) }
         return out
     }
 
@@ -170,8 +218,11 @@ public enum ContainerReader {
             let compressed = Int(data.uint32(at: position + 4))
             let expected = Int(data.uint32(at: position + 8))
             let start = position + chunkHeader
-            if compressed > 0, expected > 0, start + compressed <= data.count,
-               let block = try? inflate(data.subdata(in: start ..< start + compressed), expecting: expected),
+            let streamLength = compressed - compressedFieldOverhead
+            if streamLength > 0, expected > 0, start + streamLength <= data.count,
+               compressed <= maximumChunkSize, expected <= maximumChunkSize,
+               let block = try? inflate(data.subdata(in: start ..< start + streamLength),
+                                        expecting: expected),
                block.count == expected {
                 out.append(block)
             }
@@ -183,12 +234,35 @@ public enum ContainerReader {
         return out
     }
 
-    /// zlib-wrapped deflate. `COMPRESSION_ZLIB` in Apple's Compression framework is **raw** deflate, so
-    /// the two-byte zlib header is dropped first; passing the wrapped stream straight in fails.
+    /// One zlib stream: a two-byte header, raw deflate, and a four-byte Adler-32 of the output.
+    ///
+    /// `COMPRESSION_ZLIB` in Apple's Compression framework is **raw** deflate, so the wrapper is handled
+    /// here — and handled means *checked*, not merely skipped. The header's own check value and the
+    /// publisher's Adler-32 are both verified, which is what output length alone cannot do: probes decoded
+    /// identical bytes with an invalid header, an altered checksum and no checksum at all, so a matching
+    /// length was never evidence of integrity. Verified present and correct over 400 NOAD body chunks and
+    /// 460 key chunks across three dictionaries.
     static func inflate(_ input: Data, expecting: Int) throws -> Data {
-        guard input.count > 2 else { throw Failure.badChunk("chunk too short to be a zlib stream") }
+        // 2 header + at least 1 deflate byte + 4 trailer.
+        guard input.count >= 7 else { throw Failure.badChunk("chunk too short to be a zlib stream") }
+        guard input.count <= maximumChunkSize else {
+            throw Failure.badChunk("chunk carries \(input.count) compressed bytes, over the "
+                                   + "\(maximumChunkSize) this reader will read")
+        }
         guard expecting > 0 else { throw Failure.badChunk("chunk declares no decompressed size") }
-        let raw = input.dropFirst(2)
+        guard expecting <= maximumChunkSize else {
+            throw Failure.badChunk("chunk declares \(expecting) decompressed bytes, over the "
+                                   + "\(maximumChunkSize) this reader will allocate")
+        }
+        // RFC 1950: low nibble of CMF is the method, 8 for deflate, and CMF·256+FLG is a multiple of 31.
+        let cmf = input[input.startIndex], flg = input[input.startIndex + 1]
+        guard cmf & 0x0f == 8 else {
+            throw Failure.badChunk("zlib header names method \(cmf & 0x0f), not deflate")
+        }
+        guard (UInt16(cmf) << 8 | UInt16(flg)) % 31 == 0 else {
+            throw Failure.badChunk("zlib header check value is wrong")
+        }
+        let raw = input.dropFirst(2).dropLast(4)
         // **One byte of slack, deliberately.** `compression_decode_buffer` returns the destination size
         // when output fills it, so a buffer of exactly `expecting` cannot distinguish "decompressed to
         // exactly the declared size" from "produced more and was cut off". With room for one more byte,
@@ -206,7 +280,35 @@ public enum ContainerReader {
         guard written == expecting else {
             throw Failure.badChunk("chunk decompressed to \(written) bytes, header declares \(expecting)")
         }
-        return output.prefix(written)
+        let result = output.prefix(written)
+        // The publisher's own checksum, big-endian in the last four bytes of the stream.
+        let trailer = input.suffix(4)
+        let declared = trailer.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        let actual = adler32(of: result)
+        guard declared == actual else {
+            throw Failure.badChunk(String(format: "chunk checksum is %08x, the stream declares %08x",
+                                          actual, declared))
+        }
+        return result
+    }
+
+    /// Adler-32 (RFC 1950), which is what a zlib stream carries and what Apple's raw-deflate decoder never
+    /// looks at. `5552` is the largest run that cannot overflow `UInt32` before the modulo.
+    static func adler32<Bytes: Collection>(of bytes: Bytes) -> UInt32 where Bytes.Element == UInt8 {
+        let base: UInt32 = 65521
+        var a: UInt32 = 1, b: UInt32 = 0
+        var remaining = bytes[bytes.startIndex...]
+        while !remaining.isEmpty {
+            let run = remaining.prefix(5552)
+            for byte in run {
+                a += UInt32(byte)
+                b += a
+            }
+            a %= base
+            b %= base
+            remaining = remaining.dropFirst(run.count)
+        }
+        return b << 16 | a
     }
 }
 

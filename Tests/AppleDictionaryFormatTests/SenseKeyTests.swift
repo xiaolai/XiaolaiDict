@@ -34,21 +34,36 @@ import Testing
     }
 
     @Test func distinctDefinitionsGetOrderIndependentKeys() {
-        let forward = SenseKey.keys(dictionary: "d", entry: "e", definitions: ["first", "second", "third"])
-        let reversed = SenseKey.keys(dictionary: "d", entry: "e", definitions: ["third", "second", "first"])
-        #expect(Set(forward.map(\.value)) == Set(reversed.map(\.value)),
+        let senses = ["first", "second", "third"].map { PositionedDefinition(definition: $0) }
+        let forward = SenseKey.keys(dictionary: "d", entry: "e", senses: senses)
+        let reversed = SenseKey.keys(dictionary: "d", entry: "e", senses: senses.reversed())
+        #expect(Set(forward.keys.map(\.value)) == Set(reversed.keys.map(\.value)),
                 "reordering an entry's senses must not rename them")
     }
 
     /// 2.53% of content keys mapped to more than one publisher id, every one of them two senses whose
-    /// definitions read identically. This is that case.
-    @Test func identicalDefinitionsAreSeparatedByOrdinal() {
-        let keys = SenseKey.keys(dictionary: "d", entry: "e",
-                                 definitions: ["same wording", "different", "same wording"])
-        #expect(Set(keys.map(\.value)).count == 3, "all three senses need distinct keys")
-        #expect(keys[1].value.contains(":") == false, "an uncollided sense keeps a bare digest")
-        #expect(keys[0].value.contains(":"), "a collided sense gains an ordinal")
-        #expect(keys[2].value.contains(":"))
+    /// definitions read identically. Where the markup distinguishes them by position they no longer
+    /// collide at all; where it does not, the ordinal is the last resort and
+    /// `SenseKeyStabilityTests` states the properties that hold around it.
+    @Test func definitionsIdenticalInWordingAndPositionAreSeparatedByOrdinal() {
+        let same = PositionedDefinition(definition: "same wording")
+        let other = PositionedDefinition(definition: "different")
+        let assignment = SenseKey.keys(dictionary: "d", entry: "e", senses: [same, other, same])
+        #expect(Set(assignment.keys.map(\.value)).count == 3, "all three senses need distinct keys")
+        #expect(!assignment.keys[1].value.contains(":"), "an uncollided sense keeps a bare digest")
+        #expect(!assignment.keys[0].value.contains(":"), "the first occurrence keeps the bare digest")
+        #expect(assignment.keys[2].value.contains(":"), "the repeat gains an ordinal")
+        #expect(assignment.ordinalled == [2], "the fallback is reported, not silent")
+    }
+
+    /// The same two words at two declared positions are two senses, and neither needs an ordinal.
+    @Test func positionSeparatesIdenticallyWordedSenses() {
+        let assignment = SenseKey.keys(dictionary: "d", entry: "e", senses: [
+            PositionedDefinition(definition: "to stop", position: SensePosition(senseNumber: "1")),
+            PositionedDefinition(definition: "to stop", position: SensePosition(senseNumber: "2")),
+        ])
+        #expect(Set(assignment.keys.map(\.value)).count == 2)
+        #expect(!assignment.neededOrdinals)
     }
 
     @Test func aPublisherKeyIsMarkedAsOne() {

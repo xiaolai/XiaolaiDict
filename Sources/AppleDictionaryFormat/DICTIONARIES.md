@@ -4,6 +4,14 @@
 macOS 27 dictionary catalogue, downloaded and read on this machine. Regenerate it rather than edit it;
 a hand-edited row is a number nobody measured. See §9 for how.
 
+> **Stale as of 2026-09-27: every sense and retention figure below predates `PLAN.md` steps 0–3 and has not
+> been regenerated.** Those steps changed what the reader extracts and how retention is counted, so the
+> numbers here understate the current reader by a wide margin — NOAD alone went from 147,569 definitions
+> reached to 203,253, and its sense count from 147,569 to 180,840. Re-measured on the 9 Apple dictionaries
+> this Mac has; the other 77 need a regeneration run against the full catalogue. Treat the *structure* of
+> this document — which dictionary is which, which need what from an adapter — as current, and every
+> **count** as historical until §9 has been run again.
+
 **Scope:** 86 assets in the catalogue. **64** give senses *and* a verified key index, **20** give senses only, **2** cannot be read at all.
 
 **The headline: these are not one format.** They share a container and diverge inside it — sense depth,

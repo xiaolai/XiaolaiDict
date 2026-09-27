@@ -40,12 +40,13 @@ struct TestInventoryTests {
         "XiaolaiDictCoreTests": 548,
         "DictionaryBridgeTests": 54,
         "LocalModelTests": 48,
-        // Added 2026-09-28, at the count on that day. **It had no floor at all until then**, which
+        // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each
+        // round adding regression tests. **It had no floor at all before that**, which
         // `everyTestTargetHasAFloor` existed to catch and did: the target shipped with the module and
         // was never registered, so the guard covered four of the five directories on disk. The count
         // was 45 before `PLAN.md` steps 0–5 and is not backdated — a floor records what is there, and
         // a drop from here is the signal.
-        "AppleDictionaryFormatTests": 50,
+        "AppleDictionaryFormatTests": 162,
     ]
 
     private static let testsRoot = URL(fileURLWithPath: #filePath)

@@ -64,4 +64,25 @@ import Testing
         let p = DictionaryProfile(identifier: "x", senseIDAttribute: nil)
         #expect(p.senseIDAttribute == nil)
     }
+
+    /// **A depth token is compared, not parsed.** `Int("01") == 1` and `Int("+1") == 1`, so `x_xd01` and
+    /// `x_xd+1` matched depth 1 — distinct class names silently opening a sense region.
+    @Test func aDepthTokenIsNotParsedAsANumber() {
+        let profile = DictionaryProfile(identifier: "test", senseDepth: 1)
+        #expect(profile.marksSense(classAttribute: "x_xd1"))
+        for variant in ["x_xd01", "x_xd+1", "x_xd 1", "x_xd1x", "x_xd１"] {
+            #expect(!profile.marksSense(classAttribute: variant), "\(variant) was read as a sense")
+        }
+    }
+
+    /// The same for a sub-entry token, which decides whether a phrasal verb's senses are opened.
+    @Test func aSubEntryTokenRequiresACanonicalPositiveNumber() {
+        let profile = DictionaryProfile(identifier: "test", senseDepth: 1)
+        for good in ["x_xo1", "x_xo2", "x_xo9", "x_xo12"] {
+            #expect(profile.marksSubEntry(classAttribute: good), "\(good) should open a sub-entry")
+        }
+        for bad in ["x_xo0", "x_xo01", "x_xo+1", "x_xo-1", "x_xo", "x_xoh", "x_xoLblBlk", "x_xo1x"] {
+            #expect(!profile.marksSubEntry(classAttribute: bad), "\(bad) was read as a sub-entry")
+        }
+    }
 }

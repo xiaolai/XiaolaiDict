@@ -43,12 +43,16 @@ struct SenseStructureTests {
         #expect(Self.index(xml)?.senses.map(\.partOfSpeech) == ["noun", "verb"])
     }
 
-    /// **Subsenses are joined, and the numbering is not kept.** Recorded rather than asserted as desirable:
-    /// a numbered sense holding several `x_xd1sub` definitions becomes one sense whose text is their join,
-    /// so `1a` and `1b` cannot be told apart and the number `1` is nowhere in the result. Joining is the
-    /// right call over dropping — the alternative destroyed five of six glosses in one real entry — but the
-    /// hierarchy is lost, and anything that wants to show "sense 1: a, b" cannot get it from here.
-    @Test func subsensesAreJoinedAndTheirNumberingIsLost() {
+    /// **Subsenses are joined into their numbered sense, and the number is now carried.** Recorded rather
+    /// than asserted as desirable: a numbered sense holding several `x_xd1sub` definitions becomes one
+    /// sense whose text is their join, so `1a` and `1b` still cannot be told apart. Joining is the right
+    /// call over dropping — the alternative destroyed five of six glosses in one real entry.
+    ///
+    /// What changed is that the sense's own number reaches `position.senseNumber`, because a content key is
+    /// derived from it: two senses of one entry worded alike are different senses, and the number is what
+    /// says so. The *subsense* hierarchy is still flat — anything wanting to show "sense 1: a, b"
+    /// separately cannot get it from here.
+    @Test func subsensesAreJoinedAndCarryTheirSenseNumber() {
         let xml = """
             <d:entry id="e2" d:title="frob"><span class="x_xh0">frob</span>\
             <span class="x_xd0"><span d:pos="1" class="pos">verb</span>\
@@ -63,16 +67,24 @@ struct SenseStructureTests {
         #expect(senses.count == 2, "the two subsenses of sense 1 became one sense")
         #expect(senses.first?.definition == "to adjust; to fiddle with")
         #expect(senses.first?.key.value == "e2.1", "the id is the numbered sense's, not either subsense's")
-        // Nothing carries the number, and nothing carries a parent.
-        #expect(senses.allSatisfy { !$0.definition.contains("1") || $0.definition.contains("to") })
+        // The number reaches the position, and so the key. Nothing yet carries a parent.
+        #expect(senses.map(\.position.senseNumber) == ["1", "2"])
+        #expect(senses.map(\.position.partOfSpeech) == ["verb", "verb"])
+        // Two senses worded alike would now differ by number alone, which is the point of reading it.
+        #expect(senses[0].contentKey.value != senses[1].contentKey.value)
     }
 
-    /// **Sub-entries are not read at all.** Phrasal verbs and idioms live in `x_xo*`, a namespace this
-    /// indexer never looks at: `x_xo1` is the sub-entry, `x_xo2` a numbered sense inside it, `x_xo2sub` the
-    /// subsense holding the definition. Their definitions also carry `class="df"` **without** a `d:def`
-    /// attribute, which is why a retention figure counting `d:def=` reported 100% while a quarter of NOAD's
-    /// definitions were never reached.
-    @Test func subEntriesArePresentInTheMarkupAndNotRead() {
+    /// **Sub-entries are read, and this test used to assert the opposite.**
+    ///
+    /// Phrasal verbs and idioms live in `x_xo*`: `x_xo1` is the sub-entry, `x_xo2` a numbered sense inside
+    /// it, `x_xo2sub` the subsense holding the definition. Their definitions carry `class="df"` **without**
+    /// a `d:def` attribute, which is why a retention figure counting `d:def=` reported 100% while a quarter
+    /// of NOAD's definitions were never reached — 12,610 of them, 6.4%, in sub-entries alone.
+    ///
+    /// Kept rather than deleted because the earlier version named the consequence precisely: keys resolved,
+    /// so `give up` found `give`'s entry, and then returned all 76 of `give`'s definitions because the
+    /// phrasal verb's own senses did not exist. `DefinitionPredicateTests` covers the predicate in detail.
+    @Test func subEntrySensesAreReadAndCarryTheirLabel() {
         let xml = """
             <d:entry id="e3" d:title="wibble"><span class="x_xh0">wibble</span>\
             <span class="x_xd0"><span d:pos="1" class="pos">verb</span>\
@@ -83,9 +95,17 @@ struct SenseStructureTests {
             </span></span></span></d:entry>
             """
         let senses = Self.index(xml)?.senses ?? []
-        #expect(senses.count == 1, "only the x_xd1 sense is read")
+        #expect(senses.count == 2, "the main sense and the sub-entry's")
         #expect(senses.first?.definition == "to move unsteadily")
-        #expect(!senses.contains { $0.definition.contains("withdraw") },
-                "the sub-entry sense was read — if this now passes, update the ledger's §4")
+        #expect(senses.first?.position.subEntry == nil)
+        #expect(senses.last?.definition == "to withdraw at the last moment")
+        #expect(senses.last?.position.subEntry == "wibble out",
+                "the label is what keeps a sub-entry sense from colliding with the entry's own")
+        // **A numbered sense inside the sub-entry carries its own id**, not the sub-entry's wrapper.
+        // NOAD's `give up` has five such senses and `take off` six; emitting the sub-entry as one merged
+        // them into a single definition, which is the defect the schema's alias scoping exists to prevent
+        // one level up.
+        #expect(senses.last?.key.value == "e3.10")
+        #expect(senses.last?.position.senseNumber == "1")
     }
 }
