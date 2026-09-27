@@ -87,7 +87,21 @@ public enum ContainerReader {
     }
 
     /// Every decompressed chunk of the body, in file order.
+    ///
+    /// **Materialises all of them.** NOAD's body is 230 MB decompressed, so a pass that only needs one
+    /// chunk at a time should use `forEachBodyChunk(at:_:)` and let each one go.
     public static func bodyChunks(at url: URL) throws -> [Data] {
+        var out: [Data] = []
+        try forEachBodyChunk(at: url) { _, chunk in out.append(chunk) }
+        guard !out.isEmpty else {
+            throw Failure.badChunk("\(url.lastPathComponent): no chunks at \(firstBodyChunk)")
+        }
+        return out
+    }
+
+    /// The same walk, handing each chunk over and keeping none. The file is memory-mapped, so peak
+    /// memory is one decompressed chunk — about 290 KB — rather than the whole body.
+    public static func forEachBodyChunk(at url: URL, _ body: (Int, Data) throws -> Void) throws {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         // The read below is a UInt32 at `payloadSizeOffset`, so four bytes past it must exist. Guarding
         // on `headerSize` alone accepted 65–67-byte files and turned a truncated file into a
@@ -100,8 +114,8 @@ public enum ContainerReader {
         guard end <= data.count else {
             throw Failure.truncated("\(url.lastPathComponent): header claims \(end) bytes, file has \(data.count)")
         }
-        var out: [Data] = []
         var position = firstBodyChunk
+        var index = 0
         while position + chunkHeader <= end {
             let size = Int(data.uint32(at: position))
             if size == 0 { break }
@@ -116,13 +130,12 @@ public enum ContainerReader {
                 throw Failure.badChunk(
                     "\(url.lastPathComponent): chunk at \(position) gave \(block.count) bytes, header says \(expected)")
             }
-            out.append(block)
+            // The index is the chunk's position in file order, which is what a pointer's chunk id
+            // resolves to. It must count every chunk the walk yields, or every later index shifts.
+            try body(index, block)
+            index += 1
             position += 4 + size
         }
-        guard !out.isEmpty else {
-            throw Failure.badChunk("\(url.lastPathComponent): no chunks at \(firstBodyChunk)")
-        }
-        return out
     }
 
     /// Every entry's XHTML, in file order. Each chunk holds a run of length-prefixed UTF-8 records.
