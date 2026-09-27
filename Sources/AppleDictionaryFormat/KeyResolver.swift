@@ -139,11 +139,12 @@ public struct KeyResolutionReport: Sendable {
     public var notARecord = 0
     public var unparsableEntry = 0
 
-    /// Groups whose display form the resolved entry's headword actually contains, over those checked.
+    /// Groups whose display form shares an opening with the headword they resolved to, over those checked.
     ///
-    /// The only oracle available without leaving this module, and it is a **floor rather than a proof**:
-    /// a key that is a variant or an inflection legitimately does not appear in the headword it belongs
-    /// to — `'roos` under `roo`, `&c.` under `etc.` — so a correct dictionary does not score 100%.
+    /// **Not containment.** Asking whether the headword *contains* the key fails for every suffix-inflected
+    /// form and for every dictionary that writes pronunciation inside the word; it scored Russian at 7.9%
+    /// and Traditional Chinese at 6.9% while both resolved correctly. `KeyAgreement` explains the test and
+    /// what it is still blind to.
     public var displayFormAgreement = 0.0
     public var displayFormsChecked = 0
 
@@ -160,35 +161,32 @@ public struct KeyResolutionReport: Sendable {
 
     public var resolvedShare: Double { groups > 0 ? Double(resolved) / Double(groups) : 0 }
 
-    /// Whether the resolved mapping may be used.
+    /// Whether the resolved mapping may be used — and, when not, **what is actually in doubt.**
     ///
-    /// **Measured across the nine dictionaries on the development machine**, agreement separates into two
-    /// clearly distinct populations with nothing in between:
+    /// Agreement is the share of resolved groups whose key and headword share an opening once pronunciation
+    /// is stripped (`KeyAgreement`). It is the only oracle available without leaving this module, and it
+    /// measures **a chain, not the mapping**: a low score means one of
     ///
-    /// | dictionary | agreement | |
-    /// |---|---|---|
-    /// | `zh_CN-en.OCD` | 100.0% | correct |
-    /// | `zh_CN.thes` | 99.1% | correct |
-    /// | `zh_CN.SDCC` | 96.3% | correct |
-    /// | `ko-en.NewAce` | 93.5% | correct |
-    /// | `OAWT` | 85.9% | correct |
-    /// | `NOAD` | 82.4% | correct — the shortfall is variants and inflections |
-    /// | `zh_CN.idioms` | 61.2% | **unverified** |
-    /// | `ko.NewAce` | 56.8% | **unverified** |
-    /// | `zh_TW-en.DrEye` | **3.5%** | **wrong**, while reporting 100% resolved |
+    /// 1. the key mapping is wrong,
+    /// 2. the **headword extraction** is wrong — `he.oup` and `ro.oup` yield `Tranz.` and `(Pop. şi fam.)`
+    ///    as headwords, which is this module's own recorded `x_xh0` defect and nothing to do with keys, or
+    /// 3. the oracle is blind to that language — a kana key against a kanji headword shares no opening,
+    ///    and neither does a prefix-inflecting morphology.
     ///
-    /// DrEye's header does not match the layout this reader assumes — its key-length field is a constant
-    /// 161 — and it uses only 110 chunk ids for 430 chunks, so `chunkID` cannot identify a chunk there at
-    /// all. The thresholds below are drawn to put that case on the far side of a wide gap, and to refuse
-    /// rather than guess in the middle band.
+    /// **So a low score is a refusal to certify, not a finding of fault.** Naming the case `rejected`
+    /// implied the mapping had been shown wrong, and that implication was false: `zh_TW-en.DrEye` scored
+    /// 3.5% under an earlier containment oracle, was described as resolving 96.5% of its keys to the wrong
+    /// entry, and scores **100.0%** here — its headwords interleave Bopomofo between every character, so
+    /// containment could never have matched. Nothing was wrong with it but the measurement.
+    ///
+    /// Measured over the whole catalogue: **64 verified, 10 unverified, 10 disagreeing, 2 with no keys.**
     public enum Confidence: String, Sendable {
         /// Agreement at or above 0.80. Safe to build an index from.
         case verified
-        /// Between 0.50 and 0.80. Not demonstrably wrong, not demonstrably right — a caller must decide,
-        /// and the honest default is to leave the dictionary out.
+        /// Between 0.50 and 0.80. Not certified, not impeached.
         case unverified
-        /// Below 0.50. The mapping is not credible and must not be used.
-        case rejected
+        /// Below 0.50. Something in the chain is wrong, and this measurement cannot say which link.
+        case disagrees
         /// Nothing was checked, so nothing is known. **Never treated as passing.**
         case unmeasured
     }
@@ -197,11 +195,11 @@ public struct KeyResolutionReport: Sendable {
         guard displayFormsChecked > 0 else { return .unmeasured }
         if displayFormAgreement >= 0.80 { return .verified }
         if displayFormAgreement >= 0.50 { return .unverified }
-        return .rejected
+        return .disagrees
     }
 
-    /// Whether a rebuild should use this dictionary's key index at all. Only `verified` qualifies: an
-    /// unverified mapping that turns out wrong is worse than a missing one, because a reader cannot see it.
+    /// Whether a rebuild should use this dictionary's key index. Only `verified` qualifies: an uncertified
+    /// mapping that turns out wrong is worse than a missing one, because a reader cannot see it.
     public var isUsable: Bool { confidence == .verified }
 
     public var summary: String {
@@ -279,7 +277,7 @@ public enum KeyIndexBuilder {
                 // the one number that says whether its mapping is believable.
                 if let display = group.displayKey, !display.isEmpty {
                     agreementChecked += 1
-                    if entry.headword.contains(display) { agreementHits += 1 }
+                    if KeyAgreement.agrees(key: display, headword: entry.headword) { agreementHits += 1 }
                 }
                 try onKey(ResolvedKey(keys: group.keys, entryID: entry.entryID, headword: entry.headword))
             }
