@@ -501,4 +501,19 @@ public enum CaptureEdge {
                 || box.minY <= tolerance || box.maxY >= 1 - tolerance
         }
     }
+
+    /// **Whether text may be missing between two observations a sentence runs across.**
+    ///
+    /// `clips` asks whether a box touches *any* edge, which is the right question about a whole
+    /// block and the wrong one about a junction: two fragments sitting safely side by side, where
+    /// the first happens to start at the capture's left margin, are not cut *between* each other.
+    /// Measured as a false positive on exactly that geometry.
+    ///
+    /// What matters at a junction is the side facing the other fragment. Reading order runs left
+    /// to right and then down, so text goes missing when the earlier one was cut at the **right**
+    /// margin or the later one at the **left** — that is where a wrap passes through the edge of
+    /// what could be captured.
+    public static func cutsBetween(_ earlier: CGRect, _ later: CGRect, tolerance: CGFloat = 0.004) -> Bool {
+        earlier.maxX >= 1 - tolerance || later.minX <= tolerance
+    }
 }

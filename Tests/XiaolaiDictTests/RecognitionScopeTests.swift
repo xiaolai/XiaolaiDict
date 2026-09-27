@@ -140,3 +140,46 @@ extension RecognitionScopeTests {
         #expect(read.mayBeCut, "a sentence spliced across a cut edge was reported whole")
     }
 }
+
+extension RecognitionScopeTests {
+    private static func edged(_ text: String, word: String, x: CGFloat, width: CGFloat, y: CGFloat)
+        -> RecognisedLine {
+        let box = CGRect(x: x, y: y, width: width, height: 0.02)
+        let at = (text as NSString).range(of: word)
+        return RecognisedLine(
+            text: text, box: box,
+            words: [RecognisedWord(text: word, utf16Offset: at.location, box: box)],
+            confidence: 1.0)
+    }
+
+    /// **Two fragments side by side, safely inside the capture, are not cut between each other** —
+    /// even though the first begins at the left margin. Asking whether any contributing
+    /// observation touched *any* edge warned here, which teaches the reader to ignore the warning
+    /// that matters.
+    @Test func fragmentsBesideEachOtherAreNotCutBetweenThem() throws {
+        let lines = [
+            Self.edged("First sentence. The reader", word: "reader", x: 0.0, width: 0.400, y: 0.2),
+            Self.edged("saw a complete sentence. Last sentence.", word: "saw", x: 0.405, width: 0.400, y: 0.2),
+        ]
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text.contains("reader"), "\(read.word.sentence.text)")
+        #expect(!read.mayBeCut, "a sentence cut nowhere was reported as possibly cut")
+    }
+
+    /// **And the two answers are one value**, whatever it is — they were computed separately and
+    /// could disagree, which is what the reader sees when `HoverReader` reads the outer one.
+    @Test func theSentenceCarriesTheSameAnswerAsTheRecognition() throws {
+        for pick in [RecognisedPick(line: 0, word: 0), RecognisedPick(line: 1, word: 0)] {
+            let lines = [
+                Self.edged("First sentence. The reader saw", word: "reader", x: 0.1, width: 0.9, y: 0.200),
+                Self.edged("a sentence missing words. Last sentence.", word: "sentence", x: 0.1, width: 0.9, y: 0.225),
+            ]
+            let read = try #require(ScreenTextRecogniser.reading(
+                lines, pick: pick, region: Self.region, appName: nil, bundleID: nil))
+            #expect(read.mayBeCut == read.word.sentence.mayBeCut,
+                    "pick \(pick): Recognition says \(read.mayBeCut), the sentence says \(read.word.sentence.mayBeCut)")
+        }
+    }
+}

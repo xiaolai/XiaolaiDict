@@ -186,17 +186,31 @@ final class ScreenTextRecogniser: Sendable {
         guard let settled else { return nil }
 
         // **And the junction, which neither answer sees.** A sentence running across two
-        // observations passes through the edge between them; if that observation was cut there,
-        // words are missing from the middle of the sentence — while the sentence touches neither
-        // end of the block, so the textual answer is `false`, and it is the *interior* that is
-        // damaged, so an answer scoped to the ends cannot find it. Erring towards warning is the
-        // only safe direction here: a sentence wrongly marked cut costs the reader a caveat, and
-        // one wrongly marked whole is the failure rendering as confidently as a success.
-        let spansAJunction = covering.count > 1 && clipped
+        // observations passes through the boundary between them; if the capture was cut there,
+        // words are missing from the *middle* of the sentence — while the sentence touches neither
+        // end of the block, so the textual answer is `false`, and an answer scoped to the ends
+        // cannot find it.
+        //
+        // Asking only whether some contributing observation touches *any* edge over-warns: two
+        // fragments side by side, the first starting at the capture's left margin, are not cut
+        // between each other. `cutsBetween` asks about the sides that face.
+        let junction = zip(covering, covering.dropFirst()).contains {
+            CaptureEdge.cutsBetween(lines[$0].box, lines[$1].box)
+        }
+
+        // **One value, used for both.** `SentenceContext.mayBeCut` is positional — does the
+        // sentence reach the block's ends — so it cannot express a cut in the middle, and leaving
+        // the two to be computed separately is what let them disagree in the first place. The
+        // sentence is rebuilt carrying the answer rather than left to derive its own.
+        let cut = settled.sentence.mayBeCut || junction
+        guard let sentence = SentenceContext(
+            text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection)
+        else { return nil }
+
         return Recognition(
-            word: settled,
+            word: WordAtPoint(word: settled.word, sentence: sentence),
             confidence: block.confidence(over: span, in: lines),
-            mayBeCut: settled.sentence.mayBeCut || spansAJunction,
+            mayBeCut: cut,
             appName: appName, bundleID: bundleID)
     }
 
