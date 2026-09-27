@@ -39,7 +39,7 @@ let package = Package(
         // The three Markdown files are the module's own record — the feature ledger, the audit and
         // how every figure was measured. Excluded because SwiftPM would otherwise warn them as
         // unhandled resources; a fourth document has to be added here too, and will warn until it is.
-        .target(name: "AppleDictionaryFormat", exclude: ["FEATURE-LEDGER.md", "AUDIT.md", "RESEARCH.md", "DICTIONARIES.md"]),
+        .target(name: "AppleDictionaryFormat", exclude: ["FEATURE-LEDGER.md", "AUDIT.md", "RESEARCH.md", "DICTIONARIES.md", "PLAN.md"]),
 
         // Everything about the local model that is not running it: the model service's wire
         // protocol, the prompts and the answer schema, the catalogue, what this Mac can hold, and

@@ -4,7 +4,7 @@
 against **all 86 assets in the macOS 27 dictionary catalogue**, downloaded and read; none is cited from
 documentation. Findings and their fix history are in `AUDIT.md` beside this file; how each figure was
 measured, and against which set, is in `RESEARCH.md`. **`DICTIONARIES.md` is the per-dictionary reference** — all 86, measured, with what each
-one needs from an adapter.
+one needs from an adapter. **`PLAN.md` is the agreed order of work**, and §4 below is what it closes.
 
 **Which set matters.** The catalogue figures come from the full 86 downloaded that day. An ordinary Mac
 carries only what its region and language selected — this one has 16 — and the gated tests **print
