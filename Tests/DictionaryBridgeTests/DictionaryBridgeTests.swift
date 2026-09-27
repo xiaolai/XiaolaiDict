@@ -277,7 +277,12 @@ struct SenseCoverageTests {
     }
 
     /// 譯典通 has the sense structure and no ids at all: a weaker claim, and one that says so.
-    @Test func aDictionaryWithoutIDsIsKeyedByPosition() throws {
+    ///
+    /// Skipped where that dictionary is not enabled — there is nothing to measure — and
+    /// `DictionaryCensusTests` reports the absence so the skip is never silent.
+    @Test(.enabled(if: DictionaryPresence.isEnabled("譯典通"),
+                   "譯典通 is not enabled in Dictionary.app on this Mac"))
+    func aDictionaryWithoutIDsIsKeyedByPosition() throws {
         let entries = try Self.entries("fine", from: "譯典通")
         #expect(entries.allSatisfy { $0.senseCount > 0 })
         #expect(entries.allSatisfy { $0.senseKeyKind == .position })
@@ -324,19 +329,27 @@ struct DictionaryCapabilityTests {
 
     /// The three rungs, measured on this Mac: NOAD and 牛津英汉汉英 carry the publisher's sense ids,
     /// 譯典通 has the structure without ids, and the sideloaded conversions have neither.
+    ///
+    /// **Each row is checked only where its dictionary is enabled**, because a reader turning one
+    /// off in Dictionary.app is not a defect in this code — and gating the whole test on the
+    /// rarest of the four would stop measuring the other three. A floor keeps it from going
+    /// vacuous: at least one rung must have been measured, or the check has quietly become a
+    /// green line that asserts nothing.
     @Test func eachDictionaryReportsTheRungItCanActuallyReach() throws {
         let capabilities = DictionaryBridge.capabilities()
-        func rung(_ name: String) throws -> SenseKeyKind {
-            let found = try #require(
-                capabilities.first { $0.identity.name.contains(name) },
-                "\(name) is not enabled in Dictionary.app on this Mac")
+        var measured = 0
+        func rung(_ name: String, is expected: SenseKeyKind) throws {
+            guard DictionaryPresence.isEnabled(name) else { return }
+            let found = try #require(capabilities.first { $0.identity.name.contains(name) })
             #expect(found.probed, "no probe word was found in \(name), so its rung is a floor not a finding")
-            return found.senseKeyKind
+            #expect(found.senseKeyKind == expected, "\(name) reached \(found.senseKeyKind)")
+            measured += 1
         }
-        #expect(try rung("New Oxford American") == .publisher)
-        #expect(try rung("牛津") == .publisher)
-        #expect(try rung("譯典通") == .position)
-        #expect(try rung("Collins COBUILD") == SenseKeyKind.none)
+        try rung("New Oxford American", is: .publisher)
+        try rung("牛津", is: .publisher)
+        try rung("譯典通", is: .position)
+        try rung("Collins COBUILD", is: SenseKeyKind.none)
+        #expect(measured > 0, "none of the four dictionaries is enabled, so no rung was measured")
     }
 
     /// A dictionary whose identifier is empty — every sideloaded conversion — is keyed by name, and
@@ -478,7 +491,16 @@ struct DictionaryCapabilityTests {
 /// would say so. The documents may differ in the `aria-label` naming the index form the search
 /// matched, and in nothing else.
 struct RepeatedRecordPremiseTests {
-    @Test(arguments: ["run", "cougher", "pellucidly", "的", "了", "中"])
+    /// **The CJK terms are 譯典通's**, and are offered only where it is enabled: it is the
+    /// dictionary that answers 的 with three records of one id, one per reading. The Latin terms
+    /// are NOAD's and the Writer's Thesaurus's and are always offered, so the premise is still
+    /// exercised on any Mac.
+    static var terms: [String] {
+        ["run", "cougher", "pellucidly"]
+            + (DictionaryPresence.isEnabled("譯典通") ? ["的", "了", "中"] : [])
+    }
+
+    @Test(arguments: RepeatedRecordPremiseTests.terms)
     func recordsSharingAnEntryIDAreOneEntry(term: String) throws {
         let records = try DictionaryBridge.records(for: term).entries
         let groups = Dictionary(grouping: records.filter { $0.entryID != nil }) {
