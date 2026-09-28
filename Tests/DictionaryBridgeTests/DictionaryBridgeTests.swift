@@ -51,7 +51,8 @@ struct DictionaryBridgeTests {
 
     /// Not only NOAD: 牛津英汉汉英 files *fine* as two entries as well.
     @Test func anotherDictionaryAlsoReturnsSeveralRecords() throws {
-        let oxford = try DictionaryBridge.entries(for: "fine").entries.filter { $0.dictionary.name.contains("牛津") }
+        // `"牛津"` alone matched 牛津粵英雙語詞典 too, once it was installed — see `entries(_:from:)`.
+        let oxford = try DictionaryBridge.entries(for: "fine").entries.filter { $0.dictionary.name.contains("牛津英汉") }
         try #require(!oxford.isEmpty, "牛津英汉汉英词典 is not enabled in Dictionary.app on this Mac")
         #expect(oxford.count == 2)
         #expect(oxford.map(\.entryID) == ["e_b-en-zh_hans0013659", "e_b-en-zh_hans0013660"])
@@ -241,9 +242,20 @@ struct ServiceReplyTests {
 /// `dev-docs/dictionary-markup.md` §5 is a measurement, and a measurement that is not re-run is a
 /// claim: these reproduce it through the live lookup path.
 struct SenseCoverageTests {
+    /// Entries from the one enabled dictionary whose name contains `dictionary`.
+    ///
+    /// **Exactly one, asserted.** `"牛津"` selected 牛津英汉汉英词典 uniquely until 牛津粵英雙語詞典 was
+    /// installed on 2026-09-28, after which this filter returned both and four assertions failed on
+    /// counts that were about to be measured across two dictionaries. A selector that matches two is
+    /// broken, and the failure it produces otherwise describes the dictionary rather than the selector.
+    /// Names rather than identifiers because the sideloaded conversions have no `CFBundleIdentifier` at
+    /// all, so this is the only key that covers every caller.
     private static func entries(_ term: String, from dictionary: String) throws -> [DictionaryEntry] {
         let found = try DictionaryBridge.entries(for: term).entries.filter { $0.dictionary.name.contains(dictionary) }
         try #require(!found.isEmpty, "\(dictionary) is not enabled in Dictionary.app on this Mac")
+        let matched = Set(found.map(\.dictionary.name))
+        try #require(matched.count == 1,
+                     "'\(dictionary)' names \(matched.count) enabled dictionaries — \(matched.sorted()) — so this measures none of them")
         return found
     }
 
@@ -260,7 +272,7 @@ struct SenseCoverageTests {
     /// 牛津英汉汉英 spells it `lexid`, and files *hold* as one entry of 49 senses — which is the
     /// entry `study-unit.md` §1 is about: 货舱 is sense 47 of 49, invisible to a word-level unit.
     @Test func oxfordChineseSensesCarryLexids() throws {
-        let entries = try Self.entries("hold", from: "牛津")
+        let entries = try Self.entries("hold", from: "牛津英汉")
         #expect(entries.map(\.senseCount) == [49])
         for sense in entries.flatMap(\.senses) {
             #expect(sense.keyKind == .publisher)
@@ -270,7 +282,7 @@ struct SenseCoverageTests {
 
     /// Numbering restarts per part-of-speech block, so *hold*'s 49 senses are not one run of 49.
     @Test func sensesAreGroupedIntoPartOfSpeechBlocks() throws {
-        let entry = try #require(try Self.entries("hold", from: "牛津").first)
+        let entry = try #require(try Self.entries("hold", from: "牛津英汉").first)
         #expect(entry.blocks.count > 1, "49 senses arrived as a single block")
         #expect(entry.blocks.allSatisfy { $0.senses.first?.path.ordinal == 1 }, "ordinals do not restart per block")
         #expect(entry.blocks.compactMap(\.partOfSpeech).count == entry.blocks.count, "a block named no part of speech")
@@ -453,11 +465,12 @@ struct DictionaryCapabilityTests {
         let capabilities = DictionaryBridge.capabilities()
         func found(_ name: String) throws -> DictionaryCapability {
             try #require(
-                capabilities.first { $0.identity.name.contains(name) },
+                // `.first` of several would silently answer about the wrong dictionary; one match only.
+                capabilities.filter { $0.identity.name.contains(name) }.oneAndOnly,
                 "\(name) is not enabled in Dictionary.app on this Mac")
         }
         #expect(try !found("New Oxford American").languages.isEmpty)
-        #expect(try !found("牛津").languages.isEmpty)
+        #expect(try !found("牛津英汉").languages.isEmpty)
         #expect(try found("Collins COBUILD").languages.isEmpty)
         #expect(try found("Longman Dictionary").languages.isEmpty)
     }
@@ -468,7 +481,7 @@ struct DictionaryCapabilityTests {
     /// that answers. NOAD explains in English, so it answers for an English reader and nobody else.
     @Test func theBilingualIsTheOneForAReaderOfItsOwnLanguage() throws {
         let capabilities = DictionaryBridge.capabilities()
-        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津英汉") })
         let noad = try #require(capabilities.first { $0.identity.name.contains("New Oxford American") })
 
         #expect(oxford.teachesEnglish(to: "zh-Hans-CN"))
@@ -500,7 +513,7 @@ struct DictionaryCapabilityTests {
     /// than a liveness check.
     @Test func theProbeSeesBothHalvesOfABilingual() throws {
         let capabilities = DictionaryBridge.capabilities()
-        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津") })
+        let oxford = try #require(capabilities.first { $0.identity.name.contains("牛津英汉") })
         #expect(oxford.indexes.contains(.latin))
         #expect(oxford.indexes.contains(.han))
     }
@@ -594,4 +607,12 @@ struct RepeatedRecordPremiseTests {
         html.replacingOccurrences(
             of: #"aria-label="[^"]*""#, with: "", options: .regularExpression)
     }
+}
+
+
+/// Exactly one, or nil — so a selector that matches several fails its `#require` rather than quietly
+/// answering about whichever came first. Added 2026-09-28, when installing 牛津粵英雙語詞典 made `"牛津"`
+/// match two enabled dictionaries.
+extension Array {
+    var oneAndOnly: Element? { count == 1 ? first : nil }
 }

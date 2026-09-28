@@ -40,7 +40,8 @@ enum DictionaryPresence {
     /// with three records under one id — which is a different claim and is what it is listed for now.
     static let measured = [
         ("New Oxford American", "publisher sense ids on every sense"),
-        ("牛津", "publisher sense ids, as lexids"),
+        // "牛津" alone also matches 牛津粵英雙語詞典, installed 2026-09-28.
+        ("牛津英汉", "publisher sense ids, as lexids"),
         ("Oxford American Writer", "the positional rung — 11 entries and 199 senses here"),
         ("譯典通", "the CJK repeated-record premise — 的 answers with three records under one id"),
         ("Collins COBUILD", "a sideloaded conversion with no senses to key"),
