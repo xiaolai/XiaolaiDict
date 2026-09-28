@@ -11,9 +11,9 @@ import Foundation
 /// So this supplies no senses, no entries and no identity. Nothing here can orphan a study item, and the
 /// sense-key question does not arise.
 ///
-/// **It needs no index.** The phrase list is read straight from `KeyText.data`: NOAD yields **90,391**
-/// multi-word keys in **1.30 MB**, in **0.2 s**, against 319 MB and 317 s for the full index (2026-09-28).
-/// Re-reading is cheap enough that staleness is not a problem to solve.
+/// **The key index is cheap.** The phrase list is read straight from `KeyText.data`: NOAD yields
+/// **104,009** multi-word keys in about a second, against 319 MB and 317 s for the full index. Re-reading
+/// is cheap enough that staleness is not a problem to solve.
 ///
 /// **A dictionary stores its keys in lemma form.** `give up` is a key and `gave up` is not, so a caller
 /// normalises each word of the sentence before asking — `Lemmatizer` resolves 8 of 8 measured irregulars
@@ -41,10 +41,13 @@ public struct PhraseSpans: Sendable, Equatable {
     /// same fragments once made sub-entry scoping match the wrong phrase.
     public init(bundle: URL) throws {
         var found = Set<String>()
+        // **Every key of the group, not just the first.** A group is a folded search key followed by
+        // display forms, so `keys.first` alone loses the spellings a reader actually writes: measured
+        // 2026-09-29, 90,391 phrases from the first key against **104,009** from all of them.
         for group in try KeyIndexReader.groups(in: bundle) {
-            guard let key = group.searchKey,
-                  key.contains(" "), !key.contains("xpointer(") else { continue }
-            found.insert(key)
+            for key in group.keys where key.contains(" ") && !key.contains("xpointer(") {
+                found.insert(key)
+            }
         }
         self.init(phrases: found)
     }
