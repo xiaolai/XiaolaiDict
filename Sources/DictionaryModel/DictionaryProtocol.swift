@@ -73,6 +73,27 @@ public struct DictionaryCapability: Codable, Sendable, Equatable {
         languages.contains { $0.indexesEnglish(explainedIn: language) }
     }
 
+    /// Whether English can be looked up in it at all, whoever it explains to.
+    ///
+    /// The weaker half of `teachesEnglish(to:)`, and it earns its own name because the reader's own
+    /// choice outranks the rule: someone who installs 牛津粵英雙語詞典 has said which language they read
+    /// English in, and `yue` is a different language code from `zh`, so no Chinese reader matches it.
+    /// The menu has always let them pick it; this is what lets the setup board stop describing it as
+    /// absent.
+    public var indexesEnglish: Bool {
+        languages.contains { DictionaryLanguages.tag($0.index)?.languageCode?.identifier == "en" }
+    }
+
+    /// Whether it explains English **in English** — a monolingual or a thesaurus.
+    ///
+    /// Beside `indexesEnglish` because the pair is what distinguishes "a dictionary for a reader of
+    /// another language" from "a dictionary in the language of the thing being studied". NOAD is the
+    /// second, and calling it the first would describe it to a Chinese reader as a foreign-language
+    /// dictionary.
+    public var explainsInEnglish: Bool {
+        languages.contains { DictionaryLanguages.tag($0.explains)?.languageCode?.identifier == "en" }
+    }
+
     /// What the menu prints beside the dictionary's name.
     public var note: String {
         guard probed else { return "not yet known" }

@@ -255,7 +255,18 @@ public struct SetupView: View {
                 // Telling a reader with Longman and Collins enabled that they have no English
                 // dictionary would be false, and this is the row where the probe's answer finally
                 // earns its keep.
-                if board.undeclaredEnglishDictionaries.isEmpty {
+                // **A dictionary the reader deliberately installed is not an absence.** Checked before
+                // the two branches below, because both of them tell the reader to go and enable
+                // something — and someone who has enabled 牛津粵英雙語詞典 has already done it. `yue` is
+                // a different language code from `zh`, so no Chinese reader matches it and the rule
+                // cannot see the choice they made. The menu always let them pick it; this is the row
+                // catching up.
+                if let sideways = board.englishForAnotherLanguage.first {
+                    Text("""
+                         \(sideways.identity.name) looks up English but explains it in another \
+                         language. If that is the language you read, study from it.
+                         """)
+                } else if board.undeclaredEnglishDictionaries.isEmpty {
                     // No promise of automatic detection: nothing watches Dictionary.app, and
                     // "this will notice" would have the reader waiting for something that never
                     // happens. The button beside it is the answer.
@@ -491,8 +502,17 @@ public struct SetupView: View {
                     .buttonStyle(.glassProminent)
             }
             if case .nothingSuitable = board.proposal, !board.isAsking {
-                Button("Open Dictionary…") { openDictionaryApp() }
-                    .buttonStyle(.glassProminent)
+                // The sideways offer comes first and is prominent, because for a reader who installed
+                // a dictionary for their own language it is the answer — and "Open Dictionary…" would
+                // send them back to a list they have already set.
+                if let sideways = board.englishForAnotherLanguage.first {
+                    Button("Use \(sideways.identity.name)") { dictionary?.choose(sideways.identity.key) }
+                        .buttonStyle(.glassProminent)
+                    Button("Open Dictionary…") { openDictionaryApp() }
+                } else {
+                    Button("Open Dictionary…") { openDictionaryApp() }
+                        .buttonStyle(.glassProminent)
+                }
             }
             if let openSettings, !board.isAsking {
                 Button(board.chosenDictionary == nil ? "Choose…" : "Change…") {

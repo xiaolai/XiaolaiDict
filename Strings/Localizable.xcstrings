@@ -38,6 +38,9 @@
         }
       }
     },
+    "%@ looks up English but explains it in another language. If that is the language you read, study from it." : {
+
+    },
     "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
 
     },

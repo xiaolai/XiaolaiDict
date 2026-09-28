@@ -114,6 +114,26 @@ public struct SetupBoard: Equatable, Sendable {
         (available ?? []).filter { $0.languages.isEmpty && $0.indexes.contains(.latin) }
     }
 
+    /// English-indexing dictionaries that explain in a language which is **not** this reader's.
+    ///
+    /// **A reader's download is a statement of intent, and the board must not talk past it.** Someone
+    /// who enables 牛津粵英雙語詞典 has said which language they read English in — but `yue` is a
+    /// different language code from `zh` (both script Hant), so `teachesEnglish(to:)` refuses it for
+    /// every Chinese reader, and `.nothingSuitable` then told them to enable a dictionary in
+    /// Dictionary.app, which is what they had just done. The menu always let them choose it, so what
+    /// was missing was never the capability — only a board that could see what they had.
+    ///
+    /// Empty where the proposal answers: a sideways offer beside a real proposal is two answers to one
+    /// question. And an English monolingual is excluded — it explains in English, which is a dictionary
+    /// language rather than another reader's, and listing NOAD here would call it a Cantonese
+    /// dictionary.
+    public var englishForAnotherLanguage: [DictionaryCapability] {
+        guard case .nothingSuitable = proposal else { return [] }
+        return (available ?? []).filter {
+            $0.indexesEnglish && !$0.explainsInEnglish && !$0.teachesEnglish(to: language)
+        }
+    }
+
     /// True when the reader chose a dictionary that is no longer enabled.
     public var chosenDictionaryIsMissing: Bool {
         guard chosen != nil, let available else { return false }

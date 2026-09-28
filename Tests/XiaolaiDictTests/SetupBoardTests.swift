@@ -18,6 +18,15 @@ struct SetupBoardTests {
         senseKeyKind: .publisher, probed: true,
         languages: [.init(index: "en_US", explains: "en_US")], indexes: [.latin])
 
+    /// 牛津粵英雙語詞典: indexes English and explains in Cantonese. `yue` is a *different* language code
+    /// from `zh` in Foundation — both resolve to script Hant — so no Chinese reader matches it, however
+    /// deliberately they installed it.
+    private static let cantonese = DictionaryCapability(
+        identity: DictionaryIdentity(name: "牛津粵英雙語詞典", identifier: "com.apple.dictionary.yue-en.oup"),
+        senseKeyKind: .publisher, probed: true,
+        languages: [.init(index: "yue", explains: "yue"), .init(index: "en", explains: "yue")],
+        indexes: [.latin, .han])
+
     /// A usable combination — ⌃⌥D, as shipped.
     private static let combination = Shortcut(keyCode: 2, modifiers: 2_048 + 4_096)
 
@@ -40,6 +49,41 @@ struct SetupBoardTests {
             available: available, chosen: chosen, language: language, shortcut: shortcut,
             shortcutIsRegistered: shortcutIsRegistered, model: model, modelDeclined: modelDeclined,
             engine: engine)
+    }
+
+    // MARK: - A dictionary for another language is still a dictionary the reader has
+
+    /// **The reader's download is the statement of intent, and the board must not talk past it.**
+    ///
+    /// A reader who enables 牛津粵英雙語詞典 has said which language they read English in. The proposal
+    /// cannot see it — `yue` is not `zh`, so `teachesEnglish(to:)` refuses — and the board's
+    /// `.nothingSuitable` branch then told them "no enabled dictionary explains English in your
+    /// language. Enable one in Dictionary", which sends them to do the thing they have already done.
+    /// The menu has always let them choose it, so the capability was never missing; only the board
+    /// asserted otherwise.
+    @Test func aDictionaryThatExplainsInAnotherLanguageIsOffered() {
+        let board = board(available: [Self.cantonese, Self.noad], chosen: nil, language: "zh-Hant-HK")
+        #expect(board.proposal == .nothingSuitable, "the premise: nothing matches a zh-Hant reader")
+        #expect(board.undeclaredEnglishDictionaries.isEmpty, "and it is not the undeclared case either")
+        #expect(board.englishForAnotherLanguage.map(\.identity.name) == ["牛津粵英雙語詞典"],
+                "the Cantonese dictionary indexes English and must be offered, not described as absent")
+    }
+
+    /// An English monolingual is not "for another language" — it explains in English, which is the
+    /// reader's *dictionary* language even when it is not their own. Listing NOAD here would tell a
+    /// Chinese reader that NOAD is a Cantonese dictionary.
+    @Test func anEnglishMonolingualIsNotAnotherLanguage() {
+        let board = board(available: [Self.noad], chosen: nil, language: "zh-Hans-CN")
+        #expect(board.englishForAnotherLanguage.isEmpty)
+    }
+
+    /// And where the reader's own dictionary is present, there is nothing to offer sideways: the
+    /// proposal answers, so this list must stay empty rather than duplicating the offer.
+    @Test func nothingIsOfferedSidewaysWhenTheReadersOwnDictionaryIsThere() {
+        let board = board(available: [Self.oxford, Self.cantonese], chosen: nil, language: "zh-Hans-CN")
+        #expect(board.proposal == .propose(Self.oxford))
+        #expect(board.englishForAnotherLanguage.isEmpty,
+                "a sideways offer beside a real proposal is two answers to one question")
     }
 
     // MARK: - Rows read live state
