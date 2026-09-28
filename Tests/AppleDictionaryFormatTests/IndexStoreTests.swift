@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 @testable import AppleDictionaryFormat
 
 /// **The four scripts that failed against the first schema draft, each of which must now pass.**
@@ -311,11 +312,10 @@ import Testing
     /// The store survives being reopened: the schema applies with `IF NOT EXISTS`, so opening an existing
     /// index is the same code path as creating one.
     @Test func anExistingIndexReopensWithoutLoss() throws {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("adf-index-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("index.sqlite").path
+        // `TemporaryDirectory`, not `NSTemporaryDirectory()` — nothing owned the 16,363
+        // UUID-named directories that idiom left behind, which is why the helper exists.
+        let scratch = TemporaryDirectory(named: "adf-index")
+        let path = scratch.appending("index.sqlite").path
 
         do {
             let store = try IndexStore(path: path)
@@ -407,11 +407,10 @@ import Testing
     /// dictionaries on this Mac and can always be rebuilt, so throwing it away is both safe and the only
     /// option that cannot half-work.
     @Test func anIndexFromAnOlderSchemaIsDiscarded() throws {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("adf-schema-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("index.sqlite").path
+        // `TemporaryDirectory`, not `NSTemporaryDirectory()` — nothing owned the 16,363
+        // UUID-named directories that idiom left behind, which is why the helper exists.
+        let scratch = TemporaryDirectory(named: "adf-schema")
+        let path = scratch.appending("index.sqlite").path
 
         do {
             let store = try IndexStore(path: path)

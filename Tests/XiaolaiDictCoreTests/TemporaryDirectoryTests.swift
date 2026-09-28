@@ -50,6 +50,7 @@ struct TemporaryDirectoryTests {
         // Foundation's older `NSTemporaryDirectory()`. Searching for the first alone left the
         // second making UUID-named directories under a rule written to stop exactly that.
         let making = "temporary" + "directory"
+        let bare = "ns" + making + "()"
         var offenders: [String] = []
         for file in files {
             for (index, line) in try String(contentsOf: file, encoding: .utf8)
@@ -59,7 +60,15 @@ struct TemporaryDirectoryTests {
                 // A *file* under it is cleaned up by the `defer` the ledger fixtures already have;
                 // what leaks is a directory, which is what `appending(path:` with a directory hint
                 // or `createDirectory` makes.
-                guard code.contains("directoryHint") || code.contains("createDirectory") else { continue }
+                //
+                // **And the bare call, on any line.** Requiring one of those two on the *same* line
+                // missed the two-line form — `URL(fileURLWithPath: NSTemporaryDirectory())` and then
+                // `createDirectory(at: directory,` underneath, which names no temporary anything. Two
+                // of those sat in `IndexStoreTests` under a rule written to stop exactly them, and the
+                // scan stayed green. There is no legitimate use of the bare call in a test, so it needs
+                // no second condition.
+                guard code.contains("directoryHint") || code.contains("createDirectory")
+                        || code.lowercased().contains(bare) else { continue }
                 offenders.append("\(file.lastPathComponent):\(index + 1)")
             }
         }

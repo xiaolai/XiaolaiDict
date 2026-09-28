@@ -103,7 +103,8 @@ let package = Package(
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),
         // Gated on XIAOLAIDICT_BUNDLES: the measurements run against real installed
         // dictionaries, whose text is licensed and never vendored into the repository.
-        .testTarget(name: "AppleDictionaryFormatTests", dependencies: ["AppleDictionaryFormat"]),
+        .testTarget(name: "AppleDictionaryFormatTests",
+                    dependencies: ["AppleDictionaryFormat", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.

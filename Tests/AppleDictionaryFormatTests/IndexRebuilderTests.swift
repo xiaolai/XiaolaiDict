@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 @testable import AppleDictionaryFormat
 
 /// The rebuild decision, tested without a body pass.
@@ -206,11 +207,8 @@ import Testing
         let candidates = Self.smallestFirst()
         try #require(!candidates.isEmpty,
                      "XIAOLAIDICT_BUNDLES is set but yielded no bundle with a readable body")
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("adf-rebuild-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try IndexStore(path: directory.appendingPathComponent("index.sqlite").path)
+        let scratch = TemporaryDirectory(named: "adf-rebuild")
+        let store = try IndexStore(path: scratch.appending("index.sqlite").path)
         let rebuilder = IndexRebuilder(store: store)
 
         var stages: Set<IndexRebuilder.Progress.Stage> = []
