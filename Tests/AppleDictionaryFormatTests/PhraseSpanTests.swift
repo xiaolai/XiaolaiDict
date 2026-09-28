@@ -27,6 +27,15 @@ struct PhraseSpanTests {
         // two valid answers and only the longer is right. Without a pair like this the longest-wins
         // test passed with the rule inverted — caught by neutralising it, not by reading it.
         "give up the ghost",
+        // **Slot forms, as the publisher writes them.** These are the shapes measured in NOAD — 1,401 of
+        // its multi-word keys and 1,659 of its sub-entry labels name the object's position explicitly, so
+        // separability is read off the label rather than inferred.
+        "give something up", "take something into account", "account for something",
+        "look something up", "bear something in mind",
+        // **What NOAD actually files for a plain phrasal verb: no slot at all.** Measured 2026-09-29 —
+        // `turn down`, `give away`, `look after` are all bare, so separability there is a fact about
+        // English rather than about the dictionary, and it is the only thing this type infers.
+        "turn down", "give away", "look after",
     ]
 
     private func index() -> PhraseSpans { PhraseSpans(phrases: known) }
@@ -87,5 +96,148 @@ struct PhraseSpanTests {
     /// returning it here would make every lookup claim to be a phrase.
     @Test func aSingleWordIsNotAPhrase() {
         #expect(PhraseSpans(phrases: ["take"]).phrase(in: ["take", "it"], containing: 0) == nil)
+    }
+
+    /// **The sentence that raised the question.** Nine words sit in the slot, and the object contains
+    /// "and", so nothing structural separates this from two unrelated clauses — only the publisher's own
+    /// `something` says the gap belongs there.
+    @Test func aPhrasalVerbSplitByALongObjectIsStillTheSamePhrase() {
+        let words = "take what people think and other possible edge cases all into account"
+            .components(separatedBy: " ")
+        let found = index().match(in: words, containing: 0)
+        #expect(found?.phrase == "take something into account")
+        #expect(found?.words == 0 ... 11, "the span reaches from the verb to the end of the phrase")
+        #expect(found?.gap == 9, "and says how far it reached, so the selector can weigh it")
+        #expect(index().match(in: words, containing: 11)?.phrase == "take something into account",
+                "and is found from the far end as well as from the verb")
+    }
+
+    /// A word that merely fell inside somebody else's slot is not part of the phrase. Hovering *people*
+    /// in that sentence is hovering *people* — this is the guard that keeps a long gap from swallowing
+    /// every word between the two halves.
+    @Test func aWordInsideTheSlotIsNotPartOfThePhrase() {
+        let words = "take what people think and other possible edge cases all into account"
+            .components(separatedBy: " ")
+        #expect(index().match(in: words, containing: 2) == nil)
+        #expect(index().match(in: words, containing: 8) == nil)
+    }
+
+    /// The everyday separable case, which a contiguous matcher misses entirely.
+    ///
+    /// Sentences arrive in lemma form — `look`, not `looked` — because that is how a dictionary files its
+    /// keys, and the hovered index is always a literal word of the phrase rather than one of the reader's
+    /// own words filling the slot.
+    @Test(arguments: [
+        ("they give the plan up eventually", 1, "give something up"),
+        ("she look the unfamiliar word up", 5, "look something up"),
+        ("bear the deadline in mind", 0, "bear something in mind"),
+        ("bear the deadline in mind", 4, "bear something in mind"),
+    ])
+    func aSeparatedPhrasalVerbIsFound(sentence: String, word: Int, expected: String) {
+        #expect(index().phrase(in: sentence.components(separatedBy: " "), containing: word) == expected)
+    }
+
+    /// **The nearest filling of the slot wins**, because a narrow gap is better evidence than a wide one.
+    /// Both placements are valid here and only the tighter is what the reader met. Verified by inverting
+    /// the gap comparison, which turns this red and nothing else.
+    @Test func theNearestFillingOfTheSlotWins() {
+        let words = ["we", "take", "care", "to", "take", "everything", "into", "account"]
+        let found = index().match(in: words, containing: 7)
+        #expect(found?.words == 4 ... 7)
+        #expect(found?.gap == 1)
+    }
+
+    /// A trailing slot names no gap inside the phrase, so the template matches adjacent words like any
+    /// other — and answers with the dictionary's spelling, which is the string that has the entry.
+    @Test func aTrailingSlotIsAnOrdinaryContiguousPhrase() {
+        let found = index().match(in: ["we", "account", "for", "the", "difference"], containing: 1)
+        #expect(found?.phrase == "account for something")
+        #expect(found?.words == 1 ... 2)
+        #expect(found?.gap == 0)
+    }
+
+    /// **More of the phrase written out wins over a wider guess.** `give up the ghost` has four literal
+    /// words against `give something up`'s two, and both are keys, so length settles it before the gap
+    /// is even compared.
+    @Test func theMoreLiteralPhraseBeatsTheSlottedOne() {
+        #expect(index().phrase(in: ["they", "give", "up", "the", "ghost"], containing: 1)
+            == "give up the ghost")
+    }
+
+    /// The gap is bounded, and the bound is the caller's to set — a narrow one refuses the long object
+    /// rather than reporting it with a large `gap`.
+    @Test func aGapWiderThanAllowedIsNotAMatch() {
+        let words = "take what people think and other possible edge cases all into account"
+            .components(separatedBy: " ")
+        #expect(index().match(in: words, containing: 0, widestGap: 3) == nil)
+        #expect(index().match(in: words, containing: 0, widestGap: 9)?.gap == 9,
+                "and the boundary itself is inclusive")
+    }
+
+    /// A slot is filled by at least one word, so a template never matches the unslotted spelling — those
+    /// are different keys with different entries, and `take into account` is not a key at all.
+    @Test func aSlotIsNotAllowedToMatchNothing() {
+        #expect(PhraseSpans(phrases: ["give something up"])
+            .phrase(in: ["they", "give", "up"], containing: 1) == nil)
+    }
+
+    /// Slots around one literal word leave no phrase, so nothing is claimed.
+    @Test func aTemplateOfOneLiteralWordIsNotAPhrase() {
+        #expect(PhraseSpans(phrases: ["take something"])
+            .phrase(in: ["take", "it", "along"], containing: 0) == nil)
+    }
+
+    /// **The class the dictionary does not mark.** NOAD files `turn down` bare, so *turn the offer down*
+    /// is only findable by inferring that `down` is a particle a reader may move — and the answer says so,
+    /// because a guess and a publisher's slot are not the same evidence.
+    @Test func aBarePhrasalVerbIsBrokenOnlyByInference() {
+        let found = index().match(in: ["they", "turn", "the", "offer", "down"], containing: 1)
+        #expect(found?.phrase == "turn down")
+        #expect(found?.words == 1 ... 4)
+        #expect(found?.separation == .inferred(2))
+    }
+
+    /// Written unbroken, nothing is inferred, and the answer says that too.
+    @Test func anUnbrokenPhrasalVerbIsNotAnInference() {
+        let found = index().match(in: ["they", "turn", "down", "the", "offer"], containing: 1)
+        #expect(found?.separation == PhraseSpans.Separation.none)
+        #expect(found?.gap == 0)
+    }
+
+    /// A publisher's slot is trusted far; an inference is not. The same nine-word gap that
+    /// `take something into account` is allowed would be refused here.
+    @Test func anInferredGapIsHeldTighterThanAMarkedOne() {
+        let split = "turn what people think and every other possibility down".components(separatedBy: " ")
+        #expect(index().match(in: split, containing: 0) == nil,
+                "seven words is past the inferred cap, though a marked slot would allow it")
+        let marked = "take what people think and other possible edge cases all into account"
+            .components(separatedBy: " ")
+        #expect(index().match(in: marked, containing: 0)?.separation == .marked(9))
+    }
+
+    /// **A prepositional particle is not separable, and is left out of the set on purpose.** `look after`
+    /// must not match *look* at the child *after* lunch — the single likeliest false positive of the whole
+    /// inference, which is why `after` is absent from `particles`.
+    @Test func aPrepositionalPhrasalVerbIsNotBrokenApart() {
+        let words = ["look", "at", "the", "child", "after", "lunch"]
+        #expect(index().match(in: words, containing: 0) == nil)
+        #expect(index().match(in: ["look", "after", "the", "child"], containing: 0)?.phrase
+            == "look after", "while the unbroken phrase is still found")
+    }
+
+    /// A phrase readable unbroken is never reported as a guessed split — **enforced by the gap ordering,
+    /// not by the short-circuit**: a zero gap is the smallest there is, so the contiguous reading wins the
+    /// ranking whether or not the inferred pass also ran. Skipping that pass is an optimisation, and this
+    /// test deliberately does not claim to check it.
+    @Test func anUnbrokenReadingIsNeverGivenUpForAnInferredOne() {
+        let words = ["give", "away", "the", "prize", "and", "give", "away", "again"]
+        #expect(index().match(in: words, containing: 1)?.separation == PhraseSpans.Separation.none)
+    }
+
+    /// Only a two-word verb is inferred apart. Breaking a longer phrase the publisher wrote whole is a
+    /// guess too far, and the set of things it could match is too large to be worth a candidate.
+    @Test func aLongerContiguousPhraseIsNeverInferredApart() {
+        #expect(PhraseSpans(phrases: ["give up the ghost"])
+            .match(in: ["they", "give", "the", "thing", "up", "the", "ghost"], containing: 1) == nil)
     }
 }
