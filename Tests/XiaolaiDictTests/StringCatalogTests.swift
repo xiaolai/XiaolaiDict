@@ -310,6 +310,10 @@ struct StringCatalogTests {
         // The third list of its kind to be missing this target: the other two are
         // `ModuleBoundaryTests.allowed` and `TestInventoryTests.floors`.
         "Sources/AppleDictionaryFormat",
+        // Added 2026-09-29 with the target. All three lists refused it in the same run this time, which
+        // is what they are for — and is the whole reason each one is checked against `Package.swift`
+        // rather than kept by hand.
+        "Sources/PhraseLookup",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there

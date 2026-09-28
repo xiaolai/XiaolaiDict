@@ -1,5 +1,7 @@
 import DictionaryModel
 import Foundation
+import XiaolaiDictBase
+import os
 import XiaolaiDictCore
 import XiaolaiDictUI
 
@@ -16,6 +18,7 @@ import XiaolaiDictUI
 /// outside an app delegate.
 @MainActor
 final class LookupRunner {
+    private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
     private let client: DictionaryClient
     private let panel: any LookupPanelPresenting
     private let primary: () -> PrimaryDictionary
@@ -82,9 +85,28 @@ final class LookupRunner {
             await priorEncounters(lemma.text, requestedAt, language)
         }
 
-        guard let outcome = try? await client.lookup(selection.text), panel.isCurrent(ticket) else {
+        // **The sentence goes with the term**, so the service can answer in one round trip whether the
+        // reader is standing inside a phrase their dictionary knows. Sent whatever the capture's quality:
+        // a sentence that may be cut can still hold the phrase whole, and a cut that fell inside it simply
+        // matches nothing. Nothing on the lookup path may delete a candidate.
+        let request = LookupRequest(
+            term: selection.text, sentence: selection.sentence,
+            termLocation: selection.rangeInSentence?.location,
+            termLength: selection.rangeInSentence?.length)
+        guard let resolved = try? await client.lookup(request), panel.isCurrent(ticket) else {
             history.cancel()
             return nil
+        }
+        let outcome = resolved.word
+        // Logged rather than drawn: the panel does not show the phrase yet, and a wire nothing observes is
+        // a wire nothing can be shown to have used.
+        switch resolved.phrase {
+        case .found(let hit):
+            log.notice("phrase: \(hit.phrase, privacy: .public), gap \(hit.separation.gap, privacy: .public), \(hit.entries.count, privacy: .public) entries")
+        case .notReady:
+            log.notice("phrase: the inventory was still being read")
+        case .none, .notAsked:
+            break
         }
         presentation.outcome = outcome
         panel.update(.lookup(presentation), for: ticket)

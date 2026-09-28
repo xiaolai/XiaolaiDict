@@ -46,12 +46,19 @@ actor DictionaryClient {
 
     /// Throws only when the caller is cancelled — a newer lookup replaced this one — which says
     /// nothing about the service, so its session is kept.
-    func lookup(_ term: String) async throws(CancellationError) -> LookupOutcome {
+    func lookup(_ request: LookupRequest) async throws(CancellationError) -> LookupResolution {
         let failure: String
+        // **Kept across the fallback.** The service can answer the phrase and still fail the word — a
+        // dictionary whose entry is unreadable — and dropping the phrase there would lose the half that
+        // worked.
+        var phrase = PhraseAnswer.notAsked
         do {
-            switch try await ask(term) {
-            case .entries(let entries, let unreadable): return .entries(entries, unreadable: unreadable)
-            case .notFound: return .notFound(serviceFailure: nil)
+            let answer = try await ask(request)
+            phrase = answer.phrase
+            switch answer.word {
+            case .entries(let entries, let unreadable):
+                return LookupResolution(word: .entries(entries, unreadable: unreadable), phrase: phrase)
+            case .notFound: return LookupResolution(word: .notFound(serviceFailure: nil), phrase: phrase)
             case .failure(let reason): failure = reason.description
             }
         } catch {
@@ -60,8 +67,16 @@ actor DictionaryClient {
             case .unreachable(let why): failure = why
             }
         }
-        if let text = fallback(term) { return .plainText(text, serviceFailure: failure) }
-        return .notFound(serviceFailure: failure)
+        if let text = fallback(request.term) {
+            return LookupResolution(word: .plainText(text, serviceFailure: failure), phrase: phrase)
+        }
+        return LookupResolution(word: .notFound(serviceFailure: failure), phrase: phrase)
+    }
+
+    /// A term with no sentence around it — an instrument, or a caller that has no context to offer. The
+    /// phrase answer is then `.notAsked`, which is exactly true.
+    func lookup(_ term: String) async throws(CancellationError) -> LookupOutcome {
+        try await lookup(LookupRequest(term: term)).word
     }
 
     private enum AskError: Error {
@@ -79,11 +94,11 @@ actor DictionaryClient {
         return found
     }
 
-    private func ask(_ term: String) async throws(AskError) -> LookupReply {
-        guard case .lookup(let reply) = try await ask(.lookup(LookupRequest(term: term))) else {
+    private func ask(_ request: LookupRequest) async throws(AskError) -> LookupAnswer {
+        guard case .lookup(let answer) = try await ask(.lookup(request)) else {
             throw .unreachable("the dictionary service answered a lookup with something else")
         }
-        return reply
+        return answer
     }
 
     private func ask(_ request: ServiceRequest) async throws(AskError) -> ServiceReply {

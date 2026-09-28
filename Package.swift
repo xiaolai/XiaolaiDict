@@ -59,7 +59,11 @@ let package = Package(
         // the app the reader is using (design note §10).
         .target(name: "DictionaryBridge", dependencies: ["XiaolaiDictBase", "DictionaryModel"]),
 
-        .executableTarget(name: "XiaolaiDictService", dependencies: ["XiaolaiDictBase", "DictionaryModel", "DictionaryBridge"]),
+        .target(name: "PhraseLookup", dependencies: ["DictionaryModel", "AppleDictionaryFormat"]),
+
+        .executableTarget(
+            name: "XiaolaiDictService",
+            dependencies: ["XiaolaiDictBase", "DictionaryModel", "DictionaryBridge", "PhraseLookup"]),
 
         // What the model service does with a request — the prompts, the session, what a refusal
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
@@ -105,6 +109,9 @@ let package = Package(
         // dictionaries, whose text is licensed and never vendored into the repository.
         .testTarget(name: "AppleDictionaryFormatTests",
                     dependencies: ["AppleDictionaryFormat", "XiaolaiDictTestSupport"]),
+        .testTarget(
+            name: "PhraseLookupTests",
+            dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup"]),
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.

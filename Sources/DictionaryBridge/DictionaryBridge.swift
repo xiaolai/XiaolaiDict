@@ -72,11 +72,40 @@ public enum DictionaryBridge {
     }
 
     /// The XPC service's answer to whatever the app asked.
-    public static func reply(to request: ServiceRequest) -> ServiceReply {
+    ///
+    /// `phrases` finds the phrase the reader is standing inside. **Injected rather than owned**: this module's
+    /// subject is a private API whose failure mode is a segfault, and reading a dictionary's `KeyText.data` is
+    /// a different job with a different failure mode. Nil — the default — answers `.notAsked`, which is what a
+    /// caller that has no detector should say and is exactly true.
+    public static func reply(to request: ServiceRequest,
+                             phrases: (any PhraseFinding)? = nil) -> ServiceReply {
         switch request {
-        case .lookup(let lookup): .lookup(reply(to: lookup))
+        case .lookup(let lookup):
+            .lookup(LookupAnswer(word: reply(to: lookup), phrase: phrase(for: lookup, using: phrases)))
         case .dictionaries(let reprobing): .dictionaries(capabilities(reprobing: reprobing))
         }
+    }
+
+    /// The phrase around the term, and its own entries.
+    ///
+    /// **Four answers, and three of them are refusals that name themselves.** A card told `nil` could not
+    /// tell a service still reading its inventory from a sentence with no phrase in it, and would claim
+    /// there was nothing to find.
+    ///
+    /// A sentence longer than `LookupRequest.maximumSentenceLength` is `.notAsked`: it arrives from another
+    /// process and is a passage rather than a reading context. Truncating it instead would be worse — the cut
+    /// could fall inside the phrase.
+    static func phrase(for request: LookupRequest, using finder: (any PhraseFinding)?) -> PhraseAnswer {
+        guard let finder else { return .notAsked }
+        guard let sentence = request.sentence, let term = request.termRange,
+              sentence.utf16.count <= LookupRequest.maximumSentenceLength else { return .notAsked }
+        guard finder.isReady else { return .notReady }
+        guard let span = finder.phrase(in: sentence, at: term) else { return .none }
+        // The phrase's own entries, through the same door the word went through. Empty is a real answer:
+        // the span is in the dictionary's keys and the framework still found nothing readable for it.
+        let entries = (try? entries(for: span.phrase))?.entries ?? []
+        return .found(PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
+                                separation: span.separation, entries: entries))
     }
 
     /// Which words the capability probe tries, in order, until one is found in the dictionary being

@@ -423,8 +423,10 @@ private final class FakeDictionaries: Sendable {
 
         func send(_ request: ServiceRequest) async throws -> ServiceReply {
             guard case .lookup = request else { return .dictionaries([]) }
-            guard let found = NonEmpty(service.entries) else { return .lookup(.notFound) }
-            return .lookup(.entries(found, unreadable: service.unreadable))
+            guard let found = NonEmpty(service.entries) else {
+                return .lookup(LookupAnswer(word: .notFound))
+            }
+            return .lookup(LookupAnswer(word: .entries(found, unreadable: service.unreadable)))
         }
 
         func cancel(reason: String) {}

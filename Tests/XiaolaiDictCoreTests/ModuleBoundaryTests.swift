@@ -61,6 +61,11 @@ struct ModuleBoundaryTests {
         // failed and — more to the point — `nothingBelowTheViewLayerBindsAppKitOrSwiftUI` was not
         // checking it at all.
         "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit", "SQLite3"],
+        // The adapter between the dictionary-format reader and the wire protocol: a sentence in, a span
+        // out. `Synchronization` holds the inventory, which is read on one queue and asked from another.
+        // No `os` — it reports through a closure, so the caller owns the logging and this target stays
+        // testable without one.
+        "PhraseLookup": ["Foundation", "Synchronization"],
         // The index builder, as a command. Listed here rather than excluded with the two XPC services,
         // because a command-line tool has no more business binding AppKit than a library does — and being
         // in this table is what applies that rule to it.

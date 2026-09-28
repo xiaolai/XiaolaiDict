@@ -47,6 +47,10 @@ struct TestInventoryTests {
         // was 45 before `PLAN.md` steps 0–5 and is not backdated — a floor records what is there, and
         // a drop from here is the signal. 162 before the sense aligner, 187 with it.
         "AppleDictionaryFormatTests": 206,
+        // Added 2026-09-29 with the target, at the count it shipped with. The three translations between a
+        // reader's sentence and the matcher — lemma form, a captured range to a word, a word range back to
+        // UTF-16 — have each been a defect class here before, so this floor guards the thin part.
+        "PhraseLookupTests": 10,
     ]
 
     private static let testsRoot = URL(fileURLWithPath: #filePath)

@@ -246,7 +246,7 @@ struct LookupRunnerTests {
 struct NeverReplies: DictionaryTransport {
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
         try await Task.sleep(for: .seconds(60))
-        return .lookup(.notFound)
+        return .lookup(LookupAnswer(word: .notFound))
     }
 
     func cancel(reason: String) {}
@@ -256,7 +256,7 @@ struct NeverReplies: DictionaryTransport {
 private struct AnswersWith: DictionaryTransport {
     let entry: DictionaryEntry
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
-        .lookup(.entries(NonEmpty([entry])!, unreadable: []))
+        .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: [])))
     }
     func cancel(reason: String) {}
 }

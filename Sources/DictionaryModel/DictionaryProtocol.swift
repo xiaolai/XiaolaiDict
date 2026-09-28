@@ -1,3 +1,4 @@
+import Foundation
 import XiaolaiDictBase
 
 /// The dictionary service's wire protocol — what the app asks and what the service answers.
@@ -26,8 +27,91 @@ public enum ServiceRequest: Codable, Sendable, Equatable {
 /// What the dictionary service answers with. Typed per request, so a reply can never be read as
 /// the answer to a different question.
 public enum ServiceReply: Codable, Sendable, Equatable {
-    case lookup(LookupReply)
+    case lookup(LookupAnswer)
     case dictionaries([DictionaryCapability])
+}
+
+/// The word's answer, and the phrase around it.
+///
+/// **Two fields rather than one merged answer**, and `LookupReply` is untouched. The sense ladder's rule
+/// is that `chosen_by` never merges: a phrase's senses are not the word's, and a caller that received
+/// them in one list could not tell *take* from *take something into account*. Everything that already
+/// switches on `LookupReply` keeps working, which is also why the phrase arrives here rather than as a
+/// fourth associated value on a case.
+public struct LookupAnswer: Codable, Sendable, Equatable {
+    public let word: LookupReply
+    public let phrase: PhraseAnswer
+
+    public init(word: LookupReply, phrase: PhraseAnswer = .notAsked) {
+        self.word = word
+        self.phrase = phrase
+    }
+}
+
+/// Whether the reader is standing inside a phrase, and where the answer stands if not.
+///
+/// **Four-valued, because "no phrase here" is one of four different facts.** A service still reading its
+/// inventory, a request that carried no sentence, and a sentence with no phrase in it would all be `nil`
+/// — and a failure rendering as confidently as a success is the thing this project keeps finding. The
+/// reader's first lookup after the service launches is genuinely `.notReady`, and saying so is what lets
+/// a card decline to claim there was nothing to find.
+public enum PhraseAnswer: Codable, Sendable, Equatable {
+    /// No sentence reached the service, or no anchor within it, so nothing was asked.
+    case notAsked
+    /// The phrase inventory is still being read. **Not the same as `.none`.**
+    case notReady
+    /// Asked, and the reader is on an ordinary word.
+    case none
+    case found(PhraseHit)
+}
+
+/// One phrase found around the term, with its own entries.
+public struct PhraseHit: Codable, Sendable, Equatable {
+    /// The dictionary's own spelling, slots and all — `take something into account`. This is the string
+    /// the entries were found under, so it is what a card must name.
+    public let phrase: String
+
+    /// Where the span sits in the sentence that was sent, UTF-16, gap included.
+    public let location: Int
+    public let length: Int
+
+    public let separation: PhraseSeparation
+
+    /// The phrase's entries. **Never merged with the word's**, and empty is a real answer: the detector
+    /// found the span in the dictionary's keys, and the bridge then found no readable entry for it.
+    public let entries: [DictionaryEntry]
+
+    public init(phrase: String, location: Int, length: Int,
+                separation: PhraseSeparation, entries: [DictionaryEntry]) {
+        self.phrase = phrase
+        self.location = location
+        self.length = length
+        self.separation = separation
+        self.entries = entries
+    }
+}
+
+/// Whether the phrase's words sat together, and on whose authority they were allowed not to.
+///
+/// **A wire copy of `PhraseSpans.Separation`, on purpose.** `DictionaryModel` crosses the XPC boundary
+/// and binds nothing but `XiaolaiDictBase`; `AppleDictionaryFormat` is the service's business. The service
+/// maps between the two, which is one small translation against letting the app's protocol depend on a
+/// dictionary-format reader.
+public enum PhraseSeparation: Codable, Sendable, Equatable {
+    /// Written unbroken, as the dictionary spells it.
+    case none
+    /// The publisher marked a slot, and this many words of the sentence filled it.
+    case marked(Int)
+    /// The publisher wrote it unbroken; the split is the matcher's own inference from a particle.
+    case inferred(Int)
+
+    /// How many words were stepped over, for a caller that only needs the width.
+    public var gap: Int {
+        switch self {
+        case .none: 0
+        case .marked(let words), .inferred(let words): words
+        }
+    }
 }
 
 /// One enabled dictionary and the finest rung it can key a study item to — which is what makes
@@ -112,10 +196,47 @@ public struct LookupRequest: Codable, Sendable, Equatable {
     /// every caller did.
     public static let maximumLength = 80
 
+    /// **A sentence is not a term and needs its own bound.** Longer than this and it is a passage,
+    /// not a reading context, and the words past it cannot be part of the phrase around the term.
+    /// Enforced by the service, because it cannot know that every caller enforced it.
+    public static let maximumSentenceLength = 1000
+
     public let term: String
 
-    public init(term: String) {
+    /// The sentence the term was read in, so the service can ask whether the reader is standing
+    /// inside a phrase their dictionary knows. Nil where the capture had no sentence — most of the
+    /// time, for a selection in an app that exposes nothing around it.
+    ///
+    /// **Sent rather than re-derived.** The capture already found this sentence and knows where the
+    /// term sits in it; asking the service to find it again would be a second answer to a question
+    /// already answered, and the two would disagree on the sentence that repeats a word.
+    public let sentence: String?
+
+    /// Where `term` sits in `sentence`, UTF-16. **Two `Int`s rather than an `NSRange`**, which is
+    /// not `Codable` — and this type crosses a process boundary.
+    ///
+    /// Nil where the capture could not say. The service then has no anchor and asks nothing: which
+    /// occurrence of a repeated word the reader pointed at is not guessed.
+    public let termLocation: Int?
+    public let termLength: Int?
+
+    public init(term: String, sentence: String? = nil,
+                termLocation: Int? = nil, termLength: Int? = nil) {
         self.term = term
+        self.sentence = sentence
+        self.termLocation = termLocation
+        self.termLength = termLength
+    }
+
+    /// The term's range in the sentence, where both ends were supplied and the range is inside it.
+    ///
+    /// **Validated here, once.** Both fields arrive from another process; a range that overflows or
+    /// runs past the sentence is a request to ignore, not one to trust and crash on.
+    public var termRange: NSRange? {
+        guard let sentence, let termLocation, let termLength,
+              termLocation >= 0, termLength > 0,
+              termLength <= sentence.utf16.count - termLocation else { return nil }
+        return NSRange(location: termLocation, length: termLength)
     }
 }
 

@@ -211,7 +211,16 @@ public struct PhraseSpans: Sendable, Equatable {
     /// look up. The labels add 935 phrases NOAD files nowhere else, 211 of them carrying a slot, and cost
     /// a query rather than the 60-second body walk that produced them (measured 2026-09-29).
     public init(bundle: URL, labels: Set<String>) throws {
-        var found = Set(labels.map { $0.lowercased() }.filter { $0.contains(" ") })
+        self.init(phrases: try Self.keys(in: bundle)
+            .union(labels.map { $0.lowercased() }.filter { $0.contains(" ") }))
+    }
+
+    /// Every multi-word key of one dictionary, without building a matcher around them.
+    ///
+    /// For a caller collecting the inventory of several dictionaries: building one `PhraseSpans` per bundle
+    /// only to read `phrases` off it computes a template index per dictionary and throws each away.
+    public static func keys(in bundle: URL) throws -> Set<String> {
+        var found = Set<String>()
         // **Every key of the group, not just the first.** A group is a folded search key followed by
         // display forms, so `keys.first` alone loses the spellings a reader actually writes: measured
         // 2026-09-29, 90,391 phrases from the first key against **104,009** from all of them.
@@ -220,7 +229,7 @@ public struct PhraseSpans: Sendable, Equatable {
                 found.insert(key)
             }
         }
-        self.init(phrases: found)
+        return found
     }
 
     /// The dictionary's spelling of the phrase covering `word`, or nil where the reader is on an ordinary

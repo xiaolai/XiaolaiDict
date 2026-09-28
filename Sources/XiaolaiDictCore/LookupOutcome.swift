@@ -29,3 +29,19 @@ public enum LookupOutcome: Sendable, Equatable {
         }
     }
 }
+
+/// What one lookup came back with: the word's own answer, and the phrase the reader was standing in.
+///
+/// **Two fields, never merged** — the same rule as `LookupAnswer` on the wire, kept on this side of it so
+/// the app cannot accidentally do the merging the protocol refused to. *take* and
+/// *take something into account* are different words to a reader, and a card that received their senses in
+/// one list could not tell them apart.
+public struct LookupResolution: Sendable, Equatable {
+    public let word: LookupOutcome
+    public let phrase: PhraseAnswer
+
+    public init(word: LookupOutcome, phrase: PhraseAnswer = .notAsked) {
+        self.word = word
+        self.phrase = phrase
+    }
+}

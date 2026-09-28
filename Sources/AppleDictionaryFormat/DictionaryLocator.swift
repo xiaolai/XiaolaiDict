@@ -31,7 +31,7 @@ public struct DeclaredLanguage: Sendable, Equatable {
         return x.languageCode == y.languageCode && x.script == y.script
     }
 
-    var indexesEnglish: Bool { Self.tag(index)?.languageCode?.identifier == "en" }
+    public var indexesEnglish: Bool { Self.tag(index)?.languageCode?.identifier == "en" }
     var explainsInEnglish: Bool { Self.tag(explains)?.languageCode?.identifier == "en" }
 }
 
@@ -74,6 +74,14 @@ public struct DictionaryBundle: Sendable, Equatable {
     /// the lookup this product exists for (ADR-0027) — and the English monolinguals come along for every
     /// audience, because NOAD is what every accuracy figure here rests on and the thesaurus is where a
     /// tapped sense is studiable.
+    /// Whether this dictionary can be asked about an English word at all.
+    ///
+    /// Wider than `serves(reader:)` on purpose. **Phrase detection is not sense selection**: D7 scopes the
+    /// selector's candidate set to one dictionary, and says nothing about which spans exist. A Simplified
+    /// reader whose primary is 牛津英汉汉英 would find almost no phrases from it — its multi-word keys are
+    /// pinyin — while NOAD sitting right beside it holds 104,009.
+    public var indexesEnglish: Bool { languages.contains(where: \.indexesEnglish) }
+
     public func serves(reader: String) -> Bool {
         languages.contains { $0.indexesEnglish && ($0.explainsInEnglish || DeclaredLanguage.same($0.explains, reader)) }
     }

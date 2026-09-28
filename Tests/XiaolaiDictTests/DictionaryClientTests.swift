@@ -239,7 +239,7 @@ private final class FakeService: Sendable {
         func send(_ request: ServiceRequest) async throws -> ServiceReply {
             service.state.withLock { _ = $0.sent.insert(number) }
             guard case .lookup = request else { return .dictionaries([]) }
-            return .lookup(try await service.reply(number))
+            return .lookup(LookupAnswer(word: try await service.reply(number)))
         }
 
         func cancel(reason: String) {
