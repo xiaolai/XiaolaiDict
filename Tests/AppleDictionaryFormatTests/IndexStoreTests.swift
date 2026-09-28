@@ -568,3 +568,82 @@ import XiaolaiDictTestSupport
         #expect(senses.filter { !$0.hasSubsenses }.map(\.senseKey).sorted() == ["s1", "s2"])
     }
 }
+
+/// **Opening an index to read it must never be able to destroy it.**
+///
+/// `IndexStore(path:)` opens `READWRITE | CREATE` and drops every table when `user_version` differs. That
+/// is right for a rebuild, which owns the file and can always build it again from the reader's own
+/// dictionaries. It is catastrophic for anything that only wants to *read*: the phrase detector opens the
+/// index to fetch sub-entry labels, and under the read-write initialiser a reader whose index was written
+/// by a different build would have 319 MB of derived data silently dropped by a lookup — and a reader with
+/// no index at all would get an empty one created, which later reads as "nothing is indexed".
+///
+/// So the read-only door refuses both, loudly, and these are the two refusals.
+@Suite struct IndexStoreReadOnlyTests {
+    /// The load-bearing one, **asserted on the bytes**.
+    ///
+    /// Reading the rows back is not available here: the only door that can reset `user_version` is the
+    /// read-write one, and opening it is itself what drops the tables — so a test that reopened to look
+    /// would destroy the evidence it came for. The file being byte-identical is the stronger claim anyway,
+    /// and it says the refusal happened *before* anything was written.
+    ///
+    /// **It carries its own positive control.** The same read-write open on the same file at the end both
+    /// proves the hazard is real and proves this check could have failed.
+    @Test func anIndexFromAnotherSchemaIsRefusedWithoutBeingTouched() throws {
+        let scratch = TemporaryDirectory(named: "adf-readonly")
+        let url = scratch.appending("index.sqlite")
+        do {
+            let store = try IndexStore(path: url.path)
+            try IndexStoreTests.register(store)
+            try store.insert(IndexStoreTests.entry(senses: [("k1", "to hand over", nil)]),
+                             dictionary: "d", aliases: [SearchAlias(search: "give", display: "give")])
+            #expect(try store.candidates(for: "give").count == 1)
+            try store.setSchemaVersionForTesting(IndexStore.schemaVersion - 1)
+        }
+        let before = try Data(contentsOf: url)
+        #expect(throws: IndexStore.Failure.self) { try IndexStore(readingAt: url.path) }
+        #expect(try Data(contentsOf: url) == before,
+                "the refused open left the reader's index byte-identical")
+
+        let writable = try IndexStore(path: url.path)
+        #expect(try Data(contentsOf: url) != before,
+                "and the read-write door does change it — which is the hazard, and this test's control")
+        #expect(try writable.candidates(for: "give").isEmpty,
+                "it dropped the reader's rows, which is why reading must not come through it")
+    }
+
+    /// **No index is not an empty index.** Creating one here would answer every later question with
+    /// "nothing is indexed" for a reader who simply has not built one yet.
+    @Test func amissingIndexIsRefusedRatherThanCreated() throws {
+        let scratch = TemporaryDirectory(named: "adf-readonly-missing")
+        let path = scratch.appending("index.sqlite").path
+        #expect(throws: IndexStore.Failure.self) { try IndexStore(readingAt: path) }
+        #expect(FileManager.default.fileExists(atPath: path) == false,
+                "the refused open must not have left a file behind")
+    }
+
+    /// A current index opens and reads, which is the whole point of the door.
+    @Test func acurrentIndexOpensForReading() throws {
+        let scratch = TemporaryDirectory(named: "adf-readonly-ok")
+        let path = scratch.appending("index.sqlite").path
+        do {
+            let store = try IndexStore(path: path)
+            try IndexStoreTests.register(store)
+            try store.insert(
+                IndexStoreTests.entry(senses: [("k1", "to reckon with", "take something into account")]),
+                dictionary: "d", aliases: [SearchAlias(search: "take", display: "take")])
+        }
+        let reading = try IndexStore(readingAt: path)
+        #expect(try reading.subEntryLabels(in: "d") == ["take something into account"])
+    }
+
+    /// And a read-only connection cannot write, however it is asked — the property the refusals above are
+    /// protecting, asserted rather than assumed from the open flags.
+    @Test func areadOnlyConnectionRefusesToWrite() throws {
+        let scratch = TemporaryDirectory(named: "adf-readonly-write")
+        let path = scratch.appending("index.sqlite").path
+        do { _ = try IndexStore(path: path) }
+        let reading = try IndexStore(readingAt: path)
+        #expect(throws: IndexStore.Failure.self) { try IndexStoreTests.register(reading) }
+    }
+}

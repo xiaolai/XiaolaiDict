@@ -62,12 +62,9 @@ struct Options {
     var reader: String? = Locale.preferredLanguages.first ?? "en"
 }
 
-/// The default lives in Application Support rather than Caches. The index *is* derived data and can always
-/// be rebuilt, which argues for Caches — but rebuilding the catalogue is minutes of work, and a reader who
-/// loses it to a routine cache purge has lost their study history's names with it.
-let defaultIndex = FileManager.default
-    .homeDirectoryForCurrentUser
-    .appending(path: "Library/Application Support/XiaolaiDict/index.sqlite")
+/// `IndexStore.defaultURL`, not a second copy of the path: the dictionary service reads this same file to
+/// build its phrase inventory, and two spellings would drift the day one of them moved.
+let defaultIndex = IndexStore.defaultURL
 
 func parse(_ arguments: [String]) throws -> Options {
     struct Bad: Error, CustomStringConvertible {

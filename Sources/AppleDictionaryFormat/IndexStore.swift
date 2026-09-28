@@ -75,22 +75,58 @@ public final class IndexStore {
         case sql(String)
         /// The connection would not enforce foreign keys, so every constraint in the schema is decoration.
         case foreignKeysUnavailable
+        /// A read-only open found an index written under a different schema. **Refused rather than
+        /// migrated or discarded**: the reader owns this file, and only a rebuild may throw it away.
+        case unsupportedSchema(found: Int, expected: Int)
         public var description: String {
             switch self {
             case .open(let s): return "could not open the index: \(s)"
             case .sql(let s): return s
             case .foreignKeysUnavailable:
                 return "SQLite would not enable foreign keys; the schema's constraints would not hold"
+            case .unsupportedSchema(let found, let expected):
+                return "the index was written under schema \(found); this build reads \(expected). "
+                    + "Rebuild it with XiaolaiDictIndex"
             }
         }
     }
 
+    /// Where the reader's index lives, when nobody says otherwise.
+    ///
+    /// **One spelling of the path.** The tool that writes it and the service that reads it are different
+    /// processes, and two copies of this string would drift the day one of them moved — leaving a service
+    /// that reports an empty inventory while a 319 MB index sits beside it.
+    ///
+    /// Application Support rather than Caches. The index *is* derived data, which argues for Caches — but
+    /// rebuilding the catalogue is minutes of work, and a reader who loses it to a routine cache purge has
+    /// lost their study history's names with it.
+    public static let defaultURL = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appending(path: "Library/Application Support/XiaolaiDict/index.sqlite")
+
     private let handle: OpaquePointer
 
     /// Opens or creates the index at `path`, or `":memory:"` for a store that outlives nothing.
-    public init(path: String) throws {
+    ///
+    /// **This door may destroy the file**, and that is deliberate: `applySchema` discards an index written
+    /// under an older schema rather than migrating it. Only a rebuild should come through here. Anything
+    /// that merely wants to read uses `init(readingAt:)`.
+    public convenience init(path: String) throws { try self.init(path: path, forWriting: true) }
+
+    /// Opens an existing index **without creating, migrating or discarding anything.**
+    ///
+    /// Three refusals, each of which the read-write door would instead have answered by changing the file:
+    /// a missing index is not created, an index from another schema is not dropped, and the connection
+    /// itself cannot write. For a caller like the phrase detector, which opens the reader's index on a
+    /// lookup to fetch sub-entry labels, every one of those is the difference between reading 319 MB of
+    /// derived data and deleting it.
+    public convenience init(readingAt path: String) throws { try self.init(path: path, forWriting: false) }
+
+    private init(path: String, forWriting: Bool) throws {
         var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let flags = forWriting
+            ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+            : SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             if let handle { sqlite3_close(handle) }
@@ -98,9 +134,17 @@ public final class IndexStore {
         }
         self.handle = handle
         // **Set, then verified.** An unknown or refused pragma is silent, and every constraint below
-        // depends on this one being on.
+        // depends on this one being on. A connection setting, so it holds on a read-only handle too.
         try execute("PRAGMA foreign_keys = ON")
         guard try scalar("PRAGMA foreign_keys") == 1 else { throw Failure.foreignKeysUnavailable }
+        guard forWriting else {
+            // **Asked, and then refused — never repaired.** `applySchema` would drop every table here.
+            let found = try scalar("PRAGMA user_version")
+            guard found == Int64(Self.schemaVersion) else {
+                throw Failure.unsupportedSchema(found: Int(found), expected: Self.schemaVersion)
+            }
+            return
+        }
         try applySchema()
     }
 
