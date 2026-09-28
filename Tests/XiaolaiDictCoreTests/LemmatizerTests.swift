@@ -528,3 +528,67 @@ struct IrregularFormCoverageTests {
         #expect(Lemmatizer.lemma(of: "learnt", in: "They learnt it quickly.").text == "learn")
     }
 }
+
+/// **Every word of a sentence in lemma form, with where it sits.**
+///
+/// `PhraseSpans` matches against a dictionary's keys, and a dictionary files `give up`, never `gave up`.
+/// So the sentence has to arrive lemmatised word by word — and the ranges have to come with it, because a
+/// matched word *index* means nothing to a card that has to draw the span in the reader's own text.
+///
+/// One `NLTagger` pass, reusing the same `tag`/`resolve` the phrase lemma already uses: a second
+/// implementation of "what is this word's dictionary form" would drift from the first, and the corrections
+/// for `broke` and `swore` live in `resolve`.
+@Suite struct SentenceLemmaTests {
+    /// The everyday case, and the reason the API exists: the inflected phrasal verb becomes the key.
+    @Test func everyWordOfASentenceArrivesInLemmaForm() {
+        let words = Lemmatizer.lemmas(in: "they gave up the ghost")
+        #expect(words.map(\.lemma.text) == ["they", "give", "up", "the", "ghost"])
+    }
+
+    /// **A range must be usable on the string it came from**, which is the whole point of returning one.
+    @Test func eachRangeHoldsTheWordItCameFrom() {
+        let sentence = "she took the offer down"
+        let words = Lemmatizer.lemmas(in: sentence)
+        let text = sentence as NSString
+        #expect(words.map { text.substring(with: $0.range) } == ["she", "took", "the", "offer", "down"])
+        #expect(words.map(\.lemma.text) == ["she", "take", "the", "offer", "down"])
+    }
+
+    /// **UTF-16, not characters** — and this is the test that can tell. An emoji is two UTF-16 units and
+    /// one `Character`, so a range built from character offsets is off by one for every word after it and
+    /// the card marks the wrong span. Verified red by measuring in characters.
+    ///
+    /// **An emoji is a word to `NLTagger`** — `OtherWord`, not punctuation — so it arrives like any other.
+    /// Left in rather than filtered out: nothing may delete a candidate on the lookup path, it can never
+    /// match a dictionary key, and a word skipped inside a phrase's gap is a word that really was there.
+    @Test func rangesAreUTF16EvenWhenAnEarlierCharacterIsNot() {
+        let sentence = "😀 they gave up"
+        let words = Lemmatizer.lemmas(in: sentence)
+        let text = sentence as NSString
+        #expect(words.map { text.substring(with: $0.range) } == ["😀", "they", "gave", "up"])
+        #expect(words.map(\.lemma.text) == ["😀", "they", "give", "up"])
+        #expect(words[1].range.location == 3, "two UTF-16 units for the emoji, one for the space")
+    }
+
+    /// Punctuation is not a word, and dropping it must not shift the words after it.
+    @Test func punctuationIsNotAWordAndDoesNotShiftTheOthers() {
+        let sentence = "well, she gave up."
+        let words = Lemmatizer.lemmas(in: sentence)
+        let text = sentence as NSString
+        #expect(words.map { text.substring(with: $0.range) } == ["well", "she", "gave", "up"])
+    }
+
+    /// Nothing in, nothing out — not one empty word.
+    @Test func ablankSentenceHasNoWords() {
+        #expect(Lemmatizer.lemmas(in: "").isEmpty)
+        #expect(Lemmatizer.lemmas(in: "   \n ").isEmpty)
+    }
+
+    /// The basis travels with each word, because a wrong lemma must never be confident — the rule the
+    /// whole lemmatiser rests on, and the phrase matcher inherits it.
+    @Test func eachWordCarriesItsOwnBasis() {
+        let words = Lemmatizer.lemmas(in: "he broke the window")
+        let broke = words.first { $0.lemma.text == "break" }
+        #expect(broke?.lemma.basis == .inferred, "a tagger correction is never reported as the tagger's")
+    }
+}

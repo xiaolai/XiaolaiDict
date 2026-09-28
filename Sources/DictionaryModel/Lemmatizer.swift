@@ -46,6 +46,20 @@ public struct Lemma: Equatable, Sendable {
     }
 }
 
+/// One word of a sentence, in dictionary form, and where it was.
+public struct LemmatizedWord: Equatable, Sendable {
+    public let lemma: Lemma
+    /// **UTF-16, into the sentence handed in** — the unit Accessibility, `NSRange` and every capture path
+    /// in this app already speak. A range measured in `Character`s would be off by one for every word
+    /// after the first emoji, and the card would mark the wrong span.
+    public let range: NSRange
+
+    public init(lemma: Lemma, range: NSRange) {
+        self.lemma = lemma
+        self.range = range
+    }
+}
+
 /// Dictionary forms, so the ledger counts "running", "ran" and "runs" as one word (design note §9).
 public enum Lemmatizer {
     /// The part of speech `word` is being used as, in the sentence around it. Nil when there is no
@@ -130,6 +144,27 @@ public enum Lemmatizer {
         // break, its words read as separate paragraphs and get no lemma.
         let phrase = term.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return lemmatize(phrase.startIndex..<phrase.endIndex, of: phrase) ?? Lemma(text: canonical(phrase), basis: .surface)
+    }
+
+    /// Every word of `sentence` in lemma form, with the UTF-16 range it occupies.
+    ///
+    /// **For matching a sentence against a dictionary's keys.** A dictionary files `give up` and never
+    /// `gave up`, so `PhraseSpans` is handed the sentence already in lemma form — and the ranges have to
+    /// come with it, because a matched word *index* means nothing to a card that must draw the span in the
+    /// reader's own text.
+    ///
+    /// Built on the same `tag`/`resolve` as `lemma(of:in:at:)` rather than beside it. A second answer to
+    /// "what is this word's dictionary form" would drift from the first, and the corrections that make
+    /// `broke` resolve to `break` instead of `brake` live in `resolve`.
+    ///
+    /// Punctuation and whitespace are not words and are absent; the ranges of the words around them are
+    /// unaffected, which is what makes dropping them safe.
+    public static func lemmas(in sentence: String) -> [LemmatizedWord] {
+        let tokens = tag(sentence)
+        return tokens.indices.map { index in
+            LemmatizedWord(lemma: resolve(index, in: tokens),
+                           range: NSRange(tokens[index].range, in: sentence))
+        }
     }
 
     /// Lowercased, NFC, with a curly apostrophe written straight, so the same word typed or copied
