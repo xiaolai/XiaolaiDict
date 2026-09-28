@@ -25,7 +25,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-tools icon strings e2e e2e-status release clean
+.PHONY: all run test test-swift test-tools icon strings e2e e2e-status release clean metal-guard
 
 # Machine-local settings, untracked: the name of your end-to-end machine and anything else that
 # belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
@@ -70,7 +70,15 @@ run: test-swift
 
 test: test-swift test-tools
 
-test-swift:
+# The Metal toolchain lives on a cryptex whose directory name changes when it remounts, and the
+# build cache keeps the old absolute path — so the next build dies with "unable to spawn process
+# '…/metal'": zero `Test run with` lines and exit 1, a build failure wearing a test failure's
+# clothes. Run before every build rather than diagnosed after one, because it cost an hour twice and
+# the hand-typed cure named the wrong directory both times. ADR-0026.
+metal-guard:
+	@Tools/metal-cache-guard.sh
+
+test-swift: metal-guard
 	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; \
 	Tools/clean-test-scratch.sh || status=1; exit $$status
 
@@ -81,7 +89,7 @@ test-tools:
 
 # Re-extract every localizable string into Strings/Localizable.xcstrings, the file a
 # translator is given. Run it after adding or changing anything the reader reads.
-strings:
+strings: metal-guard
 	Tools/strings.sh
 
 icon:
