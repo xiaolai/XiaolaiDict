@@ -297,6 +297,9 @@ struct StringCatalogTests {
         let viewLayerOrAnExecutable = [
             "XiaolaiDictUI", "XiaolaiDict", "XiaolaiDictService", "XiaolaiDictModelService",
             "XiaolaiDictTestSupport",
+            // What a command prints is instrument output, for whoever ran it — the same reason the two
+            // XPC services are here, and not reader-facing text a translator would be given.
+            "XiaolaiDictIndex",
         ]
         let shouldScan = manifest.matches(of: declared)
             .map { String($0.output[1].substring ?? "") }

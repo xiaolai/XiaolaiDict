@@ -87,6 +87,12 @@ let package = Package(
         .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore"]),
         .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
+        // The index builder, as a command. The module it drives has no other entry point: everything in
+        // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
+        // capability nobody can run. Links the module and Foundation, and nothing else — it prints to
+        // stdout and draws nothing.
+        .executableTarget(name: "XiaolaiDictIndex", dependencies: ["AppleDictionaryFormat"]),
+
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),

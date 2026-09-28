@@ -61,6 +61,10 @@ struct ModuleBoundaryTests {
         // failed and — more to the point — `nothingBelowTheViewLayerBindsAppKitOrSwiftUI` was not
         // checking it at all.
         "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit", "SQLite3"],
+        // The index builder, as a command. Listed here rather than excluded with the two XPC services,
+        // because a command-line tool has no more business binding AppKit than a library does — and being
+        // in this table is what applies that rule to it.
+        "XiaolaiDictIndex": ["Foundation"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
