@@ -594,8 +594,15 @@ struct Walk {
         // enclosing a sub-entry used to have its whole subtree read, so the parent absorbed a definition
         // the sub-entry then emitted again — `declaredDefinitions = 1`, `capturedDefinitions = 2`,
         // retention 2.0, breaking the bound `IndexedEntry.definitionsReached` promises.
+        // **Guide punctuation is guide punctuation wherever it sits.** `gp` was excluded from headwords and
+        // not from definitions, and Apple puts it *inside* the definition element about as often as beside
+        // it: the Writer's Thesaurus stored `"renounce,"` for a sense whose content is `renounce`, and NOAD's
+        // `ditto` came out as `ditto.`. It reaches the digest as well as the reader — `normalise` trims the
+        // ends, so a trailing comma was harmless to the key and wrong in the text, while a `gp` in the
+        // middle was wrong in both.
         let boundary: (EntryNode) -> Bool = stoppingAtSubEntries
-            ? { self.isSubEntry($0) } : { _ in false }
+            ? { self.isSubEntry($0) || $0.classes.contains("gp") }
+            : { $0.classes.contains("gp") }
         return definitionNodes(in: node, stoppingAtSubEntries: stoppingAtSubEntries)
             .map { EntryIndexer.collapsed($0.text(excluding: boundary)) }
             .filter { !$0.isEmpty }
