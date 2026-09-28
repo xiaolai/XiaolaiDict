@@ -325,14 +325,13 @@ struct PanelResizeWatchTests {
         let window = DraggingWindow(
             contentRect: outside, styleMask: [.borderless], backing: .buffered, defer: true)
         window.setFrame(outside, display: false)
-        // **Against the frame the window actually took, never against the rect it was handed.** An
-        // `NSWindow` frame is pixel-aligned, so a fractional origin comes back rounded and the
-        // comparison fails on its own premise rather than on the guard — see the sibling test below,
-        // which this file learned the hard way.
-        let before = window.frame
+        // **Against the frame the window took, not the one it was asked for.** `setFrame` aligns to the
+        // backing store, so the two are not always equal and comparing with the request turns a rounding
+        // difference into "the window was moved". `SettingsWindowFitTests` already reads it this way.
+        let placed = window.frame
         panel.keepWhollyOnScreen(window)
         #expect(
-            window.frame == before,
+            window.frame == placed,
             "a window the reader is dragging was snapped back under their hands")
     }
 
@@ -346,19 +345,19 @@ struct PanelResizeWatchTests {
         let window = NSWindow(
             contentRect: inside, styleMask: [.borderless], backing: .buffered, defer: true)
         window.setFrame(inside, display: false)
-        // **The frame the window took, not the rect it was handed.** `visibleFrame.midY` is
-        // fractional on any display of odd visible height — 536.5 on this one, whose visible height
-        // is 1073 — and an `NSWindow` frame is pixel-aligned, so the window came back at 536.0 and
-        // `window.frame == inside` was false with `keepWhollyOnScreen` never having touched it.
-        // Measured 2026-09-28: it failed 4 runs of 4, alone and in a full run, on a machine where
-        // the guard was working perfectly. The test had only ever passed on an even-height display.
-        let before = window.frame
-        // The premise the assertion rests on: this really is a window that already fits, so being
-        // left alone is the right answer rather than a coincidence.
-        #expect(NSScreen.screens.contains { $0.visibleFrame.contains(before) },
-                "the fixture is not wholly on a screen, so it cannot test that a fitting panel is left alone")
+        // **`setFrame` aligns the frame to the backing store, so the window does not necessarily hold the
+        // rect it was given.** Comparing against `inside` measured the alignment and not the code: on a
+        // screen whose visible height is odd, `visibleFrame.midY` is fractional — 1073 gives 536.5, which
+        // the window stored as 536.0 — and the test failed while `keepWhollyOnScreen` had done nothing at
+        // all. It passed or failed with the Dock's state, which decides that parity.
+        let placed = window.frame
+        // The positive control this test needs: if the frame is not already inside, "must not be nudged"
+        // asserts nothing. The file's own history is an earlier version of this test that passed with
+        // `keepWhollyOnScreen` emptied out.
+        try #require(screen.visibleFrame.insetBy(dx: 8, dy: 8).contains(placed),
+                     "the fixture is not wholly on screen, so this asserts nothing: \(placed)")
         panel.keepWhollyOnScreen(window)
-        #expect(window.frame == before, "a panel that already fits must not be nudged")
+        #expect(window.frame == placed, "a panel that already fits must not be nudged")
     }
 }
 

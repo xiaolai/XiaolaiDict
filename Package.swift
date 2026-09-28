@@ -31,6 +31,16 @@ let package = Package(
         // is on the XPC service's execution path and so cannot be moved out of it.
         .target(name: "DictionaryModel", dependencies: ["XiaolaiDictBase"]),
 
+        // Apple's `.dictionary` container, and the facts that differ between the 86 of them.
+        // **Depends on nothing** — not even XiaolaiDictBase — because it is a file format plus a
+        // table of measured facts: testable without the app, and reusable without it. Foundation
+        // and CryptoKit only. Reads `Body.data` and `KeyText.data` directly, because Dictionary
+        // Services exposes no way to enumerate a dictionary's keys.
+        // The three Markdown files are the module's own record — the feature ledger, the audit and
+        // how every figure was measured. Excluded because SwiftPM would otherwise warn them as
+        // unhandled resources; a fourth document has to be added here too, and will warn until it is.
+        .target(name: "AppleDictionaryFormat", exclude: ["FEATURE-LEDGER.md", "AUDIT.md", "RESEARCH.md", "DICTIONARIES.md", "PLAN.md"]),
+
         // Everything about the local model that is not running it: the model service's wire
         // protocol, the prompts and the answer schema, the catalogue, what this Mac can hold, and
         // the store the weights are downloaded into. Linked by the model service and by the app;
@@ -77,9 +87,23 @@ let package = Package(
         .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore"]),
         .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
+        // The index builder, as a command. The module it drives has no other entry point: everything in
+        // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
+        // capability nobody can run. Links the module and Foundation, and nothing else — it prints to
+        // stdout and draws nothing.
+        .executableTarget(name: "XiaolaiDictIndex", dependencies: ["AppleDictionaryFormat"]),
+
+        // The aligner, as a command, for the reason the index builder is one: the alignment is derived from
+        // licensed dictionaries and is built on the reader's own Mac, so somebody has to be able to run it
+        // and read how much of it the matcher was willing to claim.
+        .executableTarget(name: "XiaolaiDictAlign", dependencies: ["AppleDictionaryFormat"]),
+
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),
+        // Gated on XIAOLAIDICT_BUNDLES: the measurements run against real installed
+        // dictionaries, whose text is licensed and never vendored into the repository.
+        .testTarget(name: "AppleDictionaryFormatTests", dependencies: ["AppleDictionaryFormat"]),
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
