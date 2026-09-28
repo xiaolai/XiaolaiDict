@@ -65,6 +65,7 @@ struct ModuleBoundaryTests {
         // because a command-line tool has no more business binding AppKit than a library does — and being
         // in this table is what applies that rule to it.
         "XiaolaiDictIndex": ["Foundation"],
+        "XiaolaiDictAlign": ["Foundation"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.

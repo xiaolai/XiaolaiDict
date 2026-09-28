@@ -34,6 +34,19 @@ public struct IndexedEntry: Sendable, Equatable {
     public let declaredDefinitions: Int
     public let capturedDefinitions: Int
 
+    /// Identifiers this entry shares with **another dictionary from the same publisher**.
+    ///
+    /// **The exact cross-dictionary join, found by measurement rather than assumed to be absent.** Oxford
+    /// stamps a pronunciation with its own `prlexid` — `optra0016615.002` — and the *same* value appears in
+    /// NOAD and in 牛津英汉汉英: 8,648 shared across the first 25,000 entries of each. Because a pronunciation
+    /// belongs to one headword and one homograph, that pins `fine` the noun to `fine` the noun across two
+    /// dictionaries **exactly**, where matching on the headword string cannot separate homographs at all.
+    ///
+    /// Not universal, and the absence matters as much as the presence: `OAWT`, `ko-en.NewAce` and
+    /// `zh_TW-en.DrEye` carry none in 4,000 entries each, so an alignment involving them has to fall back to
+    /// the headword. A caller reads `anchors.isEmpty` to know which it is dealing with.
+    public let anchors: [String]
+
     /// Share of the definitions this entry declares that reached a sense. 1.0 when none were declared,
     /// because an entry with no definitions has lost nothing.
     public var definitionsReached: Double {
@@ -42,8 +55,10 @@ public struct IndexedEntry: Sendable, Equatable {
 
     public init(entryID: String, headword: String, homograph: String?, senses: [IndexedSense],
                 sensesNeedingOrdinals: [Int] = [], subsensesNeedingOrdinals: Int = 0,
-                declaredDefinitions: Int = 0, capturedDefinitions: Int = 0) {
+                declaredDefinitions: Int = 0, capturedDefinitions: Int = 0,
+                anchors: [String] = []) {
         self.subsensesNeedingOrdinals = subsensesNeedingOrdinals
+        self.anchors = anchors
         self.entryID = entryID
         self.headword = headword
         self.homograph = homograph
@@ -95,6 +110,14 @@ public struct IndexedSense: Sendable, Equatable {
     /// two cannot disagree.
     public let position: SensePosition
     public let definition: String
+    /// The example phrases printed against this sense, in document order.
+    ///
+    /// **Extracted because they are the only material two dictionaries of different languages share.**
+    /// 牛津英汉汉英 marks its `d:def` on the *translation* — `fine` gives `罚款` — so its definitions and
+    /// NOAD's are not in the same language and cannot be compared. Both print English examples against each
+    /// sense, and that is what `SenseAligner` matches on. They are worth having on their own account too: an
+    /// example is often what tells a reader which sense they are looking at.
+    public let examples: [String]
     /// The subsenses this sense holds, where it holds more than one. See `IndexedSubsense`.
     public let subsenses: [IndexedSubsense]
 
@@ -103,7 +126,8 @@ public struct IndexedSense: Sendable, Equatable {
     public var partOfSpeech: String? { position.partOfSpeech }
 
     public init(key: SenseKey, contentKey: SenseKey, position: SensePosition, definition: String,
-                subsenses: [IndexedSubsense] = []) {
+                examples: [String] = [], subsenses: [IndexedSubsense] = []) {
+        self.examples = examples
         self.key = key
         self.contentKey = contentKey
         self.position = position
@@ -243,7 +267,8 @@ public struct EntryIndexer {
                 let subsenses = zip(raw.subsenses, assignment.keys[subsenseRanges[index]])
                     .map { IndexedSubsense(key: $1, label: $0.label, definition: $0.definition) }
                 return IndexedSense(key: key, contentKey: contentKey, position: raw.position,
-                                    definition: raw.definition, subsenses: subsenses)
+                                    definition: raw.definition, examples: raw.examples,
+                                    subsenses: subsenses)
             }
         // **Only the indices that are indices into `senses`.** The assignment runs over senses *and*
         // subsenses, so `ordinalled` indexes the flattened array — publishing it unchanged made
@@ -257,7 +282,8 @@ public struct EntryIndexer {
                                  sensesNeedingOrdinals: senseOrdinals,
                                  subsensesNeedingOrdinals: subsenseOrdinals,
                                  declaredDefinitions: declared,
-                                 capturedDefinitions: walk.capturedDefinitions)
+                                 capturedDefinitions: walk.capturedDefinitions,
+                                 anchors: walk.anchors())
         return Outcome(entry: entry, rejection: nil, declaredDefinitions: declared,
                        inlineIndexElements: inline)
     }
@@ -290,6 +316,7 @@ public struct EntryIndexer {
         var publisherID: String?
         var position: SensePosition
         var definition: String
+        var examples: [String] = []
         var subsenses: [RawSubsense] = []
 
         var positioned: PositionedDefinition {
@@ -402,6 +429,21 @@ struct Walk {
         // captured — `declared 1, captured 2`, retention 2.0. A definition owns one region; a sub-entry
         // inside it owns its own.
         count(definitionsIn: tree.root)
+    }
+
+    /// The publisher's own cross-dictionary identifiers, deduplicated and in document order.
+    ///
+    /// `prlexid` is the attribute Oxford uses; it is read as a plain attribute because it carries no
+    /// namespace prefix in any asset measured.
+    func anchors() -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for node in tree.root.allDescendants(where: { $0.attributes["prlexid"] != nil }) {
+            guard let value = node.attributes["prlexid"], !value.isEmpty,
+                  seen.insert(value).inserted else { continue }
+            out.append(value)
+        }
+        return out
     }
 
     /// `d:index` elements, by element name under the prefix this document bound to Apple's namespace.
@@ -535,7 +577,8 @@ struct Walk {
                 publisherID: publisherID(of: block),
                 position: SensePosition(subEntry: label, partOfSpeech: pos,
                                         senseNumber: number(of: block, subsenseToken: subsenseToken)),
-                definition: texts.joined(separator: "; "))
+                definition: texts.joined(separator: "; "),
+                examples: exampleTexts(in: block, stoppingAt: outer))
             raw.subsenses = block
                 .maximalNestedDescendants(where: { $0.classes.contains(subsenseToken) },
                                           stoppingAt: outer)
@@ -557,8 +600,11 @@ struct Walk {
         let texts = definitionTexts(in: node, stoppingAtSubEntries: stoppingAtSubEntries)
         guard !texts.isEmpty else { return }
         capturedDefinitions += texts.count
+        let boundary: (EntryNode) -> Bool = stoppingAtSubEntries
+            ? { self.isSubEntry($0) } : { _ in false }
         var raw = EntryIndexer.RawSense(publisherID: publisherID, position: position,
-                                        definition: texts.joined(separator: "; "))
+                                        definition: texts.joined(separator: "; "),
+                                        examples: exampleTexts(in: node, stoppingAt: boundary))
         if let subsenseToken {
             raw.subsenses = node.maximalNestedDescendants(
                 where: { $0.classes.contains(subsenseToken) },
@@ -582,6 +628,14 @@ struct Walk {
     /// first threw away five of 一's six glosses. Joining them keeps the sense singular and its content
     /// whole, which is the only option that is wrong in neither direction — and `IndexedSubsense` now
     /// carries the parts as well, so nothing needs the lossy reading to see the structure.
+    /// The example phrases this region owns. Guide punctuation is dropped for the same reason it is dropped
+    /// from a definition, and the search stops at the same boundary so a sub-entry's examples stay its own.
+    private func exampleTexts(in node: EntryNode, stoppingAt boundary: (EntryNode) -> Bool) -> [String] {
+        node.maximalNestedDescendants(where: { $0.classes.contains("ex") }, stoppingAt: boundary)
+            .map { EntryIndexer.collapsed($0.text(excluding: { $0.classes.contains("gp") })) }
+            .filter { !$0.isEmpty }
+    }
+
     private func definitionTexts(in node: EntryNode,
                                  stoppingAt boundary: (EntryNode) -> Bool) -> [String] {
         node.maximalDescendants(where: isDefinition, stoppingAt: boundary)

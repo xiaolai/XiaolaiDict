@@ -93,6 +93,11 @@ let package = Package(
         // stdout and draws nothing.
         .executableTarget(name: "XiaolaiDictIndex", dependencies: ["AppleDictionaryFormat"]),
 
+        // The aligner, as a command, for the reason the index builder is one: the alignment is derived from
+        // licensed dictionaries and is built on the reader's own Mac, so somebody has to be able to run it
+        // and read how much of it the matcher was willing to claim.
+        .executableTarget(name: "XiaolaiDictAlign", dependencies: ["AppleDictionaryFormat"]),
+
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
         .target(name: "XiaolaiDictTestSupport", path: "Tests/Support"),

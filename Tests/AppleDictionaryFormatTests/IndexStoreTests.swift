@@ -446,4 +446,126 @@ import Testing
         #expect(joined.contains("search_key_by_search"),
                 "the lookup does not use the alias index: \(joined)")
     }
+
+    // MARK: - Anchors and alignment
+
+    static func anchored(_ id: String, _ headword: String, _ anchors: [String],
+                         _ senses: [(key: String, pos: String?, definition: String,
+                                     examples: [String])]) -> IndexedEntry {
+        IndexedEntry(
+            entryID: id, headword: headword, homograph: nil,
+            senses: senses.map { sense in
+                let key = SenseKey(dictionary: "d", entry: id, value: sense.key, origin: .content)
+                return IndexedSense(key: key, contentKey: key,
+                                    position: SensePosition(partOfSpeech: sense.pos),
+                                    definition: sense.definition, examples: sense.examples)
+            },
+            anchors: anchors)
+    }
+
+    /// **The join the alignment rests on: entries, not anchors.** One entry commonly carries several — a
+    /// `prlexid` per pronunciation, British and American — and iterating anchors assessed its senses once per
+    /// pronunciation, inflating every count and leaving `INSERT OR REPLACE` to collapse the duplicates
+    /// afterwards.
+    @Test func entriesAreJoinedOnceHoweverManyAnchorsTheyShare() throws {
+        let store = try Self.store()
+        try store.beginRebuild(identifier: "hub", displayName: "hub", contentVersion: "1",
+                               keyConfidence: "verified")
+        try store.beginRebuild(identifier: "spoke", displayName: "spoke", contentVersion: "1",
+                               keyConfidence: "verified")
+        // Both entries carry the same two anchors — one word, two pronunciations.
+        try store.insert(Self.anchored("h1", "fine", ["optra1.001", "optra1.005"],
+                                       [("k1", "noun", "a penalty", [])]), dictionary: "hub")
+        try store.insert(Self.anchored("s1", "fine", ["optra1.001", "optra1.005"],
+                                       [("k2", "noun", "罚款", [])]), dictionary: "spoke")
+        #expect(try store.anchorCount(in: "hub") == 2)
+        let pairs = try store.entryPairs(hub: "hub", spoke: "spoke")
+        #expect(pairs.count == 1, "one entry pair, not one per anchor: \(pairs)")
+        #expect(pairs.first?.hub == "h1")
+        #expect(pairs.first?.spoke == "s1")
+    }
+
+    /// An aligned pair is stored with both sides' identity, and read back.
+    @Test func anAlignedPairRoundTrips() throws {
+        let store = try Self.store()
+        try store.beginRebuild(identifier: "hub", displayName: "hub", contentVersion: "1",
+                               keyConfidence: "verified")
+        try store.beginRebuild(identifier: "spoke", displayName: "spoke", contentVersion: "1",
+                               keyConfidence: "verified")
+        try store.insert(Self.anchored("h1", "fine", ["optra1.001"],
+                                       [("k1", "noun", "a penalty", ["a heavy fine"])]),
+                         dictionary: "hub")
+        try store.insert(Self.anchored("s1", "fine", ["optra1.001"],
+                                       [("k2", "noun", "罚款", ["a heavy fine"])]),
+                         dictionary: "spoke")
+        let hubSense = try #require(try store.sensesByEntry(in: "hub")["h1"]?.first)
+        let spokeSense = try #require(try store.sensesByEntry(in: "spoke")["s1"]?.first)
+        #expect(hubSense.examples == ["a heavy fine"], "examples did not round-trip")
+
+        try store.insertAlignment(hub: ("hub", hubSense), spoke: ("spoke", spokeSense),
+                                  confidence: 0.82, method: SenseAligner.method)
+        #expect(try store.alignmentCount(hub: "hub", spoke: "spoke") == 1)
+
+        // **A pair dies with either sense.** The first schema draft let an alias outlive its entry and then
+        // resolve to an unrelated word; a stored alignment pointing at a sense that has been rebuilt away is
+        // that defect with two dictionaries in it.
+        try store.forget("spoke")
+        #expect(try store.alignmentCount(hub: "hub", spoke: "spoke") == 0,
+                "the pair outlived the sense it pointed at")
+    }
+
+    /// A pair whose sense does not exist is refused outright.
+    @Test func anAlignmentToANonexistentSenseIsRejected() throws {
+        let store = try Self.store()
+        try store.beginRebuild(identifier: "hub", displayName: "hub", contentVersion: "1",
+                               keyConfidence: "verified")
+        try store.insert(Self.anchored("h1", "fine", ["optra1.001"],
+                                       [("k1", "noun", "a penalty", [])]), dictionary: "hub")
+        let real = try #require(try store.sensesByEntry(in: "hub")["h1"]?.first)
+        let ghost = IndexStore.AlignableSense(
+            entryID: "nowhere", senseKey: "k9", origin: "content", headword: "fine",
+            partOfSpeech: "noun", definition: "invented", examples: [], subEntry: nil,
+            hasSubsenses: false)
+        #expect(throws: IndexStore.Failure.self) {
+            try store.insertAlignment(hub: ("hub", real), spoke: ("hub", ghost),
+                                      confidence: 0.9, method: "test")
+        }
+    }
+
+    /// **The inflection list is the publisher's, and phrases are not inflections.** `held` must be excluded
+    /// from matchable text along with `hold`; `hold water` is a sub-entry's name and must not be.
+    @Test func inflectionsAreSingleWordSearchFormsOnly() throws {
+        let store = try Self.store()
+        try Self.register(store)
+        try store.insert(Self.entry(id: "hold", headword: "hold",
+                                    senses: [("k1", "to grasp", nil)]), dictionary: "d",
+                         aliases: [SearchAlias(search: "hold", display: "hold"),
+                                   SearchAlias(search: "held", display: "held"),
+                                   SearchAlias(search: "holding", display: "holding"),
+                                   SearchAlias(search: "hold water", display: "hold water")])
+        let forms = try store.inflectionsByEntry(in: "d")["hold"] ?? []
+        #expect(forms == ["hold", "held", "holding"], "got \(forms.sorted())")
+    }
+
+    /// A parent is reported as one, so a matcher can prefer the leaf that names a single meaning.
+    @Test func aSenseWithChildrenReportsThat() throws {
+        let store = try Self.store()
+        try Self.register(store)
+        let parent = SenseKey(dictionary: "d", entry: "at", value: "p", origin: .content)
+        try store.insert(IndexedEntry(
+            entryID: "at", headword: "@", homograph: nil,
+            senses: [IndexedSense(
+                key: parent, contentKey: parent, position: SensePosition(senseNumber: "1"),
+                definition: "a; b", examples: [],
+                subsenses: [
+                    IndexedSubsense(key: SenseKey(dictionary: "d", entry: "at", value: "s1",
+                                                  origin: .content), label: nil, definition: "a"),
+                    IndexedSubsense(key: SenseKey(dictionary: "d", entry: "at", value: "s2",
+                                                  origin: .content), label: "•", definition: "b"),
+                ])]), dictionary: "d")
+        let senses = try store.sensesByEntry(in: "d")["at"] ?? []
+        #expect(senses.count == 3)
+        #expect(senses.filter(\.hasSubsenses).map(\.senseKey) == ["p"])
+        #expect(senses.filter { !$0.hasSubsenses }.map(\.senseKey).sorted() == ["s1", "s2"])
+    }
 }

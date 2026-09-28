@@ -68,7 +68,7 @@ public final class IndexStore {
 
     /// The shape of the tables. Separate from `extractorGeneration` because a migration and a re-extraction
     /// are different jobs.
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     public enum Failure: Error, CustomStringConvertible {
         case open(String)
@@ -128,6 +128,8 @@ public final class IndexStore {
     /// Drops everything this store owns, for a schema change. Order matters: children before parents, so
     /// the foreign keys are satisfied at every step.
     static let teardown = """
+        DROP TABLE IF EXISTS alignment;
+        DROP TABLE IF EXISTS entry_anchor;
         DROP TABLE IF EXISTS search_key;
         DROP TABLE IF EXISTS sense;
         DROP TABLE IF EXISTS entry;
@@ -177,6 +179,10 @@ public final class IndexStore {
             -- sense order.
             sub_entry_key   TEXT,
             definition      TEXT NOT NULL,
+            -- The example phrases printed against this sense, joined by U+001F. One column rather than a
+            -- table because an example is never looked up on its own — it is always read with its sense —
+            -- and U+001F is a control character no dictionary prints. `examples(of:)` splits it back.
+            examples        TEXT NOT NULL DEFAULT '',
             -- A subsense's parent. **Composite and self-referencing on purpose**: a parent in another entry
             -- is meaningless, and a dangling one used to be accepted. NULL is still fine — SQLite treats a
             -- composite reference with any NULL column as satisfied, which is exactly the rule wanted here.
@@ -213,6 +219,48 @@ public final class IndexStore {
                 REFERENCES entry(dictionary, entry_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS entry_anchor (
+            dictionary  TEXT NOT NULL,
+            entry_id    TEXT NOT NULL,
+            -- An identifier this entry shares with another dictionary from the same publisher. See
+            -- `IndexedEntry.anchors`: Oxford's `prlexid` is the same value in NOAD and 牛津英汉汉英, which
+            -- makes the entry-to-entry join exact including homographs.
+            anchor      TEXT NOT NULL,
+            PRIMARY KEY (dictionary, entry_id, anchor),
+            FOREIGN KEY (dictionary, entry_id)
+                REFERENCES entry(dictionary, entry_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS alignment (
+            hub_dictionary   TEXT NOT NULL,
+            hub_entry        TEXT NOT NULL,
+            hub_sense        TEXT NOT NULL,
+            hub_origin       TEXT NOT NULL,
+            spoke_dictionary TEXT NOT NULL,
+            spoke_entry      TEXT NOT NULL,
+            spoke_sense      TEXT NOT NULL,
+            spoke_origin     TEXT NOT NULL,
+            -- What the matcher thought of this pair. Stored because an alignment without one is a claim:
+            -- the method that produced these can only settle about half of them, and a reader is entitled
+            -- to know which half a pair came from.
+            confidence       REAL NOT NULL,
+            -- Which matcher produced it, so a better one later is distinguishable from this one rather
+            -- than silently mixed with it.
+            method           TEXT NOT NULL,
+            PRIMARY KEY (hub_dictionary, hub_entry, hub_sense, hub_origin,
+                         spoke_dictionary, spoke_entry, spoke_sense, spoke_origin),
+            -- **Both sides reference a real sense, and a pair dies with either.** The first schema draft let
+            -- an alias outlive its entry and then resolve to an unrelated word; a stored alignment whose
+            -- sense has been rebuilt away is the same defect pointing at two dictionaries instead of one.
+            FOREIGN KEY (hub_dictionary, hub_entry, hub_sense, hub_origin)
+                REFERENCES sense(dictionary, entry_id, sense_key, origin) ON DELETE CASCADE,
+            FOREIGN KEY (spoke_dictionary, spoke_entry, spoke_sense, spoke_origin)
+                REFERENCES sense(dictionary, entry_id, sense_key, origin) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS entry_anchor_by_anchor ON entry_anchor(anchor);
+        CREATE INDEX IF NOT EXISTS alignment_by_hub
+            ON alignment(hub_dictionary, hub_entry, hub_sense);
         CREATE INDEX IF NOT EXISTS search_key_by_search ON search_key(search);
         CREATE INDEX IF NOT EXISTS sense_by_entry ON sense(dictionary, entry_id);
         """
@@ -283,7 +331,7 @@ public final class IndexStore {
         for sense in entry.senses {
             try insertSense(dictionary: dictionary, entryID: entry.entryID, key: sense.key.value,
                             origin: sense.key.origin.rawValue, position: sense.position,
-                            definition: sense.definition, parentKey: nil)
+                            definition: sense.definition, examples: sense.examples, parentKey: nil)
         }
         for sense in entry.senses {
             for subsense in sense.subsenses {
@@ -295,6 +343,12 @@ public final class IndexStore {
                                 definition: subsense.definition, parentKey: sense.key.value,
                                 parentOrigin: sense.key.origin.rawValue)
             }
+        }
+        for anchor in entry.anchors {
+            try execute("""
+                INSERT OR REPLACE INTO entry_anchor (dictionary, entry_id, anchor) VALUES (?, ?, ?)
+                """,
+                bind: [dictionary, entry.entryID, anchor])
         }
         for alias in aliases {
             try insertAlias(dictionary: dictionary, entryID: entry.entryID, alias: alias)
@@ -319,18 +373,27 @@ public final class IndexStore {
 
     /// One sense. Internal for the same reason: a dangling `parent_key` cannot be reached through the
     /// public writer, which always writes parents before children.
+    /// U+001F, the unit separator: a control character no dictionary prints, so it cannot occur in the text
+    /// it separates.
+    static let exampleSeparator = "\u{1F}"
+
+    /// Splits what `examples` stores back into phrases.
+    public static func examples(of stored: String) -> [String] {
+        stored.isEmpty ? [] : stored.components(separatedBy: exampleSeparator)
+    }
+
     func insertSense(dictionary: String, entryID: String, key: String, origin: String = "content",
-                     position: SensePosition = .unplaced, definition: String,
+                     position: SensePosition = .unplaced, definition: String, examples: [String] = [],
                      parentKey: String?, parentOrigin: String? = nil) throws {
         try execute("""
             INSERT OR REPLACE INTO sense (dictionary, entry_id, sense_key, origin, part_of_speech,
-                                          sense_number, sub_entry, sub_entry_key, definition,
+                                          sense_number, sub_entry, sub_entry_key, definition, examples,
                                           parent_key, parent_origin)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [dictionary, entryID, key, origin, position.partOfSpeech, position.senseNumber,
                    position.subEntry, position.subEntry.map(Self.canonical), definition,
-                   parentKey, parentOrigin])
+                   examples.joined(separator: Self.exampleSeparator), parentKey, parentOrigin])
     }
 
     /// Which sub-entry of `entry`, if any, an alias names.
@@ -408,6 +471,148 @@ public final class IndexStore {
     /// happens not to change is weak evidence. This is the number the second-run check reads.
     public var totalRowChanges: Int { Int(sqlite3_total_changes(handle)) }
 
+    // MARK: - Alignment
+
+    /// One sense of one dictionary, as a matcher needs to see it.
+    public struct AlignableSense: Sendable, Equatable {
+        public let entryID: String
+        public let senseKey: String
+        public let origin: String
+        public let headword: String
+        public let partOfSpeech: String?
+        public let definition: String
+        public let examples: [String]
+        /// The sub-entry this sense belongs to — a phrasal verb or idiom — or nil for a main sense.
+        ///
+        /// **A main sense and an idiom must not compete.** NOAD's `hold` carries both, and with the idioms in
+        /// the candidate set the matcher put 使保持不动 against "squeeze one's nostrils with one's fingers"
+        /// (*hold one's nose*) and 抓地 against "approve of something" (*hold with*) — five of five wrong for
+        /// that headword, while the aggregate moved by two points and hid it. 牛津英汉汉英 files no sub-entry
+        /// senses at all, so every one of its senses must be matched against a main sense.
+        public let subEntry: String?
+        /// Whether another sense of this entry names this one as its parent.
+        ///
+        /// **A parent is never a candidate while its children are.** A numbered sense's text is the join of
+        /// its subsenses' — `hold` reads "grasp, carry, or support with one's hands; keep or sustain in a
+        /// specified position; embrace (someone); …" — so its term overlap with anything is a *superset* of
+        /// every child's, and a score built on overlap makes the parent win every time. Two different
+        /// Chinese senses, 拥抱 and 使保持不动, both landed on that one English sense at the same confidence,
+        /// which is the coarse answer rather than the right one.
+        public let hasSubsenses: Bool
+
+        /// Everything about this sense that could be in the other dictionary's language — its definition
+        /// wording and its examples. `SenseAligner` scores against exactly this.
+        public var matchableText: String { ([definition] + examples).joined(separator: " ") }
+    }
+
+    /// Entry pairs the publisher's own anchors join, deduplicated.
+    ///
+    /// **Pairs of entries, not of anchors.** One entry commonly carries several: 牛津英汉汉英 stamps a
+    /// `prlexid` on each pronunciation, so 43,247 of its entries have more than one — the British and the
+    /// American form of the same word. Iterating anchors assessed those senses once per pronunciation, which
+    /// inflated every count and left `INSERT OR REPLACE` to quietly collapse the duplicates afterwards.
+    /// Pairing entries also gives the matcher every candidate at once instead of one anchor's worth.
+    public func entryPairs(hub: String, spoke: String) throws -> [(hub: String, spoke: String)] {
+        var seen = Set<String>()
+        var out: [(hub: String, spoke: String)] = []
+        try query("""
+            SELECT DISTINCT h.entry_id, s.entry_id
+              FROM entry_anchor h
+              JOIN entry_anchor s ON s.anchor = h.anchor AND s.dictionary = ?
+             WHERE h.dictionary = ?
+             ORDER BY h.entry_id, s.entry_id
+            """, bind: [spoke, hub]) { row in
+            let pair = (row.text(0) ?? "", row.text(1) ?? "")
+            guard seen.insert("\(pair.0)\u{1F}\(pair.1)").inserted else { return }
+            out.append((hub: pair.0, spoke: pair.1))
+        }
+        return out
+    }
+
+    /// The single-word search forms of each entry, grouped by entry.
+    ///
+    /// **The publisher's own inflection list, and it is already indexed.** Excluding a headword from the
+    /// matchable text is not enough, because a dictionary writes the inflections: dropping `hold` left *held*
+    /// behind, and "a meeting was held at the church" shares it with "she held me by the sleeve", "it held the
+    /// worm in its beak" and "we held the thief" — one shared verb form deciding four pairs that had nothing
+    /// else in common, all of them wrong. Apple's key index already carries `held`, `holding`, `holds` and
+    /// `holdable` as ways of finding that entry, so the forms to exclude need neither a lemmatiser nor a
+    /// guess. Phrases are left out: `hold water` is a sub-entry's name, not an inflection.
+    public func inflectionsByEntry(in dictionary: String) throws -> [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        try query("""
+            SELECT entry_id, search FROM search_key
+             WHERE dictionary = ? AND search NOT LIKE '% %'
+            """, bind: [dictionary]) { row in
+            guard let entry = row.text(0), let form = row.text(1) else { return }
+            out[entry, default: []].insert(form)
+        }
+        return out
+    }
+
+    /// Every sense of `dictionary`, grouped by the entry it belongs to.
+    public func sensesByEntry(in dictionary: String) throws -> [String: [AlignableSense]] {
+        var out: [String: [AlignableSense]] = [:]
+        try query("""
+            SELECT sense.entry_id, sense.sense_key, sense.origin, entry.headword,
+                   sense.part_of_speech, sense.definition, sense.examples, sense.sub_entry_key,
+                   EXISTS (SELECT 1 FROM sense child
+                            WHERE child.dictionary = sense.dictionary
+                              AND child.entry_id = sense.entry_id
+                              AND child.parent_key = sense.sense_key
+                              AND child.parent_origin = sense.origin)
+              FROM sense
+              JOIN entry ON entry.dictionary = sense.dictionary AND entry.entry_id = sense.entry_id
+             WHERE sense.dictionary = ?
+             ORDER BY sense.entry_id, sense.sense_key
+            """, bind: [dictionary]) { row in
+            let entry = row.text(0) ?? ""
+            out[entry, default: []].append(AlignableSense(
+                entryID: entry, senseKey: row.text(1) ?? "", origin: row.text(2) ?? "",
+                headword: row.text(3) ?? "", partOfSpeech: row.text(4), definition: row.text(5) ?? "",
+                examples: Self.examples(of: row.text(6) ?? ""), subEntry: row.text(7),
+                hasSubsenses: row.int(8) != 0))
+        }
+        return out
+    }
+
+    /// Records one aligned pair.
+    public func insertAlignment(hub: (dictionary: String, sense: AlignableSense),
+                                spoke: (dictionary: String, sense: AlignableSense),
+                                confidence: Double, method: String) throws {
+        try execute("""
+            INSERT OR REPLACE INTO alignment
+                (hub_dictionary, hub_entry, hub_sense, hub_origin,
+                 spoke_dictionary, spoke_entry, spoke_sense, spoke_origin, confidence, method)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bind: [hub.dictionary, hub.sense.entryID, hub.sense.senseKey, hub.sense.origin,
+                   spoke.dictionary, spoke.sense.entryID, spoke.sense.senseKey, spoke.sense.origin,
+                   confidence, method])
+    }
+
+    /// Drops every pair between two dictionaries, so a re-run replaces rather than accumulates.
+    public func forgetAlignment(hub: String, spoke: String) throws {
+        try execute("""
+            DELETE FROM alignment WHERE hub_dictionary = ? AND spoke_dictionary = ?
+            """, bind: [hub, spoke])
+    }
+
+    public func alignmentCount(hub: String, spoke: String) throws -> Int {
+        var n = 0
+        try query("SELECT count(*) FROM alignment WHERE hub_dictionary = ? AND spoke_dictionary = ?",
+                  bind: [hub, spoke]) { n = Int($0.int(0)) }
+        return n
+    }
+
+    public func anchorCount(in dictionary: String) throws -> Int {
+        var n = 0
+        try query("SELECT count(*) FROM entry_anchor WHERE dictionary = ?", bind: [dictionary]) {
+            n = Int($0.int(0))
+        }
+        return n
+    }
+
     public func senseCount(in dictionary: String) throws -> Int {
         var n = 0
         try query("SELECT count(*) FROM sense WHERE dictionary = ?", bind: [dictionary]) { n = Int($0.int(0)) }
@@ -472,6 +677,8 @@ public final class IndexStore {
                 }
             case let i as Int:
                 status = sqlite3_bind_int64(statement, index, Int64(i))
+            case let d as Double:
+                status = sqlite3_bind_double(statement, index, d)
             default:
                 throw Failure.sql("cannot bind \(type(of: value!)) at parameter \(index)")
             }
