@@ -199,7 +199,19 @@ public struct PhraseSpans: Sendable, Equatable {
     /// same fragments once made sub-entry scoping match the wrong phrase.
     ///
     public init(bundle: URL) throws {
-        var found = Set<String>()
+        try self.init(bundle: bundle, labels: [])
+    }
+
+    /// The whole inventory: the dictionary's multi-word keys **and** the sub-entry labels only the body
+    /// holds, which `IndexStore.subEntryLabels(in:)` has already walked for.
+    ///
+    /// **This is what the index buys the phrase feature.** Keys alone give 104,009 phrases in about a
+    /// second and miss `take something into account`, `beat around the bush`, `once in a blue moon` and
+    /// `cost an arm and a leg` — every one of which a reader meets and none of which they would think to
+    /// look up. The labels add 935 phrases NOAD files nowhere else, 211 of them carrying a slot, and cost
+    /// a query rather than the 60-second body walk that produced them (measured 2026-09-29).
+    public init(bundle: URL, labels: Set<String>) throws {
+        var found = Set(labels.map { $0.lowercased() }.filter { $0.contains(" ") })
         // **Every key of the group, not just the first.** A group is a folded search key followed by
         // display forms, so `keys.first` alone loses the spellings a reader actually writes: measured
         // 2026-09-29, 90,391 phrases from the first key against **104,009** from all of them.

@@ -550,6 +550,28 @@ public final class IndexStore {
         return out
     }
 
+    /// Every sub-entry label `dictionary` prints — the names of its phrasal verbs and idioms.
+    ///
+    /// **The half of the phrase inventory Apple's key index does not hold**, and the concrete thing the
+    /// body walk buys. Measured on NOAD, 2026-09-29: 9,755 labels, of which 935 appear in no key of any
+    /// group in `KeyText.data` — and those 935 include `take something into account`,
+    /// `beat around the bush`, `once in a blue moon` and `cost an arm and a leg`. Reading them from here
+    /// costs a query; finding them without an index costs a 60-second body walk per dictionary.
+    ///
+    /// Multi-word only, because a one-word sub-entry label is a derived form rather than a phrase, and
+    /// `PhraseSpans` would discard it anyway.
+    public func subEntryLabels(in dictionary: String) throws -> Set<String> {
+        var out = Set<String>()
+        try query("""
+            SELECT DISTINCT sub_entry FROM sense
+             WHERE dictionary = ? AND sub_entry IS NOT NULL AND sub_entry LIKE '% %'
+            """, bind: [dictionary]) { row in
+            guard let label = row.text(0) else { return }
+            out.insert(label)
+        }
+        return out
+    }
+
     /// Every sense of `dictionary`, grouped by the entry it belongs to.
     public func sensesByEntry(in dictionary: String) throws -> [String: [AlignableSense]] {
         var out: [String: [AlignableSense]] = [:]
