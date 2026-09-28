@@ -27,10 +27,22 @@ enum DictionaryPresence {
     static var names: [String] { enabled.sorted() }
 
     /// The dictionaries some test here measures by name, and what each is measured for.
+    ///
+    /// **譯典通 said "the positional rung" and that was wrong.** Measured 2026-09-28 across the enabled
+    /// set: the Oxford American Writer's Thesaurus answers with **11 positional entries and 199
+    /// positional senses**, beside 6 publisher entries and 1 with no senses to key — so it exercises all
+    /// three rungs by itself, and the positional one was never uncovered. The census was therefore
+    /// printing, prominently, that a rung went unmeasured while it was being measured, and telling a
+    /// reader of Simplified Chinese to enable a Traditional Chinese dictionary to restore it. A loud
+    /// wrong line is worse than a quiet right one.
+    ///
+    /// What 譯典通 does uniquely carry is the CJK half of the repeated-record premise — it answers 的
+    /// with three records under one id — which is a different claim and is what it is listed for now.
     static let measured = [
         ("New Oxford American", "publisher sense ids on every sense"),
         ("牛津", "publisher sense ids, as lexids"),
-        ("譯典通", "sense structure with no ids — the positional rung"),
+        ("Oxford American Writer", "the positional rung — 11 entries and 199 senses here"),
+        ("譯典通", "the CJK repeated-record premise — 的 answers with three records under one id"),
         ("Collins COBUILD", "a sideloaded conversion with no senses to key"),
     ]
 
@@ -56,3 +68,4 @@ struct DictionaryCensusTests {
         print("")
     }
 }
+
