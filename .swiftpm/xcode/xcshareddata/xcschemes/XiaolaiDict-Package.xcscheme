@@ -46,6 +46,32 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "XiaolaiDictIndex"
+               BuildableName = "XiaolaiDictIndex"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "XiaolaiDictAlign"
+               BuildableName = "XiaolaiDictAlign"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -91,6 +117,15 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "AppleDictionaryFormatTests"
+               BuildableName = "AppleDictionaryFormatTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -108,8 +143,8 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "XiaolaiDictModelService"
-            BuildableName = "XiaolaiDictModelService"
+            BlueprintIdentifier = "XiaolaiDictAlign"
+            BuildableName = "XiaolaiDictAlign"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -132,8 +167,8 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "XiaolaiDictModelService"
-            BuildableName = "XiaolaiDictModelService"
+            BlueprintIdentifier = "XiaolaiDictAlign"
+            BuildableName = "XiaolaiDictAlign"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
