@@ -46,7 +46,7 @@ struct TestInventoryTests {
         // was never registered, so the guard covered four of the five directories on disk. The count
         // was 45 before `PLAN.md` steps 0–5 and is not backdated — a floor records what is there, and
         // a drop from here is the signal. 162 before the sense aligner, 187 with it.
-        "AppleDictionaryFormatTests": 191,
+        "AppleDictionaryFormatTests": 198,
     ]
 
     private static let testsRoot = URL(fileURLWithPath: #filePath)

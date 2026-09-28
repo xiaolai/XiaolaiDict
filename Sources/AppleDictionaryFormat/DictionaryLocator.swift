@@ -2,6 +2,39 @@ import CryptoKit
 import Foundation
 
 /// One installed `.dictionary` bundle, identified by what it says about itself.
+/// One `DCSDictionaryLanguages` entry: what a dictionary indexes, and what it explains in.
+///
+/// Declared here rather than borrowed from `DictionaryModel`, because this module deliberately links
+/// nothing but Foundation, Compression, CryptoKit and SQLite3 — that is what makes it shippable on its
+/// own, and `ModuleBoundaryTests` holds it to that exact set.
+public struct DeclaredLanguage: Sendable, Equatable {
+    public let index: String
+    public let explains: String
+
+    public init(index: String, explains: String) {
+        self.index = index
+        self.explains = explains
+    }
+
+    static func tag(_ identifier: String) -> Locale.Language? {
+        let normalised = identifier.replacingOccurrences(of: "_", with: "-")
+        return normalised.isEmpty ? nil : Locale.Language(identifier: normalised)
+    }
+
+    /// Whether two tags name the same language **and script**.
+    ///
+    /// Script, because Apple writes `zh_CN` and `zh_TW` and Foundation resolves those to Hans and Hant —
+    /// so a Simplified reader is served 牛津英汉汉英词典 and not 譯典通. Region is not compared: it has
+    /// already done its work by deciding the script, and `zh-Hans-SG` is a Simplified reader.
+    static func same(_ a: String, _ b: String) -> Bool {
+        guard let x = tag(a), let y = tag(b) else { return false }
+        return x.languageCode == y.languageCode && x.script == y.script
+    }
+
+    var indexesEnglish: Bool { Self.tag(index)?.languageCode?.identifier == "en" }
+    var explainsInEnglish: Bool { Self.tag(explains)?.languageCode?.identifier == "en" }
+}
+
 public struct DictionaryBundle: Sendable, Equatable {
     public let url: URL
     /// `CFBundleIdentifier` from the bundle's own `Info.plist`.
@@ -17,11 +50,32 @@ public struct DictionaryBundle: Sendable, Equatable {
     /// silently unused. `LanguageAdapters.profile` consults them first and falls back to the default.
     public var profile: DictionaryProfile { LanguageAdapters.profile(for: identifier) }
 
-    public init(url: URL, identifier: String, displayName: String, declaredVersion: String = "") {
+    /// `DCSDictionaryLanguages`, as the bundle declares it. Empty for a sideloaded conversion — none of
+    /// the six installed here declares any — and an undeclared bundle serves nobody, because guessing
+    /// would put a dictionary in an audience it may not belong to.
+    public let languages: [DeclaredLanguage]
+
+    public init(url: URL, identifier: String, displayName: String, declaredVersion: String = "",
+                languages: [DeclaredLanguage] = []) {
         self.url = url
         self.identifier = identifier
         self.displayName = displayName
         self.declaredVersion = declaredVersion
+        self.languages = languages
+    }
+
+    /// Whether this dictionary belongs in `reader`'s index.
+    ///
+    /// **Three audiences, not two.** Simplified Chinese, Traditional Chinese and Cantonese each want
+    /// their own bilingual dictionary: a Cantonese reader wants Cantonese glosses, not Mandarin written
+    /// in Traditional characters, and `yue` is a different language from `zh` however the script agrees.
+    ///
+    /// English headwords are the whole point — a dictionary whose headwords are Chinese can never answer
+    /// the lookup this product exists for (ADR-0027) — and the English monolinguals come along for every
+    /// audience, because NOAD is what every accuracy figure here rests on and the thesaurus is where a
+    /// tapped sense is studiable.
+    public func serves(reader: String) -> Bool {
+        languages.contains { $0.indexesEnglish && ($0.explainsInEnglish || DeclaredLanguage.same($0.explains, reader)) }
     }
 
     /// What a rebuild compares against to decide whether this dictionary's content has changed.
@@ -120,7 +174,12 @@ public enum DictionaryLocator {
             ?? url.deletingPathExtension().lastPathComponent
         let version = (info["CFBundleShortVersionString"] as? String)
             ?? (info["CFBundleVersion"] as? String) ?? ""
+        let declared = (info["DCSDictionaryLanguages"] as? [[String: Any]] ?? []).compactMap { entry -> DeclaredLanguage? in
+            guard let index = entry["DCSDictionaryIndexLanguage"] as? String else { return nil }
+            return DeclaredLanguage(index: index,
+                                    explains: entry["DCSDictionaryDescriptionLanguage"] as? String ?? index)
+        }
         return DictionaryBundle(url: url, identifier: identifier, displayName: name,
-                                declaredVersion: version)
+                                declaredVersion: version, languages: declared)
     }
 }

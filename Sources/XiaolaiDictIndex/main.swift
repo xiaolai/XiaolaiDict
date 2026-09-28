@@ -23,10 +23,22 @@ let usage = """
                        Default: ~/Library/Application Support/XiaolaiDict/index.sqlite
       --only <id>      Restrict to one dictionary, by CFBundleIdentifier. Repeatable.
                        A prefix is enough: `--only NOAD` matches com.apple.dictionary.NOAD.
+      --reader <tag>   Build for a reader of this language rather than this Mac's own, e.g.
+                       `--reader zh-Hant-TW`, `--reader yue-Hant-HK`. Decides which bilingual
+                       dictionary is included; the English monolinguals are in every audience.
+      --all            Ignore the audience and index everything readable. Larger, slower, and it
+                       puts dictionaries in the index the reader cannot read.
       --force          Discard what was built from each selected dictionary and rebuild it,
                        even when nothing about it has changed.
       --quiet          Print the per-dictionary result only, without progress.
       --help           This text.
+
+    WHOSE INDEX THIS IS
+      Simplified Chinese, Traditional Chinese and Cantonese are three audiences, each wanting its
+      own bilingual dictionary — a Cantonese reader wants Cantonese glosses, not Mandarin written
+      in Traditional characters. Only this reader's audience is indexed by default. Measured: 82 s
+      and 319 MB scoped against 216 s and 478 MB for everything, and adding an audience later costs
+      only its own dictionaries, because a rebuild is per-dictionary.
 
     WHAT IT REFUSES, AND WHY THAT IS THE POINT
       A dictionary whose key mapping cannot be certified is skipped with a reason rather than
@@ -46,6 +58,8 @@ struct Options {
     var only: [String] = []
     var force = false
     var quiet = false
+    /// Whose index this is. Defaults to the reader's own language; `--all` sets it nil.
+    var reader: String? = Locale.preferredLanguages.first ?? "en"
 }
 
 /// The default lives in Application Support rather than Caches. The index *is* derived data and can always
@@ -74,6 +88,11 @@ func parse(_ arguments: [String]) throws -> Options {
                 throw Bad(description: "--only needs a dictionary identifier")
             }
             options.only.append(identifier)
+        case "--reader":
+            guard let tag = rest.next() else { throw Bad(description: "--reader needs a language tag") }
+            options.reader = tag
+        case "--all":
+            options.reader = nil
         case "--force": options.force = true
         case "--quiet": options.quiet = true
         default:
@@ -105,10 +124,22 @@ guard !installed.isEmpty else {
     exit(1)
 }
 
-let selected = options.only.isEmpty ? installed : installed.filter { bundle in
+// **The audience first, then `--only` within it.** `--only` is for working on one dictionary, so it
+// must not quietly widen the set past the reader it is building for.
+let forAudience = options.reader.map { reader in installed.filter { $0.serves(reader: reader) } } ?? installed
+let selected = options.only.isEmpty ? forAudience : forAudience.filter { bundle in
     options.only.contains { bundle.identifier.localizedCaseInsensitiveContains($0) }
 }
 guard !selected.isEmpty else {
+    if options.only.isEmpty, let reader = options.reader {
+        FileHandle.standardError.write(Data("""
+            xdict-index: no installed dictionary serves a reader of \(reader). One qualifies by indexing
+            English and explaining it either in English or in that reader's own language and script — so a
+            Chinese-Chinese dictionary never does, and 譯典通 does not serve a reader of Simplified Chinese.
+            Enable one in Dictionary, under Settings, or pass --all.
+            """.utf8))
+        exit(1)
+    }
     FileHandle.standardError.write(Data("""
         xdict-index: --only matched nothing. Installed identifiers:
         \(installed.map { "  " + $0.identifier }.joined(separator: "\n"))\n
@@ -131,7 +162,8 @@ do {
         for bundle in selected { try store.forget(bundle.identifier) }
     }
 
-    print("xdict-index: \(selected.count) of \(installed.count) installed dictionaries → \(options.index.path)")
+    let whose = options.reader.map { "for a reader of \($0)" } ?? "for every audience (--all)"
+    print("xdict-index: \(selected.count) of \(installed.count) installed, \(whose) → \(options.index.path)")
     var lastStage: String?
     let outcomes = rebuilder.rebuild(selected) { progress in
         guard !options.quiet else { return }
