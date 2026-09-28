@@ -207,14 +207,39 @@ public enum ContainerReader {
     /// Walked by the **fixed stride**, not by the per-chunk size field, which is 0 in some chunks. A
     /// reader that trusts that field stops at the first such chunk and returns a partial index that
     /// looks complete.
+    /// Every decompressed chunk, **and how many the stride visited** — because the difference is the
+    /// defect.
+    ///
+    /// A chunk that fails any check below is dropped and the walk continues, so a file whose chunks are
+    /// almost all unreadable returns a handful of groups and no error at all. Measured 2026-09-28:
+    /// 英譯廣東口語詞典 yields **7 key groups for 2,472 entries** from a 188 KB key file, and the
+    /// confidence gate then marked it `verified` at 100% agreement — because agreement is measured over
+    /// the keys that were read. `read` against `attempted` is what makes that visible.
+    public struct KeyChunkRead: Sendable {
+        public let blocks: [Data]
+        /// Chunk positions the fixed stride visited, whether or not they decompressed.
+        public let attempted: Int
+        public var read: Int { blocks.count }
+        /// The share that decompressed. **Never a claim about content** — a chunk can decompress and
+        /// still hold nothing a caller wants.
+        public var coverage: Double { attempted == 0 ? 0 : Double(blocks.count) / Double(attempted) }
+    }
+
+    /// The blocks alone, for callers that do not judge coverage.
     public static func keyChunks(at url: URL) throws -> [Data] {
+        try readKeyChunks(at: url).blocks
+    }
+
+    public static func readKeyChunks(at url: URL) throws -> KeyChunkRead {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         guard data.count > firstKeyChunk + chunkHeader else {
             throw Failure.truncated("\(url.lastPathComponent): \(data.count) bytes, no first chunk")
         }
         var out: [Data] = []
+        var attempted = 0
         var position = firstKeyChunk
         while position + chunkHeader <= data.count {
+            attempted += 1
             let compressed = Int(data.uint32(at: position + 4))
             let expected = Int(data.uint32(at: position + 8))
             let start = position + chunkHeader
@@ -231,7 +256,7 @@ public enum ContainerReader {
         guard !out.isEmpty else {
             throw Failure.badChunk("\(url.lastPathComponent): no chunks at \(firstKeyChunk)")
         }
-        return out
+        return KeyChunkRead(blocks: out, attempted: attempted)
     }
 
     /// One zlib stream: a two-byte header, raw deflate, and a four-byte Adler-32 of the output.

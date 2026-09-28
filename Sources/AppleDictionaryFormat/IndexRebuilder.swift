@@ -13,6 +13,8 @@ public enum RebuildRefusal: Sendable, Equatable, CustomStringConvertible {
     case noKeyIndex(String)
     /// The body read, but no record in it was an entry.
     case noEntries
+    /// Indexed, but almost nothing in it can be looked up.
+    case unsearchable(aliases: Int, entries: Int)
     /// The index itself could not be written or read — locking, disk, a constraint.
     ///
     /// **Separate from `containerUnreadable`, which it used to be reported as.** The distinction is not
@@ -47,6 +49,12 @@ public enum RebuildRefusal: Sendable, Equatable, CustomStringConvertible {
             return "it has no readable key index, so nothing could be looked up: \(why)"
         case .noEntries:
             return "its body read but held no entry"
+        case .unsearchable(let aliases, let entries):
+            return String(format: """
+                it holds %d entries and only %d of them can be looked up. Its key index reads and is \
+                almost entirely unparsed, so the words are there and nothing reaches them — a \
+                dictionary that cannot be searched is worse than a missing one, because it looks present
+                """, entries, aliases)
         case .storageFailure(let why):
             return "the index could not be written: \(why). The dictionary is fine; the store is not"
         }
@@ -132,6 +140,21 @@ public struct IndexRebuilder {
     public let store: IndexStore
     public let extractorGeneration: Int
 
+    /// The floor a dictionary's search aliases must clear, per entry, to be worth indexing.
+    ///
+    /// Measured over all 84 surveyed assets: two sit below 0.04 — 英譯廣東口語詞典 at **0.0028** and
+    /// 漢英對照成語詞典 at **0.0392** — and every other one is above **0.3654**. The floor sits inside that
+    /// 9.3× gap rather than on either edge, so it is not fitted to a boundary.
+    public static let searchableAliasesPerEntry = 0.1
+
+    /// Whether what was written is searchable enough to be worth keeping.
+    ///
+    /// A named predicate rather than the comparison inline, so the rule can be asserted at the values it
+    /// was derived from without a dictionary to hand.
+    public static func isSearchable(aliases: Int, entries: Int) -> Bool {
+        entries == 0 || Double(aliases) >= Double(entries) * searchableAliasesPerEntry
+    }
+
     public init(store: IndexStore, extractorGeneration: Int = IndexStore.extractorGeneration) {
         self.store = store
         self.extractorGeneration = extractorGeneration
@@ -213,6 +236,8 @@ public struct IndexRebuilder {
         var entries = 0, senses = 0, aliases = 0
         /// Thrown inside the transaction so an empty replacement rolls back instead of committing.
         struct NoEntries: Error {}
+        /// Thrown inside the transaction for the same reason, and rolled back for the same reason.
+        struct Unsearchable: Error { let aliases: Int; let entries: Int }
         do {
             try store.inTransaction {
                 try store.beginRebuild(identifier: bundle.identifier, displayName: bundle.displayName,
@@ -246,9 +271,27 @@ public struct IndexRebuilder {
                 // dictionary could verify, produce thousands of entries and not one definition, and commit
                 // as a successful rebuild with nothing in it a reader could be shown.
                 guard entries > 0, senses > 0 else { throw NoEntries() }
+                // **And it must be searchable, which "has entries" does not imply.**
+                //
+                // 英譯廣東口語詞典 indexes 2,472 Cantonese colloquialisms and writes **7** search keys for
+                // them. Its key file decompresses completely — 23 chunks, 514 KB — and the group parser
+                // understands almost none of it. Every other check passed: entries, senses, 100% retention,
+                // and `verified` at 100% agreement, because agreement is measured over the keys that *were*
+                // read and 100% of seven is 100%. The reader would have had a dictionary they could not look
+                // anything up in.
+                //
+                // Two narrower measures were tried first and **measured wrong**. Key-chunk coverage
+                // separates nothing: all eleven installed dictionaries decompress 100% of their chunks, this
+                // one included. The share of chunks yielding no group separates the wrong things —
+                // `ko-en.NewAce` is 65.3% empty and still yields 166,859 groups.
+                guard Self.isSearchable(aliases: aliases, entries: entries) else {
+                    throw Unsearchable(aliases: aliases, entries: entries)
+                }
             }
         } catch is NoEntries {
             return refuse(.noEntries)
+        } catch let why as Unsearchable {
+            return refuse(.unsearchable(aliases: why.aliases, entries: why.entries))
         } catch let error as IndexStore.Failure {
             return refuse(.storageFailure("\(error)"))
         } catch {

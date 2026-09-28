@@ -306,3 +306,45 @@ import Testing
         #expect(accepted + refused > 0, "no dictionary was assessed, so this measured nothing")
     }
 }
+
+/// **A dictionary that cannot be searched is refused, however well it reads.**
+///
+/// 英譯廣東口語詞典 indexes 2,472 Cantonese colloquialisms and writes 7 search keys. Its key file
+/// decompresses completely and the group parser understands almost none of it, so every other check
+/// passed — entries, senses, 100% retention, and `verified` at 100% agreement, since agreement is
+/// measured over the keys that *were* read. The floor is asserted at the values it was derived from.
+@Suite struct SearchabilityFloorTests {
+    /// The two the survey puts below the gap, over all 84 assets.
+    @Test(arguments: [(7, 2_472, "英譯廣東口語詞典"), (160, 4_086, "漢英對照成語詞典")])
+    func aDictionaryNothingReachesIsRefused(aliases: Int, entries: Int, name: String) {
+        #expect(!IndexRebuilder.isSearchable(aliases: aliases, entries: entries),
+                "\(name) writes \(aliases) keys for \(entries) entries and must be refused")
+    }
+
+    /// The lowest passer, and the three this product ships. None may be refused.
+    @Test(arguments: [(772, 2_113, "现代汉语同义词典 — the lowest above the gap"),
+                      (33_744, 36_866, "牛津粵英雙語詞典"),
+                      (250_196, 111_579, "NOAD"),
+                      (30_676, 16_007, "Oxford American Writer's Thesaurus"),
+                      (311_243, 136_288, "牛津英汉汉英词典")])
+    func aSearchableDictionaryIsKept(aliases: Int, entries: Int, name: String) {
+        #expect(IndexRebuilder.isSearchable(aliases: aliases, entries: entries),
+                "\(name) is searchable at \(aliases)/\(entries) and must not be refused")
+    }
+
+    /// The floor sits **inside** the 9.3× gap the survey measured, not on either edge — so neither the
+    /// worst passer nor the best failure decides it.
+    @Test func theFloorIsInsideTheGapRatherThanOnItsEdge() {
+        let worstFailure = 160.0 / 4_086.0      // 0.0392
+        let lowestPass = 772.0 / 2_113.0        // 0.3654
+        #expect(worstFailure < IndexRebuilder.searchableAliasesPerEntry)
+        #expect(IndexRebuilder.searchableAliasesPerEntry < lowestPass)
+        #expect(lowestPass / worstFailure > 9, "the gap this rests on is 9.3×; if it narrows, re-derive")
+    }
+
+    /// A dictionary with no entries is refused by `noEntries` first, so this must not double-refuse it
+    /// with a division that would be zero over zero.
+    @Test func anEmptyDictionaryIsNotThisRulesBusiness() {
+        #expect(IndexRebuilder.isSearchable(aliases: 0, entries: 0))
+    }
+}
