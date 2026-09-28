@@ -325,9 +325,14 @@ struct PanelResizeWatchTests {
         let window = DraggingWindow(
             contentRect: outside, styleMask: [.borderless], backing: .buffered, defer: true)
         window.setFrame(outside, display: false)
+        // **Against the frame the window actually took, never against the rect it was handed.** An
+        // `NSWindow` frame is pixel-aligned, so a fractional origin comes back rounded and the
+        // comparison fails on its own premise rather than on the guard — see the sibling test below,
+        // which this file learned the hard way.
+        let before = window.frame
         panel.keepWhollyOnScreen(window)
         #expect(
-            window.frame == outside,
+            window.frame == before,
             "a window the reader is dragging was snapped back under their hands")
     }
 
@@ -341,8 +346,19 @@ struct PanelResizeWatchTests {
         let window = NSWindow(
             contentRect: inside, styleMask: [.borderless], backing: .buffered, defer: true)
         window.setFrame(inside, display: false)
+        // **The frame the window took, not the rect it was handed.** `visibleFrame.midY` is
+        // fractional on any display of odd visible height — 536.5 on this one, whose visible height
+        // is 1073 — and an `NSWindow` frame is pixel-aligned, so the window came back at 536.0 and
+        // `window.frame == inside` was false with `keepWhollyOnScreen` never having touched it.
+        // Measured 2026-09-28: it failed 4 runs of 4, alone and in a full run, on a machine where
+        // the guard was working perfectly. The test had only ever passed on an even-height display.
+        let before = window.frame
+        // The premise the assertion rests on: this really is a window that already fits, so being
+        // left alone is the right answer rather than a coincidence.
+        #expect(NSScreen.screens.contains { $0.visibleFrame.contains(before) },
+                "the fixture is not wholly on a screen, so it cannot test that a fitting panel is left alone")
         panel.keepWhollyOnScreen(window)
-        #expect(window.frame == inside, "a panel that already fits must not be nudged")
+        #expect(window.frame == before, "a panel that already fits must not be nudged")
     }
 }
 
