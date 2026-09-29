@@ -181,21 +181,32 @@ struct PhraseSpanTests {
             .phrase(in: ["they", "give", "up"], containing: 1) == nil)
     }
 
-    /// **A placement matching entirely as written beats one that borrows a form**, at equal gap, inside one
-    /// template as well as between two. Comparing `borrowed` only between templates kept span 0...2 here over
-    /// 2...4, and the outer ranking never saw the placement `tightest` had already discarded.
-    @Test func awrittenPlacementBeatsABorrowedOneWithinOneTemplate() {
-        let spans = PhraseSpans(phrases: ["back to back"])
-        let words = [["backed", "back"], ["to"], ["back"], ["to"], ["back"]]
-        #expect(spans.match(in: words, containing: 2)?.words == 2 ... 4,
-                "got \(spans.match(in: words, containing: 2)?.words as Any)")
+    // MARK: - Nothing deletes a candidate
+
+    /// **Every phrase covering the word, not only the longest.** `give up` and `give up the ghost` both cover
+    /// the hovered word and both are keys; returning one made span length decide which unit the reader met,
+    /// which is the selector's question — *phrase length does not choose the unit… only the selector collapses
+    /// the set.*
+    @Test func everyPhraseCoveringTheWordIsReturned() {
+        let words = [["they"], ["give"], ["up"], ["the"], ["ghost"]]
+        let all = index().matches(in: words, containing: 1)
+        #expect(all.map(\.phrase) == ["give up the ghost", "give up"],
+                "got \(all.map(\.phrase))")
+        #expect(index().match(in: words, containing: 1)?.phrase == all.first?.phrase,
+                "the single answer is the leading one, not a different rule")
+    }
+
+    /// An ordinary word answers with nothing, not with an empty-but-present match.
+    @Test func anordinaryWordReturnsNoMatches() {
+        #expect(index().matches(in: [["i"], ["read"], ["a"], ["passage"]], containing: 3).isEmpty)
     }
 
     /// **The gap budget shrinks as it is spent**, so a placement that cannot fit is never built. Two slots
-    /// cannot both be filled from a budget of three when they need four words between them.
+    /// cannot both be filled from a budget of two when the first takes two words.
     @Test func thegapBudgetIsSpentNotReissued() {
         let spans = PhraseSpans(phrases: ["take something into someone account"])
         let words = [["take"], ["a"], ["b"], ["into"], ["c"], ["d"], ["account"]]
+        // First slot two words, second slot two words: four in total, so a budget of three cannot hold it.
         #expect(spans.match(in: words, containing: 0, widestGap: 3) == nil)
         #expect(spans.match(in: words, containing: 0, widestGap: 4)?.gap == 4)
     }

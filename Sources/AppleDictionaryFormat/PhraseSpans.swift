@@ -39,7 +39,6 @@ import Foundation
 /// language work of its own — the module deliberately links nothing but Foundation, Compression, CryptoKit
 /// and SQLite3 — and `Lemmatizer.forms(in:)` is what prepares a sentence for it.
 ///
-///
 /// **A span is a candidate, never a verdict.** `AGENTS.md` — *phrase length does not choose the unit…
 /// only the selector collapses the set*. A match is offered beside the hovered word's own senses and the
 /// sentence decides between them, which is why `widestGap` can afford to be generous: a span the selector
@@ -311,7 +310,24 @@ public struct PhraseSpans: Sendable, Equatable {
     public func match(in words: [[String]], containing word: Int,
                       widestGap: Int = PhraseSpans.widestGap,
                       widestInferredGap: Int = PhraseSpans.widestInferredGap) -> Match? {
-        guard words.indices.contains(word) else { return nil }
+        matches(in: words, containing: word,
+                widestGap: widestGap, widestInferredGap: widestInferredGap).first
+    }
+
+    /// **Every phrase covering `word`, best first** — because length must not choose the unit.
+    ///
+    /// `give up` and `give up the ghost` both cover the hovered word in "they give up the ghost", and both
+    /// are phrases the dictionary knows. Returning only the longest made *this* the thing that decided which
+    /// unit the reader met, which is the selector's job: `AGENTS.md` — *phrase length does not choose the
+    /// unit… only the selector collapses the set.* The ranking is a preference, not a filter, and `match`
+    /// remains for a caller that wants the leading one.
+    ///
+    /// Ranked by how much of the phrase is written out, then by the narrowest gap, then by the reader's own
+    /// spelling over the dictionary's form, then by phrase so the same sentence always answers the same way.
+    public func matches(in words: [[String]], containing word: Int,
+                        widestGap: Int = PhraseSpans.widestGap,
+                        widestInferredGap: Int = PhraseSpans.widestInferredGap) -> [Match] {
+        guard words.indices.contains(word) else { return [] }
         // `borrowed` counts the positions matched through a form the reader did not write.
         var found: [(literals: Int, borrowed: Int, match: Match)] = []
         // Every form of the hovered word, because the phrase may be filed under any of them.
@@ -328,12 +344,14 @@ public struct PhraseSpans: Sendable, Equatable {
                                           widestInferredGap: widestInferredGap) else { continue }
             found.append((template.literals, hit.borrowed, hit.match))
         }
-        // **More of the phrase written out wins, then the narrower gap.** A span the reader can see whole
-        // is better evidence than one assembled across a clause; `phrase` breaks the last tie only so that
-        // the same sentence always answers the same way.
+        // **More of the phrase written out ranks first, then the narrower gap.** A span the reader can see
+        // whole is better evidence than one assembled across a clause; `phrase` breaks the last tie only so
+        // that the same sentence always answers the same way. Nothing is dropped — this is the order the
+        // selector receives them in.
         found.sort { first, second in
             if first.literals != second.literals { return first.literals > second.literals }
             if first.match.gap != second.match.gap { return first.match.gap < second.match.gap }
+            // swiftlint:disable:next line_length — the ranking reads as one thought
             // **Then the reader's own spelling.** *mass produced* and *mass produce* are both keys, and a
             // reader who wrote the participle meant the first; without this the alphabetical tie-break chose
             // the second — the right phrase's neighbour, shown as the phrase. Same for `24 hour clocks`
@@ -341,7 +359,7 @@ public struct PhraseSpans: Sendable, Equatable {
             if first.borrowed != second.borrowed { return first.borrowed < second.borrowed }
             return first.match.phrase < second.match.phrase
         }
-        return found.first?.match
+        return found.map(\.match)
     }
 
     /// The narrowest placement of one template that covers the hovered word.
