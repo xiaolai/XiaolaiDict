@@ -66,6 +66,33 @@ actor LedgerStore {
         try ledger.recentLookups(since: since, limit: limit, studying: studying)
     }
 
+    /// **The reader asked to study this meaning.** Separate from meeting it: an encounter is something
+    /// reading produces, an enrollment is something the reader decides, and the ledger keeps them apart.
+    ///
+    /// The target is built from the encounter, so what is enrolled is exactly what was on screen — a
+    /// keyed sense where the dictionary marks one, the entry rung where it does not. The answer is the
+    /// dictionary's own snapshot, which is **local only**, carried with the version and hash that let a
+    /// later content update be noticed rather than silently re-pointing the card.
+    @discardableResult
+    func enroll(_ encounter: SenseEncounter, for lookup: Int, language: String?,
+                at when: Date) throws -> StudyNote {
+        let dictionary = encounter.dictionary.key
+        let target: StudyTarget =
+            if let key = encounter.senseKey, encounter.senseKeyKind != .none {
+                .sense(dictionary: dictionary, entryID: encounter.entryID, senseKey: key,
+                       senseKeyKind: encounter.senseKeyKind)
+            } else {
+                .entry(dictionary: dictionary, entryID: encounter.entryID)
+            }
+        let answer = encounter.gloss.map {
+            StudyAnswer(origin: .dictionary, text: $0,
+                        dictionaryVersion: encounter.dictionary.version, senseHash: encounter.senseHash)
+        }
+        return try ledger.enroll(
+            target, issuer: .live, language: language ?? StudyNote.unknownLanguage,
+            chosenBy: encounter.chosenBy, answer: answer, lookupID: lookup, at: when)
+    }
+
     /// A lookup the reader did not mean to make. The senses met in it go with it.
     func delete(lookup id: Int) throws {
         try ledger.delete(lookup: id)

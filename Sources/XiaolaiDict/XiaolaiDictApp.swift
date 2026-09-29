@@ -162,6 +162,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         panel.onStudySense = { [weak self] encounter, request in
             self?.recorder.study(encounter, request: request)
         }
+        // **Both, and in that order.** The reader met the sense *and* asked to study it; the ledger
+        // keeps the two apart, so enrolling writes the encounter as well rather than instead.
+        panel.onEnrolSense = { [weak self] encounter, request in
+            self?.recorder.enrol(encounter, request: request, language: nil)
+        }
         panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
         recorder.start()
         // Where the menu-bar item is, so a click on it is left for the menu rather than taken by

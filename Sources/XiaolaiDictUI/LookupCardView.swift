@@ -411,6 +411,7 @@ public struct LookupPanelContent: View {
     @Environment(\.scale) private var scale
     @Environment(\.pinNote) private var pin
     @Environment(\.studySense) private var studySense
+    @Environment(\.enrolSense) private var enrolSense
     @Environment(\.openDictionarySettings) private var openDictionarySettings
     @Environment(\.reportPanelFit) private var reportPanelFit
     @Environment(\.translation) private var translator
@@ -431,6 +432,9 @@ public struct LookupPanelContent: View {
     /// the sense, and only the translation noticed. Same shape as `TranslationPane`, arrived at the
     /// hard way.
     @State private var explanation: SentencePane?
+    /// Whether this card's enrol button has been pressed. Per card and never persisted: it says the
+    /// write was asked for, not that the ledger holds it.
+    @State private var enrolled = false
     /// The explanation in flight — **held, like the translation, rather than started and
     /// forgotten**. A bare task outlives the card that started it, and the answer it eventually
     /// writes lands on whatever card is there by then. Cancelling stops this side waiting; a
@@ -956,9 +960,78 @@ public struct LookupPanelContent: View {
                 if !alreadyInTheReadersLanguage { translateButton }
                 explainButton
             }
+            enrolButton(entry)
             copyButton(entry)
             pinButton(entry)
         }
+    }
+
+    /// **Add this meaning to what the reader is studying.** Separate from tapping a sense, which
+    /// records that they met it, and separate from pinning, which keeps it on screen.
+    ///
+    /// Offered only where a target can actually be built, and **disabled with the reason** where it
+    /// cannot rather than silently doing nothing: a dictionary that marks no senses can still be
+    /// studied at the entry rung, but an entry with no id of its own cannot be named at all, and a
+    /// control that refuses a click is a broken switch.
+    ///
+    /// The checkmark is this card's own `@State` and claims nothing about the ledger beyond the write
+    /// having been asked for — the same honesty the copy button's checkmark keeps.
+    private func enrolButton(_ entry: DictionaryEntry) -> some View {
+        let target = enrollable(entry)
+        return IconButton(
+            title: enrolled ? "Added to study" : "Study this meaning",
+            symbol: enrolled ? "checkmark" : "rectangle.stack.badge.plus",
+            help: target == nil
+                ? Text("This dictionary cannot name this entry, so it cannot be studied")
+                : nil,
+            isEnabled: target != nil && !enrolled
+        ) {
+            guard let target else { return }
+            enrolSense(target)
+            enrolled = true
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    /// What enrolling this card would save, or nil where nothing can be.
+    ///
+    /// **The sense where the card has one that can be keyed, the entry otherwise.** Both are honest
+    /// rungs (`study-unit.md` §3) and the ledger tells them apart; what neither can survive is an
+    /// entry with no id, because a target keyed to nothing is a card that can never be found again.
+    ///
+    /// `chosenBy` carries through unchanged, so a sense the model proposed enrols as a proposal and
+    /// is not gradable until the reader agrees — the guess never becomes a fact by being saved.
+    private func enrollable(_ entry: DictionaryEntry) -> SenseEncounter? {
+        guard let entryKey = entry.entryKey else { return nil }
+        let card = card(for: entry)
+        if let sense = card.leadingSense, let key = sense.key {
+            // **The standing the card is drawing is the standing that is saved.** A proposal enrols
+            // as a proposal and is not gradable until the reader agrees; a tap is theirs. Reading it
+            // off the card rather than deciding again here is what stops the two disagreeing.
+            let chosenBy: SenseChoice? =
+                switch sense.standing {
+                case .confirmed(let choice): choice
+                case .proposed: .model
+                case .unclaimed: nil
+                }
+            if let encounter = SenseEncounter.of(entry, senseKey: key, chosenBy: chosenBy, at: .now) {
+                return encounter
+            }
+        }
+        // The entry rung: no sense the dictionary can key, so nothing is claimed about which one.
+        return SenseEncounter(
+            dictionary: entry.dictionary, entryID: entryKey, senseKey: nil, senseKeyKind: .none,
+            sensePath: nil, entrySenseCount: entry.senseCount, senseHash: nil,
+            gloss: Self.leadingDefinition(in: entry), chosenBy: nil, chosenAt: .now)
+    }
+
+    /// The first definition the entry marks — what an entry-rung card reveals until the reader
+    /// narrows it. **Local only**, the same rule every stored gloss carries.
+    static func leadingDefinition(in entry: DictionaryEntry) -> String? {
+        for block in entry.blocks {
+            for sense in block.senses where !(sense.definition ?? "").isEmpty { return sense.definition }
+        }
+        return nil
     }
 
     /// The reader's sentence **put into** their own language — on request, because it is a reveal,

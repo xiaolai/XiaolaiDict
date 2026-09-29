@@ -132,6 +132,9 @@
     "Add an app…" : {
 
     },
+    "Added to study" : {
+
+    },
     "Always" : {
 
     },
@@ -582,6 +585,9 @@
     "Study from" : {
 
     },
+    "Study this meaning" : {
+
+    },
     "Studying from %@ — %@." : {
       "localizations" : {
         "en" : {
@@ -676,6 +682,9 @@
 
     },
     "This could not be checked just now. It will be asked again." : {
+
+    },
+    "This dictionary cannot name this entry, so it cannot be studied" : {
 
     },
     "This dictionary does not mark its senses, so the one you read cannot be identified." : {

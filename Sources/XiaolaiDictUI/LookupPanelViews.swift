@@ -156,6 +156,10 @@ private struct PinNoteKey: EnvironmentKey {
 
 /// So is writing to the ledger. Decision D8: an auxiliary dictionary's sense becomes a study item
 /// only when the reader asks for one, and it is recorded as theirs.
+private struct EnrolSenseKey: EnvironmentKey {
+    static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
+}
+
 private struct StudySenseKey: EnvironmentKey {
     public static let defaultValue: @MainActor (SenseEncounter) -> Void = { _ in }
 }
@@ -198,6 +202,15 @@ extension EnvironmentValues {
     public var studySense: @MainActor (SenseEncounter) -> Void {
         get { self[StudySenseKey.self] }
         set { self[StudySenseKey.self] = newValue }
+    }
+
+    /// **The reader asked to study this meaning**, which is not the same act as meeting it.
+    /// `studySense` records an encounter — something reading produces; this creates a target they
+    /// intend to review. Two actions, deliberately not one: the feature ledger's §3A keeps pinning,
+    /// bookmarking and enrolling apart for the same reason.
+    public var enrolSense: @MainActor (SenseEncounter) -> Void {
+        get { self[EnrolSenseKey.self] }
+        set { self[EnrolSenseKey.self] = newValue }
     }
 }
 

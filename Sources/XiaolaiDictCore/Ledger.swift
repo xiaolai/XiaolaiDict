@@ -152,7 +152,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 8
+    public static let schemaVersion = 9
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -848,6 +848,23 @@ public final class Ledger {
                 // the live path, but "so far as anyone can tell" is not a measurement, and a guessed
                 // provenance is worse than an absent one because it cannot be told from a recorded one.
                 try execute("ALTER TABLE sense_encounters ADD COLUMN key_issuer TEXT;")
+            }
+            if found == 8 {
+                // **Schema 8 shipped `readiness` as a column and it should not have been one.** Every
+                // fact it rests on — an answer, a confirmation, whether any reading still evidences the
+                // note — changes somewhere else, so a stored value goes on claiming `ready` with nothing
+                // having touched the row. Derived by `readiness(of:)` from schema 9 on. Dropped rather
+                // than left in place: a column nothing reads is one somebody will read.
+                //
+                // `found == 8` exactly, because a database created at 9 or later never had it. A fresh
+                // one is built from `studySchema`, which no longer declares it.
+                try execute("""
+                    ALTER TABLE study_notes DROP COLUMN readiness;
+                    ALTER TABLE study_notes ADD COLUMN confirmed_at REAL;
+                    """)
+            }
+            if found < 9 {
+                try execute(Self.studyAnswerSchema)
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")

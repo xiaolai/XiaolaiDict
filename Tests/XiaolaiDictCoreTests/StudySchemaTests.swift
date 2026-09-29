@@ -303,11 +303,23 @@ struct StudyMigrationTests {
     private func windBackToSeven(_ path: String) throws {
         let ledger = try Ledger(path: path)
         try ledger.execute("""
+            DROP TABLE study_answers;
             DROP TABLE study_note_lookups;
             DROP TABLE study_locators;
             DROP TABLE study_notes;
             ALTER TABLE sense_encounters DROP COLUMN key_issuer;
             PRAGMA user_version = 7;
+            """)
+    }
+
+    /// Back to 8: the study tables as they first shipped, with `readiness` stored and no answers.
+    private func windBackToEight(_ path: String) throws {
+        let ledger = try Ledger(path: path)
+        try ledger.execute("""
+            DROP TABLE study_answers;
+            ALTER TABLE study_notes DROP COLUMN confirmed_at;
+            ALTER TABLE study_notes ADD COLUMN readiness TEXT NOT NULL DEFAULT 'ready';
+            PRAGMA user_version = 8;
             """)
     }
 
@@ -357,5 +369,34 @@ struct StudyMigrationTests {
         _ = try Ledger(path: path)
         #expect(!FileManager.default.fileExists(atPath: path + ".schema7.backup"))
         #expect(!FileManager.default.fileExists(atPath: path + ".schema8.backup"))
+    }
+    /// **The 8 → 9 correction, on a ledger that already has notes in it.** Schema 8 stored `readiness`,
+    /// which was wrong: every fact it rests on changes elsewhere, so the column could only ever be right
+    /// at the moment it was written. Dropping it must not take the notes with it.
+    @Test func themigrationToNineKeepsTheNotesAndDropsTheStoredReadiness() throws {
+        let path = path()
+        defer { remove(path) }
+        let target = StudyTarget.sense(dictionary: "noad", entryID: "e1", senseKey: "e1.001",
+                                       senseKeyKind: .publisher)
+        let id: UUID
+        do {
+            let ledger = try Ledger(path: path)
+            let lookupID = try ledger.record(lookup("fine"))
+            let note = try ledger.enroll(target, issuer: .live, language: "en", chosenBy: .reader,
+                                         answer: StudyAnswer(origin: .reader, text: "a penalty"),
+                                         lookupID: lookupID, at: now)
+            id = note.id
+        }
+        try windBackToEight(path)
+
+        let migrated = try Ledger(path: path)
+        let notes = try migrated.notes()
+        #expect(notes.count == 1, "the correction must not take the reader's targets with it")
+        #expect(notes.first?.id == id)
+        #expect(notes.first?.target == target)
+        // The answer lived in the table schema 9 adds, so winding back removed it: the note is kept and
+        // is not askable, which is the honest state for a card with nothing to reveal.
+        #expect(try migrated.readiness(of: id) == .needsRepair)
+        #expect(notes.first?.confirmedAt == nil, "a column that did not exist is unknown, never guessed")
     }
 }

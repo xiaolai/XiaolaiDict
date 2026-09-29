@@ -76,8 +76,11 @@ final class LookupRecorder {
         var problem: String?
         do {
             let id = try await opening.value.record(recording)
-            // Whatever the reader tapped while this row was being written now has somewhere to go.
-            for encounter in taps.recorded(request: request, id: id) { write(encounter, for: id) }
+            // Whatever the reader tapped while this row was being written now has somewhere to go —
+            // including an enrollment, which races the row exactly as a tap does.
+            for tap in taps.recorded(request: request, id: id) {
+                write(tap.encounter, for: id, enrolling: tap.enrolling, language: recording.record.language)
+            }
         } catch {
             problem = String(localized: "The last lookup was not recorded: \(String(describing: error))",
                              comment: "Menu warning when a lookup could not be written to the ledger")
@@ -92,14 +95,27 @@ final class LookupRecorder {
     /// Held rather than written where the lookup's own row does not exist yet.
     func study(_ encounter: SenseEncounter, request: Int) {
         guard isOpen, let lookup = taps.tapped(encounter, request: request) else { return }
-        write(encounter, for: lookup)
+        write(encounter, for: lookup, enrolling: false, language: nil)
     }
 
-    private func write(_ encounter: SenseEncounter, for lookup: Int) {
+    /// **The reader asked to study this meaning.** The encounter is recorded either way — they met the
+    /// sense — and the enrollment is the second, separate fact.
+    func enrol(_ encounter: SenseEncounter, request: Int, language: String?) {
+        guard isOpen, let lookup = taps.tapped(encounter, request: request, enrolling: true) else {
+            return
+        }
+        write(encounter, for: lookup, enrolling: true, language: language)
+    }
+
+    private func write(_ encounter: SenseEncounter, for lookup: Int, enrolling: Bool,
+                       language: String?) {
         guard let opening else { return }
         Task { [log] in
             do {
                 try await opening.value.record(encounter, for: lookup)
+                if enrolling {
+                    try await opening.value.enroll(encounter, for: lookup, language: language, at: .now)
+                }
             } catch {
                 // Logged, not surfaced: the row is already gone from a drawer the reader has moved
                 // on from, and an alert about a history row is worse than the row.

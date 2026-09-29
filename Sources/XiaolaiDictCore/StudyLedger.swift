@@ -42,12 +42,13 @@ extension Ledger {
             sense_key_kind  TEXT NOT NULL,
             phrase_text     TEXT NOT NULL,
             enrollment      TEXT NOT NULL,
-            readiness       TEXT NOT NULL,
+            -- When the reader accepted this as the target they met. NULL is a proposal nobody has
+            -- agreed with. **Readiness is not stored**: every fact it rests on changes elsewhere.
+            confirmed_at    REAL,
             created_at      REAL NOT NULL,
             CHECK (target_kind IN ('sense', 'entry', 'phrase')),
             CHECK (issuer IN ('live', 'index', 'inventory')),
             CHECK (enrollment IN ('candidate', 'active', 'ignored', 'archived')),
-            CHECK (readiness IN ('ready', 'needsConfirmation', 'needsRepair')),
             CHECK (language <> '' AND dictionary <> ''),
             -- The branch shapes. Each says what its kind uses *and* what it must leave empty, so a row
             -- cannot carry a field belonging to another branch and slip past that branch's uniqueness.
@@ -94,6 +95,24 @@ extension Ledger {
         CREATE INDEX study_note_lookups_by_lookup ON study_note_lookups (lookup_id);
         """
 
+    /// Schema 9's addition, kept apart from schema 8's so an upgrade applies exactly what it is missing.
+    /// A database created now runs both; one created at 8 runs only this.
+    static let studyAnswerSchema = """
+        -- What the card reveals. One per note: a second answer is a revision, and revisions arrive with
+        -- the editing surface that makes them (K02).
+        CREATE TABLE study_answers (
+            note_id            TEXT PRIMARY KEY REFERENCES study_notes (id) ON DELETE CASCADE,
+            -- 'dictionary' text is the publisher's and is local only; 'reader' text is the reader's own.
+            origin             TEXT NOT NULL,
+            text               TEXT NOT NULL,
+            dictionary_version TEXT,
+            -- The sense's text hash at enrollment, so a content update that moves it is detectable.
+            sense_hash         TEXT,
+            recorded_at        REAL NOT NULL,
+            CHECK (origin IN ('dictionary', 'reader'))
+        );
+        """
+
     // MARK: - Notes
 
     /// Records a note. Throws where the schema refuses it — a duplicate target, or a shape no branch
@@ -104,14 +123,14 @@ extension Ledger {
             """
             INSERT INTO study_notes
                 (id, target_kind, issuer, language, dictionary, entry_id, sense_key, sense_key_kind,
-                 phrase_text, enrollment, readiness, created_at)
+                 phrase_text, enrollment, confirmed_at, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [.text(note.id.uuidString), .text(note.target.kind.rawValue),
                    .text(note.issuer.rawValue), .text(note.language), .text(note.target.dictionary),
                    .text(fields.entryID), .text(fields.senseKey), .text(fields.senseKeyKind),
                    .text(fields.phraseText), .text(note.enrollment.rawValue),
-                   .text(note.readiness.rawValue),
+                   .optionalReal(note.confirmedAt?.timeIntervalSince1970),
                    .real(note.createdAt.timeIntervalSince1970)]) { _ in }
     }
 
@@ -146,7 +165,7 @@ extension Ledger {
         try run(
             """
             SELECT id, target_kind, issuer, language, dictionary, entry_id, sense_key, sense_key_kind,
-                   phrase_text, enrollment, readiness, created_at
+                   phrase_text, enrollment, confirmed_at, created_at
             FROM study_notes \(clause) ORDER BY created_at, id
             """,
             bind: values
@@ -157,7 +176,6 @@ extension Ledger {
             guard let kind = StudyTarget.Kind(rawValue: try row.text(1)),
                   let issuer = KeyIssuer(rawValue: try row.text(2)),
                   let enrollment = StudyEnrollment(rawValue: try row.text(9)),
-                  let readiness = StudyReadiness(rawValue: try row.text(10)),
                   let id = UUID(uuidString: try row.text(0))
             else { return }
             // Every column read before the target is built: a throwing call inside the expression
@@ -178,7 +196,8 @@ extension Ledger {
             guard let target else { return }
             found.append(StudyNote(
                 id: id, target: target, issuer: issuer, language: try row.text(3),
-                enrollment: enrollment, readiness: readiness,
+                enrollment: enrollment,
+                confirmedAt: row.isNull(10) ? nil : Date(timeIntervalSince1970: row.real(10)),
                 createdAt: Date(timeIntervalSince1970: row.real(11))))
         }
         return found
@@ -273,5 +292,130 @@ extension Ledger {
             "SELECT lookup_id FROM study_note_lookups WHERE note_id = ? ORDER BY recorded_at, lookup_id",
             bind: [.text(noteID.uuidString)]) { found.append($0.integer(0)) }
         return found
+    }
+}
+
+/// **Enrollment: making one trustworthy study target out of a lookup.** WI-002.
+///
+/// The hard part is not saving. It is refusing to present, as a question with a known answer, something
+/// that is a guess, a draft, or a card whose cue the reader has since deleted — while still *keeping* all
+/// three, because the reader asked for them. Enrollment says what the reader wants; `readiness(of:)` says
+/// what may be asked; and the two are computed from different facts on purpose.
+extension Ledger {
+    /// Saves a target the reader met, or returns the one they already have.
+    ///
+    /// **Idempotent by identity, not by call.** Tapping a sense you already study is an ordinary thing to
+    /// do, and the honest answer is the note you already have with one more reading attached to it — not
+    /// a second card, and not an error the caller has to interpret.
+    ///
+    /// `chosenBy` is how the sense came to be this one. `.model` enrols **unconfirmed**: a hypothesis is
+    /// not a question. `.reader` and `.onlySense` are confirmed as they are saved, because there was
+    /// nothing to doubt. `nil` — an entry rung, where no sense was chosen at all — is confirmed too: what
+    /// holds that target back is its answer, not its identity.
+    @discardableResult
+    public func enroll(_ target: StudyTarget, issuer: KeyIssuer, language: String,
+                       chosenBy: SenseChoice?, answer: StudyAnswer?, lookupID: Int,
+                       at when: Date) throws -> StudyNote {
+        let existing = try note(for: target, issuer: issuer, language: language)
+        let note = existing ?? StudyNote(
+            target: target, issuer: issuer, language: language, enrollment: .active,
+            confirmedAt: chosenBy == .model ? nil : when, createdAt: when)
+        // **One transaction, because half an enrollment is worse than none.** A note with no link is a
+        // card with no cue; a link with no note cannot exist at all. `SAVEPOINT`, not `BEGIN`, for the
+        // same reason a lookup and its sense use one: this can be called inside another.
+        try execute("SAVEPOINT enroll")
+        do {
+            if existing == nil { try add(note) }
+            try link(noteID: note.id, toLookup: lookupID, at: when)
+            // **The first answer stays.** A later save does not overwrite what the card already reveals:
+            // rewriting an answer the reader has been reviewing against changes the question under them,
+            // and replacing it is an edit they make deliberately (K02).
+            if let answer, try self.answer(of: note.id) == nil {
+                try setAnswer(answer, of: note.id, at: when)
+            }
+            try execute("RELEASE enroll")
+        } catch {
+            try? execute("ROLLBACK TO enroll")
+            try? execute("RELEASE enroll")
+            throw error
+        }
+        return note
+    }
+
+    /// The reader agreed that this is the target they met.
+    ///
+    /// **A new fact on the note, never an edit to the evidence.** The selector's own `chosen_by = model`
+    /// row stays as it is: a proposal later agreed with is not the same history as a sense the reader
+    /// picked unaided, and the ledger has to be able to tell them apart.
+    public func confirm(noteID: UUID, at when: Date) throws {
+        try run("UPDATE study_notes SET confirmed_at = ? WHERE id = ?",
+                bind: [.real(when.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }
+    }
+
+    /// Whether the reader wants this target. Every value is reachable from every other: a disposition is
+    /// a declaration, and nothing here erases evidence.
+    public func setEnrollment(_ enrollment: StudyEnrollment, of noteID: UUID) throws {
+        try run("UPDATE study_notes SET enrollment = ? WHERE id = ?",
+                bind: [.text(enrollment.rawValue), .text(noteID.uuidString)]) { _ in }
+    }
+
+    // MARK: - The answer
+
+    public func setAnswer(_ answer: StudyAnswer, of noteID: UUID, at when: Date) throws {
+        try run(
+            """
+            INSERT INTO study_answers (note_id, origin, text, dictionary_version, sense_hash, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (note_id) DO UPDATE SET
+                origin = excluded.origin, text = excluded.text,
+                dictionary_version = excluded.dictionary_version, sense_hash = excluded.sense_hash,
+                recorded_at = excluded.recorded_at
+            """,
+            bind: [.text(noteID.uuidString), .text(answer.origin.rawValue), .text(answer.text),
+                   .optionalText(answer.dictionaryVersion), .optionalText(answer.senseHash),
+                   .real(when.timeIntervalSince1970)]) { _ in }
+    }
+
+    public func answer(of noteID: UUID) throws -> StudyAnswer? {
+        var found: StudyAnswer?
+        try run(
+            "SELECT origin, text, dictionary_version, sense_hash FROM study_answers WHERE note_id = ?",
+            bind: [.text(noteID.uuidString)]
+        ) { row in
+            guard let origin = StudyAnswer.Origin(rawValue: try row.text(0)) else { return }
+            found = StudyAnswer(origin: origin, text: try row.text(1),
+                                dictionaryVersion: row.optionalText(2), senseHash: row.optionalText(3))
+        }
+        return found
+    }
+
+    // MARK: - What may be asked
+
+    /// Whether this note can be put to the reader as a question with an answer behind it.
+    ///
+    /// **Computed from the facts every time, never read from a column.** The facts live in three places
+    /// and change independently: the note's confirmation, its answer, and whether any reading still
+    /// evidences it. A stored verdict would be right when written and wrong afterwards, with nothing
+    /// having touched the row that claims it.
+    ///
+    /// `senseHashNow` is what the dictionary says *today*, where the caller could ask. A hash that
+    /// differs from the one recorded at enrollment means the sense moved under a positional key and the
+    /// card is no longer about what it was. **Nil is not evidence**: a dictionary that could not be asked
+    /// has said nothing, and treating silence as a change would send every card into repair whenever a
+    /// dictionary is unavailable.
+    public func readiness(of noteID: UUID, senseHashNow: String? = nil) throws -> StudyReadiness {
+        let notes = try notes(where: "WHERE id = ?", bind: [.text(noteID.uuidString)])
+        guard let note = notes.first else { return .needsRepair }
+        guard let answer = try answer(of: noteID), answer.isUsable else { return .needsRepair }
+        if let senseHashNow, let recorded = answer.senseHash, senseHashNow != recorded {
+            return .needsRepair
+        }
+        // No reading evidences it any more: the answer survived and the question did not.
+        guard try !lookupIDs(evidencing: noteID).isEmpty else { return .needsRepair }
+        guard note.confirmedAt != nil else { return .needsConfirmation }
+        // An entry rung carrying the dictionary's own text is not a sense-specific answer — the whole
+        // entry is too broad for "what does this mean here?" — so it waits for the reader to narrow it.
+        if case .entry = note.target, answer.origin == .dictionary { return .needsConfirmation }
+        return .ready
     }
 }

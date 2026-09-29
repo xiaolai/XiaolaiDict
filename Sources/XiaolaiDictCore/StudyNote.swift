@@ -100,8 +100,14 @@ public enum StudyEnrollment: String, Codable, Sendable, CaseIterable {
 /// Whether the note's cue, identity and answer can support a graded question.
 ///
 /// **Separate from enrollment, because active does not imply gradable.** A sense whose key no longer
-/// resolves, an entry-level draft with no reader-confirmed answer, and a capture too poor to quote are all
-/// enrolled and none may be graded — and a card that grades one of them teaches the reader something wrong.
+/// resolves, an entry-level draft with no reader-confirmed answer, and a note whose reading the reader has
+/// deleted are all enrolled and none may be graded — and a card that grades one of them teaches the reader
+/// something wrong.
+///
+/// **Derived, never stored.** Schema 8 kept it in a column and that was wrong: every fact it rests on
+/// changes somewhere else. Deleting the last lookup that evidences a note leaves it with no cue, and a
+/// stored value would go on saying `ready` with nothing having touched the row — the stale-derived-value
+/// failure this project spends its time removing. `Ledger.readiness(of:)` computes it from the facts.
 public enum StudyReadiness: String, Codable, Sendable, CaseIterable {
     case ready
     /// A model proposed the sense and the reader has not accepted it. A proposal is a hypothesis; grading
@@ -126,7 +132,12 @@ public struct StudyNote: Sendable, Equatable, Identifiable {
     /// whose language was not recorded must not merge with rows for a language someone inferred later.
     public let language: String
     public let enrollment: StudyEnrollment
-    public let readiness: StudyReadiness
+    /// When the reader accepted this target as the one they met, where they have.
+    ///
+    /// **Nil is a model's proposal nobody has agreed with.** A sense the selector picked is a hypothesis;
+    /// grading one records the reader's memory of a guess. A sense the reader tapped, and an entry with
+    /// only one sense, are confirmed as they are enrolled — there was nothing to doubt.
+    public let confirmedAt: Date?
     public let createdAt: Date
 
     /// The sentinel for a language that was not recorded. A real value, because SQLite NULL does not
@@ -135,14 +146,14 @@ public struct StudyNote: Sendable, Equatable, Identifiable {
 
     public init(id: UUID = UUID(), target: StudyTarget, issuer: KeyIssuer,
                 language: String = StudyNote.unknownLanguage,
-                enrollment: StudyEnrollment = .candidate, readiness: StudyReadiness = .ready,
+                enrollment: StudyEnrollment = .candidate, confirmedAt: Date? = nil,
                 createdAt: Date) {
         self.id = id
         self.target = target
         self.issuer = issuer
         self.language = language
         self.enrollment = enrollment
-        self.readiness = readiness
+        self.confirmedAt = confirmedAt
         self.createdAt = createdAt
     }
 }
@@ -183,4 +194,41 @@ public struct StudyLocator: Sendable, Equatable, Identifiable {
         self.definitions = definitions
         self.recordedAt = recordedAt
     }
+}
+
+/// What the card reveals, and where the words came from.
+///
+/// **The origin is load-bearing, not provenance decoration.** A dictionary's own text is the publisher's
+/// and is local-only — never exported, never sent to a remote model — while the reader's own words are
+/// theirs to take anywhere. And an entry-rung target carrying the dictionary's text is not yet a
+/// sense-specific answer: the whole entry is too broad for "what does this mean here?", so it waits for
+/// the reader to narrow it.
+public struct StudyAnswer: Sendable, Equatable {
+    public enum Origin: String, Codable, Sendable, CaseIterable {
+        /// A snapshot of what the dictionary said. **Local only**, the same rule `SenseEncounter.gloss`
+        /// carries.
+        case dictionary
+        /// The reader's own words.
+        case reader
+    }
+
+    public let origin: Origin
+    public let text: String
+    /// Which build of the dictionary the text was taken from, where it came from one.
+    public let dictionaryVersion: String?
+    /// The sense's own text hash at enrollment. **What notices a content update moving the sense** under
+    /// a positional key, rather than silently re-pointing the reader's card at a different meaning.
+    public let senseHash: String?
+
+    public init(origin: Origin, text: String, dictionaryVersion: String? = nil,
+                senseHash: String? = nil) {
+        self.origin = origin
+        self.text = text
+        self.dictionaryVersion = dictionaryVersion
+        self.senseHash = senseHash
+    }
+
+    /// Whether there is anything to reveal. Whitespace is nothing: a card whose back is blank is the
+    /// "empty graded answer" the feature ledger's K04 refuses.
+    public var isUsable: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }

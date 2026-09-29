@@ -108,6 +108,8 @@ final class LookupPanelController: LookupPanelPresenting {
     /// made the panel, and the app holds it until that row is written rather than hanging it off
     /// whichever lookup happens to have been recorded last.
     var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
+    /// The reader asked to study the meaning on screen. Separate from meeting it.
+    var onEnrolSense: (@MainActor (SenseEncounter, Int) -> Void)?
     /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
     var onOpenDictionarySettings: (@MainActor () -> Void)?
     /// The last two numbers the window fit was computed from: what the card's content wanted, and
@@ -372,6 +374,12 @@ struct LookupPanelSceneView: View {
                     .environment(\.studySense) { [controller] encounter in
                         guard let request = content.request else { return }
                         controller.onStudySense?(encounter, request)
+                    }
+                    // The same request discipline, for the same reason: an enrollment filed under
+                    // the lookup that happened to be recorded last is a card about another word.
+                    .environment(\.enrolSense) { [controller] encounter in
+                        guard let request = content.request else { return }
+                        controller.onEnrolSense?(encounter, request)
                     }
                     // The one window the panel may bring forward: a window the reader chose. The
                     // app's own action, so the dictionary discovery that pane depends on is started
