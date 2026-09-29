@@ -64,7 +64,30 @@ func frame(_ element: AXUIElement) -> CGRect? {
     return CGRect(origin: origin, size: extent)
 }
 guard let pageFrame = frame(page), pageFrame.width > 40, pageFrame.height > 40 else { fail("the page has no usable frame") }
-let target = CGPoint(x: pageFrame.maxX - 20, y: pageFrame.maxY - 20)
+
+// **Brought to the front first, like `click-element` does, and for the same measured reason:**
+// the first click on an inactive app's window only raises it, and whatever it landed on is
+// untouched. Without this the stage needed a desktop with nothing else on it — a YouTube window
+// left open on the test Mac failed all three Safari checks with "the click did not move focus
+// into the page", which reads as a defect in the selection reader rather than as a window in
+// the way.
+if let pid = processID(), let app = NSRunningApplication(processIdentifier: pid) {
+    app.activate()
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { break }
+        usleep(100_000)
+    }
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"
+        fail("\(arguments[1]) would not come to the front (\(front) is there); a click would only raise it")
+    }
+}
+// Read again once it is in front: raising a window can move it.
+guard let raisedFrame = frame(page), raisedFrame.width > 40, raisedFrame.height > 40 else {
+    fail("the page has no usable frame once it is in front")
+}
+let target = CGPoint(x: raisedFrame.maxX - 20, y: raisedFrame.maxY - 20)
 let back = CGEvent(source: nil)?.location ?? target
 for type in [CGEventType.leftMouseDown, .leftMouseUp] {
     CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: target, mouseButton: .left)?.post(tap: .cghidEventTap)
