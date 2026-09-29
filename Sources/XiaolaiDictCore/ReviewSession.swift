@@ -95,9 +95,20 @@ public struct ReviewSession: Sendable, Equatable {
     ///
     /// Refuses a second outcome for the same presentation, so a double press cannot grade twice even
     /// if the ledger's idempotency key were mishandled.
+    ///
+    /// **`for` names the attempt the outcome belongs to, and is checked against what is in front
+    /// of the reader.** Every outcome but a skip is written to the ledger first and recorded on
+    /// the way back, so two presses overlap: both completions reached here and each advanced the
+    /// sitting, taking a card the reader was never shown. Measured on "Not today", which has no
+    /// commit guard because the button is only disabled while a *grade* is in flight. The second
+    /// completion now finds a different presentation current and does nothing.
+    ///
+    /// Nil is for a caller with no attempt to name — a skip, which is synchronous and cannot be
+    /// overtaken by anything.
     @discardableResult
-    public mutating func record(_ outcome: Presentation.Outcome) -> Bool {
+    public mutating func record(_ outcome: Presentation.Outcome, for attempt: UUID? = nil) -> Bool {
         guard let index = liveIndex else { return false }
+        if let attempt, presentations[index].id != attempt { return false }
         presentations[index].outcome = outcome
         cursor = index + 1
         return true

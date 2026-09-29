@@ -205,7 +205,7 @@ struct LibraryWiringTests {
 
         model.act(.select([note.id]))
         try await settle { model.presentation.inspector != nil }
-        model.act(.untag("legal"))
+        model.act(.untag(noteID: note.id, tag: "legal"))
         try await settle { model.presentation.inspector?.tags.isEmpty == true }
         #expect(try Ledger(path: path).tags(of: note.id).isEmpty)
         #expect(model.presentation.tagVocabulary.isEmpty, "and the empty tag stops being offered")
@@ -271,6 +271,37 @@ struct LibraryWiringTests {
         let retention = try #require(model.presentation.retention)
         #expect(retention.attempts == 1, "the introduction is excluded")
         #expect(retention.successes == 1)
+    }
+
+    /// **What is on screen is the answer to the last thing the reader asked.**
+    ///
+    /// Every reload suspends several times, and each keystroke starts another. Fired as a burst,
+    /// because that is how a search field behaves.
+    ///
+    /// **This does not verify the generation guard, and must not be read as doing so.** Measured
+    /// 2026-09-30: it passes three times out of three with the guard removed, because separately
+    /// created `Task`s on the main actor happen to resume in the order they were made here. The
+    /// guard is kept because that ordering is not a guarantee Swift makes — but the race it
+    /// closes was not reproducible through this model's own API, so what is written here is an
+    /// invariant, not a control.
+    @Test func thelastRequestIsTheOneOnScreen() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        try save(ledger, "fine")
+        try save(ledger, "hold")
+        try save(ledger, "holding")
+
+        let model = model(path)
+        await model.reload()
+        for term in ["f", "fi", "fin", "fine", "h", "ho", "hol"] { model.act(.search(term)) }
+        try await settle {
+            model.presentation.search == "hol" && model.presentation.rows.count == 2
+        }
+        #expect(model.presentation.search == "hol")
+        #expect(Set(model.presentation.rows.map(\.word)) == ["hold", "holding"],
+                "showed \(model.presentation.rows.map(\.word)) under a search for hol")
+        #expect(model.presentation.total == 2, "and the count agrees with the list")
     }
 
     // MARK: - Bulk actions, and putting them back (M04)
@@ -422,13 +453,66 @@ struct LibraryWiringTests {
         #expect(inspector.answer == "what fine means")
         #expect(inspector.isReaders == false, "the dictionary's words, so far")
 
-        model.act(.setAnswer("the money you pay when caught"))
+        model.act(.setAnswer(noteID: note.id, text: "the money you pay when caught"))
         try await settle { model.presentation.inspector?.isReaders == true }
         #expect(model.presentation.inspector?.answer == "the money you pay when caught")
 
         let reopened = try Ledger(path: path)
         #expect(try reopened.answer(of: note.id)?.text == "the money you pay when caught")
         #expect(try reopened.answer(of: note.id)?.origin == .reader)
+    }
+
+    /// **An edit reaches the row the reader was looking at, not the row the model has moved to.**
+    ///
+    /// Selection changes at once; the inspector catches up after a reload. In that window the
+    /// pane still shows A — A's word, A's answer, A's text in the editor — while the model's
+    /// selection is already B. Saving then wrote A's answer onto B, and untag had the same
+    /// targeting. The view knows which row it is showing; the action carries it.
+    @Test func anEditReachesTheRowTheInspectorWasShowing() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let first = try save(ledger, "fine")
+        let second = try save(ledger, "hold")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([first.id]))
+        try await settle { model.presentation.inspector?.id == first.id }
+
+        // The reader clicks the other row and saves before the reload has redrawn the pane, so
+        // the edit is still the one they were typing into.
+        model.act(.select([second.id]))
+        model.act(.setAnswer(noteID: first.id, text: "the money you pay when caught"))
+        try await settle { (try? Ledger(path: path).answer(of: first.id)?.text)
+            == "the money you pay when caught" }
+
+        let reopened = try Ledger(path: path)
+        #expect(try reopened.answer(of: first.id)?.text == "the money you pay when caught")
+        #expect(try reopened.answer(of: second.id)?.text == "what hold means",
+                "the row the reader was not looking at is untouched")
+    }
+
+    /// The same for taking a tag off.
+    @Test func untaggingReachesTheRowTheInspectorWasShowing() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let first = try save(ledger, "fine")
+        let second = try save(ledger, "hold")
+        try ledger.tag(noteID: first.id, "legal")
+        try ledger.tag(noteID: second.id, "legal")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([first.id]))
+        try await settle { model.presentation.inspector?.tags == ["legal"] }
+
+        model.act(.select([second.id]))
+        model.act(.untag(noteID: first.id, tag: "legal"))
+        try await settle { (try? Ledger(path: path).tags(of: first.id))?.isEmpty == true }
+        #expect(try Ledger(path: path).tags(of: second.id) == ["legal"],
+                "the other row keeps its tag")
     }
 
     /// **One row, or none.** An inspector over a multiple selection would have to pick a row to

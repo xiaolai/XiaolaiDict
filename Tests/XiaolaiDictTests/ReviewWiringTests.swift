@@ -354,6 +354,63 @@ struct ReviewWiringTests {
         #expect(all.count == 3, "setup grade, the attempt taken back, and its replacement")
     }
 
+    /// **One press, one card.** "Not today" writes to the ledger before the session advances, so
+    /// a second press during that window found no guard: both completions advanced the sitting
+    /// and the reader lost a card they were never shown. Grading has a guard; this did not, and
+    /// the button is only disabled while a *grade* is in flight.
+    @Test func twopressesOfNotTodayTakeOneCard() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 3, inProgress: true)
+        let model = model(path)
+        await model.start()
+        let first = try #require(question(model)?.word)
+        #expect(question(model)?.position == 1)
+
+        model.act(.postpone)
+        model.act(.postpone)
+        try await settle { self.question(model)?.word != first }
+        // Settled: whatever is on screen is stable now.
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(question(model)?.position == 2, "the sitting advanced by two presses, not one card")
+
+        // And only the card that was on screen was put off.
+        let reopened = try Ledger(path: path)
+        let held = try reopened.library(LibraryQuery(now: now)).compactMap {
+            try reopened.existingCard(of: $0.id)
+        }.filter { $0.hiddenUntil != nil }
+        #expect(held.count == 1, "put off \(held.count) cards on one press")
+    }
+
+    /// **No card ever shows another card's answer.** C2's rule is that the surface does not
+    /// answer the question unasked; showing the *wrong* answer unasked is the same rule broken
+    /// twice. Reveal fetches for the card in front of the reader and applies the result after an
+    /// await, so a skip in that window put the previous card's meaning on the next one.
+    ///
+    /// **Reproducible, three times out of three**, once the attempt is captured at the right
+    /// moment: reading `session.current` *inside* the task is too late, because a `Task` body
+    /// does not run where it is created and the skip lands first. Reverting the capture to inside
+    /// the task fails this test every run.
+    @Test func revealingThenSkippingDoesNotCarryTheAnswerOver() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 2, inProgress: true)
+        let model = model(path)
+        await model.start()
+        let first = try #require(question(model))
+        #expect(first.answer == nil)
+
+        model.act(.reveal)
+        model.act(.skip)
+        try await settle { self.question(model)?.word != first.word }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let next = try #require(question(model))
+        #expect(next.word != first.word, "the skip took")
+        #expect(next.answer == nil,
+                "the next card is showing an answer nobody asked for: \(next.answer?.text ?? "")")
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
     private func settle(_ condition: @MainActor () -> Bool) async throws {

@@ -932,7 +932,15 @@ else
             # `$waiting` is what was captured and never read: the last panel seen, which is the whole
             # evidence for why this failed — an empty window list reads very differently from a panel
             # that came up with the wrong words in it.
-            flunk "waiting panel: never appeared while the service was suspended (last view: $(printf '%s' "${waiting:-$view}" | head -c 240))"
+            # **Named where the app names it.** Every check in this file that drives a real
+            # lookup fails the same way on a Mac that has not granted the app Accessibility, and
+            # each used to report it as a defect in the surface being measured.
+            refusal=$(missing_grant)
+            if [ -n "$refusal" ]; then
+                flunk "waiting panel: no lookup could be driven — the app says \"$refusal\". This machine has not granted it; nothing here can"
+            else
+                flunk "waiting panel: never appeared while the service was suspended (last view: $(printf '%s' "${waiting:-$view}" | head -c 240))"
+            fi
         else
             took=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$started" "$shown")
             if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)" "$took"; then
@@ -1354,9 +1362,18 @@ board_state() {
 # reader this branch is about.
 models=$HOME/Library/Application\ Support/XiaolaiDict/Models
 stashed=no
+# **The restore has the same trap as the stash, and now the same guard.**
+#
+# `mv` onto an existing *directory* moves the source inside it. The removal above was unchecked
+# and its callers suppress errexit, so a store that could not be removed — held open by an app
+# this run did not manage to quit — was followed by a `mv` that buried the reader's weights at
+# `Models/Models.e2e-stash`, and the function then reported success. `stash_models` was hardened
+# against exactly this shape; the way back was not.
 unstash_models() {
     [ "$stashed" = yes ] || return 0
-    rm -rf "$models"
+    rm -rf "$models" || { echo "the model store could not be removed, so it was not put back" >&2; return 1; }
+    # Checked, not assumed: `rm -rf` exits 0 for some things it did not remove.
+    [ ! -e "$models" ] || { echo "the model store is still there after being removed; refusing to move the stash into it" >&2; return 1; }
     mv "$models.e2e-stash" "$models" || { echo "the model store could not be put back" >&2; return 1; }
     stashed=no
     # Put back behind the app's back, so the app is restarted: its controller read an empty store at

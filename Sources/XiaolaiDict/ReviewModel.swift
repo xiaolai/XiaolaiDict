@@ -121,16 +121,22 @@ final class ReviewModel {
     }
 
     func act(_ action: ReviewAction) {
+        // **Which card the reader acted on is decided here, synchronously.** A `Task` body does
+        // not run at the point it is created: between `act` and the task's first line the reader
+        // can skip, and a reveal that read `session.current` inside the task then revealed — and
+        // answered — whichever card had arrived in the meantime. The card they were looking at is
+        // the card in front of them *now*, which is only true here.
+        let attempt = session?.current?.id
         switch action {
         case .reveal:
-            Task { await reveal() }
+            Task { await reveal(attempt) }
         case .grade(let grade):
-            Task { await commit(grade) }
+            Task { await commit(grade, attempt) }
         case .skip:
-            session?.record(.skipped)
+            session?.record(.skipped, for: attempt)
             Task { await draw() }
         case .postpone:
-            Task { await postpone() }
+            Task { await postpone(attempt) }
         case .undo:
             Task { await undo() }
         case .anotherBatch:
@@ -148,13 +154,16 @@ final class ReviewModel {
     ///
     /// The schedule is untouched. Saying "not this one, not now" is not saying anything about
     /// memory, so nothing here grades, and the daily allowance is unspent.
-    private func postpone() async {
-        guard let card = session?.current, let opening = store() else { return }
+    private func postpone(_ attempt: UUID?) async {
+        guard let card = session?.current, card.id == attempt, let opening = store() else { return }
         let until = studyDay.start(containing: clock()).addingTimeInterval(86_400)
         do {
             let ledger = try await opening.value
             try await ledger.postpone(cardID: card.cardID, until: until)
-            session?.record(.postponed)
+            // **For this attempt, not for whatever is current now.** Two presses during the write
+            // both arrive here; the second finds a different card in front of the reader and is
+            // refused, instead of advancing the sitting past a card nobody was shown.
+            session?.record(.postponed, for: attempt)
         } catch {
             problem = String(localized: "It could not be put off: \(error.localizedDescription)",
                              comment: "Shown on a review card when postponing it failed to save")
@@ -172,30 +181,51 @@ final class ReviewModel {
         }
         answer = nil
         guard let opening = store() else { return }
+        let fetched: ReviewCue?
         do {
-            cue = try await opening.value.cue(forCard: current.cardID)
+            fetched = try await opening.value.cue(forCard: current.cardID)
         } catch {
-            cue = nil
+            fetched = nil
         }
+        // **The card this was fetched for is still the card on screen**, or a later draw owns the
+        // surface and this one has nothing to say. Unlike `reveal`'s check this one is defensive:
+        // no test here reproduces a stale draw landing last, and it is kept because the ordering
+        // that prevents it is not one Swift promises.
+        guard let live = self.session, live.current?.id == current.id else { return }
+        cue = fetched
         guard let cue else {
             // A card whose cue cannot be built is skipped rather than shown blank: its note is in
             // repair, and the queue's own recheck will stop offering it.
-            self.session?.record(.skipped)
+            self.session?.record(.skipped, for: current.id)
             await draw()
             return
         }
-        render(cue, in: session)
+        render(cue, in: live)
     }
 
-    private func reveal() async {
+    /// **The answer is applied to the card it was fetched for, or not at all.**
+    ///
+    /// C2's rule is that a surface does not answer the question unasked; putting the *previous*
+    /// card's answer on the next one breaks it and gets the answer wrong as well. The fetch
+    /// suspends, and a skip in that window moves the reader on — so the attempt is checked
+    /// against what is in front of them now.
+    ///
+    /// **Measured, not defensive.** Reading the current card inside the task instead of at the
+    /// action fails `revealingThenSkippingDoesNotCarryTheAnswerOver` every run: the reader pressed
+    /// Reveal for one card and the next one was answered for them.
+    private func reveal(_ attempt: UUID?) async {
         guard let session, let current = session.current, let opening = store() else { return }
-        answer = try? await opening.value.revealed(cardID: current.cardID)
+        guard current.id == attempt else { return }
+        let fetched = try? await opening.value.revealed(cardID: current.cardID)
+        guard self.session?.current?.id == attempt else { return }
+        answer = fetched
         self.session?.reveal()
         if let cue, let session = self.session { render(cue, in: session) }
     }
 
-    private func commit(_ grade: Grade) async {
+    private func commit(_ grade: Grade, _ attempt: UUID?) async {
         guard let session, let current = session.current, let opening = store() else { return }
+        guard current.id == attempt else { return }
         guard !committing else { return }
         committing = true
         problem = nil
@@ -214,7 +244,7 @@ final class ReviewModel {
                                               expectedRevision: current.revision, at: clock())
             }
             committing = false
-            self.session?.record(.graded(grade))
+            self.session?.record(.graded(grade), for: attempt)
             await draw()
         } catch {
             committing = false

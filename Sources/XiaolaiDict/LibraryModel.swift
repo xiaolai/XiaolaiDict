@@ -30,6 +30,18 @@ final class LibraryModel {
     /// The last bulk pause or archive, while it can still be put back. **One level**: an undo that
     /// outlives the reader's memory of what it reverses is a worse control than none.
     private var undoable: Undo?
+    /// Which reload is the current one. **Every reload suspends several times** — opening the
+    /// store, the page, the count, the answers, the timeline — and the reader can type, filter or
+    /// select during any of them. An older reload resuming last wrote its rows over newer ones,
+    /// pruned a selection made since, and could hand A's timeline to B's inspector. Bumped on
+    /// entry; a reload whose number is no longer current commits nothing.
+    ///
+    /// **Defensive, and said so.** The race was raised by an audit and could not be reproduced
+    /// through this model's API — separately created `Task`s on the main actor happen to resume
+    /// in order here, and `thelastRequestIsTheOneOnScreen` passes with this guard removed. That
+    /// ordering is not a guarantee Swift makes, so the assumption is made explicit rather than
+    /// relied on; it is not a fix for a demonstrated defect.
+    private var generation = 0
 
     /// What a bulk action changed, and enough to change it back.
     ///
@@ -103,15 +115,13 @@ final class LibraryModel {
             return apply(keepingSelection: true) { store in
                 for id in ids { try await store.tag(noteID: id, trimmed) }
             }
-        case .untag(let text):
-            guard let id = selection.first, selection.count == 1 else { return }
-            return apply(keepingSelection: true) { try await $0.untag(noteID: id, text) }
+        case .untag(let id, let tag):
+            return apply(keepingSelection: true) { try await $0.untag(noteID: id, tag) }
         case .unignore(let lemma, let language):
             return apply { try await $0.unignoreSuggestion(lemma: lemma, language: language) }
-        case .setAnswer(let text):
-            // **Exactly the row the inspector is showing**, which is the only row there is: the
-            // pane is absent unless the selection is one.
-            guard let id = selection.first, selection.count == 1 else { return }
+        case .setAnswer(let id, let text):
+            // **The row the inspector was showing**, which the view names — not `selection.first`,
+            // which has already moved on by the time a reload is in flight.
             let when = clock()
             return apply(keepingSelection: true) {
                 try await $0.setReaderAnswer(text, of: id, at: when)
@@ -167,6 +177,8 @@ final class LibraryModel {
 
     func reload() async {
         guard let opening = store() else { return }
+        generation += 1
+        let mine = generation
         do {
             let ledger = try await opening.value
             scripts = studyScripts()
@@ -182,6 +194,10 @@ final class LibraryModel {
             // bulk actions read the model: selecting two rows and searching until one was visible
             // showed "Remove 1" over a command that removed both. A count and a button that mean
             // different sets is the worst shape a destructive control can have.
+            // **Nothing is written before this point.** A reload that has been overtaken must
+            // not prune a selection the reader has made since, nor replace newer rows with its
+            // own — it simply stops, and the reload that overtook it commits instead.
+            guard mine == generation else { return }
             selection.formIntersection(Set(rows.map(\.id)))
             let answers = try await ledger.answers(of: rows.map(\.id))
             // Only under the suggested filter: a list nobody is looking at is a query nobody
@@ -205,6 +221,8 @@ final class LibraryModel {
             }
             let measured = try await ledger.retention(dictionary: nil)
             let vocabulary = try await ledger.allTags()
+            // Read again: the reads between the prune and here suspend too.
+            guard mine == generation else { return }
             presentation = LibraryPresentation(
                 rows: rows.map { Self.row($0, answer: answers[$0.id]?.text ?? "", at: now) },
                 total: total, search: search, filter: filter, scriptFiltered: scriptFiltered,
@@ -242,7 +260,9 @@ final class LibraryModel {
                                           tags: tags, timeline: timeline))
         } catch {
             // **Said, not swallowed.** An empty list and a list that could not be read are the same
-            // screen otherwise, and the reader is owed the difference.
+            // screen otherwise, and the reader is owed the difference. Still only for the current
+            // reload: an overtaken one's failure is not this screen's.
+            guard mine == generation else { return }
             presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
                                                scriptFiltered: scriptFiltered,
                                                problem: String(describing: error))

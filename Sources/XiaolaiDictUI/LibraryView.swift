@@ -79,7 +79,7 @@ public struct LibraryView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: scale.text.small))
                 HStack(spacing: scale.space.inline) {
-                    Button("Save the answer") { act(.setAnswer(draft)) }
+                    Button("Save the answer") { act(.setAnswer(noteID: inspector.id, text: draft)) }
                         .disabled(!canSave(inspector))
                     // **Said, not merely disabled.** A button that refuses a click without a reason
                     // is a broken switch, and "blank" is not guessable from a greyed-out control.
@@ -100,7 +100,7 @@ public struct LibraryView: View {
                     ForEach(inspector.tags, id: \.self) { tag in
                         // **Readable and removable.** A label the reader can add and never take
                         // off is a worse state than having no labels.
-                        Button { act(.untag(tag)) } label: {
+                        Button { act(.untag(noteID: inspector.id, tag: tag)) } label: {
                             Text(verbatim: tag)
                                 .font(.system(size: scale.text.micro))
                         }
@@ -490,10 +490,15 @@ public enum LibraryAction: Sendable, Equatable {
     case tag(String)
     /// **The reader's own words, for the one row they have open.** Replaces what the card reveals
     /// and leaves the encounter's snapshot alone — the dictionary said what it said.
-    case setAnswer(String)
-    /// Take a tag off the open row. **The reverse of `tag`**, which existed alone: a label the
-    /// reader could add and never remove.
-    case untag(String)
+    ///
+    /// **The note is named, not taken from the selection.** Selection changes at once and the
+    /// inspector catches up after a reload; in that window the pane still shows A while the model
+    /// has moved to B, and saving wrote A's answer onto B. The view knows which row it is
+    /// drawing, so the view says so.
+    case setAnswer(noteID: UUID, text: String)
+    /// Take a tag off one row. **The reverse of `tag`**, which existed alone: a label the reader
+    /// could add and never remove. Named for the same reason `setAnswer` is.
+    case untag(noteID: UUID, tag: String)
     /// Offer a set-aside word again. "Already know" is a declaration, and a declaration the reader
     /// cannot take back is a trap rather than a preference.
     case unignore(lemma: String, language: String)
