@@ -17,7 +17,7 @@ public final class PhraseReader: PhraseFinding {
     /// a span without its meaning is half an answer.
     private let inventory = Mutex<Read?>(nil)
     private let bundles: [DictionaryBundle]
-    private let phrases: @Sendable (DictionaryBundle) -> [String: String]
+    private let phrases: @Sendable (DictionaryBundle) -> PhraseInventory?
 
     private struct Read {
         let spans: PhraseSpans
@@ -26,12 +26,14 @@ public final class PhraseReader: PhraseFinding {
         let meanings: [String: String]
     }
 
-    /// `phrases` supplies the phrases the key index does not hold, **each with its meaning** — the sub-entry
-    /// labels, which `PhraseInventory` reads from the body in about seven seconds per dictionary. Injected
-    /// rather than read here so the matcher can be tested without a licensed dictionary on disk, and so a
-    /// reader whose body cannot be read still gets the keys.
+    /// `phrases` supplies one dictionary's whole inventory — its multi-word search keys **and** the sub-entry
+    /// labels with their meanings. Nil for a dictionary that cannot be read.
+    ///
+    /// **Nothing here touches `KeyText.data`.** Re-deriving the keys every launch cost 2.24 s of a 2.8 s
+    /// start-up for an answer the stored inventory already has. Injected rather than read so the matcher can
+    /// be tested without a licensed dictionary on disk.
     public init(bundles: [DictionaryBundle],
-                phrases: @escaping @Sendable (DictionaryBundle) -> [String: String] = { _ in [:] }) {
+                phrases: @escaping @Sendable (DictionaryBundle) -> PhraseInventory? = { _ in nil }) {
         self.bundles = bundles
         self.phrases = phrases
     }
@@ -91,20 +93,15 @@ public final class PhraseReader: PhraseFinding {
         var meanings: [String: String] = [:]
         var read: [String] = [], failed: [String] = []
         for bundle in bundles {
-            for (phrase, meaning) in phrases(bundle) {
-                let key = phrase.lowercased()
-                guard key.contains(" ") else { continue }
-                found.insert(key)
-                // **The first dictionary to explain a phrase keeps it**, in the reader's own dictionary
-                // order — not a judgement this type is in a position to make.
-                if meanings[key] == nil { meanings[key] = meaning }
-            }
-            do {
-                found.formUnion(try PhraseSpans.keys(in: bundle.url))
-                read.append(bundle.displayName)
-            } catch {
+            guard let inventory = phrases(bundle) else {
                 failed.append(bundle.displayName)
+                continue
             }
+            found.formUnion(inventory.phrases)
+            // **The first dictionary to explain a phrase keeps it**, in the reader's own dictionary order —
+            // not a judgement this type is in a position to make.
+            meanings.merge(inventory.meanings) { first, _ in first }
+            read.append(bundle.displayName)
         }
         let built = PhraseSpans(phrases: found)
         inventory.withLock { $0 = Read(spans: built, meanings: meanings) }

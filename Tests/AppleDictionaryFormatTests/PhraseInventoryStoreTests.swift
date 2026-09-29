@@ -91,10 +91,50 @@ struct PhraseInventoryStoreTests {
 
     @Test func anInventorySurvivesBeingWrittenAndRead() throws {
         let (store, scratch) = store()
-        let inventory = PhraseInventory(contentVersion: "v1", meanings: ["kick the bucket": "die"])
+        let inventory = PhraseInventory(
+            contentVersion: "v1",
+            phrases: ["kick the bucket", "purple passage"],
+            meanings: ["kick the bucket": "die"])
         try store.write(inventory, for: "noad")
         #expect(try store.read("noad") == inventory)
         _ = scratch
+    }
+
+    /// **A phrase with no meaning survives the round trip as one.** The key index contributes spellings
+    /// without definitions, and a format that lost them would silently shrink the inventory to the 8% the
+    /// dictionaries explain.
+    @Test func aPhraseWithNoMeaningIsStillAPhrase() throws {
+        let inventory = PhraseInventory(contentVersion: "v1", phrases: ["purple passage"], meanings: [:])
+        let back = try #require(PhraseInventory(decoding: inventory.encoded()))
+        #expect(back.phrases == ["purple passage"])
+        #expect(back.meanings.isEmpty)
+    }
+
+    /// An inventory written by a format this build does not read is refused, not guessed at — the same rule
+    /// the index follows for an unknown schema.
+    @Test func anUnknownFormatIsRefused() {
+        #expect(PhraseInventory(decoding: "phrases/99\tv1\nkick the bucket\tdie") == nil)
+        #expect(PhraseInventory(decoding: "") == nil)
+        #expect(PhraseInventory(decoding: "no tab here") == nil)
+    }
+
+    /// **A phrase carrying a tab is skipped rather than escaped.** It would split into two fields and come
+    /// back as a phrase nothing matches; no measured key contains one, and an escape scheme for a case that
+    /// does not arise is a parser nobody has tested.
+    @Test func aphraseCarryingATabIsNotWritten() throws {
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["kick the bucket", "bad\tphrase"], meanings: [:])
+        let back = try #require(PhraseInventory(decoding: inventory.encoded()))
+        #expect(back.phrases == ["kick the bucket"])
+    }
+
+    /// A newline inside a meaning is flattened, for the same reason.
+    @Test func anewlineInAMeaningIsFlattened() throws {
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["kick the bucket"],
+            meanings: ["kick the bucket": "die\nor expire"])
+        let back = try #require(PhraseInventory(decoding: inventory.encoded()))
+        #expect(back.meanings["kick the bucket"] == "die or expire")
     }
 
     /// Nothing stored is nil, not an empty inventory — an empty one would be indistinguishable from a
@@ -109,7 +149,7 @@ struct PhraseInventoryStoreTests {
     @Test func atruncatedFileIsNotAnInventory() throws {
         let (store, scratch) = store()
         try FileManager.default.createDirectory(at: scratch.url, withIntermediateDirectories: true)
-        try Data("{\"contentVersion\":\"v1\",\"mean".utf8).write(to: store.file(for: "noad"))
+        try Data("phrases".utf8).write(to: store.file(for: "noad"))
         #expect(try store.read("noad") == nil)
     }
 
@@ -118,7 +158,34 @@ struct PhraseInventoryStoreTests {
     @Test func thefileIsNamedByIdentifier() {
         let (store, scratch) = store()
         #expect(store.file(for: "com.apple.dictionary.NOAD").lastPathComponent
-            == "com.apple.dictionary.NOAD.json")
+            == "com.apple.dictionary.NOAD.phrases")
         _ = scratch
+    }
+}
+
+/// **Nothing inside a dictionary is another dictionary, so the search must not look.**
+///
+/// `.skipsPackageDescendants` does not cover these — `.dictionary` is not a registered package type — so the
+/// walker descended into every bundle's `Contents/Resources`, which for NOAD alone is a 100 MB body. Measured
+/// 2026-09-29: **2.11 s to list 12 dictionaries, against 0.014 s** once the descent stops. Every caller of
+/// `installed()` paid it, and the phrase inventory paid it on every launch.
+///
+/// Asserted on the structure rather than on a clock: a nested bundle is found only by a search that descended.
+struct DictionarySearchDepthTests {
+    @Test func thesearchDoesNotLookInsideABundle() throws {
+        let scratch = TemporaryDirectory(named: "locator")
+        let outer = scratch.appending("Outer.dictionary")
+        // A bundle inside a bundle — which no real asset has, and which only a descending walk can see.
+        let inner = outer.appending(path: "Contents/Resources/Inner.dictionary")
+        for (bundle, identifier) in [(outer, "test.outer"), (inner, "test.inner")] {
+            try FileManager.default.createDirectory(
+                at: bundle.appending(path: "Contents"), withIntermediateDirectories: true)
+            let plist: [String: Any] = ["CFBundleIdentifier": identifier, "CFBundleName": identifier]
+            try PropertyListSerialization
+                .data(fromPropertyList: plist, format: .xml, options: 0)
+                .write(to: bundle.appending(path: "Contents/Info.plist"))
+        }
+        let found = DictionaryLocator.installed(in: [scratch.url]).map(\.identifier)
+        #expect(found == ["test.outer"], "the search descended into a bundle and found \(found)")
     }
 }

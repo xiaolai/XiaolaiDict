@@ -26,12 +26,12 @@ extension PhraseReader {
         report("\(serving.count) dictionaries serve \(language)")
         return PhraseReader(bundles: serving) { bundle in
             do {
-                return try store.inventory(for: bundle).meanings
+                return try store.inventory(for: bundle)
             } catch {
                 // A dictionary whose body cannot be read contributes nothing and is named. The others still
-                // read: a reader with four dictionaries and one bad file keeps four fifths of their phrases.
+                // read: a reader with four dictionaries and one bad file keeps three quarters of the phrases.
                 report("could not read \(bundle.displayName): \(error)")
-                return [:]
+                return nil
             }
         }
     }

@@ -102,11 +102,20 @@ import Testing
         let missing = DictionaryBundle(
             url: URL(fileURLWithPath: "/nonexistent/Nope.dictionary"),
             identifier: "test.nope", displayName: "Nope")
-        let reading = PhraseReader(
-            bundles: [missing], phrases: { _ in ["out of the blue": "unexpectedly"] }).read()
+        let reading = PhraseReader(bundles: [missing], phrases: { _ in nil }).read()
         #expect(reading.failed == ["Nope"])
         #expect(reading.read.isEmpty)
-        #expect(reading.phrases == 1, "the phrases handed in survive the bundle that did not read")
-        #expect(reading.explained == 1, "and so do their meanings")
+        #expect(reading.phrases == 0, "a dictionary that cannot be read contributes nothing")
+
+        // And one that can: the reading names it, and its phrases and meanings both arrive.
+        let store = DictionaryBundle(url: URL(fileURLWithPath: "/nonexistent/Fine.dictionary"),
+                                    identifier: "test.fine", displayName: "Fine")
+        let stocked = PhraseReader(bundles: [store], phrases: { _ in
+            PhraseInventory(contentVersion: "v1", phrases: ["out of the blue", "purple passage"],
+                            meanings: ["out of the blue": "unexpectedly"])
+        }).read()
+        #expect(stocked.read == ["Fine"])
+        #expect(stocked.phrases == 2)
+        #expect(stocked.explained == 1, "the key index contributes spellings without definitions")
     }
 }
