@@ -84,8 +84,14 @@ test-swift: metal-guard
 
 # The Python suite: the icon generator, and the ladder gate `e2e.sh` decides a release with.
 # Named for the directory rather than for the icon, because it stopped being only the icon's.
+#
+# `dev-docs/algorithms` is the second root because the scheduler's numerical reference lives beside
+# the specification it is the evidence for, not under `Tools`. Its 11 tests passed for six days
+# without any gate running them: a reference kernel nothing checks is exactly the artefact that gets
+# ported to Swift with a wrong constant in it, and the port is measured against the kernel.
 test-tools:
 	python3 -m unittest discover -s Tools/tests
+	python3 -m unittest discover -s dev-docs/algorithms
 
 # Re-extract every localizable string into Strings/Localizable.xcstrings, the file a
 # translator is given. Run it after adding or changing anything the reader reads.
