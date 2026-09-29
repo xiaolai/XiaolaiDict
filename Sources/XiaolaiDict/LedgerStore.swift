@@ -109,6 +109,12 @@ actor LedgerStore {
                             newAllowance: newAllowance, dayStart: dayStart)
     }
 
+    /// **"Not today."** Out of the way until `when`, with the schedule untouched — the reader
+    /// saying "not this one, not now" is not the reader saying anything about their memory.
+    func postpone(cardID: UUID, until when: Date?) throws {
+        try ledger.postpone(cardID: cardID, until: when)
+    }
+
     func practisableCards(limit: Int, dictionary: String?) throws -> [StudyCard] {
         try ledger.practisableCards(limit: limit, dictionary: dictionary)
     }

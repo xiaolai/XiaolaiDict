@@ -143,6 +143,9 @@
     "%lld permissions are off — selections and the screen cannot be read" : {
       "comment" : "Menu warning when more than one permission is missing"
     },
+    "%lld put off until tomorrow" : {
+
+    },
     "%lld reviewed" : {
 
     },
@@ -413,6 +416,9 @@
     "In the panel" : {
 
     },
+    "It could not be put off: %@" : {
+      "comment" : "Shown on a review card when postponing it failed to save"
+    },
     "It reads your selection through Accessibility. Allow XiaolaiDict in %@, then press the shortcut again." : {
       "comment" : "The placeholder is the System Settings list to grant it in"
     },
@@ -555,6 +561,9 @@
     "Not set" : {
 
     },
+    "Not today" : {
+
+    },
     "Not yet enforced — hovering is not refused on these sites. What you add here is kept and will apply once it is. Subdomains are covered too, so example.com also excludes docs.example.com." : {
 
     },
@@ -613,6 +622,9 @@
 
     },
     "Open source" : {
+
+    },
+    "Out of the way until tomorrow. Nothing about your memory is recorded" : {
 
     },
     "Password managers" : {
@@ -796,6 +808,9 @@
 
     },
     "Standard" : {
+
+    },
+    "Still due today; the next batch can have it" : {
 
     },
     "Stop" : {

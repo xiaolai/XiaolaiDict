@@ -129,6 +129,8 @@ final class ReviewModel {
         case .skip:
             session?.record(.skipped)
             Task { await draw() }
+        case .postpone:
+            Task { await postpone() }
         case .undo:
             Task { await undo() }
         case .anotherBatch:
@@ -138,6 +140,26 @@ final class ReviewModel {
         case .done:
             WindowActions.shared.dismissWindow(id: XiaolaiDictScene.reviewID)
         }
+    }
+
+    /// **Out of the way until the next study day** (R05), and the surface advances only after the
+    /// ledger has it — a card that disappeared from the sitting and was still due tomorrow evening
+    /// would be the reader's "not today" silently ignored.
+    ///
+    /// The schedule is untouched. Saying "not this one, not now" is not saying anything about
+    /// memory, so nothing here grades, and the daily allowance is unspent.
+    private func postpone() async {
+        guard let card = session?.current, let opening = store() else { return }
+        let until = studyDay.start(containing: clock()).addingTimeInterval(86_400)
+        do {
+            let ledger = try await opening.value
+            try await ledger.postpone(cardID: card.cardID, until: until)
+            session?.record(.postponed)
+        } catch {
+            problem = String(localized: "It could not be put off: \(error.localizedDescription)",
+                             comment: "Shown on a review card when postponing it failed to save")
+        }
+        await draw()
     }
 
     // MARK: - One card

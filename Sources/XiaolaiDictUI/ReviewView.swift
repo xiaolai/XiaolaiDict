@@ -135,6 +135,14 @@ public struct ReviewView: View {
             Button("Skip") { act(.skip) }
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(question.isCommitting)
+                .help(Text("Still due today; the next batch can have it"))
+            // **"Not today" is not "skip".** A skipped card comes back in this evening's next
+            // batch; this one is gone until tomorrow, and the reader has to be able to say which
+            // they mean.
+            Button("Not today") { act(.postpone) }
+                .keyboardShortcut("t", modifiers: [])
+                .disabled(question.isCommitting)
+                .help(Text("Out of the way until tomorrow. Nothing about your memory is recorded"))
         }
         if let problem = question.problem {
             // **A failed write stays on screen.** The reader answered; if the ledger did not take it,
@@ -188,6 +196,13 @@ public struct ReviewView: View {
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
         }
+        // **A different sentence from "skipped".** One is still due this evening and the other is
+        // not, and a reader who cannot tell them apart cannot plan the rest of the sitting.
+        if summary.postponed > 0 {
+            Text("\(summary.postponed) put off until tomorrow")
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.secondary)
+        }
         // **Said, and said differently from "more due".** New words the day's allowance is holding
         // are not late; without this line a reader who saved thirty and answered five sees twenty-
         // five words go quiet with no explanation.
@@ -217,6 +232,8 @@ public enum ReviewAction: Sendable, Equatable {
     case reveal
     case grade(Grade)
     case skip
+    /// Out of the way until the next study day (R05). **Not `skip`**, which leaves it due now.
+    case postpone
     case undo
     case anotherBatch
     /// An unscheduled sitting. **Recorded and inert**: no schedule moves and no retention figure

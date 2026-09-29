@@ -61,10 +61,11 @@ struct ReviewWiringTests {
         return ledger
     }
 
-    private func model(_ path: String) -> ReviewModel {
-        ReviewModel(store: { Task { try LedgerStore(path: path) } },
-                    primary: { PrimaryDictionary(chosen: "noad") },
-                    clock: { self.now })
+    private func model(_ path: String, clock: Date? = nil) -> ReviewModel {
+        let when = clock ?? now
+        return ReviewModel(store: { Task { try LedgerStore(path: path) } },
+                           primary: { PrimaryDictionary(chosen: "noad") },
+                           clock: { when })
     }
 
     private func question(_ model: ReviewModel) -> ReviewPresentation.Question? {
@@ -261,6 +262,47 @@ struct ReviewWiringTests {
         // clock must find nothing askable — and must say why, not "nothing is due".
         await model.start()
         #expect(model.presentation.stage == .empty(.heldBackUntilTomorrow(8)))
+    }
+
+    /// **"Not today" was a ledger method with no control** (R05). `postpone` — `hide` before the
+    /// name collision that made the audit blind to it — put a card out of the way without touching
+    /// its schedule, and no surface offered it.
+    ///
+    /// Distinct from Skip, which is what makes it worth having: a skipped card is still due today
+    /// and the next batch can have it; a postponed one is gone until the next study day. A reader
+    /// who cannot face a particular word this evening has no way to say so otherwise.
+    @Test func acardCanBePutOffUntilTheNextStudyDay() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 2, inProgress: true)
+        let model = model(path)
+        await model.start()
+        let first = try #require(question(model)?.word)
+
+        model.act(.postpone)
+        try await settle { self.question(model)?.word != first }
+
+        // Gone from today, and said so at the end of the batch.
+        model.act(.grade(.good))
+        try await settle {
+            if case .finished = model.presentation.stage { return true }
+            return false
+        }
+        guard case .finished(let summary) = model.presentation.stage else {
+            Issue.record("the batch never finished")
+            return
+        }
+        #expect(summary.postponed == 1)
+        #expect(summary.skipped == 0, "a postponement is not a skip")
+
+        // **Not due again today**, which is the difference from Skip.
+        await model.start()
+        #expect(model.presentation.stage == .empty(.nothingDue))
+
+        // And back tomorrow, with its schedule untouched.
+        let tomorrow = self.model(path, clock: now.addingTimeInterval(86_400 + 3_600))
+        await tomorrow.start()
+        #expect(question(tomorrow)?.word == first)
     }
 
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an

@@ -58,7 +58,6 @@ struct StudySurfaceTests {
         "reviews": "One card's events, gathered by `timeline`.",
         // **Named, not forgiven.** These are gaps with no surface designed yet, and saying so here
         // is what stops the next audit rediscovering them as new — ADR-0038.
-        "postpone": "GAP — R05's hide-until-tomorrow has no control.",
         "card": "Creates the card for a note; enrol is the only correct caller.",
         "integrity": "GAP — D01 has no recovery surface.",
         "readingImpact": "GAP — erasing one source's reading is not offered.",

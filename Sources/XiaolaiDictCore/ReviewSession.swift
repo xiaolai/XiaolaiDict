@@ -69,6 +69,10 @@ public struct ReviewSession: Sendable, Equatable {
             /// Put aside for this sitting. Consumes no grade and no first-introduction budget, and
             /// the card stays exactly as due as it was.
             case skipped
+            /// Put out of the way until the next study day (R05). **Not a skip**: a skipped card is
+            /// still due today and the next batch can have it, and this one is gone until tomorrow.
+            /// The schedule is untouched — "not now" is not a statement about memory.
+            case postponed
         }
 
         public var isAnswered: Bool { outcome != nil }
@@ -142,6 +146,10 @@ public struct ReviewSession: Sendable, Equatable {
         presentations.count { $0.outcome == .skipped }
     }
 
+    public var postponed: Int {
+        presentations.count { $0.outcome == .postponed }
+    }
+
     /// How many are still to come in this batch.
     public var remaining: Int { presentations.count - (liveIndex ?? presentations.count) }
 
@@ -150,7 +158,8 @@ public struct ReviewSession: Sendable, Equatable {
     /// **Never "all done".** A batch is a sitting; the work beyond it is still there, and a surface
     /// that hides it teaches the reader their backlog is smaller than it is.
     public var summary: Summary {
-        Summary(graded: graded, skipped: skipped, stillDue: beyondBatch, heldBack: heldBack)
+        Summary(graded: graded, skipped: skipped, stillDue: beyondBatch, heldBack: heldBack,
+                postponed: postponed)
     }
 
     public struct Summary: Sendable, Equatable {
@@ -162,12 +171,17 @@ public struct ReviewSession: Sendable, Equatable {
         /// New cards the daily allowance is holding for tomorrow. **Not part of `stillDue`**: they
         /// are not late, and nothing the reader does today will be offered them.
         public let heldBack: Int
+        /// Put off until the next study day. **Its own count**, because a skipped card is still
+        /// due now and a postponed one is not, and one number for both would say neither.
+        public let postponed: Int
 
-        public init(graded: Int, skipped: Int, stillDue: Int, heldBack: Int = 0) {
+        public init(graded: Int, skipped: Int, stillDue: Int, heldBack: Int = 0,
+                    postponed: Int = 0) {
             self.graded = graded
             self.skipped = skipped
             self.stillDue = stillDue
             self.heldBack = heldBack
+            self.postponed = postponed
         }
     }
 }
