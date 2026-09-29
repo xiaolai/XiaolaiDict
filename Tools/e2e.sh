@@ -718,9 +718,13 @@ select_then_read "Safari: a selection across a sentence end gets both sentences 
 select_then_read "Safari: wrapping punctuation is not part of the term" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "“ephemeral,”" -- \
     text=ephemeral lemma=ephemeral
-select_then_read "Safari: a past form NLTagger leaves alone is read from its grammar" com.apple.Safari \
+# `likely`, not `inferred`: *saw* → *see* is the everyday reading of the shape, not something the
+# sentence established. This assertion said `inferred` and named itself "read from its grammar" until
+# 2026-09-29 — both were true before the basis was split, and the stage had not run since.
+select_then_read "Safari: a past form NLTagger leaves alone is lemmatised from a prior, and says so" \
+    com.apple.Safari \
     "$helpers/select-web" com.apple.Safari saw -- \
-    text=saw lemma=see lemmaBasis=inferred
+    text=saw lemma=see lemmaBasis=likely
 fi
 
 if want shortcut; then
