@@ -77,14 +77,14 @@ public struct PhrasePresentation: Equatable, Sendable {
         // that offset — the same defect `sentenceRange` already documents for the word.
         guard range.location >= 0, range.length > 0,
               NSMaxRange(range) <= (sentence as NSString).length else { return nil }
-        switch hit.meaning {
-        case .ownEntry(let entries):
-            self.init(phrase: hit.phrase, range: range, separation: hit.separation,
-                      definition: Self.definition(in: entries))
-        case .subEntry(let definition):
-            self.init(phrase: hit.phrase, range: range, separation: hit.separation,
-                      definition: definition.isEmpty ? nil : definition)
-        }
+        // **An own entry first, then a filing.** A phrase with an entry of its own is explained by that
+        // entry's leading sense; one filed inside another word's is explained by the body walk, because
+        // the entry the framework answered with is the parent's and its senses are not the phrase's. A
+        // phrase can now be both at once — different dictionaries disagree about which it is — and the
+        // card prefers the entry, whose senses the selector can also reach.
+        let definition = Self.definition(in: hit.meaning.ownEntries)
+            ?? hit.meaning.filings.lazy.compactMap(\.definition).first { !$0.isEmpty }
+        self.init(phrase: hit.phrase, range: range, separation: hit.separation, definition: definition)
     }
 
     /// The first definition any of the phrase's entries marks, in the order the dictionaries answered.

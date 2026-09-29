@@ -91,10 +91,7 @@ public struct PhraseHit: Codable, Sendable, Equatable {
     public let meaning: PhraseMeaning
 
     /// The phrase's own entries, where it has any. **Never merged with the word's.**
-    public var entries: [DictionaryEntry] {
-        if case .ownEntry(let found) = meaning { return found }
-        return []
-    }
+    public var entries: [DictionaryEntry] { meaning.ownEntries }
 
     public init(phrase: String, location: Int, length: Int,
                 separation: PhraseSeparation, meaning: PhraseMeaning) {
@@ -106,8 +103,8 @@ public struct PhraseHit: Codable, Sendable, Equatable {
     }
 }
 
-/// Whether the phrase has an entry of its own, or is filed inside another word's — **and either way, what
-/// it means.**
+/// What the dictionaries hold for a phrase: entries of its own, filings inside other words' entries, or
+/// both at once — **and either way, what it means.**
 ///
 /// **Measured, and the distinction is load-bearing** (2026-09-29, NOAD). *purple passage* is
 /// `m_en_gbus0830950` and *red herring* is `m_en_gbus0853810` — entries of their own, whose senses are the
@@ -117,18 +114,34 @@ public struct PhraseHit: Codable, Sendable, Equatable {
 /// own definition is not among them. Adding them to the candidate set would be handing the selector noise it
 /// could confidently pick.
 ///
-/// Told apart by entry id: a phrase whose entry is also returned for one of its own words is a sub-entry.
+/// Told apart by entry id: an answered entry that is also one of the phrase's own words' entries is a
+/// parent, not the phrase's. **Per entry, not per lookup** — the reader's dictionaries do not agree about
+/// which phrases get their own entry, and deciding for the whole reply lost whichever ones did.
 ///
 /// **The meaning comes from the phrase inventory, not from the entry.** A body walk reads every sub-entry's
 /// own definition — *take something into account → consider something along with other factors before
 /// reaching a decision* — for 9,740 of NOAD's sub-entries. So a sub-entry phrase is explained rather than
 /// deferred, and this type never has to say "read it somewhere else".
-public enum PhraseMeaning: Codable, Sendable, Equatable {
+public struct PhraseMeaning: Codable, Sendable, Equatable {
     /// The phrase's own entries. Their senses are the phrase's meaning, and are candidates for the ladder.
-    case ownEntry([DictionaryEntry])
-    /// Filed inside another word's entry, so the parent's senses are **not** candidates — but the inventory
-    /// has the phrase's own definition, and it travels here.
-    case subEntry(definition: String)
+    public let ownEntries: [DictionaryEntry]
+
+    /// Where the phrase is filed inside another word's entry. The parent's senses are **not** candidates —
+    /// they are that word's — so these carry the phrase's own definitions instead.
+    public let filings: [PhraseFiling]
+
+    /// **Both, because it was one or the other and that deleted candidates.** This was an enum, and
+    /// `DictionaryBridge` answered a whole lookup with a single case: one dictionary filing the phrase
+    /// under a parent made the entire result a sub-entry, and another dictionary's genuine own entry for
+    /// the same phrase — with the senses the ladder would have chosen among — vanished from the reply.
+    /// Nothing on the lookup path may delete a candidate (`dev-docs/never-gate-always-annotate.md`).
+    public init(ownEntries: [DictionaryEntry] = [], filings: [PhraseFiling] = []) {
+        self.ownEntries = ownEntries
+        self.filings = filings
+    }
+
+    /// Nothing at all: a phrase from the key index that no installed dictionary explains or files.
+    public var isEmpty: Bool { ownEntries.isEmpty && filings.isEmpty }
 }
 
 /// Whether the phrase's words sat together, and on whose authority they were allowed not to.

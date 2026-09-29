@@ -15,7 +15,7 @@ extension PhraseReader {
     /// largest.
     ///
     /// **A meaning is not promised for every phrase.** The key index contributes spellings without
-    /// definitions — 9,743 of 116,122 phrases are explained — so `PhraseReader.meaning(of:)` is nil for most
+    /// definitions — 9,740 of 103,517 phrases are explained — so `PhraseReader.filings(of:)` is empty for most
     /// of them, and that is the ordinary case rather than a gap.
     ///
     /// `report` is how the caller hears about it without this target binding a logger.

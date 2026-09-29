@@ -362,21 +362,8 @@ struct Walk {
         rubyAnnotation.contains(node.name) || node.classes.contains(where: notPartOfAHeadword.contains)
     }
 
-    /// The `d:entry` element's own `id`.
-    ///
-    /// **Matched exactly, not by suffix.** `hasSuffix("entry")` accepted `<notentry id="wrong">` and would
-    /// pick such a wrapper ahead of a genuine `d:entry`, indexing the record under the wrong id instead of
-    /// refusing it.
-    func entryID() -> String? {
-        tree.root.firstDescendant(where: isEntryElement)?.attributes["id"]
-    }
-
-    func isEntryElement(_ node: EntryNode) -> Bool {
-        if node.name == "entry" { return !tree.hasForeignDefaultNamespace }
-        let parts = node.name.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2, parts[1] == "entry" else { return false }
-        return String(parts[0]) == tree.applePrefix
-    }
+    /// The `d:entry` element's own `id` — `EntryTree`'s, which is the one owner of the match.
+    func entryID() -> String? { tree.entryID() }
 
     /// A nested sub-entry owns its own subtree, and **every** search inside a sense stops at one. The
     /// definition walk already did; the part-of-speech, sense-number and subsense searches did not — so a

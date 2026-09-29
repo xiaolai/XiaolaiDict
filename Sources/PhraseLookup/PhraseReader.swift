@@ -25,9 +25,9 @@ public final class PhraseReader: PhraseFinding {
         /// nothing answers `.none` to every sentence, which tells a reader there is no phrase here when the
         /// truth is that nothing could be looked in.
         let readAnything: Bool
-        /// Phrase to its meaning, for the phrases a dictionary explains. **Held rather than re-read**: a
-        /// lookup must not open a file to say what a phrase means, and all three of them are 2,080 KB.
-        let meanings: [String: String]
+        /// Phrase to every dictionary's filing of it. **Held rather than re-read**: a lookup must not
+        /// open a file to say what a phrase means, and all three of them are 2,080 KB.
+        let filings: [String: [PhraseFiling]]
     }
 
     /// `phrases` supplies one dictionary's whole inventory — its multi-word search keys **and** the sub-entry
@@ -47,10 +47,10 @@ public final class PhraseReader: PhraseFinding {
 
     /// An inventory already in hand. For a caller that built one, and for tests, which must be able to
     /// assert the mapping from a sentence to a span without a licensed dictionary on disk.
-    public convenience init(phrases: Set<String>, meanings: [String: String] = [:]) {
+    public convenience init(phrases: Set<String>, filings: [String: [PhraseFiling]] = [:]) {
         self.init(bundles: [], phrases: { _ in nil })
         let built = PhraseSpans(phrases: phrases)
-        inventory.withLock { $0 = Read(spans: built, readAnything: true, meanings: meanings) }
+        inventory.withLock { $0 = Read(spans: built, readAnything: true, filings: filings) }
     }
 
     /// What one reading found. **Returned rather than logged inside**, because a reader whose dictionaries
@@ -83,8 +83,8 @@ public final class PhraseReader: PhraseFinding {
     /// decision*. The body walk already put it here.
     ///
     /// Nil for a phrase that came from the key index, which carries spellings and no definitions.
-    public func meaning(of phrase: String) -> String? {
-        inventory.withLock { $0?.meanings[phrase] }
+    public func filings(of phrase: String) -> [PhraseFiling] {
+        inventory.withLock { $0?.filings[phrase] } ?? []
     }
 
     /// Reads the inventory from the store. **Call this off the reply path.**
@@ -98,7 +98,7 @@ public final class PhraseReader: PhraseFinding {
     /// unreadable file still gets the phrases from the two that read. The failure is named, not swallowed.
     @discardableResult public func read() -> Reading {
         var found = Set<String>()
-        var meanings: [String: String] = [:]
+        var filings: [String: [PhraseFiling]] = [:]
         var read: [String] = [], failed: [String] = []
         for bundle in bundles {
             guard let inventory = phrases(bundle) else {
@@ -106,14 +106,24 @@ public final class PhraseReader: PhraseFinding {
                 continue
             }
             found.formUnion(inventory.phrases)
-            // **The first dictionary to explain a phrase keeps it**, in the reader's own dictionary order —
-            // not a judgement this type is in a position to make.
-            meanings.merge(inventory.meanings) { first, _ in first }
+            // **Every dictionary's filing is kept, and each says which dictionary it is.** This merged
+            // `{ first, _ in first }` until 2026-09-29, in `DictionaryLocator.installed()` order — by
+            // identifier, which is nobody's preference — so where two dictionaries explained a phrase
+            // differently one answer was discarded and the survivor could not be attributed. Choosing
+            // between them needs the reader's sentence, which this type cannot see.
+            let identity = DictionaryIdentity(name: bundle.displayName, identifier: bundle.identifier,
+                                              version: bundle.declaredVersion)
+            for (phrase, explanations) in inventory.explanations {
+                filings[phrase, default: []].append(contentsOf: explanations.map {
+                    PhraseFiling(dictionary: identity, parentEntryID: $0.parentEntryID,
+                                 blockID: $0.blockID, definitions: $0.definitions)
+                })
+            }
             read.append(bundle.displayName)
         }
         let built = PhraseSpans(phrases: found)
-        inventory.withLock { $0 = Read(spans: built, readAnything: !read.isEmpty, meanings: meanings) }
-        return Reading(phrases: built.phrases.count, explained: meanings.count,
+        inventory.withLock { $0 = Read(spans: built, readAnything: !read.isEmpty, filings: filings) }
+        return Reading(phrases: built.phrases.count, explained: filings.count,
                        read: read, failed: failed)
     }
 
@@ -133,7 +143,7 @@ public final class PhraseReader: PhraseFinding {
                 phrase: match.phrase,
                 location: first.location, length: last.location + last.length - first.location,
                 separation: Self.separation(match.separation),
-                definition: inventory.meanings[match.phrase])
+                filings: inventory.filings[match.phrase] ?? [])
         }
     }
 

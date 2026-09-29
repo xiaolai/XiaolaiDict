@@ -90,18 +90,18 @@ extension PhraseCandidateTests {
         for (phrase, hovered, ownEntry) in expected {
             let answered = try Self.noad(phrase)
             let span = PhraseSpan(phrase: phrase, location: 0, length: 1, separation: .none,
-                                  definition: Self.inventory.meaning(of: phrase))
+                                  filings: Self.inventory.filings(of: phrase))
             let meaning = DictionaryBridge.meaning(
                 of: span, answered: answered, term: try Self.noad(hovered))
-            switch meaning {
-            case .ownEntry:
-                #expect(ownEntry, "\(phrase) was expected to be a sub-entry")
-                print("PC \(phrase) — its own entry, \(answered.count) entries")
-            case .subEntry(let definition):
-                #expect(!ownEntry, "\(phrase) was expected to have an entry of its own")
+            if ownEntry {
+                #expect(!meaning.ownEntries.isEmpty, "\(phrase) was expected to have an entry of its own")
+                print("PC \(phrase) — its own entry, \(meaning.ownEntries.count) of \(answered.count)")
+            } else {
+                #expect(meaning.ownEntries.isEmpty, "\(phrase) was expected to be a sub-entry")
                 // **The point of the whole rework**: a sub-entry phrase is explained, not deferred. The
                 // definition comes from the body walk, because the entry the framework answered with is
                 // another word's and its senses are not this phrase's.
+                let definition = meaning.filings.compactMap(\.definition).first ?? ""
                 #expect(!definition.isEmpty, "\(phrase) reached the wire with no meaning")
                 print("PC \(phrase) — sub-entry: \(definition.prefix(60))")
             }
@@ -134,8 +134,9 @@ extension PhraseCandidateTests {
             if let span {
                 withAPhrase += 1
                 let answered = try Self.noad(span.phrase)
-                if case .ownEntry = DictionaryBridge.meaning(
-                    of: span, answered: answered, term: try Self.noad(labelled.word)) {
+                if !DictionaryBridge.meaning(
+                    of: span, answered: answered, term: try Self.noad(labelled.word))
+                    .ownEntries.isEmpty {
                     phrase = try Self.candidates(for: span.phrase)
                 }
             }
@@ -158,5 +159,67 @@ extension PhraseCandidateTests {
             more labelled sentences hold a phrase than when this was measured — the set can now say \
             something about the enlargement, so score it properly rather than trusting this floor
             """)
+    }
+}
+
+/// **A phrase can be an entry in one dictionary and a filing in another, and the reply must carry both.**
+///
+/// Synthetic on purpose: it asserts the partition itself, with no dependence on which dictionaries this Mac
+/// has or on two of them disagreeing about one phrase today. The words are nonsense so the bridge's lookup
+/// of the phrase's own words finds nothing and cannot accidentally supply the parent.
+struct PhrasePartitionTests {
+    private static func entry(_ id: String, headword: String) -> DictionaryEntry {
+        let markup = """
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="\(id)" \
+            d:title="\(headword)"><span class="hg x_xh0"><span class="hw">\(headword)</span></span>\
+            <span id="\(id).001" class="se1 x_xd0"><span id="\(id).002" class="se2 x_xd1 hasSn">\
+            <span d:def="1" class="df">a meaning</span></span></span></d:entry>
+            """
+        return DictionaryEntry(
+            dictionary: DictionaryIdentity(name: "Test", identifier: "test", version: "1"),
+            headword: headword, lookedUp: headword, html: markup,
+            document: EntryDocument.parse(markup))
+    }
+
+    private static func filing(parent: String, _ definition: String) -> PhraseFiling {
+        PhraseFiling(dictionary: DictionaryIdentity(name: "Test", identifier: "test"),
+                     parentEntryID: parent, blockID: "\(parent).01", definitions: [definition])
+    }
+
+    /// The defect this replaced: one matching parent id made the **whole** answer a sub-entry, so the
+    /// dictionary that gave the phrase an entry of its own lost every sense it had.
+    @Test func anOwnEntrySurvivesAnotherDictionarysParent() {
+        let own = Self.entry("own1", headword: "zzqq wwvv")
+        let parent = Self.entry("par1", headword: "wwvv")
+        let span = PhraseSpan(phrase: "zzqq wwvv", location: 0, length: 9, separation: .none,
+                              filings: [Self.filing(parent: "par1", "what the filing says")])
+        let meaning = DictionaryBridge.meaning(of: span, answered: [own, parent],
+                                               term: [Self.entry("par1", headword: "wwvv")])
+        #expect(meaning.ownEntries.map(\.entryID) == ["own1"],
+                "the parent is not a candidate and the own entry must not go with it")
+        #expect(meaning.filings.count == 1, "and the filing is carried beside it, not instead of it")
+    }
+
+    /// With no own entry among them, nothing reaches the ladder — the parent's senses are that word's.
+    @Test func aparentAloneOffersNoCandidates() {
+        let parent = Self.entry("par1", headword: "wwvv")
+        let span = PhraseSpan(phrase: "zzqq wwvv", location: 0, length: 9, separation: .none,
+                              filings: [Self.filing(parent: "par1", "what the filing says")])
+        let meaning = DictionaryBridge.meaning(of: span, answered: [parent], term: [parent])
+        #expect(meaning.ownEntries.isEmpty)
+        #expect(meaning.filings.first?.definition == "what the filing says")
+    }
+
+    /// **The filing whose parent actually answered is drawn first.** `blow a fuse` is filed under *blow*
+    /// and under *fuse* with different meanings; before the locators were kept, the body walk's order chose
+    /// between them, which is nobody's intent.
+    @Test func thefilingWhoseParentAnsweredComesFirst() {
+        let parent = Self.entry("fuse", headword: "fuse")
+        let span = PhraseSpan(phrase: "zzqq wwvv", location: 0, length: 9, separation: .none,
+                              filings: [Self.filing(parent: "blow", "lose one's temper"),
+                                        Self.filing(parent: "fuse", "use too much power")])
+        let meaning = DictionaryBridge.meaning(of: span, answered: [parent], term: [parent])
+        #expect(meaning.filings.map(\.parentEntryID) == ["fuse", "blow"])
+        #expect(meaning.filings.count == 2, "and the other one is kept, not dropped")
     }
 }

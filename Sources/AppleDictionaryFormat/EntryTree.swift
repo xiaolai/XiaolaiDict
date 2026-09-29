@@ -227,6 +227,27 @@ public struct EntryTree: Sendable {
         return foreignPrefixes.contains(Self.conventionalPrefix) ? "" : Self.conventionalPrefix
     }
 
+    /// The `d:entry` element's own `id`, where the record declares one.
+    ///
+    /// **Matched exactly, not by suffix.** `hasSuffix("entry")` accepted `<notentry id="wrong">` and would
+    /// pick such a wrapper ahead of a genuine `d:entry`, naming the record wrongly instead of refusing it.
+    ///
+    /// **One owner, on the tree that knows the namespace.** `EntryIndexer` asked this first and
+    /// `PhraseInventory` needs the same answer for a sub-entry's parent. A namespace-sensitive match kept
+    /// in two places is one that comes to disagree in one of them, silently, on the dictionaries that
+    /// declare a foreign default namespace.
+    public func entryID() -> String? {
+        root.firstDescendant(where: isEntryElement)?.attributes["id"]
+    }
+
+    /// Whether this node is Apple's own `d:entry`, resolved against the document's own declarations.
+    public func isEntryElement(_ node: EntryNode) -> Bool {
+        if node.name == "entry" { return !hasForeignDefaultNamespace }
+        let parts = node.name.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[1] == "entry" else { return false }
+        return String(parts[0]) == applePrefix
+    }
+
     /// The tree, or nil when the record is not well-formed XML.
     public static func parse(_ xhtml: String) -> EntryTree? {
         let builder = Builder()

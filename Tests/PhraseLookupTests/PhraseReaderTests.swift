@@ -112,10 +112,54 @@ import Testing
                                     identifier: "test.fine", displayName: "Fine")
         let stocked = PhraseReader(bundles: [store], phrases: { _ in
             PhraseInventory(contentVersion: "v1", phrases: ["out of the blue", "purple passage"],
-                            meanings: ["out of the blue": "unexpectedly"])
+                            explanations: ["out of the blue": [
+                                PhraseExplanation(parentEntryID: "blue", blockID: "blue.01",
+                                                  definitions: ["unexpectedly"])]])
         }).read()
         #expect(stocked.read == ["Fine"])
         #expect(stocked.phrases == 2)
         #expect(stocked.explained == 1, "the key index contributes spellings without definitions")
+    }
+
+    /// **Two dictionaries explaining the same phrase both survive, and each says which it is.**
+    ///
+    /// They were merged `{ first, _ in first }` in `DictionaryLocator.installed()` order — by identifier,
+    /// which is nobody's preference — so one answer was discarded and the survivor was anonymous. On
+    /// 牛津粵英雙語詞典 the same first-wins rule inside one dictionary loses **70 of 647** phrases.
+    @Test func twoDictionariesExplainingOnePhraseBothSurvive() {
+        func bundle(_ identifier: String, _ name: String) -> DictionaryBundle {
+            DictionaryBundle(url: URL(fileURLWithPath: "/nonexistent/\(name).dictionary"),
+                             identifier: identifier, displayName: name)
+        }
+        let reader = PhraseReader(
+            bundles: [bundle("test.a", "A"), bundle("test.b", "B")],
+            phrases: { bundle in
+                PhraseInventory(
+                    contentVersion: "v1", phrases: ["add up"],
+                    explanations: ["add up": [PhraseExplanation(
+                        parentEntryID: bundle.identifier, blockID: "\(bundle.identifier).01",
+                        definitions: bundle.identifier == "test.a"
+                            ? ["to seem reasonable or consistent"]
+                            : ["to find the total of several numbers"])]])
+            })
+        reader.read()
+        let filings = reader.filings(of: "add up")
+        #expect(filings.count == 2, "neither dictionary's answer may be dropped")
+        #expect(filings.map(\.dictionary.name) == ["A", "B"])
+        #expect(filings.flatMap(\.definitions)
+            == ["to seem reasonable or consistent", "to find the total of several numbers"])
+    }
+
+    /// And the span the reader is standing in carries them, so the reply can attribute its own answer.
+    @Test func aspanCarriesEveryFilingOfItsPhrase() {
+        let filing = { (name: String, definition: String) in
+            PhraseFiling(dictionary: DictionaryIdentity(name: name, identifier: "test.\(name)"),
+                         parentEntryID: "p", blockID: "p.01", definitions: [definition])
+        }
+        let reader = PhraseReader(phrases: ["give up"], filings: [
+            "give up": [filing("A", "stop trying"), filing("B", "surrender")]])
+        let span = reader.phrase(in: "they give up too soon", at: NSRange(location: 5, length: 4))
+        #expect(span?.filings.count == 2)
+        #expect(span?.filings.first?.dictionary.name == "A")
     }
 }

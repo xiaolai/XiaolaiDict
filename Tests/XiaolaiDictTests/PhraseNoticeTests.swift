@@ -35,7 +35,7 @@ struct PhraseNoticeTests {
     private static func hit(_ phrase: String = "take something into account",
                             location: Int = 0, length: Int = 12,
                             separation: PhraseSeparation = .marked(2),
-                            meaning: PhraseMeaning = .ownEntry([])) -> [PhraseHit] {
+                            meaning: PhraseMeaning = PhraseMeaning()) -> [PhraseHit] {
         [PhraseHit(phrase: phrase, location: location, length: length,
                    separation: separation, meaning: meaning)]
     }
@@ -152,6 +152,13 @@ struct PhraseNoticeTests {
 
     /// **A phrase filed inside another word's entry shows its own meaning, from the body walk.**
     ///
+    /// One dictionary's filing of a phrase, as the service builds it from the body walk.
+    static func filing(_ definitions: [String], dictionary: String = "NOAD",
+                       parent: String = "m_en_gbus0005190") -> PhraseFiling {
+        PhraseFiling(dictionary: DictionaryIdentity(name: dictionary, identifier: "test.\(dictionary)"),
+                     parentEntryID: parent, blockID: "\(parent).081", definitions: definitions)
+    }
+
     /// Measured on NOAD: `take something into account` is answered with `m_en_gbus0005190`, which is
     /// `account`'s entry, and printing *that* entry's first sense would put *a report or description of an
     /// event* under the phrase — the wrong meaning under the right words. The phrase inventory reads the
@@ -159,7 +166,8 @@ struct PhraseNoticeTests {
     @Test func aPhraseFiledUnderAnotherWordShowsItsOwnMeaning() {
         let found = PhrasePresentation(
             .found(Self.hit(location: 0, length: 10,
-                            meaning: .subEntry(definition: "consider something along with other factors"))),
+                            meaning: PhraseMeaning(
+                                filings: [Self.filing(["consider something along with other factors"])]))),
             sentence: "take it into account")
         #expect(found?.definition == "consider something along with other factors")
     }
@@ -168,7 +176,7 @@ struct PhraseNoticeTests {
     /// phrase that means nothing at all.
     @Test func asubEntryWithNoMeaningShowsNone() {
         let found = PhrasePresentation(
-            .found(Self.hit(location: 0, length: 10, meaning: .subEntry(definition: ""))),
+            .found(Self.hit(location: 0, length: 10, meaning: PhraseMeaning())),
             sentence: "take it into account")
         #expect(found?.definition == nil)
     }
@@ -178,7 +186,7 @@ struct PhraseNoticeTests {
         let entry = Self.entry("an elaborate or excessively ornate passage", headword: "purple passage")
         let found = PhrasePresentation(
             .found(Self.hit("purple passage", location: 2, length: 14, separation: .none,
-                            meaning: .ownEntry([entry]))),
+                            meaning: PhraseMeaning(ownEntries: [entry]))),
             sentence: "a purple passage nobody could follow")
         #expect(found?.definition == "an elaborate or excessively ornate passage")
     }
@@ -190,9 +198,10 @@ struct PhraseNoticeTests {
         let entry = Self.entry("a report or description of an event", headword: "account")
         #expect(PhraseHit(phrase: "take something into account", location: 0, length: 10,
                           separation: .marked(2),
-                          meaning: .subEntry(definition: "consider")).entries.isEmpty)
+                          meaning: PhraseMeaning(filings: [Self.filing(["consider"])])).entries.isEmpty)
         #expect(PhraseHit(phrase: "purple passage", location: 0, length: 14,
-                          separation: .none, meaning: .ownEntry([entry])).entries.count == 1)
+                          separation: .none,
+                          meaning: PhraseMeaning(ownEntries: [entry])).entries.count == 1)
     }
 
     // MARK: - It has to reach the card

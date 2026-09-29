@@ -39,8 +39,8 @@ struct PhraseInventoryParsingTests {
     @Test func alabelWrappingItsPronunciationYieldsOnlyThePhrase() {
         let found = PhraseInventory.subEntries(in: Self.entry(Self.wrappedLabel))
         #expect(found.count == 1)
-        #expect(found.first?.0 == "kick the bucket", "got \(found.first?.0 ?? "none")")
-        #expect(found.first?.1 == "die")
+        #expect(found.first?.phrase == "kick the bucket", "got \(found.first?.phrase ?? "none")")
+        #expect(found.first?.explanation.definitions == ["die"])
     }
 
     /// **A definition cannot come from the next sub-entry.** Searching to the end of the entry gave a
@@ -54,7 +54,7 @@ struct PhraseInventoryParsingTests {
             <span class="msDict x_xo2"><span class="df">the second one's meaning</span></span></span>
             """
         let found = PhraseInventory.subEntries(in: Self.entry(markup))
-        #expect(found.map(\.0) == ["second phrase here"],
+        #expect(found.map(\.phrase) == ["second phrase here"],
                 "a sub-entry with no definition must contribute nothing, got \(found)")
     }
 
@@ -67,7 +67,7 @@ struct PhraseInventoryParsingTests {
             <span class="gp x_xoh sn ty_label">  1 </span>\
             <span class="msDict x_xo2"><span class="df">the real meaning</span></span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "the real meaning")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["the real meaning"])
     }
 
     /// Nested markup inside a definition is kept, not cut at the first closing tag.
@@ -76,7 +76,7 @@ struct PhraseInventoryParsingTests {
             <span class="subEntry x_xo1"><span class="l x_xoh">give up here </span>\
             <span class="df">move <span class="ital">away</span> quickly</span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "move away quickly")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["move away quickly"])
     }
 
     /// A definition class carrying extra tokens is still a definition. Measured at zero occurrences in NOAD
@@ -86,7 +86,7 @@ struct PhraseInventoryParsingTests {
             <span class="subEntry x_xo1"><span class="l x_xoh">give up here </span>\
             <span class="df t_core">a meaning</span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "a meaning")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["a meaning"])
     }
 
     /// **A self-closing span opens nothing.** Counting `<span/>` as an opening left the depth permanently one
@@ -97,7 +97,7 @@ struct PhraseInventoryParsingTests {
             <span class="subEntry x_xo1"><span class="l x_xoh">give up here </span>\
             <span class="df">move <span class="br"/> quickly</span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "move quickly")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["move quickly"])
     }
 
     /// **`df` in another attribute is not a class.** Whole-token matching alone accepted `<span title="df">`
@@ -109,7 +109,7 @@ struct PhraseInventoryParsingTests {
             <span title="df">not the definition</span>\
             <span class="df">the definition</span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "the definition")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["the definition"])
     }
 
     /// **The three shapes a hand-rolled scan kept getting wrong**, each found by a separate audit round and
@@ -125,7 +125,7 @@ struct PhraseInventoryParsingTests {
             <span class="subEntry x_xo1"><span class="l x_xoh">give up here </span>\
             \(noise)<span class="df">the definition</span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1 == "the definition",
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions == ["the definition"],
                 "\(name): got \(PhraseInventory.subEntries(in: Self.entry(markup)))")
     }
 
@@ -140,7 +140,7 @@ struct PhraseInventoryParsingTests {
             """
         let found = PhraseInventory.subEntries(in: Self.entry(markup))
         #expect(found.first?.0 == "a mind of one's own")
-        #expect(found.first?.1 == "independence & resolve")
+        #expect(found.first?.explanation.definitions == ["independence & resolve"])
     }
 
     /// A sub-entry nested inside another is reached through its parent, not counted twice with the inner
@@ -152,7 +152,7 @@ struct PhraseInventoryParsingTests {
             <span class="subEntry x_xo2"><span class="l x_xoh">inner phrase here </span>\
             <span class="df">the inner meaning</span></span></span>
             """
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).map(\.0) == ["outer phrase here"])
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).map(\.phrase) == ["outer phrase here"])
     }
 
     /// NOAD's own shape, from `m_en_gbus0005190.081`.
@@ -168,14 +168,15 @@ struct PhraseInventoryParsingTests {
     @Test func thePhraseAndItsMeaningAreBothRead() {
         let found = PhraseInventory.subEntries(in: Self.entry(Self.subEntry))
         #expect(found.count == 1)
-        #expect(found.first?.0 == "take something into account")
-        #expect(found.first?.1 == "consider something along with other factors before reaching a decision")
+        #expect(found.first?.phrase == "take something into account")
+        #expect(found.first?.explanation.definitions
+            == ["consider something along with other factors before reaching a decision"])
     }
 
     /// **The trailing space is removed.** The label arrives as `take something into account ` and a key with
     /// one on the end is a key that matches nothing — the whole inventory would be present and useless.
     @Test func aLabelsTrailingSpaceIsNotPartOfTheKey() {
-        #expect(PhraseInventory.subEntries(in: Self.entry(Self.subEntry)).first?.0.hasSuffix(" ") == false)
+        #expect(PhraseInventory.subEntries(in: Self.entry(Self.subEntry)).first?.phrase.hasSuffix(" ") == false)
     }
 
     /// **The class is matched as a whole token.** `class="l x_xoh"` is the real spelling; anchoring on
@@ -183,7 +184,8 @@ struct PhraseInventoryParsingTests {
     @Test(arguments: ["l x_xoh", "x_xoh", "sn x_xoh ty_label", "x_xoh sn"])
     func theLabelIsFoundWhereverItSitsInTheClassList(classes: String) {
         let markup = Self.subEntry.replacingOccurrences(of: "class=\"l x_xoh\"", with: "class=\"\(classes)\"")
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.0 == "take something into account")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.phrase
+            == "take something into account")
     }
 
     /// And **not** where it is only part of a longer name, which is how `x_xd1sub` once read as `x_xd1`.
@@ -217,13 +219,54 @@ struct PhraseInventoryParsingTests {
                 "the attribute alone must not be what this looks for")
     }
 
-    /// The first definition under a label, where a sub-entry marks several.
-    @Test func theFirstDefinitionUnderALabelIsTheMeaning() {
+    /// **Every definition under a label, in document order.** This asserted the opposite until 2026-09-29:
+    /// the walk took `firstDescendant` and the rest were dropped, which for NOAD is **2,832 definitions in
+    /// 1,698 blocks**. A phrasal verb is the common case — `give up` has five numbered senses — so the
+    /// reader was shown one of five with nothing saying so, and *never gate, always annotate* forbids
+    /// exactly that. Keeping them is also what lets a phrase card show the sense the reader met rather than
+    /// the sense that happened to be first.
+    @Test func everyDefinitionUnderALabelIsKept() {
         let markup = Self.subEntry.replacingOccurrences(
             of: "<span role=\"text\" class=\"gp tg_df\">: </span>",
             with: "<span role=\"text\" class=\"df\">a second sense</span>")
-        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.1
-            == "consider something along with other factors before reaching a decision")
+        #expect(PhraseInventory.subEntries(in: Self.entry(markup)).first?.explanation.definitions
+            == ["consider something along with other factors before reaching a decision", "a second sense"])
+    }
+
+    /// **Where the block is filed, and what it is called.** Measured 2026-09-29: **9,762 of 9,762** NOAD
+    /// sub-entry blocks carry a publisher id, and the parent is the entry document's own. The inventory
+    /// discarded both, which is why a phrase looked as though (dictionary, text) were the only identity it
+    /// could have — it was the only one the inventory *kept*.
+    @Test func anExplanationCarriesItsParentAndItsOwnIdentifier() {
+        let found = PhraseInventory.subEntries(in: Self.entry(Self.subEntry))
+        #expect(found.first?.explanation.parentEntryID == "x")
+        #expect(found.first?.explanation.blockID == "m_en_gbus0005190.081")
+    }
+
+    /// **A phrase filed under two parents keeps both filings.** NOAD files 18 labels under more than one
+    /// entry — `blow a fuse` under *blow* and under *fuse*, meaning two different things — and the first
+    /// walked won. On 牛津粵英雙語詞典 that is **70 of 647 phrases**: `add up` kept "to seem reasonable" and
+    /// discarded "to find the total of several numbers".
+    @Test func aPhraseFiledUnderTwoParentsKeepsBoth() {
+        let under = { (parent: String, definition: String) in
+            Self.entry(Self.subEntry
+                .replacingOccurrences(of: "m_en_gbus0005190.081", with: "\(parent).081")
+                .replacingOccurrences(
+                    of: "consider something along with other factors before reaching a decision",
+                    with: definition))
+            .replacingOccurrences(of: "id=\"x\"", with: "id=\"\(parent)\"")
+        }
+        var explanations: [String: [PhraseExplanation]] = [:]
+        var phrases = Set<String>()
+        for entry in [under("blow", "lose one's temper"),
+                      under("fuse", "use too much power in an electrical circuit")] {
+            PhraseInventory.accumulate(entry, into: &explanations, phrases: &phrases)
+        }
+        let found = explanations["take something into account"] ?? []
+        #expect(found.count == 2, "both filings must survive, got \(found.count)")
+        #expect(found.map(\.parentEntryID) == ["blow", "fuse"])
+        #expect(found.flatMap(\.definitions)
+            == ["lose one's temper", "use too much power in an electrical circuit"])
     }
 }
 
@@ -239,7 +282,8 @@ struct PhraseInventoryStoreTests {
         let inventory = PhraseInventory(
             contentVersion: "v1",
             phrases: ["kick the bucket", "purple passage"],
-            meanings: ["kick the bucket": "die"])
+            explanations: ["kick the bucket": [
+                PhraseExplanation(parentEntryID: "b1", blockID: "b1.01", definitions: ["die"])]])
         try store.write(inventory, for: "noad")
         #expect(try store.read("noad") == inventory)
         _ = scratch
@@ -249,10 +293,11 @@ struct PhraseInventoryStoreTests {
     /// without definitions, and a format that lost them would silently shrink the inventory to the 8% the
     /// dictionaries explain.
     @Test func aPhraseWithNoMeaningIsStillAPhrase() throws {
-        let inventory = PhraseInventory(contentVersion: "v1", phrases: ["purple passage"], meanings: [:])
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["purple passage"], explanations: [:])
         let back = try #require(PhraseInventory(decoding: inventory.encoded()))
         #expect(back.phrases == ["purple passage"])
-        #expect(back.meanings.isEmpty)
+        #expect(back.explanations.isEmpty)
     }
 
     /// An inventory written by a format this build does not read is refused, not guessed at — the same rule
@@ -268,18 +313,60 @@ struct PhraseInventoryStoreTests {
     /// does not arise is a parser nobody has tested.
     @Test func aphraseCarryingATabIsNotWritten() throws {
         let inventory = PhraseInventory(
-            contentVersion: "v1", phrases: ["kick the bucket", "bad\tphrase"], meanings: [:])
+            contentVersion: "v1", phrases: ["kick the bucket", "bad\tphrase"], explanations: [:])
         let back = try #require(PhraseInventory(decoding: inventory.encoded()))
         #expect(back.phrases == ["kick the bucket"])
     }
 
-    /// A newline inside a meaning is flattened, for the same reason.
+    /// A newline inside a definition is flattened, for the same reason.
     @Test func anewlineInAMeaningIsFlattened() throws {
         let inventory = PhraseInventory(
             contentVersion: "v1", phrases: ["kick the bucket"],
-            meanings: ["kick the bucket": "die\nor expire"])
+            explanations: ["kick the bucket": [
+                PhraseExplanation(parentEntryID: "p", blockID: "p.01",
+                                  definitions: ["die\nor expire"])]])
         let back = try #require(PhraseInventory(decoding: inventory.encoded()))
-        #expect(back.meanings["kick the bucket"] == "die or expire")
+        #expect(back.explanations["kick the bucket"]?.first?.definitions == ["die or expire"])
+    }
+
+    /// **And a tab, which the old format could tolerate and this one cannot.** A meaning was everything
+    /// after the first tab, so an embedded one survived; a definition is now its own field, and an
+    /// unflattened tab would arrive as an extra definition the dictionary never wrote.
+    @Test func atabInsideADefinitionIsFlattened() throws {
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["kick the bucket"],
+            explanations: ["kick the bucket": [
+                PhraseExplanation(parentEntryID: "p", blockID: "p.01", definitions: ["die\tor expire"])]])
+        let back = try #require(PhraseInventory(decoding: inventory.encoded()))
+        #expect(back.explanations["kick the bucket"]?.first?.definitions == ["die or expire"])
+    }
+
+    /// Every filing of a phrase, and every definition in each, survives being written and read.
+    @Test func everyFilingSurvivesTheRoundTrip() throws {
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["blow a fuse"],
+            explanations: ["blow a fuse": [
+                PhraseExplanation(parentEntryID: "blow", blockID: "blow.01",
+                                  definitions: ["lose one's temper", "a second sense"]),
+                PhraseExplanation(parentEntryID: "fuse", blockID: "fuse.09",
+                                  definitions: ["use too much power"])]])
+        #expect(PhraseInventory(decoding: inventory.encoded()) == inventory)
+    }
+
+    /// **The explanation section has its own count, and a file cut inside it is refused.** One count could
+    /// only guard the section it counted: a file whose phrase list was whole and whose explanations were
+    /// half-written matched the header and was read as current for ever.
+    @Test func afileCutInsideTheExplanationsIsRefused() throws {
+        let inventory = PhraseInventory(
+            contentVersion: "v1", phrases: ["blow a fuse", "kick the bucket"],
+            explanations: ["blow a fuse": [
+                PhraseExplanation(parentEntryID: "blow", blockID: "blow.01", definitions: ["rage"])],
+                           "kick the bucket": [
+                PhraseExplanation(parentEntryID: "kick", blockID: "kick.01", definitions: ["die"])]])
+        let whole = inventory.encoded()
+        #expect(PhraseInventory(decoding: whole) != nil, "the whole file reads")
+        let cut = whole.split(separator: "\n").dropLast().joined(separator: "\n")
+        #expect(PhraseInventory(decoding: cut) == nil, "one explanation short must be refused")
     }
 
     /// Nothing stored is nil, not an empty inventory — an empty one would be indistinguishable from a

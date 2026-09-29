@@ -128,29 +128,51 @@ public enum DictionaryBridge {
         return .found(hits)
     }
 
-    /// Whether `answered` is the phrase's own entry or the entry it is filed inside.
+    /// Which of `answered` are the phrase's **own** entries, and which of its filings explain it.
     ///
     /// **By entry id, against the entries for the phrase's own words.** A sub-entry is answered with its
     /// parent — `take something into account` returns `account`'s `m_en_gbus0005190` — and nothing in that
     /// reply says so, so it has to be asked. The words are looked up rather than the term alone because the
     /// reader may be hovering any of them: *take* in `take something into account` is not the parent, and
     /// *account* is.
+    ///
+    /// **Per entry, not per lookup.** This returned one verdict for the whole reply until 2026-09-29: the
+    /// first parent id found made *every* answered entry a sub-entry, so where one dictionary files a
+    /// phrase under a parent and another gives it an entry of its own, the second dictionary's senses —
+    /// the ones the ladder would have chosen among — were deleted from the answer. Nothing on the lookup
+    /// path may delete a candidate.
     static func meaning(of span: PhraseSpan, answered: [DictionaryEntry],
                         term: [DictionaryEntry]) -> PhraseMeaning {
-        let phrase = span.phrase
-        // The phrase's own definition, from the body walk, for a phrase whose entry belongs to another word.
-        let subEntry = PhraseMeaning.subEntry(definition: span.definition ?? "")
-        let ids = Set(answered.compactMap(\.entryID))
-        guard !ids.isEmpty else { return .ownEntry(answered) }
+        let answeredIDs = Set(answered.compactMap(\.entryID))
         // The term the reader looked up first: cheapest, and the commonest way a sub-entry is caught.
-        if term.contains(where: { $0.entryID.map(ids.contains) == true }) { return subEntry }
-        // Then the phrase's own words. A reader hovering *take* has *take*'s entries in `term`, which do not
-        // overlap; the parent is `account`, and only asking for it finds that out.
-        for word in phrase.split(separator: " ").map(String.init) where word.count > 1 {
-            guard let entries = try? entries(for: word).entries else { continue }
-            if entries.contains(where: { $0.entryID.map(ids.contains) == true }) { return subEntry }
+        var parents = Set(term.compactMap(\.entryID)).intersection(answeredIDs)
+        // Then the phrase's own words. A reader hovering *take* has *take*'s entries in `term`, which do
+        // not overlap; the parent is `account`, and only asking for it finds that out.
+        //
+        // **Stops once every answered entry is accounted for**, which is the ordinary sub-entry case after
+        // the term alone — the partition needs the whole set only while some entry might still be the
+        // phrase's own, and each of these is a lookup across every active dictionary.
+        if parents.count < answeredIDs.count {
+            for word in span.phrase.split(separator: " ").map(String.init) where word.count > 1 {
+                guard let entries = try? entries(for: word).entries else { continue }
+                parents.formUnion(Set(entries.compactMap(\.entryID)).intersection(answeredIDs))
+                if parents.count == answeredIDs.count { break }
+            }
         }
-        return .ownEntry(answered)
+        // An entry with no id cannot be shown to be a parent, so it stays the phrase's own: a phrase is
+        // refused candidates only on evidence.
+        let own = answered.filter { entry in
+            guard let id = entry.entryID else { return true }
+            return !parents.contains(id)
+        }
+        // **The filing whose parent actually answered goes first.** `blow a fuse` is filed under *blow*
+        // and under *fuse* with different meanings, and until the locators were kept there was no way to
+        // prefer either — the walk's order decided, which is the body's order and nobody's intent.
+        // A partition rather than `sorted`, which is not stable: two filings the reader's dictionaries
+        // agree about must not swap places between two identical lookups.
+        let filings = span.filings.filter { parents.contains($0.parentEntryID) }
+            + span.filings.filter { !parents.contains($0.parentEntryID) }
+        return PhraseMeaning(ownEntries: own, filings: filings)
     }
 
     /// Which words the capability probe tries, in order, until one is found in the dictionary being

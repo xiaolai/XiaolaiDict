@@ -14,21 +14,59 @@ public struct PhraseSpan: Sendable, Equatable {
     public let length: Int
     public let separation: PhraseSeparation
 
-    /// What the phrase means, where the dictionary that knows it explains it.
+    /// **Every** way the reader's dictionaries file and explain this phrase, each naming which one said it.
     ///
     /// **Carried with the span, because the finder is the only thing that has it.** A phrase filed as a
     /// sub-entry is answered by the framework with its *parent's* entry, whose senses are not the phrase's,
     /// so the definition cannot be recovered downstream — it has to travel from the body walk that read it.
-    public let definition: String?
+    ///
+    /// A list, and each entry attributed, because this was one unattributed string until 2026-09-29: every
+    /// dictionary's meanings were merged first-identifier-wins, and a block's definitions beyond the first
+    /// were dropped at the walk. Empty for a phrase from the key index, which no dictionary explains.
+    public let filings: [PhraseFiling]
 
     public init(phrase: String, location: Int, length: Int,
-                separation: PhraseSeparation, definition: String? = nil) {
+                separation: PhraseSeparation, filings: [PhraseFiling] = []) {
         self.phrase = phrase
         self.location = location
         self.length = length
         self.separation = separation
-        self.definition = definition
+        self.filings = filings
     }
+}
+
+/// One dictionary's filing of a phrase, and every definition it gives it.
+///
+/// **A wire copy of `AppleDictionaryFormat.PhraseExplanation`, plus who said it**, for the same reason
+/// `PhraseSeparation` is a copy of `PhraseSpans.Separation`: `DictionaryModel` crosses the XPC boundary and
+/// binds nothing but `XiaolaiDictBase`, while the format reader is the service's business.
+///
+/// The parent and block ids are the publisher's own — measured 2026-09-29, **9,762 of NOAD's 9,762**
+/// sub-entry blocks carry one. They say *where this definition was found*. They are **not** a sense key and
+/// must never be stored as one: the phrase inventory and the live sense path are different extractors, and
+/// a study item keyed by one of them cannot be compared with the other.
+public struct PhraseFiling: Codable, Sendable, Equatable {
+    /// Which dictionary explained it. The half that used to be discarded: every dictionary's meanings were
+    /// merged into one map in identifier order, so a card could not say whose answer it was showing.
+    public let dictionary: DictionaryIdentity
+    /// The entry the block is filed in — `account` for `take something into account`.
+    public let parentEntryID: String
+    /// The block's own publisher id, empty where the dictionary marks none.
+    public let blockID: String
+    /// Every definition in the block, in document order. `give up` has five.
+    public let definitions: [String]
+
+    public init(dictionary: DictionaryIdentity, parentEntryID: String, blockID: String,
+                definitions: [String]) {
+        self.dictionary = dictionary
+        self.parentEntryID = parentEntryID
+        self.blockID = blockID
+        self.definitions = definitions
+    }
+
+    /// The leading definition, for a surface with room for one. **A choice, not the meaning** — a caller
+    /// that can see the reader's sentence should choose better than this can.
+    public var definition: String? { definitions.first }
 }
 
 /// Whether the reader is standing inside a phrase their dictionary knows.

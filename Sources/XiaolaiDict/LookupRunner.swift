@@ -148,10 +148,10 @@ final class LookupRunner {
             guard case .found(let hits) = resolved.phrase else { return [] }
             // **Every phrase's senses, not only the leading one's.** The card draws one, and the selector
             // chooses among all of them — which is the whole point of the wire carrying more than one.
-            return hits.flatMap { hit -> [DictionaryEntry] in
-                guard case .ownEntry(let entries) = hit.meaning else { return [] }
-                return entries
-            }
+            // A hit's own entries, which is empty for a phrase filed inside another word's. **Per entry
+            // now, not per hit**: a phrase with its own entry in one dictionary and a filing in another
+            // used to contribute nothing at all.
+            return hits.flatMap(\.entries)
         }()
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.

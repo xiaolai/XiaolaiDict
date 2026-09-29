@@ -92,10 +92,18 @@ import Testing
         print("IP \(found.map { "\($0.phrase) | \($0.separation)" } ?? "NO MATCH")")
         #expect(found?.phrase == "take something into account")
         #expect(found?.separation == .marked(9))
-        // The half no index and no parser change was needed for.
-        let meaning = reader.meaning(of: "take something into account")
-        print("IP meaning: \(meaning ?? "«none»")")
-        #expect(meaning?.contains("consider") == true, "got \(meaning ?? "nil")")
+        // The half no index and no parser change was needed for — and now attributed, and whole.
+        let filings = reader.filings(of: "take something into account")
+        for filing in filings {
+            print("IP \(filing.dictionary.name) \(filing.parentEntryID)/\(filing.blockID): "
+                + filing.definitions.joined(separator: " · "))
+        }
+        #expect(filings.contains { $0.definition?.contains("consider") == true },
+                "got \(filings.map(\.definitions))")
+        // **Each filing names its dictionary and where it was found.** Both were discarded before
+        // 2026-09-29: every dictionary's meanings were merged into one unattributed map.
+        #expect(filings.allSatisfy { !$0.dictionary.name.isEmpty && !$0.parentEntryID.isEmpty },
+                "a filing must say who said it and where it sits")
 
         // A key-index phrase, which the body walk is not needed for, must still be found.
         let plain = "the review was full of purple passage nobody could follow"
