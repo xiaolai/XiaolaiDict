@@ -49,6 +49,12 @@ enum PanelReport {
     /// `nonisolated` because the thread that waits it out is not the main one — deliberately, since
     /// `NSMenu.popUp` blocks the main thread for the whole of tracking.
     nonisolated static let menuSettling: Duration = .milliseconds(400)
+    /// How long a menu may stay up before tracking is cancelled from under it.
+    ///
+    /// **Not a settling time — a way out.** Nothing else in this instrument can end menu tracking:
+    /// `popUp` holds the main thread, so `withDeadline` cannot fire. Generous against
+    /// `menuSettling`, so a slow but working click is never cut off.
+    static let menuTrackingBound: Duration = .seconds(8)
     /// How long the panel is given to stop resizing before its height is read. Long enough for the
     /// dictionaries, the memory strip and the sense to have arrived and grown it.
     static let contentSettling: Duration = .seconds(15)
@@ -121,7 +127,7 @@ enum PanelReport {
         // before the dictionaries are asked, then grown as the entry, the memory strip and the sense
         // arrive — so a height read the moment it is listed is the height of "Looking up…". Measured
         // here at 73 pt against a card that ends up several times that.
-        let settled = await restingHeight(of: window, in: app)
+        let (settled, movement) = await restingHeight(of: window, in: app)
 
         // **What this window is.** The whole first question, and it is one read.
         let identity: [String: Any] = [
@@ -157,6 +163,8 @@ enum PanelReport {
             // a view built for the purpose.
             "windowHeight": window.frame.height,
             "windowSettled": settled,
+            // Empty when it settled. What it did otherwise, so the failure can be read from here.
+            "windowMovement": movement,
             "openingHeight": PanelWindow.openingHeight,
             // What the fit was computed from. A window of the wrong height and a window asked for the
             // wrong height look identical from outside, and they have different causes.
@@ -252,14 +260,47 @@ enum PanelReport {
             Thread.sleep(forTimeInterval: wait)
             posted.withLock { $0 = Self.postClick(atFlipped: target) }
         }
+        // **The one deadline in this file that cannot be a deadline.** `popUp` blocks the main
+        // thread for the whole of tracking, so the report's own `withDeadline` — which needs the
+        // main actor to run — can never fire while a menu is up. Measured on a Mac with no
+        // Accessibility grant: the dismissing click was refused, tracking never ended, and the
+        // instrument sat there for as long as it was left, writing nothing. No report, no failure,
+        // no exit: the worst of the three.
+        //
+        // A timer instead, in `.common` modes, which is what menu tracking pumps. It runs *during*
+        // tracking and ends it whatever happened to the click.
+        //
+        // A delayed `perform` rather than a `Timer` with a closure: an `NSMenu` cannot be sent into
+        // a `@Sendable` block, and the selector form needs no capture at all.
+        let bail = MenuBail(menu: menu)
+        bail.perform(#selector(MenuBail.cancel), with: nil,
+                     afterDelay: menuTrackingBound.milliseconds / 1000, inModes: [.common])
         // The return value is kept: `popUp` answers whether it tracked at all, and a menu that
         // never came up would otherwise put the posted click onto whatever is at that corner of the
         // screen — a stray click reported as a measurement.
         let tracked = menu.popUp(positioning: nil, at: anchor, in: nil)
+        MenuBail.cancelPreviousPerformRequests(withTarget: bail,
+                                               selector: #selector(MenuBail.cancel), object: nil)
 
         // After tracking ends. The panel's state is the observable consequence of whether the
         // click-away monitors saw a mouse-down they were not offered before.
         let survived = panelStillUp()
+        // **A menu this cancelled measured nothing.** The click never landed, so whether the panel
+        // is still up says nothing about the click-away monitors — and reporting it as a finding
+        // would be reporting the absence of a permission as a fact about the surface.
+        guard !bail.didFire else {
+            return [
+                "measured": false,
+                // **What was observed, not a cause.** The first draft of this said the click
+                // "needs Accessibility" — and the report's own `clickPosted` beside it said the
+                // click was posted. An instrument that names a cause its own data contradicts is
+                // worse than one that names none.
+                "problem": "the menu was still up after \(menuTrackingBound) and tracking had to "
+                    + "be cancelled; see clickPosted for whether the dismissing click was posted",
+                "clickPosted": posted.withLock { $0 },
+                "menuTracked": tracked,
+            ]
+        }
         return [
             "measured": true,
             // Which kind of menu this was. A SwiftUI `Menu` is presented by an `NSMenu`, but it is
@@ -279,23 +320,49 @@ enum PanelReport {
     ///
     /// **False is a real answer**: a panel still growing when the deadline passes has not settled, and
     /// the height beside it is a snapshot of a moving thing rather than what the reader ends up with.
-    private static func restingHeight(of window: NSWindow, in app: XiaolaiDictApp) async -> Bool {
+    private static func restingHeight(of window: NSWindow, in app: XiaolaiDictApp)
+        async -> (settled: Bool, movement: String) {
         // **The answer first, then the stillness.** Waiting for the frame to hold still alone settles
         // on the waiting state, which is stable and short — 73 points of "Looking up…", measured.
         guard await Instrument.settle(until: contentSettling, {
             app.panelModel.content?.hasAnswered == true
-        }) else { return false }
+        }) else { return (false, "the card never answered") }
         var last = window.frame.height
         var still = 0
+        // **What it did, not just that it would not stop.** "Still resizing after 271 pt" cannot be
+        // diagnosed from another machine: a window creeping by two points and one oscillating
+        // between two sizes are different defects and read identically. The distinct heights it
+        // took, in order, are what tells them apart.
+        var seen: [CGFloat] = [last]
+        // **And what the fit was asking for while it moved.** A window chasing a target that keeps
+        // changing and a window failing to reach a fixed target are different defects, and the
+        // heights alone cannot tell them apart: one is the content, the other is the arithmetic.
+        var fits: [String] = []
         let steps = Int(contentSettling.milliseconds / 50)
         for _ in 0..<steps {
             try? await Task.sleep(for: .milliseconds(50))
             let now = window.frame.height
+            if abs(now - last) >= 1 {
+                seen.append(now)
+                if let fit = app.panelController.lastFit {
+                    let pair = "\(Int(fit.wanted))/\(Int(fit.given))"
+                    if fits.last != pair { fits.append(pair) }
+                }
+            }
             still = abs(now - last) < 1 ? still + 1 : 0
             last = now
-            if still >= 6 { return true }
+            if still >= 6 { return (true, "") }
         }
-        return false
+        // Bounded: a window that changed three hundred times needs the shape, not the log.
+        let shown = seen.count <= 12
+            ? seen.map { "\(Int($0))" }.joined(separator: "→")
+            : seen.prefix(6).map { "\(Int($0))" }.joined(separator: "→")
+                + " … " + seen.suffix(4).map { "\(Int($0))" }.joined(separator: "→")
+        let wantedGiven = fits.count <= 8
+            ? fits.joined(separator: " ")
+            : fits.prefix(4).joined(separator: " ") + " … " + fits.suffix(4).joined(separator: " ")
+        return (false, "\(seen.count) distinct heights in \(contentSettling): \(shown); "
+                + "wanted/given: \(wantedGiven)")
     }
 
     /// The frontmost application's bundle identifier, or its name where it has none.
@@ -346,6 +413,27 @@ enum PanelReport {
 private final class MenuSentinel: NSObject {
     private(set) var wasChosen = false
     @objc func chosen() { wasChosen = true }
+}
+
+/// **Ends menu tracking when nothing else can.** `NSMenu.popUp` holds the main thread, so no
+/// deadline the instrument sets for itself can fire while a menu is up; a delayed `perform` in
+/// `.common` modes runs inside the tracking loop and is the one thing that reaches it.
+///
+/// `didFire` is what stops a cancelled menu being read as a measurement.
+@MainActor
+private final class MenuBail: NSObject {
+    private let menu: NSMenu
+    private(set) var didFire = false
+
+    init(menu: NSMenu) {
+        self.menu = menu
+        super.init()
+    }
+
+    @objc func cancel() {
+        didFire = true
+        menu.cancelTracking()
+    }
 }
 
 extension CGMouseButton {

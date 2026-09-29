@@ -116,8 +116,22 @@ private struct FitsItsContent: ViewModifier {
     /// the lookup panel, which is the surface `--panel-report` measures.
     var report: ((CGFloat, CGFloat) -> Void)?
     @State private var window: NSWindow?
-    @State private var wanted: CGFloat = 0
-    @State private var given: CGFloat = 0
+    /// **The newest fit, in a box, and one move in flight at a time.**
+    ///
+    /// A value in `@State` is a snapshot: the closure handed to `DispatchQueue.main.async` carries
+    /// the numbers from the body evaluation that made it, not the numbers as they are when it runs.
+    /// Several changes arrive before any block runs, so each applied a delta computed before the
+    /// previous one had landed — **the same shortfall applied twice**, which overshoots past the
+    /// target and makes the next fit overshoot back.
+    ///
+    /// Measured on the lookup panel, 2026-09-30: a card wanting a steady 242 points drove the
+    /// window between 404 and 120 for as long as it was up — 257 distinct heights in 15 seconds,
+    /// `given` alternating 384 and 100, exactly two deltas of 142 where one was due. The fit
+    /// arithmetic was never wrong; `theFitIsAFixedPoint` holds `wanted` constant and passes, and a
+    /// fixed point is not reached by applying the step twice.
+    ///
+    /// A reference type because it must outlive a body evaluation and be read at application time.
+    @State private var fit = PendingFit()
 
     func body(content: Content) -> some View {
         content
@@ -128,31 +142,53 @@ private struct FitsItsContent: ViewModifier {
                     wanted: geometry.contentSize.height + geometry.contentInsets.top
                         + geometry.contentInsets.bottom,
                     given: geometry.containerSize.height)
-            } action: { _, fit in
-                wanted = fit.wanted
-                given = fit.given
-                report?(fit.wanted, fit.given)
+            } action: { _, latest in
+                report?(latest.wanted, latest.given)
+                fit.wanted = latest.wanted
+                fit.given = latest.given
+                apply()
             }
             .background(WindowReader { window = $0 })
-            .onChange(of: ContentFit(wanted: wanted, given: given), initial: true) { _, fit in
-                guard let window, let delta = SettingsWindowFit.shortfall(
-                    wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
-                // Outside the layout pass this runs in: resizing a window from inside one
-                // re-enters layout until AppKit gives up, which is measured in this file's own
-                // history.
-                DispatchQueue.main.async {
-                    SettingsWindowFit.move(
-                        window, by: delta, width: width,
-                        lowestBottom: window.screen?.visibleFrame.minY,
-                        animated: animates && window.isVisible, recentres: recentres)
-                }
-            }
+            .onAppear { apply() }
+    }
+
+    /// Moves the window to the newest fit, once per runloop turn.
+    ///
+    /// Nothing is lost by coalescing: the box holds the latest numbers, so a change that arrives
+    /// while a move is pending is the one that move will read. And the move itself changes what
+    /// the content is given, which brings the next fit — so a settled window simply computes a
+    /// delta of nothing and stops.
+    private func apply() {
+        guard let window, !fit.scheduled else { return }
+        fit.scheduled = true
+        // Outside the layout pass this runs in: resizing a window from inside one re-enters layout
+        // until AppKit gives up, which is measured in this file's own history.
+        DispatchQueue.main.async {
+            fit.scheduled = false
+            guard let delta = SettingsWindowFit.shortfall(
+                wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
+            SettingsWindowFit.move(
+                window, by: delta, width: width,
+                lowestBottom: window.screen?.visibleFrame.minY,
+                animated: animates && window.isVisible, recentres: recentres)
+        }
     }
 
     private struct ContentFit: Equatable {
         let wanted: CGFloat
         let given: CGFloat
     }
+}
+
+/// The newest numbers the fit was computed from, and whether a move is already on its way.
+///
+/// **A class on purpose.** The point is to be read when the move runs rather than when it was
+/// scheduled; a struct in `@State` is copied into the closure and defeats that entirely.
+@MainActor
+private final class PendingFit {
+    var wanted: CGFloat = 0
+    var given: CGFloat = 0
+    var scheduled = false
 }
 
 extension View {

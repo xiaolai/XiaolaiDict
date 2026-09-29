@@ -126,6 +126,25 @@ for started, kind, block in blocks:
         sys.exit(f"the {kind} block at line {started}, line {error.lineno} of it: {error.msg}"
                  f"\n    {(error.text or '').rstrip()}")
 print(f"{dashC} `python3 -c` and {heredocs} heredoc Python block(s) compile")
+
+# **A report assignment must not be able to end the run.** `x=$(f)` takes f's exit status, and
+# `set -e` acts on it — so a report that came back malformed killed the script before the `flunk`
+# written for that very case could run, and the stage recorded a line number in another stage's
+# heredoc. Every one of these had a guarded failure path that was unreachable; this is what keeps
+# the fourth call site from being written the same way.
+unguarded = [
+    (number, line.strip())
+    for number, line in enumerate(lines, 1)
+    if re.search(r"=\$\((run_report|history_report|settings_report)\b", line)
+    and not line.rstrip().endswith("|| true")
+    and not isComment(line)
+]
+if unguarded:
+    sys.exit("a report assignment under `set -e` can end the run; write `|| true`:\n    "
+             + "\n    ".join(f"line {n}: {t}" for n, t in unguarded))
+# The scan must be able to see one. A spelling nobody matches guards nothing.
+if not [line for line in lines if re.search(r"=\$\((run_report|history_report|settings_report)\b", line)]:
+    sys.exit("no report assignment was found, so that guard covers nothing")
 GUARD
 
 checked=0
@@ -556,6 +575,12 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     # Nothing is printed and the status is non-zero when the report is not JSON, so every caller's
     # existing empty check now covers a malformed report too. The reason stays in `$err`, which is
     # what each caller tails into its failure message.
+    #
+    # **Every caller must write `x=$(run_report …) || true`.** Under `set -e` a bare assignment
+    # takes the substitution's status, so returning 1 here ended the *run* instead of reaching the
+    # `flunk` each caller had already written for exactly this case — measured: the panel stage
+    # produced no output at all, and the record read "the script stopped at line 1701", a line in
+    # another stage's heredoc. The guard below checks the spelling at every call site.
     if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
         return 1
     fi
@@ -1011,7 +1036,7 @@ keep_stripes() {
 }
 # Frosted first, set explicitly: a machine left on Clear would otherwise flip the comparison below.
 defaults write com.xiaolaidict DrawerGlass frosted
-drawer=$(history_report)
+drawer=$(history_report) || true
 keep_stripes frosted
 if ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
     flunk "drawer: --history-report did not report ($(head -c 160 $reports/history-report.err 2>/dev/null))"
@@ -1070,7 +1095,7 @@ else
     # a third of that, far above the zero an unwired setting would give. The stripes' colour is
     # reported alongside, and both stripes images are kept beside the report's own.
     defaults write com.xiaolaidict DrawerGlass clear
-    clear_report=$(history_report)
+    clear_report=$(history_report) || true
     keep_stripes clear
     # The machine's own setting is not the test's to keep.
     restore_glass
@@ -1590,17 +1615,36 @@ else
         if [ "$pressed" != yes ]; then
             flunk "setup: Not now could not be clicked — $why ($(board_state))"
         else
+            # **What Not now changes in the row itself**, which holds on any machine: the button
+            # goes, because it is drawn only while the reader has not answered, and Download stays,
+            # because the model is still one click away. Waited for the button's *absence*, since
+            # that is the state being asserted.
             declined_shown=""
             for _ in $(seq 1 25); do
                 declined_shown=$("$helpers/panel" com.xiaolaidict)
-                printf '%s' "$declined_shown" | grep -q "still one click away" && break
+                printf '%s' "$declined_shown" | grep -q "Not now" || break
                 sleep 0.2
             done
-            if printf '%s' "$declined_shown" | grep -q "still one click away" \
-                && printf '%s' "$declined_shown" | grep -q "Download"; then
-                pass "setup: Not now is wired — the row stops waiting on the reader and keeps the download one click away"
+            if printf '%s' "$declined_shown" | grep -q "Not now"; then
+                flunk "setup: Not now is still offered after it was pressed — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
+            elif ! printf '%s' "$declined_shown" | grep -q "Download"; then
+                flunk "setup: Not now took the download away — it is supposed to stay one click away ($(printf '%s' "$declined_shown" | head -c 200))"
             else
-                flunk "setup: Not now changed nothing the reader can see — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
+                pass "setup: Not now is wired — the row stops asking and keeps the download one click away"
+            fi
+            # **The summary sentence, only where it can be reached.** It is drawn when *nothing
+            # else* is outstanding, so a machine still missing a permission never shows it — and
+            # asserting it there reported a wiring defect that did not exist. This stage ran on
+            # such a machine and said "Not now changed nothing", which was false and cost an
+            # afternoon.
+            if printf '%s' "$declined_shown" | grep -q "Nothing is waiting on you"; then
+                if printf '%s' "$declined_shown" | grep -q "still one click away"; then
+                    pass "setup: with nothing else outstanding, the summary says the model is still one click away"
+                else
+                    flunk "setup: nothing is waiting on the reader, but the summary does not say the model is still available"
+                fi
+            else
+                echo "NOTE  setup: the board still has other things outstanding, so the declined summary is not reachable here"
             fi
             restore_declined
         fi
@@ -1650,7 +1694,7 @@ if want scenes; then
 # window was ever seen part-way, which is what `stepsInBiggestChange` counts.
 # 90 s: opening, the dictionary probe, and six pane changes of at most about 4 s each.
 settings_report() { run_report --settings-report 90; }
-report=$(settings_report)
+report=$(settings_report) || true
 if [ -z "$report" ]; then
     flunk "settings: --settings-report printed nothing ($(head -c 160 $reports/settings-report.err 2>/dev/null))"
 else
@@ -1911,7 +1955,7 @@ if want panel; then
 #     stage's colour. A probe that failed on a discovery would be a stage that fails for telling us
 #     something.
 # 90 s: a cold process pays for the XPC service starting before the first lookup answers.
-report=$(run_report --panel-report 90)
+report=$(run_report --panel-report 90) || true
 if [ -z "$report" ]; then
     flunk "panel: --panel-report printed nothing ($(head -c 160 $reports/panel-report.err 2>/dev/null))"
 else
@@ -1959,7 +2003,8 @@ else:
     # actually having happened rather than the default happening to be right).
     say(w["windowSettled"],
         f"panel: the window came to rest at {w['windowHeight']:g} pt",
-        f"panel: the window was still resizing after {w['windowHeight']:g} pt — the height below means nothing")
+        f"panel: the window was still resizing after {w['windowHeight']:g} pt — the height below "
+        f"means nothing ({w.get('windowMovement', 'no movement recorded')})")
     say(w["windowHeight"] <= w["heightCeiling"],
         f"panel: the window is within the cap ({w['windowHeight']:g} of {w['heightCeiling']:g} pt)",
         f"panel: the window is {w['windowHeight']:g} pt against a ceiling of {w['heightCeiling']:g} — it grew past what its content is clipped to")
