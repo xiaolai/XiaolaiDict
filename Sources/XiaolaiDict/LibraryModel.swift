@@ -89,21 +89,22 @@ final class LibraryModel {
             return apply { store in for id in ids { try await store.confirm(noteID: id, at: when) } }
         case .tag(let text):
             let ids = Array(selection), trimmed = text
-            return apply { store in for id in ids { try await store.tag(noteID: id, trimmed) } }
+            return apply(keepingSelection: true) { store in
+                for id in ids { try await store.tag(noteID: id, trimmed) }
+            }
+        case .untag(let text):
+            guard let id = selection.first, selection.count == 1 else { return }
+            return apply(keepingSelection: true) { try await $0.untag(noteID: id, text) }
+        case .unignore(let lemma, let language):
+            return apply { try await $0.unignoreSuggestion(lemma: lemma, language: language) }
         case .setAnswer(let text):
             // **Exactly the row the inspector is showing**, which is the only row there is: the
-            // pane is absent unless the selection is one. Written and the selection kept, because
-            // the reader is still looking at it — `apply` clears, so this does not use it.
+            // pane is absent unless the selection is one.
             guard let id = selection.first, selection.count == 1 else { return }
             let when = clock()
-            guard let opening = store() else { return }
-            Task {
-                if let ledger = try? await opening.value {
-                    try? await ledger.setReaderAnswer(text, of: id, at: when)
-                }
-                await reload()
+            return apply(keepingSelection: true) {
+                try await $0.setReaderAnswer(text, of: id, at: when)
             }
-            return
         case .export:
             Task { await export() }
             return
@@ -178,6 +179,20 @@ final class LibraryModel {
                 ? try await ledger.suggestions(limit: Self.suggestionCount, language: nil,
                                                studying: scripts)
                 : []
+            // Beside the suggestions, and only there: setting a word aside enrols nothing, so
+            // this list is the only place the declaration is visible — and the only place it can
+            // be taken back.
+            let setAside = filter == .suggested ? try await ledger.ignoredSuggestions() : []
+            // **One row, or none**, so a history is read for the row the reader opened and not
+            // for two hundred of them on every keystroke of the search field.
+            let open = selection.count == 1 ? selection.first : nil
+            var timeline: NoteTimeline?
+            var tags: [String] = []
+            if let open {
+                timeline = try await ledger.timeline(of: open)
+                tags = try await ledger.tags(of: open)
+            }
+            let measured = try await ledger.retention(dictionary: nil)
             presentation = LibraryPresentation(
                 rows: rows.map { Self.row($0, answer: answers[$0.id]?.text ?? "", at: now) },
                 total: total, search: search, filter: filter, scriptFiltered: scriptFiltered,
@@ -203,9 +218,15 @@ final class LibraryModel {
                     !selection.contains($0.id) || $0.note.enrollment == .archived
                 },
                 undoable: undoable?.presentable,
+                setAside: setAside,
+                // **Nil over an empty denominator.** A rate nobody has is not 0%.
+                retention: LibraryPresentation.Retention(
+                    attempts: measured.attempts, successes: measured.successes,
+                    cards: measured.cards),
                 // **One row, or none.** An inspector over several would have to choose which one
                 // an edit reaches, and the reader cannot see which it chose.
-                inspector: Self.inspector(of: rows, selection: selection, answers: answers))
+                inspector: Self.inspector(of: rows, selection: selection, answers: answers,
+                                          tags: tags, timeline: timeline))
         } catch {
             // **Said, not swallowed.** An empty list and a list that could not be read are the same
             // screen otherwise, and the reader is owed the difference.
@@ -217,12 +238,17 @@ final class LibraryModel {
 
     /// A change that cannot be put back. **Retires the undo**, because a button offering to
     /// reverse something older than the reader's last action is one they will press by mistake.
-    private func apply(_ change: @escaping @Sendable (LedgerStore) async throws -> Void) {
+    ///
+    /// `keepingSelection` is for changes the reader makes *to* the open row rather than to a set
+    /// of rows: clearing after one would close the inspector they are working in, which reads as
+    /// the edit having thrown them out.
+    private func apply(keepingSelection: Bool = false,
+                       _ change: @escaping @Sendable (LedgerStore) async throws -> Void) {
         undoable = nil
         guard let opening = store() else { return }
         Task {
             if let ledger = try? await opening.value { try? await change(ledger) }
-            selection = []
+            if !keepingSelection { selection = [] }
             await reload()
         }
     }
@@ -299,13 +325,24 @@ final class LibraryModel {
     /// edits and the answer the row reveals have to be the same string, and two queries are two
     /// chances for them not to be.
     static func inspector(of rows: [LibraryRow], selection: Set<UUID>,
-                          answers: [UUID: StudyAnswer]) -> LibraryPresentation.Inspector? {
+                          answers: [UUID: StudyAnswer], tags: [String],
+                          timeline: NoteTimeline?) -> LibraryPresentation.Inspector? {
         guard selection.count == 1, let id = selection.first,
               let row = rows.first(where: { $0.id == id }) else { return nil }
         let answer = answers[id]
         return LibraryPresentation.Inspector(
             id: id, word: row.word, answer: answer?.text ?? "",
-            isReaders: answer?.origin == .reader)
+            isReaders: answer?.origin == .reader,
+            tags: tags,
+            readings: (timeline?.readings ?? []).map {
+                LibraryPresentation.ReadingMark(id: $0.id, at: $0.at, sentence: $0.sentence,
+                                                source: $0.place.name)
+            },
+            reviews: (timeline?.reviews ?? []).map {
+                LibraryPresentation.ReviewMark(id: $0.id, at: $0.reviewedAt, grade: $0.grade,
+                                               isPractice: $0.kind == .practice,
+                                               isVoided: $0.voidedAt != nil)
+            })
     }
 
     /// Why a card is not being asked, or nil when it simply is.

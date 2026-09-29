@@ -308,6 +308,28 @@ extension Ledger {
         }
     }
 
+    // MARK: - The audit trail (M05)
+
+    /// Everything that happened to one note, **with the two kinds kept apart**.
+    ///
+    /// A reading is something the reader did with a text; a review is something they did with a
+    /// card. One merged sequence invites reading a grade as evidence about the sentence beside it,
+    /// so the two are never interleaved — M05's acceptance rule, in the type.
+    public func timeline(of noteID: UUID) throws -> NoteTimeline {
+        let lookups = try lookupIDs(evidencing: noteID)
+        let readings: [ReadingEntry] = try lookups.compactMap { try reading(ofLookup: $0) }
+        let ordered = readings.sorted { $0.at > $1.at }
+        // **Every card of the note**, and only the ones that exist: `card(of:)` creates, and a
+        // surface that reads a history must not bring one into being by looking at it.
+        var reviews: [ReviewEvent] = []
+        for prompt in StudyCard.Prompt.allCases {
+            guard let card = try existingCard(of: noteID, prompt: prompt) else { continue }
+            reviews.append(contentsOf: try self.reviews(ofCard: card.id))
+        }
+        return NoteTimeline(readings: ordered,
+                            reviews: reviews.sorted { $0.reviewedAt > $1.reviewedAt })
+    }
+
     // MARK: - Putting a bulk action back (M04)
 
     /// Which of these notes' cards are paused, **card by card**.
@@ -446,5 +468,20 @@ extension Ledger {
             try? execute("RELEASE \(name)")
             throw error
         }
+    }
+}
+
+
+/// One note's history, **in two lists that are never merged** (M05).
+public struct NoteTimeline: Sendable, Equatable {
+    /// Where the reader met it, newest first.
+    public let readings: [ReadingEntry]
+    /// What they did with the card, newest first. **Practice and voided attempts are present**:
+    /// this is the audit trail, and a trail that hides what was taken back is not one.
+    public let reviews: [ReviewEvent]
+
+    public init(readings: [ReadingEntry], reviews: [ReviewEvent]) {
+        self.readings = readings
+        self.reviews = reviews
     }
 }

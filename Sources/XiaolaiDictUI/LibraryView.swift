@@ -95,12 +95,91 @@ public struct LibraryView: View {
                     .buttonStyle(.link)
                     .font(.system(size: scale.text.micro))
             }
+            if !inspector.tags.isEmpty {
+                HStack(spacing: scale.space.inline) {
+                    ForEach(inspector.tags, id: \.self) { tag in
+                        // **Readable and removable.** A label the reader can add and never take
+                        // off is a worse state than having no labels.
+                        Button { act(.untag(tag)) } label: {
+                            Text(verbatim: tag)
+                                .font(.system(size: scale.text.micro))
+                        }
+                        .buttonStyle(.bordered)
+                        .help(Text("Remove this tag"))
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            timeline(inspector)
         }
         .padding(scale.space.padAcross)
         // **Reset when the row changes, never carried.** A draft left over from the previous
         // selection would be saved onto this word the moment the reader pressed the button.
         .onChange(of: inspector.id, initial: true) { draft = inspector.answer }
         .onChange(of: inspector.answer) { draft = inspector.answer }
+    }
+
+    /// **Where it was met, and what was done with the card — in two lists** (M05).
+    ///
+    /// Never interleaved. A reading is something the reader did with a text and a review is
+    /// something they did with a card; one sequence invites reading a grade as evidence about the
+    /// sentence beside it.
+    @ViewBuilder
+    private func timeline(_ inspector: LibraryPresentation.Inspector) -> some View {
+        HStack(alignment: .top, spacing: scale.space.column) {
+            VStack(alignment: .leading, spacing: scale.space.tight) {
+                Text("Where you met it")
+                    .font(.system(size: scale.text.micro, weight: .medium))
+                    .foregroundStyle(.secondary)
+                ForEach(inspector.readings) { reading in
+                    HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                        Text(reading.at, format: .dateTime.year().month().day())
+                            .font(.system(size: scale.text.micro))
+                            .foregroundStyle(.tertiary)
+                        Text(verbatim: reading.sentence)
+                            .font(.system(size: scale.text.micro))
+                            .lineLimit(Token.Limit.wrapLines)
+                        if let source = reading.source {
+                            Text(verbatim: source)
+                                .font(.system(size: scale.text.micro))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: scale.space.tight) {
+                Text("What you answered")
+                    .font(.system(size: scale.text.micro, weight: .medium))
+                    .foregroundStyle(.secondary)
+                if inspector.reviews.isEmpty {
+                    Text("Not reviewed yet.")
+                        .font(.system(size: scale.text.micro))
+                        .foregroundStyle(.tertiary)
+                }
+                ForEach(inspector.reviews) { review in
+                    HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                        Text(review.at, format: .dateTime.year().month().day())
+                            .font(.system(size: scale.text.micro))
+                            .foregroundStyle(.tertiary)
+                        Text(review.grade.readerName)
+                            .font(.system(size: scale.text.micro))
+                        // **Said, not filtered out**: practice moved nothing, and an undone
+                        // attempt is still part of the trail.
+                        if review.isPractice {
+                            Text("practice")
+                                .font(.system(size: scale.text.micro))
+                                .foregroundStyle(.tertiary)
+                        }
+                        if review.isVoided {
+                            Text("taken back")
+                                .font(.system(size: scale.text.micro))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
     }
 
     /// Saveable when there is something to save: not blank, and not what is already stored.
@@ -184,6 +263,35 @@ public struct LibraryView: View {
             }
             .listStyle(.inset)
         }
+        setAside
+    }
+
+    /// **What the reader set aside, and the way back.** Setting a word aside enrols nothing, so
+    /// there is no library row to find it by — without this list "already know" is a declaration
+    /// that cannot be seen and therefore cannot be taken back.
+    @ViewBuilder
+    private var setAside: some View {
+        if !state.setAside.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: scale.space.tight) {
+                Text("Words you already know")
+                    .font(.system(size: scale.text.micro, weight: .medium))
+                    .foregroundStyle(.secondary)
+                ForEach(state.setAside) { lemma in
+                    HStack(spacing: scale.space.inline) {
+                        Text(verbatim: lemma.lemma)
+                            .font(.system(size: scale.text.small))
+                        Spacer(minLength: 0)
+                        Button("Offer it again") {
+                            act(.unignore(lemma: lemma.lemma, language: lemma.language))
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: scale.text.micro))
+                    }
+                }
+            }
+            .padding(scale.space.padAcross)
+        }
     }
 
     @ViewBuilder
@@ -221,6 +329,14 @@ public struct LibraryView: View {
                  : "\(state.selection.count) selected")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
+            // **The denominator, always beside the rate** (U03). A percentage on its own is the
+            // one figure here nobody can check afterwards, and absent is what it is when there
+            // has been nothing eligible to measure.
+            if let retention = state.retention {
+                Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: 0)
             if !state.selection.isEmpty {
                 if state.canConfirm {
@@ -268,6 +384,22 @@ public struct LibraryView: View {
                 .padding(.horizontal, scale.space.padAcross)
                 .padding(.bottom, scale.space.line)
         }
+        }
+    }
+}
+
+/// **The words the reader actually pressed.**
+///
+/// The review surface offers two: *Forgot* and *Remembered*. A trail that reported "again" and
+/// "good" would be showing someone the scheduler's vocabulary, which they have never seen. The
+/// other two are named plainly against the day they are offered.
+extension Grade {
+    var readerName: LocalizedStringKey {
+        switch self {
+        case .again: "Forgot"
+        case .hard: "Hard"
+        case .good: "Remembered"
+        case .easy: "Easy"
         }
     }
 }
@@ -346,6 +478,12 @@ public enum LibraryAction: Sendable, Equatable {
     /// **The reader's own words, for the one row they have open.** Replaces what the card reveals
     /// and leaves the encounter's snapshot alone — the dictionary said what it said.
     case setAnswer(String)
+    /// Take a tag off the open row. **The reverse of `tag`**, which existed alone: a label the
+    /// reader could add and never remove.
+    case untag(String)
+    /// Offer a set-aside word again. "Already know" is a declaration, and a declaration the reader
+    /// cannot take back is a trap rather than a preference.
+    case unignore(lemma: String, language: String)
     /// Write the collection out. What may leave is decided in `StudyExport`, not here.
     case export
     /// Take up a suggestion, or refuse it. Both are the reader's declaration and both are
@@ -379,6 +517,10 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let selectionIsArchived: Bool
     /// The last bulk action, while it can still be put back.
     public let undoable: Undoable?
+    /// What the reader has set aside. Read under the `suggested` filter, beside the suggestions.
+    public let setAside: [IgnoredLemma]
+    /// Delayed recall, **with its denominator**, or nil when nothing has been eligible yet.
+    public let retention: Retention?
     /// The one row the reader has open, when exactly one is selected. **Nil for none and for
     /// several**: an inspector over a multiple selection has to choose a row to edit and the reader
     /// cannot see which one it chose.
@@ -395,7 +537,8 @@ public struct LibraryPresentation: Sendable, Equatable {
                 hasMore: Bool = false, canConfirm: Bool = false,
                 suggestions: [Suggestion] = [], exported: String? = nil,
                 selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
-                undoable: Undoable? = nil,
+                undoable: Undoable? = nil, setAside: [IgnoredLemma] = [],
+                retention: Retention? = nil,
                 inspector: Inspector? = nil, problem: String? = nil) {
         self.rows = rows
         self.total = total
@@ -410,6 +553,8 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.selectionIsPaused = selectionIsPaused
         self.selectionIsArchived = selectionIsArchived
         self.undoable = undoable
+        self.setAside = setAside
+        self.retention = retention
         self.inspector = inspector
         self.problem = problem
     }
@@ -430,6 +575,63 @@ public struct LibraryPresentation: Sendable, Equatable {
         }
     }
 
+    /// Delayed recall and what it was measured over.
+    ///
+    /// **The denominator travels with the rate**, always. A percentage with nothing beside it is
+    /// the one figure here that cannot be checked afterwards, and the type is what stops a surface
+    /// printing it alone.
+    public struct Retention: Sendable, Equatable {
+        public let attempts: Int
+        public let successes: Int
+        public let cards: Int
+
+        public var rate: Double { Double(successes) / Double(attempts) }
+
+        /// **Nil over an empty denominator**, so there is nothing to draw rather than a 0% nobody
+        /// measured.
+        public init?(attempts: Int, successes: Int, cards: Int) {
+            guard attempts > 0 else { return nil }
+            self.attempts = attempts
+            self.successes = successes
+            self.cards = cards
+        }
+    }
+
+    /// One review, as the audit trail shows it.
+    public struct ReviewMark: Sendable, Equatable, Identifiable {
+        public let id: UUID
+        public let at: Date
+        public let grade: Grade
+        /// **Said, not filtered out.** Practice moved no schedule and enters no retention figure,
+        /// and a trail that hid it would be a trail that disagrees with the reader's memory.
+        public let isPractice: Bool
+        /// Taken back. Shown, struck through — an audit trail that hides what was undone is not one.
+        public let isVoided: Bool
+
+        public init(id: UUID, at: Date, grade: Grade, isPractice: Bool, isVoided: Bool) {
+            self.id = id
+            self.at = at
+            self.grade = grade
+            self.isPractice = isPractice
+            self.isVoided = isVoided
+        }
+    }
+
+    /// One reading, as the audit trail shows it.
+    public struct ReadingMark: Sendable, Equatable, Identifiable {
+        public let id: Int
+        public let at: Date
+        public let sentence: String
+        public let source: String?
+
+        public init(id: Int, at: Date, sentence: String, source: String?) {
+            self.id = id
+            self.at = at
+            self.sentence = sentence
+            self.source = source
+        }
+    }
+
     /// One row, open for editing.
     ///
     /// **`isReaders` is the load-bearing field.** A reader looking at a definition needs to know
@@ -441,12 +643,22 @@ public struct LibraryPresentation: Sendable, Equatable {
         public let answer: String
         /// Whether the answer shown is the reader's own rather than the dictionary's.
         public let isReaders: Bool
+        public let tags: [String]
+        /// **Two lists, never merged** (M05). A reading is something the reader did with a text; a
+        /// review is something they did with a card.
+        public let readings: [ReadingMark]
+        public let reviews: [ReviewMark]
 
-        public init(id: UUID, word: String, answer: String, isReaders: Bool) {
+        public init(id: UUID, word: String, answer: String, isReaders: Bool,
+                    tags: [String] = [], readings: [ReadingMark] = [],
+                    reviews: [ReviewMark] = []) {
             self.id = id
             self.word = word
             self.answer = answer
             self.isReaders = isReaders
+            self.tags = tags
+            self.readings = readings
+            self.reviews = reviews
         }
     }
 

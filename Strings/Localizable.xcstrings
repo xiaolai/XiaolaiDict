@@ -47,6 +47,16 @@
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
 
     },
+    "%@ recalled, over %lld reviews" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ recalled, over %2$lld reviews"
+          }
+        }
+      }
+    },
     "%@ translates your sentences and picks the sense you met, on this Mac — a %@ download." : {
       "localizations" : {
         "en" : {
@@ -336,6 +346,9 @@
     "Due" : {
       "comment" : "A library row for an overdue card"
     },
+    "Easy" : {
+
+    },
     "Everything needed has been granted." : {
       "comment" : "Permissions pane, when nothing is missing"
     },
@@ -370,6 +383,9 @@
 
     },
     "Glass" : {
+
+    },
+    "Hard" : {
 
     },
     "Hide Reading History" : {
@@ -530,6 +546,9 @@
     "Not now" : {
 
     },
+    "Not reviewed yet." : {
+
+    },
     "Not set" : {
 
     },
@@ -558,6 +577,9 @@
 
     },
     "Off" : {
+
+    },
+    "Offer it again" : {
 
     },
     "On" : {
@@ -657,6 +679,9 @@
 
     },
     "Remove from history" : {
+
+    },
+    "Remove this tag" : {
 
     },
     "Removed “%@”" : {
@@ -1011,7 +1036,13 @@
     "What does this mean here?" : {
 
     },
+    "What you answered" : {
+
+    },
     "Whatever is selected is looked up, wherever you are." : {
+
+    },
+    "Where you met it" : {
 
     },
     "Without a local model, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
@@ -1021,6 +1052,9 @@
 
     },
     "Words in a terminal, a canvas or an image are read from the pixels. That is the one way of reading a word that can be wrong rather than simply missing — and you can check it yourself, because the word it read is the one shown." : {
+
+    },
+    "Words you already know" : {
 
     },
     "Words you look up appear here, grouped by the day you met them." : {
@@ -1126,7 +1160,13 @@
     "on this Mac" : {
 
     },
+    "practice" : {
+
+    },
     "sent to a remote service" : {
+
+    },
+    "taken back" : {
 
     },
     "the connection failed" : {

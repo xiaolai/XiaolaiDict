@@ -121,6 +121,23 @@ extension Ledger {
                         .real(when.timeIntervalSince1970)]) { _ in }
     }
 
+    /// What the reader has set aside, newest first.
+    ///
+    /// **Setting a word aside enrols nothing** — there is no note, and so no library row to find
+    /// it by. Without this list the declaration is invisible and therefore irreversible in
+    /// practice, whatever `unignoreSuggestion` can do.
+    public func ignoredSuggestions() throws -> [IgnoredLemma] {
+        var found: [IgnoredLemma] = []
+        try run("""
+            SELECT lemma, language, ignored_at FROM study_ignored_lemmas
+            ORDER BY ignored_at DESC, lemma
+            """, bind: []) { row in
+            found.append(IgnoredLemma(lemma: try row.text(0), language: try row.text(1),
+                                      at: Date(timeIntervalSince1970: row.real(2))))
+        }
+        return found
+    }
+
     /// Offers it again. The reader changing their mind is ordinary.
     public func unignoreSuggestion(lemma: String, language: String? = nil) throws {
         try run("DELETE FROM study_ignored_lemmas WHERE lemma = ? AND language = ?",
@@ -250,5 +267,24 @@ extension Ledger {
         }
 
         public var cards: Int { cardIDs.count }
+    }
+}
+
+
+/// A word the reader said they already know. **Not a card and not a note** — a declaration about
+/// a word, which is why it is its own small type and not a `StudyNote` wearing an enrolment.
+public struct IgnoredLemma: Sendable, Equatable, Identifiable {
+    public let lemma: String
+    /// The empty string where no language was recorded, matching how it is stored: SQLite NULL
+    /// never equals NULL, so a nullable key column admits duplicates that all look distinct.
+    public let language: String
+    public let at: Date
+
+    public var id: String { "\(lemma)\u{1F}\(language)" }
+
+    public init(lemma: String, language: String, at: Date) {
+        self.lemma = lemma
+        self.language = language
+        self.at = at
     }
 }

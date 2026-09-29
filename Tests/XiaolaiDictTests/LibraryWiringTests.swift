@@ -148,6 +148,114 @@ struct LibraryWiringTests {
         #expect(model.presentation.rows.first(where: { $0.id == paused.id })?.status == .paused)
     }
 
+    // MARK: - What the inspector shows (M03, M05, U03)
+
+    /// **The audit trail reaches the reader** (M05). `timeline`, `reviews(ofCard:)` and
+    /// `encounters(ofLookup:)` all existed with no surface between them.
+    @Test func theinspectorShowsReadingsAndReviewsSeparately() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: try MemoryScheduler())
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
+        let inspector = try #require(model.presentation.inspector)
+        #expect(inspector.readings.count == 1)
+        #expect(inspector.readings.first?.sentence == "A sentence with fine in it.")
+        #expect(inspector.reviews.count == 1)
+        #expect(inspector.reviews.first?.grade == .good)
+        #expect(inspector.reviews.first?.isPractice == false)
+    }
+
+    /// **A tag the reader adds can be read back and taken off** (M03). It could be added and then
+    /// never seen again, which is a worse state than not having tags.
+    @Test func atagIsVisibleAndRemovable() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
+        model.act(.tag("legal"))
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector?.tags == ["legal"] }
+
+        model.act(.untag("legal"))
+        try await settle { model.presentation.inspector?.tags.isEmpty == true }
+        #expect(try Ledger(path: path).tags(of: note.id).isEmpty)
+    }
+
+    /// **"Already know" is reversible** (C05). `unignoreSuggestion` existed and nothing reached
+    /// it, so a word declared known by a mis-click was declared known for ever — and invisibly,
+    /// because setting one aside enrols nothing and leaves no row in the library to find.
+    ///
+    /// The reversal belongs beside the suggestions, which is the only place the declaration has
+    /// any effect.
+    @Test func alreadyKnowCanBeTakenBack() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        // Looked up on two days, so it would be suggested.
+        for day in 0..<2 {
+            _ = try ledger.record(LookupRecord(
+                surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
+                language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+                lookedUpAt: now.addingTimeInterval(Double(day) * 86_400), result: .found,
+                answeredBy: .dictionaryService, quality: nil, script: .latin))
+        }
+
+        let model = model(path)
+        model.act(.filter(.suggested))
+        try await settle { model.presentation.suggestions.count == 1 }
+
+        model.act(.ignore(lemma: "fine", language: "en"))
+        try await settle { model.presentation.suggestions.isEmpty }
+        // **And it is visible where it went**, or "already know" is a word that disappears.
+        try await settle { model.presentation.setAside.map(\.lemma) == ["fine"] }
+
+        model.act(.unignore(lemma: "fine", language: "en"))
+        try await settle { model.presentation.suggestions.count == 1 }
+        #expect(model.presentation.setAside.isEmpty)
+    }
+
+    /// **The retention figure states its denominator, or is absent** (U03). `retention` was
+    /// computed by nothing and shown to nobody; a rate with no denominator beside it is the one
+    /// number in this product that cannot be checked afterwards.
+    @Test func theretentionFigureArrivesWithItsDenominatorOrNotAtAll() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        let scheduler = try MemoryScheduler()
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.retention == nil, "a first review is an introduction, not a recall")
+
+        // One introduction, then a delayed recall a week later: one eligible attempt.
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: scheduler)
+        let later = now.addingTimeInterval(7 * 86_400)
+        let revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision,
+                             at: later, using: scheduler)
+
+        await model.reload()
+        let retention = try #require(model.presentation.retention)
+        #expect(retention.attempts == 1, "the introduction is excluded")
+        #expect(retention.successes == 1)
+    }
+
     // MARK: - Bulk actions, and putting them back (M04)
 
     /// **Pause was a one-way door.** `setPaused(false, …)` existed and nothing could reach it, so a

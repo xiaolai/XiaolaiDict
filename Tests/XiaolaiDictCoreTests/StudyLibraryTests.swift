@@ -285,6 +285,75 @@ struct StudyLibraryTests {
         #expect(try ledger.library(LibraryQuery(state: .struggling, now: now)).count == 1)
     }
 
+    // MARK: - The audit trail (M05)
+
+    /// **Lookups and reviews, separately** — M05's rule, and the reason this is one call returning
+    /// two lists rather than one merged sequence. A reading is something the reader did with a
+    /// text; a review is something they did with a card, and a timeline that interleaves them
+    /// invites reading a grade as evidence about the sentence beside it.
+    @Test func thetimelineKeepsReadingsAndReviewsApart() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine", sentence: "He paid the fine.")
+        // A second encounter of the same meaning, a week later.
+        let second = try ledger.record(LookupRecord(
+            surface: "fine", lemma: "fine", context: "A fine of two hundred.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now.addingTimeInterval(7 * 86_400), result: .found,
+            answeredBy: .dictionaryService, quality: nil, script: .latin))
+        try ledger.link(noteID: note.id, toLookup: second, at: now.addingTimeInterval(7 * 86_400))
+
+        let card = try ledger.card(of: note.id, at: now)
+        let scheduler = try MemoryScheduler()
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: scheduler)
+        _ = try ledger.practise(cardID: card.id, .again, eventID: UUID(), at: now)
+
+        let timeline = try ledger.timeline(of: note.id)
+        #expect(timeline.readings.count == 2)
+        #expect(timeline.readings.map(\.sentence) == ["A fine of two hundred.", "He paid the fine."],
+                "newest first, like every other history surface here")
+        #expect(timeline.reviews.count == 2, "the practice attempt is shown, not hidden")
+        #expect(timeline.reviews.contains { $0.kind == .practice })
+    }
+
+    /// **Reading a history writes nothing.** Enrolment makes the `meaning` card; the harder
+    /// `production` direction is opt-in and must stay that way. `card(of:prompt:)` *creates*, so a
+    /// timeline that walked the prompts with it would silently double the reader's load every time
+    /// they looked at a row — which is why this walks `existingCard`.
+    @Test func readingAnoteTimelineCreatesNoCard() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        func cardCount() throws -> Int {
+            try StudyCard.Prompt.allCases.compactMap {
+                try ledger.existingCard(of: note.id, prompt: $0)
+            }.count
+        }
+        #expect(try cardCount() == 1, "the meaning card, made when it was enrolled")
+
+        let timeline = try ledger.timeline(of: note.id)
+        #expect(timeline.readings.count == 1)
+        #expect(timeline.reviews.isEmpty, "nothing has been answered")
+        #expect(try cardCount() == 1, "and asking for the history made no second card")
+    }
+
+    // MARK: - Tags the reader can see and remove (M03)
+
+    /// **A tag nobody can see is worse than no tag.** `tag`, `tags(of:)`, `untag` and `allTags`
+    /// were four methods with one caller between them: a reader could add a label and then never
+    /// find it, never read it back and never take it off.
+    @Test func atagCanBeReadBackAndTakenOff() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        try ledger.tag(noteID: note.id, "legal")
+        try ledger.tag(noteID: note.id, "money")
+        #expect(try ledger.tags(of: note.id) == ["legal", "money"])
+        #expect(try ledger.allTags().map(\.tag) == ["legal", "money"])
+
+        try ledger.untag(noteID: note.id, "money")
+        #expect(try ledger.tags(of: note.id) == ["legal"])
+        #expect(try ledger.allTags().map(\.tag) == ["legal"], "and the empty tag stops being offered")
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

@@ -187,6 +187,16 @@ actor LedgerStore {
         try ledger.setReaderAnswer(text, of: noteID, at: when)
     }
     func tag(noteID: UUID, _ tag: String) throws { try ledger.tag(noteID: noteID, tag) }
+    func untag(noteID: UUID, _ tag: String) throws { try ledger.untag(noteID: noteID, tag) }
+    func timeline(of noteID: UUID) throws -> NoteTimeline { try ledger.timeline(of: noteID) }
+    func tags(of noteID: UUID) throws -> [String] { try ledger.tags(of: noteID) }
+    func ignoredSuggestions() throws -> [IgnoredLemma] { try ledger.ignoredSuggestions() }
+    func unignoreSuggestion(lemma: String, language: String) throws {
+        try ledger.unignoreSuggestion(lemma: lemma, language: language)
+    }
+    func retention(dictionary: String?) throws -> Ledger.RetentionReport {
+        try ledger.retention(dictionary: dictionary)
+    }
     func suggestions(limit: Int, language: String?,
                      studying: Set<ProbeScript>) throws -> [Ledger.Suggestion] {
         try ledger.suggestions(limit: limit, language: language, studying: studying)
