@@ -12,35 +12,36 @@ import Synchronization
 /// **Nothing here is distributed.** The inventory is read from dictionaries Apple licensed to this Mac, on
 /// this Mac, and never leaves it — the same rule the index is built under.
 public final class PhraseReader: PhraseFinding {
-    /// Nil until the inventory has been read. **The nil is the readiness**, rather than a second flag that
-    /// could disagree with it.
-    private let inventory = Mutex<PhraseSpans?>(nil)
+    /// The matcher and every phrase's meaning, or nil until they have been read. **The nil is the
+    /// readiness**, rather than a second flag that could disagree with it, and the two are one value because
+    /// a span without its meaning is half an answer.
+    private let inventory = Mutex<Read?>(nil)
     private let bundles: [DictionaryBundle]
-    private let labels: @Sendable (DictionaryBundle) -> Set<String>
+    private let phrases: @Sendable (DictionaryBundle) -> [String: String]
 
-    /// `labels` supplies the sub-entry labels the key index does not hold — `IndexStore.subEntryLabels(in:)`
-    /// where an index exists. Injected rather than opened here: without an index the feature still works on
-    /// the keys alone, and a reader who has never built one must not get a phrase detector that refuses.
-    public init(bundles: [DictionaryBundle],
-                labels: @escaping @Sendable (DictionaryBundle) -> Set<String> = { _ in [] }) {
-        self.bundles = bundles
-        self.labels = labels
+    private struct Read {
+        let spans: PhraseSpans
+        /// Phrase to its meaning, for the phrases a dictionary explains. **Held rather than re-read**: a
+        /// lookup must not open a file to say what a phrase means, and the whole of NOAD's is 632 KB.
+        let meanings: [String: String]
     }
 
-    /// Every installed dictionary that indexes English.
-    ///
-    /// **Every one, not the reader's primary.** See `DictionaryBundle.indexesEnglish`: D7 scopes what the
-    /// selector may choose between, not which spans exist in the reader's prose.
-    public static func installed() -> [DictionaryBundle] {
-        DictionaryLocator.installed().filter(\.indexesEnglish)
+    /// `phrases` supplies the phrases the key index does not hold, **each with its meaning** — the sub-entry
+    /// labels, which `PhraseInventory` reads from the body in about seven seconds per dictionary. Injected
+    /// rather than read here so the matcher can be tested without a licensed dictionary on disk, and so a
+    /// reader whose body cannot be read still gets the keys.
+    public init(bundles: [DictionaryBundle],
+                phrases: @escaping @Sendable (DictionaryBundle) -> [String: String] = { _ in [:] }) {
+        self.bundles = bundles
+        self.phrases = phrases
     }
 
     /// An inventory already in hand. For a caller that built one, and for tests, which must be able to
     /// assert the mapping from a sentence to a span without a licensed dictionary on disk.
-    public convenience init(phrases: Set<String>) {
+    public convenience init(phrases: Set<String>, meanings: [String: String] = [:]) {
         self.init(bundles: [])
         let built = PhraseSpans(phrases: phrases)
-        inventory.withLock { $0 = built }
+        inventory.withLock { $0 = Read(spans: built, meanings: meanings) }
     }
 
     /// What one reading found. **Returned rather than logged inside**, because a reader whose dictionaries
@@ -48,11 +49,27 @@ public final class PhraseReader: PhraseFinding {
     /// words: green is not evidence that anything happened.
     public struct Reading: Sendable, Equatable {
         public let phrases: Int
+        /// How many of them the dictionaries also explain. **Counted apart from `phrases`**: the key index
+        /// contributes spellings without definitions, so the two numbers differ by design and a collapse of
+        /// `explained` to zero is a body walk that stopped happening.
+        public let explained: Int
         public let read: [String]
         public let failed: [String]
     }
 
     public var isReady: Bool { inventory.withLock { $0 != nil } }
+
+    /// What the phrase means, from the dictionary that knows it.
+    ///
+    /// **The half the live sense path cannot reach.** `EntryDocument` walks `x_xd0`/`x_xd1` and a sub-entry is
+    /// `x_xo<N>`, so the framework answering `take something into account` hands over *account*'s six noun
+    /// senses and not one of them is *consider something along with other factors before reaching a
+    /// decision*. The body walk already put it here.
+    ///
+    /// Nil for a phrase that came from the key index, which carries spellings and no definitions.
+    public func meaning(of phrase: String) -> String? {
+        inventory.withLock { $0?.meanings[phrase] }
+    }
 
     /// Reads the inventory. **Call this off the reply path.**
     ///
@@ -71,9 +88,17 @@ public final class PhraseReader: PhraseFinding {
     /// unreadable file still gets the phrases from the two that read. The failure is named, not swallowed.
     @discardableResult public func read() -> Reading {
         var found = Set<String>()
+        var meanings: [String: String] = [:]
         var read: [String] = [], failed: [String] = []
         for bundle in bundles {
-            found.formUnion(labels(bundle).map { $0.lowercased() }.filter { $0.contains(" ") })
+            for (phrase, meaning) in phrases(bundle) {
+                let key = phrase.lowercased()
+                guard key.contains(" ") else { continue }
+                found.insert(key)
+                // **The first dictionary to explain a phrase keeps it**, in the reader's own dictionary
+                // order — not a judgement this type is in a position to make.
+                if meanings[key] == nil { meanings[key] = meaning }
+            }
             do {
                 found.formUnion(try PhraseSpans.keys(in: bundle.url))
                 read.append(bundle.displayName)
@@ -82,15 +107,16 @@ public final class PhraseReader: PhraseFinding {
             }
         }
         let built = PhraseSpans(phrases: found)
-        inventory.withLock { $0 = built }
-        return Reading(phrases: built.phrases.count, read: read, failed: failed)
+        inventory.withLock { $0 = Read(spans: built, meanings: meanings) }
+        return Reading(phrases: built.phrases.count, explained: meanings.count,
+                       read: read, failed: failed)
     }
 
     public func phrase(in sentence: String, at term: NSRange) -> PhraseSpan? {
         guard let inventory = inventory.withLock({ $0 }) else { return nil }
         let words = Lemmatizer.lemmas(in: sentence)
         guard let hovered = Self.word(covering: term, among: words),
-              let match = inventory.match(in: words.map(\.lemma.text), containing: hovered)
+              let match = inventory.spans.match(in: words.map(\.lemma.text), containing: hovered)
         else { return nil }
         // Back from word indices to the reader's own text. **The span's ends, not the matched words' own
         // ranges joined** — a gap belongs inside the span, because that is what the reader sees.
@@ -99,7 +125,8 @@ public final class PhraseReader: PhraseFinding {
         return PhraseSpan(
             phrase: match.phrase,
             location: first.location, length: last.location + last.length - first.location,
-            separation: Self.separation(match.separation))
+            separation: Self.separation(match.separation),
+            definition: inventory.meanings[match.phrase])
     }
 
     /// Which word the captured range is on.

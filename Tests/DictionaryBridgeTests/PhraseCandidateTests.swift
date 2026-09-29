@@ -19,7 +19,7 @@ struct PhraseCandidateTests {
     /// The inventory, read once for the whole suite: about a second per dictionary, and every test here
     /// wants the same one.
     static let inventory: PhraseReader = {
-        let reader = PhraseReader.overInstalledDictionaries()
+        let reader = PhraseReader.forReader("zh-Hans")
         reader.read()
         return reader
     }()
@@ -77,27 +77,33 @@ extension PhraseCandidateTests {
     /// because the whole design turns on which is which, and a content update moving one from one column to
     /// the other must be a finding rather than a silent change of behaviour.
     @Test func everyPhraseIsClassifiedByWhoseEntryAnsweredIt() throws {
-        let expected: [(String, String, PhraseMeaning)] = [
-            ("purple passage", "passage", .ownEntry([])),
-            ("red herring", "herring", .ownEntry([])),
-            ("once in a blue moon", "moon", .ownEntry([])),
-            ("take something into account", "take", .filedUnder("account")),
-            ("kick the bucket", "kick", .filedUnder("kick")),
-            ("keep a tight rein on", "keep", .filedUnder("rein")),
-            ("give up the ghost", "give", .filedUnder("ghost")),
+        /// Whether the phrase is expected to have an entry of its own.
+        let expected: [(phrase: String, hovered: String, ownEntry: Bool)] = [
+            ("purple passage", "passage", true),
+            ("red herring", "herring", true),
+            ("once in a blue moon", "moon", true),
+            ("take something into account", "take", false),
+            ("kick the bucket", "kick", false),
+            ("keep a tight rein on", "keep", false),
+            ("give up the ghost", "give", false),
         ]
-        for (phrase, hovered, want) in expected {
+        for (phrase, hovered, ownEntry) in expected {
             let answered = try Self.noad(phrase)
+            let span = PhraseSpan(phrase: phrase, location: 0, length: 1, separation: .none,
+                                  definition: Self.inventory.meaning(of: phrase))
             let meaning = DictionaryBridge.meaning(
-                of: phrase, answered: answered, term: try Self.noad(hovered))
-            switch (meaning, want) {
-            case (.ownEntry, .ownEntry):
+                of: span, answered: answered, term: try Self.noad(hovered))
+            switch meaning {
+            case .ownEntry:
+                #expect(ownEntry, "\(phrase) was expected to be a sub-entry")
                 print("PC \(phrase) — its own entry, \(answered.count) entries")
-            case (.filedUnder(let found), .filedUnder(let wanted)):
-                #expect(found == wanted, "\(phrase) is filed under \(found), expected \(wanted)")
-                print("PC \(phrase) — filed under \(found)")
-            default:
-                Issue.record("\(phrase): got \(meaning), expected \(want)")
+            case .subEntry(let definition):
+                #expect(!ownEntry, "\(phrase) was expected to have an entry of its own")
+                // **The point of the whole rework**: a sub-entry phrase is explained, not deferred. The
+                // definition comes from the body walk, because the entry the framework answered with is
+                // another word's and its senses are not this phrase's.
+                #expect(!definition.isEmpty, "\(phrase) reached the wire with no meaning")
+                print("PC \(phrase) — sub-entry: \(definition.prefix(60))")
             }
         }
     }
@@ -129,7 +135,7 @@ extension PhraseCandidateTests {
                 withAPhrase += 1
                 let answered = try Self.noad(span.phrase)
                 if case .ownEntry = DictionaryBridge.meaning(
-                    of: span.phrase, answered: answered, term: try Self.noad(labelled.word)) {
+                    of: span, answered: answered, term: try Self.noad(labelled.word)) {
                     phrase = try Self.candidates(for: span.phrase)
                 }
             }

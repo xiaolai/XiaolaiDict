@@ -94,7 +94,7 @@ import Testing
     /// report a working detector over an empty inventory.
     @Test func readingNothingReportsThatItReadNothing() {
         let reading = PhraseReader(bundles: []).read()
-        #expect(reading == PhraseReader.Reading(phrases: 0, read: [], failed: []))
+        #expect(reading == PhraseReader.Reading(phrases: 0, explained: 0, read: [], failed: []))
     }
 
     /// A bundle that cannot be read is named rather than dropped, and does not stop the reading.
@@ -102,9 +102,11 @@ import Testing
         let missing = DictionaryBundle(
             url: URL(fileURLWithPath: "/nonexistent/Nope.dictionary"),
             identifier: "test.nope", displayName: "Nope")
-        let reading = PhraseReader(bundles: [missing], labels: { _ in ["out of the blue"] }).read()
+        let reading = PhraseReader(
+            bundles: [missing], phrases: { _ in ["out of the blue": "unexpectedly"] }).read()
         #expect(reading.failed == ["Nope"])
         #expect(reading.read.isEmpty)
-        #expect(reading.phrases == 1, "the labels handed in survive the bundle that did not read")
+        #expect(reading.phrases == 1, "the phrases handed in survive the bundle that did not read")
+        #expect(reading.explained == 1, "and so do their meanings")
     }
 }

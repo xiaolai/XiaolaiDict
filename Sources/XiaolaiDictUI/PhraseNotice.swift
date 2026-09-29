@@ -13,19 +13,16 @@ public struct PhrasePresentation: Equatable, Sendable {
     /// Where the span sits in the reader's sentence, UTF-16, gap included.
     public let range: NSRange
     public let separation: PhraseSeparation
-    /// The phrase's leading definition, where the phrase has an **entry of its own** and that entry marks
-    /// one. Nil is ordinary, and for a sub-entry phrase it is the honest answer: the framework answers
-    /// `take something into account` with `account`'s entry, so the only definitions in hand are
-    /// *account*'s — and printing one under the phrase would be the wrong meaning under the right words.
-    public let definition: String?
-
-    /// Where to read the phrase, for one filed inside another word's entry. Nil where it has its own.
+    /// What the phrase means.
     ///
-    /// **Said rather than worked around.** The reader gets the phrase, the span in their sentence, and the
-    /// name of the entry that explains it. What they do not get is a definition this app cannot reach:
-    /// `EntryDocument` walks `x_xd0`/`x_xd1` and a sub-entry is `x_xo<N>`, so those 32 definitions in
-    /// *account*'s document are invisible to the live sense path.
-    public let filedUnder: String?
+    /// **From whichever of two places actually has it.** A phrase with an entry of its own — *purple
+    /// passage*, *red herring* — is explained by that entry's leading sense. A phrase filed as a sub-entry is
+    /// answered by the framework with its *parent's* entry, whose senses are nouns about `account`; its own
+    /// definition comes from the phrase inventory's body walk. Either way the reader is shown a true meaning
+    /// rather than sent somewhere else to look.
+    ///
+    /// Nil only where neither has one, which is a phrase from the key index that no dictionary explains.
+    public let definition: String?
 
     /// The sense of the phrase the reader met, once the selector has decided.
     ///
@@ -56,13 +53,11 @@ public struct PhrasePresentation: Equatable, Sendable {
         return false
     }
 
-    public init(phrase: String, range: NSRange, separation: PhraseSeparation,
-                definition: String?, filedUnder: String? = nil) {
+    public init(phrase: String, range: NSRange, separation: PhraseSeparation, definition: String?) {
         self.phrase = phrase
         self.range = range
         self.separation = separation
         self.definition = definition
-        self.filedUnder = filedUnder
     }
 
     /// The card's reading of one lookup's phrase answer, or nil where there is nothing to draw.
@@ -83,9 +78,9 @@ public struct PhrasePresentation: Equatable, Sendable {
         case .ownEntry(let entries):
             self.init(phrase: hit.phrase, range: range, separation: hit.separation,
                       definition: Self.definition(in: entries))
-        case .filedUnder(let headword):
+        case .subEntry(let definition):
             self.init(phrase: hit.phrase, range: range, separation: hit.separation,
-                      definition: nil, filedUnder: headword)
+                      definition: definition.isEmpty ? nil : definition)
         }
     }
 
@@ -130,13 +125,6 @@ struct PhraseNoticeView: View {
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)
                     .lineLimit(Token.Limit.wrapLines)
-            }
-            // Where the phrase is filed inside another word, the reader is told where to read it rather
-            // than shown a definition this app cannot reach.
-            if let headword = phrase.filedUnder, phrase.met == nil {
-                Text("In the entry for \(headword)")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.tertiary)
             }
             if let met = phrase.met, met.isHypothesis {
                 Text("The sense here is a guess — not confirmed")

@@ -96,28 +96,29 @@ public struct PhraseHit: Codable, Sendable, Equatable {
     }
 }
 
-/// Whether the phrase has an entry of its own, or is filed inside another word's.
+/// Whether the phrase has an entry of its own, or is filed inside another word's — **and either way, what
+/// it means.**
 ///
 /// **Measured, and the distinction is load-bearing** (2026-09-29, NOAD). *purple passage* is
 /// `m_en_gbus0830950` and *red herring* is `m_en_gbus0853810` — entries of their own, whose senses are the
-/// phrase's meaning. *take something into account* answers with `m_en_gbus0005190`, which is **`account`'s
-/// entry**: the framework returns the parent, and `EntryDocument` walks only `x_xd0`/`x_xd1`, so the
-/// sub-entry's own definition — "consider or include", one of 32 `df` elements and 16 sub-entries in that
-/// document — never becomes a `DictionarySense` at all.
+/// phrase's meaning, and which are therefore candidates for the sense ladder. *take something into account*
+/// answers with `m_en_gbus0005190`, which is **`account`'s entry**: the framework returns the parent, and
+/// `EntryDocument` walks only `x_xd0`/`x_xd1`, so *that* document's 6 senses are all nouns and the phrase's
+/// own definition is not among them. Adding them to the candidate set would be handing the selector noise it
+/// could confidently pick.
 ///
 /// Told apart by entry id: a phrase whose entry is also returned for one of its own words is a sub-entry.
 ///
-/// **This is why it matters.** Showing the parent's leading sense under the phrase would print
-/// *take something into account — a report or description of an event* — the wrong meaning under the right
-/// phrase, which is worse than showing none because the reader cannot see it is wrong. And adding the
-/// parent's senses to the sense ladder's candidate set would be adding noise: measured, they are *account*'s
-/// six noun senses, and the phrase's meaning is in none of them.
+/// **The meaning comes from the phrase inventory, not from the entry.** A body walk reads every sub-entry's
+/// own definition — *take something into account → consider something along with other factors before
+/// reaching a decision* — for 9,743 phrases in 632 KB per dictionary. So a sub-entry phrase is explained
+/// rather than deferred, and this type never has to say "read it somewhere else".
 public enum PhraseMeaning: Codable, Sendable, Equatable {
     /// The phrase's own entries. Their senses are the phrase's meaning, and are candidates for the ladder.
     case ownEntry([DictionaryEntry])
-    /// Filed inside the named word's entry, so the phrase's meaning is not reachable through the live sense
-    /// path. Named rather than guessed at: the reader is told where to read it.
-    case filedUnder(String)
+    /// Filed inside another word's entry, so the parent's senses are **not** candidates — but the inventory
+    /// has the phrase's own definition, and it travels here.
+    case subEntry(definition: String)
 }
 
 /// Whether the phrase's words sat together, and on whose authority they were allowed not to.

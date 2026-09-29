@@ -31,17 +31,15 @@ let watchdog = Watchdog(limit: .seconds(5)) {
 }
 
 // The phrase a reader did not know to look up — the failure this app can uniquely catch. Read **off the
-// reply path**: measured 2026-09-29, 232,373 phrases from 7 dictionaries takes 10–16 s, almost all of it
-// decompressing key indexes. A lookup cannot absorb that, so until it is ready a lookup answers
-// `.notReady` — a different fact from "no phrase here", and said as one.
+// reply path**, and scoped to the dictionaries this reader studies from rather than to every one that
+// happens to index English: `serves(reader:)` admits 5 here where the wider predicate admitted 34.
 //
-// **Not woken early on purpose.** The app could ping the service at launch and close the window, but the
-// panel's 0.13 s from keypress is measured *with the service suspended*, and starting it at login to save
-// the first dozen seconds of one session trades a stated property for a small one. A cache on disk is the
-// fix, not an earlier launch.
+// The first read walks each body once — about 7 s for NOAD — and stores the result, so every launch after
+// that is a file read. Until it is ready a lookup answers `.notReady`, a different fact from "no phrase
+// here" and said as one.
 //
 // Not on `lookups`: that queue answers requests, and the first request must not be stuck behind this.
-let phrases = PhraseReader.overInstalledDictionaries { why in
+let phrases = PhraseReader.forReader(ReaderLanguage.preferred) { why in
     // Not a fault: no index is the ordinary state for a reader who has not built one, and the phrase
     // feature works without it. Logged so "my idioms are missing" has an answer.
     log.notice("phrases: \(why, privacy: .public)")

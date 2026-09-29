@@ -148,18 +148,27 @@ struct PhraseNoticeTests {
 
     // MARK: - The wrong meaning under the right words
 
-    /// **A phrase filed inside another word's entry shows no definition, and says where to read it.**
+    /// **A phrase filed inside another word's entry shows its own meaning, from the body walk.**
     ///
     /// Measured on NOAD: `take something into account` is answered with `m_en_gbus0005190`, which is
-    /// `account`'s entry — and the only definitions in hand are *account*'s six noun senses. Printing the
-    /// first would put *a report or description of an event* under the phrase: the wrong meaning under the
-    /// right words, and worse than none because the reader cannot see it is wrong.
-    @Test func aPhraseFiledUnderAnotherWordShowsNoDefinition() {
+    /// `account`'s entry, and printing *that* entry's first sense would put *a report or description of an
+    /// event* under the phrase — the wrong meaning under the right words. The phrase inventory reads the
+    /// sub-entry's own definition instead, so the reader gets a true one rather than being sent elsewhere.
+    @Test func aPhraseFiledUnderAnotherWordShowsItsOwnMeaning() {
         let found = PhrasePresentation(
-            .found(Self.hit(location: 0, length: 10, meaning: .filedUnder("account"))),
+            .found(Self.hit(location: 0, length: 10,
+                            meaning: .subEntry(definition: "consider something along with other factors"))),
             sentence: "take it into account")
-        #expect(found?.definition == nil, "no definition rather than the parent's")
-        #expect(found?.filedUnder == "account", "and the reader is told where to read it")
+        #expect(found?.definition == "consider something along with other factors")
+    }
+
+    /// A sub-entry no dictionary explains carries nothing rather than an empty line — which would read as a
+    /// phrase that means nothing at all.
+    @Test func asubEntryWithNoMeaningShowsNone() {
+        let found = PhrasePresentation(
+            .found(Self.hit(location: 0, length: 10, meaning: .subEntry(definition: ""))),
+            sentence: "take it into account")
+        #expect(found?.definition == nil)
     }
 
     /// A phrase with an entry of its own shows that entry's meaning, which really is the phrase's.
@@ -170,7 +179,6 @@ struct PhraseNoticeTests {
                             meaning: .ownEntry([entry]))),
             sentence: "a purple passage nobody could follow")
         #expect(found?.definition == "an elaborate or excessively ornate passage")
-        #expect(found?.filedUnder == nil)
     }
 
     /// **Only an own entry's senses are candidates for the ladder.** `entries` is the accessor the resolver
@@ -179,7 +187,8 @@ struct PhraseNoticeTests {
     @Test func aSubEntryOffersNoCandidatesToTheLadder() {
         let entry = Self.entry("a report or description of an event", headword: "account")
         #expect(PhraseHit(phrase: "take something into account", location: 0, length: 10,
-                          separation: .marked(2), meaning: .filedUnder("account")).entries.isEmpty)
+                          separation: .marked(2),
+                          meaning: .subEntry(definition: "consider")).entries.isEmpty)
         #expect(PhraseHit(phrase: "purple passage", location: 0, length: 14,
                           separation: .none, meaning: .ownEntry([entry])).entries.count == 1)
     }

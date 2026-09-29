@@ -118,7 +118,7 @@ public enum DictionaryBridge {
         let found = (try? entries(for: span.phrase))?.entries ?? []
         return .found(PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
                                 separation: span.separation,
-                                meaning: meaning(of: span.phrase, answered: found, term: word)))
+                                meaning: meaning(of: span, answered: found, term: word)))
     }
 
     /// Whether `answered` is the phrase's own entry or the entry it is filed inside.
@@ -128,21 +128,20 @@ public enum DictionaryBridge {
     /// reply says so, so it has to be asked. The words are looked up rather than the term alone because the
     /// reader may be hovering any of them: *take* in `take something into account` is not the parent, and
     /// *account* is.
-    static func meaning(of phrase: String, answered: [DictionaryEntry],
+    static func meaning(of span: PhraseSpan, answered: [DictionaryEntry],
                         term: [DictionaryEntry]) -> PhraseMeaning {
+        let phrase = span.phrase
+        // The phrase's own definition, from the body walk, for a phrase whose entry belongs to another word.
+        let subEntry = PhraseMeaning.subEntry(definition: span.definition ?? "")
         let ids = Set(answered.compactMap(\.entryID))
         guard !ids.isEmpty else { return .ownEntry(answered) }
         // The term the reader looked up first: cheapest, and the commonest way a sub-entry is caught.
-        if let shared = term.first(where: { $0.entryID.map(ids.contains) == true }) {
-            return .filedUnder(shared.headword)
-        }
+        if term.contains(where: { $0.entryID.map(ids.contains) == true }) { return subEntry }
         // Then the phrase's own words. A reader hovering *take* has *take*'s entries in `term`, which do not
         // overlap; the parent is `account`, and only asking for it finds that out.
         for word in phrase.split(separator: " ").map(String.init) where word.count > 1 {
             guard let entries = try? entries(for: word).entries else { continue }
-            if let shared = entries.first(where: { $0.entryID.map(ids.contains) == true }) {
-                return .filedUnder(shared.headword)
-            }
+            if entries.contains(where: { $0.entryID.map(ids.contains) == true }) { return subEntry }
         }
         return .ownEntry(answered)
     }

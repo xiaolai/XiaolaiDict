@@ -14,11 +14,20 @@ public struct PhraseSpan: Sendable, Equatable {
     public let length: Int
     public let separation: PhraseSeparation
 
-    public init(phrase: String, location: Int, length: Int, separation: PhraseSeparation) {
+    /// What the phrase means, where the dictionary that knows it explains it.
+    ///
+    /// **Carried with the span, because the finder is the only thing that has it.** A phrase filed as a
+    /// sub-entry is answered by the framework with its *parent's* entry, whose senses are not the phrase's,
+    /// so the definition cannot be recovered downstream — it has to travel from the body walk that read it.
+    public let definition: String?
+
+    public init(phrase: String, location: Int, length: Int,
+                separation: PhraseSeparation, definition: String? = nil) {
         self.phrase = phrase
         self.location = location
         self.length = length
         self.separation = separation
+        self.definition = definition
     }
 }
 
