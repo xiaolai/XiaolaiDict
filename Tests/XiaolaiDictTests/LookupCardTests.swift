@@ -222,7 +222,7 @@ struct SenselessEntryTests {
         // Markup with no sense structure at all — no `x_xd1`, no `d:def` — which is the shape the
         // three sideloaded dictionaries here actually return.
         let markup = """
-            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rfc" id="x" d:title="fine">
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="x" d:title="fine">
             <span class="hw">fine</span><span class="body">of very high quality</span>
             </d:entry>
             """

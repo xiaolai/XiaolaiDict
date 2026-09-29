@@ -19,7 +19,7 @@ import Testing
 struct DictionaryListTests {
     private func entry(_ dictionary: String, headword: String, id: String) -> DictionaryEntry {
         let markup = """
-            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rfc" id="\(id)" d:title="\(headword)">
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="\(id)" d:title="\(headword)">
             <span class="hg x_xh0"><span class="hw">\(headword)</span></span>
             <span id="\(id).001" class="se1 x_xd0"><span id="\(id).002" class="se2 x_xd1 hasSn">
             <span d:def="1" class="df">a meaning</span></span></span>
