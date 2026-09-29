@@ -26,6 +26,7 @@ struct XiaolaiDictScene: App {
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
     static let setupID = "setup"
+    static let reviewID = "review"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -104,6 +105,17 @@ struct XiaolaiDictScene: App {
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
+
+        // **A window the reader chose, so it comes forward and keeps focus.** Unlike the panel and
+        // the drawer, which must never activate the app: this one is typed into. The reader asked
+        // for it from the menu, it is theirs to manage, and it keeps its title bar for that reason.
+        Window("Review", id: Self.reviewID) {
+            ReviewSceneView(model: delegate.reviewModel)
+                .xiaolaiDictAppearance(delegate.appearance)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .defaultSize(width: Token.Review.width, height: Token.Review.height)
 
         // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
         // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it

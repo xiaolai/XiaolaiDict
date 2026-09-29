@@ -347,6 +347,18 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// and one they are about to act in. "No panel may activate XiaolaiDict" governs the surfaces
     /// that appear while they are mid-sentence in another app. The launch-time open does **not**
     /// come through here — see `openSetupOnFirstLaunch` for why it must not ask to activate.
+    /// Opens the Review window and brings it forward.
+    ///
+    /// **`NSApplication.shared.activate()`, unlike the panel and the drawer**, which must never
+    /// activate the app. The reader chose this one from the menu and is about to type into it: a
+    /// window that opened behind their reading, with keyboard shortcuts that go to the app in front,
+    /// would be a review surface that cannot be reviewed in.
+    func showReview() {
+        log.notice("review: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
+        NSApplication.shared.activate()
+        WindowActions.shared.openWindow(id: XiaolaiDictScene.reviewID)
+    }
+
     func showSetup() {
         // Logged, because "the board did not come forward" has two very different causes — the
         // request never arrived, or it arrived and activation was refused — and only the app can
@@ -429,6 +441,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var panelController: LookupPanelController { panel }
     var panelModel: LookupPanelModel { panel.model }
     var drawerModel: HistoryDrawerModel { drawer.model }
+
+    /// The Review window's model. **Built once and kept**, so a window closed mid-batch and reopened
+    /// does not lose the sitting — and so the grade in flight when it closed has somewhere to land.
+    /// `@ObservationIgnored` because the *reference* never changes and the model is `@Observable`
+    /// itself: tracking it here would invalidate every scene in the app's body whenever a review
+    /// card changed — the defect this file already carries a note about, one window over.
+    @ObservationIgnored lazy var reviewModel = ReviewModel(
+        store: { [weak self] in self?.recorder.store })
 
     /// What the settings window is showing — which pane, and the permission probe's last answer.
     /// Owned here rather than inside the window so `--settings-report` can select a pane from

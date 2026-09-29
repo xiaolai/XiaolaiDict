@@ -93,6 +93,49 @@ actor LedgerStore {
             chosenBy: encounter.chosenBy, answer: answer, lookupID: lookup, at: when)
     }
 
+    // MARK: - Review
+
+    /// The batch a sitting is offered, and how much did not fit. **Two calls, both in SQL**: a count
+    /// taken by subtracting what fitted from what the surface guessed would be wrong the moment a
+    /// card became due between them.
+    func dueCards(at when: Date, limit: Int, dictionary: String?) throws -> [StudyCard] {
+        try ledger.dueCards(at: when, limit: limit, dictionary: dictionary)
+    }
+
+    func dueCount(at when: Date, dictionary: String?) throws -> Int {
+        try ledger.dueCount(at: when, dictionary: dictionary)
+    }
+
+    /// Whether the reader has saved anything at all. **A different nothing** from having nothing due,
+    /// and the review window says so differently.
+    func anyNotes() throws -> Bool {
+        try !ledger.notes().isEmpty
+    }
+
+    /// The front of a card, and — separately, only when asked — its back.
+    func cue(forCard id: UUID) throws -> ReviewCue? {
+        try ledger.cue(forCard: id)
+    }
+
+    func revealed(cardID: UUID) throws -> ReviewAnswer? {
+        try ledger.revealed(cardID: cardID)
+    }
+
+    /// One grade, committed with its event or not at all. The scheduler is built here rather than
+    /// passed in: a caller choosing its own retention would be choosing the reader's, silently.
+    @discardableResult
+    func grade(cardID: UUID, _ grade: Grade, eventID: UUID, expectedRevision: Int,
+               at when: Date) throws -> ReviewEvent {
+        try ledger.grade(cardID: cardID, grade, eventID: eventID,
+                         expectedRevision: expectedRevision, at: when,
+                         using: try MemoryScheduler())
+    }
+
+    @discardableResult
+    func undoLatestReview(ofCard cardID: UUID, at when: Date) throws -> ReviewEvent {
+        try ledger.undoLatestReview(ofCard: cardID, at: when)
+    }
+
     /// A lookup the reader did not mean to make. The senses met in it go with it.
     func delete(lookup id: Int) throws {
         try ledger.delete(lookup: id)

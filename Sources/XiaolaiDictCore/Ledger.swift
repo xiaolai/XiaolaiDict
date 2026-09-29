@@ -562,31 +562,13 @@ public final class Ledger {
     /// held elsewhere now: the card carries the gloss and shows it only when the reader asks, and
     /// `HiddenGlossTests` fails if a card's height ever depends on the length of one.
     ///
-    /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
-    /// selection, and telling that from a real gap is the reason the row was recorded at all.
+    /// **The reading a card is built from, projected once.**
     ///
-    /// It does carry `capture_quality`, which is not a definition but a warning label: it is what
-    /// lets a card tell a sentence from the word echoed back into the context column.
-    /// The drawer's query.
-    ///
-    /// `studying` is required rather than defaulted, so every caller states which scripts the
-    /// reader wants to see. A default of "everything" would be the quiet option: a surface that
-    /// forgot to pass the setting would go on showing rows the reader had filtered out, and look
-    /// exactly like a setting that does not work.
-    public func recentLookups(
-        since: Date, limit: Int, studying: Set<ProbeScript>
-    ) throws -> [ReadingEntry] {
-        // A limit of none asks for nothing. SQLite reads a *negative* LIMIT as no limit at all,
-        // so this guard is what stops `limit: -1` returning a ledger years deep. (`LIMIT 0`
-        // genuinely returns nothing; an earlier version of this comment claimed otherwise.)
-        guard limit > 0 else { return [] }
-
-        var entries: [ReadingEntry] = []
-        // One tagger for the batch: building an `NLTagger` is the expensive part, and every row
-        // written before schema 5 needs one.
-        let tagging = Lemmatizer.Pass()
-        try run(
-            """
+    /// Twenty-five columns, and two callers want them: the drawer's window of recent lookups, and the
+    /// review surface asking for the one reading a study note rests on. A second copy is a second
+    /// reader of one rule — the shape that let `history()` read a `part_of_speech` its own SELECT never
+    /// projected and answer nil for every row while passing every test.
+    static let readingProjection = """
             SELECT l.id, l.surface, l.lemma, l.context, l.looked_up_at, l.result,
                    l.context_range_location, l.context_range_length,
                    l.source_app, l.source_name, l.source_document, l.source_page,
@@ -612,6 +594,34 @@ public final class Ledger {
             LEFT JOIN sense_encounters se ON se.id = (
                 SELECT id FROM sense_encounters WHERE lookup_id = l.id ORDER BY id DESC LIMIT 1
             )
+        """
+
+    /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
+    /// selection, and telling that from a real gap is the reason the row was recorded at all.
+    ///
+    /// It does carry `capture_quality`, which is not a definition but a warning label: it is what
+    /// lets a card tell a sentence from the word echoed back into the context column.
+    /// The drawer's query.
+    ///
+    /// `studying` is required rather than defaulted, so every caller states which scripts the
+    /// reader wants to see. A default of "everything" would be the quiet option: a surface that
+    /// forgot to pass the setting would go on showing rows the reader had filtered out, and look
+    /// exactly like a setting that does not work.
+    public func recentLookups(
+        since: Date, limit: Int, studying: Set<ProbeScript>
+    ) throws -> [ReadingEntry] {
+        // A limit of none asks for nothing. SQLite reads a *negative* LIMIT as no limit at all,
+        // so this guard is what stops `limit: -1` returning a ledger years deep. (`LIMIT 0`
+        // genuinely returns nothing; an earlier version of this comment claimed otherwise.)
+        guard limit > 0 else { return [] }
+
+        var entries: [ReadingEntry] = []
+        // One tagger for the batch: building an `NLTagger` is the expensive part, and every row
+        // written before schema 5 needs one.
+        let tagging = Lemmatizer.Pass()
+        try run(
+            """
+            \(Self.readingProjection)
             WHERE l.looked_up_at >= ?1
               -- The reader's script filter, applied by SQLite so `LIMIT` still counts rows they
               -- will actually see. `IS NULL` first and deliberately: every row written before
@@ -627,30 +637,45 @@ public final class Ledger {
             // would build SQL out of values, which this file does nowhere.
             bind: [.real(since.timeIntervalSince1970), .integer(limit),
                    .text(Self.jsonArray(of: studying.map(\.rawValue)))]
-        ) { row in
-            let range: NSRange? = sqlite3_column_type(row.statement, 6) == SQLITE_NULL
-                ? nil : NSRange(location: row.integer(6), length: row.integer(7))
-            let surface = try row.text(1)
-            let context = try row.text(3)
-            // Stored where schema 5 recorded it; tagged from the reader's own sentence where it
-            // did not. `??` rather than a branch, because "recorded" and "derived" are the same
-            // answer to the card — the difference is in how much evidence stands behind it, and
-            // that is not a difference a part-of-speech label asks anyone to act on.
-            let partOfSpeech = row.optionalText(17)
-                ?? tagging.partOfSpeech(of: surface, in: context, at: range)
-            entries.append(ReadingEntry(
-                id: row.integer(0), lemma: try row.text(2), surface: surface,
-                sentence: context, sentenceRange: range,
-                place: ReadingPlace(
-                    bundleID: row.optionalText(8), name: row.optionalText(9),
-                    document: row.optionalText(10), page: row.optionalText(11),
-                    title: row.optionalText(12), rawTitle: row.optionalText(13)),
-                at: Date(timeIntervalSince1970: row.real(4)),
-                result: try row.result(5), quality: try row.quality(14),
-                partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
-                senseAbstention: try row.abstention(24)))
-        }
+        ) { entries.append(try Self.reading(from: $0, tagging: tagging)) }
         return entries
+    }
+
+    /// One `ReadingEntry` out of a row of `readingProjection`. **One builder, for the same reason as
+    /// the projection**: a card built by the review surface and one built by the drawer are the same
+    /// card, and two constructions of it drift a column at a time.
+    static func reading(from row: Row, tagging: Lemmatizer.Pass) throws -> ReadingEntry {
+        let range: NSRange? = sqlite3_column_type(row.statement, 6) == SQLITE_NULL
+            ? nil : NSRange(location: row.integer(6), length: row.integer(7))
+        let surface = try row.text(1)
+        let context = try row.text(3)
+        // Stored where schema 5 recorded it; tagged from the reader's own sentence where it did not.
+        // `??` rather than a branch, because "recorded" and "derived" are the same answer to the card
+        // — the difference is in how much evidence stands behind it, and that is not a difference a
+        // part-of-speech label asks anyone to act on.
+        let partOfSpeech = row.optionalText(17)
+            ?? tagging.partOfSpeech(of: surface, in: context, at: range)
+        return ReadingEntry(
+            id: row.integer(0), lemma: try row.text(2), surface: surface,
+            sentence: context, sentenceRange: range,
+            place: ReadingPlace(
+                bundleID: row.optionalText(8), name: row.optionalText(9),
+                document: row.optionalText(10), page: row.optionalText(11),
+                title: row.optionalText(12), rawTitle: row.optionalText(13)),
+            at: Date(timeIntervalSince1970: row.real(4)),
+            result: try row.result(5), quality: try row.quality(14),
+            partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
+            senseAbstention: try row.abstention(24))
+    }
+
+    /// The reading a lookup was, for a surface that knows which lookup it wants.
+    public func reading(ofLookup id: Int) throws -> ReadingEntry? {
+        var found: ReadingEntry?
+        let tagging = Lemmatizer.Pass()
+        try run("\(Self.readingProjection)\nWHERE l.id = ?1", bind: [.integer(id)]) { row in
+            found = try Self.reading(from: row, tagging: tagging)
+        }
+        return found
     }
 
     /// Removes one lookup, and with it every sense encounter hung off it.

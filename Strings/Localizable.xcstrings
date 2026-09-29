@@ -96,8 +96,27 @@
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
 
     },
+    "%lld more due" : {
+
+    },
+    "%lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
     "%lld permissions are off — selections and the screen cannot be read" : {
       "comment" : "Menu warning when more than one permission is missing"
+    },
+    "%lld reviewed" : {
+
+    },
+    "%lld skipped, still due" : {
+
     },
     "%lld things are still needed." : {
 
@@ -210,6 +229,9 @@
     "Dictionary" : {
 
     },
+    "Done" : {
+
+    },
     "Download" : {
 
     },
@@ -252,6 +274,9 @@
 
     },
     "First that marks senses" : {
+
+    },
+    "Forgot" : {
 
     },
     "Frosted" : {
@@ -408,6 +433,9 @@
     "Not yet enforced — hovering is not refused on these sites. What you add here is kept and will apply once it is. Subdomains are covered too, so example.com also excludes docs.example.com." : {
 
     },
+    "Nothing is due right now." : {
+
+    },
     "Nothing is waiting on you. The local model is still one click away, in the translation row." : {
 
     },
@@ -492,6 +520,9 @@
     "Record this as the sense you met" : {
 
     },
+    "Remembered" : {
+
+    },
     "Remove" : {
 
     },
@@ -511,6 +542,18 @@
 
     },
     "Reveal the meaning" : {
+
+    },
+    "Review" : {
+
+    },
+    "Review another batch" : {
+
+    },
+    "Review…" : {
+
+    },
+    "Saved meanings come back here when they are due." : {
 
     },
     "Say it aloud" : {
@@ -555,6 +598,9 @@
     "Show Less" : {
       "comment" : "Closes a day's pile of cards"
     },
+    "Show the answer" : {
+
+    },
     "Show the time a word was looked up" : {
 
     },
@@ -562,6 +608,9 @@
 
     },
     "Size" : {
+
+    },
+    "Skip" : {
 
     },
     "Some enabled dictionaries do not say which language they explain English in, so none can be suggested. Choose one yourself, or enable a dictionary for your language in Dictionary." : {
@@ -609,6 +658,12 @@
     },
     "Text" : {
 
+    },
+    "That answer was not saved: %@" : {
+      "comment" : "Shown on a review card when the grade could not be written"
+    },
+    "That review could not be taken back: %@" : {
+      "comment" : "Shown when undoing a review failed"
     },
     "The %@ download stopped: %@. What arrived and still checks out is kept, and it resumes from there." : {
       "localizations" : {
@@ -668,6 +723,9 @@
     },
     "The quick brown fox jumps over the lazy dog." : {
       "comment" : "Type specimen in the Reading pane; any sentence that shows off the reader's script will do"
+    },
+    "The review could not be started: %@" : {
+      "comment" : "Shown in the Review window when its cards could not be read"
     },
     "The sense here is a guess — not confirmed" : {
 
@@ -745,6 +803,9 @@
     "Undo" : {
 
     },
+    "Undo the last review" : {
+
+    },
     "Unknown" : {
 
     },
@@ -764,6 +825,9 @@
 
     },
     "Website" : {
+
+    },
+    "What does this mean here?" : {
 
     },
     "Whatever is selected is looked up, wherever you are." : {
@@ -797,6 +861,12 @@
 
     },
     "You have met this sense before" : {
+
+    },
+    "You have not saved any meanings to study yet." : {
+
+    },
+    "You recalled it before revealing the answer" : {
 
     },
     "Your dictionaries could not all be asked, so this may not be the whole answer." : {

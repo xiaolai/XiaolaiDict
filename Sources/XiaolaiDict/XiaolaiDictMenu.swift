@@ -54,6 +54,9 @@ struct XiaolaiDictMenu: View {
         }
 
         Button(app.drawerIsVisible ? "Hide Reading History" : "Reading History") { app.toggleHistory() }
+        // Above the dictionary picker, because reviewing is what the reader came to do and choosing
+        // a dictionary is a setting they touch once.
+        Button("Review…") { app.showReview() }
 
         studyFrom
 

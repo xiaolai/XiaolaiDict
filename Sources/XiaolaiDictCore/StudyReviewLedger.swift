@@ -350,3 +350,111 @@ extension Ledger {
         return found
     }
 }
+
+/// **What a review surface is given, in two halves that cannot be confused.**
+///
+/// The front and the back are separate types, and the ledger hands them over separately, because
+/// "never answer the question unasked" is a rule a view has to keep on every draw. A single value
+/// holding both is one `if` away from showing the answer, and that `if` is written by whoever adds the
+/// next feature. Here the surface physically does not have the answer until it asks.
+public struct ReviewCue: Sendable, Equatable {
+    public let card: StudyCard
+    /// The word as it was on screen, which is not always its dictionary form.
+    public let word: String
+    /// The reader's own sentence. **Theirs, not a publisher's** — which is what makes it a cue and
+    /// not an answer.
+    public let sentence: String
+    /// Where the word sits in it, so the card can mark the occurrence the reader actually met.
+    public let range: NSRange?
+    public let place: ReadingPlace
+    public let readAt: Date
+    /// How the capture went. A card with no usable sentence shows none rather than the word echoed
+    /// back into the column and dressed as context.
+    public let quality: CaptureQuality?
+    /// How precisely the target is known — a keyed sense, an entry, a phrase — so the card can say
+    /// what it is asking about without saying what it means.
+    public let target: StudyTarget
+
+    public init(card: StudyCard, word: String, sentence: String, range: NSRange?,
+                place: ReadingPlace, readAt: Date, quality: CaptureQuality?, target: StudyTarget) {
+        self.card = card
+        self.word = word
+        self.sentence = sentence
+        self.range = range
+        self.place = place
+        self.readAt = readAt
+        self.quality = quality
+        self.target = target
+    }
+}
+
+/// The back of the card. Fetched only when the reader asks for it.
+public struct ReviewAnswer: Sendable, Equatable {
+    public let text: String
+    /// Which dictionary said so, where one did. **A card attributes its answer**; the reader's own
+    /// words are attributed to nobody, which is the difference `origin` records.
+    public let dictionary: String?
+    public let origin: StudyAnswer.Origin
+
+    public init(text: String, dictionary: String?, origin: StudyAnswer.Origin) {
+        self.text = text
+        self.dictionary = dictionary
+        self.origin = origin
+    }
+}
+
+extension Ledger {
+    /// The front of a card: everything needed to ask, and nothing that answers.
+    ///
+    /// Built from the **most recent** reading that evidences the note. A reader who met the word three
+    /// times is asked with the sentence they met it in last, which is the one they are likeliest to
+    /// recognise; the others stay in the timeline.
+    public func cue(forCard id: UUID) throws -> ReviewCue? {
+        guard let card = try card(id: id),
+              let note = try notes(where: "WHERE id = ?", bind: [.text(card.noteID.uuidString)]).first
+        else { return nil }
+        let lookups = try lookupIDs(evidencing: card.noteID)
+        guard let newest = lookups.last, let reading = try reading(ofLookup: newest) else { return nil }
+        return ReviewCue(
+            card: card, word: reading.surface, sentence: reading.sentence,
+            range: reading.sentenceRange, place: reading.place, readAt: reading.at,
+            quality: reading.quality, target: note.target)
+    }
+
+    /// The back of a card. **A separate call on purpose** — see `ReviewCue`.
+    public func revealed(cardID: UUID) throws -> ReviewAnswer? {
+        guard let card = try card(id: cardID), let answer = try answer(of: card.noteID),
+              answer.isUsable else { return nil }
+        guard let note = try notes(where: "WHERE id = ?",
+                                   bind: [.text(card.noteID.uuidString)]).first else { return nil }
+        return ReviewAnswer(
+            text: answer.text,
+            dictionary: answer.origin == .dictionary ? note.target.dictionary : nil,
+            origin: answer.origin)
+    }
+
+    /// How many cards are eligible now, for a surface that must say what it is not showing.
+    ///
+    /// **Counted, not estimated.** "All done today" over a backlog is the one claim a review surface
+    /// may never make, and this is what lets the end of a batch say how much is still there.
+    public func dueCount(at when: Date, dictionary: String?) throws -> Int {
+        let now = when.timeIntervalSince1970
+        var bind: [SQLiteValue] = [.real(now), .real(now)]
+        var scope = ""
+        if let dictionary {
+            scope = "AND n.dictionary = ?"
+            bind.append(.text(dictionary))
+        }
+        var count = 0
+        try run("""
+            SELECT COUNT(*) FROM study_cards c
+            JOIN study_notes n ON n.id = c.note_id
+            WHERE c.paused = 0
+              AND (c.hidden_until IS NULL OR c.hidden_until <= ?)
+              AND (c.due IS NULL OR c.due <= ?)
+              AND \(Self.askableNotePredicate)
+              \(scope)
+            """, bind: bind) { count = $0.integer(0) }
+        return count
+    }
+}

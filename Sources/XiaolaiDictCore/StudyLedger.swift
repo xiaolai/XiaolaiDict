@@ -230,7 +230,7 @@ extension Ledger {
         try run("DELETE FROM study_notes WHERE id = ?", bind: [.text(noteID.uuidString)]) { _ in }
     }
 
-    private func notes(where clause: String, bind values: [SQLiteValue]) throws -> [StudyNote] {
+    func notes(where clause: String, bind values: [SQLiteValue]) throws -> [StudyNote] {
         var found: [StudyNote] = []
         try run(
             """

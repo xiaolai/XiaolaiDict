@@ -36,10 +36,27 @@ import SwiftUI
 /// What never happens: arithmetic at a call site, a one-off override, or a second token that is the
 /// first one plus two points. `NoMagicValuesTests` catches the first of those mechanically; the
 /// other two are why this note exists.
-enum Token {
+public enum Token {
     /// Window and column sizes. **Not em multiples**, and deliberately so: a panel is sized against
     /// the screen and against what has to fit side by side in it, not against its own type. Forcing
     /// 760 into "63.3 em" would be arithmetic pretending to be a reason.
+    /// The Review window, which the reader opens deliberately and types into.
+    ///
+    /// **Public**, unlike its neighbours, because the scene that opens the window lives in the app
+    /// target and a window's opening size is a design value like any other. The alternative — a
+    /// literal in the scene — is the one-off override that turns a token system into decoration.
+    public enum Review {
+        /// What it **opens** at. A window the reader manages, so this is a starting size and not a
+        /// measurement of anything: they resize it and the system remembers. Wide enough for a
+        /// sentence at the standard text size without the cue wrapping into a paragraph, which is
+        /// what makes a cue read as a sentence rather than as a block of text.
+        public static let width: CGFloat = 480
+        /// Tall enough for a sentence, the word, the question and the buttons, with the answer's
+        /// space **unreserved** — a gap the size of a definition is the definition's shape, and the
+        /// window growing on reveal is the honest version of that.
+        public static let height: CGFloat = 320
+    }
+
     enum Panel {
         /// What the lookup window **opens** at, before the card has laid itself out — the scene
         /// is `.contentSize`, so the card's own width and its content decide the rest.
