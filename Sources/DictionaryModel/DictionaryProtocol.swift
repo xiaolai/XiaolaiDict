@@ -77,18 +77,47 @@ public struct PhraseHit: Codable, Sendable, Equatable {
 
     public let separation: PhraseSeparation
 
-    /// The phrase's entries. **Never merged with the word's**, and empty is a real answer: the detector
-    /// found the span in the dictionary's keys, and the bridge then found no readable entry for it.
-    public let entries: [DictionaryEntry]
+    /// What the dictionaries could say about the phrase, which is **not** always its meaning.
+    public let meaning: PhraseMeaning
+
+    /// The phrase's own entries, where it has any. **Never merged with the word's.**
+    public var entries: [DictionaryEntry] {
+        if case .ownEntry(let found) = meaning { return found }
+        return []
+    }
 
     public init(phrase: String, location: Int, length: Int,
-                separation: PhraseSeparation, entries: [DictionaryEntry]) {
+                separation: PhraseSeparation, meaning: PhraseMeaning) {
         self.phrase = phrase
         self.location = location
         self.length = length
         self.separation = separation
-        self.entries = entries
+        self.meaning = meaning
     }
+}
+
+/// Whether the phrase has an entry of its own, or is filed inside another word's.
+///
+/// **Measured, and the distinction is load-bearing** (2026-09-29, NOAD). *purple passage* is
+/// `m_en_gbus0830950` and *red herring* is `m_en_gbus0853810` — entries of their own, whose senses are the
+/// phrase's meaning. *take something into account* answers with `m_en_gbus0005190`, which is **`account`'s
+/// entry**: the framework returns the parent, and `EntryDocument` walks only `x_xd0`/`x_xd1`, so the
+/// sub-entry's own definition — "consider or include", one of 32 `df` elements and 16 sub-entries in that
+/// document — never becomes a `DictionarySense` at all.
+///
+/// Told apart by entry id: a phrase whose entry is also returned for one of its own words is a sub-entry.
+///
+/// **This is why it matters.** Showing the parent's leading sense under the phrase would print
+/// *take something into account — a report or description of an event* — the wrong meaning under the right
+/// phrase, which is worse than showing none because the reader cannot see it is wrong. And adding the
+/// parent's senses to the sense ladder's candidate set would be adding noise: measured, they are *account*'s
+/// six noun senses, and the phrase's meaning is in none of them.
+public enum PhraseMeaning: Codable, Sendable, Equatable {
+    /// The phrase's own entries. Their senses are the phrase's meaning, and are candidates for the ladder.
+    case ownEntry([DictionaryEntry])
+    /// Filed inside the named word's entry, so the phrase's meaning is not reachable through the live sense
+    /// path. Named rather than guessed at: the reader is told where to read it.
+    case filedUnder(String)
 }
 
 /// Whether the phrase's words sat together, and on whose authority they were allowed not to.

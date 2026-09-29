@@ -161,11 +161,28 @@ struct SenseResolver: Sendable {
         }
     }
 
+    /// `phrase` is the entries for the phrase the reader was standing inside, where there was one.
+    ///
+    /// **They join the candidate set rather than replacing it, and context decides between them.** Hovering
+    /// *take* in "take what people think into account" offers *take*'s 13 senses and
+    /// *take something into account*'s 6, and the selector answers which the reader is reading — the
+    /// question a span heuristic cannot answer and the reason the phrase is detected at all.
+    ///
+    /// Measured 2026-09-29: **25 of 32** words inside a phrase gain senses this way. The 7 that do not are
+    /// the words the phrase is *filed under* — hovering `account` in `take something into account`, or
+    /// `rein` in `keep a tight rein on` — where the framework already answers with that entry, so the
+    /// senses were in the set before. A first measurement compared each phrase against its head noun and
+    /// concluded the enlargement was a no-op; the head noun is not the word the reader hovered.
+    ///
+    /// **Rung 0 stops firing when a phrase is present, and that is correct.** A word with one sense is no
+    /// longer unambiguous once the sentence also holds a phrase: there is something to choose between, so
+    /// `.onlySense` — the strongest mark there is — must not be claimed.
     func resolve(
-        entries: [DictionaryEntry], sentence: String?, context: CaptureQuality.Context,
+        entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [],
+        sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?, at when: Date
     ) async -> SenseResolution {
-        let mine = primary.entries(among: entries)
+        let mine = primary.entries(among: entries + phraseEntries)
         guard !mine.isEmpty else { return SenseResolution(mark: nil, encounter: nil) }
 
         let candidates = Self.candidates(in: mine)

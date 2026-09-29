@@ -117,7 +117,10 @@ let package = Package(
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.
-        .testTarget(name: "DictionaryBridgeTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "DictionaryBridge", "AppleDictionaryFormat"]),
+        .testTarget(
+            name: "DictionaryBridgeTests",
+            dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore",
+                           "DictionaryBridge", "AppleDictionaryFormat", "PhraseLookup"]),
         .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
     ]
 )

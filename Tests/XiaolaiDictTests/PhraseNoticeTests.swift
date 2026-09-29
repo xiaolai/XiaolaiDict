@@ -33,9 +33,9 @@ struct PhraseNoticeTests {
     private static func hit(_ phrase: String = "take something into account",
                             location: Int = 0, length: Int = 12,
                             separation: PhraseSeparation = .marked(2),
-                            entries: [DictionaryEntry] = []) -> PhraseHit {
+                            meaning: PhraseMeaning = .ownEntry([])) -> PhraseHit {
         PhraseHit(phrase: phrase, location: location, length: length,
-                  separation: separation, entries: entries)
+                  separation: separation, meaning: meaning)
     }
 
     // MARK: - What the card is allowed to claim
@@ -144,6 +144,44 @@ struct PhraseNoticeTests {
     @Test func anEntryWithNoMarkedDefinitionGivesNone() {
         #expect(PhrasePresentation.definition(in: [Self.entry(nil)]) == nil)
         #expect(PhrasePresentation.definition(in: []) == nil)
+    }
+
+    // MARK: - The wrong meaning under the right words
+
+    /// **A phrase filed inside another word's entry shows no definition, and says where to read it.**
+    ///
+    /// Measured on NOAD: `take something into account` is answered with `m_en_gbus0005190`, which is
+    /// `account`'s entry — and the only definitions in hand are *account*'s six noun senses. Printing the
+    /// first would put *a report or description of an event* under the phrase: the wrong meaning under the
+    /// right words, and worse than none because the reader cannot see it is wrong.
+    @Test func aPhraseFiledUnderAnotherWordShowsNoDefinition() {
+        let found = PhrasePresentation(
+            .found(Self.hit(location: 0, length: 10, meaning: .filedUnder("account"))),
+            sentence: "take it into account")
+        #expect(found?.definition == nil, "no definition rather than the parent's")
+        #expect(found?.filedUnder == "account", "and the reader is told where to read it")
+    }
+
+    /// A phrase with an entry of its own shows that entry's meaning, which really is the phrase's.
+    @Test func aPhraseWithItsOwnEntryShowsItsOwnMeaning() {
+        let entry = Self.entry("an elaborate or excessively ornate passage", headword: "purple passage")
+        let found = PhrasePresentation(
+            .found(Self.hit("purple passage", location: 2, length: 14, separation: .none,
+                            meaning: .ownEntry([entry]))),
+            sentence: "a purple passage nobody could follow")
+        #expect(found?.definition == "an elaborate or excessively ornate passage")
+        #expect(found?.filedUnder == nil)
+    }
+
+    /// **Only an own entry's senses are candidates for the ladder.** `entries` is the accessor the resolver
+    /// reads, and for a sub-entry it must be empty — otherwise the selector is handed the parent's senses
+    /// and can confidently pick one of them as the meaning of the phrase.
+    @Test func aSubEntryOffersNoCandidatesToTheLadder() {
+        let entry = Self.entry("a report or description of an event", headword: "account")
+        #expect(PhraseHit(phrase: "take something into account", location: 0, length: 10,
+                          separation: .marked(2), meaning: .filedUnder("account")).entries.isEmpty)
+        #expect(PhraseHit(phrase: "purple passage", location: 0, length: 14,
+                          separation: .none, meaning: .ownEntry([entry])).entries.count == 1)
     }
 
     // MARK: - It has to reach the card

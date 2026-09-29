@@ -81,9 +81,20 @@ public enum DictionaryBridge {
                              phrases: (any PhraseFinding)? = nil) -> ServiceReply {
         switch request {
         case .lookup(let lookup):
-            .lookup(LookupAnswer(word: reply(to: lookup), phrase: phrase(for: lookup, using: phrases)))
+            answer(to: lookup, phrases: phrases)
         case .dictionaries(let reprobing): .dictionaries(capabilities(reprobing: reprobing))
         }
+    }
+
+    /// **One reply, and the word's entries are read once.** The phrase needs them to tell its own entry from
+    /// the entry it is filed inside, and asking the framework for the term twice would be a second walk of
+    /// every dictionary for an answer already in hand.
+    private static func answer(to request: LookupRequest, phrases: (any PhraseFinding)?) -> ServiceReply {
+        let word = reply(to: request)
+        let entries: [DictionaryEntry]
+        if case .entries(let found, _) = word { entries = Array(found) } else { entries = [] }
+        return .lookup(LookupAnswer(
+            word: word, phrase: phrase(for: request, using: phrases, word: entries)))
     }
 
     /// The phrase around the term, and its own entries.
@@ -95,7 +106,8 @@ public enum DictionaryBridge {
     /// A sentence longer than `LookupRequest.maximumSentenceLength` is `.notAsked`: it arrives from another
     /// process and is a passage rather than a reading context. Truncating it instead would be worse — the cut
     /// could fall inside the phrase.
-    static func phrase(for request: LookupRequest, using finder: (any PhraseFinding)?) -> PhraseAnswer {
+    static func phrase(for request: LookupRequest, using finder: (any PhraseFinding)?,
+                       word: [DictionaryEntry] = []) -> PhraseAnswer {
         guard let finder else { return .notAsked }
         guard let sentence = request.sentence, let term = request.termRange,
               sentence.utf16.count <= LookupRequest.maximumSentenceLength else { return .notAsked }
@@ -103,9 +115,36 @@ public enum DictionaryBridge {
         guard let span = finder.phrase(in: sentence, at: term) else { return .none }
         // The phrase's own entries, through the same door the word went through. Empty is a real answer:
         // the span is in the dictionary's keys and the framework still found nothing readable for it.
-        let entries = (try? entries(for: span.phrase))?.entries ?? []
+        let found = (try? entries(for: span.phrase))?.entries ?? []
         return .found(PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
-                                separation: span.separation, entries: entries))
+                                separation: span.separation,
+                                meaning: meaning(of: span.phrase, answered: found, term: word)))
+    }
+
+    /// Whether `answered` is the phrase's own entry or the entry it is filed inside.
+    ///
+    /// **By entry id, against the entries for the phrase's own words.** A sub-entry is answered with its
+    /// parent — `take something into account` returns `account`'s `m_en_gbus0005190` — and nothing in that
+    /// reply says so, so it has to be asked. The words are looked up rather than the term alone because the
+    /// reader may be hovering any of them: *take* in `take something into account` is not the parent, and
+    /// *account* is.
+    static func meaning(of phrase: String, answered: [DictionaryEntry],
+                        term: [DictionaryEntry]) -> PhraseMeaning {
+        let ids = Set(answered.compactMap(\.entryID))
+        guard !ids.isEmpty else { return .ownEntry(answered) }
+        // The term the reader looked up first: cheapest, and the commonest way a sub-entry is caught.
+        if let shared = term.first(where: { $0.entryID.map(ids.contains) == true }) {
+            return .filedUnder(shared.headword)
+        }
+        // Then the phrase's own words. A reader hovering *take* has *take*'s entries in `term`, which do not
+        // overlap; the parent is `account`, and only asking for it finds that out.
+        for word in phrase.split(separator: " ").map(String.init) where word.count > 1 {
+            guard let entries = try? entries(for: word).entries else { continue }
+            if let shared = entries.first(where: { $0.entryID.map(ids.contains) == true }) {
+                return .filedUnder(shared.headword)
+            }
+        }
+        return .ownEntry(answered)
     }
 
     /// Which words the capability probe tries, in order, until one is found in the dictionary being

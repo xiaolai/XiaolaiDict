@@ -13,9 +13,38 @@ public struct PhrasePresentation: Equatable, Sendable {
     /// Where the span sits in the reader's sentence, UTF-16, gap included.
     public let range: NSRange
     public let separation: PhraseSeparation
-    /// The phrase's leading definition, where its entry marks one. Nil is ordinary: the span is in the
-    /// dictionary's keys and its entry may still carry no `d:def` a parser can reach.
+    /// The phrase's leading definition, where the phrase has an **entry of its own** and that entry marks
+    /// one. Nil is ordinary, and for a sub-entry phrase it is the honest answer: the framework answers
+    /// `take something into account` with `account`'s entry, so the only definitions in hand are
+    /// *account*'s — and printing one under the phrase would be the wrong meaning under the right words.
     public let definition: String?
+
+    /// Where to read the phrase, for one filed inside another word's entry. Nil where it has its own.
+    ///
+    /// **Said rather than worked around.** The reader gets the phrase, the span in their sentence, and the
+    /// name of the entry that explains it. What they do not get is a definition this app cannot reach:
+    /// `EntryDocument` walks `x_xd0`/`x_xd1` and a sub-entry is `x_xo<N>`, so those 32 definitions in
+    /// *account*'s document are invisible to the live sense path.
+    public let filedUnder: String?
+
+    /// The sense of the phrase the reader met, once the selector has decided.
+    ///
+    /// **Nil is the answer "you are reading the word, not the phrase."** The selector is given the word's
+    /// senses and the phrase's in one set; where it picks one of the word's, the phrase stays on the card as
+    /// something the reader might have missed, without claiming to be what they read.
+    public var met: SenseMet?
+
+    /// Which meaning of the phrase fits the reader's own sentence.
+    public struct SenseMet: Equatable, Sendable {
+        public let definition: String?
+        /// A sense the selector picked is a guess and reads as one; a sense the reader tapped is a fact.
+        public let isHypothesis: Bool
+
+        public init(definition: String?, isHypothesis: Bool) {
+            self.definition = definition
+            self.isHypothesis = isHypothesis
+        }
+    }
 
     /// **Whether the card is allowed to sound certain about the span.**
     ///
@@ -27,11 +56,13 @@ public struct PhrasePresentation: Equatable, Sendable {
         return false
     }
 
-    public init(phrase: String, range: NSRange, separation: PhraseSeparation, definition: String?) {
+    public init(phrase: String, range: NSRange, separation: PhraseSeparation,
+                definition: String?, filedUnder: String? = nil) {
         self.phrase = phrase
         self.range = range
         self.separation = separation
         self.definition = definition
+        self.filedUnder = filedUnder
     }
 
     /// The card's reading of one lookup's phrase answer, or nil where there is nothing to draw.
@@ -48,8 +79,14 @@ public struct PhrasePresentation: Equatable, Sendable {
         // that offset — the same defect `sentenceRange` already documents for the word.
         guard range.location >= 0, range.length > 0,
               NSMaxRange(range) <= (sentence as NSString).length else { return nil }
-        self.init(phrase: hit.phrase, range: range, separation: hit.separation,
-                  definition: Self.definition(in: hit.entries))
+        switch hit.meaning {
+        case .ownEntry(let entries):
+            self.init(phrase: hit.phrase, range: range, separation: hit.separation,
+                      definition: Self.definition(in: entries))
+        case .filedUnder(let headword):
+            self.init(phrase: hit.phrase, range: range, separation: hit.separation,
+                      definition: nil, filedUnder: headword)
+        }
     }
 
     /// The first definition any of the phrase's entries marks, in the order the dictionaries answered.
@@ -84,11 +121,27 @@ struct PhraseNoticeView: View {
             Text(verbatim: phrase.phrase)
                 .font(.system(size: scale.text.body, weight: .medium))
                 .foregroundStyle(accent)
-            if let definition = phrase.definition {
+            // **The sense in context where one was chosen, the leading one otherwise.** Showing the
+            // first definition when the selector has decided a different one fits would put the wrong
+            // meaning under the right phrase — worse than showing none, because the reader cannot see it
+            // is wrong.
+            if let definition = phrase.met?.definition ?? phrase.definition {
                 Text(verbatim: definition)
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)
                     .lineLimit(Token.Limit.wrapLines)
+            }
+            // Where the phrase is filed inside another word, the reader is told where to read it rather
+            // than shown a definition this app cannot reach.
+            if let headword = phrase.filedUnder, phrase.met == nil {
+                Text("In the entry for \(headword)")
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.tertiary)
+            }
+            if let met = phrase.met, met.isHypothesis {
+                Text("The sense here is a guess — not confirmed")
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.orange)
             }
             if phrase.isGuess {
                 // Said in the same voice the card uses for a proposed sense, because it is the same kind

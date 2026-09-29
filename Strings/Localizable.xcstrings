@@ -282,6 +282,9 @@
         }
       }
     },
+    "In the entry for %@" : {
+
+    },
     "In the panel" : {
 
     },
@@ -662,6 +665,9 @@
     },
     "The quick brown fox jumps over the lazy dog." : {
       "comment" : "Type specimen in the Reading pane; any sentence that shows off the reader's script will do"
+    },
+    "The sense here is a guess — not confirmed" : {
+
     },
     "The sense you read could not be identified." : {
 

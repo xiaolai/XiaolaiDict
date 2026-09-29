@@ -130,6 +130,20 @@ final class LookupRunner {
         } else {
             entries = []
         }
+        // **The phrase's own entries, for the selector to choose against.** Not merged into `entries`:
+        // that list is what the card draws and what `primaryEntry` is chosen from, and a phrase's entry
+        // appearing there would put *take something into account* in the reader's dictionary switcher as
+        // though they had looked it up.
+        // **Only where the phrase has an entry of its own**, which is the one measurement that decided this.
+        // A sub-entry phrase is answered with its parent, so `hit.entries` would be *account*'s six noun
+        // senses under `take something into account` — noise in the candidate set, and a hypothesis the
+        // selector could confidently pick. `PhraseHit.entries` is already empty for that case; this says so
+        // rather than relying on it.
+        let phraseEntries: [DictionaryEntry] = {
+            guard case .found(let hit) = resolved.phrase,
+                  case .ownEntry(let entries) = hit.meaning else { return [] }
+            return entries
+        }()
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
         let chosenPrimary = primary()
@@ -170,7 +184,7 @@ final class LookupRunner {
             // two answers to arrive in either order.
             group.addTask {
                 .sense(await resolver.resolve(
-                    entries: entries, sentence: selection.sentence,
+                    entries: entries, phrase: phraseEntries, sentence: selection.sentence,
                     context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
             }
             for await arrival in group {
@@ -185,6 +199,17 @@ final class LookupRunner {
                     guard let mark = answered.mark, panel.isCurrent(ticket) else { continue }
                     presentation.sense = mark
                     presentation.senseOwner = answered.owner
+                    // **Where the winning sense is one of the phrase's, the phrase says so.** The card's
+                    // entries are the word's, so `senseOwner` matches none of them and no mark is drawn
+                    // there — correctly, the reader was not reading that word. The notice is the only
+                    // surface that can show it, and showing the phrase's *first* definition instead would
+                    // put the wrong meaning under the right phrase.
+                    if let key = mark.key,
+                       let sense = Self.sense(key, in: phraseEntries) {
+                        presentation.phrase?.met = PhrasePresentation.SenseMet(
+                            definition: sense.definition ?? sense.text,
+                            isHypothesis: mark.isHypothesis)
+                    }
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -204,6 +229,17 @@ final class LookupRunner {
                                 // question that was never finished being asked.
                                 abstention: Task.isCancelled ? nil : resolution.abstention),
             encounter: resolution.encounter)
+    }
+
+    /// The sense `key` names, among the phrase's entries. Nil where the winning sense was one of the
+    /// word's, which is the ordinary case and the answer "you are reading the word".
+    private static func sense(_ key: String, in entries: [DictionaryEntry]) -> DictionarySense? {
+        for entry in entries {
+            for block in entry.blocks {
+                if let found = block.senses.first(where: { $0.key == key }) { return found }
+            }
+        }
+        return nil
     }
 
     /// The ledger row for a lookup — what was read, where, how it was captured, what answered, and
