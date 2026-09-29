@@ -8,7 +8,12 @@ actor LedgerStore {
 
     /// A ledger at `path`, created if absent. Opening is file and database work — creation, and a
     /// schema migration on the first launch after an update — so call it off the main actor.
+    /// Where this store's file is. **Kept**, because erasure has to reach the copies beside it and
+    /// a caller guessing the path would guess the reader's own rather than a test's.
+    let path: String
+
     init(path: String) throws {
+        self.path = path
         ledger = try Ledger(path: path)
     }
 
@@ -150,6 +155,15 @@ actor LedgerStore {
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
     func deleteReading(lookups ids: [Int]) throws { try ledger.deleteReading(lookups: ids) }
+
+    func readingErasureImpact(at path: String) throws
+        -> (lookups: Int, notesLeftWithoutACue: Int, backups: Int) {
+        try ledger.readingErasureImpact(at: path)
+    }
+
+    func eraseReadingData(at path: String) throws -> Ledger.ErasureReport {
+        try ledger.eraseReadingData(at: path)
+    }
 
     /// A lookup the reader did not mean to make. The senses met in it go with it.
     func delete(lookup id: Int) throws {

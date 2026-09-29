@@ -93,10 +93,22 @@
         }
       }
     },
+    "%lld backup copies could not be deleted." : {
+
+    },
+    "%lld backup copies made by XiaolaiDict will be deleted too." : {
+
+    },
     "%lld cards" : {
 
     },
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
+
+    },
+    "%lld lookups deleted." : {
+
+    },
+    "%lld lookups will be deleted." : {
 
     },
     "%lld more due" : {
@@ -116,6 +128,9 @@
       "comment" : "Menu warning when more than one permission is missing"
     },
     "%lld reviewed" : {
+
+    },
+    "%lld saved meanings will lose their sentence." : {
 
     },
     "%lld selected" : {
@@ -244,10 +259,22 @@
     "Confirm the meaning" : {
 
     },
+    "Copies you made yourself — Time Machine, an exported file, anything you duplicated — are not affected and cannot be reached from here." : {
+
+    },
     "Copy the word and this sense" : {
 
     },
     "Copy this definition" : {
+
+    },
+    "Delete %lld lookups" : {
+
+    },
+    "Delete all reading history…" : {
+
+    },
+    "Deleting your reading history keeps the meanings you saved. They will need a new sentence before they can be reviewed again." : {
 
     },
     "Device Control and Data Access" : {
@@ -559,6 +586,9 @@
     "Reading History" : {
 
     },
+    "Reading history" : {
+
+    },
     "Reading history drawer" : {
 
     },
@@ -728,6 +758,9 @@
     "That answer was not saved: %@" : {
       "comment" : "Shown on a review card when the grade could not be written"
     },
+    "That could not be done: %@" : {
+
+    },
     "That review could not be taken back: %@" : {
       "comment" : "Shown when undoing a review failed"
     },
@@ -764,6 +797,9 @@
     },
     "The last lookup was not recorded: %@" : {
       "comment" : "Menu warning when a lookup could not be written to the ledger"
+    },
+    "The ledger could not be opened." : {
+      "comment" : "Shown when the erase command cannot reach the reader's ledger"
     },
     "The licence could not be opened. It is published under %@, at %@." : {
       "localizations" : {

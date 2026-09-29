@@ -45,6 +45,10 @@ public struct DictionaryChoice {
 
 struct ReadingPane: View {
     var appearance: Appearance?
+    /// The erase command, which lives here because it is about the reader's reading rather than
+    /// about their cards. Nil where the pane is not connected — an instrument, or a preview.
+    var erase: ErasePresentation?
+    var eraseAction: (@MainActor (EraseAction) -> Void)?
 
     var body: some View {
         Form {
@@ -55,6 +59,9 @@ struct ReadingPane: View {
                     Text("This pane is not connected to the reader's settings.")
                         .foregroundStyle(.secondary)
                 }
+            }
+            if let erase, let eraseAction {
+                EraseReadingSection(state: erase, act: eraseAction)
             }
         }
         .formStyle(.grouped)

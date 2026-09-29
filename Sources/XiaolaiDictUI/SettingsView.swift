@@ -88,6 +88,10 @@ public struct SettingsView: View {
     private var openSetup: (() -> Void)?
     /// The local model's licence, downloaded with its weights — nil until there is a model.
     private var modelLicence: URL?
+    /// The erase command's state and its action. Optional together: a preview shows the pane
+    /// without one rather than being given a half-wired destructive control.
+    private var erase: ErasePresentation?
+    private var eraseAction: (@MainActor (EraseAction) -> Void)?
 
     /// Stands in for the app's policy in a preview, so the hover pane is live rather than inert
     /// wherever it is looked at. In the app the binding is passed in and this is never read.
@@ -100,7 +104,9 @@ public struct SettingsView: View {
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
         hover: Binding<HoverPolicy>? = nil, dictionary: DictionaryChoice? = nil,
-        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil, modelLicence: URL? = nil
+        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil, modelLicence: URL? = nil,
+        erase: ErasePresentation? = nil,
+        eraseAction: (@MainActor (EraseAction) -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         self.appearance = appearance
@@ -109,6 +115,8 @@ public struct SettingsView: View {
         self.shortcut = shortcut
         self.openSetup = openSetup
         self.modelLicence = modelLicence
+        self.erase = erase
+        self.eraseAction = eraseAction
     }
 
     public var body: some View {
@@ -229,7 +237,7 @@ public struct SettingsView: View {
 
     @ViewBuilder private func content(of pane: SettingsPane) -> some View {
         switch pane {
-        case .reading: ReadingPane(appearance: appearance)
+        case .reading: ReadingPane(appearance: appearance, erase: erase, eraseAction: eraseAction)
         case .lookup: LookupPane(policy: hover ?? $unattached, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
         case .permissions: PermissionsPane(model: model, openSetup: openSetup)

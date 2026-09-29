@@ -461,6 +461,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     @ObservationIgnored lazy var libraryModel = LibraryModel(
         store: { [weak self] in self?.recorder.store })
 
+    /// The erase command's model, in the Reading settings pane.
+    @ObservationIgnored lazy var eraseModel = EraseModel(
+        store: { [weak self] in self?.recorder.store })
+
     /// What the settings window is showing — which pane, and the permission probe's last answer.
     /// Owned here rather than inside the window so `--settings-report` can select a pane from
     /// outside and measure what the window does about it.

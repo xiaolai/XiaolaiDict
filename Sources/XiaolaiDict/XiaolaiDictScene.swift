@@ -162,7 +162,9 @@ struct XiaolaiDictSettings: View {
             dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
             openSetup: { app.showSetup() },
-            modelLicence: app.models.licenceURL)
+            modelLicence: app.models.licenceURL,
+            erase: app.eraseModel.presentation,
+            eraseAction: { [model = app.eraseModel] in model.act($0) })
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure.
         .background(WindowAccessor { app.settingsWindow = $0 })
