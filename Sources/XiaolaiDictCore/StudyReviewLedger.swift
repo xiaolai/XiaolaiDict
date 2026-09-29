@@ -456,15 +456,24 @@ extension Ledger {
                 phase: beforePhase,
                 lastReview: row.isNull(7) ? nil : Date(timeIntervalSince1970: row.real(7)),
                 due: row.isNull(8) ? nil : Date(timeIntervalSince1970: row.real(8)))
+            let kind = ReviewEvent.Kind(rawValue: try row.text(17)) ?? .graded
+            // **`after.lastReview` is derived, not stored — and the derivation is per kind.**
+            // `reviewed_at` is the card's new last review for a *grade*, by definition. For
+            // practice it is not: practice moves nothing, so the card's last review is still
+            // whenever it was last graded. Reconstructing it as the practice timestamp made the
+            // stored event disagree with the one `practise` returned — a retry of the same
+            // attempt answered differently — and it broke undo, whose guard is that the card is
+            // still in the state the latest event produced: a practice attempt reported a stale
+            // revision to a reader whose card nothing had touched.
             let after = ScheduledCard(
                 state: MemoryState(stability: row.real(10), difficulty: row.real(11)),
-                phase: afterPhase, lastReview: reviewedAt,
+                phase: afterPhase,
+                lastReview: kind == .practice ? before.lastReview : reviewedAt,
                 due: Date(timeIntervalSince1970: row.real(12)))
             found.append(ReviewEvent(
                 id: id, cardID: cardID, grade: grade, reviewedAt: reviewedAt, before: before,
                 after: after, schedulerVersion: try row.text(13), retention: row.real(14),
-                cardRevision: row.integer(15),
-                kind: ReviewEvent.Kind(rawValue: try row.text(17)) ?? .graded,
+                cardRevision: row.integer(15), kind: kind,
                 voidedAt: row.isNull(16) ? nil : Date(timeIntervalSince1970: row.real(16))))
         }
         return found

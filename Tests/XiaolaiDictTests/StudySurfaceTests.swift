@@ -41,28 +41,36 @@ struct StudySurfaceTests {
     /// allow-list is how a rule like this dies, and `everyExemptionIsRealAndEveryUnwiredMethodIsListed`
     /// fails in both directions so a name cannot rot here after it gains a caller.
     private static let exempt: [String: String] = [
-        "isDue": "A predicate on a value, used wherever a card is judged.",
-        "readiness": "One note's facts, gathered for the library's own query.",
-        "introductions": "The allowance's denominator, counted by dueCards.",
-        "scheduledDays": "The scheduler's own arithmetic.",
-        "link": "Joins a note to a lookup inside enrol, which is the only correct caller.",
-        "locators": "Evidence carried with a phrase note; read by the note's own equality.",
-        "lookupIDs": "The timeline's first step, inside the ledger.",
-        "existingCard": "Reads without creating; the timeline and the queue use it.",
-        "encounters": "A lookup's senses, read by the reading projection.",
-        "repeatedlyLapsed": """
+        "isDue(at:": "A predicate on a value, used wherever a card is judged.",
+        "readiness(of:": "One note's facts, gathered for the library's own query.",
+        "introductions(since:": "The allowance's denominator, counted by dueCards.",
+        "scheduledDays(stability:": "The scheduler's own arithmetic.",
+        "link(noteID:": "Joins a note to a lookup inside enrol, which is the only correct caller.",
+        "locators(of:": "Evidence carried with a phrase note; read by the note's own equality.",
+        "lookupIDs(evidencing:": "The timeline's first step, inside the ledger.",
+        "existingCard(of:": "Reads without creating; the timeline and the queue use it.",
+        "encounters(ofLookup:": "A lookup's senses, read by the reading projection.",
+        "repeatedlyLapsed(": """
             R09's programmatic form. Its surface is the library's Struggling filter, which shares             lapseDaysExpression rather than the function — a page narrowed in Swift after the             LIMIT is a short page (ADR-0033).
             """,
-        "backUp": "Taken before a migration changes the ledger's shape; not a reader's command.",
-        "history": "A lemma's lookups, read by the drawer's own projection.",
-        "reviews": "One card's events, gathered by `timeline`.",
+        "backUp(to:": "Taken before a migration changes the ledger's shape; not a reader's command.",
+        "history(of:": "A lemma's lookups, read by the drawer's own projection.",
+        "reviews(ofCard:": "One card's events, gathered by `timeline`.",
+        // **Exposed by the label-aware match**, which stopped one overload vouching for another.
+        // Each had an in-Core caller all along and was hidden behind a namesake that did not.
+        "lookupIDs(fromSource:": "One source's lookups, counted by the erasure impact.",
+        "remove(noteID:": "One note, removed by `removeFromStudy`.",
+        "note(for:": "Looks a target up during `enroll`, to decide new against existing.",
+        "reading(ofLookup:": "One lookup's projection, read by the drawer and the timeline.",
+        "interval(stability:": "The scheduler's own arithmetic.",
+        "recall(elapsedDays:": "The forgetting curve; the scheduler's own arithmetic.",
         // **Named, not forgiven.** These are gaps with no surface designed yet, and saying so here
         // is what stops the next audit rediscovering them as new — ADR-0038.
-        "card": "Creates the card for a note; enrol is the only correct caller.",
-        "integrity": "GAP — D01 has no recovery surface.",
-        "readingImpact": "GAP — erasing one source's reading is not offered.",
-        "newlyMetSenses": "GAP — no surface designed.",
-        "studyList": "GAP — no surface designed.",
+        "card(of:": "Creates the card for a note; enrol is the only correct caller.",
+        "integrity(": "GAP — D01 has no recovery surface.",
+        "readingImpact(ofSource:": "GAP — erasing one source's reading is not offered.",
+        "newlyMetSenses(limit:": "GAP — no surface designed.",
+        "studyList(limit:": "GAP — no surface designed.",
     ]
 
     private static var root: URL {
@@ -70,14 +78,36 @@ struct StudySurfaceTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    /// The names declared `public func` in a file.
+    /// Each `public func` in a file, as **name plus its first argument label** — `card(of:`,
+    /// `card(id:`, `allTags(`.
+    ///
+    /// **The label is what tells overloads apart, exactly as Swift does.** Matching the bare name
+    /// made `Ledger.card(id:)` — a read — vouch for `Ledger.card(of:)`, which *creates*, so a
+    /// creating call with no caller would have been reported as wired by its read-only namesake.
+    /// The same collision cost a rename earlier in this file's history (`hide` → `postpone`); a
+    /// label-aware match is the fix that does not need one.
     static func publicFunctions(in code: String) -> [String] {
         code.split(separator: "\n").compactMap { line in
             let text = line.trimmingCharacters(in: .whitespaces)
             guard text.hasPrefix("public func ") else { return nil }
             let rest = text.dropFirst("public func ".count)
             let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-            return name.isEmpty ? nil : String(name)
+            guard !name.isEmpty else { return nil }
+            let after = rest.dropFirst(name.count)
+            guard after.hasPrefix("(") else { return nil }
+            // **The first identifier after `(` is the external label.** Not "the text before the
+            // first colon": in `func f(to path: Int)` the colon follows the *internal* name, so
+            // that reading found no label at all and every overload collapsed back onto its bare
+            // name. A wildcard `_` and empty parentheses both give a call written `name(`.
+            let inside = after.dropFirst()
+            let label = inside.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+            // **A defaulted first parameter is not a label the call site has to write.**
+            // `retention(since:dictionary:)` is called `retention(dictionary:)`, so keying it by
+            // `since` reported a wired method as unwired. Where the first parameter can be
+            // omitted, fall back to the bare name — less precise, and the only thing that is true.
+            let firstParameter = inside.prefix { $0 != "," && $0 != ")" }
+            if firstParameter.contains("=") { return "\(name)(" }
+            return label.isEmpty || label == "_" ? "\(name)(" : "\(name)(\(label):"
         }
     }
 
@@ -119,11 +149,11 @@ struct StudySurfaceTests {
                 callers += (try? String(contentsOf: file, encoding: .utf8)) ?? ""
             }
         }
-        // **A member call, `.name(`** — not a bare `name(`. Every one of these is reached through
-        // a `ledger`, a `store` or a `$0`, and the looser spelling matched `symlink(` for `link`
-        // and a drawer's own `hide()` for the ledger's. A scan is only as wide as the spelling it
-        // searches for, and the first spelling reported nine methods as wired that nothing calls.
-        return declared.filter { !callers.contains(".\($0)(") }
+        // **A member call with its first label** — `.card(of:`, not `card(`. Two earlier
+        // spellings were each too wide: a bare `name(` matched `symlink(` for `link` and a
+        // drawer's own `hide()` for the ledger's, and `.name(` still let one overload vouch for
+        // another. A scan is only as wide as the spelling it searches for.
+        return declared.filter { !callers.contains(".\($0)") }
     }
 
     /// **Both directions.** An unwired method must be exempt with a reason, and an exemption whose
@@ -152,8 +182,15 @@ struct StudySurfaceTests {
         let declared = try Self.publicFunctions(in: String(
             contentsOf: Self.root.appending(path: "Sources/XiaolaiDictCore/StudyDay.swift"),
             encoding: .utf8))
-        #expect(declared.contains("introductions"), "the scan read the file it thinks it did")
-        #expect(Self.publicFunctions(in: "public func abc(") == ["abc"])
+        #expect(declared.contains("introductions(since:"), "the scan read the file it thinks it did")
+        #expect(Self.publicFunctions(in: "public func abc(") == ["abc("])
+        #expect(Self.publicFunctions(in: "public func abc(of x: Int)") == ["abc(of:"])
+        #expect(Self.publicFunctions(in: "public func abc(_ x: Int)") == ["abc("],
+                "a wildcard label is written `abc(` at the call site")
+        #expect(Self.publicFunctions(in: "public func abc(to x: Int)") == ["abc(to:"],
+                "the label is the first identifier, not the text before the first colon")
+        #expect(Self.publicFunctions(in: "public func abc(to x: Int = 1, b: Int)") == ["abc("],
+                "a defaulted first parameter need not be written at the call site")
         #expect(Self.publicFunctions(in: "    private func abc(").isEmpty)
     }
 }

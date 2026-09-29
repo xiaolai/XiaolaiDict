@@ -33,8 +33,14 @@ struct LibraryWiringTests {
     }
 
     private func model(_ path: String, scripts: Set<ProbeScript> = [.latin]) -> LibraryModel {
-        LibraryModel(store: { Task { try LedgerStore(path: path) } },
-                     studyScripts: { scripts }, clock: { self.now })
+        // **Somewhere disposable, always.** Nothing in this suite exports, but a default that
+        // reached the reader's Downloads folder is how the other suite's export test came to
+        // delete what it found there.
+        let exports = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
+        return LibraryModel(store: { Task { try LedgerStore(path: path) } },
+                            studyScripts: { scripts }, clock: { self.now },
+                            exportDirectory: { exports })
     }
 
     @Test func thelibraryListsWhatTheReaderSaved() async throws {
@@ -597,9 +603,25 @@ struct LibraryOrganisationWiringTests {
             lookupID: lookup, at: now)
     }
 
-    private func model(_ path: String) -> LibraryModel {
-        LibraryModel(store: { Task { try LedgerStore(path: path) } },
-                     studyScripts: { [.latin] }, clock: { self.now })
+    /// A scratch directory for this suite's exports. **Never the reader's own Downloads**: the
+    /// export test used to write there and then delete what it found, so every `make test` on any
+    /// Mac destroyed an export its owner had made.
+    private func exportScratch() -> (URL, () -> Void) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
+        return (directory, { try? FileManager.default.removeItem(at: directory) })
+    }
+
+    private func model(_ path: String, exportTo directory: URL? = nil,
+                       at when: Date? = nil) -> LibraryModel {
+        // **Always somewhere disposable**, even when a test does not care: a default that reached
+        // the real Downloads folder is exactly how this went wrong the first time.
+        let exports = directory ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
+        let clock = when ?? now
+        return LibraryModel(store: { Task { try LedgerStore(path: path) } },
+                            studyScripts: { [.latin] }, clock: { clock },
+                            exportDirectory: { exports })
     }
 
     @Test func taggingTheSelectionReachesTheLedger() async throws {
@@ -620,19 +642,52 @@ struct LibraryOrganisationWiringTests {
     @Test func exportingWritesAfileAndSaysWhere() async throws {
         let (path, clean) = scratch()
         defer { clean() }
+        let (exports, cleanExports) = exportScratch()
+        defer { cleanExports() }
         let ledger = try Ledger(path: path)
         try save(ledger, "fine")
-        let model = model(path)
+        let model = model(path, exportTo: exports)
         await model.reload()
         model.act(.export)
         try await settle { model.presentation.exported != nil }
 
         let written = try #require(model.presentation.exported)
-        defer { try? FileManager.default.removeItem(atPath: written) }
+        // **Inside the scratch directory, not the reader's.** Asserted rather than assumed: the
+        // destination is injected now, and a default that leaked back would put this test's
+        // writes — and its cleanup — into someone's Downloads folder again.
+        #expect(written.hasPrefix(exports.path), "wrote outside the scratch directory: \(written)")
         #expect(FileManager.default.fileExists(atPath: written), "no file at \(written)")
         let text = try String(contentsOfFile: written, encoding: .utf8)
         #expect(text.contains("what fine means"), "the reader's own answer should travel")
         #expect(text.contains("#columns:XiaolaiDictID"))
+    }
+
+    /// **No export replaces another.** One fixed filename meant a second export silently
+    /// destroyed the first, and an atomic write is still a replacement.
+    @Test func asecondExportDoesNotReplaceTheFirst() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let (exports, cleanExports) = exportScratch()
+        defer { cleanExports() }
+        let ledger = try Ledger(path: path)
+        try save(ledger, "fine")
+
+        let first = model(path, exportTo: exports)
+        await first.reload()
+        first.act(.export)
+        try await settle { first.presentation.exported != nil }
+        let one = try #require(first.presentation.exported)
+
+        // A later sitting: the name carries the instant, so a second export is a second file.
+        let second = model(path, exportTo: exports, at: now.addingTimeInterval(60))
+        await second.reload()
+        second.act(.export)
+        try await settle { second.presentation.exported != nil }
+        let two = try #require(second.presentation.exported)
+
+        #expect(one != two, "both exports went to \(one)")
+        #expect(FileManager.default.fileExists(atPath: one), "the first export was destroyed")
+        #expect(FileManager.default.fileExists(atPath: two))
     }
 
     /// Suggestions appear under their own filter and are **offered, never enrolled**.

@@ -305,6 +305,55 @@ struct ReviewWiringTests {
         #expect(question(tomorrow)?.word == first)
     }
 
+    /// **A card graded again after an undo must land.** Undo is itself a write, so the ledger
+    /// card's revision has moved twice by the time the reader answers the restored card — once
+    /// for the grade, once for taking it back. The session kept the revision the card was *drawn*
+    /// at, so the second grade was refused as stale and the reader could not answer a card they
+    /// had deliberately gone back to.
+    @Test func acardCanBeGradedAgainAfterAnUndo() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 1, inProgress: true)
+        let model = model(path)
+        await model.start()
+        let word = try #require(question(model)?.word)
+
+        model.act(.grade(.good))
+        try await settle {
+            if case .finished = model.presentation.stage { return true }
+            return false
+        }
+        model.act(.undo)
+        try await settle { self.question(model)?.word == word }
+
+        model.act(.grade(.good))
+        try await settle {
+            if case .finished = model.presentation.stage { return true }
+            return false
+        }
+        guard case .finished(let summary) = model.presentation.stage else {
+            Issue.record("the batch never finished")
+            return
+        }
+        #expect(summary.graded == 1, "the re-grade landed")
+        #expect(question(model)?.problem == nil)
+
+        // And the ledger has exactly one live event for it: the first was voided, not replaced.
+        let reopened = try Ledger(path: path)
+        let card = try #require(try reopened.dueCards(
+            at: now.addingTimeInterval(-1), limit: 10, dictionary: nil,
+            newAllowance: .max, dayStart: .distantPast).first
+            ?? reopened.library(LibraryQuery()).first.flatMap { try reopened.existingCard(of: $0.id) })
+        // The fixture's own `.again` — what made the card due — is a live grade too, so the claim
+        // is about what this sitting did: the undone attempt is voided, the replacement is not,
+        // and the replacement did not land twice.
+        let all = try reopened.reviews(ofCard: card.id)
+        #expect(all.filter(\.isVoid).count == 1,
+                "exactly the undone attempt is voided — all: \(all.map { "\($0.kind) void=\($0.isVoid)" })")
+        #expect(all.last?.isVoid == false, "the replacement is live")
+        #expect(all.count == 3, "setup grade, the attempt taken back, and its replacement")
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
     private func settle(_ condition: @MainActor () -> Bool) async throws {

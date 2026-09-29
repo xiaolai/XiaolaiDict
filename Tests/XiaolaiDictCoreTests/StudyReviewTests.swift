@@ -29,6 +29,51 @@ struct StudyReviewTests {
 
     private func scheduler() throws -> MemoryScheduler { try MemoryScheduler() }
 
+    // MARK: - Practice leaves the schedule alone, on the way back out too
+
+    /// **A practice event read back must say what it said when it was written.**
+    ///
+    /// `after.lastReview` is not a column — it is derived from `reviewed_at`, which is right for a
+    /// grade and wrong for practice: practice moves nothing, so the card's last review is still
+    /// whenever it was last *graded*. Reconstructed as the practice timestamp, the stored event
+    /// disagreed with the one `practise` returned, and a retry of the same attempt answered with a
+    /// different value than the first call.
+    @Test func apracticeEventSurvivesTheRoundTripUnchanged() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: try scheduler())
+
+        let eventID = UUID()
+        let later = now.addingTimeInterval(3_600)
+        let written = try ledger.practise(cardID: card.id, .good, eventID: eventID, at: later)
+        #expect(written.after == written.before, "practice records that nothing moved")
+
+        let read = try #require(try ledger.reviews(ofCard: card.id).first { $0.id == eventID })
+        #expect(read.after == read.before, "and it still says so when it is read back")
+        #expect(read.after.lastReview == written.after.lastReview,
+                "the practice timestamp is not the card's last review")
+        // The idempotency path answers with the stored event, so it must answer the same thing.
+        let retried = try ledger.practise(cardID: card.id, .good, eventID: eventID, at: later)
+        #expect(retried.after.lastReview == written.after.lastReview)
+    }
+
+    /// **Undo still works after a practice attempt**, which is what the round trip above is
+    /// protecting. Undo guards on the card still being in the state the latest event produced; a
+    /// practice event that claimed to have moved `lastReview` failed that guard and reported a
+    /// stale revision to a reader whose card nothing had touched.
+    @Test func undoWorksAfterApracticeAttempt() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: try scheduler())
+        _ = try ledger.practise(cardID: card.id, .again, eventID: UUID(),
+                                at: now.addingTimeInterval(3_600))
+
+        let undone = try ledger.undoLatestReview(ofCard: card.id, at: now.addingTimeInterval(7_200))
+        #expect(undone.kind == .practice, "the practice attempt is the latest thing to take back")
+    }
+
     // MARK: - One grade, once
 
     @Test func agradeMovesTheCardAndRecordsWhatItDid() throws {

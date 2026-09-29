@@ -67,13 +67,21 @@ final class LibraryModel {
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     private let studyScripts: @MainActor () -> Set<ProbeScript>
     private let clock: @MainActor () -> Date
+    /// Where an export is written. **A parameter, like the clock**, because a test that exercised
+    /// the real path wrote into the reader's own Downloads folder and then deleted what it found
+    /// there — every `make test` on any Mac, destroying an export they had made.
+    private let exportDirectory: @MainActor () -> URL
 
     init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
          studyScripts: @escaping @MainActor () -> Set<ProbeScript> = { HoverPolicyStore().load().scripts },
-         clock: @escaping @MainActor () -> Date = { .now }) {
+         clock: @escaping @MainActor () -> Date = { .now },
+         exportDirectory: @escaping @MainActor () -> URL = {
+             FileManager.default.homeDirectoryForCurrentUser.appending(path: "Downloads")
+         }) {
         self.store = store
         self.studyScripts = studyScripts
         self.clock = clock
+        self.exportDirectory = exportDirectory
     }
 
     func act(_ action: LibraryAction) {
@@ -281,18 +289,36 @@ final class LibraryModel {
     /// Writes the collection out and remembers where it went.
     ///
     /// **The path is shown**, because an export the reader cannot find did not happen for them.
+    ///
+    /// **Dated, so no export can destroy another.** One fixed filename meant every export silently
+    /// replaced the last one — and an atomic write is still a replacement. A reader who exported
+    /// on Monday, edited the file, and exported again on Friday lost Monday's work with nothing
+    /// said. The name carries the instant it was taken, which is also what a reader looking at two
+    /// of them needs to tell them apart.
     private func export() async {
         guard let opening = store(), let ledger = try? await opening.value else { return }
+        let directory = exportDirectory()
         do {
             let written = try await ledger.export(dictionary: nil)
-            let url = FileManager.default.homeDirectoryForCurrentUser
-                .appending(path: "Downloads/XiaolaiDict-cards.txt")
+            let url = directory.appending(path: "XiaolaiDict-cards-\(Self.stamp(clock())).txt")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try written.tabSeparated().write(to: url, atomically: true, encoding: .utf8)
             exported = url.path
         } catch {
             exported = error.localizedDescription
         }
         await reload()
+    }
+
+    /// `2026-09-30-051351`: sortable, filename-safe, and second-resolution so two exports in one
+    /// sitting are two files. Fixed to a neutral locale and timezone — a filename is not prose,
+    /// and one built from the reader's locale would sort differently on their next Mac.
+    static func stamp(_ when: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        return formatter.string(from: when)
     }
 
     private func query() -> LibraryQuery {

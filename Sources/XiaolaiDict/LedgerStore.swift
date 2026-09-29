@@ -160,6 +160,12 @@ actor LedgerStore {
         try ledger.undoLatestReview(ofCard: cardID, at: when)
     }
 
+    /// What revision a card is at now. **Read after an undo**, which is a write and moves it — the
+    /// session cannot know the new number and a grade committed against the old one is refused.
+    func revision(ofCard cardID: UUID) throws -> Int? {
+        try ledger.card(id: cardID)?.revision
+    }
+
     // MARK: - Library
 
     func library(_ query: LibraryQuery) throws -> [LibraryRow] { try ledger.library(query) }

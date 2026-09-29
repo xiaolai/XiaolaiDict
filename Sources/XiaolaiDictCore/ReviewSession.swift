@@ -108,15 +108,23 @@ public struct ReviewSession: Sendable, Equatable {
     /// **The session's half of undo.** The ledger's half is voiding the event; this restores the
     /// cursor and clears the outcome, and the answer is shown again because the reader has already
     /// seen it — hiding it now would pretend the attempt had not happened.
+    /// `revision` is the card's revision **after** the ledger's half of the undo, or nil where no
+    /// ledger write happened (a skip, a postponement).
+    ///
+    /// **An undo is a write, so the card has moved twice by now** — once for the grade, once for
+    /// taking it back. Keeping the revision the card was *drawn* at meant the reader's next answer
+    /// to the restored card was refused as stale: they had deliberately gone back to a card and
+    /// then could not answer it. Nothing here can compute the new number — this type holds no
+    /// ledger — so the caller that did the write supplies it.
     @discardableResult
-    public mutating func undoLast() -> Presentation? {
+    public mutating func undoLast(revision: Int? = nil) -> Presentation? {
         guard let index = presentations.lastIndex(where: { $0.isAnswered }) else { return nil }
         let previous = presentations[index]
         // **A new identity for a new attempt.** The presentation's id is the grade's idempotency
         // key: reusing it after an undo made the replacement collide with the voided event, and the
-        // ledger answered the new attempt with the old, taken-back result. The card and the
-        // revision it was drawn at are the same; the attempt is not.
-        var renewed = Presentation(cardID: previous.cardID, revision: previous.revision)
+        // ledger answered the new attempt with the old, taken-back result. The card is the same;
+        // the attempt, and the revision it will be committed against, are not.
+        var renewed = Presentation(cardID: previous.cardID, revision: revision ?? previous.revision)
         // The answer stays shown — the reader has already seen it, and hiding it again would
         // pretend the attempt had not happened.
         renewed.isRevealed = previous.isRevealed

@@ -127,6 +127,21 @@ for started, kind, block in blocks:
                  f"\n    {(error.text or '').rstrip()}")
 print(f"{dashC} `python3 -c` and {heredocs} heredoc Python block(s) compile")
 
+# **Nothing here may use a bash 5 builtin.** The shebang is `#!/bin/bash`, which is 3.2 on macOS,
+# and under `set -u` an undefined dynamic variable ends the run rather than reading as empty.
+# `$EPOCHREALTIME` reached line 893 and would have aborted the deadline stage at its one timing
+# measurement; `now_seconds` replaces it. The others are listed because they fail the same way.
+bash5 = [
+    (number, line.strip())
+    for number, line in enumerate(lines, 1)
+    if re.search(r"\$\{?(EPOCHREALTIME|EPOCHSECONDS|SRANDOM|BASH_ARGV0)\b", line)
+    and not isComment(line)
+]
+if bash5:
+    sys.exit("bash 5 builtins are unbound under this file's `#!/bin/bash` (3.2 on macOS) and "
+             "`set -u` ends the run on one:\n    "
+             + "\n    ".join(f"line {n}: {t}" for n, t in bash5))
+
 # **A report assignment must not be able to end the run.** `x=$(f)` takes f's exit status, and
 # `set -e` acts on it — so a report that came back malformed killed the script before the `flunk`
 # written for that very case could run, and the stage recorded a line number in another stage's
@@ -489,6 +504,19 @@ row_after() {
     while [ "$(rows_of "$baseline" "$surface" "$app")" -eq 0 ] && [ "$waited" -lt 100 ]; do sleep 0.1; waited=$((waited + 1)); done
     printf '%s' "$((waited / 10)).$((waited % 10))"
 }
+
+# **A wall clock with sub-second resolution, on the shell this file actually runs under.**
+#
+# `$EPOCHREALTIME` is bash 5. The shebang here is `#!/bin/bash`, which on macOS is **3.2** — this
+# file says so itself elsewhere, where it explains why it has no associative arrays — and 3.2 does
+# not define it. Under `set -u` that is not a zero, it is `unbound variable` and the end of the
+# run: the one measurement in the deadline stage that needs a clock would have taken the stage
+# with it. Verified 2026-09-30: `/bin/bash -c 'set -u; x=$EPOCHREALTIME'` prints
+# `EPOCHREALTIME: unbound variable`.
+#
+# Python because it is already a hard dependency of this file — every report validator is one —
+# so it costs no new requirement, and `date +%s.%N` is GNU-only anyway.
+now_seconds() { python3 -c 'import time; print(f"{time.monotonic():.6f}")'; }
 
 # **Why a lookup produced nothing, when the app itself knows.**
 #
@@ -890,13 +918,13 @@ else
     else
         stopped="${PIDS[*]}"
         kill -STOP "${PIDS[@]}"
-        started=$EPOCHREALTIME
+        started=$(now_seconds)
         "$helpers/keys" 2 control option
         shown="" ; waiting=""
         for _ in $(seq 1 200); do
             view=$("$helpers/panel" com.xiaolaidict)
             if printf '%s' "$view" | grep -q 'Looking up'; then
-                shown=$EPOCHREALTIME; waiting=$view; break
+                shown=$(now_seconds); waiting=$view; break
             fi
             sleep 0.05
         done

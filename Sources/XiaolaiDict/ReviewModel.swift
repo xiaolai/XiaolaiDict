@@ -229,16 +229,23 @@ final class ReviewModel {
     private func undo() async {
         guard let session, let opening = store() else { return }
         guard let last = session.presentations.last(where: { $0.isAnswered }) else { return }
+        // **The revision the restored card will be graded against.** Nil for an outcome that wrote
+        // nothing; read back from the ledger otherwise, because the undo itself moved it and the
+        // session cannot know the new number. Without this the reader's next answer to the card
+        // they had just gone back to was refused as stale.
+        var restored: Int?
         if case .graded = last.outcome {
             do {
-                try await opening.value.undoLatestReview(ofCard: last.cardID, at: clock())
+                let ledger = try await opening.value
+                try await ledger.undoLatestReview(ofCard: last.cardID, at: clock())
+                restored = try await ledger.revision(ofCard: last.cardID)
             } catch {
                 problem = String(localized: "That review could not be taken back: \(error.localizedDescription)",
                                  comment: "Shown when undoing a review failed")
                 return
             }
         }
-        self.session?.undoLast()
+        self.session?.undoLast(revision: restored)
         await draw()
     }
 
