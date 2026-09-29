@@ -289,6 +289,19 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A word the reader named rather than met — **Study** on a suggestion in the library.
+    ///
+    /// **No sentence, and the capture says so.** There is no reading behind a suggestion, only a
+    /// lemma the reader has looked up on several days, so the context is `.missing` and the card
+    /// draws no sentence rather than echoing the word back as if it were one.
+    func lookUpWord(_ word: String) {
+        lookUpHovered(
+            Selection(text: word, sentence: nil, rangeInSentence: nil,
+                      quality: .accessibility(.accessibilityTextRange, context: .missing),
+                      place: ReadingPlace(bundleID: XiaolaiDictIdentity.app, name: nil)),
+            at: UpPoint(NSEvent.mouseLocation))
+    }
+
     /// A word the reader rested on. The same path as the shortcut from here: one lookup at a
     /// time, and a newer one supersedes whatever was still arriving.
     /// **Not private: `--panel-report` drives it.** That report measures the panel's window and the
@@ -459,7 +472,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// The Library window's model, kept for the same reason.
     @ObservationIgnored lazy var libraryModel = LibraryModel(
-        store: { [weak self] in self?.recorder.store })
+        store: { [weak self] in self?.recorder.store },
+        lookUp: { [weak self] word in self?.lookUpWord(word) })
 
     /// The erase command's model, in the Reading settings pane.
     @ObservationIgnored lazy var eraseModel = EraseModel(

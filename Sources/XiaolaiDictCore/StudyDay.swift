@@ -35,13 +35,41 @@ public struct StudyDay: Sendable, Equatable, Codable {
     /// **Before the cutoff belongs to yesterday.** 01:00 on Tuesday is Monday's study day, which is
     /// the whole point of a cutoff that is not midnight.
     public func start(containing when: Date) -> Date {
+        let calendar = self.calendar
+        // **Built from the day's own components, never from midnight plus seconds.** Adding
+        // `4 * 3600` is real-time arithmetic across a local-time boundary: on a spring-forward
+        // day an hour is missing, so it lands at 05:00, and on a fall-back day an hour repeats,
+        // so it lands at 03:00. A reader in a DST zone had a study day that began an hour early
+        // or an hour late, twice a year — and the new-card allowance turns over on it.
+        //
+        // `date(bySettingHour:)` is still not used: it searches forward and would answer
+        // *tomorrow's* cutoff for a time before today's, which is the opposite of what is wanted.
+        var parts = calendar.dateComponents([.year, .month, .day], from: when)
+        parts.hour = cutoffHour
+        // Nil is unreachable for a Gregorian calendar and a clamped hour; falling back to the old
+        // arithmetic keeps a wrong-by-an-hour answer rather than inventing one.
+        guard let today = calendar.date(from: parts) else {
+            return calendar.startOfDay(for: when).addingTimeInterval(TimeInterval(cutoffHour) * 3_600)
+        }
+        if when >= today { return today }
+        // **One calendar day back, not 86,400 seconds**, for the same reason.
+        return calendar.date(byAdding: .day, value: -1, to: today) ?? today.addingTimeInterval(-86_400)
+    }
+
+    /// The instant the study day *after* the one containing `when` begins.
+    ///
+    /// Named here rather than left to callers, because "tomorrow" spelled as `+ 86_400` is the
+    /// same defect as the one above: `postpone` used it, so a card put off on a fall-back evening
+    /// came back an hour early.
+    public func startOfNextDay(containing when: Date) -> Date {
+        let today = start(containing: when)
+        return calendar.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(86_400)
+    }
+
+    private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        let midnight = calendar.startOfDay(for: when)
-        // `date(bySettingHour:)` is deliberately not used: it searches forward and would answer
-        // *tomorrow's* cutoff for a time before today's, which is the opposite of what is wanted.
-        let cutoff = midnight.addingTimeInterval(TimeInterval(cutoffHour) * 3_600)
-        return when >= cutoff ? cutoff : cutoff.addingTimeInterval(-86_400)
+        return calendar
     }
 }
 

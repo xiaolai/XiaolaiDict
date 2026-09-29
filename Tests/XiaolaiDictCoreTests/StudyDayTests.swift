@@ -47,6 +47,44 @@ struct StudyDayTests {
         #expect(day.start(containing: start.addingTimeInterval(-1)) == start.addingTimeInterval(-86_400))
     }
 
+    /// **The cutoff is 04:00 on every day of the year, including the two that are not 24 hours
+    /// long.** Adding `4 * 3600` to midnight is real-time arithmetic over a local-time boundary:
+    /// on a spring-forward day an hour is missing, so it lands at 05:00, and on a fall-back day
+    /// an hour repeats, so it lands at 03:00. A reader in a DST zone got a day that started an
+    /// hour early or an hour late, twice a year, silently — and the allowance turns over on it.
+    @Test func thecutoffIs0400OnDaylightSavingDaysToo() throws {
+        let zone = try #require(TimeZone(identifier: "America/New_York"))
+        let day = StudyDay(timeZone: zone, cutoffHour: 4)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+
+        // 2026-03-08 springs forward at 02:00; 2026-11-01 falls back at 02:00.
+        for (month, dayOfMonth) in [(3, 8), (11, 1)] {
+            let noon = try #require(calendar.date(from: DateComponents(
+                year: 2026, month: month, day: dayOfMonth, hour: 12)))
+            let start = day.start(containing: noon)
+            let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: start)
+            #expect(parts.hour == 4 && parts.minute == 0,
+                    "2026-\(month)-\(dayOfMonth): the day started at \(parts.hour ?? -1):\(parts.minute ?? -1)")
+            #expect(parts.day == dayOfMonth, "and on the day the reader is in")
+        }
+    }
+
+    /// **A day before a short day is still one day.** Stepping back by 86,400 seconds from a
+    /// cutoff lands an hour out whenever a transition falls between them.
+    @Test func theDayBeforeAdaylightSavingDayEndsAtItsOwnCutoff() throws {
+        let zone = try #require(TimeZone(identifier: "America/New_York"))
+        let day = StudyDay(timeZone: zone, cutoffHour: 4)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        // 01:00 on the spring-forward day belongs to the day before, which began at 04:00 on the 7th.
+        let smallHours = try #require(calendar.date(from: DateComponents(
+            year: 2026, month: 3, day: 8, hour: 1)))
+        let parts = calendar.dateComponents([.month, .day, .hour], from: day.start(containing: smallHours))
+        #expect(parts.day == 7 && parts.hour == 4,
+                "started at 2026-\(parts.month ?? -1)-\(parts.day ?? -1) \(parts.hour ?? -1):00")
+    }
+
     /// A cutoff of midnight is allowed and means what it says; nonsense is clamped rather than
     /// refused, because this is a preference and not a boundary anything hostile reaches.
     @Test func anOutOfRangeCutoffIsClamped() {

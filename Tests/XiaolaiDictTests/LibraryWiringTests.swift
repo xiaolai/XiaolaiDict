@@ -211,6 +211,34 @@ struct LibraryWiringTests {
         #expect(model.presentation.tagVocabulary.isEmpty, "and the empty tag stops being offered")
     }
 
+    /// **Study actually looks the word up.** `suggestionTaken` was set and `takeSuggestion` was
+    /// called by these tests alone — nothing in the app read either, so pressing Study did
+    /// nothing at all. A control that silently refuses its own click is worse than a disabled
+    /// one: there is not even a reason to read.
+    @Test func pressingStudyOnAsuggestionAsksForAlookup() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        for day in 0..<2 {
+            _ = try ledger.record(LookupRecord(
+                surface: "recondite", lemma: "recondite", context: "A recondite argument.",
+                lemmaBasis: .tagger, language: "en", contextRange: nil,
+                place: ReadingPlace(bundleID: nil, name: nil),
+                lookedUpAt: now.addingTimeInterval(Double(day) * 86_400), result: .found,
+                answeredBy: .dictionaryService, quality: nil, script: .latin))
+        }
+
+        var asked: [String] = []
+        let model = LibraryModel(store: { Task { try LedgerStore(path: path) } },
+                                 studyScripts: { [.latin] }, clock: { self.now },
+                                 lookUp: { asked.append($0) })
+        model.act(.filter(.suggested))
+        try await settle { model.presentation.suggestions.count == 1 }
+
+        model.act(.study(lemma: "recondite"))
+        #expect(asked == ["recondite"], "the word never reached the lookup path")
+    }
+
     /// **"Already know" is reversible** (C05). `unignoreSuggestion` existed and nothing reached
     /// it, so a word declared known by a mis-click was declared known for ever — and invisibly,
     /// because setting one aside enrols nothing and leaves no row in the library to find.
@@ -302,6 +330,24 @@ struct LibraryWiringTests {
         #expect(Set(model.presentation.rows.map(\.word)) == ["hold", "holding"],
                 "showed \(model.presentation.rows.map(\.word)) under a search for hol")
         #expect(model.presentation.total == 2, "and the count agrees with the list")
+    }
+
+    /// **A card put off until tomorrow does not say "Due".** The library read the schedule and
+    /// not `hiddenUntil`, so a card the reader had deliberately set aside sat in the list looking
+    /// exactly like work waiting for them — and no batch that day would offer it.
+    @Test func apostponedCardSaysWhenItComesBack() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
+
+        let model = model(path)
+        await model.reload()
+        let row = try #require(model.presentation.rows.first)
+        #expect(row.due != "Due", "a card nothing will offer today is not due")
+        #expect(row.due != "New", "and it is not waiting to be introduced either")
     }
 
     // MARK: - Bulk actions, and putting them back (M04)

@@ -156,7 +156,7 @@ final class ReviewModel {
     /// memory, so nothing here grades, and the daily allowance is unspent.
     private func postpone(_ attempt: UUID?) async {
         guard let card = session?.current, card.id == attempt, let opening = store() else { return }
-        let until = studyDay.start(containing: clock()).addingTimeInterval(86_400)
+        let until = studyDay.startOfNextDay(containing: clock())
         do {
             let ledger = try await opening.value
             try await ledger.postpone(cardID: card.cardID, until: until)
@@ -264,16 +264,25 @@ final class ReviewModel {
         // session cannot know the new number. Without this the reader's next answer to the card
         // they had just gone back to was refused as stale.
         var restored: Int?
-        if case .graded = last.outcome {
-            do {
+        do {
+            switch last.outcome {
+            case .graded:
                 let ledger = try await opening.value
                 try await ledger.undoLatestReview(ofCard: last.cardID, at: clock())
                 restored = try await ledger.revision(ofCard: last.cardID)
-            } catch {
-                problem = String(localized: "That review could not be taken back: \(error.localizedDescription)",
-                                 comment: "Shown when undoing a review failed")
-                return
+            case .postponed:
+                // **Taking it back reaches the ledger too.** Undo reversed a grade durably and a
+                // postponement only in the session, so the card came back on screen and stayed
+                // hidden until tomorrow in every query behind it: the reader undid the action and
+                // it was still in force.
+                try await opening.value.postpone(cardID: last.cardID, until: nil)
+            case .skipped, .none:
+                break
             }
+        } catch {
+            problem = String(localized: "That could not be taken back: \(error.localizedDescription)",
+                             comment: "Shown when undoing a review or a postponement failed")
+            return
         }
         self.session?.undoLast(revision: restored)
         await draw()

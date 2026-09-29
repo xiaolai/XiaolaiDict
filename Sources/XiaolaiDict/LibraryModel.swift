@@ -67,6 +67,15 @@ final class LibraryModel {
         defer { suggestionTaken = nil }
         return suggestionTaken
     }
+
+    /// Looks a word up, as the reader pressing **Study** on a suggestion asks for.
+    ///
+    /// **Nothing read this before.** `suggestionTaken` was set and `takeSuggestion` was called by
+    /// the tests alone, so the button did nothing at all — a control that refuses its own click,
+    /// silently, which is worse than one that is disabled. C06 says a suggestion is *offered*,
+    /// never enrolled: this hands the word to the lookup path and the reader decides from the
+    /// card, exactly as if they had met it while reading.
+    private let lookUp: @MainActor (String) -> Void
     private var scripts: Set<ProbeScript> = []
 
     /// How many rows one page holds. The library is paged rather than capped: a reader looking for
@@ -89,11 +98,13 @@ final class LibraryModel {
          clock: @escaping @MainActor () -> Date = { .now },
          exportDirectory: @escaping @MainActor () -> URL = {
              FileManager.default.homeDirectoryForCurrentUser.appending(path: "Downloads")
-         }) {
+         },
+         lookUp: @escaping @MainActor (String) -> Void = { _ in }) {
         self.store = store
         self.studyScripts = studyScripts
         self.clock = clock
         self.exportDirectory = exportDirectory
+        self.lookUp = lookUp
     }
 
     func act(_ action: LibraryAction) {
@@ -134,6 +145,7 @@ final class LibraryModel {
             // met, which comes from a lookup and not from a list — so this hands the word to the
             // app and they decide, which is what C06 says a suggestion is.
             suggestionTaken = lemma
+            lookUp(lemma)
             return
         case .ignore(let lemma, let language):
             let when = clock()
@@ -416,6 +428,14 @@ final class LibraryModel {
     /// date in the past dressed as a plan.
     static func due(of row: LibraryRow, at now: Date) -> String? {
         guard let card = row.card else { return nil }
+        // **Put off beats the schedule.** `hiddenUntil` is what the queue filters on, so a card
+        // the reader set aside is not offered today whatever its due date says — and the row
+        // drew "Due" or "New" over it, which is the list telling them work is waiting that
+        // nothing will hand them.
+        if let hidden = card.hiddenUntil, hidden > now {
+            return String(localized: "Put off until \(hidden.formatted(date: .abbreviated, time: .omitted))",
+                          comment: "A library row for a card the reader set aside until a date")
+        }
         guard let due = card.scheduled.due else { return String(localized: "New",
             comment: "A library row for a card that has never been reviewed") }
         if due <= now { return String(localized: "Due", comment: "A library row for an overdue card") }

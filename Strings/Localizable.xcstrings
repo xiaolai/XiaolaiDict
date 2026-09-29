@@ -654,6 +654,9 @@
     "Press a shortcut…" : {
 
     },
+    "Put off until %@" : {
+      "comment" : "A library row for a card the reader set aside until a date"
+    },
     "Quit XiaolaiDict" : {
 
     },
@@ -868,8 +871,8 @@
     "That could not be done: %@" : {
 
     },
-    "That review could not be taken back: %@" : {
-      "comment" : "Shown when undoing a review failed"
+    "That could not be taken back: %@" : {
+      "comment" : "Shown when undoing a review or a postponement failed"
     },
     "The %@ download stopped: %@. What arrived and still checks out is kept, and it resumes from there." : {
       "localizations" : {

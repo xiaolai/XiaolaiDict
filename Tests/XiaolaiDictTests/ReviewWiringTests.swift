@@ -411,6 +411,30 @@ struct ReviewWiringTests {
                 "the next card is showing an answer nobody asked for: \(next.answer?.text ?? "")")
     }
 
+    /// **Undoing "Not today" brings the card back today.** Undo reversed a grade in the ledger
+    /// and a postponement only in the session, so the card returned to the sitting on screen and
+    /// stayed hidden until tomorrow in every query behind it — the reader took the action back
+    /// and it was still in force.
+    @Test func undoingApostponementBringsTheCardBack() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 2, inProgress: true)
+        let model = model(path)
+        await model.start()
+        let first = try #require(question(model)?.word)
+
+        model.act(.postpone)
+        try await settle { self.question(model)?.word != first }
+        model.act(.undo)
+        try await settle { self.question(model)?.word == first }
+
+        let reopened = try Ledger(path: path)
+        let hidden = try reopened.library(LibraryQuery(now: now)).compactMap {
+            try reopened.existingCard(of: $0.id)
+        }.filter { $0.hiddenUntil != nil }
+        #expect(hidden.isEmpty, "\(hidden.count) card(s) are still put off after the undo")
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
