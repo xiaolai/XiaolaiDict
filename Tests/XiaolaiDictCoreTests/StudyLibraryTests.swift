@@ -305,6 +305,52 @@ struct StudyLibraryTests {
                 "the evidence is not a draft to be edited")
     }
 
+    /// **An undo restores what was there, not what it assumes was there** (M04).
+    ///
+    /// Pause is per *card* and a note can have more than one, so "put it back" cannot mean "unpause
+    /// the note": a note with one card paused and one running, bulk-paused and then undone, must
+    /// come back with one paused and one running. Recording the note's disposition would have
+    /// resumed both and called it an undo.
+    @Test func anUndoOfAbulkPauseRestoresEachCardsOwnState() throws {
+        let ledger = try ledger()
+        let alreadyPaused = try save(ledger, word: "resting")
+        let running = try save(ledger, word: "working")
+        _ = try ledger.card(of: alreadyPaused.id, at: now)
+        _ = try ledger.card(of: running.id, at: now)
+        try ledger.setPaused(true, ofNotes: [alreadyPaused.id])
+
+        let ids = [alreadyPaused.id, running.id]
+        let before = try ledger.pauseStates(ofNotes: ids)
+        #expect(before.values.filter { $0 }.count == 1)
+
+        try ledger.setPaused(true, ofNotes: ids)
+        #expect(try ledger.pauseStates(ofNotes: ids).values.allSatisfy { $0 })
+
+        try ledger.restorePauseStates(before)
+        #expect(try ledger.pauseStates(ofNotes: ids) == before,
+                "the one that was already resting stays resting")
+    }
+
+    /// The same for archiving, which is per note. **`.active` is not the answer** — a candidate the
+    /// reader never took up, archived by accident and restored, must go back to being a candidate.
+    @Test func anUndoOfAbulkArchiveRestoresTheDispositionEachNoteHad() throws {
+        let ledger = try ledger()
+        let active = try save(ledger, word: "working")
+        let candidate = try save(ledger, word: "offered")
+        try ledger.setEnrollment(.candidate, of: candidate.id)
+
+        let ids = [active.id, candidate.id]
+        let before = try ledger.enrollments(ofNotes: ids)
+        #expect(before[candidate.id] == .candidate)
+
+        try ledger.setEnrollment(.archived, ofNotes: ids)
+        #expect(try ledger.enrollments(ofNotes: ids).values.allSatisfy { $0 == .archived })
+
+        try ledger.restoreEnrollments(before)
+        #expect(try ledger.enrollments(ofNotes: ids) == before,
+                "restored to what each was, not to active")
+    }
+
     /// A bulk action lands on exactly the set it was given, all of it or none.
     @Test func abulkActionAffectsExactlyTheSelection() throws {
         let ledger = try ledger()

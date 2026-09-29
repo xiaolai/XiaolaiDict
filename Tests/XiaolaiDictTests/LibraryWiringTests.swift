@@ -148,6 +148,134 @@ struct LibraryWiringTests {
         #expect(model.presentation.rows.first(where: { $0.id == paused.id })?.status == .paused)
     }
 
+    // MARK: - Bulk actions, and putting them back (M04)
+
+    /// **Pause was a one-way door.** `setPaused(false, …)` existed and nothing could reach it, so a
+    /// reader who paused a selection had no way back — not by undo and not by hand. Both halves
+    /// are wired here: the control turns into Resume when everything selected is already resting.
+    @Test func pausingIsReversibleByHand() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        _ = try ledger.card(of: note.id, at: now)
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        #expect(model.presentation.selectionIsPaused == false)
+
+        model.act(.pause)
+        try await settle { model.presentation.rows.first?.status == .paused }
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selectionIsPaused }
+
+        model.act(.resume)
+        try await settle { model.presentation.rows.first?.status == nil }
+        #expect(try Ledger(path: path).pauseStates(ofNotes: [note.id]).values.allSatisfy { !$0 })
+    }
+
+    /// Archiving likewise: out of the way, and reachable again.
+    @Test func archivingIsReversibleByHand() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        model.act(.archive)
+        try await settle { model.presentation.rows.first?.status == .archived }
+
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selectionIsArchived }
+        model.act(.unarchive)
+        try await settle { model.presentation.rows.first?.status == nil }
+        #expect(try Ledger(path: path).enrollments(ofNotes: [note.id])[note.id] == .active)
+    }
+
+    /// **The undo restores what each row was**, which is the whole difficulty: one of these is
+    /// already paused before the bulk action, and an undo that resumed everything would be a
+    /// second unasked-for change wearing the label of a reversal.
+    @Test func undoingAbulkPausePutsEachRowBackAsItWas() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let resting = try save(ledger, "resting")
+        let working = try save(ledger, "working")
+        _ = try ledger.card(of: resting.id, at: now)
+        _ = try ledger.card(of: working.id, at: now)
+        try ledger.setPaused(true, ofNotes: [resting.id])
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.undoable == nil, "nothing has happened yet")
+        model.act(.select([resting.id, working.id]))
+        try await settle { model.presentation.selection.count == 2 }
+        model.act(.pause)
+        try await settle { model.presentation.rows.allSatisfy { $0.status == .paused } }
+        #expect(model.presentation.undoable == .pause(2))
+
+        model.act(.undo)
+        try await settle { model.presentation.undoable == nil }
+        let states = try Ledger(path: path).pauseStates(ofNotes: [resting.id, working.id])
+        #expect(states.values.filter { $0 }.count == 1,
+                "the one that was already resting is still resting")
+        let byWord = Dictionary(uniqueKeysWithValues:
+            model.presentation.rows.map { ($0.word, $0.status) })
+        #expect(byWord["resting"] == .paused)
+        #expect(byWord["working"] == LibraryPresentation.Status?.none)
+    }
+
+    /// And an archive that swept up a candidate puts the candidate back as a candidate.
+    @Test func undoingAbulkArchiveDoesNotEnrolAnything() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let active = try save(ledger, "working")
+        let candidate = try save(ledger, "offered")
+        try ledger.setEnrollment(.candidate, of: candidate.id)
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([active.id, candidate.id]))
+        try await settle { model.presentation.selection.count == 2 }
+        model.act(.archive)
+        try await settle { model.presentation.undoable == .archive(2) }
+
+        model.act(.undo)
+        try await settle { model.presentation.undoable == nil }
+        let after = try Ledger(path: path).enrollments(ofNotes: [active.id, candidate.id])
+        #expect(after[candidate.id] == .candidate, "not promoted by way of being restored")
+        #expect(after[active.id] == .active)
+    }
+
+    /// **One level, and it stops being offered once something else has happened.** An undo button
+    /// that survives an unrelated change is one the reader will press expecting it to reverse the
+    /// last thing they did.
+    @Test func theundoIsRetiredByThenextChange() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        _ = try ledger.card(of: note.id, at: now)
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        model.act(.pause)
+        try await settle { model.presentation.undoable == .pause(1) }
+
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        model.act(.tag("later"))
+        try await settle { model.presentation.undoable == nil }
+    }
+
     // MARK: - The inspector
 
     /// **`setReaderAnswer` had no caller.** A ledger method with tests and no surface is not a

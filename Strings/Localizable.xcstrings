@@ -668,6 +668,9 @@
     "Resume" : {
 
     },
+    "Resume %lld" : {
+
+    },
     "Reveal meaning" : {
 
     },
@@ -969,7 +972,16 @@
     "Try again" : {
 
     },
+    "Unarchive %lld" : {
+
+    },
     "Undo" : {
+
+    },
+    "Undo archiving %lld" : {
+
+    },
+    "Undo pausing %lld" : {
 
     },
     "Undo the last review" : {

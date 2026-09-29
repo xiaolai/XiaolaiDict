@@ -308,6 +308,69 @@ extension Ledger {
         }
     }
 
+    // MARK: - Putting a bulk action back (M04)
+
+    /// Which of these notes' cards are paused, **card by card**.
+    ///
+    /// Keyed by card, because pause is: a note with two prompts can have one of them resting. An
+    /// undo that recorded the *note's* state would resume both and call itself faithful.
+    public func pauseStates(ofNotes ids: [UUID]) throws -> [UUID: Bool] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [UUID: Bool] = [:]
+        try run("""
+            SELECT c.id, c.paused FROM study_cards c
+            WHERE c.note_id IN (SELECT value FROM json_each(?1))
+            """, bind: [.text(Self.jsonArray(of: ids.map(\.uuidString)))]) { row in
+            if let id = UUID(uuidString: try row.text(0)) { found[id] = row.integer(1) == 1 }
+        }
+        return found
+    }
+
+    /// Put each card back to the state it was recorded in, in one transaction.
+    ///
+    /// **A card that has since been deleted is skipped, not an error**: an undo of a bulk action is
+    /// a convenience, and refusing the whole of it because one row is gone would leave the reader
+    /// with neither the action nor its reversal.
+    public func restorePauseStates(_ states: [UUID: Bool]) throws {
+        guard !states.isEmpty else { return }
+        try inOneTransaction("restorePause") {
+            for (cardID, paused) in states {
+                try run("UPDATE study_cards SET paused = ? WHERE id = ?",
+                        bind: [.integer(paused ? 1 : 0), .text(cardID.uuidString)]) { _ in }
+            }
+        }
+    }
+
+    /// What each of these notes is enrolled as.
+    public func enrollments(ofNotes ids: [UUID]) throws -> [UUID: StudyEnrollment] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [UUID: StudyEnrollment] = [:]
+        try run("""
+            SELECT n.id, n.enrollment FROM study_notes n
+            WHERE n.id IN (SELECT value FROM json_each(?1))
+            """, bind: [.text(Self.jsonArray(of: ids.map(\.uuidString)))]) { row in
+            if let id = UUID(uuidString: try row.text(0)),
+               let enrollment = StudyEnrollment(rawValue: try row.text(1)) {
+                found[id] = enrollment
+            }
+        }
+        return found
+    }
+
+    /// Put each note back to the disposition it was recorded in.
+    ///
+    /// **Not to `.active`.** A candidate the reader never took up, archived by accident, goes back
+    /// to being a candidate — an undo that promoted it would have enrolled them in something by
+    /// way of undoing something else.
+    public func restoreEnrollments(_ dispositions: [UUID: StudyEnrollment]) throws {
+        guard !dispositions.isEmpty else { return }
+        try inOneTransaction("restoreEnrollment") {
+            for (noteID, enrollment) in dispositions {
+                try setEnrollment(enrollment, of: noteID)
+            }
+        }
+    }
+
     /// Set the disposition of several notes at once — archive a selection, put one back.
     public func setEnrollment(_ enrollment: StudyEnrollment, ofNotes ids: [UUID]) throws {
         try inOneTransaction("bulkEnrollment") {

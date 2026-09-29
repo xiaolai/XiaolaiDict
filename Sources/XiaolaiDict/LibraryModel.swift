@@ -25,6 +25,26 @@ final class LibraryModel {
     /// while they are reading does not shift a boundary underneath them.
     private var pages = 1
     private var exported: String?
+    /// The last bulk pause or archive, while it can still be put back. **One level**: an undo that
+    /// outlives the reader's memory of what it reverses is a worse control than none.
+    private var undoable: Undo?
+
+    /// What a bulk action changed, and enough to change it back.
+    ///
+    /// **The prior state of each row**, not the inverse of the action: resuming everything after a
+    /// bulk pause would be a second change wearing a reversal's label, and promoting a candidate
+    /// to active by way of un-archiving it would enrol the reader in something.
+    private enum Undo {
+        case pause([UUID: Bool])
+        case archive([UUID: StudyEnrollment])
+
+        var presentable: LibraryPresentation.Undoable {
+            switch self {
+            case .pause(let states): .pause(states.count)
+            case .archive(let dispositions): .archive(dispositions.count)
+            }
+        }
+    }
     /// The word the reader asked to study from a suggestion. **Read and cleared** by whoever acts
     /// on it, so a redraw cannot take the same suggestion up twice.
     private(set) var suggestionTaken: String?
@@ -97,11 +117,35 @@ final class LibraryModel {
             let when = clock()
             return apply { try await $0.ignoreSuggestion(lemma: lemma, language: language, at: when) }
         case .pause:
+            return applyReversible(Array(selection)) { store, ids in
+                // Read before the write, in this order, so what is remembered is what was there.
+                let before = try await store.pauseStates(ofNotes: ids)
+                try await store.setPaused(true, ofNotes: ids)
+                return .pause(before)
+            }
+        case .resume:
             let ids = Array(selection)
-            return apply { try await $0.setPaused(true, ofNotes: ids) }
+            return apply { try await $0.setPaused(false, ofNotes: ids) }
         case .archive:
+            return applyReversible(Array(selection)) { store, ids in
+                let before = try await store.enrollments(ofNotes: ids)
+                try await store.setEnrollment(.archived, ofNotes: ids)
+                return .archive(before)
+            }
+        case .unarchive:
+            // **`.active`, and deliberately so.** This is the reader saying "put it back in the
+            // collection", which an undo is not — see `Undo`.
             let ids = Array(selection)
-            return apply { try await $0.setEnrollment(.archived, ofNotes: ids) }
+            return apply { try await $0.setEnrollment(.active, ofNotes: ids) }
+        case .undo:
+            guard let undo = undoable else { return }
+            undoable = nil
+            switch undo {
+            case .pause(let states):
+                return apply { try await $0.restorePauseStates(states) }
+            case .archive(let dispositions):
+                return apply { try await $0.restoreEnrollments(dispositions) }
+            }
         case .removeFromStudy:
             let ids = Array(selection)
             return apply { try await $0.removeFromStudy(ids) }
@@ -150,6 +194,15 @@ final class LibraryModel {
                                                    sources: $0.distinctSources)
                 },
                 exported: exported,
+                // **What this selection is**, so the control is named for what it will do rather
+                // than for what its category is called.
+                selectionIsPaused: !selection.isEmpty && rows.allSatisfy {
+                    !selection.contains($0.id) || $0.card?.isPaused == true
+                },
+                selectionIsArchived: !selection.isEmpty && rows.allSatisfy {
+                    !selection.contains($0.id) || $0.note.enrollment == .archived
+                },
+                undoable: undoable?.presentable,
                 // **One row, or none.** An inspector over several would have to choose which one
                 // an edit reaches, and the reader cannot see which it chose.
                 inspector: Self.inspector(of: rows, selection: selection, answers: answers))
@@ -162,10 +215,33 @@ final class LibraryModel {
         }
     }
 
+    /// A change that cannot be put back. **Retires the undo**, because a button offering to
+    /// reverse something older than the reader's last action is one they will press by mistake.
     private func apply(_ change: @escaping @Sendable (LedgerStore) async throws -> Void) {
+        undoable = nil
         guard let opening = store() else { return }
         Task {
             if let ledger = try? await opening.value { try? await change(ledger) }
+            selection = []
+            await reload()
+        }
+    }
+
+    /// A bulk action that records what it changed, so it can be changed back.
+    ///
+    /// **Nothing is remembered if the write did not happen.** An undo offered over a failed action
+    /// would put rows back to a state they never left.
+    private func applyReversible(
+        _ ids: [UUID],
+        _ change: @escaping @Sendable (LedgerStore, [UUID]) async throws -> Undo
+    ) {
+        undoable = nil
+        guard let opening = store(), !ids.isEmpty else { return }
+        Task {
+            if let ledger = try? await opening.value,
+               let recorded = try? await change(ledger, ids) {
+                undoable = recorded
+            }
             selection = []
             await reload()
         }

@@ -167,6 +167,19 @@ actor LedgerStore {
         try ledger.setEnrollment(enrollment, ofNotes: ids)
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
+
+    /// What a bulk action is about to change, read before it changes it — so putting it back
+    /// restores what was there rather than the inverse of what was done.
+    func pauseStates(ofNotes ids: [UUID]) throws -> [UUID: Bool] {
+        try ledger.pauseStates(ofNotes: ids)
+    }
+    func restorePauseStates(_ states: [UUID: Bool]) throws { try ledger.restorePauseStates(states) }
+    func enrollments(ofNotes ids: [UUID]) throws -> [UUID: StudyEnrollment] {
+        try ledger.enrollments(ofNotes: ids)
+    }
+    func restoreEnrollments(_ dispositions: [UUID: StudyEnrollment]) throws {
+        try ledger.restoreEnrollments(dispositions)
+    }
     func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
     /// The reader's own words, replacing what the card reveals. The encounter's `gloss` — the
     /// publisher's snapshot — is untouched, so the evidence stays what it was when it was saved.

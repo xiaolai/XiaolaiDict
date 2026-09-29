@@ -226,8 +226,18 @@ public struct LibraryView: View {
                 if state.canConfirm {
                     Button("Confirm \(state.selection.count)") { act(.confirm) }
                 }
-                Button("Pause \(state.selection.count)") { act(.pause) }
-                Button("Archive \(state.selection.count)") { act(.archive) }
+                // **Named for what it will do to this selection.** A Pause button over rows that
+                // are all resting is a control whose label is wrong before it is pressed.
+                if state.selectionIsPaused {
+                    Button("Resume \(state.selection.count)") { act(.resume) }
+                } else {
+                    Button("Pause \(state.selection.count)") { act(.pause) }
+                }
+                if state.selectionIsArchived {
+                    Button("Unarchive \(state.selection.count)") { act(.unarchive) }
+                } else {
+                    Button("Archive \(state.selection.count)") { act(.archive) }
+                }
                 // **Two different deletions, named apart.** Removing from study keeps the reading;
                 // deleting the reading keeps the card. A single "Delete" would mean whichever the
                 // reader assumed.
@@ -240,6 +250,11 @@ public struct LibraryView: View {
                         act(.tag(tag))
                         tag = ""
                     }
+            }
+            // **Outside the selection block**, because putting a bulk action back is not an
+            // operation on whatever happens to be selected now.
+            if let undoable = state.undoable {
+                Button(undoable.name) { act(.undo) }
             }
             Button("Export…") { act(.export) }
         }
@@ -316,7 +331,15 @@ public enum LibraryAction: Sendable, Equatable {
     case filterScripts(Bool)
     case select(Set<UUID>)
     case pause
+    /// **The way back.** `setPaused(false, …)` existed with nothing able to reach it, so pausing
+    /// was a one-way door — worse than a missing undo, because no amount of care avoided it.
+    case resume
     case archive
+    case unarchive
+    /// Put the last bulk pause or archive back, exactly as each row was. **One level**, and it is
+    /// retired by the next change rather than kept around to reverse something older than the
+    /// reader remembers.
+    case undo
     case removeFromStudy
     /// Label the selection. **Organisation, not a fact about memory** — nothing reschedules.
     case tag(String)
@@ -349,6 +372,13 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let suggestions: [Suggestion]
     /// Where the last export went, once one has been written.
     public let exported: String?
+    /// Whether every selected row is already paused, so the control can say *Resume* instead of
+    /// offering to pause what is resting.
+    public let selectionIsPaused: Bool
+    /// Whether every selected note is archived.
+    public let selectionIsArchived: Bool
+    /// The last bulk action, while it can still be put back.
+    public let undoable: Undoable?
     /// The one row the reader has open, when exactly one is selected. **Nil for none and for
     /// several**: an inspector over a multiple selection has to choose a row to edit and the reader
     /// cannot see which one it chose.
@@ -364,6 +394,8 @@ public struct LibraryPresentation: Sendable, Equatable {
                 scriptFiltered: Bool = false, selection: Set<UUID> = [],
                 hasMore: Bool = false, canConfirm: Bool = false,
                 suggestions: [Suggestion] = [], exported: String? = nil,
+                selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
+                undoable: Undoable? = nil,
                 inspector: Inspector? = nil, problem: String? = nil) {
         self.rows = rows
         self.total = total
@@ -375,8 +407,27 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.canConfirm = canConfirm
         self.suggestions = suggestions
         self.exported = exported
+        self.selectionIsPaused = selectionIsPaused
+        self.selectionIsArchived = selectionIsArchived
+        self.undoable = undoable
         self.inspector = inspector
         self.problem = problem
+    }
+
+    /// What the last bulk action was, so the control can name it.
+    ///
+    /// **A case with a count, not a sentence.** The reader has to know what pressing it reaches
+    /// before they press it, and reader-facing words belong in the catalog.
+    public enum Undoable: Sendable, Equatable {
+        case pause(Int)
+        case archive(Int)
+
+        var name: LocalizedStringKey {
+            switch self {
+            case .pause(let count): "Undo pausing \(count)"
+            case .archive(let count): "Undo archiving \(count)"
+            }
+        }
     }
 
     /// One row, open for editing.
