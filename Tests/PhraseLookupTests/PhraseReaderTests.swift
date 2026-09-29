@@ -61,7 +61,7 @@ import Testing
 
     /// A range covering no word at all answers nothing rather than the nearest word.
     @Test func aRangeOnNoWordFindsNothing() {
-        let words = Lemmatizer.lemmas(in: "give up")
+        let words = Lemmatizer.forms(in: "give up")
         #expect(PhraseReader.word(covering: NSRange(location: 4, length: 1), among: words) == nil,
                 "past the end of the text")
         #expect(PhraseReader.word(covering: NSRange(location: 0, length: 0), among: words) == nil,

@@ -181,6 +181,38 @@ struct PhraseSpanTests {
             .phrase(in: ["they", "give", "up"], containing: 1) == nil)
     }
 
+    // MARK: - Which form the key is filed under
+
+    /// **A key is not always in lemma form, and lemmatising the sentence loses it.** Measured over 116,122
+    /// phrases: 36,766 carry a form the lemmatiser normalises away — `by all accounts` needs the plural,
+    /// `mass produced` the participle. Each position offers both forms and the key decides.
+    @Test func akeyFiledWithAnInflectionIsFoundByWhatTheReaderWrote() {
+        let spans = PhraseSpans(phrases: ["by all accounts", "keep a tight rein on"])
+        // As written: the plural is what the key has.
+        #expect(spans.match(in: [["by"], ["all"], ["accounts", "account"], ["it"]], containing: 2)?.phrase
+            == "by all accounts")
+        // Through the lemma: the key has the dictionary form and the reader wrote the past tense.
+        #expect(spans.match(in: [["kept", "keep"], ["a"], ["tight"], ["rein"], ["on"]], containing: 0)?.phrase
+            == "keep a tight rein on")
+    }
+
+    /// **The reader's own spelling outranks the dictionary's form.** *mass produced* and *mass produce* are
+    /// both keys; a reader who wrote the participle meant the first, and without this the alphabetical
+    /// tie-break returned the right phrase's neighbour as the phrase. Verified red by dropping the rank.
+    @Test func awrittenFormOutranksABorrowedOne() {
+        let spans = PhraseSpans(phrases: ["mass produce", "mass produced"])
+        #expect(spans.match(in: [["mass"], ["produced", "produce"]], containing: 0)?.phrase
+            == "mass produced")
+        #expect(spans.match(in: [["mass"], ["produce"]], containing: 0)?.phrase == "mass produce",
+                "and the lemma alone still finds the lemma's own key")
+    }
+
+    /// One form per position is the ordinary case and must behave exactly as before — this is the shape every
+    /// other test here uses, and the two-form call must not have changed it.
+    @Test func oneFormPerPositionIsUnchanged() {
+        #expect(index().match(in: [["they"], ["give"], ["up"]], containing: 1)?.phrase == "give up")
+    }
+
     /// Slots around one literal word leave no phrase, so nothing is claimed.
     @Test func aTemplateOfOneLiteralWordIsNotAPhrase() {
         #expect(PhraseSpans(phrases: ["take something"])

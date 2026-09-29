@@ -111,9 +111,12 @@ public final class PhraseReader: PhraseFinding {
 
     public func phrase(in sentence: String, at term: NSRange) -> PhraseSpan? {
         guard let inventory = inventory.withLock({ $0 }) else { return nil }
-        let words = Lemmatizer.lemmas(in: sentence)
+        // **`forms`, not `lemmas`.** A dictionary files `by all accounts` with the plural and
+        // `keep a tight rein on` with the lemma, so one chosen form loses 36,766 phrases of 116,122. Each
+        // position offers both and the keys decide.
+        let words = Lemmatizer.forms(in: sentence)
         guard let hovered = Self.word(covering: term, among: words),
-              let match = inventory.spans.match(in: words.map(\.lemma.text), containing: hovered)
+              let match = inventory.spans.match(in: words.map(\.candidates), containing: hovered)
         else { return nil }
         // Back from word indices to the reader's own text. **The span's ends, not the matched words' own
         // ranges joined** — a gap belongs inside the span, because that is what the reader sees.
@@ -132,7 +135,7 @@ public final class PhraseReader: PhraseFinding {
     /// always a whole word — `Lemmatizer` documents the same thing: *temper* captured in "justice tempered
     /// with mercy" is a range over `temper` inside `tempered`. A range that matched only exactly would find
     /// nothing there, and the phrase would be missed for a reason that has nothing to do with phrases.
-    static func word(covering term: NSRange, among words: [LemmatizedWord]) -> Int? {
+    static func word(covering term: NSRange, among words: [WordForms]) -> Int? {
         words.firstIndex { NSIntersectionRange($0.range, term).length > 0 }
     }
 

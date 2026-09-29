@@ -592,3 +592,57 @@ struct IrregularFormCoverageTests {
         #expect(broke?.lemma.basis == .inferred, "a tagger correction is never reported as the tagger's")
     }
 }
+
+/// **A word in every form a dictionary might file it under.**
+///
+/// `lemmas(in:)` answers "what is this word's dictionary form", which is what a ledger key needs. Matching a
+/// dictionary's *phrase* keys needs a different answer, and measuring told me so: of 116,122 phrases, **42%
+/// were unreachable** because the matcher lemmatised the sentence and then compared against keys that are not
+/// in lemma form. 36,766 of those carried an inflection the key requires — `by all accounts` needs the plural,
+/// `mass produced` the participle — and 4,102 were lost because `NLTagger` splits `one's` and `24-hour` where
+/// a key spells each whole.
+@Suite struct WordFormsTests {
+    /// **Both forms, written first.** Neither alone is enough, which is the whole finding.
+    @Test func awordOffersWhatWasWrittenAndItsDictionaryForm() {
+        let forms = Lemmatizer.forms(in: "the government kept a tight rein on spending")
+        #expect(forms.map(\.written) == ["the", "government", "kept", "a", "tight", "rein", "on", "spending"])
+        let kept = forms[2]
+        #expect(kept.candidates == ["kept", "keep"], "the reader's spelling first, then the key's")
+    }
+
+    /// A word already in dictionary form offers it once, not twice.
+    @Test func awordInDictionaryFormOffersOneForm() {
+        #expect(Lemmatizer.forms(in: "they keep it").first(where: { $0.written == "keep" })?.candidates
+            == ["keep"])
+    }
+
+    /// **Whitespace, not `NLTagger`'s word boundaries.** It splits `one's` into `one` and `'s` and `24-hour`
+    /// into two, while a key spells each as one word — 4,102 phrases were unreachable for this alone.
+    @Test(arguments: [("on one's last legs", ["on", "one's", "last", "legs"]),
+                      ("a 24-hour clock", ["a", "24-hour", "clock"])])
+    func atokenIsWhitespaceDelimited(sentence: String, expected: [String]) {
+        #expect(Lemmatizer.forms(in: sentence).map(\.written) == expected)
+    }
+
+    /// **Punctuation at an edge is not part of the word, and punctuation inside one is.** `account.` at the
+    /// end of a sentence would match no key; `one's` and `24-hour` are words.
+    @Test func edgePunctuationIsTrimmedAndInnerPunctuationIsKept() {
+        let forms = Lemmatizer.forms(in: "\"take it into account.\"")
+        #expect(forms.map(\.written) == ["take", "it", "into", "account"])
+        #expect(Lemmatizer.forms(in: "one's own").map(\.written) == ["one's", "own"])
+    }
+
+    /// The range still holds the word, trimmed, in UTF-16 — so a card can draw the span it was given.
+    @Test func therangeHoldsTheTrimmedWord() {
+        let sentence = "well, she gave up."
+        let text = sentence as NSString
+        #expect(Lemmatizer.forms(in: sentence).map { text.substring(with: $0.range) }
+            == ["well", "she", "gave", "up"])
+    }
+
+    /// A token with no word in it at all contributes nothing rather than an empty form.
+    @Test func atokenOfPurePunctuationIsNotAWord() {
+        #expect(Lemmatizer.forms(in: "give — up").map(\.written) == ["give", "up"])
+        #expect(Lemmatizer.forms(in: "   ").isEmpty)
+    }
+}

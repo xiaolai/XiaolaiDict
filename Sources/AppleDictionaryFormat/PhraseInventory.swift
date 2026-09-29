@@ -72,7 +72,13 @@ public struct PhraseInventory: Sendable, Equatable {
     ///
     /// Line one is the format's own version and the dictionary's `contentVersion`; every line after it is a
     /// phrase and its meaning, the meaning empty for a phrase from the key index.
-    static let formatVersion = "phrases/1"
+    /// **Bump this whenever the extraction changes, not only when the file's shape does.**
+    ///
+    /// `contentVersion` says whether the *dictionary* changed; it cannot say whether this code did. Lowercasing
+    /// the search keys made every stored inventory wrong and nothing noticed — the bytes had not moved, so the
+    /// cache stayed current and 8,046 phrases went on being unreachable with the fix already in the binary.
+    /// That is the same failure the index's `user_version` exists for, one level up.
+    static let formatVersion = "phrases/2"
 
     public func encoded() -> String {
         var lines = ["\(Self.formatVersion)\t\(contentVersion)"]

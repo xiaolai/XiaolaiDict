@@ -46,6 +46,30 @@ public struct Lemma: Equatable, Sendable {
     }
 }
 
+/// One whitespace-delimited word of a sentence, in every form a dictionary might file it under.
+public struct WordForms: Equatable, Sendable {
+    /// As the reader wrote it, lowercased, with punctuation trimmed from its edges only.
+    public let written: String
+    /// Its dictionary form, where the tagger gave one that differs from `written`. Nil where it did not, or
+    /// where the tagger's word boundaries disagree with this token's.
+    public let lemma: Lemma?
+    /// UTF-16, into the sentence handed in.
+    public let range: NSRange
+
+    public init(written: String, lemma: Lemma?, range: NSRange) {
+        self.written = written
+        self.lemma = lemma
+        self.range = range
+    }
+
+    /// **As written first, then the dictionary form.** Order is the preference where both match something:
+    /// the reader's own spelling is what they are looking at.
+    public var candidates: [String] {
+        guard let lemma, lemma.text != written else { return [written] }
+        return [written, lemma.text]
+    }
+}
+
 /// One word of a sentence, in dictionary form, and where it was.
 public struct LemmatizedWord: Equatable, Sendable {
     public let lemma: Lemma
@@ -165,6 +189,54 @@ public enum Lemmatizer {
             LemmatizedWord(lemma: resolve(index, in: tokens),
                            range: NSRange(tokens[index].range, in: sentence))
         }
+    }
+
+    /// Each whitespace-delimited word of `sentence`, in **every form a dictionary might file it under**.
+    ///
+    /// **For matching against a dictionary's keys, where `lemmas(in:)` is for keying a ledger.** The two need
+    /// different tokenisations and different answers, measured over 116,122 phrases:
+    ///
+    /// - **One form is not enough.** A dictionary files `by all accounts` with the plural and
+    ///   `mass produced` with the participle — 36,766 phrases carry a form the lemmatiser normalises away, so
+    ///   lemmatising the sentence makes them unmatchable. Meanwhile *kept a tight rein on* is findable only
+    ///   *through* the lemma. Both forms are offered and the dictionary picks.
+    /// - **`NLTagger`'s word boundaries are not a key's.** It splits `one's` into `one` and `'s` and
+    ///   `24-hour` into two words, while the key spells each as one — 4,102 phrases lost to that alone. So the
+    ///   tokens here are whitespace-delimited, matching `PhraseSpans.tokens(of:)`, and the lemma is attached
+    ///   only where exactly one tagger word covers the token.
+    /// - **Punctuation at an edge is not part of the word.** `account.` at the end of a sentence would match
+    ///   no key; inside a word it is kept, because `one's` and `24-hour` are words.
+    public static func forms(in sentence: String) -> [WordForms] {
+        let tagged = lemmas(in: sentence)
+        let text = sentence as NSString
+        var out: [WordForms] = []
+        for token in sentence.split(whereSeparator: \.isWhitespace) {
+            let utf16 = NSRange(token.startIndex ..< token.endIndex, in: sentence)
+            let trimmed = Self.trimmingEdgePunctuation(utf16, in: text)
+            guard trimmed.length > 0 else { continue }
+            let written = text.substring(with: trimmed).lowercased()
+            // **Only where one tagger word covers the token.** Two of them mean the tagger split what the
+            // key spells whole, and joining their lemmas would invent a spelling no dictionary has.
+            let covering = tagged.filter { NSIntersectionRange($0.range, trimmed).length > 0 }
+            let lemma = covering.count == 1 ? covering[0].lemma : nil
+            out.append(WordForms(written: written,
+                                 lemma: lemma.map { $0.text == written ? nil : $0 } ?? nil,
+                                 range: trimmed))
+        }
+        return out
+    }
+
+    /// `range` with leading and trailing non-alphanumerics removed. Nothing inside is touched.
+    static func trimmingEdgePunctuation(_ range: NSRange, in text: NSString) -> NSRange {
+        var start = range.location, end = NSMaxRange(range)
+        let keep = CharacterSet.alphanumerics
+        func isWord(_ at: Int) -> Bool {
+            guard let scalar = Unicode.Scalar(text.character(at: at)) else { return false }
+            return keep.contains(scalar)
+        }
+        while start < end, !isWord(start) { start += 1 }
+        while end > start, !isWord(end - 1) { end -= 1 }
+        return NSRange(location: start, length: end - start)
     }
 
     /// Lowercased, NFC, with a curly apostrophe written straight, so the same word typed or copied

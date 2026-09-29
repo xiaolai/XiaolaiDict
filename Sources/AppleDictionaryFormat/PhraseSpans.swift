@@ -73,7 +73,7 @@ public struct PhraseSpans: Sendable, Equatable {
         init?(phrase: String) {
             var runs: [[String]] = []
             var run: [String] = []
-            for word in phrase.split(separator: " ").map(String.init) {
+            for word in PhraseSpans.tokens(of: phrase) {
                 if PhraseSpans.slots.contains(word) {
                     if !run.isEmpty { runs.append(run) }
                     run = []
@@ -133,6 +133,16 @@ public struct PhraseSpans: Sendable, Equatable {
     static let slots: Set<String> = [
         "something", "someone", "somebody", "someone's", "somebody's", "one's", "oneself",
     ]
+
+    /// A phrase's words, as the dictionary wrote them.
+    ///
+    /// **Whitespace, and nothing else.** Splitting on a single space missed the labels where a slot was
+    /// elided — `a   and a half` — and any tokenisation finer than this disagrees with the key: 4,102 phrases
+    /// were unreachable because `NLTagger` splits `24-hour` into two words and `one's` into `one` and `'s`,
+    /// while the key spells each as one. The caller tokenises the reader's sentence the same way.
+    static func tokens(of phrase: String) -> [String] {
+        phrase.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
 
     /// The particles a two-word phrasal verb may be broken around.
     ///
@@ -199,9 +209,9 @@ public struct PhraseSpans: Sendable, Equatable {
             // part and is only wanted for a phrase a hover actually reaches.
             var literals = 0
             var seen: Set<String> = []
-            for word in phrase.split(separator: " ") where !Self.slots.contains(String(word)) {
+            for word in Self.tokens(of: phrase) where !Self.slots.contains(word) {
                 literals += 1
-                seen.insert(String(word))
+                seen.insert(word)
             }
             guard literals > 1 else { continue }
             let index = list.count
@@ -248,7 +258,9 @@ public struct PhraseSpans: Sendable, Equatable {
         // 2026-09-29, 90,391 phrases from the first key against **104,009** from all of them.
         for group in try KeyIndexReader.groups(in: bundle) {
             for key in group.keys where key.contains(" ") && !key.contains("xpointer(") {
-                found.insert(key)
+                // **Lowercased here.** 8,046 of 116,122 phrases were unreachable for case alone — `5 Eyes`,
+                // `A. A. Milne` — because the reader's sentence arrives case-folded and these did not.
+                found.insert(key.lowercased())
             }
         }
         return found
@@ -269,15 +281,38 @@ public struct PhraseSpans: Sendable, Equatable {
     public func match(in words: [String], containing word: Int,
                       widestGap: Int = PhraseSpans.widestGap,
                       widestInferredGap: Int = PhraseSpans.widestInferredGap) -> Match? {
+        match(in: words.map { [$0] }, containing: word,
+              widestGap: widestGap, widestInferredGap: widestInferredGap)
+    }
+
+    /// The phrase covering `word`, where each position offers **every form the dictionary might file it
+    /// under** — as the reader wrote it, and its dictionary form.
+    ///
+    /// **Choosing one form loses 36,766 of 116,122 phrases.** A dictionary does not file every phrase in lemma
+    /// form: `by all accounts` needs the plural, `on one's last legs` needs it twice, `mass produced` needs the
+    /// participle. Lemmatising the reader's sentence turns those into `by all account` and matches nothing.
+    /// Meanwhile *kept a tight rein on* is only findable **through** the lemma. Both are true at once, so the
+    /// sentence offers both and the dictionary decides — the same rule as everywhere else on this path:
+    /// nothing may delete a candidate, only the selector collapses the set.
+    public func match(in words: [[String]], containing word: Int,
+                      widestGap: Int = PhraseSpans.widestGap,
+                      widestInferredGap: Int = PhraseSpans.widestInferredGap) -> Match? {
         guard words.indices.contains(word) else { return nil }
-        var found: [(literals: Int, match: Match)] = []
-        for index in byWord[words[word]] ?? [] {
+        // `borrowed` counts the positions matched through a form the reader did not write.
+        var found: [(literals: Int, borrowed: Int, match: Match)] = []
+        // Every form of the hovered word, because the phrase may be filed under any of them.
+        var reachable: [Int] = []
+        var seen = Set<Int>()
+        for form in words[word] {
+            for index in byWord[form] ?? [] where seen.insert(index).inserted { reachable.append(index) }
+        }
+        for index in reachable {
             // Built here, for the handful of phrases naming this word, rather than for all 116,122 up front.
             guard let template = Template(phrase: phraseList[index]) else { continue }
-            guard let match = Self.tightest(template, in: words, containing: word,
-                                            widestGap: widestGap,
-                                            widestInferredGap: widestInferredGap) else { continue }
-            found.append((template.literals, match))
+            guard let hit = Self.tightest(template, in: words, containing: word,
+                                          widestGap: widestGap,
+                                          widestInferredGap: widestInferredGap) else { continue }
+            found.append((template.literals, hit.borrowed, hit.match))
         }
         // **More of the phrase written out wins, then the narrower gap.** A span the reader can see whole
         // is better evidence than one assembled across a clause; `phrase` breaks the last tie only so that
@@ -285,6 +320,11 @@ public struct PhraseSpans: Sendable, Equatable {
         found.sort { first, second in
             if first.literals != second.literals { return first.literals > second.literals }
             if first.match.gap != second.match.gap { return first.match.gap < second.match.gap }
+            // **Then the reader's own spelling.** *mass produced* and *mass produce* are both keys, and a
+            // reader who wrote the participle meant the first; without this the alphabetical tie-break chose
+            // the second — the right phrase's neighbour, shown as the phrase. Same for `24 hour clocks`
+            // against `24 hour clock`.
+            if first.borrowed != second.borrowed { return first.borrowed < second.borrowed }
             return first.match.phrase < second.match.phrase
         }
         return found.first?.match
@@ -295,9 +335,10 @@ public struct PhraseSpans: Sendable, Equatable {
     /// Two passes, and **the order is the ranking**: the phrase as the publisher spelled it first, then —
     /// only for a separable two-word verb, and only if that found nothing unbroken — the inferred split.
     /// A contiguous reading is never given up for a guess.
-    private static func tightest(_ template: Template, in words: [String], containing word: Int,
-                                 widestGap: Int, widestInferredGap: Int) -> Match? {
+    private static func tightest(_ template: Template, in words: [[String]], containing word: Int,
+                                 widestGap: Int, widestInferredGap: Int) -> (match: Match, borrowed: Int)? {
         var best: Match?
+        var borrowed = 0
         func consider(_ runs: [[String]], cap: Int, inferred: Bool) {
             for starts in placements(runs, in: words, from: 0, through: words.count - 1, widestGap: cap)
             where covers(starts, runs, word) {
@@ -309,6 +350,7 @@ public struct PhraseSpans: Sendable, Equatable {
                     : (inferred ? .inferred(gap) : .marked(gap))
                 if best == nil || gap < best!.gap {
                     best = Match(phrase: template.phrase, words: span, separation: separation)
+                    borrowed = Self.borrowedForms(runs, at: starts, in: words)
                 }
             }
         }
@@ -316,18 +358,33 @@ public struct PhraseSpans: Sendable, Equatable {
         if best == nil, template.separable, let pair = template.runs.first {
             consider([[pair[0]], [pair[1]]], cap: widestInferredGap, inferred: true)
         }
-        return best
+        return best.map { ($0, borrowed) }
+    }
+
+    /// How many positions of this placement matched a form the reader did not write.
+    ///
+    /// **Zero where the key is spelled exactly as the sentence spells it.** `candidates` puts the written form
+    /// first, and this is what turns that documented order into a preference the ranking can see.
+    private static func borrowedForms(_ runs: [[String]], at starts: [Int], in words: [[String]]) -> Int {
+        var borrowed = 0
+        for (start, run) in zip(starts, runs) {
+            for (offset, expected) in run.enumerated() where words[start + offset].first != expected {
+                borrowed += 1
+            }
+        }
+        return borrowed
     }
 
     /// Where each run of literal words could begin, in order.
-    private static func placements(_ runs: [[String]], in words: [String],
+    private static func placements(_ runs: [[String]], in words: [[String]],
                                    from: Int, through: Int, widestGap: Int) -> [[Int]] {
         guard let run = runs.first else { return [[]] }
         let rest = Array(runs.dropFirst())
         var out: [[Int]] = []
         var start = from
         while start + run.count <= words.count, start <= through {
-            if Array(words[start ..< start + run.count]) == run {
+            // A run matches where **some** form of each position is the key's word there.
+            if zip(run, words[start ..< start + run.count]).allSatisfy({ $1.contains($0) }) {
                 let end = start + run.count
                 if rest.isEmpty {
                     out.append([start])
