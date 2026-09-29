@@ -179,7 +179,7 @@ extension Ledger {
                 // The library cannot ask a dictionary anything, so it never claims a sense moved.
                 senseMoved: false)
             rows.append(LibraryRow(
-                note: note, card: try card(of: note.id, prompt: .meaning, at: note.createdAt),
+                note: note, card: try existingCard(of: note.id),
                 word: row.optionalText(12) ?? "", excerpt: row.optionalText(13) ?? "",
                 readAt: row.isNull(14) ? nil : Date(timeIntervalSince1970: row.real(14)),
                 script: row.optionalText(15).flatMap(ProbeScript.init(rawValue:)),

@@ -162,6 +162,31 @@ struct StudyLibraryTests {
         #expect(rows.first(where: { $0.note.id == broken.id })?.readiness == .needsRepair)
     }
 
+    /// **Listing the library must not write to it.** `library(_:)` reached for each note's card
+    /// through the accessor that *creates* one when it is missing, so merely opening the window —
+    /// or counting the rows, which lists them all — enrolled a schedule for every note that had
+    /// none. A read with a side effect is the kind of defect that only shows up as rows appearing
+    /// from nowhere.
+    @Test func listingTheLibraryCreatesNothing() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        // A note with no card: the shape a pre-schema-10 enrollment has, since the migration
+        // deliberately backfilled none.
+        try ledger.execute("DELETE FROM study_cards")
+        var cards = 0
+        try ledger.run("SELECT COUNT(*) FROM study_cards", bind: []) { cards = $0.integer(0) }
+        #expect(cards == 0)
+
+        let rows = try ledger.library(LibraryQuery())
+        #expect(rows.count == 1)
+        #expect(rows.first?.note.id == note.id)
+        #expect(rows.first?.card == nil, "a note with no card reports none rather than gaining one")
+        _ = try ledger.libraryCount(LibraryQuery())
+
+        try ledger.run("SELECT COUNT(*) FROM study_cards", bind: []) { cards = $0.integer(0) }
+        #expect(cards == 0, "listing the library created \(cards) cards")
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

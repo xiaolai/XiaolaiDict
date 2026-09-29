@@ -41,6 +41,18 @@ extension Ledger {
         try cards(where: "WHERE id = ?", bind: [.text(id.uuidString)]).first
     }
 
+    /// The card for a note's question, or nil. **Reads and never writes** — unlike `card(of:at:)`,
+    /// which creates one.
+    ///
+    /// The distinction is not stylistic. `library(_:)` reached for the creating accessor, so merely
+    /// listing the library — or counting it, which lists everything — enrolled a schedule for every
+    /// note that had none, which is every note enrolled before schema 10. A read with a side effect
+    /// shows up only as rows appearing from nowhere.
+    public func existingCard(of noteID: UUID, prompt: StudyCard.Prompt = .meaning) throws -> StudyCard? {
+        try cards(where: "WHERE note_id = ? AND prompt = ?",
+                  bind: [.text(noteID.uuidString), .text(prompt.rawValue)]).first
+    }
+
     /// Stops a card being asked, or lets it be asked again. **Memory is untouched**: pausing does not
     /// stop elapsed time, and a paused card resumed after a month is a month overdue, honestly.
     public func setPaused(_ paused: Bool, ofCard id: UUID) throws {
