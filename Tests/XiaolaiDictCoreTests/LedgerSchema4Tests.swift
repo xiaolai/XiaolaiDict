@@ -134,7 +134,9 @@ struct LedgerSchema4Tests {
 
     /// `lemma_basis` is the point of I2: the study list groups by a key that is sometimes a guess,
     /// and nothing recorded which.
-    @Test(arguments: [Lemma.Basis.tagger, .inferred, .ambiguous, .surface])
+    /// `allCases`, not a written-out list: a basis added to the enum and forgotten here would be one the
+    /// ledger was never shown to round-trip, and `.likely` was exactly that case.
+    @Test(arguments: Lemma.Basis.allCases)
     func everyLemmaBasisSurvives(basis: Lemma.Basis) throws {
         let ledger = try Ledger(path: ":memory:")
         try ledger.record(record(lemmaBasis: basis))

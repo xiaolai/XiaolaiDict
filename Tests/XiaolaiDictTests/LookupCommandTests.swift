@@ -109,7 +109,9 @@ struct LookupCommandTests {
         #expect(object["confidence"] as? Double == 1)
         #expect(object["bundleID"] as? String == "com.apple.Safari")
         #expect(object["lemma"] as? String == "see")
-        #expect(object["lemmaBasis"] as? String == "inferred")
+        // `likely`: nothing in "I saw the sign" settles the reading, so the everyday one is taken and the
+        // report says which path answered.
+        #expect(object["lemmaBasis"] as? String == "likely")
     }
 
     /// **The two capture instruments are absent from a release, asserted here as well as in the

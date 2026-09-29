@@ -152,8 +152,26 @@ struct LemmatizerTests {
         ("wound", "He wound the clock.", "wind"),
         ("saw", "She never saw him again.", "see"),
     ])
+    ///
+    /// **The basis says which of the two paths answered.** Where the grammar settles it — a third-person
+    /// subject, a modal, a participle marker — that is `.inferred`. Where nothing in the sentence settles it
+    /// and the everyday reading is taken, that is `.likely`: "I saw the film" is decided by *semantics*, not
+    /// grammar, and calling it inferred made a frequency prior indistinguishable from a resolution.
     func aPastFormIsReadAsThePast(word: String, sentence: String, lemma expected: String) {
-        #expect(Lemmatizer.lemma(of: word, in: sentence) == Lemma(text: expected, basis: .inferred))
+        let found = Lemmatizer.lemma(of: word, in: sentence)
+        #expect(found.text == expected)
+        #expect(found.basis == .inferred || found.basis == .likely,
+                "\(word) in \(sentence) came back \(found.basis.name)")
+    }
+
+    /// **Which of the two the grammar actually reached**, named individually so a form moving between them
+    /// is a finding rather than a silent change.
+    @Test func thegrammarSettlesSomeOfThemAndAPriorSettlesTheRest() {
+        // A third-person subject: "he" would take "-s" in the present, so the bare form is past.
+        #expect(Lemmatizer.lemma(of: "saw", in: "He saw the film.").basis == .inferred)
+        // Nothing in "I saw …" decides it — "I saw wood" is the tool. The everyday reading, marked as one.
+        #expect(Lemmatizer.lemma(of: "saw", in: "I saw the film yesterday.").basis == .likely)
+        #expect(Lemmatizer.lemma(of: "rose", in: "The sun rose early.").basis == .likely)
     }
 
     /// After a modal, "to" or "do", the form is a base form: its own verb.
@@ -196,6 +214,9 @@ struct LemmatizerTests {
     @Test func aSentenceOpeningNounPhraseReadsAsSubjectAndVerb() {
         #expect(lemma("rose", "The sun rose early.") == "rise")
         #expect(lemma("rose", "A red rose.") == "rise")
+        // Both come from the prior rather than the grammar, and both say so — which is what makes the flower
+        // reading's cost countable instead of invisible.
+        #expect(Lemmatizer.lemma(of: "rose", in: "A red rose.").basis == .likely)
     }
 
     /// Where the grammar is silent and both readings are common, the word is kept and marked
@@ -204,15 +225,20 @@ struct LemmatizerTests {
         #expect(Lemmatizer.lemma(of: "lay", in: "They lay there.") == Lemma(text: "lay", basis: .ambiguous))
     }
 
-    /// The accepted cost of reading "saw" as "see" when the grammar is silent: sawing wood is read
-    /// as seeing it. Pinned so the trade is visible, and a better model shows up as a change here.
+    /// The accepted cost of reading "saw" as "see" when the grammar is silent: sawing wood is read as seeing
+    /// it. Pinned so the trade is visible, and a better model shows up as a change here.
+    ///
+    /// **And it is recorded as `.likely`, not `.inferred`.** The lemma is still the useful one — merging
+    /// *saw* with *see* is most of what lemmatising is for — but the ledger can now count the rows that rest
+    /// on a prior instead of having them look like resolutions. ADR-0002: a wrong lemma is never confident.
     @Test func theEverydayReadingWinsWhenTheGrammarIsSilent() {
-        #expect(lemma("saw", "They saw wood every day.") == "see")
+        #expect(Lemmatizer.lemma(of: "saw", in: "They saw wood every day.")
+            == Lemma(text: "see", basis: .likely))
     }
 
     /// A phrase is as certain as its least certain word.
     @Test func aPhraseTakesItsLeastCertainBasis() {
-        #expect(Lemmatizer.lemma(of: "saw it", in: "I saw it coming.") == Lemma(text: "see it", basis: .inferred))
+        #expect(Lemmatizer.lemma(of: "saw it", in: "I saw it coming.") == Lemma(text: "see it", basis: .likely))
     }
 }
 
@@ -601,6 +627,52 @@ struct IrregularFormCoverageTests {
 /// in lemma form. 36,766 of those carried an inflection the key requires — `by all accounts` needs the plural,
 /// `mass produced` the participle — and 4,102 were lost because `NLTagger` splits `one's` and `24-hour` where
 /// a key spells each whole.
+@Suite struct CapturedPhrasePartsTests {
+    /// **A word the capture already covers is not looked for again.** Keeping every captured token and then
+    /// searching for the whole lemma beyond it marked `over` twice in "take over the world over time" — the
+    /// capture held `take over`, and the walk went hunting for `over` after it. Introduced by the fix for
+    /// compounds the tokenizer splits, and caught by verification.
+    @Test func acapturedPhraseDoesNotMarkALaterRepeatOfItsOwnWord() {
+        let sentence = "take over the world over time"
+        let text = sentence as NSString
+        let captured = text.range(of: "take over")
+        let parts = Lemmatizer.parts(of: "take over", surface: "take over", in: sentence, at: captured)
+        #expect(parts.map { text.substring(with: $0) } == ["take", "over"],
+                "got \(parts.map { text.substring(with: $0) })")
+    }
+
+    /// And the partial capture still reaches the particle, which is what that walk is for.
+    @Test func apartialCaptureStillFindsTheParticle() {
+        let sentence = "He took it over."
+        let text = sentence as NSString
+        let parts = Lemmatizer.parts(
+            of: "take over", surface: "took", in: sentence, at: text.range(of: "took"))
+        #expect(parts.map { text.substring(with: $0) } == ["took", "over"])
+    }
+
+    /// **A multi-word lemma whose first word the tokenizer splits.** Counting captured *tokens* instead of
+    /// covered lemma *words* consumed both words of `well-known problem` for a capture of `well-known`, and
+    /// `problem` went unmarked: `well-known` is two tokens and one word.
+    @Test func acompoundFirstWordDoesNotConsumeTheSecond() {
+        let sentence = "a well-known problem here"
+        let text = sentence as NSString
+        let parts = Lemmatizer.parts(of: "well-known problem", surface: "well-known",
+                                     in: sentence, at: text.range(of: "well-known"))
+        #expect(parts.map { text.substring(with: $0) } == ["well", "known", "problem"],
+                "got \(parts.map { text.substring(with: $0) })")
+    }
+
+    /// A compound the tokenizer splits is marked whole, which is the finding that started this.
+    @Test func acompoundSplitByTheTokenizerIsMarkedWhole() {
+        let sentence = "a well-known problem"
+        let text = sentence as NSString
+        let parts = Lemmatizer.parts(
+            of: "well-known", surface: "well-known", in: sentence, at: text.range(of: "well-known"))
+        #expect(parts.map { text.substring(with: $0) } == ["well", "known"],
+                "got \(parts.map { text.substring(with: $0) })")
+    }
+}
+
 @Suite struct WordFormsTests {
     /// **Both forms, written first.** Neither alone is enough, which is the whole finding.
     @Test func awordOffersWhatWasWrittenAndItsDictionaryForm() {

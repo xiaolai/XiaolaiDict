@@ -10,6 +10,18 @@ public struct Lemma: Equatable, Sendable {
         /// An irregular form NLTagger leaves unchanged — "saw", "found" — resolved from the grammar
         /// around it.
         case inferred
+        /// An irregular form the grammar did **not** settle, read as whichever meaning is usual.
+        ///
+        /// **Not `inferred`, which claims the grammar decided.** "They saw wood every day" is sawing and
+        /// "A red rose" is the flower, and both come back as `see` and `rise` because that is the everyday
+        /// reading of the shape — a frequency prior, not evidence from the sentence. Recording that as
+        /// `inferred` made a guess indistinguishable from a resolution, against ADR-0002's rule that a wrong
+        /// lemma is never confident.
+        ///
+        /// The lemma is still the useful one: *saw*/*see* is right far more often than not, and merging the
+        /// two is most of what lemmatising is for. What changes is that the ledger can now tell which rows
+        /// rest on a prior, so the residue is countable instead of invisible.
+        case likely
         /// An irregular form the sentence does not settle: "lay" may be "lie" or "lay". The word
         /// is kept as it is.
         case ambiguous
@@ -25,6 +37,7 @@ public struct Lemma: Equatable, Sendable {
             switch self {
             case .tagger: "tagger"
             case .inferred: "inferred"
+            case .likely: "likely"
             case .ambiguous: "ambiguous"
             case .surface: "surface"
             }
@@ -210,6 +223,7 @@ public enum Lemmatizer {
         let tagged = lemmas(in: sentence)
         let text = sentence as NSString
         var out: [WordForms] = []
+        var cursor = 0
         for token in sentence.split(whereSeparator: \.isWhitespace) {
             let utf16 = NSRange(token.startIndex ..< token.endIndex, in: sentence)
             let trimmed = Self.trimmingEdgePunctuation(utf16, in: text)
@@ -217,8 +231,21 @@ public enum Lemmatizer {
             let written = text.substring(with: trimmed).lowercased()
             // **Only where one tagger word covers the token.** Two of them mean the tagger split what the
             // key spells whole, and joining their lemmas would invent a spelling no dictionary has.
-            let covering = tagged.filter { NSIntersectionRange($0.range, trimmed).length > 0 }
-            let lemma = covering.count == 1 ? covering[0].lemma : nil
+            // **One cursor over two ordered streams.** Filtering the whole tagged array per token allocated a
+            // fresh array each time and made alignment quadratic on a long selection — on the phrase path,
+            // which runs per lookup.
+            while cursor < tagged.count, NSMaxRange(tagged[cursor].range) <= trimmed.location { cursor += 1 }
+            var covering = 0
+            var only: Lemma?
+            var look = cursor
+            while look < tagged.count, tagged[look].range.location < NSMaxRange(trimmed) {
+                if NSIntersectionRange(tagged[look].range, trimmed).length > 0 {
+                    covering += 1
+                    only = tagged[look].lemma
+                }
+                look += 1
+            }
+            let lemma = covering == 1 ? only : nil
             out.append(WordForms(written: written,
                                  lemma: lemma.map { $0.text == written ? nil : $0 } ?? nil,
                                  range: trimmed))
@@ -227,16 +254,28 @@ public enum Lemmatizer {
     }
 
     /// `range` with leading and trailing non-alphanumerics removed. Nothing inside is touched.
+    ///
+    /// **Composed character sequences, not UTF-16 units.** `NSString.character(at:)` hands back one code unit,
+    /// so each half of a surrogate pair failed `Unicode.Scalar` and every supplementary-plane letter — a CJK
+    /// extension-B ideograph, a mathematical letterform — was trimmed away as if it were punctuation; a token
+    /// made only of them vanished. `rangeOfComposedCharacterSequence` walks what the string actually holds.
     static func trimmingEdgePunctuation(_ range: NSRange, in text: NSString) -> NSRange {
         var start = range.location, end = NSMaxRange(range)
-        let keep = CharacterSet.alphanumerics
         func isWord(_ at: Int) -> Bool {
-            guard let scalar = Unicode.Scalar(text.character(at: at)) else { return false }
-            return keep.contains(scalar)
+            let unit = text.rangeOfComposedCharacterSequence(at: at)
+            return text.substring(with: unit).unicodeScalars.contains {
+                CharacterSet.alphanumerics.contains($0)
+            }
         }
-        while start < end, !isWord(start) { start += 1 }
-        while end > start, !isWord(end - 1) { end -= 1 }
-        return NSRange(location: start, length: end - start)
+        while start < end, !isWord(start) {
+            start = NSMaxRange(text.rangeOfComposedCharacterSequence(at: start))
+        }
+        while end > start {
+            let last = text.rangeOfComposedCharacterSequence(at: end - 1)
+            guard !isWord(last.location) else { break }
+            end = last.location
+        }
+        return NSRange(location: start, length: max(0, end - start))
     }
 
     /// Lowercased, NFC, with a curly apostrophe written straight, so the same word typed or copied
@@ -309,9 +348,31 @@ public enum Lemmatizer {
             return [range]
         }
 
-        var marked = [tokens[anchor]]
-        var searchFrom = anchor + 1
-        for part in words(of: lemma, or: surface).dropFirst() {
+        // **Every token the capture touches**, not only the first. The capture is what the reader selected,
+        // and a compound the tokenizer splits — `well-known` — left `known` unmarked because the phrase walk
+        // below only looks for the *lemma's* later words and a one-word lemma has none.
+        var marked = tokens.filter { $0.overlaps(captured) }
+        var searchFrom = (tokens.lastIndex { $0.overlaps(captured) } ?? anchor) + 1
+        // **The words the capture already covers are not looked for again.** Keeping every captured token and
+        // *then* searching for the whole lemma beyond it marked `over` twice in
+        // "take over the world over time": the capture held `take over`, and the walk went looking for
+        // `over` after it. What remains to find is the lemma minus what is already marked.
+        // **Which of the lemma's words the capture already covers — not how many tokens it spans.**
+        // Counting tokens was wrong twice over: `dropFirst(0)` re-found `over` in "take over the world over
+        // time", and `dropFirst(marked.count)` then consumed both words of lemma `well-known problem` for a
+        // capture of `well-known`, leaving `problem` unmarked. The tokenizer's word boundaries are not the
+        // lemma's: `well-known` is two tokens and one word.
+        //
+        // The first word is the anchor whatever it looks like — the capture holds an inflected form, so
+        // `took` covers `take`. A later word is covered when the captured text contains it.
+        let capturedText = sentence[captured]
+        let parts = words(of: lemma, or: surface)
+        var covered = 1
+        while covered < parts.count,
+              capturedText.range(of: parts[covered], options: .caseInsensitive) != nil {
+            covered += 1
+        }
+        for part in parts.dropFirst(covered) {
             let window = tokens[searchFrom...].prefix(phraseLookahead)
             guard let hit = window.firstIndex(where: {
                 sentence[$0].compare(part, options: .caseInsensitive) == .orderedSame
@@ -538,7 +599,11 @@ private struct AmbiguousPastForm {
             }
             if Self.thirdPersonSingular.contains(previous.word) { return Lemma(text: pastOf, basis: .inferred) }
         }
-        return pastUsuallyMeant ? Lemma(text: pastOf, basis: .inferred) : Lemma(text: surface, basis: .ambiguous)
+        // **`likely`, not `inferred`: nothing in the sentence decided this.** Every branch above read the
+        // grammar — a modal, a participle marker, a third-person subject, a noun phrase — and reaching here
+        // means none of them applied, so `pastUsuallyMeant` is the only thing left and it is a prior about
+        // English rather than evidence about this sentence.
+        return pastUsuallyMeant ? Lemma(text: pastOf, basis: .likely) : Lemma(text: surface, basis: .ambiguous)
     }
 
     /// Whether the form is the last word of a noun phrase, where it is a noun however NLTagger tags
