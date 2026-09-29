@@ -65,11 +65,26 @@ struct ReviewSessionTests {
         #expect(session.current?.id != graded?.id)
 
         let restored = session.undoLast()
-        #expect(restored?.id == graded?.id)
-        #expect(session.current?.id == graded?.id)
+        // **The same card, a new attempt.** This asserted the same presentation *id* until
+        // 2026-09-29, which is what let a re-grade after an undo collide with the voided event and
+        // be answered with its result — see `undoGivesTheCardAfreshPresentationIdentity`.
+        #expect(restored?.cardID == graded?.cardID)
+        #expect(session.current?.cardID == graded?.cardID)
         #expect(session.current?.outcome == nil, "the grade is gone")
         #expect(session.current?.isRevealed == true, "and the answer is not un-seen")
         #expect(session.graded == 0)
+    }
+
+    /// **The card comes back as a new attempt, with a new identity.** The presentation's id is the
+    /// grade's idempotency key: reusing it after an undo made the replacement grade collide with the
+    /// voided one, and the ledger answered with the old result as though the new one had committed.
+    @Test func undoGivesTheCardAfreshPresentationIdentity() {
+        var session = session()
+        let first = session.current
+        session.record(.graded(.again))
+        let restored = session.undoLast()
+        #expect(restored?.cardID == first?.cardID, "the same card")
+        #expect(restored?.id != first?.id, "and a new attempt at it")
     }
 
     /// Undo with nothing to undo is nothing, not a crash and not a silent state change.

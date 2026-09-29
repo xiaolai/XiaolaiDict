@@ -105,8 +105,12 @@ struct LedgerSchema4Tests {
     ///
     /// 10: `study_cards` and `review_events` — the schedule and its history. `StudyReviewTests` and
     /// `MemorySchedulerParityTests` earned it.
-    @Test func theSchemaIsTen() {
-        #expect(Ledger.schemaVersion == 10)
+    ///
+    /// 11: `study_answers.is_usable`, because SQL's `trim()` and Swift's `.whitespacesAndNewlines`
+    /// are different sets and an answer of only a tab reached the queue while reading as blank.
+    /// Swift's verdict is stored and SQL reads it. `anAnswerOfOnlyWhitespaceIsUnusableToBothJudges`.
+    @Test func theSchemaIsEleven() {
+        #expect(Ledger.schemaVersion == 11)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

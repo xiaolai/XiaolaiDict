@@ -187,6 +187,39 @@ struct StudyLibraryTests {
         #expect(cards == 0, "listing the library created \(cards) cards")
     }
 
+    /// **Each state filter must return its own collection.** They all reduced to
+    /// `enrollment = 'active'`, so Paused listed unpaused cards, Due listed cards due next year and
+    /// Needs attention listed cards with nothing wrong — and a bulk action then operated on a set
+    /// the label had described wrongly.
+    @Test func eachStateFilterReturnsItsOwnCollection() throws {
+        let ledger = try ledger()
+        let due = try save(ledger, word: "due")
+        let future = try save(ledger, word: "future")
+        let paused = try save(ledger, word: "paused")
+        let unconfirmed = try save(ledger, word: "unconfirmed")
+
+        // `future` is graded, so it is scheduled well ahead; the others have never been reviewed
+        // and are due as soon as they are ready.
+        let futureCard = try #require(try ledger.existingCard(of: future.id))
+        _ = try ledger.grade(cardID: futureCard.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: try MemoryScheduler())
+        try ledger.setPaused(true, ofNotes: [paused.id])
+        try ledger.setAnswer(StudyAnswer(origin: .dictionary, text: "x"), of: unconfirmed.id, at: now)
+        try ledger.setEnrollment(.active, of: unconfirmed.id)
+        // Unconfirmed: a model's proposal nobody has agreed with.
+        try ledger.unconfirmForTesting(noteID: unconfirmed.id)
+
+        func ids(_ state: LibraryQuery.State?) throws -> Set<UUID> {
+            Set(try ledger.library(LibraryQuery(state: state, now: now)).map(\.id))
+        }
+        let dueIDs = try ids(.due), pausedIDs = try ids(.paused)
+        let attention = try ids(.needsAttention), all = try ids(nil)
+        #expect(dueIDs == [due.id], "Due listed \(dueIDs)")
+        #expect(pausedIDs == [paused.id], "Paused listed \(pausedIDs)")
+        #expect(attention == [unconfirmed.id], "Needs attention listed \(attention)")
+        #expect(all.count == 4, "and All is all of them")
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

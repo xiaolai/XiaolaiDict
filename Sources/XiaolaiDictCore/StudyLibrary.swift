@@ -20,6 +20,13 @@ public struct LibraryQuery: Sendable, Equatable {
     /// *reading* history; applying it unasked to their card collection hides scheduled work, and an
     /// empty library and a filtered one look exactly alike (M10).
     public var scripts: Set<ProbeScript>?
+    /// Which state the reader is looking at. **Each is its own predicate** — they were once all
+    /// `enrollment = 'active'`, so Paused listed unpaused cards and the label lied about what a
+    /// bulk action would reach.
+    public var state: State?
+    /// The instant "due" is judged against. Explicit, because a library opened at midnight and a
+    /// test at a fixed date must both be able to say what "now" is.
+    public var now: Date
     public var limit: Int
     /// Keyset pagination: the last row of the previous page. **Not an offset** — a card enrolled
     /// while the reader is paging would shift every offset after it and silently skip a row.
@@ -27,13 +34,27 @@ public struct LibraryQuery: Sendable, Equatable {
 
     public init(text: String = "", dictionary: String? = nil,
                 enrollment: Set<StudyEnrollment>? = nil, scripts: Set<ProbeScript>? = nil,
+                state: State? = nil, now: Date = .now,
                 limit: Int = 50, after: Cursor? = nil) {
         self.text = text
         self.dictionary = dictionary
         self.enrollment = enrollment
         self.scripts = scripts
+        self.state = state
+        self.now = now
         self.limit = limit
         self.after = after
+    }
+
+    /// The states the library can be narrowed to.
+    public enum State: Sendable, Equatable, CaseIterable {
+        /// Askable now: enrolled, ready, not paused, not hidden, and its due time has passed.
+        case due
+        /// Put aside by the reader. Says nothing about memory.
+        case paused
+        /// Enrolled and **not** askable — a proposal to confirm, an answer to write, a reading the
+        /// reader deleted. The queue skips these silently; this is where they are visible.
+        case needsAttention
     }
 
     public struct Cursor: Sendable, Equatable {
@@ -132,6 +153,26 @@ extension Ledger {
                 """)
             bind.append(.text(Self.jsonArray(of: scripts.map(\.rawValue))))
         }
+        switch query.state {
+        case .due:
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.paused = 0
+                      AND (c.hidden_until IS NULL OR c.hidden_until <= ?\(bind.count + 1))
+                      AND (c.due IS NULL OR c.due <= ?\(bind.count + 1))
+                )
+                AND \(Ledger.askableNotePredicate)
+                """)
+            bind.append(.real(query.now.timeIntervalSince1970))
+        case .paused:
+            conditions.append("EXISTS (SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.paused = 1)")
+        case .needsAttention:
+            // Enrolled and not askable. **The same predicate, negated** — not a second opinion
+            // about what askable means, which is how two spellings of one rule start to disagree.
+            conditions.append("n.enrollment = 'active' AND NOT (\(Ledger.askableNotePredicate))")
+        case nil:
+            break
+        }
         if let after = query.after {
             // Keyset: strictly older, or the same instant with a smaller id. The id breaks the tie so
             // two notes enrolled in the same second cannot both be skipped or both repeat.
@@ -161,8 +202,7 @@ extension Ledger {
                      WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1),
                    -- Readiness's facts, not its verdict: the rule is decided once, in Swift.
                    EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id),
-                   EXISTS (SELECT 1 FROM study_answers a
-                            WHERE a.note_id = n.id AND trim(a.text) <> ''),
+                   EXISTS (SELECT 1 FROM study_answers a WHERE a.note_id = n.id AND a.is_usable = 1),
                    (SELECT a.origin FROM study_answers a WHERE a.note_id = n.id)
             FROM study_notes n
             \(whereClause)

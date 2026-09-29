@@ -154,6 +154,7 @@ actor LedgerStore {
         try ledger.setEnrollment(enrollment, ofNotes: ids)
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
+    func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
     func deleteReading(lookups ids: [Int]) throws { try ledger.deleteReading(lookups: ids) }
 
     func readingErasureImpact(at path: String) throws

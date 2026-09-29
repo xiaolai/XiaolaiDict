@@ -163,6 +163,30 @@ struct StudyReviewTests {
         #expect(stored.isVoid)
     }
 
+    /// **A voided event's id is spent, not reusable.** Re-grading after an undo reused the
+    /// presentation's id, the idempotency check found the voided row and returned it as though the
+    /// new grade had committed, and the surface advanced over a review that never happened. Returning
+    /// a *voided* event as a successful result is the defect; the id is refused instead.
+    @Test func regradingWithAvoidedEventIdIsRefusedRatherThanSilentlyDropped() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger)
+        let eventID = UUID()
+        _ = try ledger.grade(cardID: card.id, .again, eventID: eventID, expectedRevision: 0,
+                             at: now, using: try scheduler())
+        try ledger.undoLatestReview(ofCard: card.id, at: now)
+
+        #expect(throws: ReviewError.eventAlreadyVoided(eventID)) {
+            try ledger.grade(cardID: card.id, .good, eventID: eventID, expectedRevision: 0,
+                             at: self.now, using: try self.scheduler())
+        }
+        // A *fresh* attempt lands, which is what the reader is actually doing after an undo.
+        let replacement = try ledger.grade(cardID: card.id, .good, eventID: UUID(),
+                                           expectedRevision: 2, at: now, using: try scheduler())
+        let live = try ledger.reviews(ofCard: card.id).filter { !$0.isVoid }
+        #expect(live.map(\.id) == [replacement.id])
+        #expect(try #require(try ledger.card(id: card.id)).scheduled == replacement.after)
+    }
+
     // MARK: - The queue
 
     /// **Learning and relearning first, then review by oldest due, then the unreviewed.** A simple
@@ -275,6 +299,28 @@ struct StudyReviewTests {
         // Named so a future reader can see the states this was measured over, not just the count.
         #expect([unconfirmed.noteID, archived.noteID, answerless.noteID, readingless.noteID,
                  entryRung.id].allSatisfy { !bySQL.contains($0) })
+    }
+
+    /// **The two judges of "usable" must agree about whitespace too.**
+    ///
+    /// SQL's `trim()` removes ordinary spaces and nothing else; Swift's `.whitespacesAndNewlines`
+    /// removes tabs, newlines and the ideographic space as well. So an answer of `"\n\t\u{3000}"`
+    /// was unusable to `readiness(of:)`, usable to the queue, and blank on the card — a question
+    /// with nothing behind it, offered and gradable. The agreement test never found it because it
+    /// never constructed one.
+    @Test(arguments: ["\n", "\t", "\u{3000}", " \n\t\u{3000} ", "\u{00a0}"])
+    func anAnswerOfOnlyWhitespaceIsUnusableToBothJudges(text: String) throws {
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger)
+        try ledger.setAnswer(StudyAnswer(origin: .dictionary, text: text), of: card.noteID, at: now)
+
+        #expect(try ledger.readiness(of: card.noteID) == .needsRepair)
+        #expect(try ledger.askableNoteIDs().isEmpty, "the queue admitted a card with a blank answer")
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty)
+        #expect(throws: ReviewError.notEligible(card.id)) {
+            try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: self.now, using: try self.scheduler())
+        }
     }
 
     /// **Nothing but a deliberate grade moves the schedule** (spec §11). Enrolling, confirming,

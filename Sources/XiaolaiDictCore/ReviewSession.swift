@@ -99,9 +99,18 @@ public struct ReviewSession: Sendable, Equatable {
     @discardableResult
     public mutating func undoLast() -> Presentation? {
         guard let index = presentations.lastIndex(where: { $0.isAnswered }) else { return nil }
-        presentations[index].outcome = nil
+        let previous = presentations[index]
+        // **A new identity for a new attempt.** The presentation's id is the grade's idempotency
+        // key: reusing it after an undo made the replacement collide with the voided event, and the
+        // ledger answered the new attempt with the old, taken-back result. The card and the
+        // revision it was drawn at are the same; the attempt is not.
+        var renewed = Presentation(cardID: previous.cardID, revision: previous.revision)
+        // The answer stays shown — the reader has already seen it, and hiding it again would
+        // pretend the attempt had not happened.
+        renewed.isRevealed = previous.isRevealed
+        presentations[index] = renewed
         cursor = index
-        return presentations[index]
+        return renewed
     }
 
     // MARK: - What the surface asks

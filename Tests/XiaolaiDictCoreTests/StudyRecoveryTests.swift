@@ -177,6 +177,57 @@ struct StudyRecoveryTests {
         #expect(FileManager.default.fileExists(atPath: theirs), "we deleted a file that was not ours")
     }
 
+    /// **A reader's file that merely *looks* like ours is not ours.** The matcher accepted anything
+    /// between `.schema` and `.backup`, so `ledger.sqlite.schema7.my-own.backup` — a copy a reader
+    /// might plausibly name — was a candidate for deletion, while the comment claimed an exact match.
+    @Test func afileThatOnlyResemblesOursIsNotDeleted() throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        try save(ledger, "fine")
+        let ours = path + ".schema7.backup"
+        let theirs = path + ".schema7.my-own.backup"
+        try ledger.backUp(to: ours)
+        try ledger.backUp(to: theirs)
+
+        #expect(Ledger.appManagedBackups(besides: path) == [ours])
+        let report = try ledger.eraseReadingData(at: path)
+        #expect(report.backupsRemoved == [ours])
+        #expect(FileManager.default.fileExists(atPath: theirs), "we deleted a file that was not ours")
+    }
+
+    /// **An erase that says it is complete must not leave the text in the file.** `DELETE` frees the
+    /// pages and leaves their bytes; this Mac's SQLite runs `secure_delete` in FAST mode, which only
+    /// scrubs pages it is already rewriting. Measured before the fix as thousands of the deleted
+    /// sentences' bytes still present.
+    @Test func erasedSentencesAreNotStillInTheFile() throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let marker = "MARKERPHRASEUNLIKELYTOAPPEARBYCHANCE"
+        do {
+            let ledger = try Ledger(path: path)
+            for index in 0..<40 {
+                _ = try ledger.record(LookupRecord(
+                    surface: "fine", lemma: "fine",
+                    context: String(repeating: "\(marker) ", count: 40) + "\(index)",
+                    lemmaBasis: .tagger, language: "en", contextRange: nil,
+                    place: ReadingPlace(bundleID: nil, name: nil), lookedUpAt: now, result: .found,
+                    answeredBy: .dictionaryService, quality: nil))
+            }
+            _ = try ledger.eraseReadingData(at: path)
+        }
+        // Read the closed file's bytes. Nothing subtle: if the reader's sentences are in there, they
+        // are in there, and they were told they were gone.
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let needle = Data(marker.utf8)
+        #expect(bytes.range(of: needle) == nil, "the erased sentences are still in the database file")
+        for suffix in ["-wal", "-shm"] {
+            if let sidecar = try? Data(contentsOf: URL(fileURLWithPath: path + suffix)) {
+                #expect(sidecar.range(of: needle) == nil, "still in \(suffix)")
+            }
+        }
+    }
+
     // MARK: - Lookup outlives study
 
     /// **The dictionary is the product; study is built on it.** A study write that fails must not

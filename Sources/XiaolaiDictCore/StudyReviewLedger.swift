@@ -119,7 +119,7 @@ extension Ledger {
         AND EXISTS (
             SELECT 1 FROM study_answers a
             WHERE a.note_id = n.id
-              AND trim(a.text) <> ''
+              AND a.is_usable = 1
               AND NOT (n.target_kind = 'entry' AND a.origin = 'dictionary')
         )
         """
@@ -217,7 +217,12 @@ extension Ledger {
         do {
             // Idempotency first, and **before eligibility**: a retry of a review that already
             // committed must return its result even if the card has since become ineligible.
+            //
+            // **A voided event is not a result to return.** The reader took it back; answering a
+            // new attempt with it would report success for a review that never happened and let the
+            // surface advance past the card. The id is spent, and a fresh attempt needs a fresh one.
             if let existing = try events(where: "WHERE id = ?", bind: [.text(eventID.uuidString)]).first {
+                guard !existing.isVoid else { throw ReviewError.eventAlreadyVoided(eventID) }
                 try execute("RELEASE grade")
                 return existing
             }

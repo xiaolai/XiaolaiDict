@@ -256,6 +256,9 @@
     "Compact" : {
 
     },
+    "Confirm %lld" : {
+
+    },
     "Confirm the meaning" : {
 
     },
@@ -691,6 +694,9 @@
     "Show Less" : {
       "comment" : "Closes a day's pile of cards"
     },
+    "Show more" : {
+
+    },
     "Show the answer" : {
 
     },
@@ -834,6 +840,9 @@
     },
     "The sense you read could not be identified." : {
 
+    },
+    "The write-ahead log could not be truncated: another connection is reading it." : {
+      "comment" : "Reported when an erase cannot clear the database's sidecar log"
     },
     "Third-party notices" : {
 

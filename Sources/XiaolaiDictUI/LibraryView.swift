@@ -32,6 +32,10 @@ public struct LibraryView: View {
                 empty
             } else {
                 list
+                if state.hasMore {
+                    Button("Show more") { act(.showMore) }
+                        .padding(.bottom, scale.space.line)
+                }
             }
             Divider()
             footer
@@ -110,6 +114,9 @@ public struct LibraryView: View {
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
             if !state.selection.isEmpty {
+                if state.canConfirm {
+                    Button("Confirm \(state.selection.count)") { act(.confirm) }
+                }
                 Button("Pause \(state.selection.count)") { act(.pause) }
                 Button("Archive \(state.selection.count)") { act(.archive) }
                 // **Two different deletions, named apart.** Removing from study keeps the reading;
@@ -173,6 +180,12 @@ struct LibraryRowView: View {
 
 public enum LibraryAction: Sendable, Equatable {
     case search(String)
+    /// One more page. **Grown, not offset**: a card enrolled while the reader is reading must not
+    /// shift a boundary underneath them.
+    case showMore
+    /// The reader agrees these are the meanings they met. The library showed "Confirm the meaning"
+    /// as a status with no way to act on it — a diagnosis with no remedy.
+    case confirm
     case filter(LibraryPresentation.Filter)
     case filterScripts(Bool)
     case select(Set<UUID>)
@@ -189,15 +202,22 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let filter: Filter
     public let scriptFiltered: Bool
     public let selection: Set<UUID>
+    /// Whether anything matched beyond what is listed.
+    public let hasMore: Bool
+    /// Whether the selection holds anything a confirmation would change.
+    public let canConfirm: Bool
 
     public init(rows: [Row], total: Int, search: String = "", filter: Filter = .all,
-                scriptFiltered: Bool = false, selection: Set<UUID> = []) {
+                scriptFiltered: Bool = false, selection: Set<UUID> = [],
+                hasMore: Bool = false, canConfirm: Bool = false) {
         self.rows = rows
         self.total = total
         self.search = search
         self.filter = filter
         self.scriptFiltered = scriptFiltered
         self.selection = selection
+        self.hasMore = hasMore
+        self.canConfirm = canConfirm
     }
 
     /// The sidebar's states, as one control. **Archived and paused are here**, because the library is

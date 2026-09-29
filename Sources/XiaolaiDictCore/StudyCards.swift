@@ -100,4 +100,9 @@ public enum ReviewError: Error, Equatable {
     /// the reader is looking at it.
     case notEligible(UUID)
     case nothingToUndo(UUID)
+    /// The event id has already been used and taken back. **Not the same as a retry**: a retry of a
+    /// live event returns its result, while reusing the id of one the reader undid would answer a
+    /// new attempt with the old, voided outcome and let the surface advance over a review that
+    /// never happened. A fresh attempt needs a fresh id.
+    case eventAlreadyVoided(UUID)
 }

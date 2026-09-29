@@ -109,7 +109,14 @@ extension Ledger {
             -- The sense's text hash at enrollment, so a content update that moves it is detectable.
             sense_hash         TEXT,
             recorded_at        REAL NOT NULL,
-            CHECK (origin IN ('dictionary', 'reader'))
+            -- **Swift's verdict, stored.** SQL's `trim()` removes ordinary spaces and nothing
+            -- else, while `.whitespacesAndNewlines` removes tabs, newlines and the ideographic
+            -- space — so an answer of only those was blank to one judge and usable to the other,
+            -- and a card with nothing on its back reached the queue. The rule has one owner and
+            -- SQL reads its answer rather than approximating it.
+            is_usable          INTEGER NOT NULL,
+            CHECK (origin IN ('dictionary', 'reader')),
+            CHECK (is_usable IN (0, 1))
         );
         """
 
@@ -432,6 +439,13 @@ extension Ledger {
                 bind: [.real(when.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }
     }
 
+    /// Clears a note's confirmation. **For tests**: there is no reader-facing route to unconfirm,
+    /// because a confirmation is something they said and taking it back for them is not.
+    func unconfirmForTesting(noteID: UUID) throws {
+        try run("UPDATE study_notes SET confirmed_at = NULL WHERE id = ?",
+                bind: [.text(noteID.uuidString)]) { _ in }
+    }
+
     /// Whether the reader wants this target. Every value is reachable from every other: a disposition is
     /// a declaration, and nothing here erases evidence.
     public func setEnrollment(_ enrollment: StudyEnrollment, of noteID: UUID) throws {
@@ -444,16 +458,17 @@ extension Ledger {
     public func setAnswer(_ answer: StudyAnswer, of noteID: UUID, at when: Date) throws {
         try run(
             """
-            INSERT INTO study_answers (note_id, origin, text, dictionary_version, sense_hash, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO study_answers (note_id, origin, text, dictionary_version, sense_hash,
+                                       recorded_at, is_usable)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (note_id) DO UPDATE SET
                 origin = excluded.origin, text = excluded.text,
                 dictionary_version = excluded.dictionary_version, sense_hash = excluded.sense_hash,
-                recorded_at = excluded.recorded_at
+                recorded_at = excluded.recorded_at, is_usable = excluded.is_usable
             """,
             bind: [.text(noteID.uuidString), .text(answer.origin.rawValue), .text(answer.text),
                    .optionalText(answer.dictionaryVersion), .optionalText(answer.senseHash),
-                   .real(when.timeIntervalSince1970)]) { _ in }
+                   .real(when.timeIntervalSince1970), .integer(answer.isUsable ? 1 : 0)]) { _ in }
     }
 
     public func answer(of noteID: UUID) throws -> StudyAnswer? {

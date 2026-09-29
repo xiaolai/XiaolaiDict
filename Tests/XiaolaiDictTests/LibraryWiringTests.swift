@@ -156,3 +156,93 @@ struct LibraryWiringTests {
         Issue.record("the model never reached the expected state")
     }
 }
+
+extension LibraryWiringTests {
+    /// **A destructive action must affect exactly what the footer says.**
+    ///
+    /// The selection was pruned into the *presentation* and not in the model, so selecting two rows
+    /// and then searching until one was visible showed "Remove 1" over a command that removed both.
+    /// The reader sees a count and presses a button; those have to be the same set.
+    @Test func abulkActionCannotReachRowsTheReaderCanNoLongerSee() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let fine = try save(ledger, "fine")
+        let hold = try save(ledger, "hold")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([fine.id, hold.id]))
+        try await settle { model.presentation.selection.count == 2 }
+
+        // Narrow until only one of them is on screen.
+        model.act(.search("hold"))
+        try await settle { model.presentation.rows.count == 1 }
+        #expect(model.presentation.selection == [hold.id], "the footer counts what is visible")
+
+        model.act(.removeFromStudy)
+        try await settle { model.presentation.rows.isEmpty }
+
+        let reopened = try Ledger(path: path)
+        let left = try reopened.library(LibraryQuery())
+        #expect(left.map(\.id) == [fine.id],
+                "the action reached a row the reader could not see")
+    }
+}
+
+extension LibraryWiringTests {
+    /// **A status with no remedy is a diagnosis.** The library showed "Confirm the meaning" and
+    /// offered no way to confirm, so a proposal the reader saved stayed out of review for ever.
+    @Test func thereaderCanConfirmAproposalFromTheLibrary() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let lookup = try ledger.record(LookupRecord(
+            surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        // Enrolled as the model proposed it: saved, and not askable.
+        let note = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.1", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .model,
+            answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty)
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.rows.first?.status == .needsConfirmation)
+        model.act(.select([note.id]))
+        try await settle { model.presentation.canConfirm }
+        model.act(.confirm)
+        try await settle { model.presentation.rows.first?.status == nil }
+
+        let reopened = try Ledger(path: path)
+        #expect(try reopened.readiness(of: note.id) == .ready)
+        #expect(try reopened.dueCards(at: now, limit: 10, dictionary: nil).count == 1,
+                "and it can now be asked")
+    }
+
+    /// **Everything that matched is reachable.** The model asked for one page and the view offered
+    /// no continuation, so a library of 201 counted 201 and could show only 200 — and the 201st was
+    /// reachable only by guessing a search term that narrowed to it.
+    @Test func everyMatchingRowIsReachable() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let total = LibraryModel.pageSize + 1
+        for index in 0..<total {
+            try save(ledger, "word\(String(format: "%04d", index))")
+        }
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.total == total)
+        #expect(model.presentation.rows.count == LibraryModel.pageSize)
+        #expect(model.presentation.hasMore, "no way to reach the rest")
+
+        model.act(.showMore)
+        try await settle { model.presentation.rows.count == total }
+        #expect(!model.presentation.hasMore, "and nothing offers more than there is")
+        #expect(model.presentation.rows.contains { $0.word == "word0000" }, "the oldest is reachable")
+    }
+}

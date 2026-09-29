@@ -152,7 +152,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 10
+    public static let schemaVersion = 11
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -896,6 +896,22 @@ public final class Ledger {
                 // note that already exists: a schedule invented for a target the reader enrolled
                 // before there was one would be a first review they never sat.
                 try execute(Self.studyCardSchema)
+            }
+            if found == 10 {
+                // Schema 10's `study_answers` had SQL judging whether an answer was blank, with
+                // `trim()`, which removes ordinary spaces and nothing else. Swift's judgement is
+                // stored from 11 on, and the existing rows are re-judged by it here rather than by
+                // a SQL approximation of it — there are at most as many as the reader has cards.
+                try execute("ALTER TABLE study_answers ADD COLUMN is_usable INTEGER NOT NULL DEFAULT 1;")
+                var rows: [(String, String)] = []
+                try run("SELECT note_id, text FROM study_answers", bind: []) { row in
+                    rows.append((try row.text(0), try row.text(1)))
+                }
+                for (id, text) in rows {
+                    let usable = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    try run("UPDATE study_answers SET is_usable = ? WHERE note_id = ?",
+                            bind: [.integer(usable ? 1 : 0), .text(id)]) { _ in }
+                }
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")

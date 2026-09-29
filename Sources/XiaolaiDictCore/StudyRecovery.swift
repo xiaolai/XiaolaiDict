@@ -15,15 +15,24 @@ import SQLite3
 extension Ledger {
     /// The copies this app made, beside the ledger it made them from.
     ///
-    /// **Only its own.** Matched on the exact suffix `backUpBeforeMigrating` writes, so a file the
-    /// reader put there themselves is never a candidate for deletion by us.
+    /// **Only its own, and only the exact shape the migration writes**: `<ledger>.schema<digits>.backup`
+    /// and nothing else.
+    ///
+    /// A prefix-and-suffix match is not that. It accepted `ledger.sqlite.schema7.my-own.backup` — a
+    /// name a reader might plausibly choose for a copy — while the comment claimed an exact match,
+    /// which is how a file that is not ours would have been deleted by a command promising to delete
+    /// ours. The digits are checked, so anything between the version and `.backup` disqualifies it.
     public static func appManagedBackups(besides path: String) -> [String] {
         let url = URL(fileURLWithPath: path)
         let directory = url.deletingLastPathComponent()
         let prefix = url.lastPathComponent + ".schema"
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         return contents
-            .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".backup") }
+            .filter { name in
+                guard name.hasPrefix(prefix), name.hasSuffix(".backup") else { return false }
+                let middle = name.dropFirst(prefix.count).dropLast(".backup".count)
+                return !middle.isEmpty && middle.allSatisfy(\.isNumber)
+            }
             .sorted()
             .map { directory.appending(path: $0).path }
     }
@@ -106,6 +115,11 @@ extension Ledger {
     public func eraseReadingData(at path: String) throws -> ErasureReport {
         var count = 0
         try run("SELECT COUNT(*) FROM lookups", bind: []) { count = $0.integer(0) }
+        // **`DELETE` frees the pages and leaves their bytes.** macOS's SQLite runs `secure_delete`
+        // in FAST mode, which only scrubs pages it is already rewriting, so thousands of characters
+        // of the reader's sentences stayed legible in the file after an erase that reported success.
+        // Measured on this Mac before this line existed.
+        try execute("PRAGMA secure_delete = ON")
         try inOneTransaction("eraseReading") {
             try execute("DELETE FROM lookups")
         }
@@ -123,7 +137,21 @@ extension Ledger {
         }
         // The write-ahead log still holds the deleted rows until it is folded in. A reader who was
         // told their history is gone should not have it recoverable from a sidecar file.
-        try execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        //
+        // **Its answer is read.** `wal_checkpoint` reports a busy checkpoint in its first column —
+        // another connection holding a read snapshot can prevent the truncation — and running it
+        // through `execute`, whose `sqlite3_exec` callback is nil, threw that answer away. The
+        // erase then reported itself complete over a log still holding the reader's history.
+        var checkpointBusy = false
+        try run("PRAGMA wal_checkpoint(TRUNCATE)", bind: []) { checkpointBusy = $0.integer(0) != 0 }
+        if checkpointBusy {
+            left[path + "-wal"] = String(
+                localized: "The write-ahead log could not be truncated: another connection is reading it.",
+                comment: "Reported when an erase cannot clear the database's sidecar log")
+        }
+        // Rewrites the database without the freed pages, so nothing of what was deleted survives in
+        // the file. Outside the transaction, because `VACUUM` cannot run inside one.
+        try execute("VACUUM")
         return ErasureReport(lookupsRemoved: count, backupsRemoved: removed, backupsLeft: left)
     }
 }
