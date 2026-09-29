@@ -230,6 +230,12 @@ public struct LookupCardView: View {
                         .lineSpacing(scale.text.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .setApart()
+                    // **Under the sentence, and only where there is one.** The notice explains a span the
+                    // reader has just seen underlined; without the sentence there is no span to explain,
+                    // and the phrase alone would be an answer to a question nobody asked.
+                    if let phrase = card.phrase {
+                        PhraseNoticeView(phrase: phrase, accent: accent)
+                    }
                 }
                 standing
             }
@@ -309,6 +315,7 @@ public struct LookupCardView: View {
             marking: Lemmatizer.parts(
                 of: card.term, surface: card.term, in: sentence,
                 at: captured ?? text.range(of: card.term, options: .caseInsensitive)),
+            phrase: card.phrase,
             size: scale.text.body, emphasis: options.emphasis, accent: accent)
     }
 
@@ -734,7 +741,7 @@ public struct LookupPanelContent: View {
             term: presentation.term, lemma: presentation.lemma.text,
             sentenceRange: presentation.sentenceRange,
             sentence: presentation.sentence, mark: mark,
-            memory: presentation.memory)
+            memory: presentation.memory, phrase: presentation.phrase)
     }
 
     /// **A card with no entry behind it.** Both states the primary dictionary can leave the panel
@@ -746,7 +753,11 @@ public struct LookupPanelContent: View {
             term: presentation.term, lemma: presentation.lemma.text,
             heading: presentation.term, partOfSpeech: nil,
             pronunciation: nil, answer: answer,
-            sentence: presentation.sentence, alternatives: [], memory: presentation.memory)
+            // **Shown on the no-entry card too**, and this is where it matters most: a reader whose
+            // *take* found nothing is exactly the reader who needs to be told the sentence held
+            // *take something into account*. A phrase answer does not depend on the word's.
+            sentence: presentation.sentence, alternatives: [], memory: presentation.memory,
+            phrase: presentation.phrase)
     }
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a

@@ -45,6 +45,13 @@ public struct LookupPresentation: Equatable {
     public var memory: MemoryStrip?
     /// The study items the reader has already met, so a sense read before can be marked (C3).
     public var met: Set<StudyItem> = []
+    /// The phrase the reader was standing inside, where the dictionaries knew one.
+    ///
+    /// **Beside the word's answer, never merged into it.** *take* and *take something into account* are
+    /// different words to a reader; the wire refused to merge their senses and the card must not either.
+    /// Nil covers three different facts on the wire — no sentence, no phrase, and an inventory still being
+    /// read — and `PhrasePresentation.init(_:sentence:)` is where that collapse happens, once.
+    public var phrase: PhrasePresentation?
 
     /// **`request` has no default**, because a default is what makes two lookups share an identity.
     /// The panel resets a card's own state — a revealed gloss, a translation, an explanation — when

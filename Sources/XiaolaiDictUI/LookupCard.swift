@@ -85,6 +85,8 @@ public struct LookupCard: Equatable {
     /// Every other sense in the entry, in the entry's own order. Present, and not shown until
     /// asked for.
     public let alternatives: [SensePresentation]
+    /// The phrase the reader was standing inside, where there was one — shown under their sentence.
+    public let phrase: PhrasePresentation?
 
     /// How many senses the reader could turn to. Named rather than `alternatives.count` at the
     /// call site so the view cannot start counting something else.
@@ -189,10 +191,11 @@ public struct LookupCard: Equatable {
         term: String, lemma: String? = nil, sentenceRange: NSRange? = nil,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
-        memory: MemoryStrip? = nil
+        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
     ) {
         self.term = term
         self.lemma = lemma ?? term
+        self.phrase = phrase
         self.sentenceRange = sentenceRange
         self.heading = heading
         self.partOfSpeech = partOfSpeech
@@ -213,7 +216,7 @@ public extension LookupCard {
     init(
         presentation: EntryPresentation, term: String, lemma: String? = nil,
         sentenceRange: NSRange? = nil, sentence: String?, mark: SenseMark?,
-        memory: MemoryStrip? = nil
+        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
     ) {
         let chosen = presentation.senses.first { sense in
             guard let key = sense.key else { return false }
@@ -284,6 +287,7 @@ public extension LookupCard {
             answer: answer,
             sentence: sentence,
             alternatives: presentation.senses.filter { ($0.key ?? "\($0.ordinal)") != shown },
-            memory: memory)
+            memory: memory,
+            phrase: phrase)
     }
 }

@@ -98,8 +98,11 @@ final class LookupRunner {
             return nil
         }
         let outcome = resolved.word
-        // Logged rather than drawn: the panel does not show the phrase yet, and a wire nothing observes is
-        // a wire nothing can be shown to have used.
+        // **Built against the sentence the card holds, not the one that was sent.** The request sends the
+        // sentence whatever the capture's quality, while the presentation drops it for an incomplete one —
+        // so a span measured against the first and drawn on the second would bracket whatever sits at that
+        // offset. `PhrasePresentation.init(_:sentence:)` checks the pairing rather than trusting it.
+        presentation.phrase = PhrasePresentation(resolved.phrase, sentence: presentation.sentence)
         switch resolved.phrase {
         case .found(let hit):
             log.notice("phrase: \(hit.phrase, privacy: .public), gap \(hit.separation.gap, privacy: .public), \(hit.entries.count, privacy: .public) entries")

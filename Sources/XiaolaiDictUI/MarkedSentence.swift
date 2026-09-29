@@ -14,12 +14,24 @@ import SwiftUI
 /// out from the term. What they must not each decide is how a marked word *looks*.
 enum MarkedSentence {
     static func text(
-        _ sentence: String, marking ranges: [NSRange], size: CGFloat,
-        emphasis: WordEmphasis, accent: Color
+        _ sentence: String, marking ranges: [NSRange], phrase: PhrasePresentation? = nil,
+        size: CGFloat, emphasis: WordEmphasis, accent: Color
     ) -> AttributedString {
         var text = AttributedString(sentence)
         var font = Font.system(size: size, weight: emphasis.weight)
         if emphasis.isItalic { font = font.italic() }
+        // **The phrase first, the word over it.** The word's marking sets the font and the colour; an
+        // underline applied underneath survives that, and applied on top it would overwrite it. A phrase
+        // written unbroken contains the word, so the two spans overlap in the commonest case.
+        if let phrase, let swift = Range(phrase.range, in: sentence),
+           let underlined = Range(swift, in: text) {
+            // **Dashed for a guess, solid for the publisher's own mark.** The same distinction
+            // `Token.Stroke.absent` draws: a solid line asserts a thing is there. An inferred split is
+            // this app's reading of English rather than something a dictionary wrote down, and a reader
+            // comparing the claim against their own sentence can see which they are looking at.
+            text[underlined].underlineStyle = phrase.isGuess
+                ? Text.LineStyle(pattern: .dash) : Text.LineStyle(pattern: .solid)
+        }
         for range in ranges {
             guard let swift = Range(range, in: sentence),
                   let marked = Range(swift, in: text) else { continue }
