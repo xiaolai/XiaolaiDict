@@ -24,11 +24,23 @@ final class LibraryModel {
     /// How many pages the reader has asked for. **Grown rather than offset**, so a card enrolled
     /// while they are reading does not shift a boundary underneath them.
     private var pages = 1
+    private var exported: String?
+    /// The word the reader asked to study from a suggestion. **Read and cleared** by whoever acts
+    /// on it, so a redraw cannot take the same suggestion up twice.
+    private(set) var suggestionTaken: String?
+
+    func takeSuggestion() -> String? {
+        defer { suggestionTaken = nil }
+        return suggestionTaken
+    }
     private var scripts: Set<ProbeScript> = []
 
     /// How many rows one page holds. The library is paged rather than capped: a reader looking for
     /// something from March must be able to reach March.
     static let pageSize = 200
+    /// **Five, and no more.** C06: a suggestion list long enough to feel like a backlog is one,
+    /// and an unopened suggestion is supposed to cost the reader nothing.
+    static let suggestionCount = 5
 
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     private let studyScripts: @MainActor () -> Set<ProbeScript>
@@ -55,6 +67,21 @@ final class LibraryModel {
             let ids = Array(selection)
             let when = clock()
             return apply { store in for id in ids { try await store.confirm(noteID: id, at: when) } }
+        case .tag(let text):
+            let ids = Array(selection), trimmed = text
+            return apply { store in for id in ids { try await store.tag(noteID: id, trimmed) } }
+        case .export:
+            Task { await export() }
+            return
+        case .study(let lemma):
+            // **Taken up by hand, not enrolled from here.** Enrolling needs the sense the reader
+            // met, which comes from a lookup and not from a list — so this hands the word to the
+            // app and they decide, which is what C06 says a suggestion is.
+            suggestionTaken = lemma
+            return
+        case .ignore(let lemma, let language):
+            let when = clock()
+            return apply { try await $0.ignoreSuggestion(lemma: lemma, language: language, at: when) }
         case .pause:
             let ids = Array(selection)
             return apply { try await $0.setPaused(true, ofNotes: ids) }
@@ -87,6 +114,12 @@ final class LibraryModel {
             // different sets is the worst shape a destructive control can have.
             selection.formIntersection(Set(rows.map(\.id)))
             let answers = try await ledger.answers(of: rows.map(\.id))
+            // Only under the suggested filter: a list nobody is looking at is a query nobody
+            // should pay for on every keystroke.
+            let suggested = filter == .suggested
+                ? try await ledger.suggestions(limit: Self.suggestionCount, language: nil,
+                                               studying: scripts)
+                : []
             presentation = LibraryPresentation(
                 rows: rows.map { Self.row($0, answer: answers[$0.id]?.text ?? "", at: now) },
                 total: total, search: search, filter: filter, scriptFiltered: scriptFiltered,
@@ -96,10 +129,19 @@ final class LibraryModel {
                 hasMore: total > rows.count,
                 // Whether any of the selection can be confirmed, so the control is present only
                 // when it would do something.
-                canConfirm: rows.contains { selection.contains($0.id) && $0.readiness == .needsConfirmation })
+                canConfirm: rows.contains { selection.contains($0.id) && $0.readiness == .needsConfirmation },
+                suggestions: suggested.map {
+                    LibraryPresentation.Suggestion(lemma: $0.lemma, language: $0.language,
+                                                   days: $0.distinctDays,
+                                                   sources: $0.distinctSources)
+                },
+                exported: exported)
         } catch {
+            // **Said, not swallowed.** An empty list and a list that could not be read are the same
+            // screen otherwise, and the reader is owed the difference.
             presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
-                                               scriptFiltered: scriptFiltered)
+                                               scriptFiltered: scriptFiltered,
+                                               problem: String(describing: error))
         }
     }
 
@@ -112,6 +154,23 @@ final class LibraryModel {
         }
     }
 
+    /// Writes the collection out and remembers where it went.
+    ///
+    /// **The path is shown**, because an export the reader cannot find did not happen for them.
+    private func export() async {
+        guard let opening = store(), let ledger = try? await opening.value else { return }
+        do {
+            let written = try await ledger.export(dictionary: nil)
+            let url = FileManager.default.homeDirectoryForCurrentUser
+                .appending(path: "Downloads/XiaolaiDict-cards.txt")
+            try written.tabSeparated().write(to: url, atomically: true, encoding: .utf8)
+            exported = url.path
+        } catch {
+            exported = error.localizedDescription
+        }
+        await reload()
+    }
+
     private func query() -> LibraryQuery {
         // **Each filter is its own predicate.** They were once all `enrollment = 'active'`, so
         // Paused listed unpaused cards and Due listed cards due next year — and the bulk actions
@@ -122,7 +181,7 @@ final class LibraryModel {
             scripts: scriptFiltered ? scripts : nil,
             state: {
                 switch filter {
-                case .all, .archived: nil
+                case .all, .archived, .suggested: nil
                 case .due: .due
                 case .paused: .paused
                 case .needsAttention: .needsAttention

@@ -152,7 +152,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 11
+    public static let schemaVersion = 12
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -912,6 +912,17 @@ public final class Ledger {
                     try run("UPDATE study_answers SET is_usable = ? WHERE note_id = ?",
                             bind: [.integer(usable ? 1 : 0), .text(id)]) { _ in }
                 }
+            }
+            if found >= 10, found < 12 {
+                // **Only for a database that already has the table**, because a fresh one builds it
+                // from `studyCardSchema`, which declares `kind` — and adding it again is a
+                // duplicate-column error on every first launch. The same shape as the `found == 8`
+                // case above, and the same mistake, made twice now.
+                try execute("ALTER TABLE review_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'graded';")
+            }
+            if found < 12 {
+                // WI-007's tags: the reader's own labels, belonging to no dictionary.
+                try execute(Self.studyOrganisationSchema)
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")

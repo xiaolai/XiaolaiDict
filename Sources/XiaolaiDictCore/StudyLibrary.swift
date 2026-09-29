@@ -217,7 +217,8 @@ extension Ledger {
                 isEntryRung: { if case .entry = note.target { return true } else { return false } }(),
                 hasReading: row.integer(16) == 1,
                 // The library cannot ask a dictionary anything, so it never claims a sense moved.
-                senseMoved: false)
+                senseMoved: false,
+                needsReading: { if case .custom = note.target { return false } else { return true } }())
             rows.append(LibraryRow(
                 note: note, card: try existingCard(of: note.id),
                 word: row.optionalText(12) ?? "", excerpt: row.optionalText(13) ?? "",

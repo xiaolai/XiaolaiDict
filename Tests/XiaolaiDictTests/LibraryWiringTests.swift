@@ -246,3 +246,111 @@ extension LibraryWiringTests {
         #expect(model.presentation.rows.contains { $0.word == "word0000" }, "the oldest is reachable")
     }
 }
+
+/// **WI-007's surfaces, at the wire.** Tags, export and suggestions are Core features with library
+/// controls; each of these asserts the control reaches the ledger, because a feature nothing calls
+/// is not one.
+@MainActor
+struct LibraryOrganisationWiringTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func scratch() -> (String, () -> Void) {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-org-\(UUID().uuidString).sqlite").path
+        return (path, { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } })
+    }
+
+    @discardableResult
+    private func save(_ ledger: Ledger, _ word: String) throws -> StudyNote {
+        let lookup = try ledger.record(LookupRecord(
+            surface: word, lemma: word, context: "A sentence with \(word).", lemmaBasis: .tagger,
+            language: "en", contextRange: nil,
+            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        return try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1",
+                   senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .reader, text: "what \(word) means"),
+            lookupID: lookup, at: now)
+    }
+
+    private func model(_ path: String) -> LibraryModel {
+        LibraryModel(store: { Task { try LedgerStore(path: path) } },
+                     studyScripts: { [.latin] }, clock: { self.now })
+    }
+
+    @Test func taggingTheSelectionReachesTheLedger() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        model.act(.tag("law"))
+        try await settle { (try? Ledger(path: path).tags(of: note.id)) == ["law"] }
+        #expect(try Ledger(path: path).tags(of: note.id) == ["law"])
+    }
+
+    /// **The file lands where the reader is told it lands**, and holds no publisher gloss.
+    @Test func exportingWritesAfileAndSaysWhere() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        try save(ledger, "fine")
+        let model = model(path)
+        await model.reload()
+        model.act(.export)
+        try await settle { model.presentation.exported != nil }
+
+        let written = try #require(model.presentation.exported)
+        defer { try? FileManager.default.removeItem(atPath: written) }
+        #expect(FileManager.default.fileExists(atPath: written), "no file at \(written)")
+        let text = try String(contentsOfFile: written, encoding: .utf8)
+        #expect(text.contains("what fine means"), "the reader's own answer should travel")
+        #expect(text.contains("#columns:XiaolaiDictID"))
+    }
+
+    /// Suggestions appear under their own filter and are **offered, never enrolled**.
+    @Test func suggestionsAreOfferedAndTakingOneEnrolsNothing() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        for offset in [0.0, 86_400.0] {
+            _ = try ledger.record(LookupRecord(
+                surface: "recondite", lemma: "recondite", context: "A recondite point.",
+                lemmaBasis: .tagger, language: "en", contextRange: nil,
+                place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+                lookedUpAt: now.addingTimeInterval(offset), result: .found,
+                answeredBy: .dictionaryService, quality: nil, script: .latin))
+        }
+        let model = model(path)
+        model.act(.filter(.suggested))
+        try await settle { !model.presentation.suggestions.isEmpty
+            || model.presentation.problem != nil }
+        #expect(model.presentation.problem == nil, "reload failed: \(model.presentation.problem ?? "")")
+        #expect(model.presentation.suggestions.first?.lemma == "recondite")
+        #expect(model.presentation.suggestions.first?.days == 2)
+
+        model.act(.study(lemma: "recondite"))
+        #expect(model.takeSuggestion() == "recondite", "the app is handed the word to look up")
+        #expect(model.takeSuggestion() == nil, "and it cannot be taken up twice by a redraw")
+        #expect(try Ledger(path: path).notes().isEmpty, "a suggestion enrolled something")
+
+        model.act(.ignore(lemma: "recondite", language: "en"))
+        try await settle { model.presentation.suggestions.isEmpty }
+        #expect(try Ledger(path: path).notes().isEmpty, "\"already know\" made a card")
+        #expect(try Ledger(path: path).history(of: "recondite").count == 2, "and erased nothing")
+    }
+
+    private func settle(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<2_000 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("the model never reached the expected state")
+    }
+}

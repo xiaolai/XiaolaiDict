@@ -115,7 +115,10 @@ extension Ledger {
     static let askableNotePredicate = """
         n.enrollment = 'active'
         AND n.confirmed_at IS NOT NULL
-        AND EXISTS (SELECT 1 FROM study_note_lookups l WHERE l.note_id = n.id)
+        -- A reading is required of a dictionary target and not of one the reader wrote: their own
+        -- words are the cue, and demanding a lookup for it would make C07 unusable.
+        AND (n.target_kind = 'custom'
+             OR EXISTS (SELECT 1 FROM study_note_lookups l WHERE l.note_id = n.id))
         AND EXISTS (
             SELECT 1 FROM study_answers a
             WHERE a.note_id = n.id
@@ -123,6 +126,30 @@ extension Ledger {
               AND NOT (n.target_kind = 'entry' AND a.origin = 'dictionary')
         )
         """
+
+    /// Cards the reader may practise: ones they have already reviewed at least once.
+    ///
+    /// **Not the due queue, and deliberately the opposite order** — the longest since last seen
+    /// first, which is what someone choosing to practise is usually after. A card with no memory
+    /// state is excluded: its first attempt is its first review, not practice of one.
+    public func practisableCards(limit: Int, dictionary: String?) throws -> [StudyCard] {
+        guard limit > 0 else { return [] }
+        var bind: [SQLiteValue] = []
+        var scope = ""
+        if let dictionary {
+            scope = "AND n.dictionary = ?1"
+            bind.append(.text(dictionary))
+        }
+        bind.append(.integer(limit))
+        return try cardsFromJoin("""
+            JOIN study_notes n ON n.id = c.note_id
+            WHERE c.stability IS NOT NULL
+              AND \(Self.askableNotePredicate)
+              \(scope)
+            ORDER BY c.last_review, c.id
+            LIMIT ?\(bind.count)
+            """, bind: bind)
+    }
 
     /// The cards that may be asked now, in the order the specification's §10 gives.
     ///
@@ -143,18 +170,36 @@ extension Ledger {
             bind.append(.text(dictionary))
         }
         bind.append(.integer(limit))
+        // **At most one card per note in a batch** (R08). A note can grow a second question —
+        // recognise it, produce it — and asking both in one sitting is asking the reader the same
+        // thing twice with the answer fresh in mind, which measures the sitting rather than their
+        // memory. The sibling is not dropped: it is still due, and the next batch can have it.
+        //
+        // The winner is the one the ordering picks — a learning card ahead of its review sibling —
+        // which is why it is a correlated `LIMIT 1` and not a `GROUP BY`, whose winner is arbitrary.
         return try cardsFromJoin("""
             JOIN study_notes n ON n.id = c.note_id
             WHERE c.paused = 0
-              AND (c.hidden_until IS NULL OR c.hidden_until <= ?)
-              AND (c.due IS NULL OR c.due <= ?)
+              AND (c.hidden_until IS NULL OR c.hidden_until <= ?1)
+              AND (c.due IS NULL OR c.due <= ?2)
+              AND c.id = (
+                  SELECT s.id FROM study_cards s
+                  WHERE s.note_id = c.note_id AND s.paused = 0
+                    AND (s.hidden_until IS NULL OR s.hidden_until <= ?1)
+                    AND (s.due IS NULL OR s.due <= ?2)
+                  ORDER BY
+                      CASE s.phase WHEN 'learning' THEN 0 WHEN 'relearning' THEN 0
+                                   WHEN 'new' THEN 2 ELSE 1 END,
+                      s.due IS NULL, s.due, s.id
+                  LIMIT 1
+              )
               AND \(Self.askableNotePredicate)
               \(scope)
             ORDER BY
                 CASE c.phase WHEN 'learning' THEN 0 WHEN 'relearning' THEN 0
                              WHEN 'new' THEN 2 ELSE 1 END,
                 c.due IS NULL, c.due, c.id
-            LIMIT ?
+            LIMIT ?\(bind.count)
             """, bind: bind)
     }
 
@@ -288,6 +333,32 @@ extension Ledger {
         }
     }
 
+    /// **An attempt the reader asked for, outside the schedule.** Recorded and inert: no card is
+    /// written, no interval moves, and it enters no retention figure.
+    ///
+    /// It is recorded rather than dropped because it *happened* — it affects the reader's real
+    /// memory, and a scheduler that cannot see it has incomplete information. Saying so is better
+    /// than inventing a grade to fill the gap, which is what would make the model confidently wrong.
+    @discardableResult
+    public func practise(cardID: UUID, _ grade: Grade, eventID: UUID, at when: Date) throws -> ReviewEvent {
+        guard let card = try card(id: cardID) else { throw ReviewError.noSuchCard(cardID) }
+        // **A card with no memory state cannot be practised**, because there is nothing to leave
+        // unchanged and storing a zero stability beside it would be a claim about the reader's
+        // memory. Its first attempt is its first review.
+        guard card.scheduled.state != nil else { throw ReviewError.notYetReviewed(cardID) }
+        if let existing = try events(where: "WHERE id = ?", bind: [.text(eventID.uuidString)]).first {
+            guard !existing.isVoid else { throw ReviewError.eventAlreadyVoided(eventID) }
+            return existing
+        }
+        // `before` and `after` are the same state, which is the record that nothing moved.
+        let event = ReviewEvent(
+            id: eventID, cardID: cardID, grade: grade, reviewedAt: when,
+            before: card.scheduled, after: card.scheduled, retention: 0,
+            cardRevision: card.revision, kind: .practice)
+        try insert(event)
+        return event
+    }
+
     /// Every grade a card has taken, oldest first, **including the voided ones** — a caller that wants
     /// only the live ones says so, and one that is computing retention must exclude them explicitly
     /// rather than by hoping this filtered.
@@ -315,8 +386,8 @@ extension Ledger {
             INSERT INTO review_events
                 (id, card_id, grade, reviewed_at, before_phase, before_stability, before_difficulty,
                  before_last_review, before_due, after_phase, after_stability, after_difficulty,
-                 after_due, scheduler_version, retention, card_revision, voided_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                 after_due, scheduler_version, retention, card_revision, kind, voided_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             bind: [.text(event.id.uuidString), .text(event.cardID.uuidString),
                    .integer(event.grade.rawValue), .real(event.reviewedAt.timeIntervalSince1970),
@@ -329,7 +400,7 @@ extension Ledger {
                    .real(event.after.state?.stability ?? 0), .real(event.after.state?.difficulty ?? 0),
                    .real(event.after.due?.timeIntervalSince1970 ?? 0),
                    .text(event.schedulerVersion), .real(event.retention),
-                   .integer(event.cardRevision)]) { _ in }
+                   .integer(event.cardRevision), .text(event.kind.rawValue)]) { _ in }
     }
 
     private func events(where clause: String, bind values: [SQLiteValue]) throws -> [ReviewEvent] {
@@ -338,7 +409,7 @@ extension Ledger {
             """
             SELECT id, card_id, grade, reviewed_at, before_phase, before_stability, before_difficulty,
                    before_last_review, before_due, after_phase, after_stability, after_difficulty,
-                   after_due, scheduler_version, retention, card_revision, voided_at
+                   after_due, scheduler_version, retention, card_revision, voided_at, kind
             FROM review_events \(clause)
             """,
             bind: values
@@ -362,6 +433,7 @@ extension Ledger {
                 id: id, cardID: cardID, grade: grade, reviewedAt: reviewedAt, before: before,
                 after: after, schedulerVersion: try row.text(13), retention: row.real(14),
                 cardRevision: row.integer(15),
+                kind: ReviewEvent.Kind(rawValue: try row.text(17)) ?? .graded,
                 voidedAt: row.isNull(16) ? nil : Date(timeIntervalSince1970: row.real(16))))
         }
         return found

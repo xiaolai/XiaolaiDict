@@ -28,9 +28,6 @@ public enum KeyIssuer: String, Codable, Sendable, CaseIterable {
 /// because a phrase filed inside another word's entry has no identity among the other two: its only
 /// available key was its parent's entry id, **which is already the identity of the parent word at the entry
 /// rung**, so enrolling `take something into account` and the word *account* would have collided.
-///
-/// There is deliberately **no `custom` case yet**. C07's reader-authored card needs one, and a kind nothing
-/// constructs is a column value no test can reach — it goes in with the feature that writes it.
 public enum StudyTarget: Sendable, Equatable, Hashable {
     /// One sense of one entry: the finest rung, and only where the dictionary keys its senses.
     case sense(dictionary: String, entryID: String, senseKey: String, senseKeyKind: SenseKeyKind)
@@ -43,12 +40,24 @@ public enum StudyTarget: Sendable, Equatable, Hashable {
     /// was found — parent, block, content version, extraction version — and a phrase may have several.
     /// None of them is a sense key and none may be stored as one.
     case phrase(dictionary: String, text: String)
+    /// Something the reader wrote themselves (C07): a word, a phrase, a collocation the dictionary
+    /// does not file.
+    ///
+    /// **A kind of its own, not a `phrase` with no locators.** A phrase is the publisher's spelling
+    /// and can be traced to their markup; this is the reader's, and nothing about it is a claim about
+    /// a dictionary. Sharing a kind would make an invention indistinguishable from a citation the
+    /// moment anything reads the row.
+    ///
+    /// Still namespaced by dictionary, because study state belongs to one: a custom card made while
+    /// studying from NOAD is part of that collection and does not follow the reader elsewhere.
+    case custom(dictionary: String, text: String)
 
     /// The dictionary this target belongs to. Study state belongs to one dictionary: switching the primary
     /// starts it over, and two dictionaries' senses are never the same target.
     public var dictionary: String {
         switch self {
-        case .sense(let dictionary, _, _, _), .entry(let dictionary, _), .phrase(let dictionary, _):
+        case .sense(let dictionary, _, _, _), .entry(let dictionary, _), .phrase(let dictionary, _),
+             .custom(let dictionary, _):
             dictionary
         }
     }
@@ -59,11 +68,12 @@ public enum StudyTarget: Sendable, Equatable, Hashable {
         case .sense: .sense
         case .entry: .entry
         case .phrase: .phrase
+        case .custom: .custom
         }
     }
 
     public enum Kind: String, Codable, Sendable, CaseIterable {
-        case sense, entry, phrase
+        case sense, entry, phrase, custom
     }
 
     /// The `StudyItem` this target is, for the two rungs that have one.
@@ -77,7 +87,7 @@ public enum StudyTarget: Sendable, Equatable, Hashable {
             StudyItem(dictionary: dictionary, entryID: entryID, senseKey: senseKey, senseKeyKind: kind)
         case .entry(let dictionary, let entryID):
             StudyItem(dictionary: dictionary, entryID: entryID, senseKey: nil, senseKeyKind: .none)
-        case .phrase:
+        case .phrase, .custom:
             nil
         }
     }
@@ -249,18 +259,24 @@ extension StudyReadiness {
         public let isEntryRung: Bool
         /// Whether any reading still evidences it. A note whose readings the reader deleted has no cue.
         public let hasReading: Bool
+        /// Whether a reading is *required*. **False for a card the reader wrote themselves** — its
+        /// cue is their own words, and demanding a lookup for it would make C07 unusable the moment
+        /// it was built.
+        public let needsReading: Bool
         /// Whether the sense's text has changed under a stored key. **Only ever true on evidence**: a
         /// dictionary that could not be asked has said nothing.
         public let senseMoved: Bool
 
         public init(isConfirmed: Bool, hasUsableAnswer: Bool, answerIsPublishers: Bool,
-                    isEntryRung: Bool, hasReading: Bool, senseMoved: Bool) {
+                    isEntryRung: Bool, hasReading: Bool, senseMoved: Bool,
+                    needsReading: Bool = true) {
             self.isConfirmed = isConfirmed
             self.hasUsableAnswer = hasUsableAnswer
             self.answerIsPublishers = answerIsPublishers
             self.isEntryRung = isEntryRung
             self.hasReading = hasReading
             self.senseMoved = senseMoved
+            self.needsReading = needsReading
         }
     }
 
@@ -268,7 +284,7 @@ extension StudyReadiness {
     public static func of(_ facts: Facts) -> StudyReadiness {
         guard facts.hasUsableAnswer else { return .needsRepair }
         if facts.senseMoved { return .needsRepair }
-        guard facts.hasReading else { return .needsRepair }
+        guard facts.hasReading || !facts.needsReading else { return .needsRepair }
         guard facts.isConfirmed else { return .needsConfirmation }
         // The dictionary's whole entry is too broad for "what does this mean here?", so an entry rung
         // carrying it waits for the reader to narrow it.

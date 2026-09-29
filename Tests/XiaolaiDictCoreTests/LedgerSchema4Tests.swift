@@ -109,8 +109,11 @@ struct LedgerSchema4Tests {
     /// 11: `study_answers.is_usable`, because SQL's `trim()` and Swift's `.whitespacesAndNewlines`
     /// are different sets and an answer of only a tab reached the queue while reading as blank.
     /// Swift's verdict is stored and SQL reads it. `anAnswerOfOnlyWhitespaceIsUnusableToBothJudges`.
-    @Test func theSchemaIsEleven() {
-        #expect(Ledger.schemaVersion == 11)
+    ///
+    /// 12: WI-007 — `review_events.kind` for practice, `study_tags`, and `study_ignored_lemmas`.
+    /// `StudyOrganisationTests`.
+    @Test func theSchemaIsTwelve() {
+        #expect(Ledger.schemaVersion == 12)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

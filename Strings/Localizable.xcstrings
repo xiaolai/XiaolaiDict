@@ -160,6 +160,9 @@
     "A sense id only means anything inside the dictionary that issued it, so what has been learned about your senses cannot follow you to another one. Your reading history is kept either way." : {
 
     },
+    "A word you look up on more than one day appears here." : {
+
+    },
     "About" : {
 
     },
@@ -179,6 +182,9 @@
 
     },
     "All" : {
+
+    },
+    "Already know" : {
 
     },
     "Already known" : {
@@ -333,6 +339,9 @@
     "Explain this sentence" : {
 
     },
+    "Export…" : {
+
+    },
     "First that marks senses" : {
 
     },
@@ -420,6 +429,16 @@
     },
     "Look up the selection" : {
 
+    },
+    "Looked up on %lld days, in %lld places" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Looked up on %1$lld days, in %2$lld places"
+          }
+        }
+      }
     },
     "Looking up “%@” in your dictionaries…" : {
       "comment" : "Shown while the dictionaries are being asked; the placeholder is the word"
@@ -523,6 +542,9 @@
     "Nothing to look up" : {
       "comment" : "Lookup panel, when there was no word to look up"
     },
+    "Nothing to suggest yet." : {
+
+    },
     "Off" : {
 
     },
@@ -569,6 +591,12 @@
 
     },
     "Permissions" : {
+
+    },
+    "Practice — nothing is scheduled" : {
+
+    },
+    "Practise" : {
 
     },
     "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
@@ -727,6 +755,9 @@
     "Stop" : {
 
     },
+    "Study" : {
+
+    },
     "Study From" : {
 
     },
@@ -749,6 +780,9 @@
         }
       }
     },
+    "Suggested" : {
+
+    },
     "Switching dictionaries starts study over." : {
 
     },
@@ -757,6 +791,9 @@
     },
     "System Settings → Privacy & Security → %@" : {
       "comment" : "Where a permission is granted; the placeholder is the list's own name"
+    },
+    "Tag" : {
+
     },
     "Text" : {
 

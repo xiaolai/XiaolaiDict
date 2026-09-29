@@ -23,6 +23,13 @@ public struct StudyCard: Sendable, Equatable, Identifiable {
     public enum Prompt: String, Codable, Sendable, CaseIterable {
         /// The reader's own sentence on the front, what the word meant there on the back.
         case meaning
+        /// The meaning on the front, the word to produce on the back — the harder direction.
+        ///
+        /// **Its own schedule**, by `UNIQUE (note_id, prompt)`. Recognising a word and producing it
+        /// are different things to know, and one interval for both would claim a memory nobody
+        /// measured. Opt-in: making one for every note doubles the reader's load before they have
+        /// said they want it.
+        case production
     }
 
     public init(id: UUID = UUID(), noteID: UUID, prompt: Prompt = .meaning,
@@ -68,13 +75,23 @@ public struct ReviewEvent: Sendable, Equatable, Identifiable {
     public let retention: Double
     /// Which revision of the card this was applied to.
     public let cardRevision: Int
+    /// Whether this attempt changed anything. **Practice is recorded and counts for nothing**: no
+    /// schedule moves, and it enters no retention figure.
+    public let kind: Kind
     /// Set when undone. **Excluded from every count** and from any retention figure.
     public let voidedAt: Date?
+
+    public enum Kind: String, Codable, Sendable, CaseIterable {
+        /// A scheduled review. The only thing that moves a card.
+        case graded
+        /// An unscheduled attempt the reader asked for. Recorded, and inert.
+        case practice
+    }
 
     public init(id: UUID = UUID(), cardID: UUID, grade: Grade, reviewedAt: Date,
                 before: ScheduledCard, after: ScheduledCard,
                 schedulerVersion: String = MemoryScheduler.version, retention: Double,
-                cardRevision: Int, voidedAt: Date? = nil) {
+                cardRevision: Int, kind: Kind = .graded, voidedAt: Date? = nil) {
         self.id = id
         self.cardID = cardID
         self.grade = grade
@@ -84,6 +101,7 @@ public struct ReviewEvent: Sendable, Equatable, Identifiable {
         self.schedulerVersion = schedulerVersion
         self.retention = retention
         self.cardRevision = cardRevision
+        self.kind = kind
         self.voidedAt = voidedAt
     }
 
@@ -105,4 +123,9 @@ public enum ReviewError: Error, Equatable {
     /// new attempt with the old, voided outcome and let the surface advance over a review that
     /// never happened. A fresh attempt needs a fresh id.
     case eventAlreadyVoided(UUID)
+    /// Practice was asked for on a card that has never been reviewed. **A first attempt is a first
+    /// review, not practice of one**: there is no memory state to leave unchanged, and the
+    /// specification keeps a first encounter, a short-term repeat and a delayed recall apart as
+    /// three different metrics.
+    case notYetReviewed(UUID)
 }

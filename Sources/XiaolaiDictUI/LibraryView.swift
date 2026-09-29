@@ -18,6 +18,7 @@ public struct LibraryView: View {
     public let act: @MainActor (LibraryAction) -> Void
 
     @State private var revealed: Set<UUID> = []
+    @State private var tag = ""
 
     public init(state: LibraryPresentation, act: @escaping @MainActor (LibraryAction) -> Void) {
         self.state = state
@@ -28,7 +29,9 @@ public struct LibraryView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            if state.rows.isEmpty {
+            if state.filter == .suggested {
+                suggestions
+            } else if state.rows.isEmpty {
                 empty
             } else {
                 list
@@ -83,6 +86,42 @@ public struct LibraryView: View {
         .listStyle(.inset)
     }
 
+    /// **Offered, never enrolled.** An unopened suggestion costs the reader nothing, and neither
+    /// button here grades anything — "already know" is a declaration about this word, not a
+    /// measurement of it.
+    @ViewBuilder
+    private var suggestions: some View {
+        if state.suggestions.isEmpty {
+            VStack(spacing: scale.space.line) {
+                Text("Nothing to suggest yet.")
+                Text("A word you look up on more than one day appears here.")
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(state.suggestions) { suggestion in
+                HStack(spacing: scale.space.inline) {
+                    VStack(alignment: .leading, spacing: scale.space.tight) {
+                        Text(verbatim: suggestion.lemma)
+                            .font(.system(size: scale.text.body, weight: .medium))
+                        // The evidence, so the ranking is legible rather than trusted.
+                        Text("Looked up on \(suggestion.days) days, in \(suggestion.sources) places")
+                            .font(.system(size: scale.text.micro))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Study") { act(.study(lemma: suggestion.lemma)) }
+                    Button("Already know") {
+                        act(.ignore(lemma: suggestion.lemma, language: suggestion.language))
+                    }
+                }
+                .padding(.vertical, scale.space.tight)
+            }
+            .listStyle(.inset)
+        }
+    }
+
     @ViewBuilder
     private var empty: some View {
         VStack(spacing: scale.space.line) {
@@ -97,6 +136,11 @@ public struct LibraryView: View {
                 Text("Nothing matches.")
                 Button("Clear the search") { act(.search("")) }
             }
+            if let problem = state.problem {
+                Text(verbatim: problem)
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.orange)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -104,6 +148,7 @@ public struct LibraryView: View {
     // MARK: - Changing
 
     private var footer: some View {
+        VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: scale.space.inline) {
             // **The scope is on the button**, because a bulk action the reader misjudged is the one
             // they cannot see the extent of until it has happened.
@@ -125,9 +170,26 @@ public struct LibraryView: View {
                 Button("Remove \(state.selection.count) from study", role: .destructive) {
                     act(.removeFromStudy)
                 }
+                TextField("Tag", text: $tag)
+                    .frame(maxWidth: Token.Library.tagWidth)
+                    .onSubmit {
+                        act(.tag(tag))
+                        tag = ""
+                    }
             }
+            Button("Export…") { act(.export) }
         }
         .padding(scale.space.padAcross)
+        if let exported = state.exported {
+            // The path, because an export the reader cannot find did not happen for them.
+            Text(verbatim: exported)
+                .font(.system(size: scale.text.micro))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(.horizontal, scale.space.padAcross)
+                .padding(.bottom, scale.space.line)
+        }
+        }
     }
 }
 
@@ -192,6 +254,16 @@ public enum LibraryAction: Sendable, Equatable {
     case pause
     case archive
     case removeFromStudy
+    /// Label the selection. **Organisation, not a fact about memory** — nothing reschedules.
+    case tag(String)
+    /// Write the collection out. What may leave is decided in `StudyExport`, not here.
+    case export
+    /// Take up a suggestion, or refuse it. Both are the reader's declaration and both are
+    /// reversible; neither grades anything.
+    case study(lemma: String)
+    /// The language travels with it: a reader who knows English *pain* has said nothing about the
+    /// French one, and silencing the wrong pair silences nothing at all.
+    case ignore(lemma: String, language: String)
 }
 
 /// What the library draws.
@@ -206,10 +278,22 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let hasMore: Bool
     /// Whether the selection holds anything a confirmation would change.
     public let canConfirm: Bool
+    /// What the reader keeps looking up and has not saved. Only read under the `suggested` filter.
+    public let suggestions: [Suggestion]
+    /// Where the last export went, once one has been written.
+    public let exported: String?
+    /// Why the list is empty, when the reason is a failure rather than an empty collection.
+    ///
+    /// **Without this the two are the same screen.** A library that could not be read drew exactly
+    /// as one with nothing in it, which is the silent-failure shape this project spends its time
+    /// removing — and it hid a real defect for the length of one debugging session.
+    public let problem: String?
 
     public init(rows: [Row], total: Int, search: String = "", filter: Filter = .all,
                 scriptFiltered: Bool = false, selection: Set<UUID> = [],
-                hasMore: Bool = false, canConfirm: Bool = false) {
+                hasMore: Bool = false, canConfirm: Bool = false,
+                suggestions: [Suggestion] = [], exported: String? = nil,
+                problem: String? = nil) {
         self.rows = rows
         self.total = total
         self.search = search
@@ -218,12 +302,15 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.selection = selection
         self.hasMore = hasMore
         self.canConfirm = canConfirm
+        self.suggestions = suggestions
+        self.exported = exported
+        self.problem = problem
     }
 
     /// The sidebar's states, as one control. **Archived and paused are here**, because the library is
     /// where a reader goes to find what they put away.
     public enum Filter: String, Sendable, CaseIterable {
-        case all, due, needsAttention, paused, archived
+        case all, due, needsAttention, paused, archived, suggested
 
         public var name: LocalizedStringKey {
             switch self {
@@ -232,7 +319,29 @@ public struct LibraryPresentation: Sendable, Equatable {
             case .needsAttention: "Needs attention"
             case .paused: "Paused"
             case .archived: "Archived"
+            case .suggested: "Suggested"
             }
+        }
+    }
+
+    /// A word the reader keeps looking up and has not saved.
+    ///
+    /// **Not a card, and drawn as a different thing.** It carries its own evidence — how many days,
+    /// how many places — so the surface can say *why* it is being offered rather than presenting a
+    /// ranking the reader has to take on trust.
+    public struct Suggestion: Sendable, Equatable, Identifiable {
+        public let lemma: String
+        public let language: String
+        public let days: Int
+        public let sources: Int
+
+        public var id: String { "\(lemma)\u{1F}\(language)" }
+
+        public init(lemma: String, language: String, days: Int, sources: Int) {
+            self.lemma = lemma
+            self.language = language
+            self.days = days
+            self.sources = sources
         }
     }
 

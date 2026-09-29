@@ -25,6 +25,9 @@ final class ReviewModel {
     private var answer: ReviewAnswer?
     private var committing = false
     private var problem: String?
+    /// Whether this sitting is practice. **Held on the model, not inferred at the commit**: which
+    /// ledger call a grade goes to is decided once, when the sitting starts.
+    private var isPractice = false
 
     /// How many cards one sitting offers. A bound on the sitting, never on the reader's debt.
     static let batchSize = 10
@@ -42,9 +45,36 @@ final class ReviewModel {
     }
 
     /// Draws a batch. Called when the window opens and when the reader asks for another.
+    /// An unscheduled sitting over cards the reader has already reviewed.
+    ///
+    /// **Nothing it does is scheduled.** Every grade goes to `practise`, which records the attempt
+    /// and leaves the card exactly as it was — so the reader can keep going without the scheduler
+    /// concluding anything from it.
+    func startPractice() async {
+        guard let opening = store() else { return }
+        problem = nil
+        isPractice = true
+        do {
+            let ledger = try await opening.value
+            let cards = try await ledger.practisableCards(limit: Self.batchSize,
+                                                          dictionary: primary().chosen)
+            guard !cards.isEmpty else {
+                session = nil
+                presentation = ReviewPresentation(stage: .empty(.nothingDue))
+                return
+            }
+            session = ReviewSession(startedAt: clock(),
+                                    cards: cards.map { (id: $0.id, revision: $0.revision) })
+            await draw()
+        } catch {
+            presentation = ReviewPresentation(stage: .empty(.nothingDue))
+        }
+    }
+
     func start() async {
         guard let opening = store() else { return }
         problem = nil
+        isPractice = false
         do {
             let ledger = try await opening.value
             let scope = primary().chosen
@@ -83,6 +113,8 @@ final class ReviewModel {
             Task { await undo() }
         case .anotherBatch:
             Task { await start() }
+        case .practise:
+            Task { await startPractice() }
         case .done:
             WindowActions.shared.dismissWindow(id: XiaolaiDictScene.reviewID)
         }
@@ -129,8 +161,16 @@ final class ReviewModel {
         do {
             // **The presentation's id is the idempotency key.** One showing is one attempt however
             // many times the write is retried, and a second showing of the same card is a new one.
-            try await opening.value.grade(cardID: current.cardID, grade, eventID: current.id,
-                                          expectedRevision: current.revision, at: clock())
+            //
+            // Which call it goes to was decided when the sitting started, not here: a practice
+            // attempt that reached `grade` would move a schedule the reader was told it would not.
+            if isPractice {
+                try await opening.value.practise(cardID: current.cardID, grade,
+                                                 eventID: current.id, at: clock())
+            } else {
+                try await opening.value.grade(cardID: current.cardID, grade, eventID: current.id,
+                                              expectedRevision: current.revision, at: clock())
+            }
             committing = false
             self.session?.record(.graded(grade))
             await draw()
@@ -170,6 +210,7 @@ final class ReviewModel {
             sentence: Self.sentence(of: cue),
             source: Self.source(of: cue),
             position: session.cursor + 1, batchSize: session.presentations.count,
+            isPractice: isPractice,
             answer: current.isRevealed ? answer.map {
                 ReviewPresentation.Answer(text: $0.text, dictionary: $0.dictionary)
             } : nil,

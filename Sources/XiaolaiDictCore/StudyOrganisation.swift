@@ -1,0 +1,234 @@
+import DictionaryModel
+import Foundation
+
+/// **WI-007: what the reader organises, and what the numbers are allowed to claim.**
+///
+/// Tags, suggestions, the repair queue, and retention. The last is the one with a rule in it: a
+/// figure about memory is the easiest thing in this project to overstate, and a denominator nobody
+/// states is a denominator nobody can check.
+extension Ledger {
+    // MARK: - Tags (M03)
+
+    /// Adds a tag. Idempotent, and **changing a tag never touches memory** — an organisation is not
+    /// a fact about what the reader knows.
+    public func tag(noteID: UUID, _ tag: String) throws {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try run("INSERT OR IGNORE INTO study_tags (note_id, tag) VALUES (?, ?)",
+                bind: [.text(noteID.uuidString), .text(trimmed)]) { _ in }
+    }
+
+    public func untag(noteID: UUID, _ tag: String) throws {
+        try run("DELETE FROM study_tags WHERE note_id = ? AND tag = ?",
+                bind: [.text(noteID.uuidString), .text(tag)]) { _ in }
+    }
+
+    public func tags(of noteID: UUID) throws -> [String] {
+        var found: [String] = []
+        try run("SELECT tag FROM study_tags WHERE note_id = ? ORDER BY tag",
+                bind: [.text(noteID.uuidString)]) { found.append(try $0.text(0)) }
+        return found
+    }
+
+    /// Every tag the reader has used, with how many notes carry it — the sidebar's own inventory.
+    public func allTags() throws -> [(tag: String, count: Int)] {
+        var found: [(String, Int)] = []
+        try run("SELECT tag, COUNT(*) FROM study_tags GROUP BY tag ORDER BY tag", bind: []) { row in
+            found.append((try row.text(0), row.integer(1)))
+        }
+        return found
+    }
+
+    // MARK: - Suggestions (C06)
+
+    /// Words the reader keeps looking up and has not saved.
+    ///
+    /// **Ranked by distinct reading days, then by distinct sources, then by recency.** A word met on
+    /// four days is better evidence of a gap than one met four times in an afternoon, which is one
+    /// paragraph read twice.
+    ///
+    /// **A suggestion is not an enrollment.** Nothing here writes, nothing is graded, and an
+    /// unopened suggestion costs the reader nothing — the feature ledger's C06, and the reason this
+    /// returns a list rather than doing anything with it.
+    public func suggestions(limit: Int, language: String?, studying: Set<ProbeScript>) throws
+        -> [Suggestion] {
+        guard limit > 0 else { return [] }
+        var found: [Suggestion] = []
+        try run("""
+            SELECT l.lemma, COALESCE(l.language, '') AS lang,
+                   COUNT(DISTINCT date(l.looked_up_at, 'unixepoch', 'localtime')) AS days,
+                   COUNT(DISTINCT COALESCE(l.source_app, '')) AS sources,
+                   MAX(l.looked_up_at) AS last,
+                   COUNT(*) AS lookups
+            FROM lookups l
+            WHERE l.result = 'found'
+              AND (?1 IS NULL OR l.language = ?1)
+              AND (l.script IS NULL OR l.script IN (SELECT value FROM json_each(?2)))
+              -- Nothing the reader has already taken up, in any disposition: a word they ignored
+              -- must not come back as a suggestion, which is the whole point of ignoring it.
+              AND NOT EXISTS (
+                  SELECT 1 FROM study_note_lookups nl
+                  JOIN lookups other ON other.id = nl.lookup_id
+                  WHERE other.lemma = l.lemma
+              )
+              -- And nothing they have told us they already know.
+              AND NOT EXISTS (
+                  SELECT 1 FROM study_ignored_lemmas g
+                  WHERE g.lemma = l.lemma AND g.language = COALESCE(l.language, '')
+              )
+            -- **By lemma and language.** `pain` in French and `pain` in English are different
+            -- words, and a reader who says they know one has said nothing about the other. It also
+            -- makes the key the same one `study_ignored_lemmas` holds, which is what makes
+            -- "already know" actually stop offering it — grouped by lemma alone, the two never
+            -- matched and the word came straight back.
+            GROUP BY l.lemma, lang
+            HAVING days >= 2
+            ORDER BY days DESC, sources DESC, last DESC
+            LIMIT ?3
+            """, bind: [.optionalText(language),
+                        .text(Self.jsonArray(of: studying.map(\.rawValue))), .integer(limit)]) { row in
+            found.append(Suggestion(
+                lemma: try row.text(0), language: try row.text(1),
+                distinctDays: row.integer(2), distinctSources: row.integer(3),
+                lastReadAt: Date(timeIntervalSince1970: row.real(4)), lookups: row.integer(5)))
+        }
+        return found
+    }
+
+    /// A word worth offering, and the evidence for offering it. **The evidence travels**, so the
+    /// surface can say *why* rather than presenting a ranking the reader has to trust.
+    public struct Suggestion: Sendable, Equatable {
+        public let lemma: String
+        /// The language it was read in, empty where none was recorded. **Part of its identity**:
+        /// it is what `ignoreSuggestion` must be told, or "already know" silences nothing.
+        public let language: String
+        public let distinctDays: Int
+        public let distinctSources: Int
+        public let lastReadAt: Date
+        public let lookups: Int
+    }
+
+    /// The reader says they already know this word: stop offering it.
+    ///
+    /// **A declaration, not a measurement and not a card.** Inventing a study target for a word
+    /// they just said they know would answer "I know this" with a question about it. Reversible,
+    /// and it erases nothing — the lookups stay exactly where they were.
+    public func ignoreSuggestion(lemma: String, language: String? = nil, at when: Date) throws {
+        try run("""
+            INSERT OR REPLACE INTO study_ignored_lemmas (lemma, language, ignored_at)
+            VALUES (?, ?, ?)
+            """, bind: [.text(lemma), .text(language ?? ""),
+                        .real(when.timeIntervalSince1970)]) { _ in }
+    }
+
+    /// Offers it again. The reader changing their mind is ordinary.
+    public func unignoreSuggestion(lemma: String, language: String? = nil) throws {
+        try run("DELETE FROM study_ignored_lemmas WHERE lemma = ? AND language = ?",
+                bind: [.text(lemma), .text(language ?? "")]) { _ in }
+    }
+
+    // MARK: - The repair queue (R09)
+
+    /// Cards the reader keeps failing.
+    ///
+    /// **Lapses on distinct days**, not lapses: four failures in one sitting is one bad evening,
+    /// and four across four days is a card that is not working. The threshold is a parameter
+    /// because it is a product guess, not a measurement.
+    ///
+    /// Nothing is deleted or rescheduled here. The answer is a list, and what to do about it — edit
+    /// the cue, pause it, split the sense — is the reader's.
+    public func repeatedlyLapsed(atLeast days: Int = 4, dictionary: String?) throws -> [UUID] {
+        var found: [UUID] = []
+        var bind: [SQLiteValue] = [.integer(days)]
+        var scope = ""
+        if let dictionary {
+            scope = "AND n.dictionary = ?2"
+            bind.append(.text(dictionary))
+        }
+        try run("""
+            SELECT c.id FROM study_cards c
+            JOIN study_notes n ON n.id = c.note_id
+            WHERE (
+                SELECT COUNT(DISTINCT date(e.reviewed_at, 'unixepoch', 'localtime'))
+                FROM review_events e
+                WHERE e.card_id = c.id AND e.grade = 1 AND e.voided_at IS NULL AND e.kind = 'graded'
+            ) >= ?1
+            \(scope)
+            ORDER BY c.id
+            """, bind: bind) { row in
+            if let id = UUID(uuidString: try row.text(0)) { found.append(id) }
+        }
+        return found
+    }
+
+    // MARK: - What the numbers may claim (U03)
+
+    /// Delayed retention, **with its denominator**.
+    ///
+    /// The one figure in this product that is easy to overstate and impossible to check afterwards.
+    /// What it counts, and what it refuses to:
+    ///
+    /// - **Only graded events.** Practice is recorded and excluded — it changed no schedule and is
+    ///   not a scheduled recall.
+    /// - **Only live events.** A review the reader took back did not happen.
+    /// - **Only delayed ones.** At least 24 hours since the previous review, so a short-term repeat
+    ///   is not counted as remembering something. A first review has no previous one and is an
+    ///   introduction, not a recall.
+    ///
+    /// Everything excluded is *counted* and returned, so a surface can state the denominator rather
+    /// than a bare percentage. A percentage with no denominator is not a measurement.
+    public func retention(since: Date? = nil, dictionary: String?) throws -> RetentionReport {
+        var report = RetentionReport()
+        var bind: [SQLiteValue] = [.real(since?.timeIntervalSince1970 ?? 0)]
+        var scope = ""
+        if let dictionary {
+            scope = "AND n.dictionary = ?2"
+            bind.append(.text(dictionary))
+        }
+        try run("""
+            SELECT e.kind, e.voided_at, e.before_last_review, e.reviewed_at, e.grade, e.card_id
+            FROM review_events e
+            JOIN study_cards c ON c.id = e.card_id
+            JOIN study_notes n ON n.id = c.note_id
+            WHERE e.reviewed_at >= ?1 \(scope)
+            """, bind: bind) { row in
+            let kind = try row.text(0)
+            let voided = !row.isNull(1)
+            let hasPrevious = !row.isNull(2)
+            let elapsed = hasPrevious ? row.real(3) - row.real(2) : 0
+            if kind == ReviewEvent.Kind.practice.rawValue { report.practice += 1; return }
+            if voided { report.voided += 1; return }
+            guard hasPrevious else { report.introductions += 1; return }
+            guard elapsed >= 86_400 else { report.shortTerm += 1; return }
+            report.attempts += 1
+            if row.integer(4) >= Grade.hard.rawValue { report.successes += 1 }
+            if let id = UUID(uuidString: try row.text(5)) { report.cardIDs.insert(id) }
+        }
+        return report
+    }
+
+    /// What a retention figure is allowed to say, and everything it left out.
+    public struct RetentionReport: Sendable, Equatable {
+        /// Eligible graded attempts — **the denominator**.
+        public var attempts = 0
+        public var successes = 0
+        /// Distinct cards behind those attempts. Ten attempts on one card is not ten cards.
+        public var cardIDs: Set<UUID> = []
+        /// Excluded, and counted so the exclusion is visible.
+        public var practice = 0
+        public var voided = 0
+        /// A first review: an introduction, not a recall.
+        public var introductions = 0
+        /// Answered again within a day: a short-term repeat, which is a different metric.
+        public var shortTerm = 0
+
+        /// **Nil when there is nothing to divide by.** A rate over zero attempts is not 0% and not
+        /// 100%; it is a number nobody has, and returning one would be the whole defect this type
+        /// exists to prevent.
+        public var rate: Double? {
+            attempts > 0 ? Double(successes) / Double(attempts) : nil
+        }
+
+        public var cards: Int { cardIDs.count }
+    }
+}

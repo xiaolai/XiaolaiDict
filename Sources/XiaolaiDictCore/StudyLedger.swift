@@ -28,8 +28,8 @@ extension Ledger {
     static let studySchema = """
         CREATE TABLE study_notes (
             id              TEXT PRIMARY KEY,
-            -- 'sense' | 'entry' | 'phrase'. No 'custom' yet: C07's reader-authored card is what will
-            -- write one, and a kind nothing constructs is a value no test can reach.
+            -- 'sense' | 'entry' | 'phrase' | 'custom'. The last is the reader's own words and is a
+            -- kind of its own, so an invention is never indistinguishable from a citation.
             target_kind     TEXT NOT NULL,
             -- Which extractor produced the identifiers below. Part of the identity, not a note beside it.
             issuer          TEXT NOT NULL,
@@ -46,7 +46,7 @@ extension Ledger {
             -- agreed with. **Readiness is not stored**: every fact it rests on changes elsewhere.
             confirmed_at    REAL,
             created_at      REAL NOT NULL,
-            CHECK (target_kind IN ('sense', 'entry', 'phrase')),
+            CHECK (target_kind IN ('sense', 'entry', 'phrase', 'custom')),
             CHECK (issuer IN ('live', 'index', 'inventory')),
             CHECK (enrollment IN ('candidate', 'active', 'ignored', 'archived')),
             CHECK (language <> '' AND dictionary <> ''),
@@ -58,6 +58,8 @@ extension Ledger {
              OR (target_kind = 'entry'
                     AND entry_id <> '' AND sense_key = '' AND phrase_text = '')
              OR (target_kind = 'phrase'
+                    AND entry_id = '' AND sense_key = '' AND sense_key_kind = '' AND phrase_text <> '')
+             OR (target_kind = 'custom'
                     AND entry_id = '' AND sense_key = '' AND sense_key_kind = '' AND phrase_text <> '')
             )
         );
@@ -126,6 +128,31 @@ extension Ledger {
     /// later — recognise it, produce it — with its own schedule, which is why the schedule does not live
     /// on `study_notes`. Only the receptive question exists today; `prompt` is what lets the second one
     /// arrive without re-keying the first.
+    /// Schema 12. A second prompt needs nothing new — `UNIQUE (note_id, prompt)` already gives it
+    /// its own schedule — but tags do.
+    static let studyOrganisationSchema = """
+        -- The reader's own labels. Flat, because a hierarchy is a thing to maintain and a filter
+        -- over flat tags is what the library actually asks for.
+        CREATE TABLE study_tags (
+            note_id TEXT NOT NULL REFERENCES study_notes (id) ON DELETE CASCADE,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (note_id, tag),
+            CHECK (trim(tag) <> '')
+        );
+        CREATE INDEX study_tags_by_tag ON study_tags (tag);
+
+        -- **"Already know" is a declaration about a word, not a note about it.** Inventing a study
+        -- target for a word the reader just told us to stop offering would be answering "I know
+        -- this" with a question about it. A lemma, a language and the date they said so — and
+        -- reversible by deleting the row, because changing their mind is ordinary.
+        CREATE TABLE study_ignored_lemmas (
+            lemma      TEXT NOT NULL,
+            language   TEXT NOT NULL,
+            ignored_at REAL NOT NULL,
+            PRIMARY KEY (lemma, language)
+        );
+        """
+
     static let studyCardSchema = """
         CREATE TABLE study_cards (
             id                 TEXT PRIMARY KEY,
@@ -183,9 +210,15 @@ extension Ledger {
             scheduler_version  TEXT NOT NULL,
             retention          REAL NOT NULL,
             card_revision      INTEGER NOT NULL,
+            -- **A practice attempt is not a review.** Recorded, because it happened and it affects
+            -- the reader's real memory; it changes no schedule and enters no retention figure —
+            -- FSRS then has incomplete information, which is a known cost said out loud rather
+            -- than a gap papered over with an invented grade.
+            kind               TEXT NOT NULL DEFAULT 'graded',
             -- Undone, not deleted. Excluded from every count and from any retention figure.
             voided_at          REAL,
-            CHECK (grade BETWEEN 1 AND 4)
+            CHECK (grade BETWEEN 1 AND 4),
+            CHECK (kind IN ('graded', 'practice'))
         );
         CREATE INDEX review_events_by_card ON review_events (card_id, reviewed_at);
         """
@@ -277,6 +310,7 @@ extension Ledger {
                 }
             case .entry: .entry(dictionary: dictionary, entryID: entryID)
             case .phrase: .phrase(dictionary: dictionary, text: phraseText)
+            case .custom: .custom(dictionary: dictionary, text: phraseText)
             }
         guard let target else { return nil }
         return StudyNote(
@@ -299,7 +333,7 @@ extension Ledger {
             // `sense_key_kind` stays meaningful at the entry rung: `none` is what a dictionary that marks
             // no senses can offer, and it is what `StudyItem` carries for the same target.
             (entryID, "", SenseKeyKind.none.rawValue, "")
-        case .phrase(_, let text):
+        case .phrase(_, let text), .custom(_, let text):
             ("", "", "", text)
         }
     }
@@ -511,6 +545,7 @@ extension Ledger {
             senseMoved: {
                 guard let senseHashNow, let recorded = answer?.senseHash else { return false }
                 return senseHashNow != recorded
-            }()))
+            }(),
+            needsReading: { if case .custom = note.target { return false } else { return true } }()))
     }
 }

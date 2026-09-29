@@ -107,6 +107,15 @@ actor LedgerStore {
         try ledger.dueCards(at: when, limit: limit, dictionary: dictionary)
     }
 
+    func practisableCards(limit: Int, dictionary: String?) throws -> [StudyCard] {
+        try ledger.practisableCards(limit: limit, dictionary: dictionary)
+    }
+
+    @discardableResult
+    func practise(cardID: UUID, _ grade: Grade, eventID: UUID, at when: Date) throws -> ReviewEvent {
+        try ledger.practise(cardID: cardID, grade, eventID: eventID, at: when)
+    }
+
     func dueCount(at when: Date, dictionary: String?) throws -> Int {
         try ledger.dueCount(at: when, dictionary: dictionary)
     }
@@ -155,6 +164,19 @@ actor LedgerStore {
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
     func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
+    func tag(noteID: UUID, _ tag: String) throws { try ledger.tag(noteID: noteID, tag) }
+    func suggestions(limit: Int, language: String?,
+                     studying: Set<ProbeScript>) throws -> [Ledger.Suggestion] {
+        try ledger.suggestions(limit: limit, language: language, studying: studying)
+    }
+    func export(dictionary: String?) throws -> StudyExport { try ledger.export(dictionary: dictionary) }
+
+    /// **"Already know" is a declaration about a word, not a measurement of it.** There is no note
+    /// to mark, so one is made and immediately set aside — which is what makes it reversible and
+    /// what stops the word being suggested again.
+    func ignoreSuggestion(lemma: String, language: String, at when: Date) throws {
+        try ledger.ignoreSuggestion(lemma: lemma, language: language, at: when)
+    }
     func deleteReading(lookups ids: [Int]) throws { try ledger.deleteReading(lookups: ids) }
 
     func readingErasureImpact(at path: String) throws

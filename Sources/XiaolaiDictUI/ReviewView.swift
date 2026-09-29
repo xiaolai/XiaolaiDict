@@ -54,6 +54,11 @@ public struct ReviewView: View {
             Text("\(question.position) of \(question.batchSize)")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
+            if question.isPractice {
+                Text("Practice — nothing is scheduled")
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.orange)
+            }
             Spacer(minLength: 0)
             Text(verbatim: question.source)
                 .font(.system(size: scale.text.small))
@@ -177,6 +182,11 @@ public struct ReviewView: View {
             if summary.stillDue > 0 {
                 Button("Review another batch") { act(.anotherBatch) }
             }
+            // **Offered when there is nothing due**, which is when a reader who wants to keep
+            // going would otherwise have nothing to do but wait.
+            if summary.stillDue == 0 {
+                Button("Practise") { act(.practise) }
+            }
             Button("Done") { act(.done) }
                 .keyboardShortcut(.defaultAction)
         }
@@ -191,6 +201,10 @@ public enum ReviewAction: Sendable, Equatable {
     case skip
     case undo
     case anotherBatch
+    /// An unscheduled sitting. **Recorded and inert**: no schedule moves and no retention figure
+    /// counts it, which is why it is a separate action and a separate label rather than a mode
+    /// the reader might not notice they are in.
+    case practise
     case done
 }
 
@@ -224,6 +238,9 @@ public struct ReviewPresentation: Sendable, Equatable {
         public let source: String
         public let position: Int
         public let batchSize: Int
+        /// Whether this is practice. **Said on the card**, not inferred from how the reader got
+        /// here: an attempt that changes nothing must not look like one that does.
+        public let isPractice: Bool
         /// The question itself. **A fixed sentence, not a stored string** — it is reader-facing text
         /// and belongs in the catalog, so the view holds it and the model chooses nothing.
         public let prompt: Prompt
@@ -236,13 +253,14 @@ public struct ReviewPresentation: Sendable, Equatable {
         public let problem: String?
 
         public init(word: String, sentence: Sentence?, source: String, position: Int,
-                    batchSize: Int, prompt: Prompt = .meaningHere,
+                    batchSize: Int, isPractice: Bool = false, prompt: Prompt = .meaningHere,
                     answer: Answer? = nil, isCommitting: Bool = false, problem: String? = nil) {
             self.word = word
             self.sentence = sentence
             self.source = source
             self.position = position
             self.batchSize = batchSize
+            self.isPractice = isPractice
             self.prompt = prompt
             self.answer = answer
             self.isCommitting = isCommitting

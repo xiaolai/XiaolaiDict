@@ -300,6 +300,17 @@ struct StudyMigrationTests {
 
     /// Winds a real schema-8 ledger back to 7 and reopens it, so the migration step runs against rows
     /// written by the shipping code rather than against a hand-built fixture that may not resemble them.
+    /// The tables one schema constant creates, read from the constant itself.
+    static func tablesCreated(by schema: String) -> [String] {
+        schema.split(separator: "\n").compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("CREATE TABLE ") else { return nil }
+            return trimmed.dropFirst("CREATE TABLE ".count)
+                .prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+                .description
+        }
+    }
+
     /// Winds a real ledger back to an earlier schema and leaves it there, so a migration runs against
     /// rows written by the shipping code rather than a hand-built fixture that may not resemble them.
     ///
@@ -310,6 +321,30 @@ struct StudyMigrationTests {
     private func windBack(to version: Int, at path: String) throws {
         let ledger = try Ledger(path: path)
         var statements: [String] = []
+        if version < 12 {
+            // **Read out of the schema, not repeated here.** This branch listed its tables by hand
+            // and fell behind three times — each new table meant a migration test failing on
+            // "already exists", and each time the fix was to add a line to a copy. Adding a table
+            // to `studyOrganisationSchema` now updates this automatically, which is the only
+            // version of this that stays true.
+            statements += Self.tablesCreated(by: Ledger.studyOrganisationSchema)
+                .map { "DROP TABLE \($0);" }
+            // `kind` came with 12 for a database that already had the table; a fresh one at 10 or
+            // 11 never had it, so winding back below 12 takes it off again.
+            if version >= 10 { statements += ["ALTER TABLE review_events DROP COLUMN kind;"] }
+        }
+        if version < 11, version >= 9 {
+            // `study_answers` carries a `CHECK` on `is_usable`, so SQLite refuses to drop the
+            // column — the table would have to be rebuilt. Nothing winds back to 9 or 10 today, so
+            // rather than carry a rebuild no test exercises, this says so and stops.
+            struct Unsupported: Error, CustomStringConvertible {
+                var description: String {
+                    "winding back to 9 or 10 needs study_answers rebuilt, which nothing needs yet"
+                }
+            }
+            throw Unsupported()
+        }
+        // Below 9 the whole table goes, so the column goes with it.
         if version < 10 {
             statements += ["DROP TABLE review_events;", "DROP TABLE study_cards;"]
         }
