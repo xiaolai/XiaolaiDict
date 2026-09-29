@@ -28,7 +28,8 @@ import Testing
             print("PhraseInventoryTests: XIAOLAIDICT_BUNDLES not set, not measured"); return
         }
         let spans = try PhraseSpans(bundle: noad)
-        let slotted = spans.templates.filter { $0.runs.count > 1 }
+        // Templates are built on demand now, so the slotted ones are counted from the phrases.
+        let slotted = spans.phrases.compactMap(PhraseSpans.Template.init(phrase:)).filter { $0.runs.count > 1 }
         print("PhraseInventoryTests: \(spans.phrases.count) multi-word keys, \(slotted.count) slotted")
         #expect(spans.phrases.count > 90_000, "measured 104,009 on 2026-09-29")
         #expect(slotted.count > 1_000, "measured 1,572 — the templates a split phrase is matched against")

@@ -172,8 +172,14 @@ public struct PhraseSpans: Sendable, Equatable {
     /// matches words rather than being one.
     public let longest: Int
 
-    /// Sorted by `phrase`, so that two runs over the same dictionary rank ties the same way.
-    let templates: [Template]
+    /// Unsorted, and **built on demand**.
+    ///
+    /// An earlier version constructed every `Template` up front and sorted them by phrase. Both were waste:
+    /// the sort is redundant because `match` breaks its last tie on `phrase` anyway, and constructing 116,122
+    /// templates — each an array of arrays — cost **1.36 s** of a 2.8 s startup to answer questions about the
+    /// twenty or so a given hover can touch. The phrase strings are kept; a `Template` is made when a hover
+    /// actually reaches it.
+    let phraseList: [String]
 
     /// Literal word to the templates containing it. **A hover looks at the templates naming the word under
     /// the pointer and at nothing else**, which is what keeps a 100,000-phrase inventory a hash lookup
@@ -182,15 +188,31 @@ public struct PhraseSpans: Sendable, Equatable {
 
     public init(phrases: Set<String>) {
         let multiword = phrases.filter { $0.contains(" ") }
-        let templates = multiword.compactMap(Template.init(phrase:)).sorted { $0.phrase < $1.phrase }
+        var list: [String] = []
+        list.reserveCapacity(multiword.count)
         var byWord: [String: [Int]] = [:]
-        for (index, template) in templates.enumerated() {
-            for word in Set(template.runs.joined()) { byWord[word, default: []].append(index) }
+        byWord.reserveCapacity(multiword.count)
+        var longest = 1
+        for phrase in multiword {
+            // **The words, without building the template.** Indexing needs to know which literal words a
+            // phrase contains; it does not need the runs-and-gaps structure, which is the allocation-heavy
+            // part and is only wanted for a phrase a hover actually reaches.
+            var literals = 0
+            var seen: Set<String> = []
+            for word in phrase.split(separator: " ") where !Self.slots.contains(String(word)) {
+                literals += 1
+                seen.insert(String(word))
+            }
+            guard literals > 1 else { continue }
+            let index = list.count
+            list.append(phrase)
+            for word in seen { byWord[word, default: []].append(index) }
+            longest = max(longest, literals)
         }
         self.phrases = multiword
-        self.templates = templates
+        self.phraseList = list
         self.byWord = byWord
-        self.longest = templates.reduce(1) { max($0, $1.literals) }
+        self.longest = longest
     }
 
     /// Every multi-word key of one dictionary, read from its key index.
@@ -250,7 +272,8 @@ public struct PhraseSpans: Sendable, Equatable {
         guard words.indices.contains(word) else { return nil }
         var found: [(literals: Int, match: Match)] = []
         for index in byWord[words[word]] ?? [] {
-            let template = templates[index]
+            // Built here, for the handful of phrases naming this word, rather than for all 116,122 up front.
+            guard let template = Template(phrase: phraseList[index]) else { continue }
             guard let match = Self.tightest(template, in: words, containing: word,
                                             widestGap: widestGap,
                                             widestInferredGap: widestInferredGap) else { continue }
