@@ -152,7 +152,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 7
+    public static let schemaVersion = 8
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -214,6 +214,7 @@ public final class Ledger {
         }
         // Readers no longer block the writer, nor it them. A no-op for ":memory:".
         try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
+        try backUpBeforeMigrating(from: path)
         try migrate()
     }
 
@@ -669,6 +670,59 @@ public final class Ledger {
 
     // MARK: - Schema
 
+    /// A consistent copy of the ledger beside it, taken before a migration changes its shape.
+    ///
+    /// **Through SQLite's backup API, never by copying the file.** A ledger separated from its
+    /// write-ahead log loses every write SQLite has not folded in — measured here as a 449 KB log against
+    /// a 40 KB database — so a copy of `ledger.sqlite` alone is a copy of an older ledger. The backup API
+    /// reads through the WAL and writes one consistent file, which is the whole reason to use it.
+    ///
+    /// **It throws when it cannot.** This is the one moment the reader's history changes shape, and a
+    /// machine with no room for a copy of it is a condition they are owed before the rewrite rather than
+    /// after. The alternative — migrate anyway and mention it — is the quiet default this project spends
+    /// its time removing.
+    ///
+    /// Skipped for `:memory:`, which has nothing to lose, and for a database at version 0, which is one
+    /// this process is about to create.
+    private func backUpBeforeMigrating(from path: String) throws {
+        guard path != ":memory:" else { return }
+        var found = 0
+        try run("PRAGMA user_version", bind: []) { found = $0.integer(0) }
+        guard found > 0, found < Self.schemaVersion else { return }
+        try backUp(to: "\(path).schema\(found).backup")
+    }
+
+    /// Writes a consistent copy of this ledger to `path`, replacing whatever was there.
+    ///
+    /// Public because recovery is a reader-facing operation, not only a migration's private step: the
+    /// same copy is what a reader keeps before an upgrade they may want to undo.
+    public func backUp(to path: String) throws {
+        try? FileManager.default.removeItem(atPath: path)
+        var opened: OpaquePointer?
+        let status = sqlite3_open_v2(path, &opened, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        guard status == SQLITE_OK, let opened else {
+            // The handle `sqlite3_open_v2` returns alongside a failure, which nothing else will close.
+            let message = opened.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
+            sqlite3_close(opened)
+            throw LedgerError.sqlite(code: status, message: "backup: \(message)")
+        }
+        // **One owner releases it, as the source handle has**, rather than a `defer` beside the throws
+        // below — the discipline ADR-0019 exists for. Two closes of one handle is a use-after-free, and
+        // a second place in this file spelling its own cleanup is how the first one came about.
+        let destination = Connection(opened)
+        func failure() -> LedgerError {
+            .sqlite(code: sqlite3_errcode(destination.handle),
+                    message: "backup: \(String(cString: sqlite3_errmsg(destination.handle)))")
+        }
+        guard let backup = sqlite3_backup_init(destination.handle, "main", db, "main") else {
+            throw failure()
+        }
+        // -1 copies every page in one step, so there is no partially copied state to reason about.
+        let stepped = sqlite3_backup_step(backup, -1)
+        let finished = sqlite3_backup_finish(backup)
+        guard stepped == SQLITE_DONE, finished == SQLITE_OK else { throw failure() }
+    }
+
     /// One transaction, taken before the version is read: two processes opening an old file at
     /// once must not both decide to migrate it.
     private func migrate() throws {
@@ -785,6 +839,16 @@ public final class Ledger {
                 // after an update, with a filter they never set to blame.
                 try execute("ALTER TABLE lookups ADD COLUMN script TEXT;")
             }
+            if found < 8 {
+                // The study system's durable entities — WI-001. Additive: no card is backfilled, no
+                // confirmation inferred, and no row of the reading history re-read or reinterpreted.
+                try execute(Self.studySchema)
+                // Which extractor issued the key on an encounter. NULL for every row written before
+                // this, meaning **unknown** — and unknown it stays: every encounter so far came from
+                // the live path, but "so far as anyone can tell" is not a measurement, and a guessed
+                // provenance is worse than an absent one because it cannot be told from a recorded one.
+                try execute("ALTER TABLE sense_encounters ADD COLUMN key_issuer TEXT;")
+            }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")
         } catch {
@@ -821,7 +885,7 @@ public final class Ledger {
         static func optionalReal(_ value: Double?) -> SQLiteValue { value.map(SQLiteValue.real) ?? .null }
     }
 
-    private func execute(_ sql: String) throws {
+    func execute(_ sql: String) throws {
         var message: UnsafeMutablePointer<CChar>?
         let status = sqlite3_exec(db, sql, nil, nil, &message)
         defer { sqlite3_free(message) }
@@ -830,7 +894,7 @@ public final class Ledger {
         }
     }
 
-    private func run(_ sql: String, bind values: [SQLiteValue], row: (Row) throws -> Void) throws {
+    func run(_ sql: String, bind values: [SQLiteValue], row: (Row) throws -> Void) throws {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
             throw error()

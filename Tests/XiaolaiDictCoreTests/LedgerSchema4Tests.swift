@@ -95,8 +95,11 @@ struct LedgerSchema4Tests {
     /// leaves `PRAGMA user_version` claiming a shape the database does not have, and every later
     /// read is a column that is not there. This fails on the bump and is meant to: the number moves
     /// only in the same change as the `ALTER TABLE` that earns it.
-    @Test func theSchemaIsSeven() {
-        #expect(Ledger.schemaVersion == 7)
+    ///
+    /// 8 as of 2026-09-29 — the study system's notes, locators and note/lookup links, plus
+    /// `sense_encounters.key_issuer`. `StudySchemaTests` and `StudyMigrationTests` are what earned it.
+    @Test func theSchemaIsEight() {
+        #expect(Ledger.schemaVersion == 8)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

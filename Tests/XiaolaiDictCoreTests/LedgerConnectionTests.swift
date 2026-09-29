@@ -38,9 +38,16 @@ struct LedgerConnectionTests {
         // Closing through the ledger's `db` is the shape of the bug: it is the handle the owner will
         // close again when the ledger goes away.
         #expect(!code.contains("sqlite3_close(db)"), "the ledger closes the handle it does not own")
-        // Two closes, both legitimate: the owner's, and a handle `sqlite3_open_v2` returned alongside a
-        // failure — never wrapped, so nothing else will close it.
+        // Three closes, each legitimate and each of a shape this file has argued for:
+        //   1. `Connection.deinit`, the one owner of a handle in use.
+        //   2. the handle `sqlite3_open_v2` returns alongside a failed open of the ledger itself,
+        //   3. and the same shape again for the backup's destination, which is never wrapped because
+        //      there is nothing yet to own it.
+        // A successfully opened backup destination is wrapped in `Connection` like any other, so it is
+        // not in this count — if it were, that would be the `defer`-beside-a-throw shape the suite's
+        // note is about. **Raising this number is a claim, not a fix**: a new close needs one of those
+        // three reasons written down beside it.
         let closes = code.components(separatedBy: "sqlite3_close(").count - 1
-        #expect(closes == 2, "expected the owner's close and the failed-open close, found \(closes)")
+        #expect(closes == 3, "expected the owner's close and two failed-open closes, found \(closes)")
     }
 }
