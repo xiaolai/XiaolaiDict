@@ -102,8 +102,11 @@ struct LedgerSchema4Tests {
     /// 9 the same day: `study_answers`, and `readiness` **dropped** from `study_notes`. Storing it was
     /// the mistake 8 shipped — every fact it rests on changes elsewhere, so the column could only be
     /// right at the moment it was written. `StudyEnrollmentTests` is what earned this one.
-    @Test func theSchemaIsNine() {
-        #expect(Ledger.schemaVersion == 9)
+    ///
+    /// 10: `study_cards` and `review_events` — the schedule and its history. `StudyReviewTests` and
+    /// `MemorySchedulerParityTests` earned it.
+    @Test func theSchemaIsTen() {
+        #expect(Ledger.schemaVersion == 10)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

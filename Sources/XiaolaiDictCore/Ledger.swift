@@ -152,7 +152,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 9
+    public static let schemaVersion = 10
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -865,6 +865,12 @@ public final class Ledger {
             }
             if found < 9 {
                 try execute(Self.studyAnswerSchema)
+            }
+            if found < 10 {
+                // The scheduled card and its review history. Additive, and no card is created for a
+                // note that already exists: a schedule invented for a target the reader enrolled
+                // before there was one would be a first review they never sat.
+                try execute(Self.studyCardSchema)
             }
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")

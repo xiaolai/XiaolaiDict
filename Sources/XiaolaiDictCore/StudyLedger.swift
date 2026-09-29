@@ -113,6 +113,76 @@ extension Ledger {
         );
         """
 
+    /// Schema 10: the scheduled card and its review history.
+    ///
+    /// **A card is a question about a note, not the note itself.** One note can grow a second question
+    /// later — recognise it, produce it — with its own schedule, which is why the schedule does not live
+    /// on `study_notes`. Only the receptive question exists today; `prompt` is what lets the second one
+    /// arrive without re-keying the first.
+    static let studyCardSchema = """
+        CREATE TABLE study_cards (
+            id                 TEXT PRIMARY KEY,
+            note_id            TEXT NOT NULL REFERENCES study_notes (id) ON DELETE CASCADE,
+            -- Which question this card asks. 'meaning' is the receptive one: the reader's own sentence
+            -- on the front, what it meant there on the back.
+            prompt             TEXT NOT NULL,
+            phase              TEXT NOT NULL,
+            -- **Absent until the first real grade, never zero.** A stability of 0 is a claim about the
+            -- reader's memory; "no attempt yet" is not one, and saving an answer is not an attempt.
+            stability          REAL,
+            difficulty         REAL,
+            last_review        REAL,
+            due                REAL,
+            -- Eligibility, which is not memory: pausing and hiding change what is asked, never `S`.
+            paused             INTEGER NOT NULL DEFAULT 0,
+            hidden_until       REAL,
+            -- Compare-and-swap. A grade computed against one state and written over another is the
+            -- lost-update the review window's retries can produce.
+            revision           INTEGER NOT NULL DEFAULT 0,
+            scheduler_version  TEXT NOT NULL,
+            created_at         REAL NOT NULL,
+            CHECK (phase IN ('new', 'learning', 'review', 'relearning')),
+            CHECK (paused IN (0, 1)),
+            -- A card either has both halves of a memory state or neither. One of the two is a state
+            -- nothing can be computed from, and it would reach the scheduler as a crash or a guess.
+            CHECK ((stability IS NULL) = (difficulty IS NULL)),
+            CHECK ((phase = 'new') = (stability IS NULL))
+        );
+        CREATE UNIQUE INDEX study_cards_question ON study_cards (note_id, prompt);
+        CREATE INDEX study_cards_by_due ON study_cards (due);
+
+        -- **Immutable.** A review is something that happened; undo marks it void and never deletes it,
+        -- because a history with holes cannot be replayed and replay is how a parameter change is
+        -- applied honestly.
+        CREATE TABLE review_events (
+            -- The caller's idempotency key. A retry after a failure it could not see must not grade
+            -- the card twice, and this is what makes the second attempt return the first result.
+            id                 TEXT PRIMARY KEY,
+            card_id            TEXT NOT NULL REFERENCES study_cards (id) ON DELETE CASCADE,
+            grade              INTEGER NOT NULL,
+            reviewed_at        REAL NOT NULL,
+            -- The complete state either side, so the event can be replayed and undone without
+            -- recomputing anything from today's parameters.
+            before_phase       TEXT NOT NULL,
+            before_stability   REAL,
+            before_difficulty  REAL,
+            before_last_review REAL,
+            before_due         REAL,
+            after_phase        TEXT NOT NULL,
+            after_stability    REAL NOT NULL,
+            after_difficulty   REAL NOT NULL,
+            after_due          REAL NOT NULL,
+            -- Which scheduler said so. A replay must use the model that was in force, not today's.
+            scheduler_version  TEXT NOT NULL,
+            retention          REAL NOT NULL,
+            card_revision      INTEGER NOT NULL,
+            -- Undone, not deleted. Excluded from every count and from any retention figure.
+            voided_at          REAL,
+            CHECK (grade BETWEEN 1 AND 4)
+        );
+        CREATE INDEX review_events_by_card ON review_events (card_id, reviewed_at);
+        """
+
     // MARK: - Notes
 
     /// Records a note. Throws where the schema refuses it — a duplicate target, or a shape no branch
@@ -333,6 +403,10 @@ extension Ledger {
             if let answer, try self.answer(of: note.id) == nil {
                 try setAnswer(answer, of: note.id, at: when)
             }
+            // **The card exists from the moment the target does, and it is `new`.** Not scheduled:
+            // saving a meaning is not a review of it, and a first interval invented here would be a
+            // grade the reader never gave. The queue decides when a `new` card is first asked.
+            try card(of: note.id, at: when)
             try execute("RELEASE enroll")
         } catch {
             try? execute("ROLLBACK TO enroll")

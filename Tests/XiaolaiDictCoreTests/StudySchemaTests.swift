@@ -300,27 +300,32 @@ struct StudyMigrationTests {
 
     /// Winds a real schema-8 ledger back to 7 and reopens it, so the migration step runs against rows
     /// written by the shipping code rather than against a hand-built fixture that may not resemble them.
-    private func windBackToSeven(_ path: String) throws {
+    /// Winds a real ledger back to an earlier schema and leaves it there, so a migration runs against
+    /// rows written by the shipping code rather than a hand-built fixture that may not resemble them.
+    ///
+    /// **One cascade, not one helper per version.** Three schemas in a row shipped with this lagging
+    /// behind — each time, the migration test failed on a table the unwind did not know to drop, and
+    /// each time the fix was to add a line to a copy. A new schema adds one case here and the older
+    /// paths get it for free.
+    private func windBack(to version: Int, at path: String) throws {
         let ledger = try Ledger(path: path)
-        try ledger.execute("""
-            DROP TABLE study_answers;
-            DROP TABLE study_note_lookups;
-            DROP TABLE study_locators;
-            DROP TABLE study_notes;
-            ALTER TABLE sense_encounters DROP COLUMN key_issuer;
-            PRAGMA user_version = 7;
-            """)
-    }
-
-    /// Back to 8: the study tables as they first shipped, with `readiness` stored and no answers.
-    private func windBackToEight(_ path: String) throws {
-        let ledger = try Ledger(path: path)
-        try ledger.execute("""
-            DROP TABLE study_answers;
-            ALTER TABLE study_notes DROP COLUMN confirmed_at;
-            ALTER TABLE study_notes ADD COLUMN readiness TEXT NOT NULL DEFAULT 'ready';
-            PRAGMA user_version = 8;
-            """)
+        var statements: [String] = []
+        if version < 10 {
+            statements += ["DROP TABLE review_events;", "DROP TABLE study_cards;"]
+        }
+        if version < 9 {
+            statements += ["DROP TABLE study_answers;",
+                           "ALTER TABLE study_notes DROP COLUMN confirmed_at;",
+                           "ALTER TABLE study_notes ADD COLUMN readiness TEXT NOT NULL DEFAULT 'ready';"]
+        }
+        if version < 8 {
+            // Schema 8's own columns go with its tables, so the `readiness` line above is undone too.
+            statements += ["DROP TABLE study_note_lookups;", "DROP TABLE study_locators;",
+                           "DROP TABLE study_notes;",
+                           "ALTER TABLE sense_encounters DROP COLUMN key_issuer;"]
+        }
+        statements.append("PRAGMA user_version = \(version);")
+        try ledger.execute(statements.joined(separator: "\n"))
     }
 
     @Test func themigrationPreservesEveryLookupAndAddsNoNote() throws {
@@ -330,7 +335,7 @@ struct StudyMigrationTests {
             let ledger = try Ledger(path: path)
             for lemma in ["fine", "hold", "bank"] { _ = try ledger.record(lookup(lemma)) }
         }
-        try windBackToSeven(path)
+        try windBack(to: 7, at: path)
 
         let migrated = try Ledger(path: path)
         #expect(try migrated.studyList(limit: 10).map(\.lemma).sorted() == ["bank", "fine", "hold"])
@@ -348,7 +353,7 @@ struct StudyMigrationTests {
             let ledger = try Ledger(path: path)
             for lemma in ["fine", "hold"] { _ = try ledger.record(lookup(lemma)) }
         }
-        try windBackToSeven(path)
+        try windBack(to: 7, at: path)
         _ = try Ledger(path: path)
 
         let backup = path + ".schema7.backup"
@@ -387,7 +392,7 @@ struct StudyMigrationTests {
                                          lookupID: lookupID, at: now)
             id = note.id
         }
-        try windBackToEight(path)
+        try windBack(to: 8, at: path)
 
         let migrated = try Ledger(path: path)
         let notes = try migrated.notes()

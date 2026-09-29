@@ -85,13 +85,16 @@ test-swift: metal-guard
 # The Python suite: the icon generator, and the ladder gate `e2e.sh` decides a release with.
 # Named for the directory rather than for the icon, because it stopped being only the icon's.
 #
-# `dev-docs/algorithms` is the second root because the scheduler's numerical reference lives beside
-# the specification it is the evidence for, not under `Tools`. Its 11 tests passed for six days
-# without any gate running them: a reference kernel nothing checks is exactly the artefact that gets
-# ported to Swift with a wrong constant in it, and the port is measured against the kernel.
+# `Tools/fsrs` is the second root: the scheduler's numerical reference and its own tests, kept
+# together because they are one artefact. Its 11 tests passed for six days with no gate running them,
+# and a reference nothing checks is exactly what gets ported to Swift with a wrong constant in it.
+#
+# **Tracked, unlike the specification it belongs to.** It first went in under `dev-docs/`, which is
+# gitignored — so this line made `make test` pass here and fail on any fresh clone, discovery of a
+# missing directory being an `ImportError`. A gate that depends on an untracked file is not a gate.
 test-tools:
 	python3 -m unittest discover -s Tools/tests
-	python3 -m unittest discover -s dev-docs/algorithms
+	python3 -m unittest discover -s Tools/fsrs
 
 # Re-extract every localizable string into Strings/Localizable.xcstrings, the file a
 # translator is given. Run it after adding or changing anything the reader reads.
