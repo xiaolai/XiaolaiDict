@@ -490,6 +490,33 @@ row_after() {
     printf '%s' "$((waited / 10)).$((waited % 10))"
 }
 
+# **Why a lookup produced nothing, when the app itself knows.**
+#
+# Seven checks in this file drive a real lookup, and every one of them fails the same way on a Mac
+# where the app has not been granted Accessibility: it cannot read the selection, so no row is
+# written. They reported that as "no answer card", "0 rows for this lookup" and "the lookup wrote
+# no ledger row" — three sentences for one cause, none of them naming it, each reading as a defect
+# in the thing being measured. Measured 2026-09-30: `com.xiaolaidict|0` in the system TCC database,
+# and every one of those seven red.
+#
+# The app says so itself, on the panel, and this is that sentence — empty when the app is not
+# refusing for want of a permission, so a caller can lead with it and fall back to its own words.
+# **Not a guess from the absence of a row**: a missing grant and a broken lookup path both write
+# nothing, and only the app can tell them apart.
+#
+# **It cannot fail, and that is load-bearing.** "No notice" is an answer, not an error. The first
+# version ended in `grep | head`, and this file runs under `pipefail`: with no match the grep's 1
+# reached the caller's `refusal=$(missing_grant)`, which `set -e` turned into the end of the run —
+# the model stage died before reaching a single one of its own assertions. The very class of
+# defect this helper was added to explain, reintroduced by the explanation.
+missing_grant() {
+    local shown notice
+    shown=$("$helpers/panel" com.xiaolaidict 2>/dev/null) || return 0
+    notice=$(printf '%s' "$shown" | grep -o "XiaolaiDict needs [A-Za-z ]*access" | head -1) || true
+    printf '%s' "$notice"
+    return 0
+}
+
 # **One way to run an in-bundle report**, with its budget and its cleanup — defined here, before
 # every stage, because more than one stage uses it: defined inside the first that did, a run of
 # the other stage alone died on `run_report: command not found`. Each report used to
@@ -1615,22 +1642,45 @@ else
         if [ "$pressed" != yes ]; then
             flunk "setup: Not now could not be clicked — $why ($(board_state))"
         else
-            # **What Not now changes in the row itself**, which holds on any machine: the button
-            # goes, because it is drawn only while the reader has not answered, and Download stays,
-            # because the model is still one click away. Waited for the button's *absence*, since
-            # that is the state being asserted.
-            declined_shown=""
+            # **The decline itself, read from where it is kept.** The most direct evidence there
+            # is, and it needs no Accessibility at all: `LocalModelDeclined` is what the button
+            # writes and what the board reads back on the next launch.
+            declined_flag=""
             for _ in $(seq 1 25); do
-                declined_shown=$("$helpers/panel" com.xiaolaidict)
-                printf '%s' "$declined_shown" | grep -q "Not now" || break
+                declined_flag=$(defaults read com.xiaolaidict LocalModelDeclined 2>/dev/null || echo "")
+                [ "$declined_flag" = 1 ] && break
                 sleep 0.2
             done
-            if printf '%s' "$declined_shown" | grep -q "Not now"; then
-                flunk "setup: Not now is still offered after it was pressed — $(printf '%s' "$declined_shown" | tr ',' '\n' | grep -A8 'Translation and sense picking' | head -c 300)"
-            elif ! printf '%s' "$declined_shown" | grep -q "Download"; then
-                flunk "setup: Not now took the download away — it is supposed to stay one click away ($(printf '%s' "$declined_shown" | head -c 200))"
+            # **And what the row does about it — asked of the controls, never of the text.** The
+            # board draws "Not now" as a button while the reader has not answered and as the row's
+            # *status word* once they have: the same string either way, so a text dump cannot tell
+            # a button that has gone from one that has not. Two earlier versions of this check
+            # both reported a defect that did not exist — the first asserted a summary sentence
+            # the board only draws when nothing else is outstanding, the second asserted that the
+            # words were gone when they are deliberately still there.
+            declined_shown=""
+            declined_controls=""
+            for _ in $(seq 1 25); do
+                declined_shown=$("$helpers/panel" com.xiaolaidict)
+                declined_controls=$(printf '%s' "$declined_shown" \
+                    | python3 -c 'import json,sys; print("\n".join(n for w in json.load(sys.stdin)["windows"] for n in w["controls"]))')
+                printf '%s\n' "$declined_controls" | grep -qx "Not now" || break
+                sleep 0.2
+            done
+            if [ "$declined_flag" != 1 ]; then
+                flunk "setup: Not now did not record the reader's answer (LocalModelDeclined=${declined_flag:-unset})"
+            elif printf '%s\n' "$declined_controls" | grep -qx "Not now"; then
+                flunk "setup: Not now is still a button after it was pressed — controls: $(printf '%s' "$declined_controls" | tr '\n' ',' | head -c 200)"
+            elif ! printf '%s\n' "$declined_controls" | grep -qx "Download"; then
+                flunk "setup: Not now took the download away — it is supposed to stay one click away (controls: $(printf '%s' "$declined_controls" | tr '\n' ',' | head -c 200))"
             else
-                pass "setup: Not now is wired — the row stops asking and keeps the download one click away"
+                pass "setup: Not now is wired — the answer is recorded, the button goes, the download stays one click away"
+            fi
+            # The status word replaces the button, which is the row saying the reader answered.
+            if printf '%s' "$declined_shown" | grep -q "Not now"; then
+                pass "setup: the row now says Not now as its state rather than offering it"
+            else
+                flunk "setup: the row lost its state word, so nothing on it says the reader answered"
             fi
             # **The summary sentence, only where it can be reached.** It is drawn when *nothing
             # else* is outstanding, so a machine still missing a permission never shows it — and
@@ -2105,9 +2155,15 @@ find_pids "$exe"; app_pid_before=${PIDS[0]:-}
 ledger_before=$(newest_row_id)
 open -a TextEdit "$helpers/notes.txt"; sleep 1.5
 lookup_driven=no
+# **Read while the panel is up.** The app's refusal is on the panel, and Escape below takes it
+# away — asking afterwards, as the first version did, always found nothing and the stage went on
+# reporting "the lookup wrote no ledger row" over a permission it could have named. Evidence is
+# gathered when it exists, not when it is wanted.
+grant_notice=""
 if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     "$helpers/keys" 2 control option
     for _ in $(seq 1 100); do ! is_running "$model_service" || break; sleep 0.1; done
+    grant_notice=$(missing_grant)
     "$helpers/keys" 53 2>/dev/null || true
     lookup_driven=yes
 else
@@ -2128,7 +2184,11 @@ if [ "$lookup_driven" = yes ]; then
     waited=$(row_after "$ledger_before" meeting com.apple.TextEdit)
     lookup_id=$(row_id_of "$ledger_before" meeting com.apple.TextEdit)
     if [ "${lookup_id:-0}" -eq 0 ]; then
-        flunk "model: the lookup wrote no ledger row (waited ${waited}s)"
+        if [ -n "$grant_notice" ]; then
+            flunk "model: no lookup could be driven — the app says \"$grant_notice\". This machine has not granted it; nothing here can, and the production path was not exercised"
+        else
+            flunk "model: the lookup wrote no ledger row (waited ${waited}s)"
+        fi
     else
         chosen=$(sqlite3 -readonly "$ledger" "select coalesce(chosen_by, '') from sense_encounters where lookup_id = $lookup_id" 2>/dev/null || echo "")
         abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $lookup_id" 2>/dev/null || echo "")
@@ -2150,7 +2210,11 @@ find_pids "$model_service"
 if [ -z "$app_pid_before" ]; then
     flunk "model: the app is not running, so crash isolation cannot be observed"
 elif [ "${#PIDS[@]}" -eq 0 ]; then
-    flunk "model: no model service to kill, so crash isolation was not exercised"
+    if [ -n "$grant_notice" ]; then
+        flunk "model: no model service to kill — the app prewarms the model on a lookup, and no lookup could be driven (\"$grant_notice\")"
+    else
+        flunk "model: no model service to kill, so crash isolation was not exercised"
+    fi
 else
     kill -9 "${PIDS[@]}" 2>/dev/null || true
     for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
