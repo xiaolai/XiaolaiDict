@@ -3,11 +3,15 @@ import Foundation
 
 /// One lookup, as the history drawer shows it.
 ///
-/// There is deliberately **no gloss, definition or sense text on this type**, for the same reason
-/// `PriorEncounter` has none: a review surface that answers the question destroys the retrieval
-/// that makes reviewing worth anything (`feature-ledger-ux.md` C2). What a card carries is the word
-/// and *the reader's own sentence* — their text, not a publisher's — which is the cue, not the
-/// answer. The omission is enforced by what the type cannot hold.
+/// **This type carries no gloss of its own, but it is not a type-level guarantee** — `sense` holds a
+/// `SenseNote`, and a `SenseNote` holds the gloss. `PriorEncounter` is the one whose omission the
+/// compiler enforces. Here the answer is reachable and the protection is the view's: the drawer's
+/// deliberate reveal, per-card `@State`, never persisted (`feature-ledger-ux.md` C2 — a review
+/// surface that answers the question destroys the retrieval that makes reviewing worth anything).
+/// Anything that renders a `ReadingEntry` inherits that obligation rather than the safety.
+///
+/// What a card shows unasked is the word and *the reader's own sentence* — their text, not a
+/// publisher's — which is the cue, not the answer.
 public struct ReadingEntry: Identifiable, Equatable, Sendable {
     /// The ledger row, so a card can be traced back to the lookup it came from.
     public let id: Int
