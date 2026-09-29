@@ -181,6 +181,25 @@ struct PhraseSpanTests {
             .phrase(in: ["they", "give", "up"], containing: 1) == nil)
     }
 
+    /// **A placement matching entirely as written beats one that borrows a form**, at equal gap, inside one
+    /// template as well as between two. Comparing `borrowed` only between templates kept span 0...2 here over
+    /// 2...4, and the outer ranking never saw the placement `tightest` had already discarded.
+    @Test func awrittenPlacementBeatsABorrowedOneWithinOneTemplate() {
+        let spans = PhraseSpans(phrases: ["back to back"])
+        let words = [["backed", "back"], ["to"], ["back"], ["to"], ["back"]]
+        #expect(spans.match(in: words, containing: 2)?.words == 2 ... 4,
+                "got \(spans.match(in: words, containing: 2)?.words as Any)")
+    }
+
+    /// **The gap budget shrinks as it is spent**, so a placement that cannot fit is never built. Two slots
+    /// cannot both be filled from a budget of three when they need four words between them.
+    @Test func thegapBudgetIsSpentNotReissued() {
+        let spans = PhraseSpans(phrases: ["take something into someone account"])
+        let words = [["take"], ["a"], ["b"], ["into"], ["c"], ["d"], ["account"]]
+        #expect(spans.match(in: words, containing: 0, widestGap: 3) == nil)
+        #expect(spans.match(in: words, containing: 0, widestGap: 4)?.gap == 4)
+    }
+
     // MARK: - Which form the key is filed under
 
     /// **A key is not always in lemma form, and lemmatising the sentence loses it.** Measured over 116,122

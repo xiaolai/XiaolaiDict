@@ -354,7 +354,7 @@ public struct PhraseSpans: Sendable, Equatable {
         var best: Match?
         var borrowed = 0
         func consider(_ runs: [[String]], cap: Int, inferred: Bool) {
-            for starts in placements(runs, in: words, from: 0, through: words.count - 1, widestGap: cap)
+            for starts in placements(runs, in: words, from: 0, budget: cap, gapBefore: false, before: word)
             where covers(starts, runs, word) {
                 guard let first = starts.first, let last = starts.last, let tail = runs.last else { continue }
                 let span = first ... (last + tail.count - 1)
@@ -362,9 +362,15 @@ public struct PhraseSpans: Sendable, Equatable {
                 guard gap <= cap else { continue }
                 let separation: Separation = gap == 0 ? .none
                     : (inferred ? .inferred(gap) : .marked(gap))
-                if best == nil || gap < best!.gap {
+                // **Gap first, then the reader's own spelling — inside one template too.** Comparing
+                // `borrowed` only *between* templates let a placement that borrows a form beat one matching
+                // entirely as written: for `back to back` in `[backed|back, to, back, to, back]`, hovering
+                // index 2 kept span 0...2 over 2...4, and the outer ranking never saw the placement this
+                // had already discarded.
+                let taken = Self.borrowedForms(runs, at: starts, in: words)
+                if best == nil || gap < best!.gap || (gap == best!.gap && taken < borrowed) {
                     best = Match(phrase: template.phrase, words: span, separation: separation)
-                    borrowed = Self.borrowedForms(runs, at: starts, in: words)
+                    borrowed = taken
                 }
             }
         }
@@ -390,23 +396,39 @@ public struct PhraseSpans: Sendable, Equatable {
     }
 
     /// Where each run of literal words could begin, in order.
-    private static func placements(_ runs: [[String]], in words: [[String]],
-                                   from: Int, through: Int, widestGap: Int) -> [[Int]] {
+    ///
+    /// **Pruned as it walks, not filtered afterwards.** It used to build every placement across the sentence
+    /// and then discard the ones that missed the hovered word or overran the gap budget — and each recursion
+    /// was handed the *full* budget, so combinations that could not possibly fit were constructed first and
+    /// thrown away second. Two bounds remove them at the branch:
+    ///
+    /// - **The budget shrinks.** A gap already spent is not available to the next slot, and once a start
+    ///   overruns what is left every later start overruns it too, so the loop ends rather than continues.
+    /// - **The first run starts at or before the hovered word.** Runs are in order, so whichever run holds
+    ///   that word, the first one begins no later than it.
+    private static func placements(_ runs: [[String]], in words: [[String]], from: Int,
+                                   budget: Int, gapBefore: Bool, before word: Int) -> [[Int]] {
         guard let run = runs.first else { return [[]] }
         let rest = Array(runs.dropFirst())
+        // A run after a slot may start no earlier than one word past the last; the first may start anywhere
+        // up to the hovered word.
+        let last = gapBefore ? words.count - run.count : min(word, words.count - run.count)
         var out: [[Int]] = []
         var start = from
-        while start + run.count <= words.count, start <= through {
+        while start <= last {
+            let gap = gapBefore ? start - from + 1 : 0
+            // Every later start has a wider gap still, so this ends the loop rather than skipping one.
+            if gap > budget { break }
             // A run matches where **some** form of each position is the key's word there.
             if zip(run, words[start ..< start + run.count]).allSatisfy({ $1.contains($0) }) {
                 let end = start + run.count
                 if rest.isEmpty {
                     out.append([start])
                 } else {
-                    // **A slot is filled by at least one word**, so the next run cannot begin where this
-                    // one ended — abutting runs spell the unslotted phrase, which is a different key.
-                    for tail in placements(rest, in: words, from: end + 1,
-                                           through: end + widestGap, widestGap: widestGap) {
+                    // **A slot is filled by at least one word**, so the next run cannot begin where this one
+                    // ended — abutting runs spell the unslotted phrase, which is a different key.
+                    for tail in placements(rest, in: words, from: end + 1, budget: budget - gap,
+                                           gapBefore: true, before: word) {
                         out.append([start] + tail)
                     }
                 }
