@@ -60,9 +60,19 @@ public enum PhraseAnswer: Codable, Sendable, Equatable {
     case notAsked
     /// The phrase inventory is still being read. **Not the same as `.none`.**
     case notReady
+    /// No dictionary's phrases could be read at all, so nothing can be looked in.
+    ///
+    /// **Distinct from `.notReady`, which resolves.** A reader whose every dictionary failed was told the
+    /// inventory was still loading — for ever — which is a failure wearing a transient state's clothes. An
+    /// abstention names itself: `.refused`, `.undecided`, `.unavailable` is the rule the sense ladder already
+    /// follows, and this is the same rule one layer out.
+    case unavailable
     /// Asked, and the reader is on an ordinary word.
     case none
-    case found(PhraseHit)
+    /// **Every phrase covering the term, best first.** Plural because length must not choose the unit:
+    /// `give up` and `give up the ghost` both cover the hovered word, and which one the reader met is a
+    /// question about the sentence rather than about span length. Never empty — `.none` is that answer.
+    case found([PhraseHit])
 }
 
 /// One phrase found around the term, with its own entries.
@@ -111,8 +121,8 @@ public struct PhraseHit: Codable, Sendable, Equatable {
 ///
 /// **The meaning comes from the phrase inventory, not from the entry.** A body walk reads every sub-entry's
 /// own definition — *take something into account → consider something along with other factors before
-/// reaching a decision* — for 9,743 phrases in 632 KB per dictionary. So a sub-entry phrase is explained
-/// rather than deferred, and this type never has to say "read it somewhere else".
+/// reaching a decision* — for 9,740 of NOAD's sub-entries. So a sub-entry phrase is explained rather than
+/// deferred, and this type never has to say "read it somewhere else".
 public enum PhraseMeaning: Codable, Sendable, Equatable {
     /// The phrase's own entries. Their senses are the phrase's meaning, and are candidates for the ladder.
     case ownEntry([DictionaryEntry])

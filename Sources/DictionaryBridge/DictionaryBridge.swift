@@ -111,14 +111,21 @@ public enum DictionaryBridge {
         guard let finder else { return .notAsked }
         guard let sentence = request.sentence, let term = request.termRange,
               sentence.utf16.count <= LookupRequest.maximumSentenceLength else { return .notAsked }
+        // **Two different facts, said as two.** `.notReady` resolves when the read finishes; `.unavailable`
+        // is what a reader whose dictionaries could not be read is owed instead of "still loading" for ever.
+        if finder.isUnavailable { return .unavailable }
         guard finder.isReady else { return .notReady }
-        guard let span = finder.phrase(in: sentence, at: term) else { return .none }
-        // The phrase's own entries, through the same door the word went through. Empty is a real answer:
-        // the span is in the dictionary's keys and the framework still found nothing readable for it.
-        let found = (try? entries(for: span.phrase))?.entries ?? []
-        return .found(PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
-                                separation: span.separation,
-                                meaning: meaning(of: span, answered: found, term: word)))
+        let spans = finder.phrases(in: sentence, at: term)
+        guard !spans.isEmpty else { return .none }
+        // Each phrase's own entries, through the same door the word went through. Empty is a real answer: the
+        // span is in the dictionary's keys and the framework still found nothing readable for it.
+        let hits = spans.map { span in
+            let answered = (try? entries(for: span.phrase))?.entries ?? []
+            return PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
+                             separation: span.separation,
+                             meaning: meaning(of: span, answered: answered, term: word))
+        }
+        return .found(hits)
     }
 
     /// Whether `answered` is the phrase's own entry or the entry it is filed inside.

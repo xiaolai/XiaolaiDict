@@ -66,8 +66,11 @@ public struct PhrasePresentation: Equatable, Sendable {
     /// still reading its inventory is not told "no phrase here" — they are told nothing at all, which is
     /// true. Claiming the absence would be the failure rendering as confidently as a success, and the
     /// window is a dozen seconds once per service launch.
+    /// **The leading phrase is what the card draws.** The wire carries every phrase covering the word so
+    /// that nothing on the lookup path deletes a candidate — the selector sees them all — but a card has room
+    /// for one, and the order it arrives in is the order to prefer.
     public init?(_ answer: PhraseAnswer, sentence: String?) {
-        guard case .found(let hit) = answer, let sentence else { return nil }
+        guard case .found(let hits) = answer, let hit = hits.first, let sentence else { return nil }
         let range = NSRange(location: hit.location, length: hit.length)
         // Validated against the sentence the card actually holds. The hit was measured against the
         // sentence that was *sent*, and a card built from a different one would bracket whatever sits at

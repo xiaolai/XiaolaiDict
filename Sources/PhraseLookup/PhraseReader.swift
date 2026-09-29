@@ -21,19 +21,26 @@ public final class PhraseReader: PhraseFinding {
 
     private struct Read {
         let spans: PhraseSpans
+        /// Whether any dictionary was read at all. **False is not an empty inventory**: a detector over
+        /// nothing answers `.none` to every sentence, which tells a reader there is no phrase here when the
+        /// truth is that nothing could be looked in.
+        let readAnything: Bool
         /// Phrase to its meaning, for the phrases a dictionary explains. **Held rather than re-read**: a
-        /// lookup must not open a file to say what a phrase means, and the whole of NOAD's is 632 KB.
+        /// lookup must not open a file to say what a phrase means, and all three of them are 2,080 KB.
         let meanings: [String: String]
     }
 
     /// `phrases` supplies one dictionary's whole inventory — its multi-word search keys **and** the sub-entry
     /// labels with their meanings. Nil for a dictionary that cannot be read.
     ///
-    /// **Nothing here touches `KeyText.data`.** Re-deriving the keys every launch cost 2.24 s of a 2.8 s
+    /// **Nothing here touches `KeyText.data`.** Re-deriving the keys on every launch cost 2.24 s of a 2.8 s
     /// start-up for an answer the stored inventory already has. Injected rather than read so the matcher can
     /// be tested without a licensed dictionary on disk.
+    /// **`phrases` has no default.** One that returned nil made a call with real bundles compile and then
+    /// read nothing from any of them — a detector that finds no phrase in any sentence, for a reason the
+    /// signature invited. The convenience initialiser above supplies the empty provider where that is meant.
     public init(bundles: [DictionaryBundle],
-                phrases: @escaping @Sendable (DictionaryBundle) -> PhraseInventory? = { _ in nil }) {
+                phrases: @escaping @Sendable (DictionaryBundle) -> PhraseInventory?) {
         self.bundles = bundles
         self.phrases = phrases
     }
@@ -41,9 +48,9 @@ public final class PhraseReader: PhraseFinding {
     /// An inventory already in hand. For a caller that built one, and for tests, which must be able to
     /// assert the mapping from a sentence to a span without a licensed dictionary on disk.
     public convenience init(phrases: Set<String>, meanings: [String: String] = [:]) {
-        self.init(bundles: [])
+        self.init(bundles: [], phrases: { _ in nil })
         let built = PhraseSpans(phrases: phrases)
-        inventory.withLock { $0 = Read(spans: built, meanings: meanings) }
+        inventory.withLock { $0 = Read(spans: built, readAnything: true, meanings: meanings) }
     }
 
     /// What one reading found. **Returned rather than logged inside**, because a reader whose dictionaries
@@ -59,7 +66,14 @@ public final class PhraseReader: PhraseFinding {
         public let failed: [String]
     }
 
-    public var isReady: Bool { inventory.withLock { $0 != nil } }
+    /// **False until something has actually been read.** It was true as soon as `read()` returned, so a reader
+    /// whose every dictionary failed got a detector that answered "no phrase here" to every sentence — the
+    /// failure rendering exactly as confidently as a success, with the reason only in the log. Where nothing
+    /// could be read this stays false and the service answers `.notReady`, which is true.
+    public var isReady: Bool { inventory.withLock { $0?.readAnything == true } }
+
+    /// A read finished and no dictionary could be read. Distinct from not having read yet.
+    public var isUnavailable: Bool { inventory.withLock { $0?.readAnything == false } }
 
     /// What the phrase means, from the dictionary that knows it.
     ///
@@ -73,18 +87,12 @@ public final class PhraseReader: PhraseFinding {
         inventory.withLock { $0?.meanings[phrase] }
     }
 
-    /// Reads the inventory. **Call this off the reply path.**
+    /// Reads the inventory from the store. **Call this off the reply path.**
     ///
-    /// Measured on the development Mac, 2026-09-29: **7 English-indexing dictionaries, 232,373 phrases,
-    /// 10–16 s**, of which about 2 s is building the template index and the rest is decompressing the key
-    /// indexes. Per dictionary it is 1.16 s for NOAD and 0.13 s for the thesaurus.
-    ///
-    /// So this is not a cost a lookup can absorb, and it is not one an argument makes smaller: filtering out
-    /// the keys that cannot match English prose — the Korean dictionary contributes **1** English key out of
-    /// 28,522 — saves 0.3 s of the 12, because `PhraseSpans` already drops every single-word key and most of
-    /// those are single words. The cost is the reading itself. A reader's lookups in the first dozen seconds
-    /// after the service launches therefore answer `.notReady`, which is said rather than disguised; a cache
-    /// on disk is what would remove the window, and that is not this stage.
+    /// The first read of a dictionary walks its body once — seconds, and the cost is per dictionary version;
+    /// every launch after that reads a file. Until it has read something a lookup answers `.notReady`, which
+    /// is a different fact from "no phrase here" and is said as one. The measurements are in
+    /// `dev-docs/wiring-phrase-lookup.md`.
     ///
     /// One dictionary failing does not stop the others: a reader with three English dictionaries and one
     /// unreadable file still gets the phrases from the two that read. The failure is named, not swallowed.
@@ -104,29 +112,34 @@ public final class PhraseReader: PhraseFinding {
             read.append(bundle.displayName)
         }
         let built = PhraseSpans(phrases: found)
-        inventory.withLock { $0 = Read(spans: built, meanings: meanings) }
+        inventory.withLock { $0 = Read(spans: built, readAnything: !read.isEmpty, meanings: meanings) }
         return Reading(phrases: built.phrases.count, explained: meanings.count,
                        read: read, failed: failed)
     }
 
-    public func phrase(in sentence: String, at term: NSRange) -> PhraseSpan? {
-        guard let inventory = inventory.withLock({ $0 }) else { return nil }
+    public func phrases(in sentence: String, at term: NSRange) -> [PhraseSpan] {
+        guard let inventory = inventory.withLock({ $0 }) else { return [] }
         // **`forms`, not `lemmas`.** A dictionary files `by all accounts` with the plural and
         // `keep a tight rein on` with the lemma, so one chosen form loses 36,766 phrases of 116,122. Each
         // position offers both and the keys decide.
         let words = Lemmatizer.forms(in: sentence)
-        guard let hovered = Self.word(covering: term, among: words),
-              let match = inventory.spans.match(in: words.map(\.candidates), containing: hovered)
-        else { return nil }
+        guard let hovered = Self.word(covering: term, among: words) else { return [] }
         // Back from word indices to the reader's own text. **The span's ends, not the matched words' own
         // ranges joined** — a gap belongs inside the span, because that is what the reader sees.
-        let first = words[match.words.lowerBound].range
-        let last = words[match.words.upperBound].range
-        return PhraseSpan(
-            phrase: match.phrase,
-            location: first.location, length: last.location + last.length - first.location,
-            separation: Self.separation(match.separation),
-            definition: inventory.meanings[match.phrase])
+        return inventory.spans.matches(in: words.map(\.candidates), containing: hovered).map { match in
+            let first = words[match.words.lowerBound].range
+            let last = words[match.words.upperBound].range
+            return PhraseSpan(
+                phrase: match.phrase,
+                location: first.location, length: last.location + last.length - first.location,
+                separation: Self.separation(match.separation),
+                definition: inventory.meanings[match.phrase])
+        }
+    }
+
+    /// The leading phrase, for a caller that wants one — the same order `phrases(in:at:)` returns.
+    public func phrase(in sentence: String, at term: NSRange) -> PhraseSpan? {
+        phrases(in: sentence, at: term).first
     }
 
     /// Which word the captured range is on.

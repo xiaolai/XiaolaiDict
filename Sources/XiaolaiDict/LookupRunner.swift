@@ -104,10 +104,15 @@ final class LookupRunner {
         // offset. `PhrasePresentation.init(_:sentence:)` checks the pairing rather than trusting it.
         presentation.phrase = PhrasePresentation(resolved.phrase, sentence: presentation.sentence)
         switch resolved.phrase {
-        case .found(let hit):
-            log.notice("phrase: \(hit.phrase, privacy: .public), gap \(hit.separation.gap, privacy: .public), \(hit.entries.count, privacy: .public) entries")
+        case .found(let hits):
+            let leading = hits[0]
+            log.notice("phrase: \(leading.phrase, privacy: .public), gap \(leading.separation.gap, privacy: .public), \(hits.count, privacy: .public) covering, \(hits.reduce(0) { $0 + $1.entries.count }, privacy: .public) entries")
         case .notReady:
             log.notice("phrase: the inventory was still being read")
+        case .unavailable:
+            // **A fault, not a notice.** This says no dictionary's phrases could be read at all, which will
+            // not fix itself on the next lookup — unlike `.notReady`, which resolves in seconds.
+            log.fault("phrase: no dictionary's phrases could be read")
         case .none, .notAsked:
             break
         }
@@ -140,9 +145,13 @@ final class LookupRunner {
         // selector could confidently pick. `PhraseHit.entries` is already empty for that case; this says so
         // rather than relying on it.
         let phraseEntries: [DictionaryEntry] = {
-            guard case .found(let hit) = resolved.phrase,
-                  case .ownEntry(let entries) = hit.meaning else { return [] }
-            return entries
+            guard case .found(let hits) = resolved.phrase else { return [] }
+            // **Every phrase's senses, not only the leading one's.** The card draws one, and the selector
+            // chooses among all of them — which is the whole point of the wire carrying more than one.
+            return hits.flatMap { hit -> [DictionaryEntry] in
+                guard case .ownEntry(let entries) = hit.meaning else { return [] }
+                return entries
+            }
         }()
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.

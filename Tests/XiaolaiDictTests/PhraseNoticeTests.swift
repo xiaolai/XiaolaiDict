@@ -30,12 +30,14 @@ struct PhraseNoticeTests {
             document: EntryDocument.parse(markup))
     }
 
+    /// **A list, because the wire carries every phrase covering the word.** The card draws the leading one;
+    /// nothing on the lookup path deletes a candidate, so the selector sees them all.
     private static func hit(_ phrase: String = "take something into account",
                             location: Int = 0, length: Int = 12,
                             separation: PhraseSeparation = .marked(2),
-                            meaning: PhraseMeaning = .ownEntry([])) -> PhraseHit {
-        PhraseHit(phrase: phrase, location: location, length: length,
-                  separation: separation, meaning: meaning)
+                            meaning: PhraseMeaning = .ownEntry([])) -> [PhraseHit] {
+        [PhraseHit(phrase: phrase, location: location, length: length,
+                   separation: separation, meaning: meaning)]
     }
 
     // MARK: - What the card is allowed to claim

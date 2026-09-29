@@ -56,6 +56,15 @@ import Testing
             """)
         #expect(reader.isReady)
         #expect(cold.failed.isEmpty, "every dictionary serving this reader must read")
+        // **The artefact's size, reported rather than remembered.** It is the number that justifies a file
+        // per dictionary over a database, so it belongs where it is measured.
+        let written = (try? FileManager.default.contentsOfDirectory(atPath: scratch.url.path)) ?? []
+        let bytes = written.reduce(0) { total, name in
+            total + ((try? FileManager.default.attributesOfItem(
+                atPath: scratch.url.appending(path: name).path)[.size] as? Int) ?? 0)
+        }
+        print("IP stored \(written.count) files, \(bytes / 1024) KB in total")
+        #expect(bytes < 20 * 1024 * 1024, "\(bytes / 1024) KB is not a small file per dictionary any more")
         #expect(cold.phrases > 50_000, "an inventory this small means the keys were not read")
         #expect(cold.explained > 5_000, "the body walk did not happen — no phrase would have a meaning")
         #expect(coldSeconds < 120, "\(coldSeconds)s is the heavy walk, not the narrow one")

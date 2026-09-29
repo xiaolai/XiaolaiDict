@@ -43,8 +43,15 @@ public protocol PhraseFinding: Sendable {
     /// genuinely arrive first — and a card told `nil` would say there was nothing to find.
     var isReady: Bool { get }
 
-    /// The phrase covering `term`, or nil where the reader is on an ordinary word.
+    /// True once a read has finished and found nothing to read. **`isReady` false means one of two things**
+    /// — not yet, or never — and a reader whose dictionaries all failed was told "not yet" for ever.
+    var isUnavailable: Bool { get }
+
+    /// **Every phrase covering `term`, best first** — empty where the reader is on an ordinary word.
+    ///
+    /// Plural because length must not choose the unit: `give up` and `give up the ghost` both cover the
+    /// hovered word in "they give up the ghost", and which one the reader met is the selector's question.
     ///
     /// `term` is UTF-16, into `sentence`. Called only when `isReady`.
-    func phrase(in sentence: String, at term: NSRange) -> PhraseSpan?
+    func phrases(in sentence: String, at term: NSRange) -> [PhraseSpan]
 }

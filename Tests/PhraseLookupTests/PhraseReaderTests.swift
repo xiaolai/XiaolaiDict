@@ -20,7 +20,7 @@ import Testing
 
     /// Nothing read yet is **not** "no phrase here", and the two must be distinguishable from outside.
     @Test func anUnreadInventoryIsNotReadyRatherThanEmpty() {
-        let unread = PhraseReader(bundles: [])
+        let unread = PhraseReader(bundles: [], phrases: { _ in nil })
         #expect(unread.isReady == false)
         #expect(unread.phrase(in: "they give up the ghost", at: NSRange(location: 5, length: 4)) == nil)
         #expect(reader().isReady, "and an inventory handed in directly is ready at once")
@@ -93,7 +93,7 @@ import Testing
     /// Reading no dictionaries is ready and finds nothing — and **says** it read none, so a service cannot
     /// report a working detector over an empty inventory.
     @Test func readingNothingReportsThatItReadNothing() {
-        let reading = PhraseReader(bundles: []).read()
+        let reading = PhraseReader(bundles: [], phrases: { _ in nil }).read()
         #expect(reading == PhraseReader.Reading(phrases: 0, explained: 0, read: [], failed: []))
     }
 

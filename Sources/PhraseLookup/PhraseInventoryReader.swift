@@ -1,6 +1,4 @@
 import AppleDictionaryFormat
-import DictionaryModel
-import Foundation
 
 extension PhraseReader {
     /// A detector over the dictionaries **this reader** studies from, with every phrase's own meaning.
@@ -10,13 +8,24 @@ extension PhraseReader {
     /// predicate of its own and admitted **34** dictionaries on this Mac, including a Korean pair that
     /// yields 1 English key out of 28,522. `serves(reader:)` admits 5 for a Simplified reader.
     ///
-    /// **No index.** The phrase inventory is a 632 KB file per dictionary read in 7 s, so a reader who has
-    /// never built an index — or whose index was written by a schema this build does not read — still gets
-    /// every phrase *and* every meaning. That was not true of the version this replaces.
+    /// **No index.** The inventory is a file per dictionary that a launch reads in a fraction of a second, so
+    /// a reader who has never built an index — or whose index was written by a schema this build does not read
+    /// — still gets the phrases. The first read walks each body once; the figures are in
+    /// `dev-docs/wiring-phrase-lookup.md` rather than here, because they are per dictionary and NOAD is the
+    /// largest.
+    ///
+    /// **A meaning is not promised for every phrase.** The key index contributes spellings without
+    /// definitions — 9,743 of 116,122 phrases are explained — so `PhraseReader.meaning(of:)` is nil for most
+    /// of them, and that is the ordinary case rather than a gap.
     ///
     /// `report` is how the caller hears about it without this target binding a logger.
     /// `language` has **no default**, so this module states no policy about whose reader it is. The service
     /// passes `ReaderLanguage.preferred`; a test passes the audience it is measuring.
+    ///
+    /// **The order is `DictionaryLocator.installed()`'s, which is by identifier — not the reader's own.** Where
+    /// two dictionaries explain the same phrase differently, the first identifier wins, and that is arbitrary.
+    /// Said plainly rather than described as a preference it is not: honouring the reader's order needs the
+    /// order, which lives in Dictionary.app's settings and does not reach this module.
     public static func forReader(
         _ language: String,
         store: PhraseInventoryStore = PhraseInventoryStore(),
