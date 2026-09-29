@@ -1,4 +1,5 @@
 import AppleDictionaryFormat
+import DictionaryIndex
 import Foundation
 
 // Aligns one dictionary's senses to another's, in the index `xdict-index` built.

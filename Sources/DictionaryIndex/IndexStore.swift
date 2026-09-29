@@ -1,3 +1,4 @@
+import AppleDictionaryFormat
 import Foundation
 import SQLite3
 

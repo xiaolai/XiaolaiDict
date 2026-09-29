@@ -60,7 +60,15 @@ struct ModuleBoundaryTests {
         // added to `Package.swift` without being registered here, so `everyLibraryTargetIsEitherChecked…`
         // failed and — more to the point — `nothingBelowTheViewLayerBindsAppKitOrSwiftUI` was not
         // checking it at all.
-        "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit", "SQLite3"],
+        //
+        // **`SQLite3` moved out with the index, and that was forced rather than chosen.** The dictionary
+        // service reads the phrase inventory, so it links this module — and `verify_service_boundaries`
+        // forbids that service `libsqlite3`. With the store in here the service linked SQLite transitively
+        // for code it never calls, and the release refused to ship. The format reader and the index it feeds
+        // are separate concerns; the link graph is what made that concrete.
+        "AppleDictionaryFormat": ["Foundation", "Compression", "CryptoKit"],
+        // The index the format module feeds: the only thing here that touches SQLite.
+        "DictionaryIndex": ["Foundation", "SQLite3"],
         // The adapter between the dictionary-format reader and the wire protocol: a sentence in, a span
         // out. `Synchronization` holds the inventory, which is read on one queue and asked from another.
         // No `os` — it reports through a closure, so the caller owns the logging and this target stays

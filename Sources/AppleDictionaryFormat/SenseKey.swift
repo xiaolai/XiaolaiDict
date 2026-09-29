@@ -277,7 +277,11 @@ public struct SenseKey: Sendable, Equatable, Hashable, Codable {
     /// NFC, lowercased, whitespace collapsed, and the punctuation dictionaries vary on trimmed from
     /// both ends — including the CJK forms, since a definition ending in `。` and the same one ending
     /// in `.` are the same definition.
-    static func normalise(_ text: String) -> String {
+    ///
+    /// Public because `IndexStore` canonicalises a sub-entry scope with it, and the two must agree: the
+    /// query compares a stored `search_key.sub_entry` against `sense.sub_entry_key`, so one side normalising
+    /// differently from the other would silently stop matching.
+    public static func normalise(_ text: String) -> String {
         // **Lowercase first, then precompose.** The other order lets case folding undo the normalisation:
         // `"J\u{030C}"` has no precomposed uppercase form, so NFC leaves it decomposed and lowercasing gives
         // `j` + U+030C, while the same word written `"\u{01F0}"` stays composed — two spellings of one

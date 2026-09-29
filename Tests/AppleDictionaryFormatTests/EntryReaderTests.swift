@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AppleDictionaryFormat
+@testable import DictionaryIndex
 
 /// What the tree-based reader buys that a predicate could not: clean headwords, the subsense hierarchy,
 /// and the structural retirement of three recorded defects.

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import XiaolaiDictTestSupport
 @testable import AppleDictionaryFormat
+@testable import DictionaryIndex
 
 /// **The four scripts that failed against the first schema draft, each of which must now pass.**
 ///

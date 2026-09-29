@@ -314,6 +314,9 @@ struct StringCatalogTests {
         // is what they are for — and is the whole reason each one is checked against `Package.swift`
         // rather than kept by hand.
         "Sources/PhraseLookup",
+        // Added 2026-09-29 when `IndexStore` moved out of `AppleDictionaryFormat` so the dictionary service
+        // would stop linking SQLite for code it never calls.
+        "Sources/DictionaryIndex",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there

@@ -1,4 +1,5 @@
 import AppleDictionaryFormat
+import DictionaryIndex
 import Foundation
 
 // Builds the local index from the dictionaries Apple already put on this Mac.

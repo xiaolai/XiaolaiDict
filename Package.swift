@@ -41,6 +41,14 @@ let package = Package(
         // unhandled resources; a fourth document has to be added here too, and will warn until it is.
         .target(name: "AppleDictionaryFormat", exclude: ["FEATURE-LEDGER.md", "AUDIT.md", "RESEARCH.md", "DICTIONARIES.md", "PLAN.md"]),
 
+        // **The index, apart from the format it is built from — because of what links what.** The dictionary
+        // service reads the phrase inventory, which needs the container reader; it has no use for the index,
+        // and `verify_service_boundaries` forbids it `libsqlite3`. With the store inside
+        // `AppleDictionaryFormat` the service linked SQLite transitively for code it never calls, and the
+        // release refused to ship — correctly. Only `IndexStore` and `IndexRebuilder` ever touched SQLite,
+        // and nothing in the format module referenced them outside a comment.
+        .target(name: "DictionaryIndex", dependencies: ["AppleDictionaryFormat"]),
+
         // Everything about the local model that is not running it: the model service's wire
         // protocol, the prompts and the answer schema, the catalogue, what this Mac can hold, and
         // the store the weights are downloaded into. Linked by the model service and by the app;
@@ -95,12 +103,12 @@ let package = Package(
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
         // capability nobody can run. Links the module and Foundation, and nothing else — it prints to
         // stdout and draws nothing.
-        .executableTarget(name: "XiaolaiDictIndex", dependencies: ["AppleDictionaryFormat"]),
+        .executableTarget(name: "XiaolaiDictIndex", dependencies: ["AppleDictionaryFormat", "DictionaryIndex"]),
 
         // The aligner, as a command, for the reason the index builder is one: the alignment is derived from
         // licensed dictionaries and is built on the reader's own Mac, so somebody has to be able to run it
         // and read how much of it the matcher was willing to claim.
-        .executableTarget(name: "XiaolaiDictAlign", dependencies: ["AppleDictionaryFormat"]),
+        .executableTarget(name: "XiaolaiDictAlign", dependencies: ["AppleDictionaryFormat", "DictionaryIndex"]),
 
         // What the test targets share, and nothing ships: a defaults suite a test can make and
         // forget, because it is removed — file and all — when the test process ends.
@@ -108,7 +116,7 @@ let package = Package(
         // Gated on XIAOLAIDICT_BUNDLES: the measurements run against real installed
         // dictionaries, whose text is licensed and never vendored into the repository.
         .testTarget(name: "AppleDictionaryFormatTests",
-                    dependencies: ["AppleDictionaryFormat", "XiaolaiDictTestSupport"]),
+                    dependencies: ["AppleDictionaryFormat", "DictionaryIndex", "XiaolaiDictTestSupport"]),
         .testTarget(
             name: "PhraseLookupTests",
             dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup"]),

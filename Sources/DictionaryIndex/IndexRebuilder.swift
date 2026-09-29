@@ -1,3 +1,4 @@
+import AppleDictionaryFormat
 import Foundation
 
 /// Why a dictionary was not indexed, in terms a reader could act on.

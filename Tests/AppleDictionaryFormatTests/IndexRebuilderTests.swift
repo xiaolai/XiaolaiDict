@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import XiaolaiDictTestSupport
 @testable import AppleDictionaryFormat
+@testable import DictionaryIndex
 
 /// The rebuild decision, tested without a body pass.
 ///
