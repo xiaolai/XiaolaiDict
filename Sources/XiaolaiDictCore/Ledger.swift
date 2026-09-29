@@ -201,7 +201,17 @@ public final class Ledger {
         // Off by default in SQLite, which would make `sense_encounters`' reference to `lookups`
         // decorative: a sense could be hung off a lookup that does not exist and nothing would
         // say so. Fail loudly instead.
+        //
+        // **And read back, because declaring it does not make it so.** The pragma is per connection and
+        // SQLite says nothing when it is refused — the same one line away from decoration that
+        // `IndexStore` measured, where 10 of 12 constraint assertions passed with foreign keys quietly
+        // off. Every `ON DELETE CASCADE` in this schema rests on it.
         try run("PRAGMA foreign_keys = ON", bind: []) { _ in }
+        var foreignKeysOn = false
+        try run("PRAGMA foreign_keys", bind: []) { foreignKeysOn = $0.integer(0) == 1 }
+        guard foreignKeysOn else {
+            throw LedgerError.sqlite(code: SQLITE_MISUSE, message: "foreign keys could not be enabled")
+        }
         // Readers no longer block the writer, nor it them. A no-op for ":memory:".
         try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
         try migrate()
