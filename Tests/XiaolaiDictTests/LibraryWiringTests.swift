@@ -207,7 +207,8 @@ extension LibraryWiringTests {
             .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.1", senseKeyKind: .publisher),
             issuer: .live, language: "en", chosenBy: .model,
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                 newAllowance: .max, dayStart: .distantPast).isEmpty)
 
         let model = model(path)
         await model.reload()
@@ -219,7 +220,8 @@ extension LibraryWiringTests {
 
         let reopened = try Ledger(path: path)
         #expect(try reopened.readiness(of: note.id) == .ready)
-        #expect(try reopened.dueCards(at: now, limit: 10, dictionary: nil).count == 1,
+        #expect(try reopened.dueCards(at: now, limit: 10, dictionary: nil,
+                                 newAllowance: .max, dayStart: .distantPast).count == 1,
                 "and it can now be asked")
     }
 

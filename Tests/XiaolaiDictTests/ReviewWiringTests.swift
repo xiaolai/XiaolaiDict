@@ -22,8 +22,15 @@ struct ReviewWiringTests {
     }
 
     /// A ledger with `count` cards ready to be asked, and the model pointed at it.
-    private func ready(_ path: String, count: Int = 1) throws -> Ledger {
+    ///
+    /// `inProgress` answers each card once an hour ago, which is what makes it *due* rather than
+    /// *new*. The distinction is load-bearing since C08: new cards are rationed by the daily
+    /// allowance, so a fixture that wants to measure anything else — the batch bound, the backlog —
+    /// must not be made of them.
+    @discardableResult
+    private func ready(_ path: String, count: Int = 1, inProgress: Bool = false) throws -> Ledger {
         let ledger = try Ledger(path: path)
+        var enrolled: [UUID] = []
         for index in 0..<count {
             let lookup = try ledger.record(LookupRecord(
                 surface: "fine\(index)", lemma: "fine\(index)",
@@ -33,12 +40,23 @@ struct ReviewWiringTests {
                                     page: nil, title: "A page", rawTitle: "A page"),
                 lookedUpAt: now, result: .found, answeredBy: .dictionaryService,
                 quality: .accessibility(.accessibilityTextMarkers, context: .complete)))
-            try ledger.enroll(
+            let note = try ledger.enroll(
                 .sense(dictionary: "noad", entryID: "e\(index)", senseKey: "e\(index).001",
                        senseKeyKind: .publisher),
                 issuer: .live, language: "en", chosenBy: .reader,
                 answer: StudyAnswer(origin: .dictionary, text: "a penalty, sense \(index)"),
                 lookupID: lookup, at: now)
+            enrolled.append(note.id)
+        }
+        if inProgress {
+            let scheduler = try MemoryScheduler()
+            let anHourAgo = now.addingTimeInterval(-3_600)
+            for id in enrolled {
+                let card = try ledger.card(of: id, at: now)
+                _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(),
+                                     expectedRevision: card.revision, at: anHourAgo,
+                                     using: scheduler)
+            }
         }
         return ledger
     }
@@ -104,7 +122,8 @@ struct ReviewWiringTests {
         try await settle { self.question(model)?.position == 2 }
 
         let ledger = try Ledger(path: path)
-        let cards = try ledger.dueCards(at: now, limit: 10, dictionary: nil)
+        let cards = try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                      newAllowance: .max, dayStart: .distantPast)
         let reviewed = try ledger.notes().compactMap { try ledger.card(of: $0.id, at: self.now) }
             .flatMap { try ledger.reviews(ofCard: $0.id) }
         #expect(reviewed.count == 1, "the grade never reached the ledger")
@@ -184,7 +203,7 @@ struct ReviewWiringTests {
     @Test func thefinishedBatchKeepsTheBacklogVisible() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        _ = try ready(path, count: ReviewModel.batchSize + 3)
+        try ready(path, count: ReviewModel.batchSize + 3, inProgress: true)
         let model = model(path)
         await model.start()
         #expect(question(model)?.batchSize == ReviewModel.batchSize)
@@ -206,6 +225,42 @@ struct ReviewWiringTests {
         }
         #expect(summary.graded == ReviewModel.batchSize)
         #expect(summary.stillDue == 3, "three did not fit and must stay visible")
+    }
+
+    /// **The window rations first introductions** (C08). `NewCardAllowanceTests` proves the ledger
+    /// can cap them; this proves the window asks it to. A model that passed `.max` — the shape every
+    /// test below the wire uses — would satisfy every one of those and still hand a reader who saved
+    /// thirty words thirty cards on their first evening, and thirty reviews the next.
+    @Test func afirstSittingIsRationedToTheDailyAllowance() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: ReviewModel.newCardsPerDay + 8)
+        let model = model(path)
+        await model.start()
+        #expect(question(model)?.batchSize == ReviewModel.newCardsPerDay,
+                "\(ReviewModel.newCardsPerDay + 8) saved, \(ReviewModel.newCardsPerDay) allowed today")
+
+        for index in 0..<ReviewModel.newCardsPerDay {
+            model.act(.grade(.good))
+            let next = index + 2
+            try await settle {
+                if case .finished = model.presentation.stage { return true }
+                return self.question(model)?.position == next
+            }
+        }
+        guard case .finished(let summary) = model.presentation.stage else {
+            Issue.record("the batch never finished")
+            return
+        }
+        #expect(summary.stillDue == 0, "the eight beyond the allowance are tomorrow's, not a backlog")
+        // **And the reader is told.** Eight words they saved going quiet with no sentence is
+        // indistinguishable from eight words the app lost.
+        #expect(summary.heldBack == 8)
+
+        // **The allowance does not refill within the day.** Asking for another sitting on the same
+        // clock must find nothing askable — and must say why, not "nothing is due".
+        await model.start()
+        #expect(model.presentation.stage == .empty(.heldBackUntilTomorrow(8)))
     }
 
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an

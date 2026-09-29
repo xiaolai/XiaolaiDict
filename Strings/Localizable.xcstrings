@@ -114,6 +114,12 @@
     "%lld more due" : {
 
     },
+    "%lld new saved, waiting for tomorrow" : {
+
+    },
+    "%lld new saved, waiting for tomorrow." : {
+
+    },
     "%lld of %lld" : {
       "localizations" : {
         "en" : {

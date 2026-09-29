@@ -103,8 +103,10 @@ actor LedgerStore {
     /// The batch a sitting is offered, and how much did not fit. **Two calls, both in SQL**: a count
     /// taken by subtracting what fitted from what the surface guessed would be wrong the moment a
     /// card became due between them.
-    func dueCards(at when: Date, limit: Int, dictionary: String?) throws -> [StudyCard] {
-        try ledger.dueCards(at: when, limit: limit, dictionary: dictionary)
+    func dueCards(at when: Date, limit: Int, dictionary: String?,
+                  newAllowance: Int, dayStart: Date) throws -> [StudyCard] {
+        try ledger.dueCards(at: when, limit: limit, dictionary: dictionary,
+                            newAllowance: newAllowance, dayStart: dayStart)
     }
 
     func practisableCards(limit: Int, dictionary: String?) throws -> [StudyCard] {
@@ -116,8 +118,10 @@ actor LedgerStore {
         try ledger.practise(cardID: cardID, grade, eventID: eventID, at: when)
     }
 
-    func dueCount(at when: Date, dictionary: String?) throws -> Int {
-        try ledger.dueCount(at: when, dictionary: dictionary)
+    func queueCounts(at when: Date, dictionary: String?, newAllowance: Int,
+                     dayStart: Date) throws -> QueueCounts {
+        try ledger.queueCounts(at: when, dictionary: dictionary, newAllowance: newAllowance,
+                               dayStart: dayStart)
     }
 
     /// Whether the reader has saved anything at all. **A different nothing** from having nothing due,

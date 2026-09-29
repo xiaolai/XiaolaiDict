@@ -95,14 +95,16 @@ struct StudyOrganisationTests {
         try ledger.card(of: note.id, prompt: .production, at: now)
         try ledger.card(of: other.id, prompt: .meaning, at: now)
 
-        let batch = try ledger.dueCards(at: now, limit: 10, dictionary: nil)
+        let batch = try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast)
         #expect(batch.count == 2, "got \(batch.count) cards for 2 notes")
         #expect(Set(batch.map(\.noteID)).count == 2)
         // The sibling is not dropped — it is still due, and the next batch can have it.
         let answered = try #require(batch.first { $0.noteID == note.id })
         _ = try ledger.grade(cardID: answered.id, .good, eventID: UUID(),
                              expectedRevision: answered.revision, at: now, using: try MemoryScheduler())
-        let next = try ledger.dueCards(at: now, limit: 10, dictionary: nil)
+        let next = try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast)
         #expect(next.contains { $0.noteID == note.id }, "the sibling never came back")
     }
 

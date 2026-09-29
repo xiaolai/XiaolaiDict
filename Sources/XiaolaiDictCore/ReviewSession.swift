@@ -26,13 +26,21 @@ public struct ReviewSession: Sendable, Equatable {
     /// one thing a review surface must never say; this is what lets it say "18 more due" instead.
     public let beyondBatch: Int
 
+    /// New cards today's allowance is holding back, when this batch was drawn.
+    ///
+    /// **Separate from `beyondBatch`, because they are different sentences.** Work that did not fit
+    /// is still due now; work the allowance is holding is not late at all. Merging them would make
+    /// the surface offer "review another batch" over cards no batch today will contain.
+    public let heldBack: Int
+
     public init(id: UUID = UUID(), startedAt: Date, cards: [(id: UUID, revision: Int)],
-                beyondBatch: Int = 0) {
+                beyondBatch: Int = 0, heldBack: Int = 0) {
         self.id = id
         self.startedAt = startedAt
         self.presentations = cards.map { Presentation(cardID: $0.id, revision: $0.revision) }
         self.cursor = 0
         self.beyondBatch = beyondBatch
+        self.heldBack = heldBack
     }
 
     /// One card, once, as it was drawn.
@@ -142,7 +150,7 @@ public struct ReviewSession: Sendable, Equatable {
     /// **Never "all done".** A batch is a sitting; the work beyond it is still there, and a surface
     /// that hides it teaches the reader their backlog is smaller than it is.
     public var summary: Summary {
-        Summary(graded: graded, skipped: skipped, stillDue: beyondBatch)
+        Summary(graded: graded, skipped: skipped, stillDue: beyondBatch, heldBack: heldBack)
     }
 
     public struct Summary: Sendable, Equatable {
@@ -151,11 +159,15 @@ public struct ReviewSession: Sendable, Equatable {
         /// Eligible cards that did not fit in this batch, as counted when it was drawn. **A floor, not
         /// a promise**: time has passed, and more may have come due since.
         public let stillDue: Int
+        /// New cards the daily allowance is holding for tomorrow. **Not part of `stillDue`**: they
+        /// are not late, and nothing the reader does today will be offered them.
+        public let heldBack: Int
 
-        public init(graded: Int, skipped: Int, stillDue: Int) {
+        public init(graded: Int, skipped: Int, stillDue: Int, heldBack: Int = 0) {
             self.graded = graded
             self.skipped = skipped
             self.stillDue = stillDue
+            self.heldBack = heldBack
         }
     }
 }

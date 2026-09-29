@@ -156,10 +156,20 @@ public struct ReviewView: View {
         case .nothingEnrolled:
             Text("You have not saved any meanings to study yet.")
                 .font(.system(size: scale.text.body))
+        case .heldBackUntilTomorrow(let count):
+            Text("Nothing is due right now.")
+                .font(.system(size: scale.text.body))
+            // **The specific sentence instead of the general one**, never both: "they come back
+            // when they are due" is a vaguer restatement of what the line above just said exactly.
+            Text("\(count) new saved, waiting for tomorrow.")
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.secondary)
         }
-        Text("Saved meanings come back here when they are due.")
-            .font(.system(size: scale.text.small))
-            .foregroundStyle(.secondary)
+        if !reason.explainsItself {
+            Text("Saved meanings come back here when they are due.")
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
@@ -175,6 +185,14 @@ public struct ReviewView: View {
         }
         if summary.skipped > 0 {
             Text("\(summary.skipped) skipped, still due")
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.secondary)
+        }
+        // **Said, and said differently from "more due".** New words the day's allowance is holding
+        // are not late; without this line a reader who saved thirty and answered five sees twenty-
+        // five words go quiet with no explanation.
+        if summary.heldBack > 0 {
+            Text("\(summary.heldBack) new saved, waiting for tomorrow")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
         }
@@ -230,6 +248,17 @@ public struct ReviewPresentation: Sendable, Equatable {
         /// The reader has not saved anything yet. A different sentence, because "nothing is due" to
         /// someone with no cards reads as a broken feature.
         case nothingEnrolled
+        /// Nothing is askable, but new words are waiting on today's allowance. **A third sentence**,
+        /// because a reader who saved thirty words this afternoon and is told "nothing is due" has
+        /// no way to tell a working cap from a broken save.
+        case heldBackUntilTomorrow(Int)
+
+        /// Whether this reason has already said when the cards come back, so the surface does not
+        /// follow it with a vaguer version of the same sentence.
+        var explainsItself: Bool {
+            if case .heldBackUntilTomorrow = self { return true }
+            return false
+        }
     }
 
     public struct Question: Sendable, Equatable {

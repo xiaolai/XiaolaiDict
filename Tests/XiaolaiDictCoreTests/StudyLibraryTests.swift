@@ -138,7 +138,8 @@ struct StudyLibraryTests {
         try ledger.setEnrollment(.archived, of: note.id)
         #expect(try ledger.library(LibraryQuery()).count == 1)
         #expect(try ledger.library(LibraryQuery(enrollment: [.active])).isEmpty)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty)
     }
 
     /// Study state belongs to one dictionary, and the old collection stays findable after a switch.
@@ -263,10 +264,12 @@ struct StudyLibraryTests {
 
         try ledger.setPaused(true, ofNotes: [note.id])
         let later = now.addingTimeInterval(400 * 86_400)
-        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty)
         #expect(try #require(try ledger.card(id: card.id)).scheduled == scheduled)
         try ledger.setPaused(false, ofNotes: [note.id])
-        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil).count == 1)
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).count == 1)
     }
 
     // MARK: - The two deletions

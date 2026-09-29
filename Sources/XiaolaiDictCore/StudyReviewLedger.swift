@@ -160,8 +160,20 @@ extension Ledger {
     /// `dictionary` scopes to one study namespace — switching the primary starts study over, so the
     /// queue must not mix them. Nil means every namespace, which is the library's view rather than a
     /// session's.
-    public func dueCards(at when: Date, limit: Int, dictionary: String?) throws -> [StudyCard] {
+    ///
+    /// **`newAllowance` rations first introductions, and nothing else** (C08, §10.4). Due work is
+    /// work the reader already took on; only cards they have never seen are capped, and the cap is
+    /// spent by the introductions already made since `dayStart`. Without it a first sitting is ten
+    /// unseen cards, all of which come back tomorrow beside ten more.
+    ///
+    /// `dayStart` comes from a `StudyDay` frozen into the session, never recomputed here: a reader
+    /// who crosses a timezone mid-sitting must not have the boundary move under them, and the
+    /// allowance must not be replenished twice in one real day by travelling.
+    public func dueCards(at when: Date, limit: Int, dictionary: String?,
+                         newAllowance: Int, dayStart: Date) throws -> [StudyCard] {
         guard limit > 0 else { return [] }
+        let spent = try introductions(since: dayStart, dictionary: dictionary)
+        let remaining = max(0, newAllowance - spent)
         let now = when.timeIntervalSince1970
         var bind: [SQLiteValue] = [.real(now), .real(now)]
         var scope = ""
@@ -177,7 +189,7 @@ extension Ledger {
         //
         // The winner is the one the ordering picks — a learning card ahead of its review sibling —
         // which is why it is a correlated `LIMIT 1` and not a `GROUP BY`, whose winner is arbitrary.
-        return try cardsFromJoin("""
+        let found = try cardsFromJoin("""
             JOIN study_notes n ON n.id = c.note_id
             WHERE c.paused = 0
               AND (c.hidden_until IS NULL OR c.hidden_until <= ?1)
@@ -201,6 +213,21 @@ extension Ledger {
                 c.due IS NULL, c.due, c.id
             LIMIT ?\(bind.count)
             """, bind: bind)
+        // **Trimmed here, after the query, and only the new ones.** Expressing "at most N of the
+        // rows whose phase is new" in the same statement means a window function over a set the
+        // `LIMIT` has already cut — and the filter-after-`LIMIT` rule is about dropping rows the
+        // reader asked for, which this does not: a new card over the allowance was never theirs to
+        // be offered today.
+        var kept: [StudyCard] = []
+        var introduced = 0
+        for card in found {
+            if card.scheduled.phase == .new {
+                guard introduced < remaining else { continue }
+                introduced += 1
+            }
+            kept.append(card)
+        }
+        return kept
     }
 
     private func cardsFromJoin(_ clause: String, bind values: [SQLiteValue]) throws -> [StudyCard] {
@@ -522,28 +549,56 @@ extension Ledger {
             origin: answer.origin)
     }
 
-    /// How many cards are eligible now, for a surface that must say what it is not showing.
+    /// What a surface must say about work it is not showing: how much is askable now, and how much
+    /// is only waiting for tomorrow.
     ///
     /// **Counted, not estimated.** "All done today" over a backlog is the one claim a review surface
-    /// may never make, and this is what lets the end of a batch say how much is still there.
-    public func dueCount(at when: Date, dictionary: String?) throws -> Int {
+    /// may never make — and a cap the reader cannot see is the same lie told the other way, since a
+    /// reader who saved thirty words and is offered five has no way to tell rationing from loss.
+    public func queueCounts(at when: Date, dictionary: String?,
+                            newAllowance: Int, dayStart: Date) throws -> QueueCounts {
         let now = when.timeIntervalSince1970
         var bind: [SQLiteValue] = [.real(now), .real(now)]
         var scope = ""
         if let dictionary {
-            scope = "AND n.dictionary = ?"
+            scope = "AND n.dictionary = ?3"
             bind.append(.text(dictionary))
         }
-        var count = 0
+        // **Counted the same way the queue offers them**, or the end of a batch says "18 more due"
+        // over work it will never hand out. New cards beyond today's allowance are not due; they
+        // are tomorrow's.
+        var due = 0, fresh = 0
         try run("""
-            SELECT COUNT(*) FROM study_cards c
+            SELECT SUM(CASE WHEN c.phase = 'new' THEN 0 ELSE 1 END),
+                   SUM(CASE WHEN c.phase = 'new' THEN 1 ELSE 0 END)
+            FROM study_cards c
             JOIN study_notes n ON n.id = c.note_id
             WHERE c.paused = 0
-              AND (c.hidden_until IS NULL OR c.hidden_until <= ?)
-              AND (c.due IS NULL OR c.due <= ?)
+              AND (c.hidden_until IS NULL OR c.hidden_until <= ?1)
+              AND (c.due IS NULL OR c.due <= ?2)
               AND \(Self.askableNotePredicate)
               \(scope)
-            """, bind: bind) { count = $0.integer(0) }
-        return count
+            """, bind: bind) { row in
+            due = row.isNull(0) ? 0 : row.integer(0)
+            fresh = row.isNull(1) ? 0 : row.integer(1)
+        }
+        let spent = try introductions(since: dayStart, dictionary: dictionary)
+        let allowed = min(fresh, max(0, newAllowance - spent))
+        return QueueCounts(due: due + allowed, heldBack: fresh - allowed)
+    }
+}
+
+/// What the queue has, split by whether the reader may be asked it today.
+public struct QueueCounts: Sendable, Equatable {
+    /// Askable now, with the allowance already applied.
+    public let due: Int
+    /// New cards the daily allowance is holding for a later day. **Not a backlog** — nothing is late
+    /// — but not nothing either, and a surface that reports zero over eight of them is why a reader
+    /// would conclude their saved words went missing.
+    public let heldBack: Int
+
+    public init(due: Int, heldBack: Int) {
+        self.due = due
+        self.heldBack = heldBack
     }
 }

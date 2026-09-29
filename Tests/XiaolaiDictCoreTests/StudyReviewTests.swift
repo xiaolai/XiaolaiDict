@@ -207,7 +207,8 @@ struct StudyReviewTests {
         // `fresh` has never been graded at all.
 
         let later = now.addingTimeInterval(400 * 86_400)
-        let queue = try ledger.dueCards(at: later, limit: 10, dictionary: "noad")
+        let queue = try ledger.dueCards(at: later, limit: 10, dictionary: "noad",
+                                        newAllowance: .max, dayStart: .distantPast)
         #expect(queue.map(\.id) == [lapsed.id, old.id, fresh.id],
                 "got \(queue.map { "\($0.scheduled.phase)" })")
     }
@@ -218,16 +219,20 @@ struct StudyReviewTests {
         let card = try ready(ledger)
         _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
                              using: try scheduler())
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty,
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty,
                 "a card just answered is not due again in the same second")
 
         let later = now.addingTimeInterval(400 * 86_400)
-        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil).count == 1)
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).count == 1)
         try ledger.setPaused(true, ofCard: card.id)
-        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty)
         try ledger.setPaused(false, ofCard: card.id)
         try ledger.hide(cardID: card.id, until: later.addingTimeInterval(86_400))
-        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty)
         // **Neither touched the memory**: hiding and pausing are about what is asked, not about `S`.
         #expect(try #require(try ledger.card(id: card.id)).scheduled.state?.stability
             == card.scheduled.state?.stability ?? #require(try ledger.card(id: card.id)).scheduled.state?.stability)
@@ -247,9 +252,12 @@ struct StudyReviewTests {
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
         _ = try ledger.card(of: other.id, at: now)
 
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "noad").count == 1)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "oxford").count == 1)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).count == 2,
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "noad",
+                                        newAllowance: .max, dayStart: .distantPast).count == 1)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "oxford",
+                                        newAllowance: .max, dayStart: .distantPast).count == 1)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).count == 2,
                 "no scope is the library's view, not a session's")
     }
 
@@ -316,7 +324,8 @@ struct StudyReviewTests {
 
         #expect(try ledger.readiness(of: card.noteID) == .needsRepair)
         #expect(try ledger.askableNoteIDs().isEmpty, "the queue admitted a card with a blank answer")
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil).isEmpty)
+        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).isEmpty)
         #expect(throws: ReviewError.notEligible(card.id)) {
             try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
                              at: self.now, using: try self.scheduler())

@@ -31,6 +31,14 @@ final class ReviewModel {
 
     /// How many cards one sitting offers. A bound on the sitting, never on the reader's debt.
     static let batchSize = 10
+    /// **First introductions a day, and nothing else is rationed** (C08). Five is the feature
+    /// ledger's proposal and a guess: ten new cards on Monday are ten reviews on Tuesday and
+    /// twenty by Wednesday, and the number that keeps that bearable has not been measured.
+    static let newCardsPerDay = 5
+
+    /// Frozen when the sitting starts. A reader crossing a timezone mid-session must not have the
+    /// day boundary move under them, and the allowance must not be replenished by travelling.
+    private var studyDay = StudyDay.standard
 
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     private let primary: @MainActor () -> PrimaryDictionary
@@ -79,11 +87,23 @@ final class ReviewModel {
             let ledger = try await opening.value
             let scope = primary().chosen
             let now = clock()
-            let cards = try await ledger.dueCards(at: now, limit: Self.batchSize, dictionary: scope)
-            let total = try await ledger.dueCount(at: now, dictionary: scope)
+            studyDay = .standard
+            let dayStart = studyDay.start(containing: now)
+            let cards = try await ledger.dueCards(at: now, limit: Self.batchSize, dictionary: scope,
+                                                  newAllowance: Self.newCardsPerDay,
+                                                  dayStart: dayStart)
+            let counts = try await ledger.queueCounts(at: now, dictionary: scope,
+                                                      newAllowance: Self.newCardsPerDay,
+                                                      dayStart: dayStart)
             guard !cards.isEmpty else {
-                // **Two different nothings.** A reader with no cards is not a reader who is up to
-                // date, and telling them "nothing is due" reads as a feature that does not work.
+                // **Three different nothings.** A reader with no cards is not a reader who is up to
+                // date, and neither is one whose remaining words are merely waiting for tomorrow —
+                // told "nothing is due", they would read rationing as loss.
+                if counts.heldBack > 0 {
+                    session = nil
+                    presentation = ReviewPresentation(stage: .empty(.heldBackUntilTomorrow(counts.heldBack)))
+                    return
+                }
                 let any = try await ledger.anyNotes()
                 session = nil
                 presentation = ReviewPresentation(stage: .empty(any ? .nothingDue : .nothingEnrolled))
@@ -91,7 +111,7 @@ final class ReviewModel {
             }
             session = ReviewSession(
                 startedAt: now, cards: cards.map { (id: $0.id, revision: $0.revision) },
-                beyondBatch: max(0, total - cards.count))
+                beyondBatch: max(0, counts.due - cards.count), heldBack: counts.heldBack)
             await draw()
         } catch {
             problem = String(localized: "The review could not be started: \(error.localizedDescription)",
