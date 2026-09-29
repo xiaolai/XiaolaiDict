@@ -29,11 +29,16 @@ import Foundation
 /// than about the dictionary, and `Separation` keeps the two apart so a caller cannot mistake a guess for
 /// a publisher's mark.
 ///
-/// **A dictionary stores its keys in lemma form.** `give up` is a key and `gave up` is not, so a caller
-/// normalises each word of the sentence before asking — `Lemmatizer` resolves 8 of 8 measured irregulars
-/// when it has the sentence, which it does here. The words handed in are expected to be already
-/// normalised and case-folded; this type does no language work of its own, because the module deliberately
-/// links nothing but Foundation, Compression, CryptoKit and SQLite3.
+/// **A key is not always in lemma form, so a caller offers every form of each word.** `give up` is a key
+/// and `gave up` is not; `by all accounts` is a key and `by all account` is not. Measured over 116,122
+/// phrases, choosing either alone loses 36,766 — so `match(in: [[String]], containing:)` takes the forms per
+/// position, **written form first**, and the keys decide. The single-form overload is a convenience for a
+/// caller that has only one form.
+///
+/// Words arrive lowercased and split on whitespace, the way `tokens(of:)` splits a key. This type does no
+/// language work of its own — the module deliberately links nothing but Foundation, Compression, CryptoKit
+/// and SQLite3 — and `Lemmatizer.forms(in:)` is what prepares a sentence for it.
+///
 ///
 /// **A span is a candidate, never a verdict.** `AGENTS.md` — *phrase length does not choose the unit…
 /// only the selector collapses the set*. A match is offered beside the hovered word's own senses and the
@@ -144,6 +149,16 @@ public struct PhraseSpans: Sendable, Equatable {
         phrase.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
+    /// Whether a phrase has more than one word, by the **same** rule `tokens(of:)` uses.
+    static func isMultiWord(_ phrase: String) -> Bool {
+        var seen = false
+        for _ in phrase.split(whereSeparator: \.isWhitespace) {
+            if seen { return true }
+            seen = true
+        }
+        return false
+    }
+
     /// The particles a two-word phrasal verb may be broken around.
     ///
     /// **Deliberately short, and shortening it is the safe direction.** Every word here is adverbial in
@@ -178,10 +193,6 @@ public struct PhraseSpans: Sendable, Equatable {
     /// Multi-word keys only, exactly as given — slot forms included.
     public let phrases: Set<String>
 
-    /// The most literal words any one phrase here has. Slots do not count toward it, because a slot
-    /// matches words rather than being one.
-    public let longest: Int
-
     /// Unsorted, and **built on demand**.
     ///
     /// An earlier version constructed every `Template` up front and sorted them by phrase. Both were waste:
@@ -197,12 +208,13 @@ public struct PhraseSpans: Sendable, Equatable {
     let byWord: [String: [Int]]
 
     public init(phrases: Set<String>) {
-        let multiword = phrases.filter { $0.contains(" ") }
+        // `isMultiWord`, not `contains(" ")`: the two disagreed, so a key separated by a tab was rejected
+        // here while `tokens(of:)` would have read it as two words.
+        let multiword = phrases.filter(Self.isMultiWord)
         var list: [String] = []
         list.reserveCapacity(multiword.count)
         var byWord: [String: [Int]] = [:]
         byWord.reserveCapacity(multiword.count)
-        var longest = 1
         for phrase in multiword {
             // **The words, without building the template.** Indexing needs to know which literal words a
             // phrase contains; it does not need the runs-and-gaps structure, which is the allocation-heavy
@@ -217,12 +229,10 @@ public struct PhraseSpans: Sendable, Equatable {
             let index = list.count
             list.append(phrase)
             for word in seen { byWord[word, default: []].append(index) }
-            longest = max(longest, literals)
         }
         self.phrases = multiword
         self.phraseList = list
         self.byWord = byWord
-        self.longest = longest
     }
 
     /// Every multi-word key of one dictionary, read from its key index.
@@ -230,6 +240,10 @@ public struct PhraseSpans: Sendable, Equatable {
     /// `xpointer(` forms are skipped: they are locators into a document, not spellings of a word, and the
     /// same fragments once made sub-entry scoping match the wrong phrase.
     ///
+    /// **The keys alone, which is not what the app uses.** `PhraseInventory` reads these *and* the sub-entry
+    /// labels *and* their meanings, and is what `PhraseReader` is built from; this initialiser is for a caller
+    /// that wants the cheap half on its own. The figures behind that split are in
+    /// `dev-docs/wiring-phrase-lookup.md`.
     public init(bundle: URL) throws {
         try self.init(bundle: bundle, labels: [])
     }
@@ -244,7 +258,7 @@ public struct PhraseSpans: Sendable, Equatable {
     /// a query rather than the 60-second body walk that produced them (measured 2026-09-29).
     public init(bundle: URL, labels: Set<String>) throws {
         self.init(phrases: try Self.keys(in: bundle)
-            .union(labels.map { $0.lowercased() }.filter { $0.contains(" ") }))
+            .union(labels.map { $0.lowercased() }.filter(Self.isMultiWord)))
     }
 
     /// Every multi-word key of one dictionary, without building a matcher around them.
@@ -257,7 +271,7 @@ public struct PhraseSpans: Sendable, Equatable {
         // display forms, so `keys.first` alone loses the spellings a reader actually writes: measured
         // 2026-09-29, 90,391 phrases from the first key against **104,009** from all of them.
         for group in try KeyIndexReader.groups(in: bundle) {
-            for key in group.keys where key.contains(" ") && !key.contains("xpointer(") {
+            for key in group.keys where Self.isMultiWord(key) && !key.contains("xpointer(") {
                 // **Lowercased here.** 8,046 of 116,122 phrases were unreachable for case alone — `5 Eyes`,
                 // `A. A. Milne` — because the reader's sentence arrives case-folded and these did not.
                 found.insert(key.lowercased())
