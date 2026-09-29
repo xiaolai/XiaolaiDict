@@ -82,7 +82,10 @@ final class PinnedNoteController {
 /// nothing about it is assertable from a view, and this is the one line standing between the reader
 /// and a note they cannot tell from a window.
 enum PinnedNoteWindow {
-    static func configure(_ window: NSWindow) {
+    /// **`@MainActor`, because `NSWindow` is.** Without it this compiled with a Swift 6 warning that the
+    /// call was implicitly asynchronous — which is to say the buttons might be hidden after the reader has
+    /// already seen them. A window is configured where windows live.
+    @MainActor static func configure(_ window: NSWindow) {
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window.standardWindowButton(button)?.isHidden = true
         }
