@@ -206,6 +206,19 @@ public struct LibraryView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            // **Absent until there is something to pick.** A tag menu over no tags is a control
+            // that cannot do anything, which reads as one that is broken.
+            if !state.tagVocabulary.isEmpty {
+                Picker("Tag", selection: Binding(
+                    get: { state.tag },
+                    set: { act(.filterTag($0)) })) {
+                    Text("Any tag").tag(String?.none)
+                    ForEach(state.tagVocabulary, id: \.tag) { entry in
+                        Text(verbatim: "\(entry.tag) (\(entry.count))").tag(String?.some(entry.tag))
+                    }
+                }
+                .frame(maxWidth: Token.Library.tagWidth)
+            }
             Spacer(minLength: 0)
             // **Offered, off by default.** The reader's study-scripts setting filters their reading;
             // applying it here unasked would hide scheduled work, and a filtered library and an
@@ -484,6 +497,9 @@ public enum LibraryAction: Sendable, Equatable {
     /// Offer a set-aside word again. "Already know" is a declaration, and a declaration the reader
     /// cannot take back is a trap rather than a preference.
     case unignore(lemma: String, language: String)
+    /// Narrow to one of the reader's own tags, or nil for all of them. **A tag is for finding
+    /// things again**; one that could be written and never searched was half a feature.
+    case filterTag(String?)
     /// Write the collection out. What may leave is decided in `StudyExport`, not here.
     case export
     /// Take up a suggestion, or refuse it. Both are the reader's declaration and both are
@@ -496,6 +512,23 @@ public enum LibraryAction: Sendable, Equatable {
 
 /// What the library draws.
 public struct LibraryPresentation: Sendable, Equatable {
+    /// Hand-written because `tagVocabulary` is an array of tuples, which Swift will not synthesise
+    /// equality for. Every stored property is compared — a hand-written `==` that forgets one is
+    /// a view that stops redrawing for a change it cannot see.
+    public static func == (a: LibraryPresentation, b: LibraryPresentation) -> Bool {
+        a.rows == b.rows && a.total == b.total && a.search == b.search && a.filter == b.filter
+            && a.scriptFiltered == b.scriptFiltered && a.selection == b.selection
+            && a.hasMore == b.hasMore && a.canConfirm == b.canConfirm
+            && a.suggestions == b.suggestions && a.exported == b.exported
+            && a.selectionIsPaused == b.selectionIsPaused
+            && a.selectionIsArchived == b.selectionIsArchived
+            && a.undoable == b.undoable && a.setAside == b.setAside
+            && a.tagVocabulary.map(\.tag) == b.tagVocabulary.map(\.tag)
+            && a.tagVocabulary.map(\.count) == b.tagVocabulary.map(\.count)
+            && a.tag == b.tag && a.retention == b.retention
+            && a.inspector == b.inspector && a.problem == b.problem
+    }
+
     public let rows: [Row]
     public let total: Int
     public let search: String
@@ -519,6 +552,11 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let undoable: Undoable?
     /// What the reader has set aside. Read under the `suggested` filter, beside the suggestions.
     public let setAside: [IgnoredLemma]
+    /// Every tag the reader has used, with how many notes carry it. **Empty until they tag
+    /// something**, so the control is absent rather than present and useless.
+    public let tagVocabulary: [(tag: String, count: Int)]
+    /// The tag the list is narrowed to.
+    public let tag: String?
     /// Delayed recall, **with its denominator**, or nil when nothing has been eligible yet.
     public let retention: Retention?
     /// The one row the reader has open, when exactly one is selected. **Nil for none and for
@@ -538,6 +576,7 @@ public struct LibraryPresentation: Sendable, Equatable {
                 suggestions: [Suggestion] = [], exported: String? = nil,
                 selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
                 undoable: Undoable? = nil, setAside: [IgnoredLemma] = [],
+                tagVocabulary: [(tag: String, count: Int)] = [], tag: String? = nil,
                 retention: Retention? = nil,
                 inspector: Inspector? = nil, problem: String? = nil) {
         self.rows = rows
@@ -554,6 +593,8 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.selectionIsArchived = selectionIsArchived
         self.undoable = undoable
         self.setAside = setAside
+        self.tagVocabulary = tagVocabulary
+        self.tag = tag
         self.retention = retention
         self.inspector = inspector
         self.problem = problem

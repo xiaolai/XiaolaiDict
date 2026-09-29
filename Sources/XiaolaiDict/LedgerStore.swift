@@ -190,6 +190,7 @@ actor LedgerStore {
     func untag(noteID: UUID, _ tag: String) throws { try ledger.untag(noteID: noteID, tag) }
     func timeline(of noteID: UUID) throws -> NoteTimeline { try ledger.timeline(of: noteID) }
     func tags(of noteID: UUID) throws -> [String] { try ledger.tags(of: noteID) }
+    func allTags() throws -> [(tag: String, count: Int)] { try ledger.allTags() }
     func ignoredSuggestions() throws -> [IgnoredLemma] { try ledger.ignoredSuggestions() }
     func unignoreSuggestion(lemma: String, language: String) throws {
         try ledger.unignoreSuggestion(lemma: lemma, language: language)

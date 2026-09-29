@@ -192,7 +192,7 @@ struct ReviewWiringTests {
         defer { cleanSecond() }
         let ledger = try ready(second)
         let card = try #require(try ledger.card(of: try #require(try ledger.notes().first).id, at: now))
-        try ledger.hide(cardID: card.id, until: now.addingTimeInterval(86_400))
+        try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
         let upToDate = model(second)
         await upToDate.start()
         #expect(upToDate.presentation.stage == .empty(.nothingDue))

@@ -230,7 +230,7 @@ struct StudyReviewTests {
         #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty)
         try ledger.setPaused(false, ofCard: card.id)
-        try ledger.hide(cardID: card.id, until: later.addingTimeInterval(86_400))
+        try ledger.postpone(cardID: card.id, until: later.addingTimeInterval(86_400))
         #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty)
         // **Neither touched the memory**: hiding and pausing are about what is asked, not about `S`.
@@ -352,7 +352,7 @@ struct StudyReviewTests {
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: second, at: now)
         try ledger.confirm(noteID: card.noteID, at: now)
         try ledger.setPaused(true, ofCard: card.id)
-        try ledger.hide(cardID: card.id, until: now.addingTimeInterval(86_400))
+        try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
         try ledger.setEnrollment(.archived, of: card.noteID)
         try ledger.setEnrollment(.active, of: card.noteID)
         try ledger.setPaused(false, ofCard: card.id)

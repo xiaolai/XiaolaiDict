@@ -189,9 +189,20 @@ struct LibraryWiringTests {
         model.act(.select([note.id]))
         try await settle { model.presentation.inspector?.tags == ["legal"] }
 
+        // **And it can be searched by.** A tag that can be written and never found again is half
+        // a feature; `allTags` existed with nothing reading it.
+        #expect(model.presentation.tagVocabulary.map(\.tag) == ["legal"])
+        model.act(.filterTag("legal"))
+        try await settle { model.presentation.tag == "legal" && model.presentation.rows.count == 1 }
+        model.act(.filterTag(nil))
+        try await settle { model.presentation.tag == nil }
+
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
         model.act(.untag("legal"))
         try await settle { model.presentation.inspector?.tags.isEmpty == true }
         #expect(try Ledger(path: path).tags(of: note.id).isEmpty)
+        #expect(model.presentation.tagVocabulary.isEmpty, "and the empty tag stops being offered")
     }
 
     /// **"Already know" is reversible** (C05). `unignoreSuggestion` existed and nothing reached

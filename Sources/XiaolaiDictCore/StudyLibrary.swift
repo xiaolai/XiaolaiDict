@@ -20,6 +20,9 @@ public struct LibraryQuery: Sendable, Equatable {
     /// *reading* history; applying it unasked to their card collection hides scheduled work, and an
     /// empty library and a filtered one look exactly alike (M10).
     public var scripts: Set<ProbeScript>?
+    /// One of the reader's own tags, or every note. **A tag is for finding things again**, so it
+    /// belongs in the query rather than being applied to a page afterwards.
+    public var tag: String?
     /// Which state the reader is looking at. **Each is its own predicate** — they were once all
     /// `enrollment = 'active'`, so Paused listed unpaused cards and the label lied about what a
     /// bulk action would reach.
@@ -34,12 +37,13 @@ public struct LibraryQuery: Sendable, Equatable {
 
     public init(text: String = "", dictionary: String? = nil,
                 enrollment: Set<StudyEnrollment>? = nil, scripts: Set<ProbeScript>? = nil,
-                state: State? = nil, now: Date = .now,
+                tag: String? = nil, state: State? = nil, now: Date = .now,
                 limit: Int = 50, after: Cursor? = nil) {
         self.text = text
         self.dictionary = dictionary
         self.enrollment = enrollment
         self.scripts = scripts
+        self.tag = tag
         self.state = state
         self.now = now
         self.limit = limit
@@ -155,6 +159,13 @@ extension Ledger {
                 )
                 """)
             bind.append(.text(Self.jsonArray(of: scripts.map(\.rawValue))))
+        }
+        if let tag = query.tag {
+            conditions.append("""
+                EXISTS (SELECT 1 FROM study_tags t
+                        WHERE t.note_id = n.id AND t.tag = ?\(bind.count + 1))
+                """)
+            bind.append(.text(tag))
         }
         switch query.state {
         case .due:

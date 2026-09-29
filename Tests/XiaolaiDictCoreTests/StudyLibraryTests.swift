@@ -354,6 +354,21 @@ struct StudyLibraryTests {
         #expect(try ledger.allTags().map(\.tag) == ["legal"], "and the empty tag stops being offered")
     }
 
+    /// **A tag is for finding things again**, so it goes in the query like every other filter —
+    /// not applied to a page after the `LIMIT`, which would hand back a short page.
+    @Test func thelibraryCanBeNarrowedToAtag() throws {
+        let ledger = try ledger()
+        let legal = try save(ledger, word: "fine")
+        try save(ledger, word: "hold")
+        try ledger.tag(noteID: legal.id, "legal")
+
+        let rows = try ledger.library(LibraryQuery(tag: "legal"))
+        #expect(rows.map(\.id) == [legal.id])
+        #expect(try ledger.libraryCount(LibraryQuery(tag: "legal")) == 1)
+        #expect(try ledger.library(LibraryQuery(tag: "nobody")).isEmpty)
+        #expect(try ledger.library(LibraryQuery()).count == 2, "and no tag is no narrowing")
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

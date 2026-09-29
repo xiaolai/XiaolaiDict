@@ -20,6 +20,8 @@ final class LibraryModel {
     private var search = ""
     private var filter = LibraryPresentation.Filter.all
     private var scriptFiltered = false
+    /// One of the reader's own tags, or nil for all. Part of the query, never a filter on the page.
+    private var tag: String?
     private var selection: Set<UUID> = []
     /// How many pages the reader has asked for. **Grown rather than offset**, so a card enrolled
     /// while they are reading does not shift a boundary underneath them.
@@ -81,6 +83,7 @@ final class LibraryModel {
         case .search(let text): search = text; pages = 1
         case .filter(let value): filter = value; pages = 1
         case .filterScripts(let on): scriptFiltered = on; pages = 1
+        case .filterTag(let name): tag = name; pages = 1
         case .select(let ids): selection = ids
         case .showMore: pages += 1
         case .confirm:
@@ -193,6 +196,7 @@ final class LibraryModel {
                 tags = try await ledger.tags(of: open)
             }
             let measured = try await ledger.retention(dictionary: nil)
+            let vocabulary = try await ledger.allTags()
             presentation = LibraryPresentation(
                 rows: rows.map { Self.row($0, answer: answers[$0.id]?.text ?? "", at: now) },
                 total: total, search: search, filter: filter, scriptFiltered: scriptFiltered,
@@ -219,6 +223,7 @@ final class LibraryModel {
                 },
                 undoable: undoable?.presentable,
                 setAside: setAside,
+                tagVocabulary: vocabulary, tag: tag,
                 // **Nil over an empty denominator.** A rate nobody has is not 0%.
                 retention: LibraryPresentation.Retention(
                     attempts: measured.attempts, successes: measured.successes,
@@ -298,6 +303,7 @@ final class LibraryModel {
             text: search,
             enrollment: filter == .archived ? [.archived] : nil,
             scripts: scriptFiltered ? scripts : nil,
+            tag: tag,
             state: {
                 switch filter {
                 case .all, .archived, .suggested: nil

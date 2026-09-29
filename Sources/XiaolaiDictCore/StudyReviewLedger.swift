@@ -62,7 +62,11 @@ extension Ledger {
 
     /// Puts a card out of the way until a time, without touching its schedule. The reader saying "not
     /// now" is not the reader saying anything about their memory.
-    public func hide(cardID: UUID, until when: Date?) throws {
+    ///
+    /// **Not `hide`.** A window hides too, and a name two types share cannot be checked for a
+    /// caller by reading the source — `self?.hide()` in the history drawer was enough to report
+    /// this as wired when nothing in the app has ever called it (ADR-0038).
+    public func postpone(cardID: UUID, until when: Date?) throws {
         try run("UPDATE study_cards SET hidden_until = ? WHERE id = ?",
                 bind: [.optionalReal(when?.timeIntervalSince1970), .text(cardID.uuidString)]) { _ in }
     }
