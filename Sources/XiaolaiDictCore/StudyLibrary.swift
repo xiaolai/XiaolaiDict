@@ -55,6 +55,9 @@ public struct LibraryQuery: Sendable, Equatable {
         /// Enrolled and **not** askable — a proposal to confirm, an answer to write, a reading the
         /// reader deleted. The queue skips these silently; this is where they are visible.
         case needsAttention
+        /// Failed on at least `Ledger.repeatedLapseDays` distinct days (R09). **The repair list's
+        /// own rule**, not a second reading of it — `Ledger.lapseDaysExpression` is the one copy.
+        case struggling
     }
 
     public struct Cursor: Sendable, Equatable {
@@ -170,6 +173,17 @@ extension Ledger {
             // Enrolled and not askable. **The same predicate, negated** — not a second opinion
             // about what askable means, which is how two spellings of one rule start to disagree.
             conditions.append("n.enrollment = 'active' AND NOT (\(Ledger.askableNotePredicate))")
+        case .struggling:
+            // In SQL like every other filter, because a page narrowed in Swift after the `LIMIT`
+            // is a short page — and `repeatedlyLapsed` answers card ids, which is a list and not a
+            // predicate. The counting rule itself is shared rather than restated.
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id
+                      AND \(Ledger.lapseDaysExpression(cardAlias: "c")) >= ?\(bind.count + 1)
+                )
+                """)
+            bind.append(.integer(Ledger.repeatedLapseDays))
         case nil:
             break
         }

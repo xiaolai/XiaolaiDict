@@ -137,7 +137,8 @@ extension Ledger {
     ///
     /// Nothing is deleted or rescheduled here. The answer is a list, and what to do about it — edit
     /// the cue, pause it, split the sense — is the reader's.
-    public func repeatedlyLapsed(atLeast days: Int = 4, dictionary: String?) throws -> [UUID] {
+    public func repeatedlyLapsed(atLeast days: Int = Ledger.repeatedLapseDays,
+                                 dictionary: String?) throws -> [UUID] {
         var found: [UUID] = []
         var bind: [SQLiteValue] = [.integer(days)]
         var scope = ""
@@ -148,11 +149,7 @@ extension Ledger {
         try run("""
             SELECT c.id FROM study_cards c
             JOIN study_notes n ON n.id = c.note_id
-            WHERE (
-                SELECT COUNT(DISTINCT date(e.reviewed_at, 'unixepoch', 'localtime'))
-                FROM review_events e
-                WHERE e.card_id = c.id AND e.grade = 1 AND e.voided_at IS NULL AND e.kind = 'graded'
-            ) >= ?1
+            WHERE \(Self.lapseDaysExpression(cardAlias: "c")) >= ?1
             \(scope)
             ORDER BY c.id
             """, bind: bind) { row in
@@ -160,6 +157,29 @@ extension Ledger {
         }
         return found
     }
+
+    /// Distinct days on which this card was failed. **One spelling, used twice** — by the repair
+    /// list above and by the library's *Struggling* filter, which must select the same cards or the
+    /// reader is shown a list that disagrees with itself.
+    ///
+    /// The day boundary is `StudyDay.defaultCutoffHour`, shifted before the date is taken, so a
+    /// reader failing a card at 01:00 and again at 23:00 has had **one** bad day and not two. The
+    /// timezone is SQLite's `localtime`, which is this machine's — a study day carried from another
+    /// timezone is not represented here, and would need the offset passed in.
+    static func lapseDaysExpression(cardAlias card: String) -> String {
+        """
+        (SELECT COUNT(DISTINCT date(e.reviewed_at - \(StudyDay.defaultCutoffHour * 3_600),
+                                    'unixepoch', 'localtime'))
+         FROM review_events e
+         WHERE e.card_id = \(card).id AND e.grade = 1 AND e.voided_at IS NULL
+           AND e.kind = 'graded')
+        """
+    }
+
+    /// Distinct days of failure that make a card one the reader is **struggling** with. A product
+    /// guess, not a measurement, and named here so the repair list and the library filter cannot
+    /// drift apart by one.
+    public static let repeatedLapseDays = 4
 
     // MARK: - What the numbers may claim (U03)
 

@@ -170,6 +170,12 @@ public enum Token {
         /// Cards deeper than this hide exactly behind the last visible one, so a fifty-card pile is
         /// no taller — and no more work to draw — than a three-card one.
         static let pileDepth = 2
+
+        /// How tall the inspector's answer editor is, in lines. **A count, not a height**: it grows
+        /// with the reader's text because the lines do. Three is a definition; eight is where an
+        /// answer has stopped being a card and the editor should scroll rather than the window.
+        static let answerLinesAtLeast = 3
+        static let answerLinesAtMost = 8
     }
 
     /// Opacities, named for what they are dimming.

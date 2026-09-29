@@ -148,6 +148,78 @@ struct LibraryWiringTests {
         #expect(model.presentation.rows.first(where: { $0.id == paused.id })?.status == .paused)
     }
 
+    // MARK: - The inspector
+
+    /// **`setReaderAnswer` had no caller.** A ledger method with tests and no surface is not a
+    /// feature — this is the wire that makes it one, and it asserts the write landed rather than
+    /// that a button exists.
+    @Test func thereaderCanReplaceTheAnswerFromTheInspector() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.inspector == nil, "nothing is selected")
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
+        let inspector = try #require(model.presentation.inspector)
+        #expect(inspector.word == "fine")
+        #expect(inspector.answer == "what fine means")
+        #expect(inspector.isReaders == false, "the dictionary's words, so far")
+
+        model.act(.setAnswer("the money you pay when caught"))
+        try await settle { model.presentation.inspector?.isReaders == true }
+        #expect(model.presentation.inspector?.answer == "the money you pay when caught")
+
+        let reopened = try Ledger(path: path)
+        #expect(try reopened.answer(of: note.id)?.text == "the money you pay when caught")
+        #expect(try reopened.answer(of: note.id)?.origin == .reader)
+    }
+
+    /// **One row, or none.** An inspector over a multiple selection would have to pick a row to
+    /// edit, and the reader cannot see which — so it is absent, and the bulk controls are what a
+    /// multiple selection offers.
+    @Test func theinspectorIsAbsentForAmultipleSelection() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let first = try save(ledger, "fine")
+        let second = try save(ledger, "hold")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([first.id, second.id]))
+        try await settle { model.presentation.selection.count == 2 }
+        #expect(model.presentation.inspector == nil)
+    }
+
+    /// **The struggling filter reaches the query**, and the model does not narrow a page after it.
+    @Test func thestrugglingFilterReachesTheLedger() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let bad = try save(ledger, "recalcitrant")
+        try save(ledger, "easy")
+        let scheduler = try MemoryScheduler()
+        let card = try ledger.card(of: bad.id, at: now)
+        for day in 0..<Ledger.repeatedLapseDays {
+            let revision = try #require(try ledger.card(id: card.id)).revision
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(),
+                                 expectedRevision: revision,
+                                 at: now.addingTimeInterval(Double(day) * 86_400), using: scheduler)
+        }
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.rows.count == 2)
+        model.act(.filter(.struggling))
+        try await settle { model.presentation.filter == .struggling && model.presentation.rows.count == 1 }
+        #expect(model.presentation.rows.first?.word == "recalcitrant")
+        #expect(model.presentation.total == 1, "and the count is the filtered one")
+    }
+
     private func settle(_ condition: @MainActor () -> Bool) async throws {
         for _ in 0..<400 {
             if condition() { return }

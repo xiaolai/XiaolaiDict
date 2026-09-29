@@ -168,6 +168,11 @@ actor LedgerStore {
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
     func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
+    /// The reader's own words, replacing what the card reveals. The encounter's `gloss` — the
+    /// publisher's snapshot — is untouched, so the evidence stays what it was when it was saved.
+    func setReaderAnswer(_ text: String, of noteID: UUID, at when: Date) throws {
+        try ledger.setReaderAnswer(text, of: noteID, at: when)
+    }
     func tag(noteID: UUID, _ tag: String) throws { try ledger.tag(noteID: noteID, tag) }
     func suggestions(limit: Int, language: String?,
                      studying: Set<ProbeScript>) throws -> [Ledger.Suggestion] {

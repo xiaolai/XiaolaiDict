@@ -221,6 +221,70 @@ struct StudyLibraryTests {
         #expect(all.count == 4, "and All is all of them")
     }
 
+    /// **The library's *Struggling* filter and the repair list select the same cards.** R09's
+    /// `repeatedlyLapsed` had no surface at all; giving it one by narrowing a page in Swift would
+    /// have broken the keyset rule, so the lapse count is one SQL expression used in both places.
+    /// Two spellings of "keeps failing" is how a filter and a list start disagreeing in front of
+    /// the reader.
+    @Test func thestrugglingFilterAndTheRepairListAgree() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        let struggling = try save(ledger, word: "recalcitrant")
+        try save(ledger, word: "easy")
+        let card = try ledger.card(of: struggling.id, at: now)
+        for day in 0..<Ledger.repeatedLapseDays {
+            let revision = try #require(try ledger.card(id: card.id)).revision
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(),
+                                 expectedRevision: revision,
+                                 at: now.addingTimeInterval(Double(day) * 86_400),
+                                 using: scheduler)
+        }
+
+        let listed = try ledger.library(LibraryQuery(state: .struggling, now: now))
+        #expect(listed.map(\.id) == [struggling.id], "listed \(listed.map(\.word))")
+        #expect(try ledger.libraryCount(LibraryQuery(state: .struggling, now: now)) == 1)
+        #expect(try ledger.repeatedlyLapsed(dictionary: nil) == [card.id],
+                "and the repair list says the same")
+    }
+
+    /// **The study day's 04:00 cutoff reaches the SQL too**, and this fixture is built to tell the
+    /// two boundaries apart. Four failures on four *calendar* days, but the first two straddle
+    /// local midnight and are one waking evening — three study days, which is under the bar.
+    ///
+    /// A midnight boundary lists this card. That is the whole point of the test: it fails if the
+    /// shift is dropped, which a test of four failures in one afternoon would not.
+    @Test func thelapseCountUsesTheStudyDayAndNotMidnight() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        let note = try save(ledger, word: "fine")
+        let card = try ledger.card(of: note.id, at: now)
+
+        // SQLite's `localtime` is this machine's, so the fixture is built in the same calendar.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let midnight = calendar.startOfDay(for: now)
+        func at(day: Int, hour: Int, minute: Int = 0) throws -> Date {
+            try #require(calendar.date(byAdding: DateComponents(day: day, hour: hour,
+                                                                minute: minute), to: midnight))
+        }
+        func fail(_ when: Date) throws {
+            let revision = try #require(try ledger.card(id: card.id)).revision
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(),
+                                 expectedRevision: revision, at: when, using: scheduler)
+        }
+        try fail(try at(day: 0, hour: 23, minute: 30))   // study day 0, calendar day 0
+        try fail(try at(day: 1, hour: 1, minute: 30))    // study day 0, calendar day 1
+        try fail(try at(day: 2, hour: 12))               // study day 2
+        try fail(try at(day: 3, hour: 12))               // study day 3
+
+        #expect(try ledger.library(LibraryQuery(state: .struggling, now: now)).isEmpty,
+                "four calendar days, but three study days — the small hours are one evening")
+
+        // And the check is not passing because nothing ever matches.
+        try fail(try at(day: 4, hour: 12))
+        #expect(try ledger.library(LibraryQuery(state: .struggling, now: now)).count == 1)
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

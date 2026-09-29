@@ -19,6 +19,9 @@ public struct LibraryView: View {
 
     @State private var revealed: Set<UUID> = []
     @State private var tag = ""
+    /// The inspector's editor, held here rather than in the model: an in-progress edit is not
+    /// state the ledger has any business knowing about until the reader saves it.
+    @State private var draft = ""
 
     public init(state: LibraryPresentation, act: @escaping @MainActor (LibraryAction) -> Void) {
         self.state = state
@@ -40,9 +43,70 @@ public struct LibraryView: View {
                         .padding(.bottom, scale.space.line)
                 }
             }
+            if let inspector = state.inspector {
+                Divider()
+                self.inspector(inspector)
+            }
             Divider()
             footer
         }
+    }
+
+    // MARK: - The one row that is open
+
+    /// **The answer, and the reader's right to replace it.**
+    ///
+    /// Behind the same reveal the rows use: a reader tidying their collection is not reviewing it,
+    /// and a pane that prints the meaning of whatever they click would teach them the answer on the
+    /// way past. Once they have asked, it is an editor rather than a label — replacing the
+    /// publisher's words with their own is the point, not a hidden capability.
+    @ViewBuilder
+    private func inspector(_ inspector: LibraryPresentation.Inspector) -> some View {
+        VStack(alignment: .leading, spacing: scale.space.tight) {
+            HStack(spacing: scale.space.inline) {
+                Text(verbatim: inspector.word)
+                    .font(.system(size: scale.text.body, weight: .medium))
+                // **Whose words these are**, because replacing the publisher's for the first time
+                // and editing your own read identically without it.
+                Text(inspector.isReaders ? "Your own answer" : "From the dictionary")
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            if revealed.contains(inspector.id) {
+                TextField("The answer", text: $draft, axis: .vertical)
+                    .lineLimit(Token.Limit.answerLinesAtLeast...Token.Limit.answerLinesAtMost)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: scale.text.small))
+                HStack(spacing: scale.space.inline) {
+                    Button("Save the answer") { act(.setAnswer(draft)) }
+                        .disabled(!canSave(inspector))
+                    // **Said, not merely disabled.** A button that refuses a click without a reason
+                    // is a broken switch, and "blank" is not guessable from a greyed-out control.
+                    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("An answer cannot be blank.")
+                            .font(.system(size: scale.text.micro))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else {
+                Button("Show the meaning") { revealed.insert(inspector.id) }
+                    .buttonStyle(.link)
+                    .font(.system(size: scale.text.micro))
+            }
+        }
+        .padding(scale.space.padAcross)
+        // **Reset when the row changes, never carried.** A draft left over from the previous
+        // selection would be saved onto this word the moment the reader pressed the button.
+        .onChange(of: inspector.id, initial: true) { draft = inspector.answer }
+        .onChange(of: inspector.answer) { draft = inspector.answer }
+    }
+
+    /// Saveable when there is something to save: not blank, and not what is already stored.
+    private func canSave(_ inspector: LibraryPresentation.Inspector) -> Bool {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && draft != inspector.answer
     }
 
     // MARK: - Finding
@@ -256,6 +320,9 @@ public enum LibraryAction: Sendable, Equatable {
     case removeFromStudy
     /// Label the selection. **Organisation, not a fact about memory** — nothing reschedules.
     case tag(String)
+    /// **The reader's own words, for the one row they have open.** Replaces what the card reveals
+    /// and leaves the encounter's snapshot alone — the dictionary said what it said.
+    case setAnswer(String)
     /// Write the collection out. What may leave is decided in `StudyExport`, not here.
     case export
     /// Take up a suggestion, or refuse it. Both are the reader's declaration and both are
@@ -282,6 +349,10 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let suggestions: [Suggestion]
     /// Where the last export went, once one has been written.
     public let exported: String?
+    /// The one row the reader has open, when exactly one is selected. **Nil for none and for
+    /// several**: an inspector over a multiple selection has to choose a row to edit and the reader
+    /// cannot see which one it chose.
+    public let inspector: Inspector?
     /// Why the list is empty, when the reason is a failure rather than an empty collection.
     ///
     /// **Without this the two are the same screen.** A library that could not be read drew exactly
@@ -293,7 +364,7 @@ public struct LibraryPresentation: Sendable, Equatable {
                 scriptFiltered: Bool = false, selection: Set<UUID> = [],
                 hasMore: Bool = false, canConfirm: Bool = false,
                 suggestions: [Suggestion] = [], exported: String? = nil,
-                problem: String? = nil) {
+                inspector: Inspector? = nil, problem: String? = nil) {
         self.rows = rows
         self.total = total
         self.search = search
@@ -304,19 +375,41 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.canConfirm = canConfirm
         self.suggestions = suggestions
         self.exported = exported
+        self.inspector = inspector
         self.problem = problem
+    }
+
+    /// One row, open for editing.
+    ///
+    /// **`isReaders` is the load-bearing field.** A reader looking at a definition needs to know
+    /// whether they are about to replace the publisher's words with their own for the first time
+    /// or edit something they already wrote, and the two read identically without it.
+    public struct Inspector: Sendable, Equatable, Identifiable {
+        public let id: UUID
+        public let word: String
+        public let answer: String
+        /// Whether the answer shown is the reader's own rather than the dictionary's.
+        public let isReaders: Bool
+
+        public init(id: UUID, word: String, answer: String, isReaders: Bool) {
+            self.id = id
+            self.word = word
+            self.answer = answer
+            self.isReaders = isReaders
+        }
     }
 
     /// The sidebar's states, as one control. **Archived and paused are here**, because the library is
     /// where a reader goes to find what they put away.
     public enum Filter: String, Sendable, CaseIterable {
-        case all, due, needsAttention, paused, archived, suggested
+        case all, due, needsAttention, struggling, paused, archived, suggested
 
         public var name: LocalizedStringKey {
             switch self {
             case .all: "All"
             case .due: "Due"
             case .needsAttention: "Needs attention"
+            case .struggling: "Struggling"
             case .paused: "Paused"
             case .archived: "Archived"
             case .suggested: "Suggested"

@@ -70,6 +70,20 @@ final class LibraryModel {
         case .tag(let text):
             let ids = Array(selection), trimmed = text
             return apply { store in for id in ids { try await store.tag(noteID: id, trimmed) } }
+        case .setAnswer(let text):
+            // **Exactly the row the inspector is showing**, which is the only row there is: the
+            // pane is absent unless the selection is one. Written and the selection kept, because
+            // the reader is still looking at it — `apply` clears, so this does not use it.
+            guard let id = selection.first, selection.count == 1 else { return }
+            let when = clock()
+            guard let opening = store() else { return }
+            Task {
+                if let ledger = try? await opening.value {
+                    try? await ledger.setReaderAnswer(text, of: id, at: when)
+                }
+                await reload()
+            }
+            return
         case .export:
             Task { await export() }
             return
@@ -135,7 +149,10 @@ final class LibraryModel {
                                                    days: $0.distinctDays,
                                                    sources: $0.distinctSources)
                 },
-                exported: exported)
+                exported: exported,
+                // **One row, or none.** An inspector over several would have to choose which one
+                // an edit reaches, and the reader cannot see which it chose.
+                inspector: Self.inspector(of: rows, selection: selection, answers: answers))
         } catch {
             // **Said, not swallowed.** An empty list and a list that could not be read are the same
             // screen otherwise, and the reader is owed the difference.
@@ -185,6 +202,7 @@ final class LibraryModel {
                 case .due: .due
                 case .paused: .paused
                 case .needsAttention: .needsAttention
+                case .struggling: .struggling
                 }
             }(),
             now: clock(),
@@ -197,6 +215,21 @@ final class LibraryModel {
         LibraryPresentation.Row(
             id: row.id, word: row.word, excerpt: row.excerpt, answer: answer,
             status: status(of: row), due: due(of: row, at: now))
+    }
+
+    /// The open row, when exactly one is selected and it is on this page.
+    ///
+    /// **Built from the same `answers` the rows use**, not a second read: the answer the inspector
+    /// edits and the answer the row reveals have to be the same string, and two queries are two
+    /// chances for them not to be.
+    static func inspector(of rows: [LibraryRow], selection: Set<UUID>,
+                          answers: [UUID: StudyAnswer]) -> LibraryPresentation.Inspector? {
+        guard selection.count == 1, let id = selection.first,
+              let row = rows.first(where: { $0.id == id }) else { return nil }
+        let answer = answers[id]
+        return LibraryPresentation.Inspector(
+            id: id, word: row.word, answer: answer?.text ?? "",
+            isReaders: answer?.origin == .reader)
     }
 
     /// Why a card is not being asked, or nil when it simply is.

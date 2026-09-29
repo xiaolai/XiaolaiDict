@@ -15,10 +15,15 @@ public struct StudyDay: Sendable, Equatable, Codable {
     /// The hour a study day starts, local. 4 means 04:00.
     public let cutoffHour: Int
 
-    /// The default: the reader's own timezone, and Anki's cutoff.
-    public static var standard: StudyDay { StudyDay(timeZone: .current, cutoffHour: 4) }
+    /// The hour every part of this app means by "a day", unless it was told otherwise. **One
+    /// spelling**: SQL counting distinct days of failure and Swift counting today's introductions
+    /// must not disagree about when yesterday ended.
+    public static let defaultCutoffHour = 4
 
-    public init(timeZone: TimeZone = .current, cutoffHour: Int = 4) {
+    /// The default: the reader's own timezone, and Anki's cutoff.
+    public static var standard: StudyDay { StudyDay(timeZone: .current, cutoffHour: defaultCutoffHour) }
+
+    public init(timeZone: TimeZone = .current, cutoffHour: Int = StudyDay.defaultCutoffHour) {
         self.timeZone = timeZone
         // A cutoff outside the clock is a setting nobody can act on; clamped rather than refused,
         // because this is a preference and not a boundary anything hostile reaches.
