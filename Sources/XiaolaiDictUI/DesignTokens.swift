@@ -57,6 +57,17 @@ public enum Token {
         public static let height: CGFloat = 320
     }
 
+    /// The library window, where the reader takes stock. **Public** for the same reason as
+    /// `Review`: the scene that opens it lives in the app target, and a window's opening size is a
+    /// design value rather than a literal for a scene to invent.
+    public enum Library {
+        /// The search field's width. Wide enough for a phrase, narrow enough that the state filter
+        /// beside it is not pushed off the edge at the largest text size.
+        static let searchWidth: CGFloat = 240
+        public static let width: CGFloat = 720
+        public static let height: CGFloat = 480
+    }
+
     enum Panel {
         /// What the lookup window **opens** at, before the card has laid itself out — the scene
         /// is `.contentSize`, so the card's own width and its content decide the rest.
@@ -144,6 +155,10 @@ public enum Token {
 
     /// Counts, not lengths. How many of a thing is shown does not change with how large it is.
     enum Limit {
+        /// How much of the reader's own sentence a library row shows. Two lines: enough to
+        /// recognise the row, not enough to read instead of reviewing.
+        static let excerptLines = 2
+
         /// The most any label wraps to. Enough of a sentence to be a cue, not so much that a card
         /// becomes a paragraph.
         static let wrapLines = 2

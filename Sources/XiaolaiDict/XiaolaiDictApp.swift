@@ -359,6 +359,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         WindowActions.shared.openWindow(id: XiaolaiDictScene.reviewID)
     }
 
+    /// Opens the Library and brings it forward — a window the reader chose, and types into.
+    func showLibrary() {
+        log.notice("library: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
+        NSApplication.shared.activate()
+        WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
+    }
+
     func showSetup() {
         // Logged, because "the board did not come forward" has two very different causes — the
         // request never arrived, or it arrived and activation was refused — and only the app can
@@ -448,6 +455,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// itself: tracking it here would invalidate every scene in the app's body whenever a review
     /// card changed — the defect this file already carries a note about, one window over.
     @ObservationIgnored lazy var reviewModel = ReviewModel(
+        store: { [weak self] in self?.recorder.store })
+
+    /// The Library window's model, kept for the same reason.
+    @ObservationIgnored lazy var libraryModel = LibraryModel(
         store: { [weak self] in self?.recorder.store })
 
     /// What the settings window is showing — which pane, and the permission probe's last answer.

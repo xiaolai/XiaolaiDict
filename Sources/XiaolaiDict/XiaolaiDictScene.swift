@@ -27,6 +27,7 @@ struct XiaolaiDictScene: App {
     static let lookupTitle = "XiaolaiDict"
     static let setupID = "setup"
     static let reviewID = "review"
+    static let libraryID = "library"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -116,6 +117,16 @@ struct XiaolaiDictScene: App {
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
         .defaultSize(width: Token.Review.width, height: Token.Review.height)
+
+        // Where the reader takes stock. Resizable, because a list is a surface they will want
+        // bigger; the Review window is not, because a card is as big as a card.
+        Window("Library", id: Self.libraryID) {
+            LibrarySceneView(model: delegate.libraryModel)
+                .xiaolaiDictAppearance(delegate.appearance)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .defaultSize(width: Token.Library.width, height: Token.Library.height)
 
         // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
         // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it

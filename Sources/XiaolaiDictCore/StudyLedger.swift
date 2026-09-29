@@ -240,37 +240,43 @@ extension Ledger {
             """,
             bind: values
         ) { row in
-            // A row whose stored value this build does not know is **skipped, not guessed at**. It can
-            // only come from a newer build writing a kind this one has never heard of, and inventing a
-            // target for it would put a card in front of the reader that nothing here understands.
-            guard let kind = StudyTarget.Kind(rawValue: try row.text(1)),
-                  let issuer = KeyIssuer(rawValue: try row.text(2)),
-                  let enrollment = StudyEnrollment(rawValue: try row.text(9)),
-                  let id = UUID(uuidString: try row.text(0))
-            else { return }
-            // Every column read before the target is built: a throwing call inside the expression
-            // would have to be spelled once per branch, and the branch that forgot would read a
-            // column the projection does not have.
-            let dictionary = try row.text(4), entryID = try row.text(5)
-            let senseKey = try row.text(6), storedKind = try row.text(7), phraseText = try row.text(8)
-            let target: StudyTarget? =
-                switch kind {
-                case .sense:
-                    SenseKeyKind(rawValue: storedKind).map {
-                        .sense(dictionary: dictionary, entryID: entryID, senseKey: senseKey,
-                               senseKeyKind: $0)
-                    }
-                case .entry: .entry(dictionary: dictionary, entryID: entryID)
-                case .phrase: .phrase(dictionary: dictionary, text: phraseText)
-                }
-            guard let target else { return }
-            found.append(StudyNote(
-                id: id, target: target, issuer: issuer, language: try row.text(3),
-                enrollment: enrollment,
-                confirmedAt: row.isNull(10) ? nil : Date(timeIntervalSince1970: row.real(10)),
-                createdAt: Date(timeIntervalSince1970: row.real(11))))
+            if let note = try Self.note(from: row) { found.append(note) }
         }
         return found
+    }
+
+    /// One `StudyNote` out of the twelve columns every note query projects first.
+    ///
+    /// **One builder**, so the library and `notes(where:)` cannot come to disagree about what a row
+    /// means — the same reason the reading projection has one.
+    ///
+    /// A row whose stored value this build does not know is **skipped, not guessed at**. It can only
+    /// come from a newer build writing a kind this one has never heard of, and inventing a target for
+    /// it would put a card in front of the reader that nothing here understands.
+    static func note(from row: Row) throws -> StudyNote? {
+        guard let kind = StudyTarget.Kind(rawValue: try row.text(1)),
+              let issuer = KeyIssuer(rawValue: try row.text(2)),
+              let enrollment = StudyEnrollment(rawValue: try row.text(9)),
+              let id = UUID(uuidString: try row.text(0))
+        else { return nil }
+        let dictionary = try row.text(4), entryID = try row.text(5)
+        let senseKey = try row.text(6), storedKind = try row.text(7), phraseText = try row.text(8)
+        let target: StudyTarget? =
+            switch kind {
+            case .sense:
+                SenseKeyKind(rawValue: storedKind).map {
+                    .sense(dictionary: dictionary, entryID: entryID, senseKey: senseKey,
+                           senseKeyKind: $0)
+                }
+            case .entry: .entry(dictionary: dictionary, entryID: entryID)
+            case .phrase: .phrase(dictionary: dictionary, text: phraseText)
+            }
+        guard let target else { return nil }
+        return StudyNote(
+            id: id, target: target, issuer: issuer, language: try row.text(3),
+            enrollment: enrollment,
+            confirmedAt: row.isNull(10) ? nil : Date(timeIntervalSince1970: row.real(10)),
+            createdAt: Date(timeIntervalSince1970: row.real(11)))
     }
 
     /// The columns a target occupies, and the ones it must leave empty. **One place**, so the insert and
@@ -480,16 +486,16 @@ extension Ledger {
     public func readiness(of noteID: UUID, senseHashNow: String? = nil) throws -> StudyReadiness {
         let notes = try notes(where: "WHERE id = ?", bind: [.text(noteID.uuidString)])
         guard let note = notes.first else { return .needsRepair }
-        guard let answer = try answer(of: noteID), answer.isUsable else { return .needsRepair }
-        if let senseHashNow, let recorded = answer.senseHash, senseHashNow != recorded {
-            return .needsRepair
-        }
-        // No reading evidences it any more: the answer survived and the question did not.
-        guard try !lookupIDs(evidencing: noteID).isEmpty else { return .needsRepair }
-        guard note.confirmedAt != nil else { return .needsConfirmation }
-        // An entry rung carrying the dictionary's own text is not a sense-specific answer — the whole
-        // entry is too broad for "what does this mean here?" — so it waits for the reader to narrow it.
-        if case .entry = note.target, answer.origin == .dictionary { return .needsConfirmation }
-        return .ready
+        let answer = try answer(of: noteID)
+        return StudyReadiness.of(StudyReadiness.Facts(
+            isConfirmed: note.confirmedAt != nil,
+            hasUsableAnswer: answer?.isUsable ?? false,
+            answerIsPublishers: answer?.origin == .dictionary,
+            isEntryRung: { if case .entry = note.target { return true } else { return false } }(),
+            hasReading: try !lookupIDs(evidencing: noteID).isEmpty,
+            senseMoved: {
+                guard let senseHashNow, let recorded = answer?.senseHash else { return false }
+                return senseHashNow != recorded
+            }()))
     }
 }

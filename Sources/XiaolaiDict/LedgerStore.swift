@@ -136,6 +136,21 @@ actor LedgerStore {
         try ledger.undoLatestReview(ofCard: cardID, at: when)
     }
 
+    // MARK: - Library
+
+    func library(_ query: LibraryQuery) throws -> [LibraryRow] { try ledger.library(query) }
+    func libraryCount(_ query: LibraryQuery) throws -> Int { try ledger.libraryCount(query) }
+    func answer(of noteID: UUID) throws -> StudyAnswer? { try ledger.answer(of: noteID) }
+    func answers(of ids: [UUID]) throws -> [UUID: StudyAnswer] { try ledger.answers(of: ids) }
+    func setPaused(_ paused: Bool, ofNotes ids: [UUID]) throws {
+        try ledger.setPaused(paused, ofNotes: ids)
+    }
+    func setEnrollment(_ enrollment: StudyEnrollment, ofNotes ids: [UUID]) throws {
+        try ledger.setEnrollment(enrollment, ofNotes: ids)
+    }
+    func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
+    func deleteReading(lookups ids: [Int]) throws { try ledger.deleteReading(lookups: ids) }
+
     /// A lookup the reader did not mean to make. The senses met in it go with it.
     func delete(lookup id: Int) throws {
         try ledger.delete(lookup: id)

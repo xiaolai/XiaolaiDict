@@ -232,3 +232,47 @@ public struct StudyAnswer: Sendable, Equatable {
     /// "empty graded answer" the feature ledger's K04 refuses.
     public var isUsable: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
+
+extension StudyReadiness {
+    /// The facts a verdict is made of, gathered wherever the caller can gather them.
+    ///
+    /// **Split from the decision on purpose.** The verdict is wanted in three places — one note at a
+    /// time, a page of a hundred in the library, and a SQL predicate the queue cannot leave to Swift —
+    /// and three copies of the *rule* is how they come to disagree. The rule is `of(_:)`; the
+    /// gathering is whatever each caller can afford. The SQL spelling is the one copy that cannot be
+    /// avoided, and `thequeueAndReadinessAgree` is what holds it to this.
+    public struct Facts: Sendable, Equatable {
+        public let isConfirmed: Bool
+        public let hasUsableAnswer: Bool
+        /// Whether the answer is the dictionary's text rather than the reader's own.
+        public let answerIsPublishers: Bool
+        public let isEntryRung: Bool
+        /// Whether any reading still evidences it. A note whose readings the reader deleted has no cue.
+        public let hasReading: Bool
+        /// Whether the sense's text has changed under a stored key. **Only ever true on evidence**: a
+        /// dictionary that could not be asked has said nothing.
+        public let senseMoved: Bool
+
+        public init(isConfirmed: Bool, hasUsableAnswer: Bool, answerIsPublishers: Bool,
+                    isEntryRung: Bool, hasReading: Bool, senseMoved: Bool) {
+            self.isConfirmed = isConfirmed
+            self.hasUsableAnswer = hasUsableAnswer
+            self.answerIsPublishers = answerIsPublishers
+            self.isEntryRung = isEntryRung
+            self.hasReading = hasReading
+            self.senseMoved = senseMoved
+        }
+    }
+
+    /// The one place the verdict is decided.
+    public static func of(_ facts: Facts) -> StudyReadiness {
+        guard facts.hasUsableAnswer else { return .needsRepair }
+        if facts.senseMoved { return .needsRepair }
+        guard facts.hasReading else { return .needsRepair }
+        guard facts.isConfirmed else { return .needsConfirmation }
+        // The dictionary's whole entry is too broad for "what does this mean here?", so an entry rung
+        // carrying it waits for the reader to narrow it.
+        if facts.isEntryRung, facts.answerIsPublishers { return .needsConfirmation }
+        return .ready
+    }
+}

@@ -57,6 +57,7 @@ struct XiaolaiDictMenu: View {
         // Above the dictionary picker, because reviewing is what the reader came to do and choosing
         // a dictionary is a setting they touch once.
         Button("Review…") { app.showReview() }
+        Button("Library…") { app.showLibrary() }
 
         studyFrom
 

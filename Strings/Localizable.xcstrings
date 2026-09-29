@@ -93,6 +93,9 @@
         }
       }
     },
+    "%lld cards" : {
+
+    },
     "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
 
     },
@@ -115,6 +118,9 @@
     "%lld reviewed" : {
 
     },
+    "%lld selected" : {
+
+    },
     "%lld skipped, still due" : {
 
     },
@@ -128,6 +134,9 @@
 
     },
     "A hover only fires when you ask with the key and the pointer has stopped. There is no setting for asking with nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
+
+    },
+    "A meaning you save while reading appears here." : {
 
     },
     "A menu-bar dictionary for macOS." : {
@@ -154,10 +163,22 @@
     "Added to study" : {
 
     },
+    "All" : {
+
+    },
+    "Already known" : {
+
+    },
     "Always" : {
 
     },
     "An entry in %@ could not be read, so what is shown is not all of it." : {
+
+    },
+    "Archive %lld" : {
+
+    },
+    "Archived" : {
 
     },
     "Ask Again" : {
@@ -211,10 +232,16 @@
     "Clear" : {
 
     },
+    "Clear the search" : {
+
+    },
     "Comfortable" : {
 
     },
     "Compact" : {
+
+    },
+    "Confirm the meaning" : {
 
     },
     "Copy the word and this sense" : {
@@ -260,6 +287,9 @@
           }
         }
       }
+    },
+    "Due" : {
+      "comment" : "A library row for an overdue card"
     },
     "Everything needed has been granted." : {
       "comment" : "Permissions pane, when nothing is missing"
@@ -337,6 +367,12 @@
     "Latin — English and most European languages" : {
 
     },
+    "Library" : {
+
+    },
+    "Library…" : {
+
+    },
     "Licence" : {
 
     },
@@ -385,11 +421,17 @@
     "Needed" : {
 
     },
+    "Needs attention" : {
+
+    },
     "Never look up in these apps" : {
 
     },
     "Never look up on these sites" : {
 
+    },
+    "New" : {
+      "comment" : "A library row for a card that has never been reviewed"
     },
     "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, then choose Check again." : {
 
@@ -442,6 +484,9 @@
     "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
 
     },
+    "Nothing matches." : {
+
+    },
     "Nothing read yet" : {
       "comment" : "Drawer notice when nothing has been looked up yet"
     },
@@ -463,6 +508,9 @@
     "Only a compact voice is installed for this language. Better ones are a free download in System Settings → Accessibility → Spoken Content." : {
 
     },
+    "Only my study scripts" : {
+
+    },
     "Open Dictionary…" : {
 
     },
@@ -482,6 +530,12 @@
 
     },
     "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
+
+    },
+    "Pause %lld" : {
+
+    },
+    "Paused" : {
 
     },
     "Permissions" : {
@@ -524,6 +578,9 @@
 
     },
     "Remove" : {
+
+    },
+    "Remove %lld from study" : {
 
     },
     "Remove from history" : {
@@ -571,6 +628,9 @@
     "Screen Recording is off — hover cannot read the screen" : {
       "comment" : "Menu warning when only Screen Recording is missing"
     },
+    "Search" : {
+
+    },
     "Select a word anywhere and press %@." : {
 
     },
@@ -592,6 +652,9 @@
     "Shortcut" : {
 
     },
+    "Show" : {
+
+    },
     "Show All" : {
       "comment" : "Fans a day's pile of cards out"
     },
@@ -599,6 +662,9 @@
       "comment" : "Closes a day's pile of cards"
     },
     "Show the answer" : {
+
+    },
+    "Show the meaning" : {
 
     },
     "Show the time a word was looked up" : {
@@ -864,6 +930,9 @@
 
     },
     "You have not saved any meanings to study yet." : {
+
+    },
+    "You have not saved any meanings yet." : {
 
     },
     "You recalled it before revealing the answer" : {
