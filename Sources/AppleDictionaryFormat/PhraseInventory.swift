@@ -2,11 +2,12 @@ import Foundation
 
 /// Every phrase one dictionary knows, **and what each one means**.
 ///
-/// **The artefact the phrase feature actually needs, and it is small.** Measured on NOAD 2026-09-29:
-/// **9,743 phrases with their meanings in 632 KB, read in 7.0 s.** For comparison, the full index is
-/// 319 MB and minutes, and `EntryIndexer` over the same body is **109 s** — 102 of those seconds spent on
-/// sense keys, content hashes and ordinals that a phrase list has no use for. Reading the phrases with the
-/// indexer because the indexer was already written is what made this look expensive.
+/// **The artefact the phrase feature actually needs, and it is small.** Measured 2026-09-29 over the three
+/// dictionaries that serve a Simplified reader: **103,517 phrases, 9,740 of them explained, 2,080 KB across
+/// three files**, read cold in 19 s and from the store in 0.5 s. For comparison the full index is 319 MB and
+/// minutes, and `EntryIndexer` over the same bodies costs **109 s for NOAD alone** — 102 of those seconds
+/// spent on sense keys, content hashes and ordinals that a phrase list has no use for. Reading the phrases
+/// with the indexer because the indexer was already written is what made this look expensive.
 ///
 /// Two things follow from being cheap. The phrase feature stops depending on the index — which a reader may
 /// not have, and which refuses a schema it does not know — and it stops needing `EntryDocument` to learn
@@ -54,6 +55,9 @@ public struct PhraseInventory: Sendable, Equatable {
         try ContainerReader.forEachEntry(in: bundle.url) { xhtml in
             // The prefilter, and it is where the time goes. Without it every entry is scanned for a
             // structure five sixths of them do not have.
+            // Parsing costs more than a substring test, and five sixths of entries hold no sub-entry at all —
+            // only 16,099 of NOAD's 111,606. The class name is what the walk looks for, so this is the same
+            // question asked cheaply first.
             guard xhtml.contains(Self.labelClass) else { return }
             for (phrase, meaning) in Self.subEntries(in: xhtml) where meanings[phrase] == nil {
                 meanings[phrase] = meaning
@@ -78,12 +82,24 @@ public struct PhraseInventory: Sendable, Equatable {
     /// the search keys made every stored inventory wrong and nothing noticed — the bytes had not moved, so the
     /// cache stayed current and 8,046 phrases went on being unreachable with the fix already in the binary.
     /// That is the same failure the index's `user_version` exists for, one level up.
-    static let formatVersion = "phrases/2"
+    ///
+    /// **It has already been forgotten once, in the session that wrote the rule.** Extraction changed twice
+    /// — bounding the definition, then reading the label from its own text span — and this was bumped once,
+    /// so a file written by the broken intermediate was accepted as current and `kick the bucket` reached the
+    /// wire with no meaning. What caught it was not this comment but
+    /// `PhraseCandidateTests.everyPhraseIsClassifiedByWhoseEntryAnsweredIt`, which names four phrases and
+    /// asserts each arrives explained. A version a person must remember to bump needs an assertion that does
+    /// not; that test is it.
+    static let formatVersion = "phrases/5"
 
     public func encoded() -> String {
-        var lines = ["\(Self.formatVersion)\t\(contentVersion)"]
-        lines.reserveCapacity(phrases.count + 1)
-        for phrase in phrases.sorted() {
+        // **The row count is in the header, so a truncated file is refused rather than read short.**
+        // Validating only the header accepted a valid line followed by half the data, and `contentVersion`
+        // then matched — so an inventory missing most of its phrases was treated as current for ever.
+        let writable = phrases.sorted().filter { !$0.contains("\t") && !$0.contains("\n") }
+        var lines = ["\(Self.formatVersion)\t\(contentVersion)\t\(writable.count)"]
+        lines.reserveCapacity(writable.count + 1)
+        for phrase in writable {
             // **A phrase carrying a tab or a newline is skipped, not escaped.** It would split into two
             // fields or two lines and come back as a phrase nothing matches; no key measured contains one,
             // and an escape scheme for a case that does not arise is a parser nobody has tested.
@@ -99,8 +115,9 @@ public struct PhraseInventory: Sendable, Equatable {
     public init?(decoding text: String) {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         guard let header = lines.first else { return nil }
-        let fields = header.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-        guard fields.count == 2, fields[0] == Self.formatVersion else { return nil }
+        let fields = header.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == 3, fields[0] == Self.formatVersion,
+              let declared = Int(fields[2]) else { return nil }
         lines.removeFirst()
         var phrases = Set<String>()
         var meanings: [String: String] = [:]
@@ -111,67 +128,59 @@ public struct PhraseInventory: Sendable, Equatable {
             phrases.insert(String(phrase))
             if parts.count == 2, !parts[1].isEmpty { meanings[String(phrase)] = String(parts[1]) }
         }
+        // Short of what the header promised means the file was cut; refused, so the next launch rebuilds.
+        guard phrases.count == declared else { return nil }
         self.init(contentVersion: String(fields[1]), phrases: phrases, meanings: meanings)
     }
 
-    /// The sub-entry label's class, and the definition's.
+    /// The sub-entry block, its label's text span, and its definition — by class.
     ///
-    /// **`class="df"`, not the `d:def` attribute.** A sub-entry's definition span carries only the class —
-    /// which is the same reason reading `d:def` reaches 74.6% of NOAD's definitions and `class="df"` reaches
-    /// nearly all. A first version searched for the attribute and found **zero** phrases in 111,606 entries,
-    /// which is what a wrong selector looks like: not an error, an empty answer.
+    /// **`x_xoh` is the label and `l` is its text.** Some labels put both classes on the text span;
+    /// others make `x_xoh` a wrapper holding the text *and the pronunciation*, so the text is always the
+    /// `l` span where there is one.
+    static let blockClass = "subEntry"
     static let labelClass = "x_xoh"
+    static let labelTextClass = "l"
     static let definitionClass = "df"
 
-    /// One entry's sub-entries: the label, and the first definition under it.
+    /// One entry's sub-entries: the label, and the first definition inside the same block.
     ///
-    /// Multi-word only. A one-word sub-entry is a derived form — *bucketful* under *bucket* — not a phrase a
-    /// reader meets mid-sentence and fails to notice.
+    /// **Parsed, not scanned.** Three rounds of audit found three holes in a hand-rolled scan of this
+    /// markup — a definition bleeding in from the next sub-entry, a nested span truncating the text, a
+    /// self-closing `<span/>` swallowing the block — and each patch exposed the next: a `>` inside an
+    /// attribute value, a class name matched inside `title=`, `data_class` read as `class`. That is a
+    /// scanner re-deriving XML one defect at a time. `EntryTree` is the module's own `XMLParser` walk; it
+    /// knows elements from attributes, decodes character references, and has tests of its own.
+    ///
+    /// Multi-word labels only. A one-word sub-entry is a derived form — *bucketful* under *bucket* — not a
+    /// phrase a reader meets mid-sentence and fails to notice.
     static func subEntries(in xhtml: String) -> [(String, String)] {
+        guard let tree = EntryTree.parse(xhtml) else { return [] }
         var found: [(String, String)] = []
-        var scanner = xhtml.startIndex
-        while let hit = xhtml.range(of: labelClass, range: scanner ..< xhtml.endIndex) {
-            scanner = hit.upperBound
-            // **A whole class token, never a prefix.** `class="sn x_xoh"` and `class="l x_xoh"` are both
-            // real spellings, so anchoring on `class="x_xoh` found 11 of `take`'s labels where the whole-word
-            // test finds every one. The project's own rule, and this is the third place it has bitten.
-            guard isWholeToken(at: hit, in: xhtml),
-                  let label = element(after: hit.upperBound, in: xhtml),
-                  label.text.contains(" "),
-                  let definition = xhtml.range(of: "class=\"\(definitionClass)\"",
-                                               range: label.end ..< xhtml.endIndex),
-                  let meaning = element(after: definition.upperBound, in: xhtml),
-                  !meaning.text.isEmpty
+        // Maximal blocks: a sub-entry nested inside another is reached through its parent, and taking both
+        // would attribute the inner one's definition twice.
+        for block in tree.root.maximalDescendants(where: { $0.classes.contains(blockClass) }) {
+            guard let label = block.firstDescendant(where: { $0.classes.contains(labelClass) }) else { continue }
+            let text = collapsed(
+                label.firstDescendant(where: { $0.classes.contains(labelTextClass) })?.text ?? label.text)
+            guard PhraseSpans.isMultiWord(text) else { continue }
+            // **Inside this block only.** Searching past it gave a sub-entry with no definition of its own
+            // the *following* one's — the wrong meaning under the right words.
+            guard let definition = block.firstDescendant(where: { $0.classes.contains(definitionClass) })
             else { continue }
-            found.append((label.text.lowercased(), meaning.text))
+            let meaning = collapsed(definition.text)
+            guard !meaning.isEmpty else { continue }
+            found.append((text.lowercased(), meaning))
         }
         return found
     }
 
-    /// Whether the class name found at `range` is a whole token rather than part of a longer one.
-    private static func isWholeToken(at range: Range<String.Index>, in xhtml: String) -> Bool {
-        let after = range.upperBound < xhtml.endIndex ? xhtml[range.upperBound] : " "
-        let before = range.lowerBound > xhtml.startIndex
-            ? xhtml[xhtml.index(before: range.lowerBound)] : " "
-        return (after == "\"" || after == " ") && (before == "\"" || before == " ")
-    }
-
-    /// The text of the element whose opening tag contains `from`, and where that element ends.
-    private static func element(after from: String.Index, in xhtml: String) -> (text: String, end: String.Index)? {
-        guard let tag = xhtml.range(of: ">", range: from ..< xhtml.endIndex),
-              let shut = xhtml.range(of: "</span>", range: tag.upperBound ..< xhtml.endIndex)
-        else { return nil }
-        return (stripped(xhtml[tag.upperBound ..< shut.lowerBound]), shut.upperBound)
-    }
-
-    /// Markup removed, whitespace collapsed to one space and trimmed. A label arrives as
-    /// `take something into account ` with a trailing space, and a key with one is a key nothing matches.
-    private static func stripped(_ markup: Substring) -> String {
-        var text = String(markup)
-        while let open = text.range(of: "<"),
-              let shut = text.range(of: ">", range: open.lowerBound ..< text.endIndex) {
-            text.removeSubrange(open.lowerBound ..< shut.upperBound)
-        }
-        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// Whitespace collapsed to one space and trimmed. A label arrives as `take something into account `
+    /// with a trailing space, and a key with one is a key nothing matches.
+    ///
+    /// No tag stripping: `EntryNode.text` is text, and character references are already decoded by the
+    /// parser — which is also why `one&apos;s` needs no special handling here.
+    private static func collapsed(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }

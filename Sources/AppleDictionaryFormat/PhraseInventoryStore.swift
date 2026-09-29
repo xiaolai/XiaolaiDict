@@ -33,15 +33,21 @@ public struct PhraseInventoryStore: Sendable {
     @discardableResult
     public func inventory(for bundle: DictionaryBundle) throws -> PhraseInventory {
         let wanted = bundle.contentVersion()
-        if let stored = try? read(bundle.identifier), stored.contentVersion == wanted { return stored }
+        if let stored = read(bundle.identifier), stored.contentVersion == wanted { return stored }
         let fresh = try PhraseInventory.read(bundle)
+        // **The inventory is returned whether or not it could be stored.** A failed write costs the next
+        // launch another body walk; refusing to answer would cost the reader their phrases outright. The
+        // error is dropped *here*, at the one place that knows that trade, rather than inside `write`.
         try? write(fresh, for: bundle.identifier)
         return fresh
     }
 
     /// What is on disk for `identifier`, whatever version it is. Nil where there is nothing, or where the
     /// file cannot be read as one — a truncated write is not a valid inventory.
-    public func read(_ identifier: String) throws -> PhraseInventory? {
+    /// Not `throws`: every way this can fail — no file, unreadable, unparsable, truncated — means one thing
+    /// to every caller, which is "no usable cache, read the body". A declared error path the body suppresses
+    /// is one callers must handle and nothing can reach.
+    public func read(_ identifier: String) -> PhraseInventory? {
         let url = file(for: identifier)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
@@ -53,9 +59,19 @@ public struct PhraseInventoryStore: Sendable {
         // **Written whole, then moved into place.** A reader who quits mid-write would otherwise leave a
         // half-file that decodes as nothing and is re-read every launch — the failure would be a feature
         // that silently costs seven seconds for ever rather than one that is noticed.
-        let staged = file(for: identifier).appendingPathExtension("staging")
+        // **A staging path of this writer's own.** One shared `.staging` name lets two writers — the
+        // app's service and the index tool, which share this directory — replace or consume each other's
+        // file mid-publish. `.atomic` protects one write, not the write-then-replace pair.
+        let staged = file(for: identifier).appendingPathExtension("staging-\(UUID().uuidString)")
         try Data(inventory.encoded().utf8).write(to: staged, options: .atomic)
-        _ = try? FileManager.default.replaceItemAt(file(for: identifier), withItemAt: staged)
+        do {
+            _ = try FileManager.default.replaceItemAt(file(for: identifier), withItemAt: staged)
+        } catch {
+            // **Reported, not swallowed.** `try?` here made `write` claim success when publication failed, so
+            // the reader paid the body walk again on every launch with nothing in the log to say why.
+            try? FileManager.default.removeItem(at: staged)
+            throw error
+        }
     }
 
     /// One file per dictionary, named by identifier rather than by display name — a name is localized, and a
