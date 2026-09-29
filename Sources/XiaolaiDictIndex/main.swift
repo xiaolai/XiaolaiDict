@@ -59,6 +59,9 @@ struct Options {
     var force = false
     var quiet = false
     /// Whose index this is. Defaults to the reader's own language; `--all` sets it nil.
+    // Spelled here rather than read from `ReaderLanguage`: this tool links `AppleDictionaryFormat` alone,
+    // and pulling `DictionaryModel` in for one accessor would widen an instrument's dependencies to
+    // narrow a duplication. Two spellings, and this is the one that is a command's default flag value.
     var reader: String? = Locale.preferredLanguages.first ?? "en"
 }
 

@@ -1,21 +1,6 @@
 import DictionaryModel
 import Foundation
 
-/// The reader's own language, as the system orders it.
-public enum ReaderLanguage {
-    /// The first entry of `Locale.preferredLanguages`.
-    ///
-    /// **Not `Locale.current`.** The two agreed when measured on 2026-09-22 — forced Chinese-first,
-    /// `Locale.current.identifier` answered `zh_CN` — but that probe ran in a bare binary whose
-    /// `Bundle.main.localizations` is empty, and the shipping bundle carries `en` alone. Whether
-    /// Foundation resolves the app's locale against its available localizations in *that* shape was
-    /// never established, and `preferredLanguages` cannot be wrong either way: it is the system's
-    /// list, not a negotiation with the bundle.
-    ///
-    /// Empty only on a system with no language list at all, which is not a state a Mac reaches.
-    public static var preferred: String { Locale.preferredLanguages.first ?? "en" }
-}
-
 /// Which dictionary the reader should study English from, before they have chosen one.
 ///
 /// One rule, with no branch for "is the system English": a dictionary suits a reader of language L

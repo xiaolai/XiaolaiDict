@@ -1,4 +1,5 @@
 import AppKit
+import DictionaryModel
 import OSLog
 import SwiftUI
 import XiaolaiDictBase
