@@ -64,6 +64,9 @@ struct StudySurfaceTests {
         "reading(ofLookup:": "One lookup's projection, read by the drawer and the timeline.",
         "interval(stability:": "The scheduler's own arithmetic.",
         "recall(elapsedDays:": "The forgetting curve; the scheduler's own arithmetic.",
+        // Newly visible once `public static func` stopped being skipped: the erasure path's own
+        // helper, called twice inside `StudyRecovery`.
+        "appManagedBackups(besides:": "The copies this app made; read by the impact count and the erase.",
         // **Named, not forgiven.** These are gaps with no surface designed yet, and saying so here
         // is what stops the next audit rediscovering them as new — ADR-0038.
         "card(of:": "Creates the card for a note; enrol is the only correct caller.",
@@ -89,8 +92,19 @@ struct StudySurfaceTests {
     static func publicFunctions(in code: String) -> [String] {
         code.split(separator: "\n").compactMap { line in
             let text = line.trimmingCharacters(in: .whitespaces)
-            guard text.hasPrefix("public func ") else { return nil }
-            let rest = text.dropFirst("public func ".count)
+            // **Any modifier between `public` and `func`.** Requiring the exact prefix
+            // `public func ` skipped `public mutating func` — and every public method on
+            // `ReviewSession`, a file this scan explicitly lists, is one. That file contributed
+            // nothing at all: `record`, `reveal` and `undoLast` were invisible to a check whose
+            // whole job is to notice a capability with no caller.
+            guard text.hasPrefix("public ") else { return nil }
+            guard let funcRange = text.range(of: " func ") else { return nil }
+            let modifiers = text[text.index(text.startIndex, offsetBy: "public".count)..<funcRange.lowerBound]
+            // Only declaration modifiers may sit there; `public var funcs: Int` must not match.
+            let allowed: Set<Substring> = ["", "static", "mutating", "nonisolated", "final",
+                                           "class", "override", "borrowing", "consuming"]
+            guard modifiers.split(separator: " ").allSatisfy({ allowed.contains($0) }) else { return nil }
+            let rest = text[funcRange.upperBound...]
             let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
             guard !name.isEmpty else { return nil }
             let after = rest.dropFirst(name.count)
@@ -143,17 +157,54 @@ struct StudySurfaceTests {
                 // reading its `.build` checkout found "callers" in Swift's own source — which is
                 // how a scan reports a capability as wired when nothing in this app touches it.
                 options: [.skipsHiddenFiles])
+            var seen = 0
             while let file = walk?.nextObject() as? URL {
                 guard ["swift", "sh", "py"].contains(file.pathExtension) else { continue }
                 guard !file.pathComponents.contains(".build") else { continue }
-                callers += (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+                // **A test is not a surface**, wherever it lives. `Tools/fsrs/test_fsrs6.py` sits
+                // under a calling root, so a scan that reads it lets a test vouch for a method —
+                // the one thing this check is built to refuse.
+                let name = file.lastPathComponent
+                guard !name.hasPrefix("test_"), !name.hasSuffix("Tests.swift"),
+                      !file.pathComponents.contains("tests"), !file.pathComponents.contains("Tests")
+                else { continue }
+                // **Thrown, never defaulted to "".** A file that could not be read contributes no
+                // callers and looks exactly like a file with none, so an unreadable tree reports
+                // every method as unwired — or, worse, leaves an exemption looking current.
+                callers += try String(contentsOf: file, encoding: .utf8)
+                seen += 1
+            }
+            guard seen > 0 else {
+                throw CocoaError(.fileReadNoSuchFile)
             }
         }
         // **A member call with its first label** — `.card(of:`, not `card(`. Two earlier
         // spellings were each too wide: a bare `name(` matched `symlink(` for `link` and a
         // drawer's own `hide()` for the ledger's, and `.name(` still let one overload vouch for
         // another. A scan is only as wide as the spelling it searches for.
-        return declared.filter { !callers.contains(".\($0)") }
+        // **Comments and string literals are not callers.** Raw substring matching counted a
+        // commented-out call as wiring, so removing the last caller by commenting it out left
+        // this check satisfied — the exact move the table is meant to catch.
+        let live = Self.stripped(callers)
+        return declared.filter { !live.contains(".\($0)") }
+    }
+
+    /// Source with `//` comments and string literals removed, so neither can vouch for a method.
+    static func stripped(_ code: String) -> String {
+        var out = ""
+        for line in code.split(separator: "\n", omittingEmptySubsequences: false) {
+            var text = String(line)
+            if let comment = text.range(of: "//") { text = String(text[text.startIndex..<comment.lowerBound]) }
+            var kept = "", inString = false, escaped = false
+            for character in text {
+                if escaped { escaped = false; continue }
+                if character == "\\" { escaped = true; continue }
+                if character == "\"" { inString.toggle(); continue }
+                if !inString { kept.append(character) }
+            }
+            out += kept + "\n"
+        }
+        return out
     }
 
     /// **Both directions.** An unwired method must be exempt with a reason, and an exemption whose
@@ -191,6 +242,14 @@ struct StudySurfaceTests {
                 "the label is the first identifier, not the text before the first colon")
         #expect(Self.publicFunctions(in: "public func abc(to x: Int = 1, b: Int)") == ["abc("],
                 "a defaulted first parameter need not be written at the call site")
+        #expect(Self.publicFunctions(in: "public mutating func abc(of x: Int)") == ["abc(of:"],
+                "a modifier between `public` and `func` is still a public function")
+        #expect(Self.publicFunctions(in: "public static func abc()") == ["abc("])
+        #expect(Self.publicFunctions(in: "public var funcs: Int { 0 }").isEmpty,
+                "a property whose name contains `func` is not a function")
+        #expect(Self.stripped("a.b()  // c.d()").contains(".d(") == false, "a comment is not a caller")
+        #expect(Self.stripped("let s = \".x(\"").contains(".x(") == false, "a string is not a caller")
+        #expect(Self.stripped("a.b()").contains(".b("), "and real calls survive stripping")
         #expect(Self.publicFunctions(in: "    private func abc(").isEmpty)
     }
 }
