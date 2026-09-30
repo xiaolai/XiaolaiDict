@@ -370,6 +370,21 @@ struct StudyLibraryTests {
         #expect(try ledger.library(LibraryQuery()).count == 2, "and no tag is no narrowing")
     }
 
+    /// **The first confirmation stands.** A bulk confirm reaches every selected note, including
+    /// ones confirmed weeks ago, and it rewrote their timestamps with today's — changing the
+    /// record of *when* the reader said something, which is the one thing that record must keep.
+    @Test func confirmingAgainDoesNotRewriteWhenTheReaderSaidIt() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        try ledger.unconfirmForTesting(noteID: note.id)
+        try ledger.confirm(noteID: note.id, at: now)
+        let first = try #require(try ledger.notes().first?.confirmedAt)
+
+        try ledger.confirm(noteID: note.id, at: now.addingTimeInterval(30 * 86_400))
+        #expect(try ledger.notes().first?.confirmedAt == first,
+                "a later confirm rewrote when the reader agreed")
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

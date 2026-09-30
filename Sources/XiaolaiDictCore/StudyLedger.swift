@@ -468,8 +468,12 @@ extension Ledger {
     /// **A new fact on the note, never an edit to the evidence.** The selector's own `chosen_by = model`
     /// row stays as it is: a proposal later agreed with is not the same history as a sense the reader
     /// picked unaided, and the ledger has to be able to tell them apart.
+    /// **The first confirmation stands.** A bulk confirm reaches every selected note, including
+    /// ones the reader confirmed weeks ago, and this overwrote their timestamps with today's —
+    /// rewriting when they said it, which is the one thing a record of what they said must not
+    /// do. Confirming an already-confirmed note is now a no-op rather than an edit.
     public func confirm(noteID: UUID, at when: Date) throws {
-        try run("UPDATE study_notes SET confirmed_at = ? WHERE id = ?",
+        try run("UPDATE study_notes SET confirmed_at = ? WHERE id = ? AND confirmed_at IS NULL",
                 bind: [.real(when.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }
     }
 
