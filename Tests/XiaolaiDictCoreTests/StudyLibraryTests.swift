@@ -572,3 +572,100 @@ struct StudyLibraryTests {
         #expect(try ledger.readiness(of: bothPlaces.id) == .ready, "it still has a sentence")
     }
 }
+
+/// Four claims about the library query that the page tests cannot make, because each is about
+/// where an answer *comes from* rather than about which rows come back.
+struct StudyLibraryQueryTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func save(_ ledger: Ledger, word: String, at when: Date) throws -> StudyNote {
+        let lookup = try ledger.record(LookupRecord(
+            surface: word, lemma: word, context: "A sentence holding \(word).",
+            lemmaBasis: .tagger, language: "en", contextRange: nil,
+            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+            lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        return try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).001",
+                   senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "what \(word) means"),
+            lookupID: lookup, at: when)
+    }
+
+    /// **The word and the sentence come from the same reading.** Four copies of the same
+    /// correlated `ORDER BY … LIMIT 1` are four places for the ordering rule to drift, and a row
+    /// whose word came from one reading and whose sentence came from another would look
+    /// perfectly ordinary.
+    @Test func arowsReadingIsOneReading() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let note = try save(ledger, word: "settle", at: now.addingTimeInterval(-86_400))
+        let newer = try ledger.record(LookupRecord(
+            surface: "settled", lemma: "settle", context: "The dust settled overnight.",
+            lemmaBasis: .tagger, language: "en", contextRange: nil,
+            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        try ledger.link(noteID: note.id, toLookup: newer, at: now)
+
+        let row = try #require(try ledger.library(LibraryQuery()).first)
+        #expect(row.word == "settled", "the newest reading's word")
+        #expect(row.excerpt == "The dust settled overnight.", "and the same reading's sentence")
+        #expect(row.readAt == now, "and the same reading's time")
+    }
+
+    /// **A state filter judges the card the row draws.** A row loads the meaning card, so a filter
+    /// that accepted any of a note's cards could put a row under Paused whose own card says it is
+    /// not paused — and under Due a row that is not.
+    @Test func astateFilterJudgesTheCardTheRowDraws() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let note = try save(ledger, word: "settle", at: now)
+        _ = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let production = try ledger.card(of: note.id, prompt: .production, at: now)
+        // **Card-level, because that is the only way to build the case.** `setPaused`
+        // takes notes and moves every card under one together, which is why a row whose own
+        // card disagrees with its note has never appeared in a test before.
+        try ledger.restorePauseStates([production.id: true])
+
+        #expect(try ledger.library(LibraryQuery(state: .paused, now: now)).isEmpty,
+                "the card this row draws is not paused")
+        #expect(try ledger.library(LibraryQuery(state: .due, now: now)).count == 1,
+                "and it is the one that is due")
+        #expect(try ledger.libraryCount(LibraryQuery(state: .paused, now: now)) == 0,
+                "the count applies the same rule")
+    }
+
+    /// **An explicitly empty enrollment set matches nothing.** `nil` already means unrestricted,
+    /// so treating `[]` as unrestricted too left a caller with no way to say "none of them" and
+    /// gave a query that asked for nothing the whole library instead.
+    @Test func anEmptyEnrollmentSetMatchesNothing() throws {
+        let ledger = try Ledger(path: ":memory:")
+        _ = try save(ledger, word: "settle", at: now)
+        #expect(try ledger.library(LibraryQuery(enrollment: [])).isEmpty)
+        #expect(try ledger.libraryCount(LibraryQuery(enrollment: [])) == 0)
+        #expect(try ledger.library(LibraryQuery(enrollment: nil)).count == 1,
+                "nil is still unrestricted")
+    }
+
+    /// **The count and the page agree under every filter.** The count is its own SQL now rather
+    /// than the page query run with no limit, so the two can disagree — and a surface that
+    /// promises rows no page will hand out is the defect this replaces.
+    @Test func thecountAgreesWithThePageUnderEveryFilter() throws {
+        let ledger = try Ledger(path: ":memory:")
+        for index in 0..<12 {
+            let note = try save(ledger, word: "word\(index)", at: now.addingTimeInterval(Double(-index)))
+            let card = try ledger.card(of: note.id, prompt: .meaning, at: now)
+            if index % 3 == 0 { try ledger.restorePauseStates([card.id: true]) }
+        }
+        let states: [LibraryQuery.State?] = [nil, .due, .paused, .needsAttention, .struggling]
+        for state in states {
+            var page = LibraryQuery(state: state, now: now); page.limit = 500
+            let rows = try ledger.library(page).count
+            let counted = try ledger.libraryCount(LibraryQuery(state: state, now: now))
+            #expect(rows == counted, "\(String(describing: state)): \(rows) rows against \(counted)")
+        }
+        var searched = LibraryQuery(text: "word1"); searched.limit = 500
+        let found = try ledger.library(searched).count
+        #expect(found == (try ledger.libraryCount(LibraryQuery(text: "word1"))), "and under a search")
+    }
+}

@@ -117,102 +117,8 @@ extension Ledger {
     /// rows vanish between pages with no explanation.
     public func library(_ query: LibraryQuery) throws -> [LibraryRow] {
         guard query.limit > 0 else { return [] }
-        var conditions: [String] = []
-        var bind: [SQLiteValue] = []
-
-        if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
-            // Matched against the word, the reader's own sentence and the answer. The answer is the
-            // publisher's text and **stays local** — searching it here is reading a file on this Mac.
-            conditions.append("""
-                (EXISTS (
-                    SELECT 1 FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                    WHERE nl.note_id = n.id
-                      AND (l.surface LIKE ?1 ESCAPE '\\' OR l.lemma LIKE ?1 ESCAPE '\\'
-                           OR l.context LIKE ?1 ESCAPE '\\')
-                 )
-                 OR EXISTS (
-                    SELECT 1 FROM study_answers a
-                    WHERE a.note_id = n.id AND a.text LIKE ?1 ESCAPE '\\'
-                 )
-                 OR n.phrase_text LIKE ?1 ESCAPE '\\')
-                """)
-            bind.append(.text("%\(Self.escapingWildcards(query.text))%"))
-        }
-        if let dictionary = query.dictionary {
-            conditions.append("n.dictionary = ?\(bind.count + 1)")
-            bind.append(.text(dictionary))
-        }
-        if let enrollment = query.enrollment, !enrollment.isEmpty {
-            conditions.append(
-                "n.enrollment IN (SELECT value FROM json_each(?\(bind.count + 1)))")
-            bind.append(.text(Self.jsonArray(of: enrollment.map(\.rawValue))))
-        }
-        if let scripts = query.scripts, !scripts.isEmpty {
-            // Offered, never applied unasked. A row written before schema 7 has no script and is
-            // **drawn**, for the same reason the drawer draws it: unknown is not excluded.
-            // **A note with no reading at all is not a note in a script the reader dropped.**
-            // Requiring a lookup excluded every custom card, and every note whose readings were
-            // deleted — both of which the rule above says must stay visible, since unknown is
-            // not excluded.
-            conditions.append("""
-                (NOT EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id)
-                 OR EXISTS (
-                    SELECT 1 FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                    WHERE nl.note_id = n.id
-                      AND (l.script IS NULL
-                           OR l.script IN (SELECT value FROM json_each(?\(bind.count + 1))))
-                 ))
-                """)
-            bind.append(.text(Self.jsonArray(of: scripts.map(\.rawValue))))
-        }
-        if let tag = query.tag {
-            conditions.append("""
-                EXISTS (SELECT 1 FROM study_tags t
-                        WHERE t.note_id = n.id AND t.tag = ?\(bind.count + 1))
-                """)
-            bind.append(.text(tag))
-        }
-        switch query.state {
-        case .due:
-            conditions.append("""
-                EXISTS (
-                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.paused = 0
-                      AND (c.hidden_until IS NULL OR c.hidden_until <= ?\(bind.count + 1))
-                      AND (c.due IS NULL OR c.due <= ?\(bind.count + 1))
-                )
-                AND \(Ledger.askableNotePredicate)
-                """)
-            bind.append(.real(query.now.timeIntervalSince1970))
-        case .paused:
-            conditions.append("EXISTS (SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.paused = 1)")
-        case .needsAttention:
-            // Enrolled and not askable. **The same predicate, negated** — not a second opinion
-            // about what askable means, which is how two spellings of one rule start to disagree.
-            conditions.append("n.enrollment = 'active' AND NOT (\(Ledger.askableNotePredicate))")
-        case .struggling:
-            // In SQL like every other filter, because a page narrowed in Swift after the `LIMIT`
-            // is a short page — and `repeatedlyLapsed` answers card ids, which is a list and not a
-            // predicate. The counting rule itself is shared rather than restated.
-            conditions.append("""
-                EXISTS (
-                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id
-                      AND \(Ledger.lapseDaysExpression(cardAlias: "c")) >= ?\(bind.count + 1)
-                )
-                """)
-            bind.append(.integer(Ledger.repeatedLapseDays))
-        case nil:
-            break
-        }
-        if let after = query.after {
-            // Keyset: strictly older, or the same instant with a smaller id. The id breaks the tie so
-            // two notes enrolled in the same second cannot both be skipped or both repeat.
-            conditions.append(
-                "(n.created_at < ?\(bind.count + 1) "
-                + "OR (n.created_at = ?\(bind.count + 1) AND n.id < ?\(bind.count + 2)))")
-            bind.append(.real(after.createdAt.timeIntervalSince1970))
-            bind.append(.text(after.noteID.uuidString))
-        }
-        let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: "\n AND ")
+        let filter = try Self.libraryFilter(query)
+        var bind = filter.bind
         bind.append(.integer(query.limit))
 
         var rows: [LibraryRow] = []
@@ -220,22 +126,22 @@ extension Ledger {
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
                    n.sense_key_kind, n.phrase_text, n.enrollment, n.confirmed_at, n.created_at,
                    -- The newest reading that evidences it: the word, the sentence, when, and its
-                   -- script. Left joined, because a note whose readings were deleted is still the
-                   -- reader's and must be findable in order to be repaired.
-                   (SELECT l.surface FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                     WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1),
-                   (SELECT l.context FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                     WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1),
-                   (SELECT l.looked_up_at FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                     WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1),
-                   (SELECT l.script FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
-                     WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1),
+                   -- script. **One subquery decides which reading that is**, and the columns come
+                   -- off the join — four copies of the same correlated `ORDER BY … LIMIT 1` are
+                   -- four places for the ordering rule to drift, and a row whose word and sentence
+                   -- came from different readings would look perfectly ordinary.
+                   -- Left joined, because a note whose readings were deleted is still the reader's
+                   -- and must be findable in order to be repaired.
+                   newest.surface, newest.context, newest.looked_up_at, newest.script,
                    -- Readiness's facts, not its verdict: the rule is decided once, in Swift.
                    EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id),
                    EXISTS (SELECT 1 FROM study_answers a WHERE a.note_id = n.id AND a.is_usable = 1),
                    (SELECT a.origin FROM study_answers a WHERE a.note_id = n.id)
             FROM study_notes n
-            \(whereClause)
+            LEFT JOIN lookups newest ON newest.id = (
+                SELECT l.id FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
+                 WHERE nl.note_id = n.id ORDER BY l.looked_up_at DESC, l.id DESC LIMIT 1)
+            \(filter.whereClause)
             ORDER BY n.created_at DESC, n.id DESC
             LIMIT ?\(bind.count)
             """, bind: bind) { row in
@@ -250,7 +156,7 @@ extension Ledger {
                 senseMoved: false,
                 needsReading: { if case .custom = note.target { return false } else { return true } }())
             rows.append(LibraryRow(
-                note: note, card: try existingCard(of: note.id),
+                note: note, card: try existingCard(of: note.id, prompt: Self.libraryPrompt),
                 // **The reading's word, or the target's own.** A custom card needs no lookup
                 // (C07), so this was empty for every one of them — a blank row in the library
                 // and a blank label in the inspector, for a card the reader had written.
@@ -270,8 +176,11 @@ extension Ledger {
     public func libraryCount(_ query: LibraryQuery) throws -> Int {
         var counted = query
         counted.after = nil
-        counted.limit = Int.max
-        return try library(counted).count
+        let filter = try Self.libraryFilter(counted)
+        var total = 0
+        try run("SELECT COUNT(*) FROM study_notes n\n\(filter.whereClause)",
+                bind: filter.bind) { total = $0.integer(0) }
+        return total
     }
 
     /// The answers for a page of notes, in **one** query.
@@ -510,5 +419,131 @@ public struct NoteTimeline: Sendable, Equatable {
     public init(readings: [ReadingEntry], reviews: [ReviewEvent]) {
         self.readings = readings
         self.reviews = reviews
+    }
+}
+
+extension Ledger {
+    /// **The prompt the library draws.** A row loads the meaning card, so a state filter that
+    /// judged any of a note's cards could admit a row whose own card is in another state
+    /// entirely — paused production, unpaused meaning, and a Paused filter showing a row that
+    /// says it is not. Named once so the two cannot drift.
+    static let libraryPrompt = StudyCard.Prompt.meaning
+
+    /// What narrows a library page, as SQL and its bindings — **the same conditions the count
+    /// uses**, which is the whole reason it is not written inside the page query.
+    ///
+    /// Counting used to run the page query with `limit = Int.max` and take `.count`, so every
+    /// keystroke of the search field decoded the entire matching library and ran one card query
+    /// per note to produce a number.
+    static func libraryFilter(_ query: LibraryQuery) throws -> (whereClause: String, bind: [SQLiteValue]) {
+        var conditions: [String] = []
+        var bind: [SQLiteValue] = []
+
+        if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            // Matched against the word, the reader's own sentence and the answer. The answer is the
+            // publisher's text and **stays local** — searching it here is reading a file on this Mac.
+            conditions.append("""
+                (EXISTS (
+                    SELECT 1 FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
+                    WHERE nl.note_id = n.id
+                      AND (l.surface LIKE ?1 ESCAPE '\\' OR l.lemma LIKE ?1 ESCAPE '\\'
+                           OR l.context LIKE ?1 ESCAPE '\\')
+                 )
+                 OR EXISTS (
+                    SELECT 1 FROM study_answers a
+                    WHERE a.note_id = n.id AND a.text LIKE ?1 ESCAPE '\\'
+                 )
+                 OR n.phrase_text LIKE ?1 ESCAPE '\\')
+                """)
+            bind.append(.text("%\(Self.escapingWildcards(query.text))%"))
+        }
+        if let dictionary = query.dictionary {
+            conditions.append("n.dictionary = ?\(bind.count + 1)")
+            bind.append(.text(dictionary))
+        }
+        if let enrollment = query.enrollment {
+            conditions.append(
+                "n.enrollment IN (SELECT value FROM json_each(?\(bind.count + 1)))")
+            bind.append(.text(Self.jsonArray(of: enrollment.map(\.rawValue))))
+        }
+        if let scripts = query.scripts, !scripts.isEmpty {
+            // Offered, never applied unasked. A row written before schema 7 has no script and is
+            // **drawn**, for the same reason the drawer draws it: unknown is not excluded.
+            // **A note with no reading at all is not a note in a script the reader dropped.**
+            // Requiring a lookup excluded every custom card, and every note whose readings were
+            // deleted — both of which the rule above says must stay visible, since unknown is
+            // not excluded.
+            conditions.append("""
+                (NOT EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id)
+                 OR EXISTS (
+                    SELECT 1 FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
+                    WHERE nl.note_id = n.id
+                      AND (l.script IS NULL
+                           OR l.script IN (SELECT value FROM json_each(?\(bind.count + 1))))
+                 ))
+                """)
+            bind.append(.text(Self.jsonArray(of: scripts.map(\.rawValue))))
+        }
+        if let tag = query.tag {
+            conditions.append("""
+                EXISTS (SELECT 1 FROM study_tags t
+                        WHERE t.note_id = n.id AND t.tag = ?\(bind.count + 1))
+                """)
+            bind.append(.text(tag))
+        }
+        switch query.state {
+        case .due:
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.prompt = ?0P
+                      AND c.paused = 0
+                      AND (c.hidden_until IS NULL OR c.hidden_until <= ?\(bind.count + 1))
+                      AND (c.due IS NULL OR c.due <= ?\(bind.count + 1))
+                )
+                AND \(Ledger.askableNotePredicate)
+                """)
+            bind.append(.real(query.now.timeIntervalSince1970))
+        case .paused:
+            conditions.append("""
+                EXISTS (SELECT 1 FROM study_cards c
+                         WHERE c.note_id = n.id AND c.prompt = ?0P AND c.paused = 1)
+                """)
+        case .needsAttention:
+            // Enrolled and not askable. **The same predicate, negated** — not a second opinion
+            // about what askable means, which is how two spellings of one rule start to disagree.
+            conditions.append("n.enrollment = 'active' AND NOT (\(Ledger.askableNotePredicate))")
+        case .struggling:
+            // In SQL like every other filter, because a page narrowed in Swift after the `LIMIT`
+            // is a short page — and `repeatedlyLapsed` answers card ids, which is a list and not a
+            // predicate. The counting rule itself is shared rather than restated.
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM study_cards c WHERE c.note_id = n.id AND c.prompt = ?0P
+                      AND \(Ledger.lapseDaysExpression(cardAlias: "c")) >= ?\(bind.count + 1)
+                )
+                """)
+            bind.append(.integer(Ledger.repeatedLapseDays))
+        case nil:
+            break
+        }
+        if let after = query.after {
+            // Keyset: strictly older, or the same instant with a smaller id. The id breaks the tie so
+            // two notes enrolled in the same second cannot both be skipped or both repeat.
+            conditions.append(
+                "(n.created_at < ?\(bind.count + 1) "
+                + "OR (n.created_at = ?\(bind.count + 1) AND n.id < ?\(bind.count + 2)))")
+            bind.append(.real(after.createdAt.timeIntervalSince1970))
+            bind.append(.text(after.noteID.uuidString))
+        }
+        var whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: "\n AND ")
+        // **Bound last, and only when a clause asked for it.** The state clauses above spell the
+        // prompt `?0P` because they cannot know their own position; numbering it first shifted
+        // every other placeholder by one — the search clause spells `?1` — and binding it when
+        // no clause mentions it gave SQLite a parameter its statement does not declare.
+        if whereClause.contains("?0P") {
+            bind.append(.text(libraryPrompt.rawValue))
+            whereClause = whereClause.replacingOccurrences(of: "?0P", with: "?\(bind.count)")
+        }
+        return (whereClause, bind)
     }
 }
