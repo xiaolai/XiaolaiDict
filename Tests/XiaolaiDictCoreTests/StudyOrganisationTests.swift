@@ -66,6 +66,19 @@ struct StudyOrganisationTests {
         #expect(try ledger.readiness(of: own.id) == .ready)
         #expect(try ledger.readiness(of: publishers.id) == .needsRepair, "a citation still needs one")
         #expect(try ledger.askableNoteIDs() == [own.id])
+
+        // **And the cue exists.** The sentence above claimed it and nothing checked: `cue` built
+        // its word from the newest reading and returned nil without one, so a custom card was
+        // eligible for review and drawn by nothing — skipped every sitting, for ever.
+        let card = try ledger.card(of: own.id, at: now)
+        let cue = try #require(try ledger.cue(forCard: card.id), "a custom card has no cue at all")
+        #expect(cue.word == "put up with", "its cue is the reader's own words")
+        #expect(cue.sentence == nil, "and it was met in no sentence, rather than echoing itself")
+        #expect(cue.readAt == nil, "nor at a time, which would be a reading that never happened")
+
+        // It also has to survive the library, which derived its word from a reading too.
+        let row = try #require(try ledger.library(LibraryQuery(now: now)).first { $0.id == own.id })
+        #expect(row.word == "put up with", "the library drew it as a blank row")
     }
 
     // MARK: - Two questions about one note (K07, R08)

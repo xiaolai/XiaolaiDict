@@ -338,13 +338,22 @@ final class ReviewModel {
     static func sentence(of cue: ReviewCue) -> ReviewPresentation.Sentence? {
         // `.missing` means the app exposed no surrounding text and the "sentence" *is* the
         // selection. Drawing that as context would be the word echoed back and dressed as reading.
-        guard cue.quality?.context != .missing, cue.sentence != cue.word else { return nil }
-        return ReviewPresentation.Sentence(text: cue.sentence, range: cue.range)
+        //
+        // **No quality is not a quality that passes.** `cue.quality?.context != .missing` is true
+        // when there is no quality at all, so an unqualified sentence was drawn as confidently as
+        // a complete one — against the rule that a capture with no quality signal shows none.
+        // A card with no reading behind it has no sentence either, and says so by being nil.
+        guard let sentence = cue.sentence, let quality = cue.quality,
+              quality.context != .missing, sentence != cue.word else { return nil }
+        return ReviewPresentation.Sentence(text: sentence, range: cue.range)
     }
 
     static func source(of cue: ReviewCue) -> String {
         let where_ = cue.place.title ?? cue.place.name ?? ""
-        let when = cue.readAt.formatted(date: .abbreviated, time: .omitted)
+        // A card the reader wrote was met nowhere and read at no time; it says neither rather
+        // than naming today, which would be a reading that never happened.
+        guard let readAt = cue.readAt else { return where_ }
+        let when = readAt.formatted(date: .abbreviated, time: .omitted)
         return where_.isEmpty ? when : "\(where_) · \(when)"
     }
 }

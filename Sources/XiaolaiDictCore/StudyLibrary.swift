@@ -150,13 +150,18 @@ extension Ledger {
         if let scripts = query.scripts, !scripts.isEmpty {
             // Offered, never applied unasked. A row written before schema 7 has no script and is
             // **drawn**, for the same reason the drawer draws it: unknown is not excluded.
+            // **A note with no reading at all is not a note in a script the reader dropped.**
+            // Requiring a lookup excluded every custom card, and every note whose readings were
+            // deleted — both of which the rule above says must stay visible, since unknown is
+            // not excluded.
             conditions.append("""
-                EXISTS (
+                (NOT EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id)
+                 OR EXISTS (
                     SELECT 1 FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
                     WHERE nl.note_id = n.id
                       AND (l.script IS NULL
                            OR l.script IN (SELECT value FROM json_each(?\(bind.count + 1))))
-                )
+                 ))
                 """)
             bind.append(.text(Self.jsonArray(of: scripts.map(\.rawValue))))
         }
@@ -246,7 +251,11 @@ extension Ledger {
                 needsReading: { if case .custom = note.target { return false } else { return true } }())
             rows.append(LibraryRow(
                 note: note, card: try existingCard(of: note.id),
-                word: row.optionalText(12) ?? "", excerpt: row.optionalText(13) ?? "",
+                // **The reading's word, or the target's own.** A custom card needs no lookup
+                // (C07), so this was empty for every one of them — a blank row in the library
+                // and a blank label in the inspector, for a card the reader had written.
+                word: row.optionalText(12) ?? note.target.ownText ?? "",
+                excerpt: row.optionalText(13) ?? "",
                 readAt: row.isNull(14) ? nil : Date(timeIntervalSince1970: row.real(14)),
                 script: row.optionalText(15).flatMap(ProbeScript.init(rawValue:)),
                 readiness: StudyReadiness.of(facts)))

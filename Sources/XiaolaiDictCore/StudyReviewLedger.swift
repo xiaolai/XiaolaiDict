@@ -516,11 +516,13 @@ public struct ReviewCue: Sendable, Equatable {
     public let word: String
     /// The reader's own sentence. **Theirs, not a publisher's** — which is what makes it a cue and
     /// not an answer.
-    public let sentence: String
+    /// Nil where there is no reading behind the card — a custom one the reader wrote (C07).
+    public let sentence: String?
     /// Where the word sits in it, so the card can mark the occurrence the reader actually met.
     public let range: NSRange?
     public let place: ReadingPlace
-    public let readAt: Date
+    /// Nil for the same reason as `sentence`.
+    public let readAt: Date?
     /// How the capture went. A card with no usable sentence shows none rather than the word echoed
     /// back into the column and dressed as context.
     public let quality: CaptureQuality?
@@ -528,8 +530,8 @@ public struct ReviewCue: Sendable, Equatable {
     /// what it is asking about without saying what it means.
     public let target: StudyTarget
 
-    public init(card: StudyCard, word: String, sentence: String, range: NSRange?,
-                place: ReadingPlace, readAt: Date, quality: CaptureQuality?, target: StudyTarget) {
+    public init(card: StudyCard, word: String, sentence: String?, range: NSRange?,
+                place: ReadingPlace, readAt: Date?, quality: CaptureQuality?, target: StudyTarget) {
         self.card = card
         self.word = word
         self.sentence = sentence
@@ -566,12 +568,26 @@ extension Ledger {
         guard let card = try card(id: id),
               let note = try notes(where: "WHERE id = ?", bind: [.text(card.noteID.uuidString)]).first
         else { return nil }
-        let lookups = try lookupIDs(evidencing: card.noteID)
-        guard let newest = lookups.last, let reading = try reading(ofLookup: newest) else { return nil }
+        // **The newest reading, by when it was read.** `lookupIDs` is ordered by when the link
+        // was *recorded*, so linking an older reading later put a stale sentence on the card.
+        let readings = try lookupIDs(evidencing: card.noteID)
+            .compactMap { try reading(ofLookup: $0) }
+            .sorted { $0.at > $1.at }
+        if let reading = readings.first {
+            return ReviewCue(
+                card: card, word: reading.surface, sentence: reading.sentence,
+                range: reading.sentenceRange, place: reading.place, readAt: reading.at,
+                quality: reading.quality, target: note.target)
+        }
+        // **A card the reader wrote needs no reading** (C07), and returning nil for one meant the
+        // review surface skipped it — every sitting, for ever, with the card still counted as
+        // eligible. Its cue is its own words, with no sentence and no place, because there is no
+        // reading behind it and inventing one would dress the reader's own note as a citation.
+        guard let own = note.target.ownText else { return nil }
         return ReviewCue(
-            card: card, word: reading.surface, sentence: reading.sentence,
-            range: reading.sentenceRange, place: reading.place, readAt: reading.at,
-            quality: reading.quality, target: note.target)
+            card: card, word: own, sentence: nil, range: nil,
+            place: ReadingPlace(bundleID: nil, name: nil), readAt: nil,
+            quality: nil, target: note.target)
     }
 
     /// The back of a card. **A separate call on purpose** — see `ReviewCue`.

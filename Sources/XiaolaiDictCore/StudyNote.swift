@@ -63,6 +63,19 @@ public enum StudyTarget: Sendable, Equatable, Hashable {
     }
 
     /// The stored discriminator. Its spelling is a schema value: changing it re-keys every row.
+    /// The words this target *is*, where it has them of its own: a phrase's own spelling, a
+    /// custom card's cue. Nil for a sense or an entry, whose word comes from the reading.
+    ///
+    /// **A note without a lookup still has a name.** Everything on-screen derived the word from
+    /// the newest reading, so a custom card — which needs no lookup at all (C07) — drew as an
+    /// empty row in the library and an empty label in the inspector.
+    public var ownText: String? {
+        switch self {
+        case .phrase(_, let text), .custom(_, let text): text
+        case .sense, .entry: nil
+        }
+    }
+
     public var kind: Kind {
         switch self {
         case .sense: .sense
