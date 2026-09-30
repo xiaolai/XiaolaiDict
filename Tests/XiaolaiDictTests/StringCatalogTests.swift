@@ -98,6 +98,12 @@ struct StringCatalogTests {
         "not used from a nib":
             "the message of a `fatalError` in an initialiser marked unavailable; it is a crash "
             + "reason for whoever reads the log, and is never drawn",
+        "Ava":
+            "the name macOS gives a voice, and it gives it that name in every language. A "
+            + "translated one would send the reader looking through VoiceOver Utility for a voice "
+            + "that is not listed under it — the same failure `PrivacySettings` localizes its "
+            + "paths to avoid, arrived at from the opposite direction",
+        "Serena": "a voice's name, for the reason given under Ava",
     ]
 
     /// Every literal in a file, with what preceded it, and continuations rejoined.

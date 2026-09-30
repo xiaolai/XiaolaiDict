@@ -634,8 +634,19 @@
     "One thing is still needed." : {
 
     },
-    "Only a compact voice is installed for this language. Better ones are a free download in System Settings → Accessibility → Spoken Content." : {
+    "Only a compact voice is available for this language. macOS offers nothing better for it." : {
 
+    },
+    "Only a compact voice is installed. %@ is a free download in %@." : {
+      "comment" : "Voice caveat: which voice to get, and the app that installs it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Only a compact voice is installed. %1$@ is a free download in %2$@."
+          }
+        }
+      }
     },
     "Only my study scripts" : {
 
@@ -1096,6 +1107,9 @@
     },
     "Use the larger model (%@)" : {
 
+    },
+    "VoiceOver Utility → Speech" : {
+      "comment" : "Where macOS installs voices — use the system's own wording for both names"
     },
     "Website" : {
 

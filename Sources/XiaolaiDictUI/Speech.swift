@@ -78,11 +78,57 @@ public enum Speech {
             return String(localized: "No voice is installed for this language.")
         }
         guard voice.quality == .default else { return nil }
-        return String(localized: """
-            Only a compact voice is installed for this language. Better ones are a free download in \
-            System Settings → Accessibility → Spoken Content.
-            """)
+        guard let better = recommendation(for: language) else {
+            // A language macOS offers nothing better for. Saying "better ones are a download"
+            // anyway is an errand that ends in confusion, and it is the reader's own language
+            // this happens to — Chinese has no voice above compact to download at all.
+            return String(localized: """
+                Only a compact voice is available for this language. macOS offers nothing better \
+                for it.
+                """)
+        }
+        return String(
+            localized: "Only a compact voice is installed. \(better) is a free download in \(Self.voiceLibrary).",
+            comment: "Voice caveat: which voice to get, and the app that installs it")
     }
+
+    /// The voice worth downloading for `language`, by name.
+    ///
+    /// **Hardcoded, because nothing can be asked.** There is no API that lists the voices a Mac
+    /// *could* install — only the ones it has — so this is a measured claim about macOS rather than
+    /// a reading of it, and it is written down with what was measured.
+    ///
+    /// Measured on macOS 27 (build 26A428) on 2026-10-01, through `--speech-report` inside the
+    /// signed bundle: **Ava (Premium)** installs, is vended by `AVSpeechSynthesisVoice` as
+    /// `com.apple.voice.premium.en-US.Ava`, and **renders 35,483 frames** against the compact
+    /// Samantha's 31,498. That last number is the part worth keeping — the reported macOS Tahoe
+    /// fault is that premium voices are *silently* skipped, so "it installed" would not have been
+    /// evidence that it speaks.
+    ///
+    /// Nil for anything not named, and Chinese is deliberately not named: the voice catalogue
+    /// covers 25 languages and no variety of Chinese is among them.
+    static func recommendation(for language: String) -> String? {
+        if language.hasPrefix("en-GB") { return "Serena" }
+        if language.hasPrefix("en") { return "Ava" }
+        return nil
+    }
+
+    /// **Where a voice is actually installed on macOS 27, which is not System Settings.**
+    ///
+    /// The caveat used to send readers to System Settings → Accessibility → Spoken Content. There
+    /// is no voice list there any more: searching Settings for "Manage Voices" returns no results,
+    /// and the phrase appears nowhere in `ExtensionKit/Extensions`, `PrivateFrameworks`,
+    /// `CoreServices`, `/System/Applications` or any `.loctable` on the machine — checked
+    /// 2026-10-01. VoiceOver Utility is where the list survives, and it is where Ava was found.
+    static var voiceLibrary: String {
+        // Localized, for the reason `PrivacySettings` localizes its two paths: a translation is
+        // not a rendering of the English but whatever the running system prints on that screen.
+        String(localized: "VoiceOver Utility → Speech",
+               comment: "Where macOS installs voices — use the system's own wording for both names")
+    }
+
+    /// VoiceOver Utility itself, so the reader can be taken there rather than told a path.
+    public static let voiceLibraryURL = URL(fileURLWithPath: "/System/Applications/Utilities/VoiceOver Utility.app")
 
     /// The caveat for the text that would be spoken, found the way `say` finds its voice — from
     /// the reader's own sentence where there is one.

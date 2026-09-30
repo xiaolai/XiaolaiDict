@@ -33,15 +33,54 @@ struct SpeechTests {
 
     /// S1's finding, turned into something the reader is told: nothing is downloaded by default,
     /// and a reader who does not know better voices exist will conclude XiaolaiDict sounds bad.
-    @Test func aCompactOnlyLanguageSaysSo() {
-        let caveat = Speech.caveat(for: "en", among: installed)
-        let best = installed.filter { $0.language.hasPrefix("en") }.map(\.quality.rawValue).max()
-        if best == AVSpeechSynthesisVoiceQuality.default.rawValue {
-            #expect(caveat?.contains("compact") == true, "a compact-only language said nothing about it")
-            #expect(caveat?.contains("Spoken Content") == true, "it did not say where to get better ones")
-        } else {
-            #expect(caveat == nil, "a good voice was apologised for")
-        }
+    ///
+    /// **Against a list filtered to compact, not against whatever this Mac happens to have.** The
+    /// branch used to be exercised only on a machine with no good voice installed — so the moment
+    /// Ava was downloaded here it started passing through the `nil` arm, and the wording assertion
+    /// it exists for stopped running. A voice cannot be constructed, but a list can be narrowed.
+    @Test func aCompactOnlyLanguageSaysWhatToGetAndWhereFrom() throws {
+        let compactOnly = installed.filter { $0.quality == .default }
+        try #require(!compactOnly.filter { $0.language.hasPrefix("en") }.isEmpty)
+        let caveat = try #require(Speech.caveat(for: "en", among: compactOnly))
+        #expect(caveat.contains("compact"), "a compact-only language said nothing about it")
+        #expect(caveat.contains("Ava"), "it did not name the voice worth getting")
+        #expect(caveat.contains("VoiceOver Utility"), "it did not say where voices are installed")
+        #expect(!caveat.contains("System Settings"), """
+            it still sends the reader to System Settings, which on macOS 27 has no voice list at all
+            """)
+    }
+
+    /// **And it does not promise a download that does not exist.** No variety of Chinese is in the
+    /// voice catalogue at any quality above compact, so telling a Chinese reader that better ones
+    /// are a free download is an errand that ends nowhere — in their own language.
+    @Test func alanguageWithNothingBetterIsToldThatPlainly() throws {
+        let compactOnly = installed.filter { $0.quality == .default }
+        try #require(!compactOnly.filter { $0.language.hasPrefix("zh") }.isEmpty,
+                     "this Mac has no Chinese voice to test against")
+        let caveat = try #require(Speech.caveat(for: "zh", among: compactOnly))
+        #expect(caveat.contains("nothing better"), "got: \(caveat)")
+        #expect(!caveat.contains("VoiceOver Utility"), "it offered a download that does not exist")
+    }
+
+    /// A good voice is never apologised for — the caveat exists to report a shortfall.
+    ///
+    /// **Skipped rather than required where there is no good voice.** A `#require` here would turn
+    /// the suite red on every Mac that has downloaded nothing, which is the default state and is
+    /// the end-to-end machine's state. The arm this misses is the negative of
+    /// `aCompactOnlyLanguageSaysWhatToGetAndWhereFrom`, which runs everywhere.
+    @Test func agoodVoiceIsNotApologisedFor() {
+        let good = installed.filter { $0.quality != .default }
+        guard let voice = good.first else { return }
+        #expect(Speech.caveat(for: voice.language, among: good) == nil)
+    }
+
+    /// The recommendation is a claim about macOS, so it says which languages it is making one for.
+    @Test func onlyLanguagesWithAMeasuredAnswerAreRecommended() {
+        #expect(Speech.recommendation(for: "en-US") == "Ava")
+        #expect(Speech.recommendation(for: "en") == "Ava")
+        #expect(Speech.recommendation(for: "en-GB") == "Serena")
+        #expect(Speech.recommendation(for: "zh-Hans") == nil)
+        #expect(Speech.recommendation(for: "ja") == nil)
     }
 
     /// **The wire, not the value.** `Speech.caveat` was complete, memoised and tested while nothing
