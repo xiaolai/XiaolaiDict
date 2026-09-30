@@ -577,6 +577,9 @@
     "No voice is installed for this language." : {
 
     },
+    "None installed" : {
+
+    },
     "Not available" : {
 
     },
@@ -658,6 +661,9 @@
 
     },
     "Open Settings…" : {
+
+    },
+    "Open VoiceOver Utility" : {
 
     },
     "Open in Dictionary" : {
@@ -865,6 +871,9 @@
 
     },
     "Some of this could not be checked." : {
+
+    },
+    "Speaking" : {
 
     },
     "Standard" : {
@@ -1106,6 +1115,9 @@
 
     },
     "Use the larger model (%@)" : {
+
+    },
+    "Voice" : {
 
     },
     "VoiceOver Utility → Speech" : {

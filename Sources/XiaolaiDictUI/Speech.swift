@@ -87,14 +87,23 @@ public enum Speech {
             forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
             object: nil, queue: nil
         ) { _ in
-            Task { @MainActor in
-                // Both, because the caveat is derived from the list and would otherwise go on
-                // apologising for a compact voice the reader has just replaced.
-                cachedVoices = nil
-                cachedCaveats.removeAll()
-                timesVoicesChanged += 1
-            }
+            Task { @MainActor in forgetInstalledVoices() }
         }
+    }
+
+    /// Drops what was read, so the next ask reads the system again.
+    ///
+    /// **Callable, not only reachable from the observer**, because a view that redraws on the same
+    /// notification would otherwise race it: the observer hops to the main actor through a `Task`,
+    /// and `onReceive` runs first as often as not — leaving the row drawing the answer it is
+    /// redrawing to escape. A caller that clears it itself cannot be out of order with itself.
+    ///
+    /// Both caches: the caveat is derived from the list, and would go on apologising for a compact
+    /// voice the reader has just replaced.
+    static func forgetInstalledVoices() {
+        cachedVoices = nil
+        cachedCaveats.removeAll()
+        timesVoicesChanged += 1
     }
 
     /// Takes the reader to where voices are installed. **Opening it is all we can do** — there is no

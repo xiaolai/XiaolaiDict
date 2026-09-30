@@ -1,6 +1,7 @@
 import AppKit
 import DictionaryModel
 import XiaolaiDictCore
+import AVFoundation
 import SwiftUI
 
 /// Which dictionary the reader studies from, as the settings window needs it.
@@ -43,6 +44,57 @@ public struct DictionaryChoice {
 
 // MARK: - Reading
 
+/// **What the speak button will sound like, and the one thing the reader can do about it.**
+///
+/// English, because that is the language of the words this dictionary is asked about: the button
+/// speaks the headword. A reader looking a Chinese word up is told about that voice on the card
+/// itself, where the sentence is known and the language can be detected.
+///
+/// It is here rather than on the setup board because it is a standing preference — the board is
+/// for what a fresh install still needs, and a voice is neither missing nor blocking.
+struct SpeakingVoiceSection: View {
+    /// The words this dictionary is asked about.
+    private static let language = "en"
+    /// Bumped when macOS says the voices changed, which is what redraws this.
+    @State private var generation = 0
+
+    var body: some View {
+        Section {
+            LabeledContent("Voice") {
+                if let voice = Speech.bestVoice(for: Self.language) {
+                    // A voice's name is a proper noun; macOS calls it that in every language.
+                    Text(verbatim: voice.name)
+                } else {
+                    Text("None installed")
+                }
+            }
+            if let caveat = Speech.caveat(for: Self.language) {
+                Text(caveat)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Offered only where there is something to go and get. A language macOS has nothing
+                // better for gets the sentence and no button — a control that leads nowhere is
+                // worse than none, and this is the one screen where that would waste a trip.
+                if Speech.recommendation(for: Self.language) != nil {
+                    Button("Open VoiceOver Utility") { Speech.openVoiceLibrary() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
+            }
+        } header: {
+            Text("Speaking")
+        }
+        // **Cleared here rather than waited for.** The observer inside `Speech` hops to the main
+        // actor, so it may land after this redraw; clearing it on the way through means the body
+        // below cannot read the answer it is redrawing to escape.
+        .onReceive(NotificationCenter.default.publisher(
+            for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in
+            Speech.forgetInstalledVoices()
+            generation += 1
+        }
+    }
+}
+
 struct ReadingPane: View {
     var appearance: Appearance?
     /// The erase command, which lives here because it is about the reader's reading rather than
@@ -60,6 +112,7 @@ struct ReadingPane: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            SpeakingVoiceSection()
             if let erase, let eraseAction {
                 EraseReadingSection(state: erase, act: eraseAction)
             }
