@@ -124,15 +124,8 @@ public struct SettingsView: View {
             ForEach(SettingsPane.allCases) { pane in
                 Tab(pane.title, systemImage: pane.symbol, value: pane) {
                     content(of: pane)
-                        .onScrollGeometryChange(for: PaneGeometry.self) { geometry in
-                            // Insets included on both sides of the comparison: whatever sits over
-                            // the content — the tab bar, under a toolbar — is in `wanted` and in
-                            // `given` alike, and cancels.
-                            PaneGeometry(
-                                wanted: geometry.contentSize.height + geometry.contentInsets.top
-                                    + geometry.contentInsets.bottom,
-                                given: geometry.containerSize.height)
-                        } action: { _, geometry in
+                        .onScrollGeometryChange(for: ContentFit.self) { ContentFit(of: $0) }
+                        action: { _, geometry in
                             // **Only the pane on screen.** Settings keeps a hidden pane's views
                             // alive, and one reporting a height of its own — or none — would set
                             // the readiness and the viewport the fit reads for the pane that *is*
@@ -196,12 +189,6 @@ public struct SettingsView: View {
                 try? await Task.sleep(for: Token.Timing.permissionPoll)
             }
         }
-    }
-
-    /// What one pane's scroll view reports: the height its content wants, and the height it has.
-    private struct PaneGeometry: Equatable {
-        let wanted: CGFloat
-        let given: CGFloat
     }
 
     /// What a fit depends on. The window is part of it because a pane can measure itself before

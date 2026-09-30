@@ -59,7 +59,30 @@ public struct ReviewView: View {
     // MARK: - Asking
 
     @ViewBuilder
+    /// **The front of a card, and its back only once asked for.** Four parts: where in the batch
+    /// this is, the cue, the question, and the controls.
     private func asking(_ question: ReviewPresentation.Question) -> some View {
+        standing(question)
+        cue(question)
+
+        switch question.prompt {
+        case .meaningHere:
+            Text("What does this mean here?")
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.secondary)
+        }
+
+        // Present only after the reveal. Not hidden, not zero-height, not `.opacity(0)`: absent.
+        if let answer = question.answer {
+            revealed(answer)
+        }
+
+        Spacer(minLength: 0)
+        controls(question)
+    }
+
+    /// Where in the batch this is, whether it counts, and where the reader met it.
+    private func standing(_ question: ReviewPresentation.Question) -> some View {
         HStack {
             Text("\(question.position) of \(question.batchSize)")
                 .font(.system(size: scale.text.small))
@@ -75,7 +98,10 @@ public struct ReviewView: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         }
+    }
 
+    /// The reader's own sentence with the word marked, and the word itself.
+    @ViewBuilder private func cue(_ question: ReviewPresentation.Question) -> some View {
         // **The reader's own sentence, with the word marked** — the cue, and the only thing on the
         // front that is prose. A capture that produced no real sentence shows none rather than the
         // word echoed back and dressed as context.
@@ -95,21 +121,6 @@ public struct ReviewView: View {
         Text(verbatim: question.word)
             .font(.system(size: scale.text.heading, weight: .medium))
             .foregroundStyle(accent(for: question))
-
-        switch question.prompt {
-        case .meaningHere:
-            Text("What does this mean here?")
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.secondary)
-        }
-
-        // Present only after the reveal. Not hidden, not zero-height, not `.opacity(0)`: absent.
-        if let answer = question.answer {
-            revealed(answer)
-        }
-
-        Spacer(minLength: 0)
-        controls(question)
     }
 
     @ViewBuilder

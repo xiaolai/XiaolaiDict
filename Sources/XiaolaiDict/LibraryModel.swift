@@ -224,7 +224,7 @@ final class LibraryModel {
         var suggested: [Ledger.Suggestion]
         var setAside: [IgnoredLemma]
         var retention: Ledger.RetentionReport
-        var vocabulary: [(tag: String, count: Int)]
+        var vocabulary: [LibraryPresentation.TagUse]
         var at: Date
     }
 
@@ -279,6 +279,7 @@ final class LibraryModel {
             let setAside = filter == .suggested ? try await ledger.ignoredSuggestions() : []
             let measured = try await ledger.retention(dictionary: nil)
             let vocabulary = try await ledger.allTags()
+                .map { LibraryPresentation.TagUse(tag: $0.tag, count: $0.count) }
             // **A filter cannot outlive the thing it filters by.** Removing the last use of the
             // active tag emptied the vocabulary, which hid the picker — and left `tag` set, so
             // the library stayed empty with no control on screen to clear it.

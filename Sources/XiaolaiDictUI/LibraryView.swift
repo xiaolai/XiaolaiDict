@@ -95,7 +95,7 @@ public struct LibraryView: View {
                         .disabled(!canSave(inspector))
                     // **Said, not merely disabled.** A button that refuses a click without a reason
                     // is a broken switch, and "blank" is not guessable from a greyed-out control.
-                    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if isDraftBlank {
                         Text("An answer cannot be blank.")
                             .font(.system(size: scale.text.micro))
                             .foregroundStyle(.secondary)
@@ -204,10 +204,16 @@ public struct LibraryView: View {
         }
     }
 
+    /// **One rule for blank**, because the Save button and the sentence under it must agree:
+    /// two copies of the trimming predicate is a control that refuses a click while the label
+    /// beside it says nothing is wrong.
+    private var isDraftBlank: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Saveable when there is something to save: not blank, and not what is already stored.
     private func canSave(_ inspector: LibraryPresentation.Inspector) -> Bool {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && draft != inspector.answer
+        !isDraftBlank && draft != inspector.answer
     }
 
     // MARK: - Finding
@@ -238,7 +244,7 @@ public struct LibraryView: View {
                     get: { state.tag },
                     set: { act(.filterTag($0)) })) {
                     Text("Any tag").tag(String?.none)
-                    ForEach(state.tagVocabulary, id: \.tag) { entry in
+                    ForEach(state.tagVocabulary) { entry in
                         Text(verbatim: "\(entry.tag) (\(entry.count))").tag(String?.some(entry.tag))
                     }
                 }
@@ -384,76 +390,86 @@ public struct LibraryView: View {
 
     // MARK: - Changing
 
+    /// **Three things, each its own view**: what the reader is looking at, what they can do to
+    /// the selection, and where the last export went.
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
-        HStack(spacing: scale.space.inline) {
-            // **The scope is on the button**, because a bulk action the reader misjudged is the one
-            // they cannot see the extent of until it has happened.
-            Text(state.selection.isEmpty
-                 ? "\(state.total) cards"
-                 : "\(state.selection.count) selected")
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.secondary)
-            // **The denominator, always beside the rate** (U03). A percentage on its own is the
-            // one figure here nobody can check afterwards, and absent is what it is when there
-            // has been nothing eligible to measure.
-            if let retention = state.retention {
-                Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
+            HStack(spacing: scale.space.inline) {
+                tally
+                Spacer(minLength: 0)
+                if !state.selection.isEmpty { selectionActions }
+                // **Outside the selection block**, because putting a bulk action back is not an
+                // operation on whatever happens to be selected now.
+                if let undoable = state.undoable {
+                    Button(undoable.name) { act(.undo) }
+                }
+                Button("Export…") { act(.export) }
+            }
+            .padding(scale.space.padAcross)
+            if let exported = state.exported {
+                // The path, because an export the reader cannot find did not happen for them.
+                Text(verbatim: exported)
                     .font(.system(size: scale.text.micro))
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, scale.space.padAcross)
+                    .padding(.bottom, scale.space.line)
             }
-            Spacer(minLength: 0)
-            if !state.selection.isEmpty {
-                if state.canConfirm {
-                    Button("Confirm \(state.selection.count)") { act(.confirm) }
-                }
-                // **Named for what it will do to this selection.** A Pause button over rows that
-                // are all resting is a control whose label is wrong before it is pressed.
-                if state.selectionIsPaused {
-                    Button("Resume \(state.selection.count)") { act(.resume) }
-                } else {
-                    Button("Pause \(state.selection.count)") { act(.pause) }
-                }
-                if state.selectionIsArchived {
-                    Button("Unarchive \(state.selection.count)") { act(.unarchive) }
-                } else {
-                    Button("Archive \(state.selection.count)") { act(.archive) }
-                }
-                // **Two different deletions, named apart.** Removing from study keeps the reading;
-                // deleting the reading keeps the card. A single "Delete" would mean whichever the
-                // reader assumed.
-                Button("Remove \(state.selection.count) from study", role: .destructive) {
-                    act(.removeFromStudy)
-                }
-                Button("Delete the reading behind \(state.selection.count)", role: .destructive) {
-                    act(.deleteReading)
-                }
-                .help(Text("Keeps the cards and removes the sentences they were saved from"))
-                TextField("Tag", text: $tag)
-                    .frame(maxWidth: Token.Library.tagWidth)
-                    .onSubmit {
-                        act(.tag(tag))
-                        tag = ""
-                    }
-            }
-            // **Outside the selection block**, because putting a bulk action back is not an
-            // operation on whatever happens to be selected now.
-            if let undoable = state.undoable {
-                Button(undoable.name) { act(.undo) }
-            }
-            Button("Export…") { act(.export) }
         }
-        .padding(scale.space.padAcross)
-        if let exported = state.exported {
-            // The path, because an export the reader cannot find did not happen for them.
-            Text(verbatim: exported)
+    }
+
+    /// What the reader is looking at, and how well they are remembering it.
+    @ViewBuilder private var tally: some View {
+        // **The scope is on the button**, because a bulk action the reader misjudged is the one
+        // they cannot see the extent of until it has happened.
+        Text(state.selection.isEmpty
+             ? "\(state.total) cards"
+             : "\(state.selection.count) selected")
+            .font(.system(size: scale.text.small))
+            .foregroundStyle(.secondary)
+        // **The denominator, always beside the rate** (U03). A percentage on its own is the
+        // one figure here nobody can check afterwards, and absent is what it is when there
+        // has been nothing eligible to measure.
+        if let retention = state.retention {
+            Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
                 .font(.system(size: scale.text.micro))
                 .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.horizontal, scale.space.padAcross)
-                .padding(.bottom, scale.space.line)
         }
+    }
+
+    /// What can be done to the selection, each control named for what it will do to *this* one.
+    @ViewBuilder private var selectionActions: some View {
+        if state.canConfirm {
+            Button("Confirm \(state.selection.count)") { act(.confirm) }
         }
+        // **Named for what it will do to this selection.** A Pause button over rows that
+        // are all resting is a control whose label is wrong before it is pressed.
+        if state.selectionIsPaused {
+            Button("Resume \(state.selection.count)") { act(.resume) }
+        } else {
+            Button("Pause \(state.selection.count)") { act(.pause) }
+        }
+        if state.selectionIsArchived {
+            Button("Unarchive \(state.selection.count)") { act(.unarchive) }
+        } else {
+            Button("Archive \(state.selection.count)") { act(.archive) }
+        }
+        // **Two different deletions, named apart.** Removing from study keeps the reading;
+        // deleting the reading keeps the card. A single "Delete" would mean whichever the
+        // reader assumed.
+        Button("Remove \(state.selection.count) from study", role: .destructive) {
+            act(.removeFromStudy)
+        }
+        Button("Delete the reading behind \(state.selection.count)", role: .destructive) {
+            act(.deleteReading)
+        }
+        .help(Text("Keeps the cards and removes the sentences they were saved from"))
+        TextField("Tag", text: $tag)
+            .frame(maxWidth: Token.Library.tagWidth)
+            .onSubmit {
+                act(.tag(tag))
+                tag = ""
+            }
     }
 }
 
@@ -577,21 +593,15 @@ public enum LibraryAction: Sendable, Equatable {
 
 /// What the library draws.
 public struct LibraryPresentation: Sendable, Equatable {
-    /// Hand-written because `tagVocabulary` is an array of tuples, which Swift will not synthesise
-    /// equality for. Every stored property is compared — a hand-written `==` that forgets one is
-    /// a view that stops redrawing for a change it cannot see.
-    public static func == (a: LibraryPresentation, b: LibraryPresentation) -> Bool {
-        a.rows == b.rows && a.total == b.total && a.search == b.search && a.filter == b.filter
-            && a.scriptFiltered == b.scriptFiltered && a.selection == b.selection
-            && a.hasMore == b.hasMore && a.canConfirm == b.canConfirm
-            && a.suggestions == b.suggestions && a.exported == b.exported
-            && a.selectionIsPaused == b.selectionIsPaused
-            && a.selectionIsArchived == b.selectionIsArchived
-            && a.undoable == b.undoable && a.setAside == b.setAside
-            && a.tagVocabulary.map(\.tag) == b.tagVocabulary.map(\.tag)
-            && a.tagVocabulary.map(\.count) == b.tagVocabulary.map(\.count)
-            && a.tag == b.tag && a.retention == b.retention
-            && a.inspector == b.inspector && a.problem == b.problem
+    /// **A tag and how many notes carry it.** A named type rather than a tuple, because a tuple
+    /// is not `Equatable` — which forced a hand-written `==` over every stored property of the
+    /// presentation, and a hand-written one that forgets a property is a view that stops
+    /// redrawing for a change it cannot see. The compiler writes it now.
+    public struct TagUse: Sendable, Equatable, Identifiable {
+        public let tag: String
+        public let count: Int
+        public var id: String { tag }
+        public init(tag: String, count: Int) { self.tag = tag; self.count = count }
     }
 
     public let rows: [Row]
@@ -625,7 +635,7 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let setAside: [IgnoredLemma]
     /// Every tag the reader has used, with how many notes carry it. **Empty until they tag
     /// something**, so the control is absent rather than present and useless.
-    public let tagVocabulary: [(tag: String, count: Int)]
+    public let tagVocabulary: [TagUse]
     /// The tag the list is narrowed to.
     public let tag: String?
     /// Delayed recall, **with its denominator**, or nil when nothing has been eligible yet.
@@ -647,7 +657,7 @@ public struct LibraryPresentation: Sendable, Equatable {
                 suggestions: [Suggestion] = [], exported: String? = nil,
                 selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
                 undoable: Undoable? = nil, setAside: [IgnoredLemma] = [],
-                tagVocabulary: [(tag: String, count: Int)] = [], tag: String? = nil,
+                tagVocabulary: [TagUse] = [], tag: String? = nil,
                 retention: Retention? = nil,
                 inspector: Inspector? = nil, problem: String? = nil) {
         self.rows = rows

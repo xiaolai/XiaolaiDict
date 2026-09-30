@@ -135,14 +135,8 @@ private struct FitsItsContent: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onScrollGeometryChange(for: ContentFit.self) { geometry in
-                // Insets on both sides of the comparison, so whatever sits over the content is in
-                // each and cancels.
-                ContentFit(
-                    wanted: geometry.contentSize.height + geometry.contentInsets.top
-                        + geometry.contentInsets.bottom,
-                    given: geometry.containerSize.height)
-            } action: { _, latest in
+            .onScrollGeometryChange(for: ContentFit.self) { ContentFit(of: $0) }
+            action: { _, latest in
                 report?(latest.wanted, latest.given)
                 fit.wanted = latest.wanted
                 fit.given = latest.given
@@ -192,9 +186,23 @@ private struct FitsItsContent: ViewModifier {
         }
     }
 
-    private struct ContentFit: Equatable {
-        let wanted: CGFloat
-        let given: CGFloat
+}
+
+/// **What a scroll view reports: the height its content wants, and the height it has** — with
+/// the insets on both sides, so whatever sits over the content is in each and cancels.
+///
+/// One type and one conversion, shared by the fit and by the pane that feeds it. Two copies of a
+/// two-field measurement and its `onScrollGeometryChange` mapping is two places for the inset
+/// rule to drift, and a window sized from one reading of it while a pane reported the other
+/// would chase a target nothing agrees on.
+struct ContentFit: Equatable {
+    let wanted: CGFloat
+    let given: CGFloat
+
+    init(of geometry: ScrollGeometry) {
+        wanted = geometry.contentSize.height + geometry.contentInsets.top
+            + geometry.contentInsets.bottom
+        given = geometry.containerSize.height
     }
 }
 
