@@ -122,7 +122,14 @@ public struct LibraryView: View {
                     Spacer(minLength: 0)
                 }
             }
-            timeline(inspector)
+            // **Scrollable, and bounded.** The two histories were unbounded stacks outside the
+            // list, so a word met fifty times pushed its own oldest entries — and everything
+            // below them — past the bottom of the window with no way to reach them.
+            ScrollView {
+                timeline(inspector)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: Token.Library.inspectorHistoryHeight)
         }
         .padding(scale.space.padAcross)
         // **Reset when the row changes, never carried.** A draft left over from the previous
@@ -274,7 +281,10 @@ public struct LibraryView: View {
             List(state.suggestions) { suggestion in
                 HStack(spacing: scale.space.inline) {
                     VStack(alignment: .leading, spacing: scale.space.tight) {
-                        Text(verbatim: suggestion.lemma)
+                        // **Named with its language**, because Study and "already know" both act
+                        // on the lemma *and* the language: two homographs read as one row.
+                        Text(verbatim: suggestion.language.isEmpty
+                             ? suggestion.lemma : "\(suggestion.lemma) · \(suggestion.language)")
                             .font(.system(size: scale.text.body, weight: .medium))
                         // The evidence, so the ranking is legible rather than trusted.
                         Text("Looked up on \(suggestion.days) days, in \(suggestion.sources) places")
@@ -305,18 +315,29 @@ public struct LibraryView: View {
                 Text("Words you already know")
                     .font(.system(size: scale.text.micro, weight: .medium))
                     .foregroundStyle(.secondary)
-                ForEach(state.setAside) { lemma in
-                    HStack(spacing: scale.space.inline) {
-                        Text(verbatim: lemma.lemma)
-                            .font(.system(size: scale.text.small))
-                        Spacer(minLength: 0)
-                        Button("Offer it again") {
-                            act(.unignore(lemma: lemma.lemma, language: lemma.language))
+                // Scrollable for the same reason the histories are: this list grows without
+                // bound, and the oldest "Offer it again" went off the bottom of the window.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: scale.space.tight) {
+                        ForEach(state.setAside) { lemma in
+                            HStack(spacing: scale.space.inline) {
+                                // **With its language**, because the action is keyed by both:
+                                // English and French *pain* are two rows that read as one.
+                                Text(verbatim: lemma.language.isEmpty
+                                     ? lemma.lemma : "\(lemma.lemma) · \(lemma.language)")
+                                    .font(.system(size: scale.text.small))
+                                Spacer(minLength: 0)
+                                Button("Offer it again") {
+                                    act(.unignore(lemma: lemma.lemma, language: lemma.language))
+                                }
+                                .buttonStyle(.link)
+                                .font(.system(size: scale.text.micro))
+                            }
                         }
-                        .buttonStyle(.link)
-                        .font(.system(size: scale.text.micro))
                     }
                 }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: Token.Library.setAsideHeight)
             }
             .padding(scale.space.padAcross)
         }

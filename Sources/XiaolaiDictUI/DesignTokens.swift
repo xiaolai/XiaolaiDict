@@ -66,6 +66,11 @@ public enum Token {
         static let searchWidth: CGFloat = 240
         /// The tag field. Narrow: a tag is a word, and a field the width of a sentence invites one.
         static let tagWidth: CGFloat = 120
+        /// How tall the inspector's two histories may grow before they scroll. A window's worth
+        /// of reading, not a screen's: past this the pane would push its own controls off.
+        static let inspectorHistoryHeight: CGFloat = 220
+        /// The same, for the set-aside list under the suggestions.
+        static let setAsideHeight: CGFloat = 160
         public static let width: CGFloat = 720
         public static let height: CGFloat = 480
     }

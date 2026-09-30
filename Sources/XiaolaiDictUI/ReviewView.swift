@@ -13,6 +13,7 @@ import XiaolaiDictCore
 /// a reader who can see how long the answer is has been told something about it.
 public struct ReviewView: View {
     @Environment(\.scale) private var scale
+    @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
     public let state: ReviewPresentation
     /// What the reader did. The view decides nothing: it reports, and the model commits.
@@ -24,17 +25,24 @@ public struct ReviewView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: scale.space.stack) {
-            switch state.stage {
-            case .empty(let reason):
-                emptyState(reason)
-            case .asking(let asking):
-                self.asking(asking)
-            case .finished(let summary):
-                finishedState(summary)
+        // **Scrollable, because the content is the reader's own writing.** A long sentence and a
+        // long answer shared a fixed stack with the controls, so past a certain length neither
+        // could be read to the end and the buttons went off the bottom of the window.
+        ScrollView {
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                switch state.stage {
+                case .empty(let reason):
+                    emptyState(reason)
+                case .asking(let asking):
+                    self.asking(asking)
+                case .finished(let summary):
+                    finishedState(summary)
+                }
             }
+            .padding(scale.space.padAcross)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(scale.space.padAcross)
+        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -77,7 +85,11 @@ public struct ReviewView: View {
             Text(MarkedSentence.text(
                 sentence.text,
                 marking: sentence.range.map { [$0] } ?? [],
-                size: scale.text.body, emphasis: .bold, accent: accent(for: question)))
+                // **The reader's emphasis setting**, which the lookup card and the drawer both
+                // honour through the same helper. Hardcoding `.bold` made this the one surface
+                // that ignored it.
+                size: scale.text.body, emphasis: options.emphasis,
+                accent: accent(for: question)))
         }
 
         Text(verbatim: question.word)
