@@ -371,9 +371,6 @@
     "Easy" : {
 
     },
-    "Everything needed has been granted." : {
-      "comment" : "Permissions pane, when nothing is missing"
-    },
     "Everything needed is in place. Anything here can still be changed." : {
 
     },
@@ -622,13 +619,7 @@
     "Nothing to suggest yet." : {
 
     },
-    "Off" : {
-
-    },
     "Offer it again" : {
-
-    },
-    "On" : {
 
     },
     "On a card" : {
@@ -688,9 +679,6 @@
 
     },
     "Paused" : {
-
-    },
-    "Permissions" : {
 
     },
     "Practice — nothing is scheduled" : {
@@ -1026,9 +1014,6 @@
     "This board was opened without the model's state, so it cannot say what is here." : {
 
     },
-    "This could not be checked just now. It will be asked again." : {
-
-    },
     "This dictionary cannot name this entry, so it cannot be studied" : {
 
     },
@@ -1100,9 +1085,6 @@
 
     },
     "Undo the last review" : {
-
-    },
-    "Unknown" : {
 
     },
     "Unpin this note" : {

@@ -253,7 +253,6 @@ public struct SettingsView: View {
         case .reading: ReadingPane(appearance: appearance, erase: erase, eraseAction: eraseAction)
         case .lookup: LookupPane(policy: hover ?? $unattached, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
-        case .permissions: PermissionsPane(model: model)
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
@@ -271,14 +270,15 @@ public struct SettingsView: View {
 /// window does. A report naming its own panes could drift from the window's and still pass.
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// **First, because it is what a fresh install needs and the only pane that answers across the
-    /// others**: is any of this working. It was a window of its own until 2026-10-01 — a second
+    /// others**: is any of this working. It absorbed the Permissions pane on 2026-10-01 — that pane
+    /// listed the same two grants this one already has rows for, with fewer affordances: it named
+    /// no list to find them in and offered no way to ask macOS. It was a window of its own until 2026-10-01 — a second
     /// surface over the same facts, and the only place the reader could choose which model answers,
     /// which is a standing preference rather than something a fresh install lacks.
     case setup
     case reading
     case lookup
     case dictionary
-    case permissions
     case about
 
     public var id: String { rawValue }
@@ -293,7 +293,6 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
-        case .permissions: "Permissions"
         case .about: "About"
         }
     }
@@ -308,7 +307,6 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
-        case .permissions: "Permissions"
         case .about: "About"
         }
     }
@@ -319,7 +317,6 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "textformat.size"
         case .lookup: "magnifyingglass"
         case .dictionary: "character.book.closed"
-        case .permissions: "lock.shield"
         case .about: "info.circle"
         }
     }
