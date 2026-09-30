@@ -55,27 +55,36 @@ public struct DictionaryChoice {
 struct SpeakingVoiceSection: View {
     /// The words this dictionary is asked about.
     private static let language = "en"
-    /// Bumped when macOS says the voices changed, which is what redraws this.
-    @State private var generation = 0
+
+    /// **What is drawn, held rather than recomputed in `body`.**
+    ///
+    /// It used to ask `Speech` from inside `body` and keep a `generation` counter that `body` never
+    /// read — so the redraw rested on `@State` invalidation alone, with no visible dependency
+    /// between the counter and anything on screen. Holding the answers makes the dependency the
+    /// thing it actually is, and keeps a memoised-but-not-free lookup off the layout path.
+    @State private var voiceName: String?
+    @State private var caveat: String?
+    @State private var advice: Speech.VoiceAdvice = .unknown
 
     var body: some View {
         Section {
             LabeledContent("Voice") {
-                if let voice = Speech.bestVoice(for: Self.language) {
+                if let voiceName {
                     // A voice's name is a proper noun; macOS calls it that in every language.
-                    Text(verbatim: voice.name)
+                    Text(verbatim: voiceName)
                 } else {
                     Text("None installed")
                 }
             }
-            if let caveat = Speech.caveat(for: Self.language) {
+            if let caveat {
                 Text(caveat)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                // Offered only where there is something to go and get. A language macOS has nothing
-                // better for gets the sentence and no button — a control that leads nowhere is
-                // worse than none, and this is the one screen where that would waste a trip.
-                if Speech.recommendation(for: Self.language) != nil {
+                // Offered wherever there is somewhere to go — a named voice, or a language nobody
+                // has checked, which is most of them. Withheld only where the absence is measured:
+                // a button that leads nowhere is worse than none, and this is the one screen where
+                // that would waste a trip.
+                if advice != .nothingBetter {
                     Button("Open VoiceOver Utility") { Speech.openVoiceLibrary() }
                         .buttonStyle(.glass)
                         .controlSize(.small)
@@ -84,14 +93,25 @@ struct SpeakingVoiceSection: View {
         } header: {
             Text("Speaking")
         }
-        // **Cleared here rather than waited for.** The observer inside `Speech` hops to the main
-        // actor, so it may land after this redraw; clearing it on the way through means the body
-        // below cannot read the answer it is redrawing to escape.
+        .task { refresh() }
+        // **Delivered on the main queue explicitly.** `NotificationCenter`'s publisher fires on
+        // whichever thread posted, and nothing documents which thread macOS posts this one from —
+        // while everything the closure touches is main-actor isolated.
         .onReceive(NotificationCenter.default.publisher(
-            for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in
+            for: AVSpeechSynthesizer.availableVoicesDidChangeNotification
+        ).receive(on: DispatchQueue.main)) { _ in
+            // Cleared here rather than waited for: the observer inside `Speech` hops to the main
+            // actor through a `Task` and may land after this, leaving the row drawing the answer
+            // it is redrawing to escape.
             Speech.forgetInstalledVoices()
-            generation += 1
+            refresh()
         }
+    }
+
+    private func refresh() {
+        voiceName = Speech.bestVoice(for: Self.language)?.name
+        caveat = Speech.caveat(for: Self.language)
+        advice = Speech.advice(for: Self.language)
     }
 }
 

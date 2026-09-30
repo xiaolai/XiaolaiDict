@@ -102,6 +102,29 @@ struct SpeechTests {
         #expect(Speech.recommendation(for: "ja") == nil)
     }
 
+    /// **Three answers, because there are three.** An unmeasured language is not a measured
+    /// absence: the voice catalogue carries Otoya for Japanese and Audrey for French, so telling
+    /// those readers macOS offers nothing is false — and it was what one sentence said to every
+    /// language the table did not name.
+    @Test func anUnmeasuredLanguageIsNotToldThereIsNothing() {
+        #expect(Speech.advice(for: "en-US") == .get("Ava"))
+        #expect(Speech.advice(for: "en-GB") == .get("Serena"))
+        #expect(Speech.advice(for: "zh-Hans") == .nothingBetter, "Chinese is the measured absence")
+        for unmeasured in ["ja", "fr-FR", "de-DE", "en-AU", "en-IN"] {
+            #expect(Speech.advice(for: unmeasured) == .unknown, "\(unmeasured) claimed to be measured")
+        }
+    }
+
+    /// And the caveat says so: "may be available", never "nothing better", for an unknown language.
+    @Test func anUnmeasuredLanguagesCaveatDoesNotClaimThereIsNothing() throws {
+        let compactOnly = installed.filter { $0.quality == .default }
+        try #require(!compactOnly.filter { $0.language.hasPrefix("ja") }.isEmpty,
+                     "this Mac has no Japanese voice to test against")
+        let caveat = try #require(Speech.caveat(for: "ja", among: compactOnly))
+        #expect(caveat.contains("may be available"), "got: \(caveat)")
+        #expect(!caveat.contains("nothing better"), "an unmeasured language was told macOS has nothing")
+    }
+
     /// **The wire, not the value.** `Speech.caveat` was complete, memoised and tested while nothing
     /// in the card asked for it — the reader with only a compact voice was told nothing for as long
     /// as the card has existed. The check is on what reaches the button, because that is the part

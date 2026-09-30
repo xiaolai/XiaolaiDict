@@ -266,6 +266,76 @@ struct ReadingRepeatTests {
         #expect(day.entries[0].times == 2)
     }
 
+    /// **A found and a not-found reading are two cards**, because they draw differently: one
+    /// carries the miss badge. Collapsing them made one card stand for two visible states.
+    @Test func afoundAndAmissedReadingDoNotCollapse() {
+        // Identical in every other field, so only `result` can separate them. Built by hand rather
+        // than through `read(_:_:id:)`, whose default sense would have separated them anyway — the
+        // first version of this test passed without `result` in the key at all.
+        func entry(_ result: LookupResult, id: Int, at when: Date) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: "qqqq", surface: "qqqq", sentence: "The sentence.",
+                sentenceRange: nil, place: ReadingPlace(name: "Chrome"), at: when, result: result,
+                quality: .accessibility(.accessibilityTextRange, context: .complete))
+        }
+        let day = Self.day([
+            entry(.found, id: 1, at: at("2026-09-29 10:00")),
+            entry(.notFound, id: 2, at: at("2026-09-29 10:01")),
+        ])
+        #expect(day.entries.count == 2, "a found and a missed reading were drawn as one card")
+    }
+
+    /// **And a reading with no captured sentence is its own card.** One draws the cue, the other
+    /// draws nothing where the cue would be, so merging them puts a sentence on a card that has
+    /// none — or takes one away.
+    @Test func areadingWithNoCapturedSentenceIsItsOwnCard() {
+        func entry(_ context: CaptureQuality.Context, id: Int, at when: Date) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: "qqqq", surface: "qqqq", sentence: "The sentence.",
+                sentenceRange: nil, place: ReadingPlace(name: "Chrome"), at: when, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: context))
+        }
+        let day = Self.day([
+            entry(.complete, id: 1, at: at("2026-09-29 10:00")),
+            entry(.missing, id: 2, at: at("2026-09-29 10:01")),
+        ])
+        #expect(day.entries.count == 2, "a cue and a silence were drawn as one card")
+    }
+
+    /// **Two senses at the same coordinates are two cards.** A dictionary name with a block and an
+    /// ordinal says where a sense sits, not which sense it is — across homographs, or two revisions
+    /// of one dictionary, the same coordinates carry different meanings.
+    @Test func twoGlossesAtTheSameCoordinatesDoNotCollapse() {
+        func withGloss(_ gloss: String, id: Int, at when: Date) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: "fine", surface: "fine", sentence: "The sentence.", sentenceRange: nil,
+                place: ReadingPlace(name: "Chrome"), at: when, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: .complete),
+                sense: SenseNote(dictionary: "NOAD", ordinal: 2, outOf: 2, gloss: gloss, chosenBy: .model))
+        }
+        let day = Self.day([
+            withGloss("of high quality", id: 1, at: at("2026-09-29 10:00")),
+            withGloss("a sum exacted as a penalty", id: 2, at: at("2026-09-29 10:01")),
+        ])
+        #expect(day.entries.count == 2, "two meanings were drawn as one card")
+    }
+
+    /// **One lemma in two languages is two words**, which is what a study note is already keyed by.
+    @Test func onelemmaInTwoLanguagesDoesNotCollapse() {
+        func word(_ language: String, id: Int, at when: Date) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: "gift", surface: "gift", sentence: "Ein Wort.", sentenceRange: nil,
+                place: ReadingPlace(name: "Chrome"), at: when, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: .complete),
+                language: language)
+        }
+        let day = Self.day([
+            word("en", id: 1, at: at("2026-09-29 10:00")),
+            word("de", id: 2, at: at("2026-09-29 10:01")),
+        ])
+        #expect(day.entries.count == 2, "two languages' words were drawn as one card")
+    }
+
     /// A reading with no sense still collapses, and one that abstained differently does not.
     @Test func anAbstentionIsPartOfWhatMakesACardDifferent() {
         let plain = Self.read("qqqq", at("2026-09-29 10:00"), id: 1, ordinal: nil)

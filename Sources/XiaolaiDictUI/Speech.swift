@@ -150,38 +150,72 @@ public enum Speech {
             return String(localized: "No voice is installed for this language.")
         }
         guard voice.quality == .default else { return nil }
-        guard let better = recommendation(for: language) else {
-            // A language macOS offers nothing better for. Saying "better ones are a download"
-            // anyway is an errand that ends in confusion, and it is the reader's own language
-            // this happens to — Chinese has no voice above compact to download at all.
+        switch advice(for: language) {
+        case .get(let better):
+            return String(
+                localized: "Only a compact voice is installed. \(better) is a free download in \(Self.voiceLibrary).",
+                comment: "Voice caveat: which voice to get, and the app that installs it")
+        case .nothingBetter:
             return String(localized: """
                 Only a compact voice is available for this language. macOS offers nothing better \
                 for it.
                 """)
+        case .unknown:
+            // **Not "nothing better" — that was a measurement this had not made.** The table names
+            // English and Chinese; every other language fell into the same sentence and was told
+            // macOS has nothing, which is plainly false for the ones the voice catalogue does
+            // carry — Otoya for Japanese, Audrey for French, Petra for German. Saying "may be"
+            // and offering the door is the honest shape for a language nobody has checked.
+            return String(localized: """
+                Only a compact voice is installed. Better ones may be available in \
+                \(Self.voiceLibrary).
+                """)
         }
-        return String(
-            localized: "Only a compact voice is installed. \(better) is a free download in \(Self.voiceLibrary).",
-            comment: "Voice caveat: which voice to get, and the app that installs it")
     }
 
-    /// The voice worth downloading for `language`, by name.
+    /// What is known about better voices for a language. **Three cases, because there are three** —
+    /// a voice worth naming, a measured absence, and a language nobody has looked at. Collapsing
+    /// the last two told most of the world that macOS offers them nothing.
+    enum VoiceAdvice: Equatable {
+        /// Measured: this voice installs and speaks.
+        case get(String)
+        /// Measured: macOS offers nothing above compact for this language.
+        case nothingBetter
+        /// Not measured. There may or may not be something.
+        case unknown
+    }
+
+    /// What is known for `language`, and nothing beyond it.
     ///
-    /// **Hardcoded, because nothing can be asked.** There is no API that lists the voices a Mac
-    /// *could* install — only the ones it has — so this is a measured claim about macOS rather than
-    /// a reading of it, and it is written down with what was measured.
+    /// **Ava is the only entry backed by a run of the product.** Measured on macOS 27 (build
+    /// 26A428) on 2026-10-01 through `--speech-report` inside the signed bundle: installed from
+    /// VoiceOver Utility, vended as `com.apple.voice.premium.en-US.Ava` at premium quality, and
+    /// rendering 35,483 frames against the compact Samantha's 31,498. The frame count is the
+    /// load-bearing half — the reported macOS Tahoe fault is that premium voices are *silently*
+    /// skipped, so "it installed" would not have been evidence that it speaks.
     ///
-    /// Measured on macOS 27 (build 26A428) on 2026-10-01, through `--speech-report` inside the
-    /// signed bundle: **Ava (Premium)** installs, is vended by `AVSpeechSynthesisVoice` as
-    /// `com.apple.voice.premium.en-US.Ava`, and **renders 35,483 frames** against the compact
-    /// Samantha's 31,498. That last number is the part worth keeping — the reported macOS Tahoe
-    /// fault is that premium voices are *silently* skipped, so "it installed" would not have been
-    /// evidence that it speaks.
+    /// **Serena is weaker evidence and is named anyway**: she is in the catalogue macOS 27 ships
+    /// and Apple still serves the asset, but nothing here has installed her. Said plainly because
+    /// the two claims are not equal, and a later reader should not have to guess which is which.
     ///
-    /// Nil for anything not named, and Chinese is deliberately not named: the voice catalogue
-    /// covers 25 languages and no variety of Chinese is among them.
+    /// **Chinese is the one measured absence.** The catalogue covers 25 languages and no variety of
+    /// Chinese is among them; the Siri voices that do cover it are not vended to third-party apps.
+    ///
+    /// Everything else is `unknown` — including other English regions. The catalogue lists Lee for
+    /// en-AU and Veena for en-IN, and that is exactly the evidence that already misled this file
+    /// once: it also listed Ava and Serena while omitting Zoe, who turned out to install fine. A
+    /// catalogue that is provably incomplete cannot be the source of a recommendation.
+    static func advice(for language: String) -> VoiceAdvice {
+        if language.hasPrefix("zh") { return .nothingBetter }
+        if language.hasPrefix("en-GB") { return .get("Serena") }
+        // `en` bare and `en-US` only. Another region is a different voice, and an unmeasured one.
+        if language == "en" || language.hasPrefix("en-US") { return .get("Ava") }
+        return .unknown
+    }
+
+    /// The voice worth downloading for `language`, by name, or nil where none is named.
     static func recommendation(for language: String) -> String? {
-        if language.hasPrefix("en-GB") { return "Serena" }
-        if language.hasPrefix("en") { return "Ava" }
+        if case .get(let name) = advice(for: language) { return name }
         return nil
     }
 

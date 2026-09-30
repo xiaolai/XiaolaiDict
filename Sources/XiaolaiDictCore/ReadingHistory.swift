@@ -56,6 +56,13 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     /// **Defaulted, because every existing caller means "this one lookup".** Only
     /// `ReadingHistory.days` collapses, and it is the only thing that passes anything here.
     public let repeats: [Int]
+    /// The language of the word, where the ledger recorded one.
+    ///
+    /// **A lemma alone collides**, which this project already says of a study note and of a
+    /// suggestion — *die*, *chat*, *pain*, and English *gift* against German *Gift*. The drawer
+    /// filters by script, and two languages can share one; counting or grouping by lemma alone
+    /// makes those one word.
+    public let language: String?
 
     /// How many times this reading was looked up. One card, so at least one.
     public var times: Int { repeats.count + 1 }
@@ -70,7 +77,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         id: Int, lemma: String, surface: String, sentence: String, sentenceRange: NSRange?,
         place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?,
         partOfSpeech: String? = nil, sense: SenseNote? = nil, senseAbstention: Abstention? = nil,
-        repeats: [Int] = []
+        language: String? = nil, repeats: [Int] = []
     ) {
         self.id = id
         self.lemma = lemma
@@ -85,6 +92,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.sense = sense
         self.senseAbstention = senseAbstention
         self.repeats = repeats
+        self.language = language
     }
 
     /// The same reading, answerable for the lookups it stands for.
@@ -92,7 +100,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         ReadingEntry(
             id: id, lemma: lemma, surface: surface, sentence: sentence, sentenceRange: sentenceRange,
             place: place, at: at, result: result, quality: quality, partOfSpeech: partOfSpeech,
-            sense: sense, senseAbstention: senseAbstention, repeats: repeats)
+            sense: sense, senseAbstention: senseAbstention, language: language, repeats: repeats)
     }
 
     /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a
@@ -300,20 +308,38 @@ public enum ReadingHistory {
     /// this is the identity of the card, and two cards a reader cannot tell apart are one card.
     private struct Reading: Hashable {
         let lemma: String
+        /// Part of the key for the reason it is part of a study note's: one lemma is two words in
+        /// two languages, and they must not become one card.
+        let language: String?
         let sentence: String
+        let result: LookupResult
+        let cue: SentenceCue
         let dictionary: String?
         let block: Int?
         let ordinal: Int?
         let outOf: Int?
+        /// **The sense's own words, because the coordinates are not an identity.** A dictionary
+        /// name with a block and an ordinal says *where* a sense sits, not which sense it is:
+        /// across homographs, or across two revisions of one dictionary, the same coordinates can
+        /// carry different meanings. Merging those would hand the reader one card for two senses
+        /// and could apply an older confirmation to the wrong one.
+        let gloss: String?
         let abstention: String?
 
         init(_ entry: ReadingEntry) {
             lemma = entry.lemma
+            language = entry.language
             sentence = entry.sentence
+            // **Both are drawn, so both separate cards.** A not-found reading carries the miss
+            // badge and a reading with no captured context draws no sentence at all — collapsing
+            // either into its neighbour makes one card stand for two visibly different states.
+            result = entry.result
+            cue = entry.cue
             dictionary = entry.sense?.dictionary
             block = entry.sense?.block
             ordinal = entry.sense?.ordinal
             outOf = entry.sense?.outOf
+            gloss = entry.sense?.gloss
             abstention = entry.senseAbstention?.rawValue
         }
     }

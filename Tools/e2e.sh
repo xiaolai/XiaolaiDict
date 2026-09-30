@@ -1266,18 +1266,34 @@ else
     # Earlier stages recorded lookups, so the drawer must have something to show. An empty drawer
     # here would mean the ledger read silently returned nothing.
     if why=$(expect "$drawer" problem=none 2>&1); then
-        days=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["days"])' "$drawer")
-        readings=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["readings"])' "$drawer")
-        lookups=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["lookups"])' "$drawer")
-        words=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["words"])' "$drawer")
-        if [ "$readings" -le 0 ]; then
-            flunk "drawer: the ledger has rows from earlier stages but the drawer showed none"
-        # **A card is a reading and stands for one lookup or several**, so there can never be fewer
-        # lookups than cards. Fewer would mean the collapse invented a card, which is the one way
-        # the grouping can be wrong that a reader would never see: the cards would look right.
-        elif [ "$lookups" -lt "$readings" ] || [ "$words" -gt "$readings" ]; then
-            flunk "drawer: $readings card(s) stand for $lookups lookup(s) and hold $words word(s), which cannot all be true"
+        # **One decode, and the ordering checked in Python rather than in `[ ]`.** Four separate
+        # `python3 -c` calls decoded the same JSON four times, and the comparisons that followed
+        # were the real fault: `[ "$x" -lt "$y" ]` *errors* on a non-integer, and an error inside an
+        # `if` is simply a false branch — so a report whose counts came back as `null` or a message
+        # failed every test and fell through to the `else`, which passes. A check that reports
+        # success when it could not read its input is worse than no check.
+        counts=$(python3 - "$drawer" <<'COUNTS' 2>/dev/null || true
+import json, sys
+d = json.loads(sys.argv[1])
+got = {k: d.get(k) for k in ("days", "readings", "lookups", "words")}
+# `bool` is an `int` in Python, so it is excluded by name: `True` would otherwise read as 1 and
+# pass the type test, and only trip the ordering below by coincidence.
+missing = [k for k, v in got.items() if not isinstance(v, int) or isinstance(v, bool)]
+if missing:
+    sys.exit("not whole numbers: " + ", ".join(f"{k}={got[k]!r}" for k in missing))
+# A card stands for at least its own lookup and holds exactly one word, so the order is fixed.
+# Anything else means the collapse invented a card — the one way the grouping can be wrong that
+# a reader would never see, because the cards themselves would look right.
+if not (1 <= got["words"] <= got["readings"] <= got["lookups"]):
+    sys.exit("counts cannot all be true: "
+             + " ".join(f"{k}={got[k]}" for k in ("words", "readings", "lookups")))
+print(" ".join(str(got[k]) for k in ("days", "readings", "lookups", "words")))
+COUNTS
+)
+        if [ -z "$counts" ]; then
+            flunk "drawer: the counts did not read as whole numbers in the right order ($(printf '%s' "$drawer" | head -c 160))"
         else
+            read -r days readings lookups words <<<"$counts"
             pass "drawer: shows $readings reading(s) — $lookups lookup(s), $words word(s) — across $days day(s)"
         fi
     else

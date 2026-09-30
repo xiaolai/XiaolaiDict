@@ -103,7 +103,11 @@ public final class HistoryDrawerModel {
     /// drawer the reader is looking at. Lemmas, because that is what the ledger keys a word by;
     /// `surface` would count `vanish` and `vanished` as two.
     public var distinctWords: Int {
-        Set(days.lazy.flatMap(\.entries).map(\.lemma)).count
+        // **Lemma *and* language**, the pair a study note is keyed by. English `gift` and German
+        // `Gift` are two words with two ledger identities, and the drawer filters by script — which
+        // both of those pass. Counting lemmas alone made them one.
+        struct Word: Hashable { let lemma: String; let language: String? }
+        return Set(days.lazy.flatMap(\.entries).map { Word(lemma: $0.lemma, language: $0.language) }).count
     }
 
     public func isExpanded(_ day: ReadingDay) -> Bool { expandedDays.contains(day.id) }

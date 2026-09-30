@@ -599,7 +599,11 @@ public final class Ledger {
                    se.gloss, se.chosen_by,
                    -- Why no sense was marked, where the selector declined: "the model declined"
                    -- and "no model here" are different facts, and the card can say which.
-                   l.sense_abstention
+                   l.sense_abstention,
+                   -- **Appended, never inserted.** Every reader of this projection is
+                   -- positional, so a column added in the middle silently re-points all of
+                   -- them. The tail is the only safe end.
+                   l.language
             FROM lookups l
             -- By id rather than by lookup_id, so a lookup with more than one encounter contributes
             -- one row and not several. Only the primary dictionary is recorded, so there should be
@@ -678,7 +682,7 @@ public final class Ledger {
             at: Date(timeIntervalSince1970: row.real(4)),
             result: try row.result(5), quality: try row.quality(14),
             partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
-            senseAbstention: try row.abstention(24))
+            senseAbstention: try row.abstention(24), language: row.optionalText(25))
     }
 
     /// The reading a lookup was, for a surface that knows which lookup it wants.

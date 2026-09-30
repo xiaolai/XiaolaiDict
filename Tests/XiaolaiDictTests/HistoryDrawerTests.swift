@@ -229,6 +229,23 @@ struct HistoryRemovalTests {
         #expect(model.distinctWords <= model.totalEntries)
     }
 
+    /// One lemma in two languages is two words — the pair a study note is keyed by.
+    @Test func thewordCountSeparatesLanguages() {
+        func word(_ language: String, id: Int) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: "gift", surface: "gift", sentence: "A sentence.", sentenceRange: nil,
+                place: ReadingPlace(name: "TextEdit"), at: .distantPast, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: .complete),
+                language: language)
+        }
+        let model = HistoryDrawerModel()
+        model.days = [ReadingDay(
+            id: "d", date: .distantPast, label: .today,
+            entries: [word("en", id: 1), word("de", id: 2)])]
+        #expect(model.totalEntries == 2)
+        #expect(model.distinctWords == 2, "English gift and German Gift were counted as one word")
+    }
+
     /// Counted over the days the drawer is showing, not over the ledger: a filtered drawer's
     /// header has to describe the drawer in front of the reader.
     @Test func theWordCountFollowsWhatTheDrawerIsShowing() {

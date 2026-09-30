@@ -651,6 +651,9 @@
         }
       }
     },
+    "Only a compact voice is installed. Better ones may be available in %@." : {
+
+    },
     "Only my study scripts" : {
 
     },

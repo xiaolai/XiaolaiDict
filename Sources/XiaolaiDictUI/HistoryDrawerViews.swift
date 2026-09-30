@@ -530,11 +530,7 @@ struct ReadingCardView: View {
     /// behind the sense count of the entry it was recorded against.
     private func mark(_ badge: CardBadge) -> some View {
         Text(badge.text)
-            .font(.system(size: scale.text.micro, weight: .medium))
-            .monospacedDigit()
-            .padding(.horizontal, scale.space.inline)
-            .padding(.vertical, scale.space.tight)
-            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
+            .modifier(BadgeCapsule(scale: scale))
             .foregroundStyle(badge.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
             .help(Text(badge.explanation))
     }
@@ -656,13 +652,14 @@ struct ReadingCardView: View {
     /// a sentence.
     private var timesRead: some View {
         Text(verbatim: "×\(entry.times)")
-            .font(.system(size: scale.text.micro, weight: .medium))
-            .monospacedDigit()
-            .padding(.horizontal, scale.space.inline)
-            .padding(.vertical, scale.space.tight)
-            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
+            .modifier(BadgeCapsule(scale: scale))
             .foregroundStyle(.secondary)
-            .help(Text("Read ^[\(entry.times) time](inflect: true), in this same sentence"))
+            // **The sentence is only claimed where there is one.** A reading with no captured
+            // context draws no sentence at all, and saying "in this same sentence" over a card
+            // that shows none is a claim about text the reader was never shown.
+            .help(entry.cue == .none
+                  ? Text("Read ^[\(entry.times) time](inflect: true)")
+                  : Text("Read ^[\(entry.times) time](inflect: true), in this same sentence"))
             .accessibilityLabel(Text("Read ^[\(entry.times) time](inflect: true)"))
     }
 
@@ -841,3 +838,23 @@ private let sampleGeometry = DrawerGeometry.make(
         .frame(width: 380, height: 420)
 }
 #endif
+
+/// **The capsule both of a card's small marks wear** — the repeat count beside the word and the
+/// sense badge at the end of the line.
+///
+/// One shape, because they were two copies of the same six modifiers and a change to the padding
+/// or the wash would have had to be made twice or drift. What stays separate is everything that
+/// says what each one *is*: the colour, the help text and the accessibility label. They are the
+/// same furniture carrying different facts, not the same badge.
+struct BadgeCapsule: ViewModifier {
+    let scale: Scale
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: scale.text.micro, weight: .medium))
+            .monospacedDigit()
+            .padding(.horizontal, scale.space.inline)
+            .padding(.vertical, scale.space.tight)
+            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
+    }
+}
