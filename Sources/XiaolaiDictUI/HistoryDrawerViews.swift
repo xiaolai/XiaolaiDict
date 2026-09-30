@@ -750,13 +750,18 @@ private let sampleDays: [ReadingDay] = [
     ]),
 ]
 
+/// **Non-optional, and named, so no preview force-unwraps a model's `geometry`.** Two previews did,
+/// and each built the model twice — `HistoryDrawerSurface(model: sampleModel(), geometry:
+/// sampleModel().geometry!)` handed a surface the geometry of a *different* instance.
+private let sampleGeometry = DrawerGeometry.make(
+    DrawerLayout(thickness: 380, edge: .right),
+    on: ScreenMetrics(
+        frame: UpRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: UpRect(x: 0, y: 0, width: 1440, height: 870)))
+
 @MainActor private func sampleModel() -> HistoryDrawerModel {
     let model = HistoryDrawerModel()
-    model.geometry = DrawerGeometry.make(
-        DrawerLayout(thickness: 380, edge: .right),
-        on: ScreenMetrics(
-            frame: UpRect(x: 0, y: 0, width: 1440, height: 900),
-            visibleFrame: UpRect(x: 0, y: 0, width: 1440, height: 870)))
+    model.geometry = sampleGeometry
     model.days = sampleDays
     model.revealed = true
     return model
@@ -802,14 +807,14 @@ private let sampleDays: [ReadingDay] = [
 /// The whole drawer, glass and all. The glass reads as grey here — a preview has no wallpaper
 /// behind it to refract, so judge the material in the running app, not in the canvas.
 #Preview("Drawer") {
-    HistoryDrawerSurface(model: sampleModel(), geometry: sampleModel().geometry!)
+    HistoryDrawerSurface(model: sampleModel(), geometry: sampleGeometry)
         .frame(width: 380, height: 700)
 }
 
 #Preview("Drawer, nothing read yet") {
     let empty = HistoryDrawerModel()
-    empty.geometry = sampleModel().geometry
-    return HistoryDrawerSurface(model: empty, geometry: empty.geometry!)
+    empty.geometry = sampleGeometry
+    return HistoryDrawerSurface(model: empty, geometry: sampleGeometry)
         .frame(width: 380, height: 420)
 }
 #endif
