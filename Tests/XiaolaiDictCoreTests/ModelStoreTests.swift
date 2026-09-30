@@ -25,6 +25,10 @@ struct ModelStoreTests {
         let shortfalls = Recorder<[String: Int]>([:])
         /// Every request, as (path, offset) — what a resume actually asked for.
         let requests = Recorder<[(String, Int64)]>([])
+        /// Every request's host, in the same order — which host a retry actually moved to.
+        let hostsAsked = Recorder<[ModelHost]>([])
+        /// Hosts that fail every request, however healthy the others are.
+        let failingHosts = Recorder<Set<ModelHost>>([])
 
         init(_ bodies: [String: Data]) { self.bodies = bodies }
 
@@ -36,10 +40,12 @@ struct ModelStoreTests {
         struct NotInTheFixture: Error { let path: String }
 
         func fetch(
-            _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+            _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
             progress: @escaping @Sendable (Int64) -> Void
         ) async throws {
             requests.withLock { $0.append((file.path, offset)) }
+            hostsAsked.withLock { $0.append(host) }
+            if failingHosts.withLock({ $0.contains(host) }) { throw Dropped() }
             guard let body = bodies[file.path] else { throw NotInTheFixture(path: file.path) }
             // A host that ignores the range sends the whole file, and what was on disk is discarded.
             var from = offset
@@ -88,7 +94,7 @@ struct ModelStoreTests {
         struct NeverCancelled: Error {}
 
         func fetch(
-            _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+            _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
             progress: @escaping @Sendable (Int64) -> Void
         ) async throws {
             guard let body = bodies[file.path] else {
@@ -115,8 +121,11 @@ struct ModelStoreTests {
     private static func manifest(_ bodies: [String: Data], listedAs listed: [String: Data]? = nil) -> ModelManifest {
         let files = bodies.keys.sorted().map { path in
             let body = (listed ?? bodies)[path]!
+            // **With a second host**, as every real file but the licence has — without one
+            // `isServed` refuses the alternate and a host-rotation test measures nothing.
             return ModelFile(repository: "test/model", revision: "abc", path: path,
-                             size: Int64(body.count), sha256: sha(body))
+                             size: Int64(body.count), sha256: sha(body),
+                             alternates: [.huggingFace: (repository: "test/model", revision: "def")])
         }
         return ModelManifest(size: .standard, repository: "test/model", revision: "abc", files: files)
     }
@@ -475,6 +484,54 @@ struct ModelStoreTests {
         }
         let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
         #expect(asked.count <= 2, "asked \(asked.count) times of a host that had already sent all it has")
+    }
+
+    /// **A host that wins and then dies is not the end of the download.** Choosing a host is a
+    /// measurement taken before the transfer; a VPN dropping halfway through is not, and five
+    /// retries against a host that has gone is five ways of failing the same way. The attempts
+    /// move through the hosts in order, resuming from what is already on disk.
+    @Test func adownloadMovesToTheNextHostWhenOneStopsAnswering() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let transport = MemoryTransport(Self.bodies)
+        transport.failingHosts.withLock { $0.insert(.huggingFace) }
+        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
+                                         retryPause: .zero, hosts: [.huggingFace, .modelScope])
+
+        let directory = try await downloader.install(manifest)
+        #expect(try Data(contentsOf: directory.appending(path: "model.safetensors")) == Self.bodies["model.safetensors"])
+        let asked = transport.hostsAsked.withLock { $0 }
+        #expect(asked.first == .huggingFace, "the chosen host was not tried first")
+        #expect(asked.contains(.modelScope), "the download never moved off the host that had gone")
+    }
+
+    /// **A reader who named ModelScope is never sent anywhere else.** Hugging Face is unreachable
+    /// from mainland China, and a fallback that reaches for it anyway turns a deliberate choice
+    /// into a request nobody made.
+    @Test func achosenHostIsTheOnlyHostWhenItWasNamed() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let transport = MemoryTransport(Self.bodies)
+        transport.failingHosts.withLock { $0.insert(.modelScope) }
+        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
+                                         retryPause: .zero, hosts: [.modelScope])
+
+        await #expect(throws: MemoryTransport.Dropped.self) { try await downloader.install(manifest) }
+        let asked = Set(transport.hostsAsked.withLock { $0 })
+        #expect(asked == [.modelScope], "asked a host the reader did not choose: \(asked)")
+    }
+
+    /// The default is the canonical host, so nothing reaches Hugging Face unless it was asked for.
+    @Test func thedefaultHostIsTheCanonicalOne() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let transport = MemoryTransport(Self.bodies)
+        _ = try await ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
+            .install(manifest)
+        #expect(Set(transport.hostsAsked.withLock { $0 }) == [.modelScope])
     }
 
     /// **A model's identity is frozen.** `identifier` names the install directory and the

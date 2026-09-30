@@ -24,6 +24,10 @@ final class LocalModelController {
     @ObservationIgnored let store: ModelStore
     @ObservationIgnored private let declines: LocalModelDeclineStore
     @ObservationIgnored private let transport: any ModelFileTransport
+    @ObservationIgnored private let probe: any ModelHostProbe
+    /// The reader's choice of where weights come from. Read at each download rather than held,
+    /// so changing it in Settings takes effect on the next one without anything being rebuilt.
+    @ObservationIgnored private let sources: ModelSourceStore
     /// What each size downloads — the pinned manifests; a test hands in small ones.
     @ObservationIgnored private let manifest: @Sendable (LocalModelSize) -> ModelManifest
     @ObservationIgnored private var download: Task<Void, Never>?
@@ -39,10 +43,15 @@ final class LocalModelController {
         defaults: UserDefaults, store: ModelStore = .standard(),
         physicalMemory: UInt64 = SystemMemory.physical,
         transport: any ModelFileTransport = URLSessionModelTransport(),
+        probe: any ModelHostProbe = URLSessionModelHostProbe(),
         manifest: @escaping @Sendable (LocalModelSize) -> ModelManifest = { $0.manifest }
     ) {
         self.store = store
         self.transport = transport
+        self.probe = probe
+        let sources = ModelSourceStore(defaults: defaults)
+        self.sources = sources
+        source = sources.load()
         self.manifest = manifest
         declines = LocalModelDeclineStore(defaults: defaults)
         declined = declines.hasDeclined()
@@ -158,17 +167,33 @@ final class LocalModelController {
         // What is answering while this downloads: an upgrade replaces a model that keeps working.
         let replacing = Self.installedSize(store: store, offered: offered, manifest: manifest)
         let wanted = manifest(size)
-        let downloader = ModelDownloader(store: store, transport: transport)
         let publish = progressPublisher(for: size, replacing: replacing, generation: current)
         state = .downloading(
             ModelDownloadProgress(received: 0, total: wanted.totalBytes), size: size, replacing: replacing)
         log.notice("model: downloading \(wanted.identifier, privacy: .public)")
+        let chosen = source
+        let transport = transport
+        let probe = probe
+        let store = store
         download = Task { [weak self] in
             do {
+                // **Measured once, before the transfer.** A named host is an order already; only
+                // `fastest` asks, and it asks about the largest file because that is the one the
+                // choice is actually about.
+                let order: [ModelHost]
+                if let fixed = chosen.fixedOrder {
+                    order = fixed
+                } else {
+                    let largest = wanted.files.max { $0.size < $1.size } ?? wanted.files[0]
+                    order = await probe.order(for: largest, among: ModelHost.allCases)
+                }
+                try Task.checkCancellation()
+                self?.log.notice("model: fetching from \(order.map(\.rawValue).joined(separator: ", "), privacy: .public)")
+                let downloader = ModelDownloader(store: store, transport: transport, hosts: order)
                 try await downloader.install(wanted, progress: publish)
                 await self?.installed(size, keeping: wanted)
             } catch {
-                self?.log.error("model: download stopped: \(String(describing: error), privacy: .public)")
+                self?.log.error("model: download stopped: \(Self.logDescription(error), privacy: .public)")
                 self?.finish(.stopped(reason: Self.reason(error), size: size, replacing: replacing))
             }
         }
@@ -224,6 +249,17 @@ final class LocalModelController {
     }
 
     /// Why a download stopped, in the reader's terms — and never a network reason for a disk problem.
+    /// **What to write in a log line, with no URL in it.** The weights arrive through a CDN
+    /// redirect whose query carries a signature, and `String(describing:)` on a `URLError` puts
+    /// the entire failing URL into a line marked `.public` — measured, not supposed. What
+    /// diagnosis needs is which failure it was.
+    static func logDescription(_ error: any Error) -> String {
+        if let url = error as? URLError { return "URLError \(url.code.rawValue)" }
+        // The store's own refusals name a file, never a URL, and are worth keeping whole.
+        if let refusal = error as? ModelDownloadError { return String(describing: refusal) }
+        return String(reflecting: type(of: error))
+    }
+
     static func reason(_ error: any Error) -> String {
         if error is CancellationError || (error as? URLError)?.code == .cancelled {
             return String(localized: "you stopped it", comment: "Why the model download stopped")
@@ -266,13 +302,28 @@ final class LocalModelController {
         }
     }
 
+    /// Where the reader has said weights should come from. **Observed**, so the picker redraws
+    /// with what it set rather than with what it was built with.
+    private(set) var source: ModelSource
+
+    /// Takes effect on the next download: a transfer already running is not moved to another
+    /// host underneath itself, which would restart a file rather than resume it.
+    func chooseSource(_ chosen: ModelSource) {
+        guard chosen != source else { return }
+        source = chosen
+        sources.save(chosen)
+        log.notice("model: weights will be fetched from \(chosen.rawValue, privacy: .public)")
+    }
+
     /// What the setup board and the translation pane are handed.
     var choice: LocalModelChoice {
         LocalModelChoice(
             state: state, declined: declined, offered: offered, recommended: recommended,
             download: { [weak self] in self?.startDownload($0) },
             decline: { [weak self] in self?.decline() },
-            cancel: { [weak self] in self?.cancelDownload() })
+            cancel: { [weak self] in self?.cancelDownload() },
+            source: source,
+            chooseSource: { [weak self] in self?.chooseSource($0) })
     }
 }
 

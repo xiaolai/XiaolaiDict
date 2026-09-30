@@ -166,9 +166,13 @@ public struct ModelFile: Sendable, Equatable, Hashable {
 
 /// Everything one model needs on disk, as the host listed it at a pinned commit.
 ///
-/// **Weights from ModelScope, never Hugging Face.** Hugging Face is unreachable from mainland China,
-/// a core audience — which is the reason ModelScope was chosen, and the one thing about it not yet
-/// measured *from inside* China.
+/// **Weights from ModelScope by default, and the product never depends on Hugging Face.** Hugging
+/// Face is unreachable from mainland China, a core audience, which is why ModelScope is canonical:
+/// it holds every file, it names every model's identity, and a reader who chooses it is never
+/// sent anywhere else. A reader may choose Hugging Face, and `fastest` — the default — may measure
+/// it, but ModelScope answers whenever it does not. Measured 2026-09-30 from one Mac: ModelScope
+/// 0.38–0.71 MB/s against Hugging Face's 13.8, which is hours against minutes for the large model.
+/// ModelScope's speed from inside China is still not measured — ADR-0040.
 public struct ModelManifest: Sendable, Equatable, Hashable {
     public let size: LocalModelSize
     /// The weights' repository and the commit they are pinned to. The directory the model lives in

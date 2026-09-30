@@ -57,12 +57,21 @@ public struct LocalModelChoice {
     public var download: @MainActor (LocalModelSize) -> Void
     public var decline: @MainActor () -> Void
     public var cancel: @MainActor () -> Void
+    /// Where the weights come from, and how to change it. **Beside the download rather than in a
+    /// pane of its own**, because this is the one moment the answer matters to the reader — and
+    /// the default measures both hosts, so most will never touch it.
+    public var source: ModelSource
+    public var chooseSource: @MainActor (ModelSource) -> Void
 
     public init(
         state: LocalModelState, declined: Bool, offered: [LocalModelSize], recommended: LocalModelSize?,
         download: @escaping @MainActor (LocalModelSize) -> Void, decline: @escaping @MainActor () -> Void,
-        cancel: @escaping @MainActor () -> Void
+        cancel: @escaping @MainActor () -> Void,
+        source: ModelSource = .fastest,
+        chooseSource: @escaping @MainActor (ModelSource) -> Void = { _ in }
     ) {
+        self.source = source
+        self.chooseSource = chooseSource
         self.state = state
         self.declined = declined
         self.offered = offered

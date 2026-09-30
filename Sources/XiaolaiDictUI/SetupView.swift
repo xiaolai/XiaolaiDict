@@ -1,6 +1,7 @@
 import AppKit
 import DictionaryModel
 import OSLog
+import ModelKit
 import SwiftUI
 import XiaolaiDictBase
 import XiaolaiDictCore
@@ -459,6 +460,24 @@ public struct SetupView: View {
         }
     }
 
+    /// **Where the weights come from.** Offered beside the download, which is the one moment it
+    /// matters — and the default measures both hosts, so a reader who has no opinion never needs
+    /// one. Named for what each does rather than for the companies: "fastest" is the answer to
+    /// the question a reader actually has.
+    @ViewBuilder private func sourcePicker(_ localModel: LocalModelChoice) -> some View {
+        Picker(
+            "From",
+            selection: Binding(get: { localModel.source }, set: { localModel.chooseSource($0) })
+        ) {
+            Text("Fastest available").tag(ModelSource.fastest)
+            Text("ModelScope").tag(ModelSource.modelScope)
+            Text("Hugging Face").tag(ModelSource.huggingFace)
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
+    }
+
     /// **A download never starts unasked**, so it is always a button — and it stays in the row after
     /// Not now, one click away, for as long as there is something to download.
     @ViewBuilder private var modelActions: some View {
@@ -476,6 +495,7 @@ public struct SetupView: View {
                             localModel.download(size)
                         }
                         .buttonStyle(.glassProminent)
+                        sourcePicker(localModel)
                         if !localModel.declined {
                             Button("Not now") { localModel.decline() }
                                 .buttonStyle(.glass)

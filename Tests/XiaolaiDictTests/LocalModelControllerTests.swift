@@ -14,12 +14,16 @@ struct LocalModelControllerTests {
     /// Serves one small file per path from memory, or fails every request.
     struct Transport: ModelFileTransport {
         let fails: Bool
+        /// Every host this transport was asked, so a test can say which the reader's choice
+        /// actually reached — the only way to check that nothing touches Hugging Face.
+        var asked: Recorder<[ModelHost]>?
         struct Offline: Error {}
 
         func fetch(
-            _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+            _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
             progress: @escaping @Sendable (Int64) -> Void
         ) async throws {
+            asked?.withLock { $0.append(host) }
             if fails { throw URLError(.notConnectedToInternet) }
             let handle = try FileHandle(forWritingTo: destination)
             try handle.seekToEnd()
@@ -40,7 +44,12 @@ struct LocalModelControllerTests {
                 let body = Transport.body(path)
                 return ModelFile(
                     repository: real.repository, revision: real.revision, path: path, size: Int64(body.count),
-                    sha256: SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined())
+                    sha256: SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined(),
+                    // **Shaped like the real catalogue**: everything but the licence has a
+                    // second host. Without that, `isServed` refuses every alternate and a test
+                    // about which host is asked can only ever see the canonical one.
+                    alternates: path == ModelManifest.licenceFileName
+                        ? [:] : [.huggingFace: (repository: real.repository, revision: "hf-commit")])
             })
     }
 
@@ -240,7 +249,7 @@ struct LocalModelControllerTests {
         // row keeps the reason while 4B goes on answering.
         let upgrade = LocalModelController(
             defaults: TemporaryDefaults.suite(), store: store, physicalMemory: 48 * Self.gigabyte,
-            transport: Transport(fails: true), manifest: Self.manifest)
+            transport: Transport(fails: true, asked: nil), manifest: Self.manifest)
         upgrade.startDownload(.large)
         await settle(upgrade)
         guard case .stopped(let reason, let size, let replacing) = upgrade.state else {
@@ -272,6 +281,109 @@ struct LocalModelControllerTests {
         await settle(controller)
         #expect(controller.state == .ready(.standard))
         #expect(store.installed(stale) == nil, "the older pin's weights were kept beside the new ones")
+    }
+
+    /// **The reader's choice is what gets asked**, and a probe is the only thing that may decide
+    /// otherwise. A fresh preferences domain resolves to `fastest`, which measures; naming
+    /// ModelScope means nothing reaches Hugging Face, not even to look.
+    @Test(arguments: [
+        (ModelSource?.none, "an empty preferences domain"),
+        (.fastest, "fastest, with a probe that answers ModelScope"),
+        (.modelScope, "ModelScope, named"),
+    ])
+    func achoiceOfModelScopeNeverReachesHuggingFace(choice: ModelSource?, why: String) async throws {
+        let defaults = TemporaryDefaults.suite()
+        if let choice { ModelSourceStore(defaults: defaults).save(choice) }
+        let scratch = TemporaryDirectory(named: "xiaolaidict-source")
+        let store = ModelStore(root: scratch.url)
+        let asked = Recorder<[ModelHost]>([])
+        let controller = LocalModelController(
+            defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
+            transport: Transport(fails: false, asked: asked),
+            // Answers the canonical host, as a probe from inside China would.
+            probe: FixedProbe(order: [.modelScope]),
+            manifest: Self.manifest)
+
+        controller.startDownload(.standard)
+        await settle(controller)
+        #expect(Set(asked.withLock { $0 }) == [.modelScope], "\(why): asked a host nobody chose")
+        _ = scratch
+    }
+
+    /// And naming Hugging Face does reach it — or the setting is decoration.
+    @Test func achoiceOfHuggingFaceReachesIt() async throws {
+        let defaults = TemporaryDefaults.suite()
+        ModelSourceStore(defaults: defaults).save(.huggingFace)
+        let scratch = TemporaryDirectory(named: "xiaolaidict-source-hf")
+        let store = ModelStore(root: scratch.url)
+        let asked = Recorder<[ModelHost]>([])
+        let controller = LocalModelController(
+            defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
+            transport: Transport(fails: false, asked: asked),
+            probe: FixedProbe(order: [.modelScope]), manifest: Self.manifest)
+
+        controller.startDownload(.standard)
+        await settle(controller)
+        #expect(asked.withLock { $0 }.contains(.huggingFace), "the choice reached nothing")
+        _ = scratch
+    }
+
+    /// A probe that answers whatever the test needs, without a network.
+    struct FixedProbe: ModelHostProbe {
+        let order: [ModelHost]
+        func order(for file: ModelFile, among candidates: [ModelHost]) async -> [ModelHost] {
+            order.filter { file.isServed(by: $0) }.isEmpty ? [.modelScope] : order
+        }
+    }
+
+    /// **The picker is wired, not decoration.** A control that sets a value nothing reads is the
+    /// defect this project keeps finding: the choice must survive to the next download, and it
+    /// must survive a relaunch.
+    @Test func choosingAsourceIsSavedAndIsWhatTheNextDownloadUses() async throws {
+        let defaults = TemporaryDefaults.suite()
+        let scratch = TemporaryDirectory(named: "xiaolaidict-choose")
+        let store = ModelStore(root: scratch.url)
+        let asked = Recorder<[ModelHost]>([])
+        let controller = LocalModelController(
+            defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
+            transport: Transport(fails: false, asked: asked),
+            probe: FixedProbe(order: [.modelScope]), manifest: Self.manifest)
+        #expect(controller.choice.source == .fastest, "the default is not what is offered")
+
+        controller.choice.chooseSource(.huggingFace)
+        #expect(controller.choice.source == .huggingFace, "the picker would not show its own change")
+        // Saved, so it is still the choice after a relaunch.
+        #expect(ModelSourceStore(defaults: defaults).load() == .huggingFace)
+
+        controller.startDownload(.standard)
+        await settle(controller)
+        #expect(asked.withLock { $0 }.contains(.huggingFace), "the choice reached no download")
+        _ = scratch
+    }
+
+    /// **A failing URL must not reach the log.** The weights come through a CDN redirect whose
+    /// query carries a signature, and `String(describing:)` on a `URLError` puts the whole
+    /// failing URL in — measured — into a line marked `.public`. What is wanted for diagnosis is
+    /// which error it was, not where it was.
+    @Test func adownloadFailureIsLoggedWithoutItsUrl() {
+        let signed = "https://cdn.example.invalid/model.safetensors?sig=SENTINELTOKEN&exp=1"
+        let error = URLError(.timedOut, userInfo: [NSURLErrorFailingURLStringErrorKey: signed])
+        // The premise: this is a real leak, not a hypothetical one.
+        #expect(String(describing: error).contains("SENTINELTOKEN"),
+                "the premise has changed — String(describing:) no longer carries the URL")
+
+        let logged = LocalModelController.logDescription(error)
+        #expect(!logged.contains("SENTINELTOKEN"), "the signature reached the log")
+        #expect(!logged.contains("cdn.example.invalid"), "the URL reached the log")
+        #expect(!logged.isEmpty && logged.contains("-1001"), "nothing was left to diagnose with")
+    }
+
+    /// The store's own refusals stay legible — they carry a file name, never a URL.
+    @Test(arguments: ModelDownloadError.everyKind)
+    func astoreRefusalIsStillLegibleInTheLog(error: ModelDownloadError) {
+        let logged = LocalModelController.logDescription(error)
+        #expect(!logged.isEmpty)
+        #expect(!logged.contains("https://"), "a refusal put a URL in the log: \(logged)")
     }
 
     /// **Every way the store can refuse says its own thing.** Left to the generic ending, a download

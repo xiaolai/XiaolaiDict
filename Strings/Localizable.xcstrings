@@ -376,10 +376,16 @@
     "Export…" : {
 
     },
+    "Fastest available" : {
+
+    },
     "First that marks senses" : {
 
     },
     "Forgot" : {
+
+    },
+    "From" : {
 
     },
     "From the dictionary" : {
@@ -418,6 +424,9 @@
           }
         }
       }
+    },
+    "Hugging Face" : {
+
     },
     "In the panel" : {
 
@@ -508,6 +517,9 @@
 
     },
     "Model" : {
+
+    },
+    "ModelScope" : {
 
     },
     "Name the app a word was read in" : {

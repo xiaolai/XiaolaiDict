@@ -330,7 +330,7 @@ public protocol ModelFileTransport: Sendable {
     /// Returns once the host has sent all it will; the downloader, not the transport, decides
     /// whether that was the whole file.
     func fetch(
-        _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+        _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
         progress: @escaping @Sendable (Int64) -> Void
     ) async throws
 }
@@ -343,6 +343,11 @@ public struct ModelDownloader: Sendable {
     private let freeDisk: @Sendable (URL) -> Int64?
     private let retryPause: Duration
     private let attempts: Int
+    /// Which hosts to ask, in order. **An ordered list rather than one host**, because choosing a
+    /// host is a measurement taken before the transfer and a link dropping halfway through is
+    /// not: five retries against a host that has gone are five ways of failing the same way.
+    /// A single-element list is a reader's deliberate choice and is never departed from.
+    private let hosts: [ModelHost]
 
     /// Left free after the download, so a model never takes the last of the reader's disk.
     public static let diskMargin: Int64 = 512 * 1_048_576
@@ -366,7 +371,8 @@ public struct ModelDownloader: Sendable {
         store: ModelStore, transport: any ModelFileTransport = URLSessionModelTransport(),
         freeDisk: @escaping @Sendable (URL) -> Int64? = ModelDownloader.availableDisk(at:),
         retryPause: Duration = ModelDownloader.retryPauseDefault,
-        attempts: Int = ModelDownloader.transportAttempts
+        attempts: Int = ModelDownloader.transportAttempts,
+        hosts: [ModelHost] = [.modelScope]
     ) {
         self.store = store
         self.transport = transport
@@ -374,6 +380,7 @@ public struct ModelDownloader: Sendable {
         self.retryPause = retryPause
         // **One is a legitimate budget**: it is the old behaviour, which several tests are about.
         self.attempts = max(1, attempts)
+        self.hosts = hosts.isEmpty ? [.modelScope] : hosts
     }
 
     /// Downloads whatever of `manifest` is missing and moves it into place. Returns the model's
@@ -480,13 +487,19 @@ public struct ModelDownloader: Sendable {
         // **Resumed, and retried from what is on disk each time.** The offset is read again per
         // attempt because a dropped transfer leaves more of the file behind than the last one did.
         var attemptsLeft = attempts
+        var tried = 0
         while true {
             let offset = size(of: partial)
             if offset >= file.size { break }
+            // **Through the hosts in turn**, and only those that have this file: the licence has
+            // one, and asking another for it fetches bytes that cannot match its pin.
+            let usable = hosts.filter { file.isServed(by: $0) }
+            let host = usable.isEmpty ? .modelScope : usable[tried % usable.count]
+            tried += 1
             // Everything but this file, so a restart inside the transport cannot double-count.
             let others = arrivedBytes(of: manifest, in: staging, excluding: file)
             do {
-                try await transport.fetch(file, from: offset, appendingTo: partial) { onDisk in
+                try await transport.fetch(file, from: offset, on: host, appendingTo: partial) { onDisk in
                     progress(ModelDownloadProgress(received: others + min(onDisk, file.size), total: total))
                 }
                 // **A host that ends a range response early has not failed**, so nothing is
@@ -654,10 +667,10 @@ public struct URLSessionModelTransport: ModelFileTransport {
     public init() { session = URLSession(configuration: Self.configuration) }
 
     public func fetch(
-        _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
+        _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
         progress: @escaping @Sendable (Int64) -> Void
     ) async throws {
-        var request = URLRequest(url: file.url)
+        var request = URLRequest(url: file.url(from: host))
         if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
         let writer = try RangeWriter(
             destination: destination, offset: offset, path: file.path, expecting: file.size,
