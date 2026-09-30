@@ -120,13 +120,12 @@ public enum ContainerReader {
     /// memory is one decompressed chunk — about 290 KB — rather than the whole body.
     public static func forEachBodyChunk(at url: URL, _ body: (Int, Data) throws -> Void) throws {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        // The read below is a UInt32 at `payloadSizeOffset`, so four bytes past it must exist. Guarding
-        // on `headerSize` alone accepted 65–67-byte files and turned a truncated file into a
-        // precondition crash instead of a thrown error.
-        guard data.count >= payloadSizeOffset + 4 else {
+        // **The read is the bound.** Guarding on `headerSize` alone accepted 65–67-byte files and turned
+        // a truncated file into a precondition crash; a separate `count >= payloadSizeOffset + 4` guard
+        // beside it was a second spelling of the same four bytes, free to drift from the read it guarded.
+        guard let payload = data.uint32(at: payloadSizeOffset).map(Int.init) else {
             throw Failure.truncated("\(url.lastPathComponent): \(data.count) bytes, shorter than the header")
         }
-        let payload = Int(data.uint32(at: payloadSizeOffset))
         let end = payloadSizeOffset + payload
         guard end <= data.count else {
             throw Failure.truncated("\(url.lastPathComponent): header claims \(end) bytes, file has \(data.count)")
@@ -134,10 +133,14 @@ public enum ContainerReader {
         var position = firstBodyChunk
         var index = 0
         while position + chunkHeader <= end {
-            let size = Int(data.uint32(at: position))
+            guard let size = data.uint32(at: position).map(Int.init),
+                  let compressed = data.uint32(at: position + 4).map(Int.init),
+                  let expected = data.uint32(at: position + 8).map(Int.init)
+            else {
+                throw Failure.truncated(
+                    "\(url.lastPathComponent): the chunk header at \(position) runs past the file")
+            }
             if size == 0 { break }
-            let compressed = Int(data.uint32(at: position + 4))
-            let expected = Int(data.uint32(at: position + 8))
             let start = position + chunkHeader
             // **Checked before the copy, not inside `inflate`.** `subdata` copies a file-controlled length,
             // so a malformed chunk forced the allocation before anything could reject it.
@@ -240,8 +243,14 @@ public enum ContainerReader {
         var position = firstKeyChunk
         while position + chunkHeader <= data.count {
             attempted += 1
-            let compressed = Int(data.uint32(at: position + 4))
-            let expected = Int(data.uint32(at: position + 8))
+            // A chunk whose header is not there is one this stride-walk cannot read, like every other
+            // unreadable chunk here: counted in `attempted` and skipped, never fatal.
+            guard let compressed = data.uint32(at: position + 4).map(Int.init),
+                  let expected = data.uint32(at: position + 8).map(Int.init)
+            else {
+                position += keyStride
+                continue
+            }
             let start = position + chunkHeader
             let streamLength = compressed - compressedFieldOverhead
             if streamLength > 0, expected > 0, start + streamLength <= data.count,
@@ -293,6 +302,9 @@ public enum ContainerReader {
         // exactly the declared size" from "produced more and was cut off". With room for one more byte,
         // `written > expecting` is detectable and a chunk claiming the wrong size fails loudly.
         var output = Data(count: expecting + 1)
+        // **Both `baseAddress!` below are non-nil by the guards above**, which is the whole reason they
+        // are there: `baseAddress` is nil only for an *empty* buffer, `input.count >= 7` leaves `raw` at
+        // least one byte, and `expecting > 0` leaves `output` at least two.
         let written: Int = raw.withUnsafeBytes { source in
             output.withUnsafeMutableBytes { destination in
                 compression_decode_buffer(
@@ -338,14 +350,22 @@ public enum ContainerReader {
 }
 
 extension Data {
-    /// Little-endian UInt32 at a byte offset, read relative to `startIndex` rather than to 0.
+    /// Little-endian UInt32 at a byte offset, read relative to `startIndex` rather than to 0 — **nil
+    /// where the four bytes are not there**.
     ///
     /// `Data`'s range subscript yields a slice whose indices continue the parent's, so `slice[0]` traps
     /// or reads the wrong byte. `subdata(in:)` copies and does rebase, but relying on which of the two
     /// a caller used is exactly the bug this avoids: offsetting from `startIndex` is correct for both.
-    func uint32(at offset: Int) -> UInt32 {
+    ///
+    /// **Optional rather than a `precondition`, because these are the reader's own files.** Every caller
+    /// bounds its offset, and a truncated container already turned one missed bound into a crash rather
+    /// than a thrown error — the comment in `forEachBodyChunk` is what is left of that. A dictionary
+    /// this reader installed is external input: it may be truncated, replaced mid-read, or from a macOS
+    /// this build has not met, and none of those is a reason to end the process. Now the read itself is
+    /// the bound, so a caller's guard cannot drift from what it guards.
+    func uint32(at offset: Int) -> UInt32? {
         let base = startIndex + offset
-        precondition(base + 4 <= endIndex, "uint32 read past the end")
+        guard base >= startIndex, base + 4 <= endIndex else { return nil }
         return UInt32(self[base]) | UInt32(self[base + 1]) << 8
             | UInt32(self[base + 2]) << 16 | UInt32(self[base + 3]) << 24
     }

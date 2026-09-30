@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 @testable import AppleDictionaryFormat
 
 /// The container reader, against bundles on this machine.
@@ -152,5 +153,46 @@ import Testing
         out += [UInt8(truncatingIfNeeded: checksum >> 24), UInt8(truncatingIfNeeded: checksum >> 16),
                 UInt8(truncatingIfNeeded: checksum >> 8), UInt8(truncatingIfNeeded: checksum)]
         return out
+    }
+}
+
+/// **A dictionary file is external input, and a bounded read is how that is honoured.**
+///
+/// `Data.uint32(at:)` and `uint16(at:)` were `precondition`s: every caller bounded its offset, and one
+/// missed bound had already turned a truncated container into a crash rather than a thrown error — the
+/// surviving comment in `forEachBodyChunk` is what is left of that repair. The reader's own dictionaries
+/// can be truncated, replaced mid-read, or come from a macOS this build has not met, and none of those
+/// is a reason to end the process the dictionary service runs in — ADR-0042.
+@Suite struct BoundedBinaryReadTests {
+    /// Before the fix each of these ended the test process instead of answering.
+    @Test func areadPastTheEndIsNilRatherThanFatal() {
+        let four = Data([1, 2, 3, 4])
+        #expect(four.uint32(at: 0) == 0x0403_0201)
+        #expect(four.uint32(at: 1) == nil, "a read one byte short of four answered")
+        #expect(four.uint32(at: 4) == nil)
+        #expect(four.uint32(at: 9_999) == nil)
+        #expect(Data().uint32(at: 0) == nil)
+        #expect(four.uint16(at: 2) == 0x0403)
+        #expect(four.uint16(at: 3) == nil)
+        #expect(Data().uint16(at: 0) == nil)
+    }
+
+    /// **Offsets are relative to `startIndex`, and a slice's indices continue its parent's.** The bound
+    /// has to be relative too, or a slice near the end of a large `Data` refuses reads that are there.
+    @Test func aslicesOffsetsAreItsOwn() {
+        let slice = Data([9, 9, 9, 9, 1, 2, 3, 4, 5, 6]).dropFirst(4)
+        #expect(slice.uint32(at: 0) == 0x0403_0201)
+        #expect(slice.uint16(at: 4) == 0x0605)
+        #expect(slice.uint32(at: 4) == nil, "the slice read past its own end")
+    }
+
+    /// The end-to-end shape: a file too short to hold its own header is refused with a reason.
+    @Test func atruncatedContainerIsRefusedWithAReason() throws {
+        let directory = TemporaryDirectory(named: "container-reader")
+        let url = directory.appending("Body.data")
+        try Data(repeating: 0, count: 8).write(to: url)
+        #expect(throws: ContainerReader.Failure.self) {
+            try ContainerReader.forEachBodyChunk(at: url) { _, _ in }
+        }
     }
 }

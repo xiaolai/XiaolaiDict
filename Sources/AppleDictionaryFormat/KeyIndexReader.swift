@@ -80,13 +80,16 @@ public enum KeyIndexReader {
         var position = 0
         // A group needs its own header before any key can be read; `headerBytes` past the size field.
         while position + 4 + headerBytes <= chunk.count {
-            let size = Int(chunk.uint32(at: position))
+            guard let size = chunk.uint32(at: position).map(Int.init) else { break }
             // Trailing zeros pad the last chunk of the stride-walked stream.
             guard size > headerBytes, position + 4 + size <= chunk.count else { break }
             let body = position + 4
-            let offset = Int(chunk.uint32(at: body + offsetField))
-            let chunkID = Int(chunk.uint16(at: body + chunkIDField))
-            let keyBytes = Int(chunk.uint32(at: body + keyLengthField))
+            // A group header that is not wholly there ends the walk. It cannot happen under the bound
+            // above; the reads answer for their own bounds so that stays true when the bound is edited.
+            guard let offset = chunk.uint32(at: body + offsetField).map(Int.init),
+                  let chunkID = chunk.uint16(at: body + chunkIDField).map(Int.init),
+                  let keyBytes = chunk.uint32(at: body + keyLengthField).map(Int.init)
+            else { break }
             position += 4 + size
 
             guard keyBytes > 0, body + headerBytes + keyBytes <= chunk.count else { continue }
@@ -94,7 +97,7 @@ public enum KeyIndexReader {
             var read = body + headerBytes
             let end = read + keyBytes
             while read + 2 <= end {
-                let length = Int(chunk.uint16(at: read))
+                guard let length = chunk.uint16(at: read).map(Int.init) else { break }
                 // A zero length terminates the block; the remaining bytes are padding.
                 guard length > 0, read + 2 + length <= end else { break }
                 let slice = chunk.subdata(in: (read + 2) ..< (read + 2 + length))
@@ -117,10 +120,11 @@ public enum KeyIndexReader {
 }
 
 extension Data {
-    /// Little-endian UInt16, offset from `startIndex` for the same reason `uint32(at:)` is.
-    func uint16(at offset: Int) -> UInt16 {
+    /// Little-endian UInt16, offset from `startIndex` — and nil past the end — for the same reasons
+    /// `uint32(at:)` is both.
+    func uint16(at offset: Int) -> UInt16? {
         let base = startIndex + offset
-        precondition(base + 2 <= endIndex, "uint16 read past the end")
+        guard base >= startIndex, base + 2 <= endIndex else { return nil }
         return UInt16(self[base]) | UInt16(self[base + 1]) << 8
     }
 }

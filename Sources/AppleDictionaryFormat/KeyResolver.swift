@@ -48,7 +48,7 @@ public struct BodyLayout: Sendable {
         var out: [Int] = []
         var offset = 0
         while offset + 4 <= chunk.count {
-            let length = Int(chunk.uint32(at: offset))
+            guard let length = chunk.uint32(at: offset).map(Int.init) else { break }
             guard length > 0, offset + 4 + length <= chunk.count else { break }
             out.append(offset)
             offset += 4 + length
@@ -59,8 +59,7 @@ public struct BodyLayout: Sendable {
     /// The record at an offset, if one starts exactly there. Nil is the answer to "that pointer is not a
     /// record", which is a resolution failing **loudly** rather than returning a neighbouring entry.
     static func record(in chunk: Data, at offset: Int) -> String? {
-        guard offset >= 0, offset + 4 <= chunk.count else { return nil }
-        let length = Int(chunk.uint32(at: offset))
+        guard offset >= 0, let length = chunk.uint32(at: offset).map(Int.init) else { return nil }
         guard length > 0, offset + 4 + length <= chunk.count else { return nil }
         return String(data: chunk.subdata(in: (offset + 4) ..< (offset + 4 + length)), encoding: .utf8)
     }
