@@ -46,7 +46,9 @@ enum ModelReport {
         } catch is CancellationError {
             return .interrupted
         } catch {
-            report["error"] = "\(error)"
+            // **Never the raw error.** A `URLError` carries the failing URL, and the weights come
+            // through a signed CDN redirect — measured leaking an `auth_key` into this very field.
+            report["error"] = modelFailureDescription(error)
             ok = false
         }
         guard Instrument.write(report, to: write) else { return .internalError }

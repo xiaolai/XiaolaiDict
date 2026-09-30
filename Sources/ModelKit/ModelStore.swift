@@ -321,6 +321,19 @@ public enum ModelDownloadError: Error, Equatable, Sendable {
     ]
 }
 
+/// **What to say about a download failure, with no URL in it.**
+///
+/// The weights arrive through a CDN redirect whose query carries a signature, and
+/// `String(describing:)` on a `URLError` puts the entire failing URL — `auth_key` and all — into
+/// whatever prints it. Measured: it reached both a `.public` log line and an instrument's JSON,
+/// which is the same defect twice and the reason this lives here rather than beside one caller.
+public func modelFailureDescription(_ error: any Error) -> String {
+    if let url = error as? URLError { return "URLError \(url.code.rawValue)" }
+    // The store's own refusals name a file, never a URL, and are worth keeping whole.
+    if let refusal = error as? ModelDownloadError { return String(describing: refusal) }
+    return String(reflecting: type(of: error))
+}
+
 /// Fetches one file's bytes. The seam tests replace: the real one is `URLSessionModelTransport`.
 public protocol ModelFileTransport: Sendable {
     /// Appends `file`'s bytes, **starting at byte `offset`**, to the end of `destination`, calling

@@ -404,6 +404,33 @@ struct LocalModelControllerTests {
         #expect(!logged.isEmpty && logged.contains("-1001"), "nothing was left to diagnose with")
     }
 
+    /// **Both directions, mechanically: nothing on the download path prints a raw error.**
+    /// The rule was written for the controller's log, and the day after, the same leak was found
+    /// in the model instrument's JSON — one defect in two places. A scan is what stops a third.
+    @Test func nothingOnTheDownloadPathPrintsArawError() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        // Every file that can hold a download failure: the controller, the instrument that
+        // reports on it, and the store the failures come from.
+        let onThePath = [
+            "Sources/XiaolaiDict/LocalModelController.swift",
+            "Sources/XiaolaiDict/ModelReport.swift",
+            "Sources/XiaolaiDict/LocalModelCoordinator.swift",
+        ]
+        for path in onThePath {
+            let url = repository.appendingPathComponent(path)
+            #expect(FileManager.default.fileExists(atPath: url.path),
+                    "\(path) has moved and this scan stopped covering it")
+            let source = try String(contentsOf: url, encoding: .utf8)
+            for (number, line) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                guard !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") else { continue }
+                // The two spellings that put a whole error into text.
+                let raw = line.contains("String(describing: error)") || line.contains("\\(error)")
+                #expect(!raw, "\(path):\(number + 1) prints a raw error, which carries a URL: \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+    }
+
     /// The store's own refusals stay legible — they carry a file name, never a URL.
     @Test(arguments: ModelDownloadError.everyKind)
     func astoreRefusalIsStillLegibleInTheLog(error: ModelDownloadError) {

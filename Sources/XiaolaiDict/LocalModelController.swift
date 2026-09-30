@@ -263,16 +263,9 @@ final class LocalModelController {
     }
 
     /// Why a download stopped, in the reader's terms — and never a network reason for a disk problem.
-    /// **What to write in a log line, with no URL in it.** The weights arrive through a CDN
-    /// redirect whose query carries a signature, and `String(describing:)` on a `URLError` puts
-    /// the entire failing URL into a line marked `.public` — measured, not supposed. What
-    /// diagnosis needs is which failure it was.
-    static func logDescription(_ error: any Error) -> String {
-        if let url = error as? URLError { return "URLError \(url.code.rawValue)" }
-        // The store's own refusals name a file, never a URL, and are worth keeping whole.
-        if let refusal = error as? ModelDownloadError { return String(describing: refusal) }
-        return String(reflecting: type(of: error))
-    }
+    /// Kept as a name the tests and this file use; the rule itself lives in `ModelKit`, beside
+    /// the download, because it was needed in a second place the day after it was written.
+    static func logDescription(_ error: any Error) -> String { modelFailureDescription(error) }
 
     static func reason(_ error: any Error) -> String {
         if error is CancellationError || (error as? URLError)?.code == .cancelled {
