@@ -180,7 +180,7 @@ if bash5:
 unguarded = [
     (number, line.strip())
     for number, line in enumerate(lines, 1)
-    if re.search(r"=\$\((run_report|history_report|settings_report)\b", line)
+    if re.search(r"=\$\((run_report|history_report|settings_report|read_point)\b", line)
     and not line.rstrip().endswith("|| true")
     and not isComment(line)
 ]
@@ -188,7 +188,7 @@ if unguarded:
     sys.exit("a report assignment under `set -e` can end the run; write `|| true`:\n    "
              + "\n    ".join(f"line {n}: {t}" for n, t in unguarded))
 # The scan must be able to see one. A spelling nobody matches guards nothing.
-if not [line for line in lines if re.search(r"=\$\((run_report|history_report|settings_report)\b", line)]:
+if not [line for line in lines if re.search(r"=\$\((run_report|history_report|settings_report|read_point)\b", line)]:
     sys.exit("no report assignment was found, so that guard covers nothing")
 GUARD
 
@@ -1357,11 +1357,39 @@ read_point() {  # read_point <x> <y>: the instrument's JSON on success, nothing 
     # **Reaped before returning.** Output appearing is not the process ending, and the caller's next
     # move is another `--read-point` — a second screen capture, which deadlocks against a live one.
     end_instrument --read-point || true
-    cat "$out" 2>/dev/null
+    # **`|| true`, for the reason `run_report` carries at length.** `rm -f` then a launch that
+    # writes only to stderr leaves no `$out` at all, so `cat` returns 1 — and under `set -e` a bare
+    # `got=$(read_point …)` takes that status and ends the run before the `flunk` written for the
+    # case can be reached. `run_report` was fixed for this and this helper was missed; the
+    # pre-flight now names both.
+    cat "$out" 2>/dev/null || true
 }
 
-open -a Ghostty; sleep 3
-if ! frame=$("$helpers/window-frame" com.mitchellh.ghostty 2>&1); then
+# **Raised before every probe, not once at the top.** Each `--read-point` launches an app and reaps
+# it, and the front then goes to whichever app macOS activates next. Measured on the end-to-end machine
+# 2026-09-30, nine probes in a row: Ghostty is frontmost for the first and `com.microsoft.Word` for
+# all eight after it. That is harmless while the two windows are apart and decides the stage when
+# they overlap — Word's 1280×1410 window contained Ghostty's 960×1050 that day, so every point in
+# the grid belonged to Word.
+front_is_ghostty() {
+    [ "$("$helpers/on-screen" com.mitchellh.ghostty 2>/dev/null \
+        | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')" = com.mitchellh.ghostty ]
+}
+raise_ghostty() {
+    open -a Ghostty
+    for _ in $(seq 1 10); do
+        front_is_ghostty && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+# `flunk` returns 0, so the refusals below have to be told apart by the `if` rather than by their
+# status: a stage that cannot raise the terminal must not go on to probe points in someone else's
+# window and report what it found there.
+if ! raise_ghostty; then
+    flunk "recogniser: Ghostty would not come to the front, so no point in it can be read"
+elif ! frame=$("$helpers/window-frame" com.mitchellh.ghostty 2>&1); then
     flunk "recogniser: no Ghostty window to read ($frame)"
 else
     read -r wx wy _ _ <<<"$frame"
@@ -1369,33 +1397,39 @@ else
     reading=""
     read_x=0
     read_y=0
+    saw=""  # which apps answered instead, so a failure names what it actually saw
     for dy in 98 113 83 128 68 143; do
         for dx in 50 160 280; do
-            got=$(read_point $((wx + dx)) $((wy + dy)))
-            if printf '%s' "$got" | grep -q opticalRecognition; then
+            if ! raise_ghostty; then saw="$saw (Ghostty stopped coming to the front)"; break 2; fi
+            got=$(read_point $((wx + dx)) $((wy + dy))) || true
+            # **The search criterion is the assertion.** This accepted any OCR reading and then
+            # asserted afterwards that it came from Ghostty — so a covered terminal was reported as
+            # `bundleID: wanted com.mitchellh.ghostty, got com.microsoft.Word`, a message about the
+            # wrong thing entirely. A reading of another app is not a reading of the terminal: the
+            # grid moves on, and what answered instead goes into the failure rather than into it.
+            if expect "$got" captureSource=opticalRecognition bundleID=com.mitchellh.ghostty >/dev/null 2>&1; then
                 reading=$got
                 read_x=$((wx + dx))
                 read_y=$((wy + dy))
                 break 2
             fi
+            other=$(printf '%s' "$got" | sed -n 's/.*"bundleID"[^"]*"\([^"]*\)".*/\1/p') || true
+            if [ -n "$other" ]; then saw="$saw $other"; fi
         done
     done
     if [ -z "$reading" ]; then
-        flunk "recogniser: no point in the Ghostty window came back through OCR; last error: $(head -c 120 "$reports/read-point.err" 2>/dev/null)"
+        flunk "recogniser: no point in the Ghostty window read as a terminal through OCR; answered by:${saw:- nothing}; last error: $(head -c 120 "$reports/read-point.err" 2>/dev/null)"
     else
-        if why=$(expect "$reading" captureSource=opticalRecognition bundleID=com.mitchellh.ghostty 2>&1); then
-            word=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["text"])' "$reading")
-            pass "recogniser: read '$word' from a terminal through OCR"
-        else
-            flunk "recogniser: $why"
-        fi
+        word=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["text"])' "$reading")
+        pass "recogniser: read '$word' from a terminal through OCR"
         # **Timed on a second read of the same point**, which is what "warm" means. The first
         # capture after boot pays a system-wide ScreenCaptureKit warm-up — measured at 14.8 s once
         # and 24.8 s on 2026-09-23 — against ~0.5 s for every read after. This comment said
         # "asserted warm" while the code timed the very first read, so the stage was measuring how
         # long the machine had been up. A warm read that fails to come back is reported as that,
         # never silently replaced by the cold one.
-        warm=$(read_point "$read_x" "$read_y")
+        raise_ghostty || true
+        warm=$(read_point "$read_x" "$read_y") || true
         cold=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["milliseconds"])' "$reading")
         if ! printf '%s' "$warm" | grep -q opticalRecognition; then
             # **Not substituted by the cold one.** Timing the first read under a "warm read cost…"
