@@ -24,7 +24,8 @@ struct LocalModelCoordinatorTests {
         let store = ModelStore(root: scratch.url)
         return LocalModelCoordinator(
             defaults: TemporaryDefaults.suite(), store: store,
-            transport: LocalModelControllerTests.Transport(fails: true), physicalMemory: memory)
+            transport: LocalModelControllerTests.Transport(fails: true),
+            probe: LocalModelControllerTests.FixedProbe(), physicalMemory: memory)
     }
 
     /// A coordinator over an **empty** store, talking to a scripted service.
@@ -49,7 +50,8 @@ struct LocalModelCoordinatorTests {
             shutdownLimit: .milliseconds(50))
         let coordinator = LocalModelCoordinator(
             defaults: TemporaryDefaults.suite(), store: store, client: client,
-            transport: LocalModelControllerTests.Transport(fails: true), physicalMemory: 48 * Self.gigabyte)
+            transport: LocalModelControllerTests.Transport(fails: true),
+            probe: LocalModelControllerTests.FixedProbe(), physicalMemory: 48 * Self.gigabyte)
         return (coordinator, store)
     }
 

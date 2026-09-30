@@ -16,12 +16,34 @@ struct ModelHostProbeTests {
     /// **The canonical host is always in the order.** A probe that reached nothing must still
     /// hand back a download that can be attempted, or a bad minute offline becomes a refusal.
     @Test(arguments: [[ModelHost.huggingFace], [], [.modelScope], [.modelScope, .huggingFace]])
-    func theorderAlwaysEndsSomewhereThatHasTheBytes(ranked: [ModelHost]) {
-        let order = URLSessionModelHostProbe.completing(ranked)
+    func theorderAlwaysEndsSomewhereThatHasTheBytes(measured: [ModelHost]) {
+        // Descending, so the ranking below has something to preserve.
+        let speeds = measured.enumerated().map {
+            ModelHostSpeed(host: $0.element, bytes: 100 - $0.offset)
+        }
+        let order = ModelHost.ranked(speeds)
         #expect(order.contains(.modelScope), "an order with nowhere to fall back to: \(order)")
         #expect(!order.isEmpty)
-        // Ranking is preserved: completing adds, it does not reorder.
-        #expect(Array(order.prefix(ranked.count)) == ranked)
+        #expect(Array(order.prefix(measured.count)) == measured, "ranking lost the order it measured")
+    }
+
+    /// **A host that delivered nothing is dropped, not ranked last.** Keeping it would put an
+    /// unreachable host ahead of the one that answered.
+    @Test func ahostThatDeliveredNothingIsNotInTheOrder() {
+        let order = ModelHost.ranked([
+            ModelHostSpeed(host: .huggingFace, bytes: 0),
+            ModelHostSpeed(host: .modelScope, bytes: 4_000),
+        ])
+        #expect(order == [.modelScope])
+    }
+
+    /// And the faster one leads when both answered — the whole point of measuring.
+    @Test func thefasterHostLeads() {
+        let order = ModelHost.ranked([
+            ModelHostSpeed(host: .modelScope, bytes: 6_061_113),
+            ModelHostSpeed(host: .huggingFace, bytes: 40_974_585),
+        ])
+        #expect(order == [.huggingFace, .modelScope], "the slower host was chosen")
     }
 
     /// A file only one host has — the licence — is never probed and never offered elsewhere.
@@ -59,5 +81,27 @@ struct ModelHostProbeTests {
         #expect(Set(order).count == order.count, "a host appears twice: \(order)")
         #expect(order.allSatisfy { Self.file().isServed(by: $0) })
         #expect(order.last == .modelScope || order.contains(.modelScope))
+    }
+}
+
+/// **The window and the ceiling are a measurement, and either can make it the wrong one.**
+struct ModelHostProbeShapeTests {
+    /// A window shorter than a host's handshake measures the handshake. Measured 2026-09-30:
+    /// Hugging Face delivered nothing at 1.5 s and 13.5 MB at 5 s, against ModelScope's 3.9 MB,
+    /// so a short window chose four hours over seven minutes.
+    @Test func thewindowOutlastsAslowHandshake() {
+        #expect(URLSessionModelHostProbe.window >= .seconds(4),
+                "a window this short measures the handshake, not the link")
+        // And not so long that it is felt: this is paid before every download.
+        #expect(URLSessionModelHostProbe.window <= .seconds(10))
+    }
+
+    /// **A ceiling either host can reach is a tie however different they are.** It has to sit
+    /// above what the faster link delivers inside the window, or the measurement is capped.
+    @Test func theceilingCannotBindBeforeTheWindowDoes() {
+        let seconds = Double(URLSessionModelHostProbe.window.components.seconds)
+        let implied = Double(URLSessionModelHostProbe.ceiling) / seconds / 1_048_576
+        // 13.8 MB/s was measured here; the ceiling must not bind on a link several times faster.
+        #expect(implied > 25, "the ceiling caps a fast host at \(implied) MB/s, which is a tie")
     }
 }

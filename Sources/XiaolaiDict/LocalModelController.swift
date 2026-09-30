@@ -185,7 +185,14 @@ final class LocalModelController {
                     order = fixed
                 } else {
                     let largest = wanted.files.max { $0.size < $1.size } ?? wanted.files[0]
-                    order = await probe.order(for: largest, among: ModelHost.allCases)
+                    let measured = await probe.measure(largest, among: ModelHost.allCases)
+                    // **What it measured, not just what it chose.** A probe that picks the
+                    // slower host reads exactly like one that picked well, and these are the
+                    // only numbers that tell them apart from a reader's machine.
+                    let summary = measured.sorted { $0.host.rawValue < $1.host.rawValue }
+                        .map { "\($0.host.rawValue) \($0.bytes)B" }.joined(separator: ", ")
+                    self?.log.notice("model: probed \(summary, privacy: .public)")
+                    order = ModelHost.ranked(measured)
                 }
                 try Task.checkCancellation()
                 self?.log.notice("model: fetching from \(order.map(\.rawValue).joined(separator: ", "), privacy: .public)")

@@ -8,9 +8,30 @@ import Foundation
 /// probe from mainland China finds Hugging Face unreachable and answers ModelScope, which is why
 /// this is safe as a default rather than a preference only the informed would find.
 public protocol ModelHostProbe: Sendable {
+    /// What each candidate delivered. **Measuring is all a probe does** — ranking is arithmetic
+    /// on the answer, and saying what was measured belongs to whoever owns a log.
+    func measure(_ file: ModelFile, among candidates: [ModelHost]) async -> [ModelHostSpeed]
+}
+
+extension ModelHostProbe {
     /// The hosts in the order they should be tried, best first. **Never empty**, and never
     /// without the canonical host, so a probe that learns nothing still yields a usable download.
-    func order(for file: ModelFile, among candidates: [ModelHost]) async -> [ModelHost]
+    public func order(for file: ModelFile, among candidates: [ModelHost]) async -> [ModelHost] {
+        ModelHost.ranked(await measure(file, among: candidates))
+    }
+}
+
+extension ModelHost {
+    /// **A host that delivered nothing has not been measured, it has failed.** Ranking it as
+    /// "slowest" would still place it ahead of nothing; dropping it is what makes an unreachable
+    /// host cost a measurement rather than a download. The canonical host is always last if it
+    /// is not already somewhere, because it has every file.
+    public static func ranked(_ measured: [ModelHostSpeed]) -> [ModelHost] {
+        let ordered = measured.filter { $0.bytes > 0 }
+            .sorted { ($0.bytes, $0.host == .modelScope ? 1 : 0) > ($1.bytes, $1.host == .modelScope ? 1 : 0) }
+            .map(\.host)
+        return ordered.contains(.modelScope) ? ordered : ordered + [.modelScope]
+    }
 }
 
 /// What a probe measured, per host — bytes delivered inside the deadline.
@@ -30,13 +51,28 @@ public struct ModelHostSpeed: Sendable, Equatable {
 /// makes them tie however different they are, and latency then decides — which is the wrong
 /// question for a file measured in gigabytes.
 public struct URLSessionModelHostProbe: ModelHostProbe {
-    /// How long each host is given. Short: this is paid before every download, and a host that
-    /// has not sent anything in this long is not the one to spend two hours with.
-    public static let window = Duration.milliseconds(1_500)
+    /// How long each host is given.
+    ///
+    /// **Long enough to out-last the handshake, because what matters is the sustained rate.**
+    /// Measured 2026-09-30 on one Mac, bytes delivered inside the window:
+    ///
+    /// | window | ModelScope | Hugging Face |
+    /// |---|---|---|
+    /// | 1.5 s | 392 KB | **0** |
+    /// | 3 s | 2.5 MB | 0.9 MB |
+    /// | 5 s | 3.9 MB | **13.5 MB** |
+    ///
+    /// Hugging Face pays 0.8–2.8 s before its first byte — a VPN and a CDN redirect — and then
+    /// outruns ModelScope several times over. A short window measures that handshake and answers
+    /// the wrong host: at 1.5 s it chose the mirror that would have taken four hours over the one
+    /// that takes seven minutes. Five seconds is paid once, against a download measured in hours.
+    public static let window = Duration.seconds(5)
 
-    /// The most that will be read from either host. A ceiling on memory, not a target — reaching
-    /// it early is what winning looks like.
-    public static let ceiling = 4 * 1_048_576
+    /// The most that will be read from either host. **A stop, not a target**, and deliberately
+    /// far above what a fast link delivers inside the window: a ceiling either host can reach
+    /// makes them tie however different they are. Nothing is kept — the bytes are counted and
+    /// dropped — so this bounds the transfer rather than memory.
+    public static let ceiling = 256 * 1_048_576
 
     private let window: Duration
     private let ceiling: Int
@@ -47,12 +83,17 @@ public struct URLSessionModelHostProbe: ModelHostProbe {
         self.ceiling = ceiling
     }
 
-    public func order(for file: ModelFile, among candidates: [ModelHost]) async -> [ModelHost] {
+    public func measure(_ file: ModelFile, among candidates: [ModelHost]) async -> [ModelHostSpeed] {
         let usable = candidates.filter { file.isServed(by: $0) }
-        guard usable.count > 1 else { return Self.completing(usable) }
+        guard usable.count > 1 else {
+            // Nothing to choose between: measuring would cost the window and decide nothing.
+            return usable.map { ModelHostSpeed(host: $0, bytes: 1) }
+        }
+        // **Both at once, so they are measured under the same conditions.** Run in turn, the
+        // second is measured on a link the first has just warmed and a network that may have
+        // moved; run together they compete for the same bandwidth, which lowers both numbers
+        // equally and leaves the comparison fair. What is wanted is the ratio, not the rate.
         var measured: [ModelHostSpeed] = []
-        // `async let` rather than a task group: cancellation propagates, and each measurement is
-        // independent, so the slower host does not hold the faster one's answer.
         await withTaskGroup(of: ModelHostSpeed.self) { group in
             for host in usable {
                 group.addTask { [window, ceiling] in
@@ -63,19 +104,7 @@ public struct URLSessionModelHostProbe: ModelHostProbe {
             }
             for await speed in group { measured.append(speed) }
         }
-        // **A host that delivered nothing has not been measured, it has failed.** Ranking it as
-        // "slowest" would still put it in the order ahead of nothing; dropping it is what makes
-        // an unreachable Hugging Face cost 1.5 seconds and not a download.
-        let ranked = measured.filter { $0.bytes > 0 }
-            .sorted { ($0.bytes, $0.host == .modelScope ? 1 : 0) > ($1.bytes, $1.host == .modelScope ? 1 : 0) }
-            .map(\.host)
-        return Self.completing(ranked)
-    }
-
-    /// The canonical host is always last if it is not already somewhere: every file has its bytes,
-    /// and a probe that failed on every host must still hand back a download that can be tried.
-    static func completing(_ hosts: [ModelHost]) -> [ModelHost] {
-        hosts.contains(.modelScope) ? hosts : hosts + [.modelScope]
+        return measured
     }
 
     /// Bytes this host delivered inside the window. **Never written to disk** — the staged file
@@ -86,42 +115,63 @@ public struct URLSessionModelHostProbe: ModelHostProbe {
         request.setValue("bytes=0-\(ceiling - 1)", forHTTPHeaderField: "Range")
         // Its own short timeouts, so a host that accepts a connection and says nothing cannot
         // hold the probe past its window by any route.
+        let seconds = Double(window.components.seconds)
+            + Double(window.components.attoseconds) / 1e18
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = Double(window.components.seconds) + 1
-        configuration.timeoutIntervalForResource = Double(window.components.seconds) + 1
+        configuration.timeoutIntervalForRequest = seconds + 1
+        configuration.timeoutIntervalForResource = seconds + 1
         configuration.waitsForConnectivity = false
-        let session = URLSession(configuration: configuration)
+
+        // **Counted per chunk, through a delegate — never by iterating `AsyncBytes`.** A
+        // `for await` over the body suspends once per *byte*, so the first version of this
+        // measured the cost of its own loop and not the link: it answered ModelScope on a Mac
+        // where Hugging Face was twenty times faster, because neither host could out-run the
+        // suspensions. The same reason `RangeWriter` is a delegate.
+        let counter = ByteCounter(ceiling: ceiling)
+        let session = URLSession(configuration: configuration, delegate: counter,
+                                 delegateQueue: nil)
         defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: request)
+        task.resume()
+        try? await Task.sleep(for: window)
+        // **Cancelled, then read.** The count lives on the delegate rather than in the task, so
+        // stopping the transfer does not discard what it had already delivered.
+        task.cancel()
+        return counter.count
+    }
 
-        let counted = Counter()
-        let work = Task {
-            let (bytes, response) = try await session.bytes(for: request)
-            // **An error page is not throughput.** Counting raw bytes would rank a fast 403 as
-            // the winner; only a success says the host will serve this file at all.
+    /// Counts a response body as it arrives, and only for a status that means the host will
+    /// actually serve this file: a fast error page is not throughput.
+    private final class ByteCounter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private var received = 0
+        private var accepted = false
+        private let ceiling: Int
+
+        init(ceiling: Int) { self.ceiling = ceiling }
+
+        var count: Int { lock.withLock { accepted ? received : 0 } }
+
+        func urlSession(
+            _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+            completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
+        ) {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard status == 200 || status == 206 else { return }
-            var seen = 0
-            for try await _ in bytes {
-                seen += 1
-                if seen % 65_536 == 0 { await counted.set(seen) }
-                if seen >= ceiling { break }
+            guard status == 200 || status == 206 else {
+                completionHandler(.cancel)
+                return
             }
-            await counted.set(seen)
+            lock.withLock { accepted = true }
+            completionHandler(.allow)
         }
-        // **The deadline cancels and waits.** Letting a timer win a race leaves the request
-        // running, and `invalidateAndCancel` then races the task rather than following it.
-        let deadline = Task {
-            try? await Task.sleep(for: window)
-            work.cancel()
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            let full = lock.withLock {
+                received = min(received + data.count, ceiling)
+                return received >= ceiling
+            }
+            if full { dataTask.cancel() }
         }
-        _ = try? await work.value
-        deadline.cancel()
-        return await counted.value
     }
 
-    /// What the probe has counted so far, readable after cancellation.
-    private actor Counter {
-        private(set) var value = 0
-        func set(_ seen: Int) { value = max(value, seen) }
-    }
 }

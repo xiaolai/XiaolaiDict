@@ -11,6 +11,17 @@ import XiaolaiDictTestSupport
 /// and a Not now that is remembered and never takes the download away.
 @MainActor
 struct LocalModelControllerTests {
+    /// **A probe that answers without a network.** The real one takes five seconds and reaches
+    /// two hosts; a controller built without this in a test stalls and then measures the tester's
+    /// internet connection. Every construction below passes one.
+    struct FixedProbe: ModelHostProbe {
+        var winner: ModelHost = .modelScope
+        func measure(_ file: ModelFile, among candidates: [ModelHost]) async -> [ModelHostSpeed] {
+            candidates.filter { file.isServed(by: $0) }
+                .map { ModelHostSpeed(host: $0, bytes: $0 == winner ? 100 : 1) }
+        }
+    }
+
     /// Serves one small file per path from memory, or fails every request.
     struct Transport: ModelFileTransport {
         let fails: Bool
@@ -68,7 +79,7 @@ struct LocalModelControllerTests {
         let store = ModelStore(root: scratch.url)
         return (LocalModelController(
             defaults: defaults, store: store, physicalMemory: memory,
-            transport: Transport(fails: fails), manifest: Self.manifest), store)
+            transport: Transport(fails: fails), probe: FixedProbe(), manifest: Self.manifest), store)
     }
 
     private func settle(_ controller: LocalModelController) async {
@@ -249,7 +260,8 @@ struct LocalModelControllerTests {
         // row keeps the reason while 4B goes on answering.
         let upgrade = LocalModelController(
             defaults: TemporaryDefaults.suite(), store: store, physicalMemory: 48 * Self.gigabyte,
-            transport: Transport(fails: true, asked: nil), manifest: Self.manifest)
+            transport: Transport(fails: true, asked: nil), probe: FixedProbe(),
+            manifest: Self.manifest)
         upgrade.startDownload(.large)
         await settle(upgrade)
         guard case .stopped(let reason, let size, let replacing) = upgrade.state else {
@@ -301,7 +313,7 @@ struct LocalModelControllerTests {
             defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
             transport: Transport(fails: false, asked: asked),
             // Answers the canonical host, as a probe from inside China would.
-            probe: FixedProbe(order: [.modelScope]),
+            probe: FixedProbe(),
             manifest: Self.manifest)
 
         controller.startDownload(.standard)
@@ -320,20 +332,12 @@ struct LocalModelControllerTests {
         let controller = LocalModelController(
             defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
             transport: Transport(fails: false, asked: asked),
-            probe: FixedProbe(order: [.modelScope]), manifest: Self.manifest)
+            probe: FixedProbe(), manifest: Self.manifest)
 
         controller.startDownload(.standard)
         await settle(controller)
         #expect(asked.withLock { $0 }.contains(.huggingFace), "the choice reached nothing")
         _ = scratch
-    }
-
-    /// A probe that answers whatever the test needs, without a network.
-    struct FixedProbe: ModelHostProbe {
-        let order: [ModelHost]
-        func order(for file: ModelFile, among candidates: [ModelHost]) async -> [ModelHost] {
-            order.filter { file.isServed(by: $0) }.isEmpty ? [.modelScope] : order
-        }
     }
 
     /// **The picker is wired, not decoration.** A control that sets a value nothing reads is the
@@ -347,7 +351,7 @@ struct LocalModelControllerTests {
         let controller = LocalModelController(
             defaults: defaults, store: store, physicalMemory: 64 * 1_073_741_824,
             transport: Transport(fails: false, asked: asked),
-            probe: FixedProbe(order: [.modelScope]), manifest: Self.manifest)
+            probe: FixedProbe(), manifest: Self.manifest)
         #expect(controller.choice.source == .fastest, "the default is not what is offered")
 
         controller.choice.chooseSource(.huggingFace)

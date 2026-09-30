@@ -25,10 +25,12 @@ final class LocalModelCoordinator {
     init(
         defaults: UserDefaults, store: ModelStore = .standard(), client: ModelClient = ModelClient(),
         transport: any ModelFileTransport = URLSessionModelTransport(),
+        probe: any ModelHostProbe = URLSessionModelHostProbe(),
         physicalMemory: UInt64 = SystemMemory.physical
     ) {
         controller = LocalModelController(
-            defaults: defaults, store: store, physicalMemory: physicalMemory, transport: transport)
+            defaults: defaults, store: store, physicalMemory: physicalMemory,
+            transport: transport, probe: probe)
         access = LocalModelAccess(client: client, store: store)
         // A new model is answered from only once the service holding the old one has gone.
         //
