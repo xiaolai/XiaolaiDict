@@ -1,4 +1,6 @@
 import Foundation
+import XiaolaiDictBase
+import os
 
 /// A window onto the reader's sentence that is guaranteed to show the word.
 ///
@@ -26,7 +28,17 @@ public struct SentenceExcerpt: Equatable, Sendable {
     public let clippedBefore: Bool
 
     public init(sentence: String, marks: [NSRange], wordsBefore: Int = SentenceExcerpt.wordsBefore) {
-        precondition(wordsBefore >= 0, "a window cannot keep a negative number of words")
+        // **A nonsense run-up is answered with the whole sentence, not with a dead process.** This was a
+        // `precondition`. The value comes from `fallbacks` and nowhere else, so a negative one is a
+        // mistake in this file rather than anything a reader can cause — but this type's promise is "a
+        // window that shows the word", the whole sentence keeps that promise, and there is nothing to
+        // gain by ending the app to say so. Logged, because a mistake in the code has to be findable
+        // whatever the caller does with the value.
+        guard wordsBefore >= 0 else {
+            Self.log.fault("a window cannot keep \(wordsBefore, privacy: .public) words of run-up")
+            self.init(text: sentence, marks: marks, clippedBefore: false)
+            return
+        }
         let whole = sentence as NSString
         guard let first = marks.map(\.location).min(), first > 0, first <= whole.length else {
             self.init(text: sentence, marks: marks, clippedBefore: false)
@@ -82,6 +94,10 @@ public struct SentenceExcerpt: Equatable, Sendable {
         }
         return windows
     }
+
+    /// Where a mistake in this file's own arithmetic goes. No reader-facing text: `XiaolaiDictCore`
+    /// carries none (ADR-0025).
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "excerpt")
 
     private init(text: String, marks: [NSRange], clippedBefore: Bool) {
         self.text = text

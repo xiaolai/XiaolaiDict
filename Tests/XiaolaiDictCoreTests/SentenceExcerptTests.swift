@@ -158,3 +158,30 @@ struct SentenceExcerptTests {
         #expect(windows.dropFirst().allSatisfy { ($0.text as NSString).length < (sentence as NSString).length })
     }
 }
+
+/// **A nonsense run-up answers with the whole sentence, not with a dead process.**
+///
+/// `wordsBefore` came from `fallbacks` and nowhere else, so a negative one is a mistake in the file rather
+/// than anything a reader can cause — but it was a `precondition`, and this type's promise is "a window
+/// that shows the word", which the whole sentence keeps. Ending the app to report a bad constant buys
+/// nothing the log does not — ADR-0042.
+struct SentenceExcerptRunUpTests {
+    @Test func anegativeRunUpKeepsTheWholeSentence() {
+        let sentence = "The ticket was in the pocket of the coat she had not worn since spring."
+        let word = (sentence as NSString).range(of: "ticket")
+        let excerpt = SentenceExcerpt(sentence: sentence, marks: [word], wordsBefore: -1)
+        #expect(excerpt.text == sentence, "a bad run-up cut the sentence instead of keeping it whole")
+        #expect(excerpt.marks == [word], "the marks moved for a window that was never cut")
+        #expect(!excerpt.clippedBefore)
+    }
+
+    /// The positive control: a run-up that makes sense still cuts.
+    @Test func avalidRunUpStillCuts() {
+        let sentence = "The ticket was in the pocket of the coat she had not worn since spring."
+        let word = (sentence as NSString).range(of: "coat")
+        let excerpt = SentenceExcerpt(sentence: sentence, marks: [word], wordsBefore: 2)
+        #expect(excerpt.clippedBefore)
+        #expect(excerpt.text.hasPrefix("…"))
+        #expect(excerpt.text.contains("coat"))
+    }
+}
