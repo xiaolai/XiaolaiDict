@@ -86,15 +86,31 @@ enum SelectionReader {
     static let contextRadii = [400, 1_600, 6_400]
 
     /// Synchronous IPC into another app, so it runs detached — never on the caller's actor.
+    ///
+    /// **Except when the app is this one, which is read on the main actor instead.** The reader can
+    /// press the shortcut while XiaolaiDict is frontmost — Settings, the library and the review window
+    /// all activate it — and then `FrontApp.frontmost()` is us. An Accessibility request about *this*
+    /// process is not IPC at all: it is serviced in-process on the calling thread, so
+    /// `-[NSApplication accessibilityFocusedUIElement]` reaches `NSHostingView` and SwiftUI evaluates a
+    /// body wherever the call was made from. Off the main actor its first `@MainActor` call traps —
+    /// the second instance of the class the compositor check in `ScreenWordReader.target(at:)` closes,
+    /// whose first instance is crash report 2026-09-25. There is no hung app to be stalled by here and
+    /// nothing to serialise against, so the two reasons `oneAtATime` exists do not apply.
     static func read(from app: FrontApp) async -> Outcome {
-        await oneAtATime {
-            let application = AXUIElementCreateApplication(app.pid)
-            // Chromium and Electron build their tree only when asked; every other app ignores this.
-            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            return read(application: application, of: app, with: AccessibilitySession(budget: budget))
+        guard app.pid != getpid() else { return await MainActor.run { readNow(app) } }
+        return await oneAtATime {
+            readNow(app)
         } cancelled: {
             .nothing(message(for: .cancelled, app: app.name))
         }
+    }
+
+    /// One read of `app`, wherever the caller has decided it may happen.
+    private static func readNow(_ app: FrontApp) -> Outcome {
+        let application = AXUIElementCreateApplication(app.pid)
+        // Chromium and Electron build their tree only when asked; every other app ignores this.
+        AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        return read(application: application, of: app, with: AccessibilitySession(budget: budget))
     }
 
     private static let lastRead = Mutex<Task<Outcome, Never>?>(nil)

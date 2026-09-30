@@ -1,6 +1,7 @@
 import AppKit
 @testable import XiaolaiDict
 import DictionaryModel
+import Synchronization
 import XiaolaiDictCore
 import Testing
 
@@ -54,6 +55,49 @@ struct HoverAuditTests {
         // The case exists and is distinct from "no element here", which *may* still try OCR.
         let ours = ScreenWordReader.TargetOutcome.ourOwnWindow
         if case .ourOwnWindow = ours {} else { Issue.record("the case collapsed into .none") }
+    }
+
+    /// **Our own window is recognised from the compositor's list, before Accessibility is asked.**
+    ///
+    /// The `pid` check on what `AXUIElementCopyElementAtPosition` returns cannot do this job: the crash
+    /// is *inside* that call. A hit test at a point one of XiaolaiDict's own windows covers is serviced
+    /// in this process, on the calling thread — the detached task's — so `NSHostingView` answers it and
+    /// the panel's SwiftUI body is evaluated off the main actor, where its first `@MainActor` call
+    /// traps. Crash report 2026-09-25: `EXC_BREAKPOINT` in `dispatch_assert_queue`, under
+    /// `-[NSApplication accessibilityHitTest:]` → `LookupPanelContent.content`.
+    ///
+    /// The point is off every screen, so Accessibility has nothing to find there and the only thing
+    /// that can produce `.ourOwnWindow` is the compositor's answer being consulted first.
+    @Test func thepointerOverOurOwnWindowIsRefusedWithoutAskingAccessibility() {
+        let outcome = ScreenWordReader.target(
+            at: CGPoint(x: -9_000, y: -9_000),
+            access: AccessibilityAccess(probe: { .granted }, request: { true }),
+            windows: { [ListedWindow(pid: getpid(), bounds: CGRect(x: -9_200, y: -9_200, width: 400, height: 400))] })
+        if case .ourOwnWindow = outcome {} else {
+            Issue.record("a hover over XiaolaiDict's own window reached Accessibility: \(outcome)")
+        }
+    }
+
+    /// The negative control: another app's window at the same point is not refused as ours. Without it
+    /// the check above would pass on a rule that refused every hover.
+    @Test func thepointerOverAnotherAppsWindowIsNotOurOwn() {
+        let outcome = ScreenWordReader.target(
+            at: CGPoint(x: -9_000, y: -9_000),
+            access: AccessibilityAccess(probe: { .granted }, request: { true }),
+            windows: { [ListedWindow(pid: getpid() + 1, bounds: CGRect(x: -9_200, y: -9_200, width: 400, height: 400))] })
+        if case .ourOwnWindow = outcome { Issue.record("another app's window read as XiaolaiDict's own") }
+    }
+
+    /// **The grant is still the first refusal, and it is still the cheapest.** Hover pays for the
+    /// window list only once the gate has let it through — the invariant that a reader who is simply
+    /// reading pays for nothing, which putting a compositor query first would have undone.
+    @Test func arefusedGrantAnswersBeforeTheWindowListIsBuilt() {
+        let built = Mutex(false)
+        let outcome = ScreenWordReader.target(
+            at: .zero, access: AccessibilityAccess(probe: { .declined }, request: { false }),
+            windows: { built.withLock { $0 = true }; return [] })
+        if case .none = outcome {} else { Issue.record("a missing grant did not refuse: \(outcome)") }
+        #expect(!built.withLock { $0 }, "the window list was built for a hover the grant had refused")
     }
 
     /// The guard must be releasable only by whoever finishes, which is why it is a reference type:

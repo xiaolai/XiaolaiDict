@@ -65,12 +65,31 @@ enum ScreenWordReader {
         case ourOwnWindow
     }
 
-    /// `access` is a parameter so a test can drive the refusal without this Mac's grant deciding
-    /// the answer. **`granted()` and never `ensure()`**: a hover the reader walked away from must
-    /// not raise a permission dialog, which is the rule `ScreenRecordingAccess` already keeps for
-    /// the other permission.
-    static func target(at point: CGPoint, access: AccessibilityAccess = .system) -> TargetOutcome {
+    /// `access` and `windows` are parameters so a test can drive both refusals without this Mac's
+    /// grant or this Mac's screen deciding the answer. **`granted()` and never `ensure()`**: a hover
+    /// the reader walked away from must not raise a permission dialog, which is the rule
+    /// `ScreenRecordingAccess` already keeps for the other permission.
+    static func target(
+        at point: CGPoint, access: AccessibilityAccess = .system,
+        windows: () -> [ListedWindow] = ScreenWordReader.listedWindows
+    ) -> TargetOutcome {
         guard access.granted() else { return .none("Accessibility access for XiaolaiDict is off") }
+        // **Whose window this is, asked of the compositor before Accessibility is asked anything.**
+        //
+        // The `pid` check below cannot do this job, and no check on a returned element ever could:
+        // where the window under the pointer is one of XiaolaiDict's own, the crash is *inside*
+        // `AXUIElementCopyElementAtPosition`. Accessibility services a request about this process
+        // in-process, on the **calling thread** — here a cooperative-pool thread, because the read is
+        // detached so a hung app cannot stall a hover — so `-[NSApplication accessibilityHitTest:]`
+        // runs, `NSHostingView` answers it, and the panel's SwiftUI body is evaluated off the main
+        // actor. Its first `@MainActor` call then traps. Measured: crash report 2026-09-25,
+        // `EXC_BREAKPOINT` in `dispatch_assert_queue` under `LookupPanelContent.content`, nine minutes
+        // into an ordinary session — the panel opens beside the pointer, so reaching for it with the
+        // modifier still held is the shortest route there.
+        //
+        // **After the grant, never before it.** The cheap refusal stays cheapest: a reader who is
+        // simply reading pays one set comparison, not a window list — ADR-0015.
+        if PointerWindow.owner(at: point, in: windows()) == getpid() { return .ourOwnWindow }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, messagingTimeout)
 
@@ -81,6 +100,9 @@ enum ScreenWordReader {
         }
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
+        // Kept as the second line. The compositor's list is a moment old, so a window that arrived or
+        // moved since is answered here instead — by then the hit test has happened, which is why this
+        // cannot be the only line.
         guard pid != getpid() else { return .ourOwnWindow }
         let running = NSRunningApplication(processIdentifier: pid)
         return .found(Target(
@@ -251,6 +273,19 @@ enum ScreenWordReader {
     /// The page containing `element`, or `element` itself where there is none.
     private static func webArea(containing element: AXUIElement) -> AXUIElement {
         ((try? DirectReads().webArea(containing: element)) ?? nil) ?? element
+    }
+
+    /// The compositor's on-screen windows, front to back — **every level**, which is what lets a hover
+    /// see XiaolaiDict's own panel at `.floating`. Costs no permission: an owner and a frame are public,
+    /// and only a window's *title* needs Screen Recording.
+    ///
+    /// **0.38–0.41 ms for 17 windows**, measured 2026-09-30 on this Mac over five passes — against the
+    /// 1–9 ms Accessibility round trip it precedes, and only on hovers the gate has already admitted.
+    /// Not `SCShareableContent`, which is the same question at 60–85 ms and needs a grant.
+    static func listedWindows() -> [ListedWindow] {
+        PointerWindow.listed(
+            CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] ?? [])
     }
 
     private static func awaken(_ pid: pid_t) {
