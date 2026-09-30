@@ -132,7 +132,13 @@ final class LibraryModel {
             pages = 1
         case .filterScripts(let on): scriptFiltered = on; pages = 1
         case .filterTag(let name): tag = name; pages = 1
-        case .select(let ids): selection = ids
+        // **The one action that reads nothing.** Selecting writes nothing, so the rows, the
+        // count, the answers, the retention scan and the tag vocabulary are all still true;
+        // only the open row's history has to be fetched.
+        case .select(let ids):
+            selection = ids
+            Task { await reselect() }
+            return
         case .showMore: pages += 1
         // **One transaction, like every other bulk action.** A loop of separately committed
         // writes leaves an arbitrary subset changed when one fails part-way, and the reader has
@@ -207,6 +213,24 @@ final class LibraryModel {
         Task { await reload() }
     }
 
+    /// **What one read of the ledger produced**, kept so that changing the selection does not
+    /// have to produce it again. Selecting a row changes nothing in the ledger, and re-running
+    /// the page query, the count, the answers, the retention scan and the tag vocabulary for it
+    /// made clicking through a library as expensive as searching it.
+    private struct Reading {
+        var rows: [LibraryRow]
+        var total: Int
+        var answers: [UUID: StudyAnswer]
+        var suggested: [Ledger.Suggestion]
+        var setAside: [IgnoredLemma]
+        var retention: Ledger.RetentionReport
+        var vocabulary: [(tag: String, count: Int)]
+        var at: Date
+    }
+
+    /// The last complete read, or nil before the first one.
+    private var reading: Reading?
+
     func reload() async {
         guard let opening = store() else { return }
         generation += 1
@@ -218,9 +242,6 @@ final class LibraryModel {
             let rows = try await ledger.library(query)
             let total = try await ledger.libraryCount(query)
             let now = clock()
-            // One query for the page's answers, not one per row: the list is redrawn on every
-            // keystroke of the search field, and two hundred round trips through an actor per
-            // keystroke is a search field that stutters.
             // **Pruned here, in the model — not on the way out to the presentation.** Narrowing it
             // only for display left the model holding ids the reader could no longer see, and the
             // bulk actions read the model: selecting two rows and searching until one was visible
@@ -231,6 +252,9 @@ final class LibraryModel {
             // own — it simply stops, and the reload that overtook it commits instead.
             guard mine == generation else { return }
             selection.formIntersection(Set(rows.map(\.id)))
+            // One query for the page's answers, not one per row: the list is redrawn on every
+            // keystroke of the search field, and two hundred round trips through an actor per
+            // keystroke is a search field that stutters.
             let answers = try await ledger.answers(of: rows.map(\.id))
             // Only under the suggested filter: a list nobody is looking at is a query nobody
             // should pay for on every keystroke.
@@ -253,15 +277,6 @@ final class LibraryModel {
             // this list is the only place the declaration is visible — and the only place it can
             // be taken back.
             let setAside = filter == .suggested ? try await ledger.ignoredSuggestions() : []
-            // **One row, or none**, so a history is read for the row the reader opened and not
-            // for two hundred of them on every keystroke of the search field.
-            let open = selection.count == 1 ? selection.first : nil
-            var timeline: NoteTimeline?
-            var tags: [String] = []
-            if let open {
-                timeline = try await ledger.timeline(of: open)
-                tags = try await ledger.tags(of: open)
-            }
             let measured = try await ledger.retention(dictionary: nil)
             let vocabulary = try await ledger.allTags()
             // **A filter cannot outlive the thing it filters by.** Removing the last use of the
@@ -274,50 +289,100 @@ final class LibraryModel {
             }
             // Read again: the reads between the prune and here suspend too.
             guard mine == generation else { return }
-            presentation = LibraryPresentation(
-                rows: rows.map { Self.row($0, answer: answers[$0.id]?.text ?? "", at: now) },
-                total: total, search: search, filter: filter, scriptFiltered: scriptFiltered,
-                selection: selection,
-                // **Offered only when there is more.** The count is of everything that matched, so
-                // a library of exactly one page must not show a button that does nothing.
-                hasMore: total > rows.count,
-                // Whether any of the selection can be confirmed, so the control is present only
-                // when it would do something.
-                canConfirm: rows.contains { selection.contains($0.id) && $0.readiness == .needsConfirmation },
-                suggestions: suggested.map {
-                    LibraryPresentation.Suggestion(lemma: $0.lemma, language: $0.language,
-                                                   days: $0.distinctDays,
-                                                   sources: $0.distinctSources)
-                },
-                exported: exported,
-                // **What this selection is**, so the control is named for what it will do rather
-                // than for what its category is called.
-                selectionIsPaused: !selection.isEmpty && rows.allSatisfy {
-                    !selection.contains($0.id) || $0.card?.isPaused == true
-                },
-                selectionIsArchived: !selection.isEmpty && rows.allSatisfy {
-                    !selection.contains($0.id) || $0.note.enrollment == .archived
-                },
-                undoable: undoable?.presentable,
-                setAside: setAside,
-                tagVocabulary: vocabulary, tag: tag,
-                // **Nil over an empty denominator.** A rate nobody has is not 0%.
-                retention: LibraryPresentation.Retention(
-                    attempts: measured.attempts, successes: measured.successes,
-                    cards: measured.cards),
-                // **One row, or none.** An inspector over several would have to choose which one
-                // an edit reaches, and the reader cannot see which it chose.
-                inspector: Self.inspector(of: rows, selection: selection, answers: answers,
-                                          tags: tags, timeline: timeline))
+            reading = Reading(rows: rows, total: total, answers: answers, suggested: suggested,
+                              setAside: setAside, retention: measured, vocabulary: vocabulary,
+                              at: now)
+            await inspect(ledger, generation: mine)
         } catch {
             // **Said, not swallowed.** An empty list and a list that could not be read are the same
             // screen otherwise, and the reader is owed the difference. Still only for the current
             // reload: an overtaken one's failure is not this screen's.
             guard mine == generation else { return }
+            reading = nil
             presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
                                                scriptFiltered: scriptFiltered,
                                                problem: String(describing: error))
         }
+    }
+
+    /// **What a selection change costs.** The rows, the count, the answers, the retention scan
+    /// and the tag vocabulary are all unchanged by it — selecting a row writes nothing — so this
+    /// reads the one open row's history and republishes the last reading around it.
+    ///
+    /// Falls back to a full reload when there is no reading to republish, which is the first
+    /// selection after a failure.
+    private func reselect() async {
+        guard reading != nil, let opening = store() else { return await reload() }
+        generation += 1
+        let mine = generation
+        do {
+            await inspect(try await opening.value, generation: mine)
+        } catch {
+            guard mine == generation else { return }
+            presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
+                                               scriptFiltered: scriptFiltered,
+                                               problem: String(describing: error))
+        }
+    }
+
+    /// Reads the open row's history — **one row, or none**, so a history is read for the row the
+    /// reader opened and not for two hundred of them — and publishes.
+    private func inspect(_ ledger: LedgerStore, generation mine: Int) async {
+        guard let reading else { return }
+        let open = selection.count == 1 ? selection.first : nil
+        var timeline: NoteTimeline?
+        var tags: [String] = []
+        if let open {
+            do {
+                timeline = try await ledger.timeline(of: open)
+                tags = try await ledger.tags(of: open)
+            } catch {
+                guard mine == generation else { return }
+                problem = String(describing: error)
+            }
+        }
+        guard mine == generation else { return }
+        publish(reading, tags: tags, timeline: timeline)
+    }
+
+    private func publish(_ reading: Reading, tags: [String], timeline: NoteTimeline?) {
+        let rows = reading.rows
+        presentation = LibraryPresentation(
+            rows: rows.map { Self.row($0, answer: reading.answers[$0.id]?.text ?? "", at: reading.at) },
+            total: reading.total, search: search, filter: filter, scriptFiltered: scriptFiltered,
+            selection: selection,
+            // **Offered only when there is more.** The count is of everything that matched, so
+            // a library of exactly one page must not show a button that does nothing.
+            hasMore: reading.total > rows.count,
+            // Whether any of the selection can be confirmed, so the control is present only
+            // when it would do something.
+            canConfirm: rows.contains { selection.contains($0.id) && $0.readiness == .needsConfirmation },
+            suggestions: reading.suggested.map {
+                LibraryPresentation.Suggestion(lemma: $0.lemma, language: $0.language,
+                                               days: $0.distinctDays,
+                                               sources: $0.distinctSources)
+            },
+            exported: exported,
+            // **What this selection is**, so the control is named for what it will do rather
+            // than for what its category is called.
+            selectionIsPaused: !selection.isEmpty && rows.allSatisfy {
+                !selection.contains($0.id) || $0.card?.isPaused == true
+            },
+            selectionIsArchived: !selection.isEmpty && rows.allSatisfy {
+                !selection.contains($0.id) || $0.note.enrollment == .archived
+            },
+            undoable: undoable?.presentable,
+            setAside: reading.setAside,
+            tagVocabulary: reading.vocabulary, tag: tag,
+            // **Nil over an empty denominator.** A rate nobody has is not 0%.
+            retention: LibraryPresentation.Retention(
+                attempts: reading.retention.attempts, successes: reading.retention.successes,
+                cards: reading.retention.cards),
+            // **One row, or none.** An inspector over several would have to choose which one
+            // an edit reaches, and the reader cannot see which it chose.
+            inspector: Self.inspector(of: rows, selection: selection, answers: reading.answers,
+                                      tags: tags, timeline: timeline),
+            problem: problem)
     }
 
     /// A change that cannot be put back. **Retires the undo**, because a button offering to

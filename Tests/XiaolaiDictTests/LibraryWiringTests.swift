@@ -1145,6 +1145,34 @@ struct LibraryReversibleRaceTests {
             .values.allSatisfy { $0 == .archived }, "and they are archived now")
     }
 
+    /// **Selecting a row reads nothing but that row's history.** It writes nothing, so the page,
+    /// the count, the answers, the retention scan and the tag vocabulary are all still true —
+    /// re-running them made clicking through a library as expensive as searching it.
+    ///
+    /// A row written behind the model's back is the instrument: a selection must not see it, and
+    /// a reload must.
+    @Test func selectingArowDoesNotReadTheLibraryAgain() async throws {
+        let (path, clean) = Wiring.scratch("reselect"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try Wiring.save(ledger, "first", at: now)
+        let model = LibraryModel(store: Wiring.store(path), studyScripts: { [] }, clock: { now })
+        await model.reload()
+        #expect(model.presentation.rows.count == 1)
+
+        try Wiring.save(ledger, "second", at: now)
+        model.act(.select([first.id]))
+        try await Wiring.settle("the inspector opened") { model.presentation.inspector != nil }
+        #expect(model.presentation.rows.count == 1,
+                "selecting re-ran the library query")
+        #expect(model.presentation.inspector?.word == "first",
+                "and it still read the open row's own history")
+
+        await model.reload()
+        #expect(model.presentation.rows.count == 2, "a reload does read it again")
+        #expect(model.presentation.inspector?.word == "first", "and keeps the inspector open")
+    }
+
     /// Opened once, awaited by however many callers.
     private actor Gate {
         private var isOpen = false
