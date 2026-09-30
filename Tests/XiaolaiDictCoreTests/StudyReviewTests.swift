@@ -251,21 +251,39 @@ struct StudyReviewTests {
     @Test func thequeueOrdersLearningThenOverdueThenNew() throws {
         let ledger = try Ledger(path: ":memory:")
         let lapsed = try ready(ledger, "fine", key: "a")
-        let old = try ready(ledger, "hold", key: "b")
-        let fresh = try ready(ledger, "bank", key: "c")
+        let older = try ready(ledger, "hold", key: "b")
+        let newer = try ready(ledger, "bank", key: "c")
+        let fresh = try ready(ledger, "keen", key: "d")
 
-        // `lapsed` fails and lands in relearning, due in ten minutes.
-        _ = try ledger.grade(cardID: lapsed.id, .again, eventID: UUID(), expectedRevision: 0,
+        // **`lapsed` is genuinely relearning**, which takes two grades: a new card answered
+        // `.again` lands in *learning*, and the comment here used to say relearning while the
+        // fixture produced something else. The queue treats the two alike, so the fixture was
+        // never exercising the phase it named.
+        _ = try ledger.grade(cardID: lapsed.id, .good, eventID: UUID(), expectedRevision: 0,
                              at: now, using: try scheduler())
-        // `old` passes and becomes a review card, long overdue by the time we ask.
-        _ = try ledger.grade(cardID: old.id, .good, eventID: UUID(), expectedRevision: 0,
+        let lapsedRevision = try #require(try ledger.card(id: lapsed.id)).revision
+        _ = try ledger.grade(cardID: lapsed.id, .again, eventID: UUID(),
+                             expectedRevision: lapsedRevision,
+                             at: now.addingTimeInterval(200_000), using: try scheduler())
+        #expect(try #require(try ledger.card(id: lapsed.id)).scheduled.phase == .relearning)
+
+        // **Two review cards, due at different times**, so "oldest due first" is a claim the
+        // fixture can refute. With one, any ordering put it in the right place.
+        _ = try ledger.grade(cardID: older.id, .good, eventID: UUID(), expectedRevision: 0,
                              at: now, using: try scheduler())
+        _ = try ledger.grade(cardID: newer.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now.addingTimeInterval(86_400), using: try scheduler())
+        let olderCard = try #require(try ledger.card(id: older.id))
+        let newerCard = try #require(try ledger.card(id: newer.id))
+        let olderDue = try #require(olderCard.scheduled.due)
+        let newerDue = try #require(newerCard.scheduled.due)
+        #expect(olderDue < newerDue, "the fixture's two review cards are due at the same time")
         // `fresh` has never been graded at all.
 
         let later = now.addingTimeInterval(400 * 86_400)
         let queue = try ledger.dueCards(at: later, limit: 10, dictionary: "noad",
                                         newAllowance: .max, dayStart: .distantPast)
-        #expect(queue.map(\.id) == [lapsed.id, old.id, fresh.id],
+        #expect(queue.map(\.id) == [lapsed.id, older.id, newer.id, fresh.id],
                 "got \(queue.map { "\($0.scheduled.phase)" })")
     }
 
@@ -275,6 +293,11 @@ struct StudyReviewTests {
         let card = try ready(ledger)
         _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
                              using: try scheduler())
+        // What the grade produced, which is what pausing and postponing must leave alone.
+        let answered = try #require(try ledger.card(id: card.id))
+        let graded = answered.scheduled.state?.stability
+        let due = answered.scheduled.due
+        #expect(graded != nil, "the fixture has a memory state to protect")
         #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty,
                 "a card just answered is not due again in the same second")
@@ -286,12 +309,23 @@ struct StudyReviewTests {
         #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty)
         try ledger.setPaused(false, ofCard: card.id)
+        // **The unpause is asserted before the postpone is.** Without this a broken resume kept
+        // the queue empty and the postpone below looked like it was working.
+        #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
+                                        newAllowance: .max, dayStart: .distantPast).count == 1,
+                "resuming did not bring the card back, so nothing below is testing postpone")
+
         try ledger.postpone(cardID: card.id, until: later.addingTimeInterval(86_400))
         #expect(try ledger.dueCards(at: later, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty)
-        // **Neither touched the memory**: hiding and pausing are about what is asked, not about `S`.
-        #expect(try #require(try ledger.card(id: card.id)).scheduled.state?.stability
-            == card.scheduled.state?.stability ?? #require(try ledger.card(id: card.id)).scheduled.state?.stability)
+        // **Neither touched the memory**: hiding and pausing are about what is asked, not about
+        // `S`. Compared against the stability the *grade* produced — the original card is `new`
+        // with none, so the old `??` fell through to comparing the current value with itself and
+        // any corruption in between passed.
+        #expect(try #require(try ledger.card(id: card.id)).scheduled.state?.stability == graded,
+                "pausing or postponing moved the memory state")
+        #expect(try #require(try ledger.card(id: card.id)).scheduled.due == due,
+                "…or the due date")
     }
 
     /// Study state belongs to one dictionary, so a session's queue must not mix two namespaces.
