@@ -365,6 +365,28 @@ struct LocalModelControllerTests {
         _ = scratch
     }
 
+    /// **A restarted file must be visible, and a stale reading must not be.** A host that
+    /// ignores the range truncates what was on disk; dropping every reading below the one on
+    /// screen kept the bar at 80% through a re-download of gigabytes. Ordering by *when* a
+    /// reading was taken separates that from a callback that merely arrived late — and this is
+    /// the rule itself, which is the only place both halves can be asked at once.
+    @Test func arestartIsShownAndAlateReadingIsNot() {
+        let order = ProgressOrder()
+        let first = order.next(), second = order.next(), third = order.next()
+
+        #expect(order.isNewest(second), "a reading in order was refused")
+        #expect(!order.isNewest(first), "a reading taken earlier landed later and was accepted")
+        #expect(order.isNewest(third))
+        #expect(!order.isNewest(third), "the same reading was accepted twice")
+    }
+
+    /// The point of the ticket: **nothing here looks at byte counts**, so a count that falls —
+    /// which is what a truncation is — is published like any other.
+    @Test func orderingSaysNothingAboutHowLargeAreadingIs() {
+        let order = ProgressOrder()
+        for _ in 0..<5 { #expect(order.isNewest(order.next())) }
+    }
+
     /// **A failing URL must not reach the log.** The weights come through a CDN redirect whose
     /// query carries a signature, and `String(describing:)` on a `URLError` puts the whole
     /// failing URL in — measured — into a line marked `.public`. What is wanted for diagnosis is

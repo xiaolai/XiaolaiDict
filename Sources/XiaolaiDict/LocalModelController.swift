@@ -212,11 +212,18 @@ final class LocalModelController {
         for size: LocalModelSize, replacing: LocalModelSize?, generation current: Int
     ) -> @Sendable (ModelDownloadProgress) -> Void {
         let throttle = ProgressThrottle()
+        // **Staleness is about when a reading was taken, not how large it is.** Dropping any
+        // reading below the one on screen kept the bar honest against callbacks that arrive out
+        // of order — and made it lie when a file genuinely restarts: a host that ignores the
+        // range truncates what was there, and the bar sat at 80% through a re-download of
+        // gigabytes. A ticket taken in call order tells the two apart with no threshold.
+        let ordering = ProgressOrder()
         return { [weak self] progress in
             guard throttle.shouldPublish(progress) else { return }
+            let ticket = ordering.next()
             Task { @MainActor [weak self] in
                 guard let self, self.generation == current,
-                      case .downloading(let shown, _, _) = self.state, progress.received >= shown.received
+                      case .downloading = self.state, ordering.isNewest(ticket)
                 else { return }
                 self.state = .downloading(progress, size: size, replacing: replacing)
             }
@@ -331,6 +338,30 @@ final class LocalModelController {
             cancel: { [weak self] in self?.cancelDownload() },
             source: source,
             chooseSource: { [weak self] in self?.chooseSource($0) })
+    }
+}
+
+/// Which progress reading is the newest, by the order the downloader produced them.
+///
+/// **Taken synchronously, checked after the hop.** The publisher's `Task { @MainActor }` hops are
+/// not ordered against each other, so without this a reading taken earlier could land later and
+/// overwrite a newer one. Comparing byte counts instead cannot tell a stale reading from a file
+/// that restarted, which is a bar that freezes rather than one that flickers.
+final class ProgressOrder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var issued = 0
+    private var delivered = 0
+
+    func next() -> Int {
+        lock.withLock { issued += 1; return issued }
+    }
+
+    func isNewest(_ ticket: Int) -> Bool {
+        lock.withLock {
+            guard ticket > delivered else { return false }
+            delivered = ticket
+            return true
+        }
     }
 }
 
