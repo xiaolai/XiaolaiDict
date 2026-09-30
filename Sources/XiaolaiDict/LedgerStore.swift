@@ -234,12 +234,15 @@ actor LedgerStore {
         try ledger.ignoreSuggestion(lemma: lemma, language: language, at: when)
     }
 
-    func readingErasureImpact(at path: String) throws
-        -> (lookups: Int, notesLeftWithoutACue: Int, backups: Int) {
+    /// **This store's own path, never the caller's idea of it.** Both of these delete rows from
+    /// *this* ledger and copies from beside whatever path they are handed, so a mismatched
+    /// argument would erase one reader's rows and another ledger's backups. Every caller passed
+    /// the right thing; the type no longer lets them pass the wrong one.
+    func readingErasureImpact() throws -> (lookups: Int, notesLeftWithoutACue: Int, backups: Int) {
         try ledger.readingErasureImpact(at: path)
     }
 
-    func eraseReadingData(at path: String) throws -> Ledger.ErasureReport {
+    func eraseReadingData() throws -> Ledger.ErasureReport {
         try ledger.eraseReadingData(at: path)
     }
 

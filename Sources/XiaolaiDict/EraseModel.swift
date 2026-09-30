@@ -41,7 +41,7 @@ final class EraseModel {
         // ledger from a test, or a test's from the reader's.
         let impact: (lookups: Int, notesLeftWithoutACue: Int, backups: Int)
         do {
-            impact = try await ledger.readingErasureImpact(at: ledger.path)
+            impact = try await ledger.readingErasureImpact()
         } catch {
             presentation = ErasePresentation(stage: .failed(error.localizedDescription))
             return
@@ -55,7 +55,7 @@ final class EraseModel {
         guard let opening = store() else { return }
         do {
             let ledger = try await opening.value
-            let report = try await ledger.eraseReadingData(at: ledger.path)
+            let report = try await ledger.eraseReadingData()
             presentation = ErasePresentation(stage: .erased(ErasePresentation.Report(
                 lookupsRemoved: report.lookupsRemoved,
                 backupsLeft: report.backupsLeft.map { "\($0.key): \($0.value)" }.sorted())))
