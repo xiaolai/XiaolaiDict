@@ -201,6 +201,10 @@ actor LedgerStore {
         try ledger.restoreEnrollments(dispositions)
     }
     func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
+    func confirm(noteIDs ids: [UUID], at when: Date) throws {
+        try ledger.confirm(noteIDs: ids, at: when)
+    }
+    func tag(noteIDs ids: [UUID], _ tag: String) throws { try ledger.tag(noteIDs: ids, tag) }
     /// The reader's own words, replacing what the card reveals. The encounter's `gloss` — the
     /// publisher's snapshot — is untouched, so the evidence stays what it was when it was saved.
     func setReaderAnswer(_ text: String, of noteID: UUID, at when: Date) throws {

@@ -21,6 +21,13 @@ extension Ledger {
     /// **Normalised the same way `tag` normalises.** Adding " law " stores `law`, so removing
     /// " law " matched nothing and the tag stayed attached — the reader typing what they typed
     /// before could not take it off.
+    /// Tags several notes in **one transaction**, so a failure part-way leaves none of them
+    /// tagged rather than an arbitrary subset the reader cannot see.
+    public func tag(noteIDs ids: [UUID], _ tag: String) throws {
+        guard !ids.isEmpty else { return }
+        try inOneTransaction("bulkTag") { for id in ids { try self.tag(noteID: id, tag) } }
+    }
+
     public func untag(noteID: UUID, _ tag: String) throws {
         let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         try run("DELETE FROM study_tags WHERE note_id = ? AND tag = ?",
@@ -73,7 +80,11 @@ extension Ledger {
             FROM lookups l
             WHERE l.result = 'found'
               AND (?1 IS NULL OR l.language = ?1)
-              AND (l.script IS NULL OR l.script IN (SELECT value FROM json_each(?2)))
+              -- **An empty set is no narrowing, not "match nothing"** — the same convention
+              -- `LibraryQuery.scripts` uses for nil. Passing the toggle's "off" state through as
+              -- an empty set silently emptied the whole list.
+              AND (?2 IS NULL OR l.script IS NULL
+                   OR l.script IN (SELECT value FROM json_each(?2)))
               -- Nothing the reader has already taken up, in any disposition: a word they ignored
               -- must not come back as a suggestion, which is the whole point of ignoring it.
               AND NOT EXISTS (
@@ -101,7 +112,9 @@ extension Ledger {
             ORDER BY days DESC, sources DESC, last DESC
             LIMIT ?3
             """, bind: [.optionalText(language),
-                        .text(Self.jsonArray(of: studying.map(\.rawValue))), .integer(limit)]) { row in
+                        studying.isEmpty ? .null
+                            : .text(Self.jsonArray(of: studying.map(\.rawValue))),
+                        .integer(limit)]) { row in
             found.append(Suggestion(
                 lemma: try row.text(0), language: try row.text(1),
                 distinctDays: row.integer(2), distinctSources: row.integer(3),

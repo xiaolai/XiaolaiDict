@@ -230,7 +230,10 @@ public struct LibraryView: View {
             .labelsHidden()
             // **Absent until there is something to pick.** A tag menu over no tags is a control
             // that cannot do anything, which reads as one that is broken.
-            if !state.tagVocabulary.isEmpty {
+            // **Hidden under Suggested**, which has no tags to filter by: a control that
+            // appears to narrow what is on screen and silently narrows something else is worse
+            // than one that refuses a click.
+            if !state.tagVocabulary.isEmpty, state.filter != .suggested {
                 Picker("Tag", selection: Binding(
                     get: { state.tag },
                     set: { act(.filterTag($0)) })) {

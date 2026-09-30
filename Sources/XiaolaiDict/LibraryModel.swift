@@ -131,15 +131,17 @@ final class LibraryModel {
         case .filterTag(let name): tag = name; pages = 1
         case .select(let ids): selection = ids
         case .showMore: pages += 1
+        // **One transaction, like every other bulk action.** A loop of separately committed
+        // writes leaves an arbitrary subset changed when one fails part-way, and the reader has
+        // no way to see which — the same all-or-nothing the pause and archive helpers already
+        // give, which these two were the only bulk actions not to have.
         case .confirm:
             let ids = Array(selection)
             let when = clock()
-            return apply { store in for id in ids { try await store.confirm(noteID: id, at: when) } }
+            return apply { try await $0.confirm(noteIDs: ids, at: when) }
         case .tag(let text):
             let ids = Array(selection), trimmed = text
-            return apply(keepingSelection: true) { store in
-                for id in ids { try await store.tag(noteID: id, trimmed) }
-            }
+            return apply(keepingSelection: true) { try await $0.tag(noteIDs: ids, trimmed) }
         case .untag(let id, let tag):
             return apply(keepingSelection: true) { try await $0.untag(noteID: id, tag) }
         case .unignore(let lemma, let language):
@@ -231,10 +233,21 @@ final class LibraryModel {
             let answers = try await ledger.answers(of: rows.map(\.id))
             // Only under the suggested filter: a list nobody is looking at is a query nobody
             // should pay for on every keystroke.
-            let suggested = filter == .suggested
-                ? try await ledger.suggestions(limit: Self.suggestionCount, language: nil,
-                                               studying: scripts)
-                : []
+            // **The controls on screen govern what is on screen.** Suggestions ignored the
+            // search box entirely and applied the study-scripts narrowing whether or not the
+            // toggle was on — so the two visible controls were quietly filtering the *library*
+            // rows behind this list while appearing to do nothing, and the toggle did the
+            // opposite of what it said.
+            var suggested: [Ledger.Suggestion] = []
+            if filter == .suggested {
+                let narrowing = search.trimmingCharacters(in: .whitespaces).lowercased()
+                let all = try await ledger.suggestions(
+                    limit: Self.suggestionCount * 4, language: nil,
+                    studying: scriptFiltered ? scripts : [])
+                suggested = Array(all.lazy
+                    .filter { narrowing.isEmpty || $0.lemma.lowercased().contains(narrowing) }
+                    .prefix(Self.suggestionCount))
+            }
             // Beside the suggestions, and only there: setting a word aside enrols nothing, so
             // this list is the only place the declaration is visible — and the only place it can
             // be taken back.

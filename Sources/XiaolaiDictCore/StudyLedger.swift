@@ -472,6 +472,14 @@ extension Ledger {
     /// ones the reader confirmed weeks ago, and this overwrote their timestamps with today's —
     /// rewriting when they said it, which is the one thing a record of what they said must not
     /// do. Confirming an already-confirmed note is now a no-op rather than an edit.
+    /// Confirms several notes in **one transaction**, for the reason the bulk pause and archive
+    /// helpers have one: a failure part-way through a loop of separate commits leaves a subset
+    /// changed and nothing on screen says which.
+    public func confirm(noteIDs ids: [UUID], at when: Date) throws {
+        guard !ids.isEmpty else { return }
+        try inOneTransaction("bulkConfirm") { for id in ids { try self.confirm(noteID: id, at: when) } }
+    }
+
     public func confirm(noteID: UUID, at when: Date) throws {
         try run("UPDATE study_notes SET confirmed_at = ? WHERE id = ? AND confirmed_at IS NULL",
                 bind: [.real(when.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }

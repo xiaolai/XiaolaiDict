@@ -250,6 +250,36 @@ struct LibraryWiringTests {
         #expect(asked == ["recondite"], "the word never reached the lookup path")
     }
 
+    /// **The controls on screen govern what is on screen.** Under Suggested the search box was
+    /// ignored entirely and the study-scripts toggle was applied whether or not it was on — so
+    /// both quietly filtered the library rows *behind* the list while appearing to do nothing,
+    /// and the toggle did the opposite of what it said.
+    @Test func thesearchAndScriptToggleGovernTheSuggestions() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let day: TimeInterval = 86_400
+        for lemma in ["recondite", "lapidary"] {
+            for offset in [0.0, day] {
+                _ = try ledger.record(LookupRecord(
+                    surface: lemma, lemma: lemma, context: "A \(lemma) remark.",
+                    lemmaBasis: .tagger, language: "en", contextRange: nil,
+                    place: ReadingPlace(bundleID: nil, name: nil),
+                    lookedUpAt: now.addingTimeInterval(offset), result: .found,
+                    answeredBy: .dictionaryService, quality: nil, script: .latin))
+            }
+        }
+
+        let model = model(path)
+        model.act(.filter(.suggested))
+        try await settle { model.presentation.suggestions.count == 2 }
+
+        model.act(.search("lapid"))
+        try await settle { model.presentation.suggestions.count == 1 }
+        #expect(model.presentation.suggestions.first?.lemma == "lapidary",
+                "the search box did nothing to the list it is shown above")
+    }
+
     /// **"Already know" is reversible** (C05). `unignoreSuggestion` existed and nothing reached
     /// it, so a word declared known by a mis-click was declared known for ever — and invisibly,
     /// because setting one aside enrols nothing and leaves no row in the library to find.

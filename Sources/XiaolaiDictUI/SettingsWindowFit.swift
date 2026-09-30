@@ -148,8 +148,18 @@ private struct FitsItsContent: ViewModifier {
                 fit.given = latest.given
                 apply()
             }
-            .background(WindowReader { window = $0 })
+            // **Attaching retries the fit.** `WindowReader` only assigned, and both `apply`
+            // calls give up when there is no window yet — so a geometry change and `onAppear`
+            // that both landed before attachment were discarded, and nothing asked again. The
+            // pane kept its default size until some later geometry change happened to arrive.
+            .background(WindowReader { attached in
+                window = attached
+                if attached != nil { apply() }
+            })
             .onAppear { apply() }
+            // **And the window is let go when the view does.** Held past disappearance, a queued
+            // move could resize a window this modifier no longer belongs to.
+            .onDisappear { window = nil; fit.scheduled = false }
     }
 
     /// Moves the window to the newest fit, once per runloop turn.
@@ -161,16 +171,24 @@ private struct FitsItsContent: ViewModifier {
     private func apply() {
         guard let window, !fit.scheduled else { return }
         fit.scheduled = true
+        _ = window
         // Outside the layout pass this runs in: resizing a window from inside one re-enters layout
         // until AppKit gives up, which is measured in this file's own history.
         DispatchQueue.main.async {
-            fit.scheduled = false
+            // **Cleared after the move, not before it.** Clearing first let a geometry callback
+            // arriving during an animated resize schedule a second move toward the same
+            // destination, and the setup window retargeted itself repeatedly on one change.
+            defer { fit.scheduled = false }
+            // **Still this modifier's window, and still a window.** The block captured the
+            // window it was scheduled with, so one queued before the view disappeared — or
+            // before the window was replaced — resized something this view no longer owns.
+            guard let live = self.window, live === window else { return }
             guard let delta = SettingsWindowFit.shortfall(
                 wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
             SettingsWindowFit.move(
-                window, by: delta, width: width,
-                lowestBottom: window.screen?.visibleFrame.minY,
-                animated: animates && window.isVisible, recentres: recentres)
+                live, by: delta, width: width,
+                lowestBottom: live.screen?.visibleFrame.minY,
+                animated: animates && live.isVisible, recentres: recentres)
         }
     }
 
