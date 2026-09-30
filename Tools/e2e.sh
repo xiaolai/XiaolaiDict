@@ -701,6 +701,24 @@ end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument t
     return 1
 }
 
+consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/FAIL lines, then DONE
+    # A here-string, never a pipe: `flunk` increments a counter, and a pipe would run it in a
+    # subshell where the increment is thrown away — a stage that reported its failures and then
+    # passed.
+    local name=$1 verdicts=$2 verdict text
+    while IFS=$'\t' read -r verdict text; do
+        case "$verdict" in
+            PASS) pass "$text" ;;
+            NOTE) echo "NOTE  $text" ;;
+            FAIL) flunk "$text" ;;
+        esac
+    done <<<"$verdicts"
+    # **The marker, or the stage did not finish.** A validator that died part-way emits some
+    # PASS lines and no DONE, and without this the stage is green on the ones it reached.
+    printf '%s' "$verdicts" | grep -qx DONE \
+        || flunk "$name: the report's validator stopped before it finished: $(printf '%s' "$verdicts" | tail -3)"
+}
+
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
     local flag=$1 budget=$2 name=${1#--}
     local out="$reports/$name.json" err="$reports/$name.err"
@@ -1984,14 +2002,7 @@ else:
 print("DONE")
 PYCHECK
 )
-    while IFS=$'\t' read -r verdict message; do
-        case "$verdict" in
-            PASS) pass "$message" ;;
-            FAIL) flunk "$message" ;;
-        esac
-    done <<<"$verdicts"
-    printf '%s' "$verdicts" | grep -qx DONE \
-        || flunk "settings: the report's validator stopped before it finished: $(printf '%s' "$verdicts" | tail -3)"
+    consume_verdicts settings "$verdicts"
 fi
 
 # **The shortcut is a control in Settings, and it takes the keyboard.**
@@ -2279,18 +2290,7 @@ else:
 print("DONE")
 PYCHECK
 )
-    # A here-string, never a pipe: `flunk` increments a counter, and a pipe would run it in a
-    # subshell where the increment is thrown away — a stage that reported its failures and then
-    # passed. The settings stage above reads its verdicts the same way, for the same reason.
-    while IFS=$'\t' read -r verdict text; do
-        case "$verdict" in
-            PASS) pass "$text" ;;
-            NOTE) echo "NOTE  $text" ;;
-            FAIL) flunk "$text" ;;
-        esac
-    done <<<"$verdicts"
-    printf '%s' "$verdicts" | grep -qx DONE \
-        || flunk "panel: the report's validator stopped before it finished: $(printf '%s' "$verdicts" | tail -3)"
+    consume_verdicts panel "$verdicts"
 fi
 fi
 

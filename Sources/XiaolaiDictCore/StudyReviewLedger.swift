@@ -264,14 +264,19 @@ extension Ledger {
                 c.due IS NULL, c.due, c.id
             LIMIT ?\(bind.count)
             """, bind: bind)
-        // **Trimmed here, after the query, and only the new ones.** Expressing "at most N of the
-        // rows whose phase is new" in the same statement means a window function over a set the
-        // `LIMIT` has already cut — and the filter-after-`LIMIT` rule is about dropping rows the
-        // reader asked for, which this does not: a new card over the allowance was never theirs to
-        // be offered today.
+        return Self.rationingIntroductions(in: found, to: remaining)
+    }
+
+    /// **At most `remaining` cards the reader has never seen, and every other card untouched.**
+    ///
+    /// Trimmed after the query, and deliberately: expressing "at most N of the rows whose phase
+    /// is new" in the same statement means a window function over a set the `LIMIT` has already
+    /// cut. The filter-after-`LIMIT` rule is about dropping rows the reader asked for, which
+    /// this does not — a new card over the allowance was never theirs to be offered today.
+    static func rationingIntroductions(in cards: [StudyCard], to remaining: Int) -> [StudyCard] {
         var kept: [StudyCard] = []
         var introduced = 0
-        for card in found {
+        for card in cards {
             if card.scheduled.phase == .new {
                 guard introduced < remaining else { continue }
                 introduced += 1

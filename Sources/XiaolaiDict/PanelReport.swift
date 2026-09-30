@@ -144,8 +144,35 @@ enum PanelReport {
         // here at 73 pt against a card that ends up several times that.
         let (settled, movement) = await restingHeight(of: window, in: app)
 
-        // **What this window is.** The whole first question, and it is one read.
-        let identity: [String: Any] = [
+        let identity = Self.identity(of: window, in: app, behaved: behaved,
+                                     settled: settled, movement: movement)
+        let beforeClick = Self.beforeClick(frontBefore: frontBefore, activeBefore: activeBefore,
+                                           wasAlreadyActive: wasAlreadyActive)
+        let afterClick = await Self.afterClick(on: window, in: app, frontBefore: frontBefore)
+        let menu = await trackMenu(outside: window,
+                                   panelStillUp: { Instrument.isOnScreen(app.panelController.window) })
+
+        let report: [String: Any] = [
+            "bundle": Bundle.main.bundleIdentifier ?? "none",
+            "insideBundle": Bundle.main.bundleIdentifier != nil,
+            "appeared": true,
+            "term": term,
+            "window": identity,
+            "beforeClick": beforeClick,
+            "afterClick": afterClick,
+            "menu": menu,
+        ]
+        guard Instrument.write(report) else { return .failure }
+        // Whether the *panel* behaved is the harness's assertion to make, not this process's exit
+        // status — the same division `--history-report` makes for the backdrop. A non-zero exit here
+        // means the measurement failed, never that the app did.
+        return .success
+    }
+
+    /// **What this window is.** The whole first question, and it is one read.
+    private static func identity(of window: NSWindow, in app: XiaolaiDictApp, behaved: Bool,
+                                 settled: Bool, movement: String) -> [String: Any] {
+        [
             "panelBehaviourApplied": behaved,
             "class": window.className,
             "isPanel": window is NSPanel,
@@ -187,9 +214,12 @@ enum PanelReport {
             "fitGiven": app.panelController.lastFit?.given ?? -1,
             "heightCeiling": PanelWindow.tallest,
         ]
+    }
 
-        // **Before the click**, which is the state the reader is in while they read the answer.
-        let beforeClick: [String: Any] = [
+    /// **Before the click**, which is the state the reader is in while they read the answer.
+    private static func beforeClick(frontBefore: String, activeBefore: Bool,
+                                    wasAlreadyActive: Bool) -> [String: Any] {
+        [
             "appWasActive": activeBefore,
             "appIsActive": NSApp.isActive,
             // **Whether this run could observe a change at all.** With the app already active
@@ -201,12 +231,15 @@ enum PanelReport {
             // The passing shape: showing the panel changed neither.
             "showingTookTheFront": frontmost() != frontBefore || (NSApp.isActive && !activeBefore),
         ]
+    }
 
-        // **A click inside the panel.** At its centre, over the card's own text.
+    /// **A click inside the panel**, at its centre, over the card's own text — and what it did.
+    private static func afterClick(on window: NSWindow, in app: XiaolaiDictApp,
+                                   frontBefore: String) async -> [String: Any] {
         let inside = NSPoint(x: window.frame.midX, y: window.frame.midY)
         let clicked = post(at: inside)
         _ = await Instrument.settle(until: delivery) { NSApp.isActive || window.isKeyWindow }
-        let afterClick: [String: Any] = [
+        return [
             "clickPosted": clicked,
             "appIsActive": NSApp.isActive,
             "isKeyWindow": window.isKeyWindow,
@@ -216,24 +249,6 @@ enum PanelReport {
             "tookTheFront": frontmost() != frontBefore,
             "survivedTheClick": Instrument.isOnScreen(app.panelController.window),
         ]
-
-        let menu = await trackMenu(outside: window, panelStillUp: { Instrument.isOnScreen(app.panelController.window) })
-
-        let report: [String: Any] = [
-            "bundle": Bundle.main.bundleIdentifier ?? "none",
-            "insideBundle": Bundle.main.bundleIdentifier != nil,
-            "appeared": true,
-            "term": term,
-            "window": identity,
-            "beforeClick": beforeClick,
-            "afterClick": afterClick,
-            "menu": menu,
-        ]
-        guard Instrument.write(report) else { return .failure }
-        // Whether the *panel* behaved is the harness's assertion to make, not this process's exit
-        // status — the same division `--history-report` makes for the backdrop. A non-zero exit here
-        // means the measurement failed, never that the app did.
-        return .success
     }
 
     /// Pops up a menu of this instrument's own, outside the panel's frame, and posts a click at its
@@ -243,19 +258,62 @@ enum PanelReport {
     /// closes: it runs a nested tracking runloop, and main-queue work is not reliably serviced inside
     /// it — which is the same reason the monitors' behaviour during tracking is the open question.
     /// Scheduling the click on the main queue would therefore deadlock the measurement it is part of.
+    /// A placement, or why there is none. **Not `Result`**, whose failure has to be an `Error`
+    /// and this one is a sentence for a report.
+    private enum Either<Found> {
+        case success(Found)
+        case failure(String)
+    }
+
+    /// Where a menu can be put that the panel does not cover, and where to click it.
+    private struct Placement {
+        let anchor: NSPoint
+        /// The point the click is actually posted at, in screen coordinates.
+        let onItem: NSPoint
+        /// The same point, flipped for CoreGraphics.
+        let target: CGPoint
+    }
+
+    /// **Outside the panel's frame, and on screen.** The click-away predicate hit-tests that
+    /// frame, so a menu inside it would measure nothing.
+    private static func placement(outside window: NSWindow) -> Either<Placement> {
+        guard let screen = window.screen ?? NSScreen.main else {
+            return .failure("no screen to place a menu on")
+        }
+        // The screen's own top-left work area, which no panel placement can reach —
+        // `PanelPlacement` offsets below and right of a pointer.
+        let anchor = NSPoint(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - 40)
+        guard !window.frame.contains(anchor) else {
+            return .failure("the panel covers the only anchor available")
+        }
+        // One item, so the first row sits just below the anchor. A few points in, to clear the
+        // menu's own rounded corner.
+        let onItem = NSPoint(x: anchor.x + 30, y: anchor.y - 14)
+        // **The click, not only the anchor.** The anchor was checked against the panel and the
+        // click is offset from it, so on a narrow screen the point actually clicked could land
+        // inside the panel — which is the one place a click-away test must not click.
+        guard !window.frame.contains(onItem) else {
+            return .failure("the panel covers the point the menu would be clicked at")
+        }
+        // **Converted here, on the main actor, and handed over as a plain point.** The thread
+        // that posts touches nothing but CoreGraphics: reading `NSScreen` from it would be
+        // exactly the main-actor-isolated access Swift 6 refuses, and the conversion is the only
+        // part that needs AppKit.
+        guard let target = flipped(onItem) else {
+            return .failure("no primary display to convert a click through")
+        }
+        return .success(Placement(anchor: anchor, onItem: onItem, target: target))
+    }
+
     private static func trackMenu(
         outside window: NSWindow, panelStillUp: @escaping @MainActor () -> Bool
     ) async -> [String: Any] {
-        guard let screen = window.screen ?? NSScreen.main else {
-            return ["measured": false, "problem": "no screen to place a menu on"]
+        let placed: Placement
+        switch Self.placement(outside: window) {
+        case .success(let found): placed = found
+        case .failure(let why): return ["measured": false, "problem": why]
         }
-        // Outside the panel's frame, and on screen: the click-away predicate hit-tests that frame, so
-        // a menu inside it would measure nothing. Placed at the screen's own top-left work area,
-        // which no panel placement can reach — `PanelPlacement` offsets below and right of a pointer.
-        let anchor = NSPoint(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - 40)
-        guard !window.frame.contains(anchor) else {
-            return ["measured": false, "problem": "the panel covers the only anchor available"]
-        }
+        let (anchor, onItem, target) = (placed.anchor, placed.onItem, placed.target)
 
         let menu = NSMenu()
         let sentinel = MenuSentinel()
@@ -263,22 +321,6 @@ enum PanelReport {
         item.target = sentinel
         menu.addItem(item)
 
-        // One item, so the first row sits just below the anchor. A few points in, to clear the menu's
-        // own rounded corner.
-        let onItem = NSPoint(x: anchor.x + 30, y: anchor.y - 14)
-        // **The click, not only the anchor.** The anchor was checked against the panel and the
-        // click is offset from it, so on a narrow screen the point actually clicked could land
-        // inside the panel — which is the one place a click-away test must not click.
-        guard !window.frame.contains(onItem) else {
-            return ["measured": false, "problem": "the panel covers the point the menu would be clicked at"]
-        }
-        // **Converted here, on the main actor, and handed over as a plain point.** The thread below
-        // touches nothing but CoreGraphics: reading `NSScreen` from it would be exactly the
-        // main-actor-isolated access that Swift 6 refuses, and the conversion is the only part that
-        // needs AppKit.
-        guard let target = flipped(onItem) else {
-            return ["measured": false, "problem": "no primary display to convert a click through"]
-        }
         let posted = OSAllocatedUnfairLock(initialState: false)
         // **Disarmed when tracking ends.** The thread slept and then clicked regardless, so a menu
         // that closed early — cancelled, or dismissed by something else — left a click landing on
