@@ -28,6 +28,23 @@ public struct LibraryView: View {
     }
 
     public var body: some View {
+        // **A sidebar, which is what `Filter` has always called itself** — "the sidebar's states,
+        // as one control". Seven of them had been folded into a segmented picker, which gives each
+        // state a sliver and no room to name it. The floating treatment is the system's: the list
+        // beneath extends under it rather than being clipped to a column beside it.
+        NavigationSplitView {
+            List(LibraryPresentation.Filter.allCases, id: \.self, selection: Binding(
+                get: { state.filter },
+                set: { chosen in if let chosen { act(.filter(chosen)) } })) { filter in
+                Label(filter.name, systemImage: filter.symbol).tag(filter)
+            }
+            .navigationSplitViewColumnWidth(Token.Library.sidebarWidth)
+        } detail: {
+            detail.backgroundExtensionEffect()
+        }
+    }
+
+    private var detail: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
@@ -225,15 +242,6 @@ public struct LibraryView: View {
                 set: { act(.search($0)) }))
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: Token.Library.searchWidth)
-            Picker("Show", selection: Binding(
-                get: { state.filter },
-                set: { act(.filter($0)) })) {
-                ForEach(LibraryPresentation.Filter.allCases, id: \.self) { filter in
-                    Text(filter.name).tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             // **Absent until there is something to pick.** A tag menu over no tags is a control
             // that cannot do anything, which reads as one that is broken.
             // **Hidden under Suggested**, which has no tags to filter by: a control that
@@ -788,6 +796,20 @@ public struct LibraryPresentation: Sendable, Equatable {
     /// where a reader goes to find what they put away.
     public enum Filter: String, Sendable, CaseIterable {
         case all, due, needsAttention, struggling, paused, archived, suggested
+
+        /// The sidebar's symbol for each state. Named for what the state *is* rather than for a
+        /// mood: `exclamationmark` is the repair list, not a warning about the reader.
+        public var symbol: String {
+            switch self {
+            case .all: "tray.full"
+            case .due: "clock"
+            case .needsAttention: "exclamationmark.triangle"
+            case .struggling: "arrow.trianglehead.counterclockwise"
+            case .paused: "pause.circle"
+            case .archived: "archivebox"
+            case .suggested: "sparkles"
+            }
+        }
 
         public var name: LocalizedStringKey {
             switch self {

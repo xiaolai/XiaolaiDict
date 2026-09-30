@@ -71,7 +71,14 @@ public enum Token {
         static let inspectorHistoryHeight: CGFloat = 220
         /// The same, for the set-aside list under the suggestions.
         static let setAsideHeight: CGFloat = 160
-        public static let width: CGFloat = 720
+        /// The sidebar's width, replacing a seven-way segmented picker on 2026-10-01 — a control
+        /// that had one segment per state and no room to name any of them. Wide enough for the
+        /// longest label, *Needs attention*, beside its symbol. Not derived from the em: the labels
+        /// are the system's own sidebar font, and a sidebar that grew with the reader's chosen text
+        /// size would move the list sideways for a reason that has nothing to do with it.
+        static let sidebarWidth: CGFloat = 200
+        /// The window, which is the sidebar and the list beside it.
+        public static let width: CGFloat = 720 + sidebarWidth
         public static let height: CGFloat = 480
     }
 
