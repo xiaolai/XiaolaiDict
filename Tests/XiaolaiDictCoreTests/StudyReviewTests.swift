@@ -12,6 +12,12 @@ import Testing
 struct StudyReviewTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// **One spelling of the target**, so re-enrolling it in a test cannot accidentally make a
+    /// different note while the test goes on claiming the schedule survived.
+    private func target(key: String = "e1.001") -> StudyTarget {
+        .sense(dictionary: "noad", entryID: "e\(key)", senseKey: key, senseKeyKind: .publisher)
+    }
+
     private func ready(_ ledger: Ledger, _ lemma: String = "fine", key: String = "e1.001",
                        at when: Date? = nil) throws -> StudyCard {
         let when = when ?? now
@@ -21,7 +27,7 @@ struct StudyReviewTests {
             place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
             lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil))
         let note = try ledger.enroll(
-            .sense(dictionary: "noad", entryID: "e\(key)", senseKey: key, senseKeyKind: .publisher),
+            target(key: key),
             issuer: .live, language: "en", chosenBy: .reader,
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: when)
         return try #require(try ledger.card(of: note.id, at: when))
@@ -456,10 +462,13 @@ struct StudyReviewTests {
             surface: "fine", lemma: "fine", context: "Another fine sentence.", lemmaBasis: .tagger,
             language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
             lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
-        _ = try ledger.enroll(
-            .sense(dictionary: "noad", entryID: "ee1.001", senseKey: "e1.001", senseKeyKind: .publisher),
-            issuer: .live, language: "en", chosenBy: .reader,
+        let again = try ledger.enroll(
+            target(), issuer: .live, language: "en", chosenBy: .reader,
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: second, at: now)
+        // **The same note, which is what makes the rest of this a test.** Spelling the target
+        // out here duplicated `ready`'s construction, so changing the helper would have made a
+        // second note quietly and left the assertions below true of a card nothing touched.
+        #expect(again.id == card.noteID, "re-enrolling made a different note")
         try ledger.confirm(noteID: card.noteID, at: now)
         try ledger.setPaused(true, ofCard: card.id)
         try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))

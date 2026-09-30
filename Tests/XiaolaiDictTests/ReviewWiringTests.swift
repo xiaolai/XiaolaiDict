@@ -23,6 +23,8 @@ struct ReviewWiringTests {
     /// *new*. The distinction is load-bearing since C08: new cards are rationed by the daily
     /// allowance, so a fixture that wants to measure anything else — the batch bound, the backlog —
     /// must not be made of them.
+    private func sentence(_ index: Int) -> String { "He paid the fine\(index) today." }
+
     @discardableResult
     private func ready(_ path: String, count: Int = 1, inProgress: Bool = false) throws -> Ledger {
         let ledger = try Ledger(path: path)
@@ -30,8 +32,11 @@ struct ReviewWiringTests {
         for index in 0..<count {
             let lookup = try ledger.record(LookupRecord(
                 surface: "fine\(index)", lemma: "fine\(index)",
-                context: "He paid the fine\(index) today.", lemmaBasis: .tagger, language: "en",
-                contextRange: NSRange(location: 12, length: 5),
+                context: sentence(index), lemmaBasis: .tagger, language: "en",
+                // **Derived, never counted by hand.** A fixed length of 5 truncated `fine10`
+                // onwards to `fine1`, so the backlog fixtures were pointing the range at a word
+                // the sentence does not contain.
+                contextRange: (sentence(index) as NSString).range(of: "fine\(index)"),
                 place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari", document: nil,
                                     page: nil, title: "A page", rawTitle: "A page"),
                 lookedUpAt: now, result: .found, answeredBy: .dictionaryService,
@@ -59,7 +64,7 @@ struct ReviewWiringTests {
 
     private func model(_ path: String, clock: Date? = nil) -> ReviewModel {
         let when = clock ?? now
-        return ReviewModel(store: { Task { try LedgerStore(path: path) } },
+        return ReviewModel(store: Wiring.store(path),
                            primary: { PrimaryDictionary(chosen: "noad") },
                            clock: { when })
     }

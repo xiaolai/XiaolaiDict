@@ -46,7 +46,7 @@ struct EraseWiringTests {
         let (path, clean) = scratch()
         defer { clean() }
         let ledger = try saved(path)
-        let model = EraseModel(store: { Task { try LedgerStore(path: path) } })
+        let model = EraseModel(store: Wiring.store(path))
         #expect(model.presentation.stage == .idle)
 
         model.act(.preview)
@@ -66,7 +66,7 @@ struct EraseWiringTests {
         let (path, clean) = scratch()
         defer { clean() }
         _ = try saved(path)
-        let model = EraseModel(store: { Task { try LedgerStore(path: path) } })
+        let model = EraseModel(store: Wiring.store(path))
         model.act(.preview)
         try await settle {
             if case .previewing = model.presentation.stage { return true }
@@ -92,7 +92,7 @@ struct EraseWiringTests {
         let (path, clean) = scratch()
         defer { clean() }
         let ledger = try saved(path)
-        let model = EraseModel(store: { Task { try LedgerStore(path: path) } })
+        let model = EraseModel(store: Wiring.store(path))
         model.act(.preview)
         try await settle {
             if case .previewing = model.presentation.stage { return true }

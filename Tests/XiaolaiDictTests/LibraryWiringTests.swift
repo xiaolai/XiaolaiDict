@@ -26,7 +26,7 @@ struct LibraryWiringTests {
         // delete what it found there.
         let exports = FileManager.default.temporaryDirectory
             .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
-        return LibraryModel(store: { Task { try LedgerStore(path: path) } },
+        return LibraryModel(store: Wiring.store(path),
                             studyScripts: { scripts }, clock: { self.now },
                             exportDirectory: { exports })
     }
@@ -187,8 +187,14 @@ struct LibraryWiringTests {
         await model.reload()
         model.act(.select([note.id]))
         try await settle { model.presentation.inspector != nil }
+        // **No second action while the first is in flight.** `tag` keeps the selection and
+        // reloads on its own, so the `select` that used to follow it here started an overlapping
+        // reload whose older snapshot could land last — and the test would then be measuring
+        // which of two reloads won.
         model.act(.tag("legal"))
-        model.act(.select([note.id]))
+        try await settle("the tag reached the ledger") {
+            ((try? Ledger(path: path).tags(of: note.id)) ?? []).contains("legal")
+        }
         try await settle { model.presentation.inspector?.tags == ["legal"] }
 
         // **And it can be searched by.** A tag that can be written and never found again is half
@@ -232,7 +238,7 @@ struct LibraryWiringTests {
         }
 
         var asked: [String] = []
-        let model = LibraryModel(store: { Task { try LedgerStore(path: path) } },
+        let model = LibraryModel(store: Wiring.store(path),
                                  studyScripts: { [.latin] }, clock: { self.now },
                                  lookUp: { asked.append($0) })
         model.act(.filter(.suggested))
@@ -393,7 +399,15 @@ struct LibraryWiringTests {
         let ledger = try Ledger(path: path)
         let note = try save(ledger, "fine")
 
-        let model = model(path)
+        // **Reopened per access**, because the permissions below take effect at `open` and a
+        // connection opened before them writes on through its own descriptor.
+        let model = LibraryModel(store: Wiring.reopeningStore(path), studyScripts: { [.latin] },
+                                 clock: { now },
+                                 exportDirectory: {
+                                     FileManager.default.temporaryDirectory
+                                         .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)",
+                                                                 isDirectory: true)
+                                 })
         await model.reload()
         model.act(.select([note.id]))
         try await settle { model.presentation.selection == [note.id] }
@@ -627,7 +641,14 @@ struct LibraryWiringTests {
         model.act(.select([note.id]))
         try await settle { model.presentation.selection == [note.id] }
         model.act(.tag("later"))
-        try await settle { model.presentation.undoable == nil }
+        // **The write, not the flag.** `act` clears `undoable` before it starts anything, so a
+        // settle on that alone returned while the tag's write and its reload were still running
+        // — and `clean()` then deleted the SQLite files underneath them.
+        try await settle("the tag reached the ledger") {
+            ((try? Ledger(path: path).tags(of: note.id)) ?? []).contains("later")
+        }
+        try await settle { model.presentation.undoable == nil
+                           && model.presentation.inspector?.tags == ["later"] }
     }
 
     // MARK: - The inspector
@@ -757,8 +778,9 @@ struct LibraryWiringTests {
 
     /// Forwards to the one shared wait — see `Wiring.settle`, which throws rather than
     /// letting everything after a missed state run anyway.
-    private func settle(_ condition: @MainActor () -> Bool) async throws {
-        try await Wiring.settle("the model never reached the expected state", condition)
+    private func settle(_ what: String = "the model never reached the expected state",
+                        _ condition: @MainActor () -> Bool) async throws {
+        try await Wiring.settle(what, condition)
     }
 }
 
@@ -838,19 +860,26 @@ extension LibraryWiringTests {
         defer { clean() }
         let ledger = try Ledger(path: path)
         let total = LibraryModel.pageSize + 1
+        // **Each a second older than the last.** Sharing one timestamp left the order to break
+        // ties by UUID, so "word0000" was not the oldest and not reliably off the first page —
+        // the assertion below could pass with no second page having been fetched at all.
         for index in 0..<total {
-            try save(ledger, "word\(String(format: "%04d", index))")
+            try Wiring.save(ledger, "word\(String(format: "%04d", index))",
+                            at: now.addingTimeInterval(Double(-index)))
         }
+        let oldest = "word\(String(format: "%04d", total - 1))"
         let model = model(path)
         await model.reload()
         #expect(model.presentation.total == total)
         #expect(model.presentation.rows.count == LibraryModel.pageSize)
         #expect(model.presentation.hasMore, "no way to reach the rest")
+        #expect(!model.presentation.rows.contains { $0.word == oldest },
+                "the oldest is off the first page, which is what makes the rest of this a test")
 
         model.act(.showMore)
         try await settle { model.presentation.rows.count == total }
         #expect(!model.presentation.hasMore, "and nothing offers more than there is")
-        #expect(model.presentation.rows.contains { $0.word == "word0000" }, "the oldest is reachable")
+        #expect(model.presentation.rows.last?.word == oldest, "the oldest is reachable, and last")
     }
 }
 
@@ -880,7 +909,7 @@ struct LibraryOrganisationWiringTests {
         let exports = directory ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
         let clock = when ?? now
-        return LibraryModel(store: { Task { try LedgerStore(path: path) } },
+        return LibraryModel(store: Wiring.store(path),
                             studyScripts: { [.latin] }, clock: { clock },
                             exportDirectory: { exports })
     }
@@ -999,8 +1028,9 @@ struct LibraryOrganisationWiringTests {
 
     /// Forwards to the one shared wait — see `Wiring.settle`, which throws rather than
     /// letting everything after a missed state run anyway.
-    private func settle(_ condition: @MainActor () -> Bool) async throws {
-        try await Wiring.settle("the model never reached the expected state", condition)
+    private func settle(_ what: String = "the model never reached the expected state",
+                        _ condition: @MainActor () -> Bool) async throws {
+        try await Wiring.settle(what, condition)
     }
 }
 

@@ -56,6 +56,23 @@ enum Wiring {
             lookupID: lookup, at: when)
     }
 
+    /// **One store, opened once**, as the app has. Four suites each wrote
+    /// `{ Task { try LedgerStore(path: path) } }`, which builds a new actor and a new SQLite
+    /// connection per access — so none of them exercised the serialisation or the write-ahead
+    /// log that production depends on.
+    @MainActor
+    static func store(_ path: String) -> @MainActor () -> Task<LedgerStore, any Error>? {
+        let opening = Task { try LedgerStore(path: path) }
+        return { opening }
+    }
+
+    /// **Opened on every access**, for the one test whose subject is a ledger that cannot be
+    /// written: the permissions it sets take effect at `open`, so a connection opened before
+    /// them goes on writing through its own descriptor. Everything else wants `store`.
+    static func reopeningStore(_ path: String) -> @MainActor () -> Task<LedgerStore, any Error>? {
+        { Task { try LedgerStore(path: path) } }
+    }
+
     static let patience = 2_000
 
     /// Waits for `condition`, and **throws when it never holds**.

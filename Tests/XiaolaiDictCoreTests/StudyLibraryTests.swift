@@ -359,15 +359,22 @@ struct StudyLibraryTests {
     /// not applied to a page after the `LIMIT`, which would hand back a short page.
     @Test func thelibraryCanBeNarrowedToAtag() throws {
         let ledger = try ledger()
-        let legal = try save(ledger, word: "fine")
-        try save(ledger, word: "hold")
-        try ledger.tag(noteID: legal.id, "legal")
-
-        let rows = try ledger.library(LibraryQuery(tag: "legal"))
-        #expect(rows.map(\.id) == [legal.id])
-        #expect(try ledger.libraryCount(LibraryQuery(tag: "legal")) == 1)
+        // **The tagged rows are the older half, and the limit is smaller than either half.**
+        // Two rows under the default fifty could not tell the two implementations apart: a
+        // filter applied in Swift after the `LIMIT` returns the same answer when everything
+        // fits on one page, which is the only case the old fixture had.
+        var tagged: [UUID] = []
+        for index in 0..<10 {
+            let note = try save(ledger, word: "word\(index)", at: now.addingTimeInterval(Double(-index)))
+            if index >= 5 { try ledger.tag(noteID: note.id, "legal"); tagged.append(note.id) }
+        }
+        var page = LibraryQuery(tag: "legal"); page.limit = 3
+        let rows = try ledger.library(page)
+        #expect(rows.count == 3, "a filter applied after the LIMIT would hand back a short page")
+        #expect(rows.allSatisfy { tagged.contains($0.id) })
+        #expect(try ledger.libraryCount(LibraryQuery(tag: "legal")) == 5, "and the count is of all of them")
         #expect(try ledger.library(LibraryQuery(tag: "nobody")).isEmpty)
-        #expect(try ledger.library(LibraryQuery()).count == 2, "and no tag is no narrowing")
+        #expect(try ledger.library(LibraryQuery()).count == 10, "and no tag is no narrowing")
     }
 
     /// **The first confirmation stands.** A bulk confirm reaches every selected note, including

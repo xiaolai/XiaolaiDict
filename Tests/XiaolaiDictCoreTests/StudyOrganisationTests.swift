@@ -16,11 +16,7 @@ struct StudyOrganisationTests {
     private func save(_ ledger: Ledger, _ word: String, at when: Date? = nil,
                       source: String = "com.apple.Safari") throws -> StudyNote {
         let when = when ?? now
-        let lookup = try ledger.record(LookupRecord(
-            surface: word, lemma: word, context: "A sentence with \(word).", lemmaBasis: .tagger,
-            language: "en", contextRange: nil, place: ReadingPlace(bundleID: source, name: source),
-            lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil,
-            script: .latin))
+        let lookup = try read(ledger, word, at: when, source: source)
         return try ledger.enroll(
             .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1",
                    senseKeyKind: .publisher),
@@ -29,9 +25,12 @@ struct StudyOrganisationTests {
             lookupID: lookup, at: when)
     }
 
+    /// A reading, and **the one construction `save` uses too** — two copies of it let the
+    /// enrolled note's reading drift from the unenrolled ones a test compares it against.
+    @discardableResult
     private func read(_ ledger: Ledger, _ word: String, at when: Date,
-                      source: String = "com.apple.Safari") throws {
-        _ = try ledger.record(LookupRecord(
+                      source: String = "com.apple.Safari") throws -> Int {
+        try ledger.record(LookupRecord(
             surface: word, lemma: word, context: "A sentence with \(word).", lemmaBasis: .tagger,
             language: "en", contextRange: nil, place: ReadingPlace(bundleID: source, name: source),
             lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil,
@@ -54,7 +53,9 @@ struct StudyOrganisationTests {
             lookupID: lookup, at: now)
         // A phrase with the same words is a different target, because it is a different claim.
         let publishers = try ledger.enroll(
-            .phrase(dictionary: "noad", text: "put up with"), issuer: .inventory, language: "en",
+            // **The same issuer.** Changing it too separated the identities on its own, so the
+            // assertion held whether or not the target's kind was part of the key at all.
+            .phrase(dictionary: "noad", text: "put up with"), issuer: .live, language: "en",
             chosenBy: nil, answer: StudyAnswer(origin: .dictionary, text: "tolerate"),
             lookupID: lookup, at: now)
         #expect(own.id != publishers.id)
@@ -92,10 +93,13 @@ struct StudyOrganisationTests {
         let production = try ledger.card(of: note.id, prompt: .production, at: now)
         #expect(meaning.id != production.id)
 
+        let before = try #require(try ledger.card(id: production.id))
         _ = try ledger.grade(cardID: meaning.id, .good, eventID: UUID(), expectedRevision: 0,
                              at: now, using: try MemoryScheduler())
-        #expect(try #require(try ledger.card(id: production.id)).scheduled.phase == .new,
-                "grading one sibling scheduled the other")
+        // **The whole card, not its phase.** A due date, a memory state or a revision moved by
+        // the sibling's grade leaves the phase exactly where it was.
+        #expect(try #require(try ledger.card(id: production.id)) == before,
+                "grading one sibling changed the other")
     }
 
     /// **R08: one card per note in a batch.** Asking both siblings in one sitting asks the reader
@@ -199,7 +203,12 @@ struct StudyOrganisationTests {
         let events = try ledger.reviews(ofCard: card.id)
         #expect(events.count == 2)
         #expect(events.last?.kind == .practice)
-        #expect(try ledger.retention(dictionary: nil).practice == 1, "and it is counted as excluded")
+        // **Counted as excluded *and* actually excluded.** The `practice` tally can be right
+        // while the attempt is still in the denominator, which is the number a reader reads.
+        let report = try ledger.retention(dictionary: nil)
+        #expect(report.practice == 1, "counted as excluded")
+        #expect(report.attempts == 0, "the graded review was this card's first, so nothing is measurable")
+        #expect(report.rate == nil, "and a rate over no attempts is a number nobody has")
     }
 
     /// A card that has never been reviewed cannot be practised: its first attempt **is** its first
@@ -321,7 +330,9 @@ struct StudyOrganisationTests {
                              at: now.addingTimeInterval(200_000), using: scheduler)
         #expect(try ledger.retention(dictionary: nil).attempts == 1)
 
-        try ledger.undoLatestReview(ofCard: card.id, at: now)
+        // **After the review it undoes.** Timestamping it 200,000 seconds earlier made a
+        // chronology no sitting can produce, and the test then rested on nothing checking it.
+        try ledger.undoLatestReview(ofCard: card.id, at: now.addingTimeInterval(200_100))
         let report = try ledger.retention(dictionary: nil)
         #expect(report.attempts == 0, "a review the reader took back is still in the denominator")
         #expect(report.voided == 1)

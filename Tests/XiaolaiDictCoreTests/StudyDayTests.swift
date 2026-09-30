@@ -116,18 +116,22 @@ struct NewCardAllowanceTests {
     private func ledger() throws -> Ledger { try Ledger(path: ":memory:") }
 
     @discardableResult
-    private func save(_ ledger: Ledger, _ word: String) throws -> StudyCard {
+    /// **`when` is not decoration.** Without it a backlog fixture had to create a card now and
+    /// then grade it two days earlier, so the test rested on the ledger accepting a review of a
+    /// card that did not yet exist.
+    private func save(_ ledger: Ledger, _ word: String, at when: Date? = nil) throws -> StudyCard {
+        let when = when ?? now
         let lookup = try ledger.record(LookupRecord(
             surface: word, lemma: word, context: "A sentence with \(word).", lemmaBasis: .tagger,
             language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
-            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+            lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil))
         let note = try ledger.enroll(
             .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1",
                    senseKeyKind: .publisher),
             issuer: .live, language: "en", chosenBy: .reader,
             answer: StudyAnswer(origin: .dictionary, text: "what \(word) means"),
-            lookupID: lookup, at: now)
-        return try ledger.card(of: note.id, at: now)
+            lookupID: lookup, at: when)
+        return try ledger.card(of: note.id, at: when)
     }
 
     /// **The cap applies to new cards and to nothing else.** Due work is work the reader already
@@ -253,7 +257,7 @@ struct NewCardAllowanceTests {
         // introductions belong to a day that is over.
         let twoDaysAgo = now.addingTimeInterval(-2 * 86_400)
         for index in 0..<12 {
-            let card = try save(ledger, "behind\(index)")
+            let card = try save(ledger, "behind\(index)", at: twoDaysAgo)
             _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(),
                                  expectedRevision: card.revision, at: twoDaysAgo, using: scheduler)
         }
@@ -287,9 +291,15 @@ struct NewCardAllowanceTests {
             _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(),
                                  expectedRevision: card.revision, at: now, using: scheduler)
         }
-        let today = now.addingTimeInterval(1)
-        #expect(try ledger.introductions(since: today, dictionary: nil) == 0)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil, newAllowance: 5,
-                                    dayStart: today).count == 3, "the remaining three, not five")
+        // **A real next-day sitting**: the boundary is a day on, and the question is asked after
+        // it. Setting the boundary one second ahead of `now` and then asking at `now` tested a
+        // day that had not begun — a shape no sitting can be in.
+        let tomorrow = now.addingTimeInterval(86_400)
+        #expect(try ledger.introductions(since: tomorrow, dictionary: nil) == 0,
+                "yesterday's five belong to yesterday")
+        let next = try ledger.dueCards(at: tomorrow.addingTimeInterval(60), limit: 10,
+                                       dictionary: nil, newAllowance: 5, dayStart: tomorrow)
+        #expect(next.filter { $0.scheduled.phase == .new }.count == 3,
+                "the three never introduced, and the allowance is whole again")
     }
 }
