@@ -34,6 +34,9 @@ final class LibraryModel {
     /// `problem`**, which is about reading; this one is about writing, and both reach the same
     /// field on the presentation.
     private var problem: String?
+    /// Which action is the latest. **Not the reload's generation**: a reload is about what is
+    /// read and this is about what was written, and an action can outlive several reloads.
+    private var actions = 0
     /// Which reload is the current one. **Every reload suspends several times** — opening the
     /// store, the page, the count, the answers, the timeline — and the reader can type, filter or
     /// select during any of them. An older reload resuming last wrote its rows over newer ones,
@@ -168,19 +171,17 @@ final class LibraryModel {
             return apply { try await $0.ignoreSuggestion(lemma: lemma, language: language, at: when) }
         case .pause:
             return applyReversible(Array(selection)) { store, ids in
-                // Read before the write, in this order, so what is remembered is what was there.
-                let before = try await store.pauseStates(ofNotes: ids)
-                try await store.setPaused(true, ofNotes: ids)
-                return .pause(before)
+                // **One hop, so nothing can write between the read and the change.** Two awaits
+                // let another operation move the same rows in between, and the undo recorded a
+                // state that had already gone.
+                .pause(try await store.pauseAndRemember(true, ofNotes: ids))
             }
         case .resume:
             let ids = Array(selection)
             return apply { try await $0.setPaused(false, ofNotes: ids) }
         case .archive:
             return applyReversible(Array(selection)) { store, ids in
-                let before = try await store.enrollments(ofNotes: ids)
-                try await store.setEnrollment(.archived, ofNotes: ids)
-                return .archive(before)
+                .archive(try await store.setEnrollmentAndRemember(.archived, ofNotes: ids))
             }
         case .unarchive:
             // **`.active`, and deliberately so.** This is the reader saying "put it back in the
@@ -328,6 +329,7 @@ final class LibraryModel {
     private func apply(keepingSelection: Bool = false,
                        _ change: @escaping @Sendable (LedgerStore) async throws -> Void) {
         undoable = nil
+        actions += 1
         guard let opening = store() else { return }
         Task {
             // **A write that did not happen is said, not dropped.** `try?` on both calls meant a
@@ -356,10 +358,17 @@ final class LibraryModel {
     ) {
         undoable = nil
         guard let opening = store(), !ids.isEmpty else { return }
+        // **This action's turn.** An earlier reversible task finishing after a later one had
+        // retired the undo reinstalled its own, stale record — pressing Undo then put rows back
+        // to a state two actions ago. Two overlapping ones could also publish in completion
+        // order rather than in the order the reader pressed them.
+        actions += 1
+        let mine = actions
         Task {
             var failure: String?
             do {
-                undoable = try await change(try await opening.value, ids)
+                let recorded = try await change(try await opening.value, ids)
+                if mine == actions { undoable = recorded }
             } catch {
                 failure = error.localizedDescription
             }

@@ -17,15 +17,7 @@ struct LibraryWiringTests {
 
     @discardableResult
     private func save(_ ledger: Ledger, _ word: String, script: ProbeScript = .latin) throws -> StudyNote {
-        let lookup = try ledger.record(LookupRecord(
-            surface: word, lemma: word, context: "A sentence with \(word) in it.", lemmaBasis: .tagger,
-            language: "en", contextRange: nil, place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
-            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil, script: script))
-        return try ledger.enroll(
-            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1", senseKeyKind: .publisher),
-            issuer: .live, language: "en", chosenBy: .reader,
-            answer: StudyAnswer(origin: .dictionary, text: "what \(word) means"),
-            lookupID: lookup, at: now)
+        try Wiring.save(ledger, word, script: script, at: now)
     }
 
     private func model(_ path: String, scripts: Set<ProbeScript> = [.latin]) -> LibraryModel {
@@ -535,7 +527,7 @@ struct LibraryWiringTests {
 
         model.act(.resume)
         try await settle { model.presentation.rows.first?.status == nil }
-        #expect(try Ledger(path: path).pauseStates(ofNotes: [note.id]).values.allSatisfy { !$0 })
+        #expect(try Ledger(path: path).pauseStates(ofCardsUnder: [note.id]).values.allSatisfy { !$0 })
     }
 
     /// Archiving likewise: out of the way, and reachable again.
@@ -583,7 +575,7 @@ struct LibraryWiringTests {
 
         model.act(.undo)
         try await settle { model.presentation.undoable == nil }
-        let states = try Ledger(path: path).pauseStates(ofNotes: [resting.id, working.id])
+        let states = try Ledger(path: path).pauseStates(ofCardsUnder: [resting.id, working.id])
         #expect(states.values.filter { $0 }.count == 1,
                 "the one that was already resting is still resting")
         let byWord = Dictionary(uniqueKeysWithValues:
@@ -873,18 +865,7 @@ struct LibraryOrganisationWiringTests {
 
     @discardableResult
     private func save(_ ledger: Ledger, _ word: String) throws -> StudyNote {
-        let lookup = try ledger.record(LookupRecord(
-            surface: word, lemma: word, context: "A sentence with \(word).", lemmaBasis: .tagger,
-            language: "en", contextRange: nil,
-            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
-            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
-            script: .latin))
-        return try ledger.enroll(
-            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1",
-                   senseKeyKind: .publisher),
-            issuer: .live, language: "en", chosenBy: .reader,
-            answer: StudyAnswer(origin: .reader, text: "what \(word) means"),
-            lookupID: lookup, at: now)
+        try Wiring.save(ledger, word, origin: .reader, at: now)
     }
 
     /// A scratch directory for this suite's exports. **Never the reader's own Downloads**: the
@@ -1020,5 +1001,132 @@ struct LibraryOrganisationWiringTests {
     /// letting everything after a missed state run anyway.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
         try await Wiring.settle("the model never reached the expected state", condition)
+    }
+}
+
+/// Two claims about a reversible action that the ordinary undo tests cannot see, because both
+/// need a second action in flight at the same time as the first.
+@Suite("Overlapping reversible library actions")
+@MainActor
+struct LibraryReversibleRaceTests {
+    /// **An overtaken action must not reinstall its undo.** The model retires the undo when a new
+    /// action starts, so a slow earlier task finishing afterwards used to put its own record back
+    /// — and pressing Undo then restored a state two actions old.
+    @Test func anovertakenActionDoesNotReinstallItsUndo() async throws {
+        let (path, clean) = Wiring.scratch("overtaken"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try Wiring.save(ledger, "linger", at: now)
+        let second = try Wiring.save(ledger, "hurry", at: now)
+        _ = try ledger.card(of: first.id, at: now)
+        _ = try ledger.card(of: second.id, at: now)
+
+        // The first action's store arrives only when this is released; the second's is immediate.
+        // **Armed only for the action under test.** `reload()` opens the store too, and gating
+        // that one deadlocks the test before it has begun.
+        let gate = Gate()
+        var armed = false
+        let model = LibraryModel(store: { [gate] in
+            let wait = armed
+            armed = false
+            return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
+        }, studyScripts: { [] }, clock: { now })
+
+        await model.reload()
+        model.act(.select([first.id]))
+        try await Wiring.settle("the first row is selected") { model.presentation.selection == [first.id] }
+        armed = true
+        model.act(.pause)                                   // blocked on the gate
+        model.act(.select([second.id]))
+        try await Wiring.settle("the second row is selected") { model.presentation.selection == [second.id] }
+        model.act(.archive)                                 // overtakes it
+        try await Wiring.settle("the later action published its undo") {
+            model.presentation.undoable == .archive(1)
+        }
+
+        await gate.open()
+        // Let the overtaken task finish: it must change the rows and say nothing about undo.
+        try await Wiring.settle("the overtaken action still did its write") {
+            { let states = (try? Ledger(path: path).pauseStates(ofCardsUnder: [first.id])) ?? [:]
+              return !states.isEmpty && states.values.allSatisfy { $0 } }()
+        }
+        #expect(model.presentation.undoable == .archive(1),
+                "the later action's undo is still the one on offer")
+    }
+
+    /// **An unrelated action that retires the undo keeps it retired.** `apply` clears the record
+    /// too, so a reversible task it overtook must not put one back where the reader sees none.
+    @Test func aplainActionAlsoOvertakesAReversibleOne() async throws {
+        let (path, clean) = Wiring.scratch("overtaken-plain"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let word = try Wiring.save(ledger, "linger", at: now)
+        _ = try ledger.card(of: word.id, at: now)
+
+        let gate = Gate()
+        var armed = false
+        let model = LibraryModel(store: { [gate] in
+            let wait = armed
+            armed = false
+            return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
+        }, studyScripts: { [] }, clock: { now })
+
+        await model.reload()
+        model.act(.select([word.id]))
+        try await Wiring.settle("selected") { model.presentation.selection == [word.id] }
+        armed = true
+        model.act(.pause)
+        model.act(.tag("later"))
+        try await Wiring.settle("the tag landed") {
+            ((try? Ledger(path: path).tags(of: word.id)) ?? []).contains("later")
+        }
+        await gate.open()
+        try await Wiring.settle("the overtaken action still did its write") {
+            { let states = (try? Ledger(path: path).pauseStates(ofCardsUnder: [word.id])) ?? [:]
+              return !states.isEmpty && states.values.allSatisfy { $0 } }()
+        }
+        #expect(model.presentation.undoable == nil, "nothing is offered to undo")
+    }
+
+    /// **The read and the write are one actor hop.** Two `await`s let another operation move the
+    /// same rows in between, and the undo then described a state that had already gone. The
+    /// helper that exists to close that window must both answer and change.
+    @Test func thestoreRemembersAndChangesInOneCall() async throws {
+        let (path, clean) = Wiring.scratch("one-hop"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let resting = try Wiring.save(ledger, "resting", at: now)
+        let working = try Wiring.save(ledger, "working", at: now)
+        _ = try ledger.card(of: resting.id, at: now)
+        _ = try ledger.card(of: working.id, at: now)
+        try ledger.setPaused(true, ofNotes: [resting.id])
+
+        let store = try LedgerStore(path: path)
+        let before = try await store.pauseAndRemember(true, ofNotes: [resting.id, working.id])
+        #expect(before.values.sorted(by: { !$0 && $1 }) == [false, true],
+                "one of the two was already resting, and that is what was remembered")
+        #expect(try Ledger(path: path).pauseStates(ofCardsUnder: [resting.id, working.id])
+            .values.allSatisfy { $0 }, "and the change happened in the same call")
+
+        let enrolments = try await store.setEnrollmentAndRemember(.archived,
+                                                                  ofNotes: [resting.id, working.id])
+        #expect(enrolments.values.allSatisfy { $0 != .archived }, "the enrollments before the change")
+        #expect(try Ledger(path: path).enrollments(ofNotes: [resting.id, working.id])
+            .values.allSatisfy { $0 == .archived }, "and they are archived now")
+    }
+
+    /// Opened once, awaited by however many callers.
+    private actor Gate {
+        private var isOpen = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            if isOpen { return }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+        func open() {
+            isOpen = true
+            for one in waiting { one.resume() }
+            waiting = []
+        }
     }
 }

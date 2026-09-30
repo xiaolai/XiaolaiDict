@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import Testing
 import XiaolaiDictCore
@@ -32,6 +33,29 @@ enum Wiring {
 
     /// How long a model is given to reach a state. One number, because two suites disagreeing
     /// about patience is a flake that looks like a defect in whichever is stricter.
+
+    /// A word the reader looked up and enrolled. **One spelling, parameterised** — three copies
+    /// of this had drifted in their context text and their answer's origin, and a test reading
+    /// one suite's rows against another's expectations could not be written at all.
+    @discardableResult
+    static func save(_ ledger: Ledger, _ word: String,
+                     script: ProbeScript = .latin,
+                     origin: StudyAnswer.Origin = .dictionary,
+                     at when: Date) throws -> StudyNote {
+        let lookup = try ledger.record(LookupRecord(
+            surface: word, lemma: word, context: "A sentence with \(word) in it.",
+            lemmaBasis: .tagger, language: "en", contextRange: nil,
+            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+            lookedUpAt: when, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: script))
+        return try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).1",
+                   senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: origin, text: "what \(word) means"),
+            lookupID: lookup, at: when)
+    }
+
     static let patience = 2_000
 
     /// Waits for `condition`, and **throws when it never holds**.

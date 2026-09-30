@@ -442,15 +442,15 @@ struct StudyLibraryTests {
         try ledger.setPaused(true, ofCard: production.id)
 
         let ids = [note.id]
-        let before = try ledger.pauseStates(ofNotes: ids)
+        let before = try ledger.pauseStates(ofCardsUnder: ids)
         #expect(before[meaning.id] == false)
         #expect(before[production.id] == true, "one card of this note is resting and one is not")
 
         try ledger.setPaused(true, ofNotes: ids)
-        #expect(try ledger.pauseStates(ofNotes: ids).values.allSatisfy { $0 })
+        #expect(try ledger.pauseStates(ofCardsUnder: ids).values.allSatisfy { $0 })
 
         try ledger.restorePauseStates(before)
-        let after = try ledger.pauseStates(ofNotes: ids)
+        let after = try ledger.pauseStates(ofCardsUnder: ids)
         #expect(after == before, "each card went back to its own state, not the note's")
         #expect(after[meaning.id] == false, "the card that was running is running again")
         #expect(after[production.id] == true)

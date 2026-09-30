@@ -188,17 +188,28 @@ actor LedgerStore {
         try ledger.deleteReading(lookups: lookups)
     }
 
-    /// What a bulk action is about to change, read before it changes it — so putting it back
-    /// restores what was there rather than the inverse of what was done.
-    func pauseStates(ofNotes ids: [UUID]) throws -> [UUID: Bool] {
-        try ledger.pauseStates(ofNotes: ids)
-    }
     func restorePauseStates(_ states: [UUID: Bool]) throws { try ledger.restorePauseStates(states) }
-    func enrollments(ofNotes ids: [UUID]) throws -> [UUID: StudyEnrollment] {
-        try ledger.enrollments(ofNotes: ids)
-    }
     func restoreEnrollments(_ dispositions: [UUID: StudyEnrollment]) throws {
         try ledger.restoreEnrollments(dispositions)
+    }
+
+    /// Reads what a bulk pause is about to change **and changes it, without leaving the actor**,
+    /// so putting it back restores what was there rather than the inverse of what was done.
+    ///
+    /// The model did these as two `await`s, so another operation could write between them and
+    /// the undo it recorded described a state that had already gone. One hop, one answer.
+    func pauseAndRemember(_ paused: Bool, ofNotes ids: [UUID]) throws -> [UUID: Bool] {
+        let before = try ledger.pauseStates(ofCardsUnder: ids)
+        try ledger.setPaused(paused, ofNotes: ids)
+        return before
+    }
+
+    /// The same for archiving.
+    func setEnrollmentAndRemember(_ enrollment: StudyEnrollment,
+                                  ofNotes ids: [UUID]) throws -> [UUID: StudyEnrollment] {
+        let before = try ledger.enrollments(ofNotes: ids)
+        try ledger.setEnrollment(enrollment, ofNotes: ids)
+        return before
     }
     func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
     func confirm(noteIDs ids: [UUID], at when: Date) throws {

@@ -356,7 +356,13 @@ extension Ledger {
     ///
     /// Keyed by card, because pause is: a note with two prompts can have one of them resting. An
     /// undo that recorded the *note's* state would resume both and call itself faithful.
-    public func pauseStates(ofNotes ids: [UUID]) throws -> [UUID: Bool] {
+    /// Whether each card under these notes is paused, **keyed by card and not by note** — a note
+    /// may carry several, so note-keying would silently drop all but one.
+    ///
+    /// The label used to say `ofNotes` while the key was a card's, and both are `UUID`, so the
+    /// type system had nothing to say about it. Every caller happened to read only `.values`;
+    /// the first one to subscript it got `nil` for an id that was certainly there.
+    public func pauseStates(ofCardsUnder ids: [UUID]) throws -> [UUID: Bool] {
         guard !ids.isEmpty else { return [:] }
         var found: [UUID: Bool] = [:]
         try run("""
@@ -368,7 +374,8 @@ extension Ledger {
         return found
     }
 
-    /// Put each card back to the state it was recorded in, in one transaction.
+    /// Put each card back to the state it was recorded in, in one transaction. Keyed by card,
+    /// as `pauseStates(ofCardsUnder:)` returns it.
     ///
     /// **A card that has since been deleted is skipped, not an error**: an undo of a bulk action is
     /// a convenience, and refusing the whole of it because one row is gone would leave the reader
