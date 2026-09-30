@@ -52,6 +52,12 @@ struct DictionaryList: Equatable {
     /// dictionary are**, which a count of dictionaries alone would have missed.
     var isWorthShowing: Bool { rows.count > 1 }
 
+    /// One row by index, bounds-checked — the same spelling, and for the same reason, as
+    /// `LookupPanelContent.entry(at:)`: `showing` is `@State` that outlives the presentation, and the
+    /// panel is a container that fills in. An index taken from one list and used on a shorter one is a
+    /// trap, and the heading drew it straight.
+    func row(at index: Int) -> Row? { rows.indices.contains(index) ? rows[index] : nil }
+
     init(of entries: [DictionaryEntry]) {
         let names = entries.map(\.dictionary.name)
         // Counted before the rows are built: whether a headword is needed is a property of how many

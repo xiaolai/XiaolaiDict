@@ -87,3 +87,37 @@ struct DictionaryListTests {
         #expect(Set(list.rows.map(\.label)).count == 4)
     }
 }
+
+/// **An index into a list that may have changed.** `showing` is `@State`: it outlives the presentation,
+/// and the panel is a container that fills in. The heading used to subscript `rows` with it directly,
+/// while the card beside it went through a bounds-checked `entry(at:)` written for exactly this — the
+/// class the 2026-09-25 crash belongs to, one file over. ADR-0042.
+struct DictionaryListBoundsTests {
+    private func list(_ count: Int) -> DictionaryList {
+        DictionaryList(of: (1...count).map {
+            let markup = """
+                <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="e\($0)" d:title="w\($0)">
+                <span class="hg x_xh0"><span class="hw">w\($0)</span></span>
+                </d:entry>
+                """
+            return DictionaryEntry(
+                dictionary: DictionaryIdentity(name: "D\($0)", identifier: "d\($0)", version: "1"),
+                headword: "w\($0)", lookedUp: "w", html: markup, document: EntryDocument.parse(markup))
+        })
+    }
+
+    @Test func anIndexPastTheEndIsNoRowRatherThanACrash() {
+        let two = list(2)
+        #expect(two.row(at: 0) != nil)
+        #expect(two.row(at: 1) != nil)
+        #expect(two.row(at: 2) == nil, "an index one past the end answered with a row")
+        #expect(two.row(at: 7) == nil, "a stale selection from a longer list answered with a row")
+        #expect(two.row(at: -1) == nil, "a negative index answered with a row")
+    }
+
+    /// The row it does answer with is the one at that index, not merely some row — otherwise the check
+    /// above would pass on a rule that always answered nil.
+    @Test func therowAnsweredIsTheOneAsked() {
+        #expect(list(3).row(at: 2)?.dictionary == "D3")
+    }
+}

@@ -881,9 +881,13 @@ public struct LookupPanelContent: View {
                     HStack(spacing: scale.space.line) {
                         Image(systemName: showingDictionaries ? "chevron.down" : "chevron.right")
                             .font(.system(size: scale.text.micro))
-                        Text(verbatim: list.rows[showing ?? opening].label)
-                            .font(.system(size: scale.text.micro, weight: .medium))
-                            .lineLimit(1)
+                        // **Through `row(at:)`, never a bare subscript.** `entry` falls back the same
+                        // way for the same reason, so the heading names the entry the card draws.
+                        if let current = list.row(at: showing ?? opening) ?? list.rows.first {
+                            Text(verbatim: current.label)
+                                .font(.system(size: scale.text.micro, weight: .medium))
+                                .lineLimit(1)
+                        }
                         if list.otherDictionaries > 0 {
                             // Dictionaries, never entries: NOAD answering four times is one other
                             // dictionary, and counting entries would say four.
