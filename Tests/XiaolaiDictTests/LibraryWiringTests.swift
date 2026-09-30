@@ -390,6 +390,62 @@ struct LibraryWiringTests {
         #expect(model.presentation.rows.first?.status != .archived, "and the archive did not land")
     }
 
+    /// **Suggested replaces the list, so it cannot keep a selection.** Every other narrowing
+    /// prunes the selection to the rows that survive it (ADR-0035); under Suggested the library
+    /// query still matches every row, so pruning kept them all selected while none was on screen
+    /// — the footer counted rows nobody could see and Remove was armed over them.
+    @Test func switchingToSuggestedDropsAselectionNothingCanShow() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let fine = try save(ledger, "fine")
+        try save(ledger, "hold")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([fine.id]))
+        try await settle { model.presentation.selection == [fine.id] }
+
+        model.act(.filter(.suggested))
+        try await settle { model.presentation.filter == .suggested }
+        #expect(model.presentation.selection.isEmpty,
+                "rows nobody can see are still selected, and Remove still reaches them")
+
+        // And coming back does not resurrect it.
+        model.act(.filter(.all))
+        try await settle { model.presentation.filter == .all }
+        #expect(model.presentation.selection.isEmpty)
+    }
+
+    /// **An empty list says which nothing it is, and offers the way out that applies.** The
+    /// "nothing saved" branch ignored the tag picker and the script toggle, so a full collection
+    /// hidden behind either was reported as nothing ever saved — and the only recovery offered
+    /// was "Clear the search" over a search that was already empty.
+    @Test func anEmptyListNamesTheFilterHidingIt() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+        try ledger.tag(noteID: note.id, "legal")
+
+        let model = model(path)
+        await model.reload()
+        #expect(model.presentation.isUnfiltered, "nothing is narrowing it yet")
+
+        model.act(.filterTag("legal"))
+        try await settle { model.presentation.tag == "legal" }
+        #expect(model.presentation.isUnfiltered == false, "a tag filter is a narrowing")
+
+        // **And a filter cannot outlive its tag.** Removing the last use emptied the vocabulary,
+        // which hid the picker and left the filter set: an empty library with no way to clear it.
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
+        model.act(.untag(noteID: note.id, tag: "legal"))
+        try await settle { model.presentation.tagVocabulary.isEmpty }
+        #expect(model.presentation.tag == nil, "the filter outlived the tag it filters by")
+        #expect(model.presentation.rows.count == 1, "and the library came back")
+    }
+
     // MARK: - Bulk actions, and putting them back (M04)
 
     /// **Pause was a one-way door.** `setPaused(false, …)` existed and nothing could reach it, so a

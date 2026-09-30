@@ -117,7 +117,16 @@ final class LibraryModel {
         // Any change to what is being looked at starts the paging over: a page count carried
         // across a new search is a "show more" button that reveals rows from the old one.
         case .search(let text): search = text; pages = 1
-        case .filter(let value): filter = value; pages = 1
+        // **Suggested is the one filter that clears the selection**, because it is the one that
+        // does not narrow the list — it replaces it. Every other narrowing is handled by pruning
+        // the selection to the rows that survive (ADR-0035), which keeps the footer's count
+        // honest while letting the reader keep a selection through a search. Under Suggested the
+        // library query still matches every row, so pruning keeps them all selected while none is
+        // on screen: the footer counted, and Remove was armed over, rows nobody could see.
+        case .filter(let value):
+            if value == .suggested || filter == .suggested { selection = [] }
+            filter = value
+            pages = 1
         case .filterScripts(let on): scriptFiltered = on; pages = 1
         case .filterTag(let name): tag = name; pages = 1
         case .select(let ids): selection = ids
@@ -238,6 +247,14 @@ final class LibraryModel {
             }
             let measured = try await ledger.retention(dictionary: nil)
             let vocabulary = try await ledger.allTags()
+            // **A filter cannot outlive the thing it filters by.** Removing the last use of the
+            // active tag emptied the vocabulary, which hid the picker — and left `tag` set, so
+            // the library stayed empty with no control on screen to clear it.
+            if let active = tag, !vocabulary.contains(where: { $0.tag == active }) {
+                tag = nil
+                await reload()
+                return
+            }
             // Read again: the reads between the prune and here suspend too.
             guard mine == generation else { return }
             presentation = LibraryPresentation(

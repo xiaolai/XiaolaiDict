@@ -325,14 +325,32 @@ public struct LibraryView: View {
         VStack(spacing: scale.space.line) {
             // **Two different nothings**, said differently: a reader who has saved nothing is not a
             // reader whose search found nothing.
-            if state.search.isEmpty && state.filter == .all {
+            //
+            // **Every narrowing counts, not only the search.** The tag picker and the script
+            // toggle also hide rows, and ignoring them told a reader with a full collection that
+            // they had saved nothing — over a filter they could still see set.
+            if state.isUnfiltered {
                 Text("You have not saved any meanings yet.")
                 Text("A meaning you save while reading appears here.")
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)
             } else {
                 Text("Nothing matches.")
-                Button("Clear the search") { act(.search("")) }
+                // **Only the narrowings that are actually on.** "Clear the search" over an empty
+                // search is a recovery button that changes nothing, which is the same broken
+                // switch as one that refuses its click.
+                if !state.search.isEmpty {
+                    Button("Clear the search") { act(.search("")) }
+                }
+                if state.tag != nil {
+                    Button("Show every tag") { act(.filterTag(nil)) }
+                }
+                if state.scriptFiltered {
+                    Button("Show every script") { act(.filterScripts(false)) }
+                }
+                if state.filter != .all {
+                    Button("Show everything saved") { act(.filter(.all)) }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -552,6 +570,12 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let hasMore: Bool
     /// Whether the selection holds anything a confirmation would change.
     public let canConfirm: Bool
+
+    /// Whether anything is narrowing the list. **Every narrowing**, so an empty result can only
+    /// claim "you have saved nothing" when nothing is hiding rows.
+    public var isUnfiltered: Bool {
+        search.isEmpty && filter == .all && tag == nil && !scriptFiltered
+    }
     /// What the reader keeps looking up and has not saved. Only read under the `suggested` filter.
     public let suggestions: [Suggestion]
     /// Where the last export went, once one has been written.
