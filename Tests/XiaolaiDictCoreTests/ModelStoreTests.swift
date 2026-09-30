@@ -16,6 +16,10 @@ struct ModelStoreTests {
         let interruptions = Recorder<[String: Int]>([:])
         /// Paths the host restarts from zero, as one ignoring a range request does.
         let restarts = Recorder<Set<String>>([])
+        /// Paths that drop on **every** attempt, after sending `alwaysDropsAfter` bytes — a host
+        /// that is not coming back, which is the only way to reach the end of the retry budget.
+        let alwaysDrops = Recorder<Set<String>>([])
+        let alwaysDropsAfter = 1_000
         /// Every request, as (path, offset) — what a resume actually asked for.
         let requests = Recorder<[(String, Int64)]>([])
 
@@ -41,7 +45,8 @@ struct ModelStoreTests {
                 try Data().write(to: destination)
             }
             var slice = body.dropFirst(Int(from))
-            let cut = interruptions.withLock { $0.removeValue(forKey: file.path) }
+            var cut = interruptions.withLock { $0.removeValue(forKey: file.path) }
+            if alwaysDrops.withLock({ $0.contains(file.path) }) { cut = alwaysDropsAfter }
             if let cut { slice = slice.prefix(cut) }
             let handle = try FileHandle(forWritingTo: destination)
             try handle.seekToEnd()
@@ -156,25 +161,49 @@ struct ModelStoreTests {
         }
     }
 
-    /// The drop comes 40,000 bytes into the weights. The retry asks for **byte 40,000 onwards**, and
-    /// the file that results is the whole file — not a restart, and not a doubled front.
+    /// The drop comes 40,000 bytes into the weights. The retry asks for **byte 40,000 onwards**,
+    /// and the file that results is the whole file — not a restart, and not a doubled front.
+    ///
+    /// **Retried inside one install**, which is the part that changed: a 5.9 GB model over a slow
+    /// link drops for reasons that have nothing to do with the reader, and reporting "connection
+    /// failed" at the first one made them press the button again for every stall — measured, a
+    /// download that died 18 MB into 5,350 MB.
     @Test func anInterruptedDownloadResumesFromWhereItStopped() async throws {
         let (store, scratch) = try store()
         defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 40_000 }
-        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
-
-        await #expect(throws: MemoryTransport.Dropped.self) { try await downloader.install(manifest) }
-        #expect(store.installed(manifest) == nil, "half a model was loadable")
+        let downloader = ModelDownloader(store: store, transport: transport,
+                                         freeDisk: { _ in .max }, retryPause: .zero)
 
         let directory = try await downloader.install(manifest)
         let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
-        #expect(asked == [0, 40_000])
+        #expect(asked == [0, 40_000], "the retry restarted the file instead of resuming it")
         #expect(try Data(contentsOf: directory.appending(path: "model.safetensors")) == Self.bodies["model.safetensors"])
         // The config finished on the first attempt and is not fetched again.
         #expect(transport.requests.withLock { $0.filter { $0.0 == "config.json" }.count } == 1)
+    }
+
+    /// **A host that is not coming back is still a failure**, after the budget is spent — and what
+    /// arrived is kept, so the reader's next attempt resumes rather than starting the 5.9 GB again.
+    @Test func ahostThatKeepsDroppingIsReportedAfterTheLastAttempt() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let transport = MemoryTransport(Self.bodies)
+        transport.alwaysDrops.withLock { $0.insert("model.safetensors") }
+        let downloader = ModelDownloader(store: store, transport: transport,
+                                         freeDisk: { _ in .max }, retryPause: .zero)
+
+        await #expect(throws: MemoryTransport.Dropped.self) { try await downloader.install(manifest) }
+        #expect(store.installed(manifest) == nil, "half a model was loadable")
+        let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
+        #expect(asked.count == ModelDownloader.transportAttempts,
+                "asked \(asked.count) times for a budget of \(ModelDownloader.transportAttempts)")
+        // Each attempt resumed from where the last one stopped, so the front grows and is kept.
+        #expect(asked == asked.sorted(), "an attempt asked for less than the one before it")
+        #expect(asked.first == 0 && asked.last ?? 0 > 0, "nothing was kept between attempts")
     }
 
     /// Bytes that are not the pinned file are refused, deleted — so a retry starts clean rather than
@@ -253,7 +282,10 @@ struct ModelStoreTests {
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 90_000 }
-        let roomy = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
+        // **One attempt**, so the drop is the end of this install: what is being set up here is a
+        // part-finished download, and a retry would simply finish it.
+        let roomy = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
+                                    attempts: 1)
         await #expect(throws: MemoryTransport.Dropped.self) { try await roomy.install(manifest) }
 
         // 10,000 bytes still to come, plus the margin: exactly enough.
@@ -371,7 +403,9 @@ struct ModelStoreTests {
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
         transport.interruptions.withLock { $0["model.safetensors"] = 40_000 }
-        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max })
+        // One attempt: this test is about the *second* install, which meets a host that restarts.
+        let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
+                                         attempts: 1)
         await #expect(throws: MemoryTransport.Dropped.self) { try await downloader.install(manifest) }
 
         let seen = Recorder<[Int64]>([])
@@ -384,6 +418,25 @@ struct ModelStoreTests {
         // before it — `aHostThatIgnoresTheRangeStartsTheFileAgain` asserts that drop directly, at
         // the writer, where the truncation actually happens.
         #expect(received.allSatisfy { $0 <= manifest.totalBytes }, "progress counted a discarded front")
+    }
+
+    /// **The default request timeout is the defect.** `URLSession.shared` fails a request after
+    /// 60 seconds with no data, and a 5.9 GB model over a link measured at 0.4–0.7 MB/s is hours
+    /// on one connection — so an ordinary stall ended the download and the reader was told the
+    /// connection had failed.
+    ///
+    /// The resource timeout is left alone: it bounds the whole transfer, and the default of seven
+    /// days is the right bound for a file this size.
+    @Test func thetransportDoesNotUseTheSixtySecondDefault() {
+        let configuration = URLSessionModelTransport.configuration
+        #expect(configuration.timeoutIntervalForRequest > 60,
+                "a stall shorter than this is not a failed download")
+        #expect(configuration.timeoutIntervalForRequest == URLSessionModelTransport.requestTimeout)
+        #expect(configuration.waitsForConnectivity,
+                "a link that comes back is not a download that failed")
+        // Seven days, `URLSessionConfiguration`'s own default, asserted so that raising the
+        // request timeout cannot quietly be read as having raised this one too.
+        #expect(configuration.timeoutIntervalForResource == 7 * 24 * 60 * 60)
     }
 
     /// The pins themselves: every file by commit, from ModelScope, with a SHA-256 and a size — and

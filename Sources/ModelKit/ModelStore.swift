@@ -321,17 +321,39 @@ public struct ModelDownloader: Sendable {
     public let store: ModelStore
     private let transport: any ModelFileTransport
     private let freeDisk: @Sendable (URL) -> Int64?
+    private let retryPause: Duration
+    private let attempts: Int
 
     /// Left free after the download, so a model never takes the last of the reader's disk.
     public static let diskMargin: Int64 = 512 * 1_048_576
 
+    /// How many times one file's transfer is attempted before the download is reported failed.
+    ///
+    /// **A 5.9 GB model over a slow link drops for reasons that are not the reader's.** Measured
+    /// on 2026-09-30: ModelScope served this Mac at 0.4–0.7 MB/s, so the large model is two to
+    /// four hours on one connection, and the transfer died 18 MB in. Reporting the first drop as
+    /// a failed download asked the reader to press the button again for every stall.
+    ///
+    /// A fixed budget per file and **never reset by progress**: a host that sends a kilobyte and
+    /// drops would otherwise be retried for ever.
+    public static let transportAttempts = 5
+
+    /// Between attempts. Short, because what it waits out is a dropped connection rather than a
+    /// busy server — and a parameter, so a test is not made to sleep through it.
+    public static let retryPauseDefault = Duration.seconds(1)
+
     public init(
         store: ModelStore, transport: any ModelFileTransport = URLSessionModelTransport(),
-        freeDisk: @escaping @Sendable (URL) -> Int64? = ModelDownloader.availableDisk(at:)
+        freeDisk: @escaping @Sendable (URL) -> Int64? = ModelDownloader.availableDisk(at:),
+        retryPause: Duration = ModelDownloader.retryPauseDefault,
+        attempts: Int = ModelDownloader.transportAttempts
     ) {
         self.store = store
         self.transport = transport
         self.freeDisk = freeDisk
+        self.retryPause = retryPause
+        // **One is a legitimate budget**: it is the old behaviour, which several tests are about.
+        self.attempts = max(1, attempts)
     }
 
     /// Downloads whatever of `manifest` is missing and moves it into place. Returns the model's
@@ -435,12 +457,27 @@ public struct ModelDownloader: Sendable {
         if !FileManager.default.fileExists(atPath: partial.path) {
             FileManager.default.createFile(atPath: partial.path, contents: nil)
         }
-        let offset = size(of: partial)
-        if offset < file.size {
+        // **Resumed, and retried from what is on disk each time.** The offset is read again per
+        // attempt because a dropped transfer leaves more of the file behind than the last one did.
+        var attemptsLeft = attempts
+        while true {
+            let offset = size(of: partial)
+            if offset >= file.size { break }
             // Everything but this file, so a restart inside the transport cannot double-count.
             let others = arrivedBytes(of: manifest, in: staging, excluding: file)
-            try await transport.fetch(file, from: offset, appendingTo: partial) { onDisk in
-                progress(ModelDownloadProgress(received: others + min(onDisk, file.size), total: total))
+            do {
+                try await transport.fetch(file, from: offset, appendingTo: partial) { onDisk in
+                    progress(ModelDownloadProgress(received: others + min(onDisk, file.size), total: total))
+                }
+                break
+            } catch {
+                // **Cancellation is not a drop.** The reader stopped it, and retrying would carry
+                // on downloading after they asked for it to stop. `URLSession` reports it as
+                // `URLError.cancelled` rather than `CancellationError`, so the flag is what to ask.
+                if Task.isCancelled { throw error }
+                attemptsLeft -= 1
+                guard attemptsLeft > 0 else { throw error }
+                try await Task.sleep(for: retryPause)
             }
         }
         let received = size(of: partial)
@@ -564,7 +601,29 @@ final class InstallLock: @unchecked Sendable {
 /// A data task with a delegate rather than `bytes(for:)`: iterating `AsyncBytes` one byte at a time
 /// over 3 GB is billions of suspensions for nothing, where the delegate hands over whole chunks.
 public struct URLSessionModelTransport: ModelFileTransport {
-    public init() {}
+    /// **Not the 60-second default.** `URLSession`'s request timeout is the gap it will tolerate
+    /// between packets, and a 5.9 GB model over a link measured at 0.4–0.7 MB/s on 2026-09-30 is
+    /// hours on one connection — so an ordinary stall ended the download and the reader was told
+    /// the connection had failed. Three minutes of silence is a link that has gone, not one that
+    /// is slow.
+    public static let requestTimeout: TimeInterval = 180
+
+    /// The transport's own configuration, rather than `URLSession.shared`'s, which cannot be
+    /// changed without changing it for everything else in the process.
+    ///
+    /// `timeoutIntervalForResource` is deliberately untouched: it bounds the whole transfer, and
+    /// its default of seven days is the right bound for a file this size.
+    public static var configuration: URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = requestTimeout
+        // A link that comes back is not a download that failed.
+        configuration.waitsForConnectivity = true
+        return configuration
+    }
+
+    private let session: URLSession
+
+    public init() { session = URLSession(configuration: Self.configuration) }
 
     public func fetch(
         _ file: ModelFile, from offset: Int64, appendingTo destination: URL,
@@ -575,7 +634,7 @@ public struct URLSessionModelTransport: ModelFileTransport {
         let writer = try RangeWriter(
             destination: destination, offset: offset, path: file.path, expecting: file.size,
             progress: progress)
-        let task = URLSession.shared.dataTask(with: request)
+        let task = session.dataTask(with: request)
         task.delegate = writer
         try await withTaskCancellationHandler {
             try await writer.run(task)
