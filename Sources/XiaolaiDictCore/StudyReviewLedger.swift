@@ -55,8 +55,12 @@ extension Ledger {
 
     /// Stops a card being asked, or lets it be asked again. **Memory is untouched**: pausing does not
     /// stop elapsed time, and a paused card resumed after a month is a month overdue, honestly.
+    /// **The revision moves too.** It is the compare-and-swap that stops a grade computed against
+    /// one state landing on another — and pausing, resuming and postponing all change whether the
+    /// card may be asked at all. Leaving the revision alone let a presentation drawn *before* the
+    /// change pass the guard and grade a card the reader had just put away.
     public func setPaused(_ paused: Bool, ofCard id: UUID) throws {
-        try run("UPDATE study_cards SET paused = ? WHERE id = ?",
+        try run("UPDATE study_cards SET paused = ?, revision = revision + 1 WHERE id = ?",
                 bind: [.integer(paused ? 1 : 0), .text(id.uuidString)]) { _ in }
     }
 
@@ -67,7 +71,7 @@ extension Ledger {
     /// caller by reading the source — `self?.hide()` in the history drawer was enough to report
     /// this as wired when nothing in the app has ever called it (ADR-0038).
     public func postpone(cardID: UUID, until when: Date?) throws {
-        try run("UPDATE study_cards SET hidden_until = ? WHERE id = ?",
+        try run("UPDATE study_cards SET hidden_until = ?, revision = revision + 1 WHERE id = ?",
                 bind: [.optionalReal(when?.timeIntervalSince1970), .text(cardID.uuidString)]) { _ in }
     }
 
@@ -145,14 +149,28 @@ extension Ledger {
             bind.append(.text(dictionary))
         }
         bind.append(.integer(limit))
+        // **Practice obeys the two rules the queue does.** It offered paused cards and cards the
+        // reader had put off until tomorrow — both are answers to "do not ask me this now" — and
+        // it could hand back both prompts of one note in a batch, which R08 forbids for the same
+        // reason it forbids it of a review: asking the same thing twice with the answer fresh
+        // measures the sitting, not the memory.
         return try cardsFromJoin("""
             JOIN study_notes n ON n.id = c.note_id
             WHERE c.stability IS NOT NULL
+              AND c.paused = 0
+              AND (c.hidden_until IS NULL OR c.hidden_until <= ?\(bind.count + 1))
+              AND c.id = (
+                  SELECT s.id FROM study_cards s
+                  WHERE s.note_id = c.note_id AND s.paused = 0 AND s.stability IS NOT NULL
+                    AND (s.hidden_until IS NULL OR s.hidden_until <= ?\(bind.count + 1))
+                  ORDER BY s.last_review, s.id
+                  LIMIT 1
+              )
               AND \(Self.askableNotePredicate)
               \(scope)
             ORDER BY c.last_review, c.id
             LIMIT ?\(bind.count)
-            """, bind: bind)
+            """, bind: bind + [.real(Date.now.timeIntervalSince1970)])
     }
 
     /// The cards that may be asked now, in the order the specification's §10 gives.
@@ -377,6 +395,12 @@ extension Ledger {
         // unchanged and storing a zero stability beside it would be a claim about the reader's
         // memory. Its first attempt is its first review.
         guard card.scheduled.state != nil else { throw ReviewError.notYetReviewed(cardID) }
+        // **Rechecked here, as a grade is.** A note archived, unconfirmed or stripped of its
+        // answer while the sitting was on screen still accepted a practice attempt, so an
+        // inert-but-recorded event landed against a card nothing should be asking.
+        guard try askableNoteIDs().contains(card.noteID), !card.isPaused else {
+            throw ReviewError.notEligible(cardID)
+        }
         if let existing = try events(where: "WHERE id = ?", bind: [.text(eventID.uuidString)]).first {
             guard !existing.isVoid else { throw ReviewError.eventAlreadyVoided(eventID) }
             return existing

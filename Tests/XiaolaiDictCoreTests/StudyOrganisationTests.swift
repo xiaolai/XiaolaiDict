@@ -114,6 +114,62 @@ struct StudyOrganisationTests {
 
     // MARK: - Practice (R10)
 
+    /// **Practice obeys the two rules the queue obeys**: it does not offer a card the reader
+    /// paused or put off, and it holds at most one card per note. It offered all three.
+    @Test func practiceSkipsWhatTheReaderPutAwayAndHoldsOnePerNote() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+
+        // Three notes, each with a reviewed card so all are practisable to begin with.
+        let paused = try save(ledger, "resting")
+        let putOff = try save(ledger, "tomorrow")
+        let twoPrompts = try save(ledger, "both")
+        var cards: [UUID: StudyCard] = [:]
+        for note in [paused, putOff, twoPrompts] {
+            let card = try ledger.card(of: note.id, at: now)
+            _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(),
+                                 expectedRevision: card.revision, at: now, using: scheduler)
+            cards[note.id] = card
+        }
+        // The second prompt of one note, also reviewed.
+        let sibling = try ledger.card(of: twoPrompts.id, prompt: .production, at: now)
+        _ = try ledger.grade(cardID: sibling.id, .good, eventID: UUID(),
+                             expectedRevision: sibling.revision, at: now, using: scheduler)
+
+        try ledger.setPaused(true, ofCard: try #require(cards[paused.id]).id)
+        try ledger.postpone(cardID: try #require(cards[putOff.id]).id,
+                            until: now.addingTimeInterval(86_400))
+
+        let batch = try ledger.practisableCards(limit: 10, dictionary: nil)
+        #expect(batch.contains { $0.noteID == paused.id } == false, "a paused card was offered")
+        #expect(batch.contains { $0.noteID == putOff.id } == false, "a card put off was offered")
+        #expect(batch.filter { $0.noteID == twoPrompts.id }.count == 1,
+                "both prompts of one note in a batch")
+    }
+
+    /// **An eligibility change moves the revision**, because the revision is the compare-and-swap
+    /// that stops a grade computed against one state landing on another — and pausing or putting
+    /// a card off changes whether it may be asked at all. Without it a presentation drawn before
+    /// the change passed the guard and graded a card the reader had just put away.
+    @Test func pausingAndPostponingRefuseAgradeDrawnBeforeThem() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        for (label, put) in [("paused", true), ("postponed", false)] {
+            let note = try save(ledger, "fine-\(label)")
+            let card = try ledger.card(of: note.id, at: now)
+            let drawnAt = card.revision
+            if put {
+                try ledger.setPaused(true, ofCard: card.id)
+            } else {
+                try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
+            }
+            #expect(throws: ReviewError.self, "a \(label) card accepted a grade drawn before it") {
+                try ledger.grade(cardID: card.id, .good, eventID: UUID(),
+                                 expectedRevision: drawnAt, at: self.now, using: scheduler)
+            }
+        }
+    }
+
     /// **Practice is recorded and inert.** It happened — it affects the reader's real memory — and
     /// it moves no schedule and enters no retention figure.
     @Test func practiceChangesNothingAndIsStillWrittenDown() throws {
