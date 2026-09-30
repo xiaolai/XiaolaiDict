@@ -691,6 +691,12 @@
     "Quit XiaolaiDict" : {
 
     },
+    "Read ^[%lld time](inflect: true)" : {
+
+    },
+    "Read ^[%lld time](inflect: true), in this same sentence" : {
+
+    },
     "Read recently" : {
 
     },

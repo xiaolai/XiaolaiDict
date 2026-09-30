@@ -112,10 +112,20 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         drawer.model.delete = { [weak self] entry in
             guard let self, let opening = self.recorder.store else { return }
             Task {
-                do { try await opening.value.delete(lookup: entry.id) }
-                // Logged, not surfaced: the card is already gone from a drawer the reader has
-                // moved on from, and an alert about a history row is worse than the row.
-                catch { self.log.error("could not remove lookup \(entry.id): \(error)") }
+                // **Every row the card stands for, not the one it was drawn from.** A card is one
+                // reading and a reading can be several lookups; deleting only `id` left the rest
+                // in the ledger, and the card the reader had just removed came back on the next
+                // read of the drawer — with a different row behind it. ADR-0033: a destructive
+                // control reaches exactly what its label counts.
+                //
+                // Each row separately, and a failure on one does not abandon the others: a partial
+                // removal that stops halfway is the state that brings the card back.
+                for id in entry.lookupIDs {
+                    do { try await opening.value.delete(lookup: id) }
+                    // Logged, not surfaced: the card is already gone from a drawer the reader has
+                    // moved on from, and an alert about a history row is worse than the row.
+                    catch { self.log.error("could not remove lookup \(id): \(error)") }
+                }
             }
         }
         return drawer

@@ -193,6 +193,36 @@ struct HistoryRemovalTests {
         return model
     }
 
+    /// **The header says words, so it must count words.** It read `totalEntries`, which is one per
+    /// lookup — and a reader meets the same word more than once. Measured on a real ledger
+    /// 2026-09-30: 102 cards over 8 days, 74 words, and 19 cards repeating a word already shown
+    /// that day in the same sentence. Yesterday alone was 9 cards for 4 words.
+    @Test func theHeaderCountsWordsAndTheCardsCountLookups() {
+        let model = model(["delirium", "delirium", "delirium", "malleable", "malleable", "vanish"])
+        #expect(model.totalEntries == 6, "a card is a lookup, and there were six")
+        #expect(model.distinctWords == 3, "the header promised words and gave \(model.distinctWords)")
+    }
+
+    /// Counted over the days the drawer is showing, not over the ledger: a filtered drawer's
+    /// header has to describe the drawer in front of the reader.
+    @Test func theWordCountFollowsWhatTheDrawerIsShowing() {
+        let model = model(["fine", "fine"])
+        #expect(model.distinctWords == 1)
+        model.days = []
+        #expect(model.distinctWords == 0, "an empty drawer still claimed words")
+    }
+
+    /// A word met on two days is one word. The count is over the whole drawer, not per day.
+    @Test func thesameWordOnTwoDaysIsStillOneWord() {
+        let model = HistoryDrawerModel()
+        model.days = [
+            ReadingDay(id: "a", date: .distantPast, label: .today, entries: [entry("hive", id: 1)]),
+            ReadingDay(id: "b", date: .distantPast, label: .yesterday, entries: [entry("hive", id: 2)]),
+        ]
+        #expect(model.totalEntries == 2)
+        #expect(model.distinctWords == 1)
+    }
+
     @Test func aRemovedCardLeavesTheDrawerAtOnce() {
         let model = model(["qqqq", "fine"])
         model.remove(entry("qqqq", id: 1))

@@ -157,3 +157,124 @@ struct ReadingDayPileTests {
         #expect(piled == [true, true])
     }
 }
+
+/// A card for each *reading*, not for each lookup.
+///
+/// A reader meets the same word again, and every meeting used to become its own card. Measured on
+/// a real ledger 2026-09-30: `delirium` five times in 81 seconds in one sentence, `malleable`
+/// twice in 17; 19 of 102 cards repeated a word already on screen that day, and one day drew 9
+/// cards for 4 words.
+struct ReadingRepeatTests {
+    private static func read(
+        _ lemma: String, _ when: Date, id: Int, sentence: String = "The sentence.",
+        ordinal: Int? = 2, of outOf: Int = 2, by chosenBy: SenseChoice? = .model
+    ) -> ReadingEntry {
+        ReadingEntry(
+            id: id, lemma: lemma, surface: lemma, sentence: sentence, sentenceRange: nil,
+            place: ReadingPlace(name: "Chrome"), at: when, result: .found,
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            sense: ordinal.map {
+                SenseNote(dictionary: "NOAD", ordinal: $0, outOf: outOf, gloss: nil, chosenBy: chosenBy)
+            })
+    }
+
+    private static func day(_ entries: [ReadingEntry]) -> ReadingDay {
+        ReadingHistory.days(
+            from: entries, now: at("2026-09-29 23:00"), calendar: calendar("UTC"))[0]
+    }
+
+    /// The reported case, in miniature.
+    @Test func thesameWordInTheSameSentenceIsOneCard() {
+        let day = Self.day([
+            Self.read("delirium", at("2026-09-29 01:03"), id: 96),
+            Self.read("delirium", at("2026-09-29 01:04"), id: 97),
+            Self.read("delirium", at("2026-09-29 01:05"), id: 98),
+        ])
+        #expect(day.entries.count == 1, "drew \(day.entries.count) cards for one reading")
+        #expect(day.entries[0].times == 3)
+        #expect(day.entries[0].id == 98, "the newest reading should front the card")
+        #expect(day.entries[0].repeats == [97, 96], "newest first, and never its own id")
+    }
+
+    /// **The load-bearing half.** A different sentence is a different reading, and folding those
+    /// together would hide where the reader actually met the word.
+    @Test func adifferentSentenceIsADifferentCard() {
+        let day = Self.day([
+            Self.read("hive", at("2026-09-29 10:00"), id: 1, sentence: "A hive of activity."),
+            Self.read("hive", at("2026-09-29 10:01"), id: 2, sentence: "The bees left the hive."),
+        ])
+        #expect(day.entries.count == 2)
+        #expect(day.entries.allSatisfy { $0.times == 1 })
+    }
+
+    /// And a different *sense* of the same word in the same sentence is a disagreement the reader
+    /// is entitled to see, never noise to fold away.
+    @Test func adifferentSenseIsNeverFoldedAway() {
+        let day = Self.day([
+            Self.read("fine", at("2026-09-29 10:00"), id: 1, ordinal: 1),
+            Self.read("fine", at("2026-09-29 10:01"), id: 2, ordinal: 7),
+        ])
+        #expect(day.entries.count == 2, "two senses were drawn as one card")
+    }
+
+    /// **The reader's own tap fronts the group.** All five `delirium` lookups carried one sense
+    /// key and one of them also carried `chosen_by = reader`; a card that showed the newest
+    /// regardless would draw the reader's own confirmation as a guess.
+    @Test func thereadersOwnTapFrontsTheGroup() {
+        let day = Self.day([
+            Self.read("delirium", at("2026-09-29 01:03"), id: 96, by: .model),
+            Self.read("delirium", at("2026-09-29 01:04"), id: 97, by: .reader),
+            Self.read("delirium", at("2026-09-29 01:05"), id: 98, by: .model),
+        ])
+        #expect(day.entries.count == 1)
+        #expect(day.entries[0].id == 97, "the confirmed reading did not front the card")
+        #expect(day.entries[0].sense?.isConfirmed == true)
+        #expect(day.entries[0].repeats.sorted() == [96, 98])
+    }
+
+    /// Nothing is lost: a card answers for every row it stands for, which is what a removal reaches.
+    @Test func acardAnswersForEveryLookupItStandsFor() {
+        let ids = [96, 97, 98, 99, 100]
+        let day = Self.day(ids.enumerated().map { index, id in
+            Self.read("delirium", at("2026-09-29 01:0\(index)"), id: id)
+        })
+        #expect(day.entries.count == 1)
+        #expect(day.entries[0].lookupIDs.sorted() == ids)
+        #expect(Set(day.entries[0].lookupIDs).count == ids.count, "a row was counted twice")
+    }
+
+    /// Days are never crossed — a word read on two days is two cards, under the two dates.
+    @Test func awordMetOnTwoDaysIsTwoCards() {
+        let days = ReadingHistory.days(
+            from: [
+                Self.read("hive", at("2026-09-28 10:00"), id: 1),
+                Self.read("hive", at("2026-09-29 10:00"), id: 2),
+            ],
+            now: at("2026-09-29 23:00"), calendar: calendar("UTC"))
+        #expect(days.count == 2)
+        #expect(days.allSatisfy { $0.entries.count == 1 && $0.entries[0].times == 1 })
+    }
+
+    /// A card sits where its most recent reading does, not where its first did.
+    @Test func acardSitsAtItsNewestReading() {
+        let day = Self.day([
+            Self.read("delirium", at("2026-09-29 09:00"), id: 1),
+            Self.read("vanish", at("2026-09-29 10:00"), id: 2),
+            Self.read("delirium", at("2026-09-29 11:00"), id: 3),
+        ])
+        #expect(day.entries.map(\.lemma) == ["delirium", "vanish"])
+        #expect(day.entries[0].times == 2)
+    }
+
+    /// A reading with no sense still collapses, and one that abstained differently does not.
+    @Test func anAbstentionIsPartOfWhatMakesACardDifferent() {
+        let plain = Self.read("qqqq", at("2026-09-29 10:00"), id: 1, ordinal: nil)
+        let refused = ReadingEntry(
+            id: 2, lemma: "qqqq", surface: "qqqq", sentence: "The sentence.", sentenceRange: nil,
+            place: ReadingPlace(name: "Chrome"), at: at("2026-09-29 10:01"), result: .found,
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            senseAbstention: .refused)
+        #expect(Self.day([plain, plain.standing(for: [])]).entries.count == 1)
+        #expect(Self.day([plain, refused]).entries.count == 2, "a refusal was folded into a silence")
+    }
+}

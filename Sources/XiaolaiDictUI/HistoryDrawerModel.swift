@@ -84,6 +84,20 @@ public final class HistoryDrawerModel {
 
     public var totalEntries: Int { days.reduce(0) { $0 + $1.entries.count } }
 
+    /// How many **words** the history holds, which is not how many cards it draws.
+    ///
+    /// A card is one lookup, and a reader meets the same word more than once: measured on a real
+    /// ledger 2026-09-30, 102 cards over 8 days carried 74 words, and 19 of those cards repeated a
+    /// word already shown that day in the same sentence. The header said "102 words" — it was
+    /// reading `totalEntries`, whose own name says what it counts.
+    ///
+    /// Counted over `days` rather than over the ledger, so a filtered drawer's header describes the
+    /// drawer the reader is looking at. Lemmas, because that is what the ledger keys a word by;
+    /// `surface` would count `vanish` and `vanished` as two.
+    public var distinctWords: Int {
+        Set(days.lazy.flatMap(\.entries).map(\.lemma)).count
+    }
+
     public func isExpanded(_ day: ReadingDay) -> Bool { expandedDays.contains(day.id) }
 
     public func setExpanded(_ expanded: Bool, for day: ReadingDay) {

@@ -129,7 +129,10 @@ struct HistoryDrawerSurface: View {
             if model.isLoading {
                 ProgressView().controlSize(.small)
             } else if model.totalEntries > 0 {
-                Text("^[\(model.totalEntries) word](inflect: true) · ^[\(model.days.count) day](inflect: true)")
+                // **Words, because that is what it says.** This read `totalEntries`, which is a
+                // count of cards — one per lookup — and a reader meets the same word more than
+                // once: 102 cards over 8 days were 74 words on the ledger this was found on.
+                Text("^[\(model.distinctWords) word](inflect: true) · ^[\(model.days.count) day](inflect: true)")
                     .font(.system(size: scale.text.body))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -491,6 +494,7 @@ struct ReadingCardView: View {
             HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
                 Text(entry.lemma)
                     .font(.system(size: scale.text.strong, weight: .semibold))
+                if entry.times > 1 { timesRead }
                 if entry.result != .found { missBadge }
                 Spacer(minLength: scale.space.inline)
                 // Revealed on hover: it is the one control here that destroys something, and a
@@ -643,6 +647,25 @@ struct ReadingCardView: View {
 
     /// A miss is recorded on purpose, and shown as one. It is usually a typo or a stray selection,
     /// and telling that from a real gap is the point.
+    /// **How often this reading was met**, shown only when that is more than once.
+    ///
+    /// Beside the word rather than at the end of the line, because it is about the word: the far
+    /// end is the sense badge, which is about the entry. A numeral and a multiplication sign are
+    /// not prose and compose the same way in every language this ships in, so the mark is
+    /// `verbatim` and the sentence goes in the help and the accessibility label — where it can be
+    /// a sentence.
+    private var timesRead: some View {
+        Text(verbatim: "×\(entry.times)")
+            .font(.system(size: scale.text.micro, weight: .medium))
+            .monospacedDigit()
+            .padding(.horizontal, scale.space.inline)
+            .padding(.vertical, scale.space.tight)
+            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
+            .foregroundStyle(.secondary)
+            .help(Text("Read ^[\(entry.times) time](inflect: true), in this same sentence"))
+            .accessibilityLabel(Text("Read ^[\(entry.times) time](inflect: true)"))
+    }
+
     private var missBadge: some View {
         Text("not found")
             .font(.system(size: scale.text.micro, weight: .medium))
