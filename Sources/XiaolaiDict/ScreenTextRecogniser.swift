@@ -138,7 +138,7 @@ final class ScreenTextRecogniser: Sendable {
             throw RecognitionError.nothingUnderPointer
         }
         guard let read = Self.reading(
-            lines, pick: pick, region: target.region.size,
+            lines, pick: pick, at: cursor, region: target.region.size,
             appName: target.appName, bundleID: target.bundleID)
         else { throw RecognitionError.nothingUnderPointer }
         return read
@@ -151,13 +151,23 @@ final class ScreenTextRecogniser: Sendable {
     /// inline, which meant the quality signals below could only be checked by capturing a real
     /// screen, and so were not checked at all.
     static func reading(
-        _ lines: [RecognisedLine], pick: RecognisedPick, region: CGSize,
+        _ lines: [RecognisedLine], pick: RecognisedPick, at cursor: CGPoint, region: CGSize,
         appName: String?, bundleID: String?
     ) -> Recognition? {
         // A sentence outruns its line, so segment over the whole block of lines around it.
         let block = LineJoiner.block(around: pick.line, in: lines, region: region)
         let blockClipped = CaptureEdge.clips(block.lineIndices.map { lines[$0].box })
-        let offset = block.offsetShift + lines[pick.line].words[pick.word].utf16Offset
+        // **Which token of the run, decided by the pointer.** A run is all Vision can box, so
+        // taking its start meant `/Users/alice/…` answered `Users` wherever in it the reader
+        // pointed, and `state-of-the-art` answered `state`. The bounds-scan and text-marker
+        // dialects already interpolate for exactly this reason (finding 8); this is the third.
+        let run = lines[pick.line].runs[pick.run]
+        let within = CaptureGeometry.characterIndex(
+            at: cursor.x, across: run.box.minX...run.box.maxX, count: run.text.utf16.count)
+        // Nearest, not containing: a separator is one character wide, and landing on the `/` in a
+        // path means beside a word rather than away from one.
+        let start = TextSegmenter.wordStart(nearest: within, in: run.text) ?? 0
+        let offset = block.offsetShift + run.utf16Offset + start
         guard let word = TextSegmenter.word(
             in: block.text, utf16Offset: offset,
             clipped: blockClipped ? [.start, .end] : [])
@@ -354,6 +364,24 @@ final class ScreenTextRecogniser: Sendable {
         return fresh
     }
 
+    /// The maximal runs of non-whitespace in `text` — the unit Vision boxes, and nothing finer.
+    ///
+    /// Not `TextSegmenter.wordRanges`: that is the tokeniser's answer, which splits `well-known`
+    /// and `/Users/alice` into pieces Vision cannot tell apart. The tokeniser still decides what
+    /// the reader is handed; it just does so after the pointer has chosen a character.
+    static func runs(in text: String) -> [Range<String.Index>] {
+        var found: [Range<String.Index>] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard !text[index].isWhitespace else { index = text.index(after: index); continue }
+            var end = index
+            while end < text.endIndex, !text[end].isWhitespace { end = text.index(after: end) }
+            found.append(index..<end)
+            index = end
+        }
+        return found
+    }
+
     private func recognise(_ image: CGImage) throws -> [RecognisedLine] {
         let request = VNRecognizeTextRequest()
         // `.fast` is 10× quicker and truncates words — "rendipity", "repa". For a dictionary a
@@ -371,16 +399,21 @@ final class ScreenTextRecogniser: Sendable {
         return (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
             let text = candidate.string
-            let words = TextSegmenter.wordRanges(in: text).compactMap { range -> RecognisedWord? in
+            // **Runs, not tokeniser words, because that is the granularity Vision has.** Asked for
+            // a sub-range of a run it returns the run's whole box — measured 2026-09-30, six words
+            // of `/Users/alice/github/xiaolai/myprojects/xiaolaidict` all at `x 0.0111 … 0.7667`.
+            // Storing those as six words made every comparison a tie and handed the reader the
+            // leftmost one; `reading` asks the pointer which token it was instead.
+            let runs = Self.runs(in: text).compactMap { range -> RecognisedRun? in
                 guard let box = try? candidate.boundingBox(for: range)?.boundingBox else { return nil }
-                return RecognisedWord(
+                return RecognisedRun(
                     text: String(text[range]),
                     utf16Offset: text.utf16.distance(from: text.startIndex, to: range.lowerBound),
                     box: CaptureGeometry.flippedFromVision(box))
             }
             return RecognisedLine(
                 text: text, box: CaptureGeometry.flippedFromVision(observation.boundingBox),
-                words: words, confidence: Double(candidate.confidence))
+                runs: runs, confidence: Double(candidate.confidence))
         }
     }
 }

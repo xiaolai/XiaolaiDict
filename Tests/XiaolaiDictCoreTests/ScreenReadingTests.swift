@@ -74,25 +74,25 @@ struct CaptureGeometryTests {
 
 /// Picking a word out of recognised lines.
 struct RecognisedTextPickerTests {
-    private static func line(_ text: String, y: CGFloat, words: [(String, CGFloat, CGFloat)]) -> RecognisedLine {
+    private static func line(_ text: String, y: CGFloat, runs: [(String, CGFloat, CGFloat)]) -> RecognisedLine {
         RecognisedLine(
             text: text, box: CGRect(x: 0.05, y: y, width: 0.9, height: 0.05),
-            words: words.map { word, x, width in
-                RecognisedWord(
-                    text: word, utf16Offset: (text as NSString).range(of: word).location,
+            runs: runs.map { run, x, width in
+                RecognisedRun(
+                    text: run, utf16Offset: (text as NSString).range(of: run).location,
                     box: CGRect(x: x, y: y + 0.01, width: width, height: 0.03))
             },
             confidence: 1)
     }
 
     private let lines = [
-        Self.line("the ship's hold", y: 0.1, words: [("the", 0.05, 0.1), ("ship's", 0.2, 0.15), ("hold", 0.4, 0.1)]),
-        Self.line("was full", y: 0.3, words: [("was", 0.05, 0.1), ("full", 0.2, 0.1)]),
+        Self.line("the ship's hold", y: 0.1, runs: [("the", 0.05, 0.1), ("ship's", 0.2, 0.15), ("hold", 0.4, 0.1)]),
+        Self.line("was full", y: 0.3, runs: [("was", 0.05, 0.1), ("full", 0.2, 0.1)]),
     ]
 
     @Test func theWordUnderThePointerIsPicked() {
         let pick = RecognisedTextPicker.pick(at: CGPoint(x: 0.45, y: 0.12), in: lines)
-        #expect(pick == RecognisedPick(line: 0, word: 2))
+        #expect(pick == RecognisedPick(line: 0, run: 2))
     }
 
     /// The **line** box decides vertically: word boxes hug the glyphs, so a pointer above an
@@ -114,7 +114,7 @@ struct RecognisedTextPickerTests {
     @Test func theNearestRealEdgeWinsNotTheNearestCentre() {
         let slack = CGSize(width: 0.06, height: 0)
         let pick = RecognisedTextPicker.pick(at: CGPoint(x: 0.355, y: 0.12), in: lines, slack: slack)
-        #expect(pick == RecognisedPick(line: 0, word: 1), "the long word's edge lost to a short neighbour")
+        #expect(pick == RecognisedPick(line: 0, run: 1), "the long word's edge lost to a short neighbour")
     }
 }
 
@@ -127,7 +127,7 @@ let squareCapture = CGSize(width: 1000, height: 1000)
 
 struct LineJoinerTests {
     private static func line(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) -> RecognisedLine {
-        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: width, height: height), words: [], confidence: 1)
+        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: width, height: height), runs: [], confidence: 1)
     }
 
     /// Wrapped lines of one paragraph join, and the seed's offset shifts by what came before it.
@@ -260,21 +260,63 @@ struct WordAtPointTests {
     }
 }
 
+/// **The nearest word to an offset that was estimated rather than reported.**
+///
+/// `word(in:utf16Offset:)` answers nil off a word, which is right for a source that knows exact
+/// character positions. A pointer interpolated across a run of text is the other case: the `/` in
+/// a path is one character wide, and landing on it means beside a word.
+struct NearestWordStartTests {
+    @Test func anOffsetInsideAWordGivesThatWordsStart() {
+        #expect(TextSegmenter.wordStart(nearest: 3, in: "the ship's hold") == 0)
+        #expect(TextSegmenter.wordStart(nearest: 12, in: "the ship's hold") == 11)
+    }
+
+    /// The case the OCR path needs: every character of `xiaolai` in a path answers `xiaolai`.
+    @Test func everyCharacterOfASegmentAnswersThatSegment() {
+        let path = "/Users/alice/github/xiaolai/myprojects/xiaolaidict"
+        for offset in 20..<27 {
+            #expect(TextSegmenter.wordStart(nearest: offset, in: path) == 20,
+                    "offset \(offset) left the segment it is inside")
+        }
+    }
+
+    /// A separator has a word on each side. It reads left, as a caret does — deterministically,
+    /// rather than by whichever the search happened to reach first.
+    @Test func aSeparatorReadsTheWordToItsLeft() throws {
+        let path = "/Users/alice/github/xiaolai/myprojects/xiaolaidict"
+        #expect(TextSegmenter.wordStart(nearest: 19, in: path) == 13, "the `/` before xiaolai")
+        // The leading `/` has nothing to its left, so the word after it is the nearest.
+        #expect(TextSegmenter.wordStart(nearest: 0, in: path) == 1)
+    }
+
+    @Test func textWithNoWordAtAllAnswersNothing() {
+        #expect(TextSegmenter.wordStart(nearest: 0, in: "///") == nil)
+        #expect(TextSegmenter.wordStart(nearest: 0, in: "") == nil)
+    }
+
+    /// An offset outside the text is still answered: it is an estimate from a pointer, and the
+    /// nearest word is the honest reading of one that overshot.
+    @Test func anOffsetPastTheEndTakesTheLastWord() {
+        #expect(TextSegmenter.wordStart(nearest: 999, in: "the ship's hold") == 11)
+        #expect(TextSegmenter.wordStart(nearest: -5, in: "the ship's hold") == 0)
+    }
+}
+
 /// Found by audit. Each of these was a real failure scenario, and each is pinned by the case that
 /// produced it rather than by a description of it.
 struct ScreenReadingAuditTests {
     private static func line(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) -> RecognisedLine {
-        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: width, height: height), words: [], confidence: 1)
+        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: width, height: height), runs: [], confidence: 1)
     }
 
     private static func wordLine(
-        _ text: String, y: CGFloat, height: CGFloat, words: [(String, CGFloat, CGFloat)]
+        _ text: String, y: CGFloat, height: CGFloat, runs: [(String, CGFloat, CGFloat)]
     ) -> RecognisedLine {
         RecognisedLine(
             text: text, box: CGRect(x: 0.05, y: y, width: 0.9, height: height),
-            words: words.map { word, x, width in
-                RecognisedWord(
-                    text: word, utf16Offset: (text as NSString).range(of: word).location,
+            runs: runs.map { run, x, width in
+                RecognisedRun(
+                    text: run, utf16Offset: (text as NSString).range(of: run).location,
                     box: CGRect(x: x, y: y + height * 0.2, width: width, height: height * 0.6))
             },
             confidence: 1)
@@ -304,7 +346,7 @@ struct ScreenReadingAuditTests {
     @Test func amongLinesEquallyOutsideTheNearestEdgeWins() {
         // A 1000 x 140 pt capture, so a normalised unit is 1000 pt across and 140 pt down.
         let region = CGSize(width: 1_000, height: 140)
-        let a = Self.wordLine("a", y: 0.20, height: 0.05, words: [("aaa", 0.30, 0.10)])
+        let a = Self.wordLine("a", y: 0.20, height: 0.05, runs: [("aaa", 0.30, 0.10)])
         // 1 pt below a's band: outside it, and well inside the 2.8 pt of vertical slack.
         let y = (a.box.maxY * region.height + 1) / region.height
         // b begins 1.05 pt below the pointer — barely further away vertically than a is — but its
@@ -312,19 +354,19 @@ struct ScreenReadingAuditTests {
         // in points: a is hypot(3, 1) = 3.16 pt away and b is 1.05, so b wins.
         let b = Self.wordLine(
             "b", y: (y * region.height + 1.05) / region.height, height: 0.05,
-            words: [("bbb", 0.38, 0.10)])
+            runs: [("bbb", 0.38, 0.10)])
         let point = CGPoint(x: (0.30 * region.width + 0.10 * region.width + 3) / region.width, y: y)
         let picked = RecognisedTextPicker.pick(
             at: point, in: [a, b], slack: CGSize(width: 0.01, height: 0.02), region: region)
-        #expect(picked == RecognisedPick(line: 1, word: 0), "the further word in points was taken")
+        #expect(picked == RecognisedPick(line: 1, run: 0), "the further word in points was taken")
     }
 
     /// Where two slack-widened bands both reach the pointer, the line it is actually *inside* wins.
     /// Ranking on horizontal distance alone let the earlier line take it.
     @Test func thelinethePointerIsInsideWins() {
         let lines = [
-            Self.wordLine("first line", y: 0.10, height: 0.04, words: [("first", 0.3, 0.2)]),
-            Self.wordLine("second line", y: 0.15, height: 0.04, words: [("second", 0.3, 0.2)]),
+            Self.wordLine("first line", y: 0.10, height: 0.04, runs: [("first", 0.3, 0.2)]),
+            Self.wordLine("second line", y: 0.15, height: 0.04, runs: [("second", 0.3, 0.2)]),
         ]
         // y = 0.155 is inside the second line's real band and only inside the first's slack.
         let pick = RecognisedTextPicker.pick(

@@ -30,7 +30,7 @@ struct LineJoinerSplitLineTests {
         -> RecognisedLine {
         RecognisedLine(
             text: text, box: CGRect(x: x, y: top, width: width, height: height),
-            words: [], confidence: 1)
+            runs: [], confidence: 1)
     }
 
     private static let capture = [
@@ -93,7 +93,7 @@ struct RealCaptureBlockTests {
     private static func line(_ text: String, x: CGFloat, width: CGFloat, top: CGFloat, height: CGFloat)
         -> RecognisedLine {
         RecognisedLine(text: text, box: CGRect(x: x, y: top, width: width, height: height),
-                       words: [], confidence: 1)
+                       runs: [], confidence: 1)
     }
 
     static let capture: [RecognisedLine] = [
@@ -103,7 +103,7 @@ struct RealCaptureBlockTests {
         RecognisedLine(
             text: "00C211٢0",
             box: CGRect(x: 0.4230, y: 0.3947, width: 0.0378, height: 0.0526),
-            words: [], confidence: 0.30),
+            runs: [], confidence: 0.30),
         line("they're relabelled and all haven't moved them.", x: 0.0160, width: 0.2180, top: 0.5263, height: 0.1584),
         line("That includes our twelve spare lamp-shade frames,", x: 0.2340, width: 0.2326, top: 0.5263, height: 0.1584),
         line("which are therefore sitting untouched at home right now - worth knowing if", x: 0.0145, width: 0.3503, top: 0.6842, height: 0.1852),
@@ -164,7 +164,7 @@ struct RowGroupingTests {
 
     private static func line(_ text: String, _ x: CGFloat, _ y: CGFloat,
                              _ w: CGFloat = 20, _ h: CGFloat = 10) -> RecognisedLine {
-        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: w, height: h), words: [])
+        RecognisedLine(text: text, box: CGRect(x: x, y: y, width: w, height: h), runs: [])
     }
 
     /// **A fragment that bridges two others must join them, not pick one.** Grouping appended a
@@ -228,9 +228,9 @@ struct RowGroupingTests {
     @Test func confidenceIsScopedToTheSpanItDescribes() {
         let lines = [
             RecognisedLine(text: "A badly read sentence.", box: CGRect(x: 0, y: 0, width: 50, height: 10),
-                           words: [], confidence: 0.30),
+                           runs: [], confidence: 0.30),
             RecognisedLine(text: "A perfectly read one.", box: CGRect(x: 0, y: 12, width: 50, height: 10),
-                           words: [], confidence: 1.0),
+                           runs: [], confidence: 1.0),
         ]
         let block = LineJoiner.block(around: 1, in: lines, region: Self.band)
         let second = try! #require(block.offsets[1])

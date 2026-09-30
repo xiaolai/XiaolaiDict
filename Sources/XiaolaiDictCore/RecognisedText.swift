@@ -3,10 +3,23 @@ import Foundation
 import XiaolaiDictBase
 import os
 
-/// One recognised word. `box` is normalised to the capture: 0...1, top-left origin.
-public struct RecognisedWord: Equatable, Sendable {
+/// One run of non-whitespace text, as recognised. `box` is normalised to the capture: 0...1,
+/// top-left origin.
+///
+/// **A run, not a word, because a run is the finest thing Vision can box.** Measured 2026-09-30:
+/// `VNRecognizedText.boundingBox(for:)` resolves only to whitespace-delimited runs — asked for any
+/// sub-range inside one, it returns that whole run's box. Six tokeniser words cut from
+/// `/Users/alice/github/xiaolai/myprojects/xiaolaidict` all came back as `x 0.0111 … 0.7667`,
+/// and `state-of-the-art` likewise gave one box for four words. Stored per word, those boxes tie
+/// on every comparison and `RecognisedTextPicker` keeps the first — so the pointer's position
+/// inside the run was thrown away and the leftmost token always won.
+///
+/// Which token the reader meant is recovered from the pointer instead, by
+/// `CaptureGeometry.characterIndex` across this box — the arrangement the Accessibility
+/// bounds-scan and text-marker dialects already use, for the same reason.
+public struct RecognisedRun: Equatable, Sendable {
     public let text: String
-    /// Where the word starts in its line, in UTF-16 units.
+    /// Where the run starts in its line, in UTF-16 units.
     public let utf16Offset: Int
     public let box: CGRect
 
@@ -17,11 +30,11 @@ public struct RecognisedWord: Equatable, Sendable {
     }
 }
 
-/// One recognised line and its words, in the same normalised space.
+/// One recognised line and its runs, in the same normalised space.
 public struct RecognisedLine: Equatable, Sendable {
     public let text: String
     public let box: CGRect
-    public let words: [RecognisedWord]
+    public let runs: [RecognisedRun]
     /// Vision's confidence in this line, 0...1.
     ///
     /// **This is the signal that exposes a wrong reading.** Nothing in the geometry or the timings
@@ -29,31 +42,32 @@ public struct RecognisedLine: Equatable, Sendable {
     /// panel rendered it as confidently as a correct reading (finding 6b).
     public let confidence: Double
 
-    public init(text: String, box: CGRect, words: [RecognisedWord], confidence: Double = 1) {
+    public init(text: String, box: CGRect, runs: [RecognisedRun], confidence: Double = 1) {
         self.text = text
         self.box = box
-        self.words = words
+        self.runs = runs
         self.confidence = confidence
     }
 }
 
-/// Which word of which line the pointer landed on.
+/// Which run of which line the pointer landed on. **Not which word** — a run holds several where
+/// the writing packs them without spaces, and only the pointer can say which of those was meant.
 public struct RecognisedPick: Equatable, Sendable {
     public let line: Int
-    public let word: Int
+    public let run: Int
 
-    public init(line: Int, word: Int) {
+    public init(line: Int, run: Int) {
         self.line = line
-        self.word = word
+        self.run = run
     }
 }
 
 public enum RecognisedTextPicker {
-    /// The word under `point` — normalised, top-left origin — or nil between words or lines.
+    /// The run under `point` — normalised, top-left origin — or nil between runs or lines.
     ///
-    /// The *line* box decides vertically, because word boxes hug the glyphs and a pointer above an
+    /// The *line* box decides vertically, because run boxes hug the glyphs and a pointer above an
     /// x-height letter would otherwise miss. `slack` widens every box so box rounding and tight
-    /// letter gaps still hit; where widened boxes overlap, the word whose real edge is nearest wins.
+    /// letter gaps still hit; where widened boxes overlap, the run whose real edge is nearest wins.
     /// `region` is the capture's size in points. Given it, distances are compared in **points**
     /// rather than in normalised units, which are not square — a capture is far wider than it is
     /// tall, so a normalised vertical and a normalised horizontal are simply different quantities.
@@ -67,12 +81,12 @@ public enum RecognisedTextPicker {
             guard band.minY <= point.y, point.y <= band.maxY else { continue }
             // Distance to the line's **real** band, before slack. Ranking on the horizontal alone
             // let an earlier line whose widened band merely reaches the pointer beat the line the
-            // pointer is actually inside, whenever both had a word at that x.
+            // pointer is actually inside, whenever both had a run at that x.
             let vertical = max(line.box.minY - point.y, 0, point.y - line.box.maxY)
-            for (w, word) in line.words.enumerated() {
-                let span = word.box.insetBy(dx: -slack.width, dy: 0)
+            for (r, run) in line.runs.enumerated() {
+                let span = run.box.insetBy(dx: -slack.width, dy: 0)
                 guard span.minX <= point.x, point.x <= span.maxX else { continue }
-                let horizontal = max(word.box.minX - point.x, 0, point.x - word.box.maxX)
+                let horizontal = max(run.box.minX - point.x, 0, point.x - run.box.maxX)
                 // Two ranks, and no weight between them. First: is the pointer *inside* this
                 // line's real band? That is the question a reader would answer, and it settles
                 // every ordinary case outright. Only among lines that are equally inside — or
@@ -86,7 +100,7 @@ public enum RecognisedTextPicker {
                 let dy = region.height > 0 ? vertical * region.height : 0
                 let distance = hypot(dx, dy)
                 if best.map({ (inside, distance) < ($0.inside, $0.distance) }) ?? true {
-                    best = (RecognisedPick(line: l, word: w), inside, distance)
+                    best = (RecognisedPick(line: l, run: r), inside, distance)
                 }
             }
         }
@@ -259,7 +273,7 @@ public enum LineJoiner {
             for member in row.members { offsets[member] = at + row.offset(of: member) }
             // The seed is an *observation*, and its row may hold fragments before it — so the shift
             // is where the row starts plus where the observation starts inside the row. Pointing at
-            // the row would put the word's offset before text that precedes it on the same line.
+            // the row would put the run's offset before text that precedes it on the same line.
             if position == seed { shift = at + row.offset(of: index) }
         }
         let joined = members.flatMap { rows[$0].members }
@@ -359,24 +373,24 @@ public enum LineJoiner {
         let members = group.sorted { lines[$0].box.minX < lines[$1].box.minX }
         var text = ""
         var offsets: [Int: Int] = [:]
-        var words: [RecognisedWord] = []
+        var runs: [RecognisedRun] = []
         var union = lines[members[0]].box
         for member in members {
             let at = append(lines[member].text, to: &text)
             offsets[member] = at
-            // **Rebased.** A word's offset is into its own fragment; in the row it has to be into
-            // the row. Flat-mapping them unchanged left every word after the first claiming a
+            // **Rebased.** A run's offset is into its own fragment; in the row it has to be into
+            // the row. Flat-mapping them unchanged left every run after the first claiming a
             // position that is not its own — latent today, because the pick reads the original
             // observation, and a trap for the next reader who does not know that.
-            words += lines[member].words.map {
-                RecognisedWord(text: $0.text, utf16Offset: at + $0.utf16Offset, box: $0.box)
+            runs += lines[member].runs.map {
+                RecognisedRun(text: $0.text, utf16Offset: at + $0.utf16Offset, box: $0.box)
             }
             union = union.union(lines[member].box)
         }
         return Row(
             members: members,
             line: RecognisedLine(
-                text: text, box: union, words: words,
+                text: text, box: union, runs: runs,
                 confidence: members.map { lines[$0].confidence }.min() ?? 1),
             offsets: offsets)
     }

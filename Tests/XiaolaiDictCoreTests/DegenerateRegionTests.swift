@@ -41,7 +41,7 @@ struct BlockWithNoRegionTests {
         let box = CGRect(x: x, y: y, width: 0.1, height: 0.02)
         return RecognisedLine(
             text: text, box: box,
-            words: [RecognisedWord(text: text, utf16Offset: 0, box: box)])
+            runs: [RecognisedRun(text: text, utf16Offset: 0, box: box)])
     }
 
     @Test func azeroRegionGivesTheSeedLineAloneRatherThanEndingTheProcess() {

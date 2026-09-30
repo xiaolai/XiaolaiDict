@@ -121,6 +121,34 @@ public enum TextSegmenter {
         return WordAtPoint(word: word, sentence: sentence)
     }
 
+    /// Where the word at `utf16Offset` starts, UTF-16 — or the nearest word's start when the offset
+    /// falls between words.
+    ///
+    /// **For a caller that estimated the offset rather than being told it.** `word(in:utf16Offset:)`
+    /// answers nil off a word, which is right for a source that reports exact character positions:
+    /// there genuinely is no word at a margin. A pointer interpolated across a run of text is a
+    /// different case — the separator in `/Users/alice` is one character wide and landing on it
+    /// means *beside* a word, not away from one.
+    ///
+    /// Nil when `text` holds no word at all, which is the only answer a caller can act on.
+    public static func wordStart(nearest utf16Offset: Int, in text: String) -> Int? {
+        let starts = wordRanges(in: text).map { range -> (start: Int, end: Int) in
+            (text.utf16.distance(from: text.startIndex, to: range.lowerBound),
+             text.utf16.distance(from: text.startIndex, to: range.upperBound))
+        }
+        guard !starts.isEmpty else { return nil }
+        // Distance to the word's span, zero inside it — the same nearest-edge rule `HitTolerance`
+        // applies to boxes, in characters rather than points. `min(by:)` keeps the earlier word on
+        // a tie, so a separator with a word on each side reads left, as a caret does.
+        return starts.min {
+            Self.distance(from: utf16Offset, to: $0) < Self.distance(from: utf16Offset, to: $1)
+        }?.start
+    }
+
+    private static func distance(from offset: Int, to word: (start: Int, end: Int)) -> Int {
+        max(word.start - offset, 0, offset - (word.end - 1))
+    }
+
     private static func tokens(_ unit: NLTokenUnit, in text: String) -> [Range<String.Index>] {
         let tokenizer = NLTokenizer(unit: unit)
         tokenizer.string = text

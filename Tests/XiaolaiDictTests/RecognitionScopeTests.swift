@@ -14,13 +14,24 @@ import XiaolaiDictCore
 struct RecognitionScopeTests {
     private static let region = CGSize(width: 1000, height: 1000)
 
+    /// A cursor at the left edge of the run the pick names.
+    ///
+    /// These tests are about the *scope* of the quality signals, not about which token of a run
+    /// the reader meant — so they point at the run's first character, which is the reading the
+    /// recogniser used to give wherever in a run the pointer was. `ScreenTextRecogniserRunTests`
+    /// is where the choice itself is asserted.
+    private static func atRun(_ pick: RecognisedPick, in lines: [RecognisedLine]) -> CGPoint {
+        let box = lines[pick.line].runs[pick.run].box
+        return CGPoint(x: box.minX, y: box.midY)
+    }
+
     private static func fragment(
         _ text: String, x: CGFloat, width: CGFloat, confidence: Double
     ) -> RecognisedLine {
         let box = CGRect(x: x, y: 0, width: width, height: 10)
         return RecognisedLine(
             text: text, box: box,
-            words: [RecognisedWord(text: text, utf16Offset: 0, box: box)],
+            runs: [RecognisedRun(text: text, utf16Offset: 0, box: box)],
             confidence: confidence)
     }
 
@@ -30,8 +41,9 @@ struct RecognitionScopeTests {
             Self.fragment("学", x: 0, width: 10, confidence: 0.30),
             Self.fragment("习。", x: 10.5, width: 20, confidence: 1.0),
         ]
+        let pick = RecognisedPick(line: 1, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            lines, pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            lines, pick: pick, at: Self.atRun(pick, in: lines), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.word.sentence.text == "学习。", "the row did not join: \(read.word.sentence.text)")
         #expect(read.confidence == 0.30, "reported \(read.confidence) for a sentence half read at 0.30")
@@ -42,16 +54,17 @@ struct RecognitionScopeTests {
     @Test func aNeighbouringBadSentenceDoesNotMakeThisOneDoubtful() throws {
         let bad = RecognisedLine(
             text: "Rubbish here.", box: CGRect(x: 0, y: 0, width: 50, height: 10),
-            words: [RecognisedWord(text: "Rubbish", utf16Offset: 0,
+            runs: [RecognisedRun(text: "Rubbish", utf16Offset: 0,
                                    box: CGRect(x: 0, y: 0, width: 20, height: 10))],
             confidence: 0.30)
         let good = RecognisedLine(
             text: "The ship's hold was full.", box: CGRect(x: 0, y: 12, width: 50, height: 10),
-            words: [RecognisedWord(text: "hold", utf16Offset: 11,
+            runs: [RecognisedRun(text: "hold", utf16Offset: 11,
                                    box: CGRect(x: 20, y: 12, width: 10, height: 10))],
             confidence: 1.0)
+        let pick = RecognisedPick(line: 1, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            [bad, good], pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            [bad, good], pick: pick, at: Self.atRun(pick, in: [bad, good]), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.word.sentence.text.contains("ship"), "\(read.word.sentence.text)")
         #expect(read.confidence == 1.0, "a good sentence was marked \(read.confidence) by its neighbour")
@@ -64,8 +77,9 @@ struct RecognitionScopeTests {
             Self.fragment("学", x: 0, width: 10, confidence: 1.0),
             Self.fragment("习。", x: 10.5, width: 20, confidence: 1.0),
         ]
+        let pick = RecognisedPick(line: 1, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            lines, pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            lines, pick: pick, at: Self.atRun(pick, in: lines), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.mayBeCut == read.word.sentence.mayBeCut,
                 "Recognition says \(read.mayBeCut), the sentence says \(read.word.sentence.mayBeCut)")
@@ -82,11 +96,12 @@ extension RecognitionScopeTests {
         let good = Self.fragment("学习。", x: 0, width: 30, confidence: 1.0)
         let bad = RecognisedLine(
             text: "学习。", box: CGRect(x: 30.5, y: 0, width: 30, height: 10),
-            words: [RecognisedWord(text: "学习", utf16Offset: 0,
+            runs: [RecognisedRun(text: "学习", utf16Offset: 0,
                                    box: CGRect(x: 30.5, y: 0, width: 20, height: 10))],
             confidence: 0.30)
+        let pick = RecognisedPick(line: 1, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            [good, bad], pick: RecognisedPick(line: 1, word: 0), region: Self.region,
+            [good, bad], pick: pick, at: Self.atRun(pick, in: [good, bad]), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.confidence == 0.30,
                 "the sentence before the pointer was scored instead: \(read.confidence)")
@@ -103,10 +118,11 @@ extension RecognitionScopeTests {
         let box = CGRect(x: 0, y: 0, width: 1, height: 10)
         let line = RecognisedLine(
             text: text, box: box,
-            words: [RecognisedWord(text: "Middle", utf16Offset: middle.location, box: box)],
+            runs: [RecognisedRun(text: "Middle", utf16Offset: middle.location, box: box)],
             confidence: 1.0)
+        let pick = RecognisedPick(line: 0, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            [line], pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            [line], pick: pick, at: Self.atRun(pick, in: [line]), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.word.sentence.text.contains("Middle"), "\(read.word.sentence.text)")
         #expect(read.mayBeCut == read.word.sentence.mayBeCut, "the two answers disagree")
@@ -126,15 +142,16 @@ extension RecognitionScopeTests {
             let at = (text as NSString).range(of: word)
             return RecognisedLine(
                 text: text, box: box,
-                words: [RecognisedWord(text: word, utf16Offset: at.location, box: box)],
+                runs: [RecognisedRun(text: word, utf16Offset: at.location, box: box)],
                 confidence: 1.0)
         }
         let lines = [
             line("First sentence. The reader saw", y: 0.200, word: "reader"),
             line("a sentence missing words. Last sentence.", y: 0.225, word: "sentence"),
         ]
+        let pick = RecognisedPick(line: 0, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            lines, pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            lines, pick: pick, at: Self.atRun(pick, in: lines), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.word.sentence.text.contains("reader saw"), "\(read.word.sentence.text)")
         #expect(read.mayBeCut, "a sentence spliced across a cut edge was reported whole")
@@ -148,7 +165,7 @@ extension RecognitionScopeTests {
         let at = (text as NSString).range(of: word)
         return RecognisedLine(
             text: text, box: box,
-            words: [RecognisedWord(text: word, utf16Offset: at.location, box: box)],
+            runs: [RecognisedRun(text: word, utf16Offset: at.location, box: box)],
             confidence: 1.0)
     }
 
@@ -161,8 +178,9 @@ extension RecognitionScopeTests {
             Self.edged("First sentence. The reader", word: "reader", x: 0.0, width: 0.400, y: 0.2),
             Self.edged("saw a complete sentence. Last sentence.", word: "saw", x: 0.405, width: 0.400, y: 0.2),
         ]
+        let pick = RecognisedPick(line: 0, run: 0)
         let read = try #require(ScreenTextRecogniser.reading(
-            lines, pick: RecognisedPick(line: 0, word: 0), region: Self.region,
+            lines, pick: pick, at: Self.atRun(pick, in: lines), region: Self.region,
             appName: nil, bundleID: nil))
         #expect(read.word.sentence.text.contains("reader"), "\(read.word.sentence.text)")
         #expect(!read.mayBeCut, "a sentence cut nowhere was reported as possibly cut")
@@ -171,13 +189,13 @@ extension RecognitionScopeTests {
     /// **And the two answers are one value**, whatever it is — they were computed separately and
     /// could disagree, which is what the reader sees when `HoverReader` reads the outer one.
     @Test func theSentenceCarriesTheSameAnswerAsTheRecognition() throws {
-        for pick in [RecognisedPick(line: 0, word: 0), RecognisedPick(line: 1, word: 0)] {
+        for pick in [RecognisedPick(line: 0, run: 0), RecognisedPick(line: 1, run: 0)] {
             let lines = [
                 Self.edged("First sentence. The reader saw", word: "reader", x: 0.1, width: 0.9, y: 0.200),
                 Self.edged("a sentence missing words. Last sentence.", word: "sentence", x: 0.1, width: 0.9, y: 0.225),
             ]
             let read = try #require(ScreenTextRecogniser.reading(
-                lines, pick: pick, region: Self.region, appName: nil, bundleID: nil))
+                lines, pick: pick, at: Self.atRun(pick, in: lines), region: Self.region, appName: nil, bundleID: nil))
             #expect(read.mayBeCut == read.word.sentence.mayBeCut,
                     "pick \(pick): Recognition says \(read.mayBeCut), the sentence says \(read.word.sentence.mayBeCut)")
         }
