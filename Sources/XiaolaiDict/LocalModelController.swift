@@ -326,6 +326,14 @@ final class LocalModelController {
     /// Which model the reader has chosen to answer, or nil where they have not said.
     private(set) var wanted: LocalModelSize?
 
+    /// What the switch lists: each model on disk with what it occupies. **Measured rather than
+    /// taken from the manifest**, because what the reader is weighing is the space it is using.
+    var onDiskModels: [LocalModelChoice.InstalledModel] {
+        installedSizes.map {
+            LocalModelChoice.InstalledModel(size: $0, bytes: manifest($0).totalBytes)
+        }
+    }
+
     /// Every model on disk this Mac can be offered, smallest first — what the switch lists.
     var installedSizes: [LocalModelSize] {
         store.installedManifests(among: offered.map(manifest)).map(\.size).sorted()
@@ -382,7 +390,12 @@ final class LocalModelController {
             decline: { [weak self] in self?.decline() },
             cancel: { [weak self] in self?.cancelDownload() },
             source: source,
-            chooseSource: { [weak self] in self?.chooseSource($0) })
+            chooseSource: { [weak self] in self?.chooseSource($0) },
+            onDisk: onDiskModels,
+            chosen: wanted,
+            answering: answeringChoice,
+            choose: { [weak self] in self?.choose($0) },
+            removeModel: { [weak self] in self?.remove($0) })
     }
 }
 

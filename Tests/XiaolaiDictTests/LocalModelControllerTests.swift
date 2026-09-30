@@ -415,6 +415,29 @@ struct LocalModelControllerTests {
         #expect(store.installed(Self.manifest(.large)) != nil)
     }
 
+    /// **The switch the board draws is the controller's, not a copy of it.** A control that
+    /// lists models nothing can choose, or whose buttons reach nothing, is the defect this
+    /// project keeps finding — so the board's own handles are exercised here.
+    @Test func theboardsSwitchReachesTheController() async {
+        let (controller, store) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+
+        #expect(controller.choice.onDisk.map(\.size) == [.standard, .large])
+        #expect(controller.choice.onDisk.allSatisfy { $0.bytes > 0 }, "a row with no size to weigh")
+        controller.choice.choose(.standard)
+        #expect(controller.choice.chosen == .standard, "the board's own switch reached nothing")
+        #expect(controller.choice.answering.answering == .standard)
+
+        controller.choice.removeModel(.standard)
+        for _ in 0..<200 where store.installed(Self.manifest(.standard)) != nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.installed(Self.manifest(.standard)) == nil, "the board's Remove reached nothing")
+    }
+
     /// **The case the whole change exists for**, end to end: the reader chose 9B, the Mac is too
     /// busy to load it, and the 4B they still have answers — named as standing in, so the card
     /// cannot read as the answer they asked for. Before, the 4B had been deleted and there was

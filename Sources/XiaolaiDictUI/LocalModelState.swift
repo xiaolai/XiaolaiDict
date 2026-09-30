@@ -62,16 +62,47 @@ public struct LocalModelChoice {
     /// the default measures both hosts, so most will never touch it.
     public var source: ModelSource
     public var chooseSource: @MainActor (ModelSource) -> Void
+    /// Every model on disk, smallest first, with what it occupies. **The list is the switch**:
+    /// a reader with two models can move between them without downloading anything.
+    public var onDisk: [InstalledModel]
+    /// Which one the reader has chosen, or nil where they have not said.
+    public var chosen: LocalModelSize?
+    /// The model that will actually answer, and whether it is the one that was asked for.
+    public var answering: ModelChoice
+    public var choose: @MainActor (LocalModelSize?) -> Void
+    public var removeModel: @MainActor (LocalModelSize) -> Void
+
+    /// A model on this Mac, as the switch lists it.
+    public struct InstalledModel: Sendable, Equatable, Identifiable {
+        public let size: LocalModelSize
+        /// Bytes on disk, so the reader can weigh keeping it against what it costs them.
+        public let bytes: Int64
+        public var id: LocalModelSize { size }
+        public init(size: LocalModelSize, bytes: Int64) {
+            self.size = size
+            self.bytes = bytes
+        }
+    }
 
     public init(
         state: LocalModelState, declined: Bool, offered: [LocalModelSize], recommended: LocalModelSize?,
         download: @escaping @MainActor (LocalModelSize) -> Void, decline: @escaping @MainActor () -> Void,
         cancel: @escaping @MainActor () -> Void,
         source: ModelSource = .fastest,
-        chooseSource: @escaping @MainActor (ModelSource) -> Void = { _ in }
+        chooseSource: @escaping @MainActor (ModelSource) -> Void = { _ in },
+        onDisk: [InstalledModel] = [],
+        chosen: LocalModelSize? = nil,
+        answering: ModelChoice = .none(wanted: nil),
+        choose: @escaping @MainActor (LocalModelSize?) -> Void = { _ in },
+        removeModel: @escaping @MainActor (LocalModelSize) -> Void = { _ in }
     ) {
         self.source = source
         self.chooseSource = chooseSource
+        self.onDisk = onDisk
+        self.chosen = chosen
+        self.answering = answering
+        self.choose = choose
+        self.removeModel = removeModel
         self.state = state
         self.declined = declined
         self.offered = offered

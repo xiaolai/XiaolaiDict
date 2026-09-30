@@ -460,6 +460,43 @@ public struct SetupView: View {
         }
     }
 
+    /// **The models on this Mac, and which one answers.** Shown only where there is a choice to
+    /// make — one model is not a switch, it is a label — and each row says what it occupies, so
+    /// keeping it can be weighed against what it costs.
+    @ViewBuilder private func modelSwitch(_ localModel: LocalModelChoice) -> some View {
+        if localModel.onDisk.count > 1 {
+            VStack(alignment: .leading, spacing: scale.space.inline) {
+                ForEach(localModel.onDisk) { model in
+                    HStack(spacing: scale.space.inline) {
+                        Button {
+                            localModel.choose(model.size)
+                        } label: {
+                            Label(
+                                model.size.displayName,
+                                systemImage: localModel.chosen == model.size
+                                    ? "largecircle.fill.circle" : "circle")
+                        }
+                        .buttonStyle(.plain)
+                        Text(Self.bytes(model.bytes))
+                            .font(.system(size: scale.text.micro))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Button("Remove") { localModel.removeModel(model.size) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: scale.text.micro))
+                    }
+                }
+                // **Said where it is true, and only then.** A reader comparing answers must know
+                // when the one in front of them is not from the model they chose.
+                if case .standingIn(let answering, let wanted) = localModel.answering {
+                    Text("\(wanted.displayName) needs more free memory than this Mac has right now, so \(answering.displayName) is answering.")
+                        .font(.system(size: scale.text.micro))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     /// **Where the weights come from.** Offered beside the download, which is the one moment it
     /// matters — and the default measures both hosts, so a reader who has no opinion never needs
     /// one. Named for what each does rather than for the companies: "fastest" is the answer to
@@ -482,6 +519,8 @@ public struct SetupView: View {
     /// Not now, one click away, for as long as there is something to download.
     @ViewBuilder private var modelActions: some View {
         if let localModel {
+            VStack(alignment: .leading, spacing: scale.space.inline) {
+            modelSwitch(localModel)
             HStack(spacing: scale.space.stack) {
                 switch localModel.state {
                 case .downloading:
@@ -513,6 +552,7 @@ public struct SetupView: View {
                 }
             }
             .controlSize(.small)
+            }
         }
     }
 

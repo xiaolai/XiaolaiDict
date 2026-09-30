@@ -44,6 +44,16 @@
     "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
 
     },
+    "%@ needs more free memory than this Mac has right now, so %@ is answering." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ needs more free memory than this Mac has right now, so %2$@ is answering."
+          }
+        }
+      }
+    },
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
 
     },
