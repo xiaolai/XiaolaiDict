@@ -203,6 +203,32 @@ struct HistoryRemovalTests {
         #expect(model.distinctWords == 3, "the header promised words and gave \(model.distinctWords)")
     }
 
+    /// **Three numbers, and the order between them can never break.** A card stands for one lookup
+    /// or several, so lookups can never be fewer than cards; and a card holds one word, so words
+    /// can never be more than cards. `--history-report` publishes all three and the drawer stage
+    /// checks the ordering, because a collapse that invented a card would look right on screen.
+    @Test func theThreeCountsCannotContradictEachOther() {
+        // Stated rather than collapsed: `ReadingHistory.days` is where the folding is tested, and
+        // this is about the three counts agreeing whatever the drawer was handed.
+        func card(_ lemma: String, id: Int, repeats: [Int] = []) -> ReadingEntry {
+            ReadingEntry(
+                id: id, lemma: lemma, surface: lemma, sentence: "A sentence.", sentenceRange: nil,
+                place: ReadingPlace(name: "TextEdit"), at: .distantPast, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: .complete),
+                repeats: repeats)
+        }
+        let model = HistoryDrawerModel()
+        model.days = [ReadingDay(
+            id: "d", date: .distantPast, label: .today,
+            entries: [card("delirium", id: 1, repeats: [2]), card("malleable", id: 3),
+                      card("vanish", id: 4)])]
+        #expect(model.totalEntries == 3, "cards")
+        #expect(model.totalLookups == 4, "the lookups those cards stand for")
+        #expect(model.distinctWords == 3, "words")
+        #expect(model.totalLookups >= model.totalEntries)
+        #expect(model.distinctWords <= model.totalEntries)
+    }
+
     /// Counted over the days the drawer is showing, not over the ledger: a filtered drawer's
     /// header has to describe the drawer in front of the reader.
     @Test func theWordCountFollowsWhatTheDrawerIsShowing() {

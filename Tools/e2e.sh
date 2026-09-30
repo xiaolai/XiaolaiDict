@@ -1267,11 +1267,18 @@ else
     # here would mean the ledger read silently returned nothing.
     if why=$(expect "$drawer" problem=none 2>&1); then
         days=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["days"])' "$drawer")
-        entries=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["entries"])' "$drawer")
-        if [ "$entries" -gt 0 ]; then
-            pass "drawer: shows $entries lookup(s) across $days day(s) from the ledger"
-        else
+        readings=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["readings"])' "$drawer")
+        lookups=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["lookups"])' "$drawer")
+        words=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["words"])' "$drawer")
+        if [ "$readings" -le 0 ]; then
             flunk "drawer: the ledger has rows from earlier stages but the drawer showed none"
+        # **A card is a reading and stands for one lookup or several**, so there can never be fewer
+        # lookups than cards. Fewer would mean the collapse invented a card, which is the one way
+        # the grouping can be wrong that a reader would never see: the cards would look right.
+        elif [ "$lookups" -lt "$readings" ] || [ "$words" -gt "$readings" ]; then
+            flunk "drawer: $readings card(s) stand for $lookups lookup(s) and hold $words word(s), which cannot all be true"
+        else
+            pass "drawer: shows $readings reading(s) — $lookups lookup(s), $words word(s) — across $days day(s)"
         fi
     else
         flunk "drawer: $why"

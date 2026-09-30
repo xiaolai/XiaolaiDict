@@ -84,6 +84,14 @@ public final class HistoryDrawerModel {
 
     public var totalEntries: Int { days.reduce(0) { $0 + $1.entries.count } }
 
+    /// How many **lookups** the cards stand for — always at least `totalEntries`, and more wherever
+    /// a reading was met again. Three numbers describe this drawer and they are all different:
+    /// cards, the lookups behind them, and the words. Reported by `--history-report` so a stage can
+    /// compare them; nothing on screen shows it.
+    public var totalLookups: Int {
+        days.reduce(0) { $0 + $1.entries.reduce(0) { $0 + $1.times } }
+    }
+
     /// How many **words** the history holds, which is not how many cards it draws.
     ///
     /// A card is one lookup, and a reader meets the same word more than once: measured on a real

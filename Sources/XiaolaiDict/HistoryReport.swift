@@ -90,7 +90,13 @@ enum HistoryReport {
             "claimedEscapeWhileShown": claimedEscape,
             "releasedEscapeAfterClosing": released,
             "days": app.drawerModel.days.count,
-            "entries": app.drawerModel.totalEntries,
+            // **Three numbers, because they are three different things.** This published one, named
+            // `entries`, and a card became one *reading* rather than one lookup — so the stage went
+            // on printing "shows 6 lookup(s)" for a number that had stopped counting lookups. That
+            // is the `totalEntries`-drawn-as-"words" defect a second time, in the instrument.
+            "readings": app.drawerModel.totalEntries,
+            "lookups": app.drawerModel.totalLookups,
+            "words": app.drawerModel.distinctWords,
             "problem": app.drawerModel.problem ?? "none",
             // Whether the drawer lets what is behind it through — the one property "glass" names,
             // and one nothing measured until the reader saw a flat grey panel on screen. Reported,
