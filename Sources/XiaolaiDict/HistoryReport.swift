@@ -156,8 +156,14 @@ enum HistoryReport {
         let glassOverBlack: Int?
 
         /// `black` and `white` are the same region's luminance, pixel for pixel, over each backdrop.
-        init(black: [UInt8], white: [UInt8]) {
-            precondition(black.count == white.count, "two captures of one region differ in size")
+        ///
+        /// **Nil where they are not the same size**, which was a `precondition`: `zip` stops at the
+        /// shorter while `changedFraction` divides by `black.count`, so an unequal pair would report a
+        /// fraction of the wrong denominator. That is worth refusing and not worth ending the process
+        /// for — this instrument already has a shape for a reading it could not take, and
+        /// `BackdropOutcome.unmeasured` is it.
+        init?(black: [UInt8], white: [UInt8]) {
+            guard black.count == white.count else { return nil }
             let glass = zip(black, white).filter { abs(Int($0) - Int($1)) > Self.changedBy }.map(\.0)
             changedFraction = black.isEmpty ? 0 : Double(glass.count) / Double(black.count)
             glassOverBlack = glass.isEmpty ? nil : Int(glass.sorted()[glass.count / 2])
@@ -318,8 +324,14 @@ enum HistoryReport {
             stripes = .unmeasured("\(error)")
         }
         let problems = carried + [black.1, white.1, stripesEvidence].compactMap { $0 }
+        // Two captures of one region that came back different sizes are a reading nobody has, and
+        // `unmeasured` is what this instrument says about those — it used to be a `precondition`.
+        guard let reading = BackdropReading(black: black.0.luminance, white: white.0.luminance) else {
+            return .unmeasured("the black and white captures of one region differ in size: "
+                               + "\(black.0.luminance.count) against \(white.0.luminance.count)")
+        }
         return .measured(
-            BackdropReading(black: black.0.luminance, white: white.0.luminance),
+            reading,
             stripes: stripes, evidenceProblem: problems.isEmpty ? nil : problems.joined(separator: "; "))
     }
 
