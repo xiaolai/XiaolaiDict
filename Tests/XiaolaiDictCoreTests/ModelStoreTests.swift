@@ -118,6 +118,18 @@ struct ModelStoreTests {
     }
 
     /// A two-file model whose listing matches `bodies` unless told otherwise.
+    /// Writes a manifest into the store as a finished install: every file, and the marker.
+    static func install(_ manifest: ModelManifest, into store: ModelStore) throws {
+        let directory = store.directory(for: manifest)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for file in manifest.files {
+            try Data(count: Int(file.size)).write(to: directory.appending(path: file.path))
+        }
+        try ModelStore.markerText(for: manifest)
+            .write(to: directory.appending(path: ModelStore.completionMarker),
+                   atomically: true, encoding: .utf8)
+    }
+
     private static func manifest(_ bodies: [String: Data], listedAs listed: [String: Data]? = nil) -> ModelManifest {
         let files = bodies.keys.sorted().map { path in
             let body = (listed ?? bodies)[path]!
@@ -534,6 +546,41 @@ struct ModelStoreTests {
         #expect(Set(transport.hostsAsked.withLock { $0 }) == [.modelScope])
     }
 
+    /// **A model the reader downloaded is never removed to make room for another.** Pruning to a
+    /// single model deleted a working 4B the moment a 9B landed — and on a 32 GB Mac the 9B needs
+    /// 6.6 GB free, so a busy machine was then left with nothing that could answer at all. What a
+    /// prune is for is a *superseded* revision and a directory nobody asked for, neither of which
+    /// the reader chose.
+    @Test func aprunKeepsEveryModelTheReaderHasAndRemovesTheRest() throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let small = Self.manifest(Self.bodies)
+        let large = ModelManifest(size: .large, repository: "test/model", revision: "xyz",
+                                  files: small.files)
+        // A superseded revision of the small one: same repository, a commit that is no longer pinned.
+        let stale = ModelManifest(size: .standard, repository: "test/model", revision: "old",
+                                  files: small.files)
+        for manifest in [small, large, stale] { try Self.install(manifest, into: store) }
+        #expect(store.installed(small) != nil && store.installed(large) != nil)
+
+        let left = store.removeStrays(keeping: [small, large])
+        #expect(left.isEmpty, "\(left)")
+        #expect(store.installed(small) != nil, "the model the reader was using was deleted")
+        #expect(store.installed(large) != nil, "the model the reader had just downloaded was deleted")
+        #expect(store.installed(stale) == nil, "a superseded revision was kept")
+    }
+
+    /// Keeping nothing removes nothing: a caller that knows of no model is a caller with nothing
+    /// to say about the store, not an instruction to empty it.
+    @Test func aprunThatKnowsOfNoModelRemovesNothing() throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        try Self.install(manifest, into: store)
+        _ = store.removeStrays(keeping: [])
+        #expect(store.installed(manifest) != nil, "an empty keep-set emptied the store")
+    }
+
     /// **A model's identity is frozen.** `identifier` names the install directory and the
     /// completion marker embeds every file's path, size and hash — so reordering `files`,
     /// repinning one, or adding a host's revision to the identity makes every installed model
@@ -661,11 +708,11 @@ struct ModelStoreTests {
         let held = try #require(InstallLock(store.lockFile(for: keeper)))
         // A prune that did not run says so: an empty answer would read as "the store is as this pin
         // wants it", which is exactly what nobody checked.
-        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
+        #expect(store.removeStrays(keeping: [keeper]) == ["the store was busy, so nothing was pruned"])
         #expect(store.installed(stale) != nil, "a model was deleted while a download was in flight")
         held.release()
 
-        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(store.removeStrays(keeping: [keeper]).isEmpty)
         #expect(store.installed(keeper) != nil)
         #expect(store.installed(stale) == nil)
         #expect(!FileManager.default.fileExists(atPath: store.directory(for: stale).path))
@@ -700,12 +747,12 @@ struct ModelStoreTests {
 
         // While the old pin is being downloaded, its part-file is not touched.
         let held = try #require(InstallLock(store.lockFile(for: stale)))
-        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
+        #expect(store.removeStrays(keeping: [keeper]) == ["the store was busy, so nothing was pruned"])
         #expect(FileManager.default.fileExists(atPath: store.stagingDirectory(for: stale).path),
                 "a staged download that was running was deleted")
         held.release()
 
-        #expect(store.removeStrays(keeping: keeper).isEmpty)
+        #expect(store.removeStrays(keeping: [keeper]).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: store.stagingDirectory(for: stale).path),
                 "the older pin's part-file was left on disk for good")
         #expect(FileManager.default.fileExists(atPath: store.stagingDirectory(for: keeper).path),
@@ -759,7 +806,7 @@ struct ModelStoreTests {
         try "not this pin".write(
             to: stale.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
 
-        #expect(store.removeStrays(keeping: manifest) == ["the store was busy, so nothing was pruned"])
+        #expect(store.removeStrays(keeping: [manifest]) == ["the store was busy, so nothing was pruned"])
         #expect(FileManager.default.fileExists(atPath: stale.path),
                 "the prune decided over a store somebody else was writing to")
 
@@ -800,10 +847,10 @@ struct ModelStoreTests {
         // It gave the lock back too, so the prune below can take it.
         try store.remove(second)
 
-        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(store.removeStrays(keeping: [manifest]).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: stale.path))
         // And it gives the lock back: a second prune runs.
-        #expect(store.removeStrays(keeping: manifest).isEmpty)
+        #expect(store.removeStrays(keeping: [manifest]).isEmpty)
         #expect(store.installed(manifest) != nil)
     }
 
@@ -830,7 +877,7 @@ struct ModelStoreTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: staging.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path) }
         #expect(store.isInstalling, "an unreadable staging directory was read as nothing installing")
-        #expect(store.removeStrays(keeping: keeper) == ["the store was busy, so nothing was pruned"])
+        #expect(store.removeStrays(keeping: [keeper]) == ["the store was busy, so nothing was pruned"])
         #expect(store.installed(keeper) != nil)
     }
 
@@ -869,7 +916,7 @@ struct ModelStoreTests {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: store.root.path)
         }
 
-        #expect(store.removeStrays(keeping: keeper) == ["the model directory could not be read"])
+        #expect(store.removeStrays(keeping: [keeper]) == ["the model directory could not be read"])
         // **And nothing was removed on the strength of it.** The stray is exactly what a prune that
         // read an empty walk as an emptied store would have deleted.
         #expect(store.installed(stale) != nil, "a model was deleted because the store could not be read")
@@ -1187,7 +1234,7 @@ struct ModelStoreTests {
         let root = scratch.appending("gone")
         let store = ModelStore(root: root)
         #expect(!FileManager.default.fileExists(atPath: root.path), "the fixture made the store itself")
-        #expect(store.removeStrays(keeping: Self.manifest(Self.bodies)) == [])
+        #expect(store.removeStrays(keeping: [Self.manifest(Self.bodies)]) == [])
         #expect(!FileManager.default.fileExists(atPath: root.path),
                 "the prune put the store back: \((try? FileManager.default.subpathsOfDirectory(atPath: root.path)) ?? [])")
     }

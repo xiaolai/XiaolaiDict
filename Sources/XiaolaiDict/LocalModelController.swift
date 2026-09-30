@@ -105,7 +105,7 @@ final class LocalModelController {
             }
             state = read
         }
-        if case .ready(let size) = read { pruneStrays(keeping: size) }
+        if case .ready = read { pruneStrays() }
     }
 
     /// The prune the last `refresh()` started, or nil where it started none.
@@ -130,10 +130,12 @@ final class LocalModelController {
     /// board draws on. A removal that failed while the new model was installing, because a file was
     /// still open or a permission was missing, is **retried** here rather than logged once and
     /// forgotten: forgotten, it is gigabytes that stay for good.
-    private func pruneStrays(keeping size: LocalModelSize) {
+    /// **Every model this build knows is kept**, whichever one is answering. What goes is a
+    /// superseded revision and a directory nobody asked for — ADR-0041.
+    private func pruneStrays() {
         let store = store
-        let wanted = manifest(size)
-        pruning = Task.detached(priority: .background) { _ = store.removeStrays(keeping: wanted) }
+        let keep = LocalModelSize.allCases.map(manifest)
+        pruning = Task.detached(priority: .background) { _ = store.removeStrays(keeping: keep) }
     }
 
     private static func read(
@@ -237,7 +239,8 @@ final class LocalModelController {
     /// the reader is looking at the board while it happens.
     private func installed(_ size: LocalModelSize, keeping wanted: ModelManifest) async {
         let store = store
-        let left = await Task.detached(priority: .utility) { store.removeStrays(keeping: wanted) }.value
+        let keep = LocalModelSize.allCases.map(manifest)
+        let left = await Task.detached(priority: .utility) { store.removeStrays(keeping: keep) }.value
         // The new model is installed and works; what is left over is only disk it will not use. It
         // is named rather than shrugged off, and `pruneStrays` tries again on the next refresh.
         if !left.isEmpty {

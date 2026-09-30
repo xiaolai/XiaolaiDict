@@ -97,7 +97,15 @@ public struct ModelStore: Sendable, Equatable {
     /// their completion markers instead, which is what makes a directory a model whatever pin
     /// wrote it.
     @discardableResult
-    public func removeStrays(keeping: ModelManifest) -> [String] {
+    /// Removes what nobody chose: a **superseded** revision of a model, and any directory that is
+    /// not one of `keeping`.
+    ///
+    /// **Every model the reader has is kept.** This used to take a single manifest and delete the
+    /// rest, so finishing a 9B download removed a working 4B — and on a 32 GB Mac the 9B needs
+    /// 6.6 GB free, leaving a busy machine with nothing that could answer at all. Switching back
+    /// then meant three gigabytes and an hour. A model the reader downloaded is removed when they
+    /// ask and not before — ADR-0041.
+    public func removeStrays(keeping: [ModelManifest]) -> [String] {
         // **Never while an install is in flight anywhere on this Mac.** The downloader runs in the
         // app *and* in `--model-report`, so a model finished by the other process would be found as
         // a stray by a prune that read the store before it landed — and three gigabytes deleted a
@@ -123,17 +131,19 @@ public struct ModelStore: Sendable, Equatable {
             return ["the store was busy, so nothing was pruned"]
         }
         defer { store.release() }
-        // Nothing is removed on behalf of a model that is not there: whatever the caller believed
-        // about the store, it is not what the store says now.
-        guard installed(keeping) != nil else { return [] }
-        let keep = directory(for: keeping).standardizedFileURL.path
+        // **Nothing is removed on behalf of a caller that knows of no model.** An empty keep-set
+        // is a caller with nothing to say about the store, never an instruction to empty it — and
+        // nothing is removed for a model that is not actually there, whatever the caller believed.
+        let present = keeping.filter { installed($0) != nil }
+        guard !present.isEmpty else { return [] }
+        let keep = Set(present.map { directory(for: $0).standardizedFileURL.path })
         var failures: [String] = []
         let complete = completeDirectories()
         if complete.isEmpty, FileManager.default.fileExists(atPath: root.path) {
-            // The keeper is installed — asked above — so the walk finding nothing means it failed.
+            // A keeper is installed — asked above — so the walk finding nothing means it failed.
             failures.append("the model directory could not be read")
         }
-        for directory in complete where directory.standardizedFileURL.path != keep {
+        for directory in complete where !keep.contains(directory.standardizedFileURL.path) {
             // No re-check here: the store lock above is held across the enumeration *and* these
             // removals, and an install commits under the same lock — so nothing can land between
             // the decision and the deletion. That is what the lock is for.
@@ -149,11 +159,13 @@ public struct ModelStore: Sendable, Equatable {
     ///
     /// Each is removed only while **its own install lock can be taken** — which is what says nobody
     /// is downloading it now — and the lock is given straight back afterwards.
-    private func removeStagedStrays(keeping: ModelManifest) -> [String] {
+    private func removeStagedStrays(keeping: [ModelManifest]) -> [String] {
         let staging = root.appending(path: Self.stagingName, directoryHint: .isDirectory)
-        let keep = stagingDirectory(for: keeping).standardizedFileURL.path
+        // Every model the reader might still be fetching, not just one: a part-finished download
+        // of the model they are not currently using is still theirs to resume.
+        let keep = Set(keeping.map { stagingDirectory(for: $0).standardizedFileURL.path })
         var failures: [String] = []
-        for directory in stagedModels(under: staging) where directory.standardizedFileURL.path != keep {
+        for directory in stagedModels(under: staging) where !keep.contains(directory.standardizedFileURL.path) {
             // The identifier is the path under `.staging` — the same shape the lock is named from.
             let identifier = directory.standardizedFileURL.path
                 .replacingOccurrences(of: staging.standardizedFileURL.path + "/", with: "")

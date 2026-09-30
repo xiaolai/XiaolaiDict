@@ -33,3 +33,29 @@ struct ModelSourceStoreTests {
         }
     }
 }
+
+struct ModelChoiceStoreTests {
+    /// **Unset is nil, not a size.** "They have not said" and "they chose the smallest" lead to
+    /// different answers — the first takes the largest that fits, the second does not.
+    @Test func unsetIsNoChoiceRatherThanAsmallOne() {
+        #expect(ModelChoiceStore(defaults: TemporaryDefaults.suite()).load() == nil)
+    }
+
+    /// A value this build does not know is no choice either, rather than a crash or a default
+    /// that silently overrides what the reader actually picked on a later version.
+    @Test func avalueThisBuildDoesNotKnowIsNoChoice() {
+        let defaults = TemporaryDefaults.suite()
+        defaults.set("enormous", forKey: ModelChoiceStore.defaultsKey)
+        #expect(ModelChoiceStore(defaults: defaults).load() == nil)
+    }
+
+    @Test(arguments: LocalModelSize.allCases)
+    func whatIsChosenComesBack(size: LocalModelSize) {
+        let store = ModelChoiceStore(defaults: TemporaryDefaults.suite())
+        store.save(size)
+        #expect(store.load() == size)
+        // And it can be taken back, which is what removing the chosen model has to do.
+        store.save(nil)
+        #expect(store.load() == nil)
+    }
+}

@@ -199,8 +199,11 @@ struct LocalModelControllerTests {
         #expect(controller.state.answering == .large)
     }
 
-    /// 9B only where the Mac holds it, and a switch leaves one model on disk, not two.
-    @Test func theLargerModelIsOfferedWhereItFitsAndReplacesTheSmaller() async {
+    /// 9B only where the Mac holds it — and **the smaller model stays**, so the reader can switch
+    /// back without three gigabytes and an hour, and so a Mac too busy for 9B still has something
+    /// that answers. Measured on a 32 GB Mac: 9B wants 6,633 MB and 4,729 MB was free, and the 4B
+    /// that would have answered had been deleted to make room for it — ADR-0041.
+    @Test func theLargerModelIsOfferedWhereItFitsAndTheSmallerIsKept() async {
         let (roomy, store) = controller(memory: 48 * Self.gigabyte)
         roomy.startDownload(.standard)
         await settle(roomy)
@@ -208,7 +211,9 @@ struct LocalModelControllerTests {
         roomy.startDownload(.large)
         await settle(roomy)
         #expect(roomy.state == .ready(.large))
-        #expect(store.installed(Self.manifest(.standard)) == nil, "the smaller model was kept beside the larger")
+        #expect(store.installed(Self.manifest(.standard)) != nil,
+                "the model the reader was using was deleted to make room")
+        #expect(store.installed(Self.manifest(.large)) != nil)
         #expect(roomy.choice.larger == nil)
 
         let (sixteen, _) = controller(memory: 16 * Self.gigabyte)

@@ -48,3 +48,27 @@ public struct ModelSourceStore {
         defaults.set(source.rawValue, forKey: Self.defaultsKey)
     }
 }
+
+/// Which model the reader wants to answer. **Absent means they have not said**, which is not the
+/// same as wanting the smallest: with nothing recorded the largest installed model that fits is
+/// used, and nothing is described as standing in for a choice nobody made.
+public struct ModelChoiceStore {
+    public static let defaultsKey = "PreferredModelSize"
+
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    public func load() -> LocalModelSize? {
+        guard let raw = defaults.object(forKey: Self.defaultsKey) as? String else { return nil }
+        return LocalModelSize(rawValue: raw)
+    }
+
+    public func save(_ size: LocalModelSize?) {
+        guard let size else {
+            defaults.removeObject(forKey: Self.defaultsKey)
+            return
+        }
+        defaults.set(size.rawValue, forKey: Self.defaultsKey)
+    }
+}
