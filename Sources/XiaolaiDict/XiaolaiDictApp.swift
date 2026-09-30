@@ -389,13 +389,16 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
     }
 
+    /// Shows the setup board, which is a **pane of the settings window** rather than a window of
+    /// its own. It had one until 2026-10-01: a second surface over the same facts, and the only
+    /// place the reader could choose which model answers — a standing preference, not something a
+    /// fresh install is missing.
     func showSetup() {
         // Logged, because "the board did not come forward" has two very different causes — the
         // request never arrived, or it arrived and activation was refused — and only the app can
         // say which. An end-to-end run could not tell them apart from outside.
         log.notice("setup: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
-        NSApplication.shared.activate()
-        WindowActions.shared.openWindow(id: XiaolaiDictScene.setupID)
+        showSettings(on: .setup)
     }
 
     /// Opens the board unasked, once in the life of an install.
@@ -410,7 +413,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// compositor listed it — and that app stayed frontmost, because macOS's cooperative activation
     /// refuses focus to an app the reader did not just bring forward. Marking the flag here recorded
     /// the board as shown to a reader who never saw it, and it never opened by itself again. The
-    /// flag is written by `setupWindow` becoming key instead, which is the reader actually having it.
+    /// flag is written by the settings window becoming key on the setup pane instead, which is the
+    /// reader actually having it.
     ///
     /// Not forcing activation is deliberate: stealing focus at launch — at login, above whatever the
     /// reader was doing — is exactly what cooperative activation exists to stop. The board waits
@@ -430,9 +434,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             else { return }
             // Opened from the menu in the meantime: the reader already has it, and ordering it again
             // from here would only be a second, unasked request.
-            guard self?.setupWindow?.isVisible != true else { return }
+            guard self?.settingsWindow?.isVisible != true else { return }
             self?.log.notice("setup: opened unasked at launch")
-            WindowActions.shared.openWindow(id: XiaolaiDictScene.setupID)
+            // **Not `showSetup()`**, which activates. That request is refused at launch and can do
+            // harm — the reason is in this method's own doc comment, and routing through the
+            // activating path would have quietly undone it.
+            self?.settings.pane = .setup
+            WindowActions.shared.openSettings()
         }
     }
 
@@ -440,22 +448,36 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     ///
     /// Held so the app can tell when the reader has actually seen the board: its becoming key is
     /// that moment, and it is what writes `SetupPresentationStore`'s flag.
-    @ObservationIgnored weak var setupWindow: NSWindow? {
-        didSet { watchSetupWindow() }
-    }
     @ObservationIgnored private var setupKeyObserver: NSObjectProtocol?
 
-    private func watchSetupWindow() {
+    /// Watches the settings window for the reader actually having the board in front of them.
+    ///
+    /// **Becoming key, not being opened — and only while the setup pane is the one selected.**
+    /// Measured on the E2E machine 2026-09-22: launched with another app in front, the board was
+    /// drawn and that app stayed frontmost, because macOS's cooperative activation refuses focus to
+    /// an app the reader did not just bring forward. Marking it seen on open recorded a board the
+    /// reader never saw, and it never opened by itself again.
+    ///
+    /// The pane test is what the move to a settings pane added. This window is now opened for
+    /// five other reasons, and a reader who came to change their text size has not seen setup.
+    private func watchSettingsWindow() {
         if let setupKeyObserver { NotificationCenter.default.removeObserver(setupKeyObserver) }
         setupKeyObserver = nil
-        guard let window = setupWindow else { return }
+        guard let window = settingsWindow else { return }
         // Already key by the time the view reported its window — opened from the menu, say.
-        if window.isKeyWindow { setupWasSeen() }
+        if window.isKeyWindow { setupWasSeenIfShowing() }
         setupKeyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setupWasSeen() }
+            MainActor.assumeIsolated { self?.setupWasSeenIfShowing() }
         }
+    }
+
+    /// The window came forward. It counts as the board having been seen only if the board is what
+    /// it is showing.
+    private func setupWasSeenIfShowing() {
+        guard settings.pane == .setup else { return }
+        setupWasSeen()
     }
 
     /// The reader has the board in front of them. Idempotent: writing `true` twice is one fact.
@@ -500,7 +522,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The settings window, taken from the view inside it rather than searched for among
     /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
     /// it is measuring — and on a bad day it measures the menu bar's.
-    @ObservationIgnored weak var settingsWindow: NSWindow?
+    @ObservationIgnored weak var settingsWindow: NSWindow? {
+        didSet { watchSettingsWindow() }
+    }
 
     /// The reader's text size, and the scale every surface is drawn from. Owned here because it
     /// outlives any one window: the drawer, the panel and a pinned note all read the same one, and

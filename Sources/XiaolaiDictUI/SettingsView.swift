@@ -85,7 +85,6 @@ public struct SettingsView: View {
     private var shortcut: ShortcutChoice?
     /// Opens the setup board. The board is reachable from the menu too; this is the other way in,
     /// for a reader already in Settings wondering whether anything is missing.
-    private var openSetup: (() -> Void)?
     /// The local model's licence, downloaded with its weights — nil until there is a model.
     private var modelLicence: URL?
     /// The erase command's state and its action. Optional together: a preview shows the pane
@@ -101,22 +100,36 @@ public struct SettingsView: View {
     /// there is no window to fit and the view simply lays out.
     @State private var window: NSWindow?
 
+    /// What the setup pane needs and the rest of the window does not. Nil where Settings is drawn
+    /// without the app behind it — a preview, an instrument — and the pane says so rather than
+    /// drawing rows that report nothing.
+    private let setup: SetupModel?
+    private let shortcutIsRegistered: Bool
+    private let localModel: LocalModelChoice?
+    private let refreshDictionaries: (() async -> Void)?
+
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
         hover: Binding<HoverPolicy>? = nil, dictionary: DictionaryChoice? = nil,
-        shortcut: ShortcutChoice? = nil, openSetup: (() -> Void)? = nil, modelLicence: URL? = nil,
+        shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
         erase: ErasePresentation? = nil,
-        eraseAction: (@MainActor (EraseAction) -> Void)? = nil
+        eraseAction: (@MainActor (EraseAction) -> Void)? = nil,
+        setup: SetupModel? = nil, shortcutIsRegistered: Bool = false,
+        localModel: LocalModelChoice? = nil,
+        refreshDictionaries: (() async -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         self.appearance = appearance
         self.hover = hover
         self.dictionary = dictionary
         self.shortcut = shortcut
-        self.openSetup = openSetup
         self.modelLicence = modelLicence
         self.erase = erase
         self.eraseAction = eraseAction
+        self.setup = setup
+        self.shortcutIsRegistered = shortcutIsRegistered
+        self.localModel = localModel
+        self.refreshDictionaries = refreshDictionaries
     }
 
     public var body: some View {
@@ -224,10 +237,23 @@ public struct SettingsView: View {
 
     @ViewBuilder private func content(of pane: SettingsPane) -> some View {
         switch pane {
+        // **The board, in a pane rather than a window of its own.** Each row's action selects the
+        // pane it is about, which is now a sibling tab rather than another window.
+        case .setup:
+            if let setup {
+                SetupView(
+                    model: setup, dictionary: dictionary, shortcut: shortcut,
+                    shortcutIsRegistered: shortcutIsRegistered, localModel: localModel,
+                    openSettings: { model.pane = $0 },
+                    refreshDictionaries: refreshDictionaries)
+            } else {
+                Form { Text("This pane is not connected to the reader's settings.") }
+                    .formStyle(.grouped)
+            }
         case .reading: ReadingPane(appearance: appearance, erase: erase, eraseAction: eraseAction)
         case .lookup: LookupPane(policy: hover ?? $unattached, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
-        case .permissions: PermissionsPane(model: model, openSetup: openSetup)
+        case .permissions: PermissionsPane(model: model)
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
@@ -244,6 +270,11 @@ public struct SettingsView: View {
 /// and `--settings-report`, which selects each one inside the running bundle and measures what the
 /// window does. A report naming its own panes could drift from the window's and still pass.
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
+    /// **First, because it is what a fresh install needs and the only pane that answers across the
+    /// others**: is any of this working. It was a window of its own until 2026-10-01 — a second
+    /// surface over the same facts, and the only place the reader could choose which model answers,
+    /// which is a standing preference rather than something a fresh install lacks.
+    case setup
     case reading
     case lookup
     case dictionary
@@ -258,6 +289,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// Mac. `title` is the label.
     public var name: String {
         switch self {
+        case .setup: "Setup"
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
@@ -272,6 +304,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// from the catalog for exactly that reason.
     var title: LocalizedStringKey {
         switch self {
+        case .setup: "Setup"
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
@@ -282,6 +315,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
 
     var symbol: String {
         switch self {
+        case .setup: "checklist"
         case .reading: "textformat.size"
         case .lookup: "magnifyingglass"
         case .dictionary: "character.book.closed"
