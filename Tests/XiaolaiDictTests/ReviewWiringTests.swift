@@ -97,12 +97,28 @@ struct ReviewWiringTests {
     /// when nothing surrounded the word, and drawing that as context would be the word echoed back
     /// and dressed as the reader's own reading.
     @Test func acaptureWithNoSentenceShowsNone() throws {
-        let cue = ReviewCue(
-            card: StudyCard(noteID: UUID(), createdAt: now), word: "fine", sentence: "fine",
-            range: nil, place: ReadingPlace(bundleID: nil, name: nil), readAt: now,
-            quality: .accessibility(.accessibilityTextRange, context: .missing),
-            target: .entry(dictionary: "noad", entryID: "e1"))
-        #expect(ReviewModel.sentence(of: cue) == nil)
+        func cue(sentence: String?, quality: CaptureQuality?) -> ReviewCue {
+            ReviewCue(card: StudyCard(noteID: UUID(), createdAt: now), word: "fine",
+                      sentence: sentence, range: nil,
+                      place: ReadingPlace(bundleID: nil, name: nil), readAt: now,
+                      quality: quality, target: .entry(dictionary: "noad", entryID: "e1"))
+        }
+        // **One reason at a time.** The original fixture set `.missing` *and* made the sentence
+        // equal the word, so either guard alone satisfied it and removing the other went
+        // unnoticed. Each of the three reasons is now its own case, with a real sentence where
+        // the reason is the quality, and a real quality where the reason is the sentence.
+        let complete = CaptureQuality.accessibility(.accessibilityTextRange, context: .complete)
+        #expect(ReviewModel.sentence(of: cue(sentence: "He paid the fine.",
+                                             quality: .accessibility(.accessibilityTextRange,
+                                                                     context: .missing))) == nil,
+                "a capture that exposed no surrounding text has no sentence to draw")
+        #expect(ReviewModel.sentence(of: cue(sentence: "fine", quality: complete)) == nil,
+                "the word echoed back is not the reader's reading")
+        #expect(ReviewModel.sentence(of: cue(sentence: "He paid the fine.", quality: nil)) == nil,
+                "no quality signal at all shows no sentence")
+        // And the positive control: a real sentence with a real quality is drawn.
+        #expect(ReviewModel.sentence(of: cue(sentence: "He paid the fine.",
+                                             quality: complete))?.text == "He paid the fine.")
     }
 
     // MARK: - The grade reaches the ledger
@@ -114,6 +130,12 @@ struct ReviewWiringTests {
         let model = model(path)
         await model.start()
         #expect(question(model)?.position == 1)
+        // Which card is actually on screen, so the assertions below are about that one.
+        let shownWord = try #require(question(model)?.word)
+        let opened = try Ledger(path: path)
+        let shown = try #require(
+            try opened.notes().compactMap { try opened.existingCard(of: $0.id) }
+                .first { try opened.cue(forCard: $0.id)?.word == shownWord }).id
 
         model.act(.grade(.good))
         try await settle { self.question(model)?.position == 2 }
@@ -126,6 +148,10 @@ struct ReviewWiringTests {
         #expect(reviewed.count == 1, "the grade never reached the ledger")
         #expect(reviewed.first?.grade == .good)
         #expect(cards.count == 1, "and the card it graded is no longer due")
+        // **The card that was on screen**, not merely one of the two. Counting a review and a
+        // remaining due card was satisfied by grading the other one.
+        #expect(reviewed.first?.cardID == shown, "the grade landed on the card nobody was shown")
+        #expect(cards.first?.id != shown, "and the graded card is the one that left the queue")
     }
 
     /// **The surface advances after the write, never before.** A model that moved on while the grade
@@ -275,6 +301,13 @@ struct ReviewWiringTests {
         await model.start()
         let first = try #require(question(model)?.word)
 
+        // What the schedule is before it is put off, so "untouched" is a comparison.
+        let opened = try Ledger(path: path)
+        let target = try #require(
+            try opened.notes().compactMap { try opened.existingCard(of: $0.id) }
+                .first { try opened.cue(forCard: $0.id)?.word == first })
+        let beforePostponing = target.scheduled
+
         model.act(.postpone)
         try await settle { self.question(model)?.word != first }
 
@@ -295,8 +328,24 @@ struct ReviewWiringTests {
         await model.start()
         #expect(model.presentation.stage == .empty(.nothingDue))
 
-        // And back tomorrow, with its schedule untouched.
-        let tomorrow = self.model(path, clock: now.addingTimeInterval(86_400 + 3_600))
+        // **Back at the next study day's cutoff, and not before** — a rolling 24-hour
+        // postponement satisfied "25 hours later" without ever using the boundary. And the
+        // schedule must be exactly what it was: putting a card off says nothing about memory.
+        let reopened = try Ledger(path: path)
+        let held = try #require(
+            try reopened.library(LibraryQuery(now: now)).compactMap {
+                try reopened.existingCard(of: $0.id)
+            }.first { $0.hiddenUntil != nil })
+        let boundary = StudyDay.standard.startOfNextDay(containing: now)
+        #expect(held.hiddenUntil == boundary, "put off to a rolling 24 hours, not to the cutoff")
+        #expect(held.scheduled == beforePostponing, "putting a card off moved its schedule")
+
+        // A minute before the boundary it is still away; a minute after, it is back.
+        let justBefore = self.model(path, clock: boundary.addingTimeInterval(-60))
+        await justBefore.start()
+        #expect(question(justBefore)?.word != first, "it came back before the cutoff")
+
+        let tomorrow = self.model(path, clock: boundary.addingTimeInterval(60))
         await tomorrow.start()
         #expect(question(tomorrow)?.word == first)
     }
