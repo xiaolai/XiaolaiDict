@@ -250,6 +250,9 @@ final class LocalModelController {
         case ModelDownloadError.alreadyInstalling:
             return String(localized: "it is already being downloaded",
                           comment: "Why the model download stopped")
+        case ModelDownloadError.rangeMismatch:
+            return String(localized: "the server sent a different part of the file than was asked for",
+                          comment: "Why the model download stopped")
         case ModelDownloadError.http(let status, _):
             return String(localized: "the server answered \(status)", comment: "Why the model download stopped")
         case let error as URLError where error.code == .notConnectedToInternet:

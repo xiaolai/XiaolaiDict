@@ -299,6 +299,26 @@ public enum ModelDownloadError: Error, Equatable, Sendable {
     /// Another install of this model is running — in this process or another. One writes; the other
     /// waits for the reader to ask again rather than writing over it.
     case alreadyInstalling(identifier: String)
+    /// A partial answer that is not the part that was asked for. Named apart from `http` because
+    /// the status was a success: what is wrong is which bytes the host decided to send.
+    case rangeMismatch(path: String, expected: Int64, answered: String)
+
+    /// **One value per case, declared beside the cases themselves.** The test that requires every
+    /// refusal to say its own thing listed them by hand in another module, so adding a case left
+    /// a hole that nothing reported — and the new case fell through to "the download could not be
+    /// completed", which names nothing a reader can act on. `everyKindIsListed` checks this array
+    /// against the cases in this file, in both directions.
+    public static let everyKind: [ModelDownloadError] = [
+        .insufficientDisk(needed: 3_000_000_000, available: 1),
+        .diskCapacityUnknown(path: "/"),
+        .hashMismatch(path: "model.safetensors"),
+        .sizeMismatch(path: "model.safetensors", expected: 2, received: 1),
+        .rangeMismatch(path: "model.safetensors", expected: 4, answered: "bytes 0-3/8"),
+        .couldNotDiscard(path: "model.safetensors.partial", reason: "in use"),
+        .incomplete(identifier: "test/model@abc"),
+        .http(status: 503, path: "model.safetensors"),
+        .alreadyInstalling(identifier: "test/model@abc"),
+    ]
 }
 
 /// Fetches one file's bytes. The seam tests replace: the real one is `URLSessionModelTransport`.
@@ -726,7 +746,19 @@ final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
                 return nil
             }
         }
+        // Closed here rather than only in `didCompleteWithError`: the point of settling is that
+        // this writer is finished with the file, and another attempt may be about to open it.
+        try? handle.close()
         continuation?.resume(with: result)
+    }
+
+    /// Whether this writer has finished, however it finished.
+    var hasSettled: Bool {
+        lock.withLock {
+            if case .waiting = state { return false }
+            if case .running = state { return false }
+            return true
+        }
     }
 
     /// ModelScope answers with a redirect to its CDN. The range goes with it, or the CDN sends the
@@ -749,7 +781,21 @@ final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         do {
             switch status {
-            case 206 where offset > 0:
+            case 206:
+                // **A partial answer must say which part it is, and it must be the part that was
+                // asked for.** Appending any `206` to what was on disk let a host answering with
+                // a different range — a republished file, a load balancer on another copy, a
+                // mirror with its own idea of the object — poison a valid prefix. The final hash
+                // catches that, but only after the rest of the gigabytes have arrived, and then
+                // deletes all of it. Both hosts send the header; RFC 9110 §14.4 requires it.
+                guard let range = (response as? HTTPURLResponse)?
+                        .value(forHTTPHeaderField: "Content-Range"),
+                      Self.contentRange(range, startsAt: offset, ofTotal: expected) else {
+                    throw ModelDownloadError.rangeMismatch(
+                        path: path, expected: offset,
+                        answered: (response as? HTTPURLResponse)?
+                            .value(forHTTPHeaderField: "Content-Range") ?? "no Content-Range")
+                }
                 try handle.seekToEnd()
             case 200:
                 // The host ignored the range and is sending the whole file: start the file again,
@@ -767,7 +813,25 @@ final class RangeWriter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         }
     }
 
+    /// Whether `bytes <first>-<last>/<total>` is the range that was asked for, of the file that
+    /// was pinned. Anything it cannot parse is not that range.
+    static func contentRange(_ header: String, startsAt offset: Int64, ofTotal total: Int64) -> Bool {
+        let parts = header.trimmingCharacters(in: .whitespaces).split(separator: " ")
+        guard parts.count == 2, parts[0] == "bytes" else { return false }
+        let span = parts[1].split(separator: "/")
+        guard span.count == 2, let whole = Int64(span[1]), whole == total else { return false }
+        let ends = span[0].split(separator: "-")
+        guard ends.count == 2, let first = Int64(ends[0]), let last = Int64(ends[1]),
+              first == offset, last == total - 1 else { return false }
+        return true
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // **A writer that has settled stops touching the file.** `settle` returns from here and
+        // from the response path while the task is still delivering what it had queued, and the
+        // handle stayed open until `didCompleteWithError` — so a chunk in flight when the writer
+        // failed was still written, and the retry loop could by then hold the same file.
+        guard !hasSettled else { return }
         // **Refused before it is written, not after it has all arrived.** The disk was checked for
         // the pinned size; a body that runs past it is either the wrong file or an endless one, and
         // writing it first means finding out when the disk is full.

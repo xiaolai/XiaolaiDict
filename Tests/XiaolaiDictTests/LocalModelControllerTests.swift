@@ -278,16 +278,7 @@ struct LocalModelControllerTests {
     /// refused because this Mac would not say how much disk is free reads exactly like one that lost
     /// its connection — "the download could not be completed", which names nothing the reader can act
     /// on. Measured against a foreign error, which is the only thing the generic sentence is for.
-    @Test(arguments: [
-        ModelDownloadError.insufficientDisk(needed: 3_000_000_000, available: 1),
-        .diskCapacityUnknown(path: "/"),
-        .hashMismatch(path: "model.safetensors"),
-        .sizeMismatch(path: "model.safetensors", expected: 2, received: 1),
-        .couldNotDiscard(path: "model.safetensors.partial", reason: "in use"),
-        .incomplete(identifier: "test/model@abc"),
-        .http(status: 503, path: "model.safetensors"),
-        .alreadyInstalling(identifier: "test/model@abc"),
-    ])
+    @Test(arguments: ModelDownloadError.everyKind)
     func everyDownloadFailureSaysItsOwnThing(error: ModelDownloadError) {
         struct Foreign: Error {}
         let generic = LocalModelController.reason(Foreign())

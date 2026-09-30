@@ -1223,6 +1223,9 @@
     "the server answered %lld" : {
       "comment" : "Why the model download stopped"
     },
+    "the server sent a different part of the file than was asked for" : {
+      "comment" : "Why the model download stopped"
+    },
     "there is not enough free disk space — it needs %@" : {
       "comment" : "Why the model download stopped"
     },

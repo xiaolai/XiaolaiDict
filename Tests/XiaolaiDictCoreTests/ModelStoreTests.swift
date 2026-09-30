@@ -148,10 +148,22 @@ struct ModelStoreTests {
         return URLSession.shared.dataTask(with: request)
     }
 
-    private static func response(_ status: Int) throws -> HTTPURLResponse {
+    private static func response(_ status: Int, contentRange: String? = nil) throws -> HTTPURLResponse {
         let url = try #require(URL(string: "https://example.invalid/model.safetensors"))
+        let headers = contentRange.map { ["Content-Range": $0] }
         return try #require(
-            HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil))
+            HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers))
+    }
+
+    /// A writer over a four-byte front of an eight-byte file, and what it wrote.
+    private static func resuming(_ file: URL, offset: Int64 = 4, expecting: Int64 = 8)
+        throws -> (RangeWriter, Recorder<[Int64]>) {
+        try Data([1, 2, 3, 4]).write(to: file)
+        let seen = Recorder<[Int64]>([])
+        let writer = try RangeWriter(
+            destination: file, offset: offset, path: "model.safetensors", expecting: expecting,
+            progress: { onDisk in seen.withLock { $0.append(onDisk) } })
+        return (writer, seen)
     }
 
     @Test func aCompleteDownloadIsInstalledAndLoadable() async throws {
@@ -463,6 +475,31 @@ struct ModelStoreTests {
         }
         let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
         #expect(asked.count <= 2, "asked \(asked.count) times of a host that had already sent all it has")
+    }
+
+    /// **Both directions, mechanically.** `everyKind` exists so the message test cannot fall
+    /// behind the enum — but a list that is itself hand-written needs something checking it, or
+    /// it becomes a list nobody has read. This reads the cases out of the source and compares
+    /// them with the samples, each way.
+    @Test func everyRefusalKindIsListedAndEveryListedKindIsAcase() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ModelKit/ModelStore.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        let declaration = try #require(text.range(of: "public enum ModelDownloadError"))
+        let body = text[declaration.upperBound...]
+        let end = try #require(body.range(of: "\n}"))
+        var declared: Set<String> = []
+        for match in body[..<end.lowerBound].matches(of: /\n    case ([a-zA-Z]+)/) {
+            declared.insert(String(match.1))
+        }
+        #expect(declared.count > 5, "no cases were found, so this checks nothing")
+
+        let listed = Set(ModelDownloadError.everyKind.map { "\($0)".prefix { $0 != "(" } }.map(String.init))
+        #expect(declared.subtracting(listed).isEmpty,
+                "a refusal nothing samples, so nothing checks it says its own thing: \(declared.subtracting(listed).sorted())")
+        #expect(listed.subtracting(declared).isEmpty,
+                "a sample for a case that no longer exists: \(listed.subtracting(declared).sorted())")
     }
 
     /// **The default request timeout is the defect.** `URLSession.shared` fails a request after
@@ -842,7 +879,8 @@ struct ModelStoreTests {
         let task = try Self.suspendedTask(range: "bytes=4-")
 
         let disposition = Recorder<[URLSession.ResponseDisposition]>([])
-        writer.urlSession(.shared, dataTask: task, didReceive: try Self.response(206)) { answer in
+        writer.urlSession(.shared, dataTask: task,
+                          didReceive: try Self.response(206, contentRange: "bytes 4-7/8")) { answer in
             disposition.withLock { $0.append(answer) }
         }
         #expect(disposition.withLock { $0 } == [.allow])
@@ -852,6 +890,83 @@ struct ModelStoreTests {
         #expect(try Data(contentsOf: file) == Data([1, 2, 3, 4, 5, 6, 7, 8]),
                 "the resumed bytes were written over the front rather than after it")
         #expect(seen.withLock { $0 } == [8])
+    }
+
+    /// **A partial answer must say which part it is, and it must be the part that was asked
+    /// for.** The writer appended any `206` to whatever was already on disk, so a host answering
+    /// with a different range — a republished file, a load balancer reaching another copy, a
+    /// mirror with its own idea of the object — silently poisoned a valid prefix. The final hash
+    /// catches it, but only after the remaining gigabytes have arrived, and then deletes all of
+    /// it. Both hosts send the header (measured 2026-09-30, `bytes 1000-1999/5349771222` from
+    /// each), so requiring it costs nothing real and RFC 9110 §14.4 requires it anyway.
+    @Test(arguments: [
+        (String?.none, "no Content-Range at all"),
+        ("bytes 0-3/8", "a range starting somewhere else"),
+        ("bytes 4-7/9", "a different total, so a different file"),
+        ("items 4-7/8", "a unit that is not bytes"),
+        ("nonsense", "a header that does not parse"),
+    ])
+    func apartialAnswerThatIsNotThePartAskedForIsRefused(header: String?, why: String) async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        let (writer, seen) = try Self.resuming(file)
+        let task = try Self.suspendedTask(range: "bytes=4-")
+
+        let disposition = Recorder<[URLSession.ResponseDisposition]>([])
+        writer.urlSession(.shared, dataTask: task,
+                          didReceive: try Self.response(206, contentRange: header)) { answer in
+            disposition.withLock { $0.append(answer) }
+        }
+        #expect(disposition.withLock { $0 } == [.cancel], "\(why) was allowed")
+        #expect(try Data(contentsOf: file) == Data([1, 2, 3, 4]),
+                "\(why): the front it was resuming was touched")
+        #expect(seen.withLock { $0 }.isEmpty, "\(why): progress was reported for bytes not written")
+    }
+
+    /// **A whole-file `206` at offset zero is a legitimate answer**, and refusing it made the one
+    /// shape a fresh ranged read can take look like a broken host.
+    @Test func apartialAnswerFromTheStartIsAllowedWhenNothingIsOnDisk() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        try Data().write(to: file)
+        let writer = try RangeWriter(destination: file, offset: 0, path: "model.safetensors",
+                                     expecting: 8, progress: { _ in })
+        let task = try Self.suspendedTask(range: "bytes=0-")
+
+        let disposition = Recorder<[URLSession.ResponseDisposition]>([])
+        writer.urlSession(.shared, dataTask: task,
+                          didReceive: try Self.response(206, contentRange: "bytes 0-7/8")) { answer in
+            disposition.withLock { $0.append(answer) }
+        }
+        #expect(disposition.withLock { $0 } == [.allow])
+    }
+
+    /// **A writer that has failed stops touching the file.** `settle` returned from the response
+    /// and data paths while the handle stayed open until `didCompleteWithError`, so a chunk
+    /// already queued could still be written — and with the retry loop starting the next attempt
+    /// as soon as `fetch` returns, two writers could hold the same file at once.
+    @Test func awriterThatHasFailedWritesNothingMore() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        let file = store.root.appending(path: "model.safetensors")
+        let (writer, seen) = try Self.resuming(file)
+        let task = try Self.suspendedTask(range: "bytes=4-")
+
+        // Refused: a body longer than the file it claims to be.
+        writer.urlSession(.shared, dataTask: task, didReceive: Data(count: 99))
+        #expect(try Data(contentsOf: file) == Data([1, 2, 3, 4]), "the oversized body was written")
+        let after = seen.withLock { $0 }
+
+        // A chunk that was already in flight when it failed.
+        writer.urlSession(.shared, dataTask: task, didReceive: Data([5, 6, 7, 8]))
+        #expect(try Data(contentsOf: file) == Data([1, 2, 3, 4]),
+                "a settled writer wrote a queued chunk")
+        #expect(seen.withLock { $0 } == after, "a settled writer reported progress")
     }
 
     /// **A status that is neither is refused before a byte is written.** 416 is what a host answers
