@@ -2173,7 +2173,11 @@ else
     # which is what an earlier line here asked for and, being `|| true`, silently never closed.
     pane=$("$helpers/panel" com.xiaolaidict | python3 -c '
 import json, sys
-names = {"Reading", "Lookup", "Dictionary", "Permissions", "About"}
+# Every pane's `name`, and it must stay that way: `SettingsPaneNamesTests` compares this literal
+# against `SettingsPane.allCases`, because a set that quietly falls behind finds no window and the
+# close below then closes whatever "Lookup" happens to be. It was already stale once — Setup was
+# added and this was not.
+names = {"Setup", "Reading", "Lookup", "Dictionary", "About"}
 print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] if t in names), ""))')
     if ! why=$("$helpers/close-window" "${pane:-Lookup}" 2>&1); then
         flunk "shortcut: could not close the settings window afterwards ($why)"
