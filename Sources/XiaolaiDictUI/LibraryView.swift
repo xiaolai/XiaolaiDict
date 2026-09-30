@@ -127,8 +127,11 @@ public struct LibraryView: View {
         .padding(scale.space.padAcross)
         // **Reset when the row changes, never carried.** A draft left over from the previous
         // selection would be saved onto this word the moment the reader pressed the button.
+        //
+        // **And only when the row changes.** Following the stored answer as well meant the save
+        // the reader had just made came back and overwrote whatever they had typed since — the
+        // edit they were in the middle of, replaced by the edit before it.
         .onChange(of: inspector.id, initial: true) { draft = inspector.answer }
-        .onChange(of: inspector.answer) { draft = inspector.answer }
     }
 
     /// **Where it was met, and what was done with the card — in two lists** (M05).

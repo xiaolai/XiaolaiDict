@@ -155,6 +155,9 @@
     "%lld selected" : {
 
     },
+    "%lld skipped" : {
+
+    },
     "%lld skipped, still due" : {
 
     },

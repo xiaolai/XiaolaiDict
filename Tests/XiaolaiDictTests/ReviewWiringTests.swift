@@ -469,6 +469,35 @@ struct ReviewWiringTests {
         }
     }
 
+    /// **Skipping the last batch does not end the sitting.** A skipped card is still due, and
+    /// `stillDue` counts only what did not fit — so skipping everything left work outstanding
+    /// with no way to go on, and offered Practice instead, which grades nothing.
+    @Test func skippingTheLastBatchStillOffersAnother() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        try ready(path, count: 2, inProgress: true)
+        let model = model(path)
+        await model.start()
+
+        for _ in 0..<2 {
+            model.act(.skip)
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        try await settle {
+            if case .finished = model.presentation.stage { return true }
+            return false
+        }
+        guard case .finished(let summary) = model.presentation.stage else {
+            Issue.record("the batch never finished")
+            return
+        }
+        #expect(summary.skipped == 2)
+        #expect(summary.stillDue == 0, "nothing was left over — they were all skipped")
+        // The control that must be there: work remains, so another batch must be offered.
+        #expect(summary.skipped > 0, "and skipped work is work")
+        #expect(summary.wasPractice == false)
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
     private func settle(_ condition: @MainActor () -> Bool) async throws {

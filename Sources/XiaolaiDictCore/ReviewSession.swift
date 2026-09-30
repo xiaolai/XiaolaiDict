@@ -176,9 +176,9 @@ public struct ReviewSession: Sendable, Equatable {
     ///
     /// **Never "all done".** A batch is a sitting; the work beyond it is still there, and a surface
     /// that hides it teaches the reader their backlog is smaller than it is.
-    public var summary: Summary {
+    public func summary(wasPractice: Bool = false) -> Summary {
         Summary(graded: graded, skipped: skipped, stillDue: beyondBatch, heldBack: heldBack,
-                postponed: postponed)
+                postponed: postponed, wasPractice: wasPractice)
     }
 
     public struct Summary: Sendable, Equatable {
@@ -193,14 +193,19 @@ public struct ReviewSession: Sendable, Equatable {
         /// Put off until the next study day. **Its own count**, because a skipped card is still
         /// due now and a postponed one is not, and one number for both would say neither.
         public let postponed: Int
+        /// Whether this was a practice sitting. **Carried, because the words differ**: practice
+        /// includes cards that are not due, so "skipped, still due" is a claim about the
+        /// schedule a practice batch cannot make.
+        public let wasPractice: Bool
 
         public init(graded: Int, skipped: Int, stillDue: Int, heldBack: Int = 0,
-                    postponed: Int = 0) {
+                    postponed: Int = 0, wasPractice: Bool = false) {
             self.graded = graded
             self.skipped = skipped
             self.stillDue = stillDue
             self.heldBack = heldBack
             self.postponed = postponed
+            self.wasPractice = wasPractice
         }
     }
 }

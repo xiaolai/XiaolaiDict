@@ -121,8 +121,12 @@ public struct ReviewView: View {
     private func controls(_ question: ReviewPresentation.Question) -> some View {
         HStack(spacing: scale.space.inline) {
             if question.answer == nil {
+                // **Disabled while a grade is committing**, like the grade buttons beside it: a
+                // reveal started here could finish after the sitting had advanced and put this
+                // card's answer on the next one.
                 Button("Show the answer") { act(.reveal) }
                     .keyboardShortcut(.space, modifiers: [])
+                    .disabled(question.isCommitting)
             }
             Spacer(minLength: 0)
             // **Forgot first, always.** The order is the same on every card, so a reader answering
@@ -201,7 +205,10 @@ public struct ReviewView: View {
                 .foregroundStyle(.secondary)
         }
         if summary.skipped > 0 {
-            Text("\(summary.skipped) skipped, still due")
+            // **Practice includes cards that are not due at all**, so "still due" was a claim
+            // about the schedule that a practice sitting cannot make.
+            Text(summary.wasPractice ? "\(summary.skipped) skipped"
+                                     : "\(summary.skipped) skipped, still due")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
         }
@@ -221,12 +228,14 @@ public struct ReviewView: View {
                 .foregroundStyle(.secondary)
         }
         HStack(spacing: scale.space.inline) {
-            if summary.stillDue > 0 {
+            // **Skipped cards are still due**, and were left out of `stillDue` — so skipping
+            // the last batch ended the sitting with work outstanding and no way to go on.
+            if summary.stillDue > 0 || summary.skipped > 0 {
                 Button("Review another batch") { act(.anotherBatch) }
             }
             // **Offered when there is nothing due**, which is when a reader who wants to keep
             // going would otherwise have nothing to do but wait.
-            if summary.stillDue == 0 {
+            if summary.stillDue == 0 && summary.skipped == 0 {
                 Button("Practise") { act(.practise) }
             }
             Button("Done") { act(.done) }

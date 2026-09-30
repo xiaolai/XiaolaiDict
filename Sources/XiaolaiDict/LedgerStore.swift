@@ -224,9 +224,12 @@ actor LedgerStore {
     }
     func export(dictionary: String?) throws -> StudyExport { try ledger.export(dictionary: dictionary) }
 
-    /// **"Already know" is a declaration about a word, not a measurement of it.** There is no note
-    /// to mark, so one is made and immediately set aside — which is what makes it reversible and
-    /// what stops the word being suggested again.
+    /// **"Already know" is a declaration about a word, not a measurement of it.** No note is made
+    /// — a declaration is not a card (ADR-0036) — only a row naming the lemma and its language,
+    /// which is what stops the word being suggested and what `unignoreSuggestion` takes back.
+    ///
+    /// The previous sentence here said a note *was* made and set aside. It never was, and a
+    /// comment describing a design the code does not have is worse than none.
     func ignoreSuggestion(lemma: String, language: String, at when: Date) throws {
         try ledger.ignoreSuggestion(lemma: lemma, language: language, at: when)
     }

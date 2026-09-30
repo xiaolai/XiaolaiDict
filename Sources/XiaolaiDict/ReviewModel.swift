@@ -182,7 +182,7 @@ final class ReviewModel {
     private func draw() async {
         guard let session else { return }
         guard let current = session.current else {
-            presentation = ReviewPresentation(stage: .finished(session.summary))
+            presentation = ReviewPresentation(stage: .finished(session.summary(wasPractice: isPractice)))
             return
         }
         answer = nil

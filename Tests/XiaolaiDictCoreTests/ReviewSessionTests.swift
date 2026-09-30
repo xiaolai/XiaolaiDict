@@ -119,7 +119,7 @@ struct ReviewSessionTests {
         var session = session(2, beyond: 18)
         session.record(.graded(.good))
         session.record(.skipped)
-        #expect(session.summary == ReviewSession.Summary(graded: 1, skipped: 1, stillDue: 18))
+        #expect(session.summary() == ReviewSession.Summary(graded: 1, skipped: 1, stillDue: 18))
     }
 
     /// The presentation carries the revision it was drawn at, so the grade can be committed against
@@ -145,6 +145,6 @@ struct ReviewSessionTests {
         let session = session(0, beyond: 4)
         #expect(session.isFinished)
         #expect(session.current == nil)
-        #expect(session.summary == ReviewSession.Summary(graded: 0, skipped: 0, stillDue: 4))
+        #expect(session.summary() == ReviewSession.Summary(graded: 0, skipped: 0, stillDue: 4))
     }
 }
