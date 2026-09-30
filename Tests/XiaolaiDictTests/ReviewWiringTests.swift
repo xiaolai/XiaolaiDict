@@ -435,6 +435,40 @@ struct ReviewWiringTests {
         #expect(hidden.isEmpty, "\(hidden.count) card(s) are still put off after the undo")
     }
 
+    /// **A collection that cannot be read is not a collection with nothing due.**
+    ///
+    /// Both drew the same screen, so a reader whose ledger failed to open was told they were up
+    /// to date. The reason was even computed on that path and then dropped, because an empty
+    /// stage had nowhere to carry it.
+    @Test func aledgerThatCannotBeOpenedSaysSoRatherThanNothingDue() async throws {
+        // A path that cannot be a database: a directory where the file should be.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xiaolaidict-unopenable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let model = ReviewModel(store: { Task { try LedgerStore(path: directory.path) } },
+                                primary: { PrimaryDictionary(chosen: "noad") },
+                                clock: { self.now })
+        await model.start()
+        guard case .empty(let reason) = model.presentation.stage else {
+            Issue.record("expected an empty stage, got \(model.presentation.stage)")
+            return
+        }
+        guard case .couldNotBeRead(let said) = reason else {
+            Issue.record("a failed read drew \(reason), which reads as being up to date")
+            return
+        }
+        #expect(!said.isEmpty, "and it says what went wrong")
+
+        // Practice took the same path and discarded the error outright.
+        await model.startPractice()
+        guard case .empty(.couldNotBeRead) = model.presentation.stage else {
+            Issue.record("practice drew \(model.presentation.stage) over a ledger it could not open")
+            return
+        }
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
     private func settle(_ condition: @MainActor () -> Bool) async throws {

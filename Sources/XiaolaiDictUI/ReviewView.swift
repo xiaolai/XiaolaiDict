@@ -164,6 +164,13 @@ public struct ReviewView: View {
         case .nothingEnrolled:
             Text("You have not saved any meanings to study yet.")
                 .font(.system(size: scale.text.body))
+        case .couldNotBeRead(let problem):
+            Text("Your cards could not be read.")
+                .font(.system(size: scale.text.body))
+            Text(verbatim: problem)
+                .font(.system(size: scale.text.small))
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
         case .heldBackUntilTomorrow(let count):
             Text("Nothing is due right now.")
                 .font(.system(size: scale.text.body))
@@ -269,12 +276,19 @@ public struct ReviewPresentation: Sendable, Equatable {
         /// because a reader who saved thirty words this afternoon and is told "nothing is due" has
         /// no way to tell a working cap from a broken save.
         case heldBackUntilTomorrow(Int)
+        /// **A fourth nothing: the cards could not be read at all.** The other three are answers;
+        /// this is a failure, and it drew as "nothing is due" — telling a reader with a full
+        /// collection that they were up to date. `problem` was assigned on that path and then
+        /// thrown away, because an empty stage had nowhere to put it.
+        case couldNotBeRead(String)
 
         /// Whether this reason has already said when the cards come back, so the surface does not
         /// follow it with a vaguer version of the same sentence.
         var explainsItself: Bool {
-            if case .heldBackUntilTomorrow = self { return true }
-            return false
+            switch self {
+            case .heldBackUntilTomorrow, .couldNotBeRead: true
+            case .nothingDue, .nothingEnrolled: false
+            }
         }
     }
 

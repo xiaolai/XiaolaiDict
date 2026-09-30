@@ -350,6 +350,46 @@ struct LibraryWiringTests {
         #expect(row.due != "New", "and it is not waiting to be introduced either")
     }
 
+    /// **A change that did not land is said.** Both apply helpers wrapped the write in `try?`,
+    /// so a failed archive, pause, tag or removal cleared the selection and redrew a list that
+    /// looked exactly as though it had worked. A reader believing a change landed is worse than
+    /// the change not landing.
+    @Test func achangeThatCouldNotBeWrittenIsReported() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        #expect(model.presentation.problem == nil)
+
+        // **Writes refused, reads still working.** Making the ledger unopenable instead would
+        // fail the *reload* too, and the reload's own error would satisfy the assertion — the
+        // swallow-the-write mutant passed that version. A read-only file separates the two.
+        // All three, because WAL mode commits into the sidecar: making only the main file
+        // read-only let the archive succeed through `-wal`, which the first version of this
+        // test did not notice.
+        let files = ["", "-wal", "-shm"].map { path + $0 }
+        for file in files where FileManager.default.fileExists(atPath: file) {
+            try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: file)
+        }
+        defer {
+            for file in files where FileManager.default.fileExists(atPath: file) {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+            }
+        }
+
+        model.act(.archive)
+        try await settle { model.presentation.problem != nil }
+        #expect(model.presentation.problem?.isEmpty == false, "and it says what went wrong")
+        // The read still worked, so the reported failure is the write's and not the reload's.
+        #expect(model.presentation.rows.count == 1, "the list was read fine")
+        #expect(model.presentation.rows.first?.status != .archived, "and the archive did not land")
+    }
+
     // MARK: - Bulk actions, and putting them back (M04)
 
     /// **Pause was a one-way door.** `setPaused(false, …)` existed and nothing could reach it, so a

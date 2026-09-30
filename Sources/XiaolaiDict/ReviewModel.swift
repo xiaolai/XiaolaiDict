@@ -75,7 +75,11 @@ final class ReviewModel {
                                     cards: cards.map { (id: $0.id, revision: $0.revision) })
             await draw()
         } catch {
-            presentation = ReviewPresentation(stage: .empty(.nothingDue))
+            // **Said, not swallowed.** This drew "nothing is due" over a ledger that could not be
+            // opened, which tells a reader with a full collection that they are up to date.
+            session = nil
+            presentation = ReviewPresentation(
+                stage: .empty(.couldNotBeRead(error.localizedDescription)))
         }
     }
 
@@ -114,9 +118,11 @@ final class ReviewModel {
                 beyondBatch: max(0, counts.due - cards.count), heldBack: counts.heldBack)
             await draw()
         } catch {
-            problem = String(localized: "The review could not be started: \(error.localizedDescription)",
-                             comment: "Shown in the Review window when its cards could not be read")
-            presentation = ReviewPresentation(stage: .empty(.nothingDue))
+            // `problem` belongs to a card on screen; there is none, so the reason goes in the
+            // stage itself — assigning it here and then drawing `.nothingDue` lost it entirely.
+            session = nil
+            presentation = ReviewPresentation(
+                stage: .empty(.couldNotBeRead(error.localizedDescription)))
         }
     }
 
@@ -180,12 +186,21 @@ final class ReviewModel {
             return
         }
         answer = nil
+        // **A failure belongs to the card it happened on.** Carried across, "That answer was not
+        // saved" appeared on an untouched card the reader had merely skipped to.
+        problem = nil
         guard let opening = store() else { return }
         let fetched: ReviewCue?
         do {
             fetched = try await opening.value.cue(forCard: current.cardID)
         } catch {
-            fetched = nil
+            // **A failed read is not a card in repair.** Both used to become nil and then a
+            // silent skip, so one storage failure could consume an entire batch without ever
+            // drawing a card — and the sitting would end saying everything had been reviewed.
+            self.session = nil
+            presentation = ReviewPresentation(
+                stage: .empty(.couldNotBeRead(error.localizedDescription)))
+            return
         }
         // **The card this was fetched for is still the card on screen**, or a later draw owns the
         // surface and this one has nothing to say. Unlike `reveal`'s check this one is defensive:
@@ -216,7 +231,18 @@ final class ReviewModel {
     private func reveal(_ attempt: UUID?) async {
         guard let session, let current = session.current, let opening = store() else { return }
         guard current.id == attempt else { return }
-        let fetched = try? await opening.value.revealed(cardID: current.cardID)
+        let fetched: ReviewAnswer?
+        do {
+            fetched = try await opening.value.revealed(cardID: current.cardID)
+        } catch {
+            // **`try?` marked the card revealed with nothing to show**, so "Show the answer"
+            // could be pressed again and again and do nothing, with no reason given.
+            guard self.session?.current?.id == attempt else { return }
+            problem = String(localized: "The answer could not be read: \(error.localizedDescription)",
+                             comment: "Shown on a review card when its answer could not be loaded")
+            if let cue, let session = self.session { render(cue, in: session) }
+            return
+        }
         guard self.session?.current?.id == attempt else { return }
         answer = fetched
         self.session?.reveal()
@@ -282,6 +308,10 @@ final class ReviewModel {
         } catch {
             problem = String(localized: "That could not be taken back: \(error.localizedDescription)",
                              comment: "Shown when undoing a review or a postponement failed")
+            // **Drawn, or the reason is invisible.** The view observes `presentation`; assigning
+            // `problem` and returning left the old presentation on screen, so a failed undo
+            // looked exactly like one the reader had not pressed.
+            if let cue, let session = self.session { render(cue, in: session) }
             return
         }
         self.session?.undoLast(revision: restored)

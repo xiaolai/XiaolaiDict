@@ -32,6 +32,19 @@ public struct LibraryView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            // **Above every branch, because a failure is not a state of the list.** `problem` was
+            // drawn only by the empty view, so a database error under the Suggested filter — or
+            // one that arrived while rows were on screen — read as "Nothing to suggest yet", or
+            // as nothing at all.
+            if let problem = state.problem {
+                Text(verbatim: problem)
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, scale.space.padAcross)
+                    .padding(.vertical, scale.space.tight)
+            }
             if state.filter == .suggested {
                 suggestions
             } else if state.rows.isEmpty {
@@ -320,11 +333,6 @@ public struct LibraryView: View {
             } else {
                 Text("Nothing matches.")
                 Button("Clear the search") { act(.search("")) }
-            }
-            if let problem = state.problem {
-                Text(verbatim: problem)
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.orange)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

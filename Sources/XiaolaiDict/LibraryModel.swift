@@ -30,6 +30,10 @@ final class LibraryModel {
     /// The last bulk pause or archive, while it can still be put back. **One level**: an undo that
     /// outlives the reader's memory of what it reverses is a worse control than none.
     private var undoable: Undo?
+    /// Why the last change did not land, until the next one is attempted. **Not the reload's
+    /// `problem`**, which is about reading; this one is about writing, and both reach the same
+    /// field on the presentation.
+    private var problem: String?
     /// Which reload is the current one. **Every reload suspends several times** — opening the
     /// store, the page, the count, the answers, the timeline — and the reader can type, filter or
     /// select during any of them. An older reload resuming last wrote its rows over newer ones,
@@ -108,6 +112,7 @@ final class LibraryModel {
     }
 
     func act(_ action: LibraryAction) {
+        problem = nil
         switch action {
         // Any change to what is being looked at starts the paging over: a page count carried
         // across a new search is a "show more" button that reveals rows from the old one.
@@ -292,9 +297,19 @@ final class LibraryModel {
         undoable = nil
         guard let opening = store() else { return }
         Task {
-            if let ledger = try? await opening.value { try? await change(ledger) }
+            // **A write that did not happen is said, not dropped.** `try?` on both calls meant a
+            // failed archive, pause, tag or removal cleared the selection and redrew a list that
+            // looked exactly as if it had worked — the reader believing a change landed is worse
+            // than the change not landing.
+            var failure: String?
+            do {
+                try await change(try await opening.value)
+            } catch {
+                failure = error.localizedDescription
+            }
             if !keepingSelection { selection = [] }
             await reload()
+            if let failure { problem = failure; republish() }
         }
     }
 
@@ -309,13 +324,36 @@ final class LibraryModel {
         undoable = nil
         guard let opening = store(), !ids.isEmpty else { return }
         Task {
-            if let ledger = try? await opening.value,
-               let recorded = try? await change(ledger, ids) {
-                undoable = recorded
+            var failure: String?
+            do {
+                undoable = try await change(try await opening.value, ids)
+            } catch {
+                failure = error.localizedDescription
             }
             selection = []
             await reload()
+            if let failure { problem = failure; republish() }
         }
+    }
+
+    /// Puts `problem` on the presentation the reload just built.
+    ///
+    /// **A reload overwrites it**, because it constructs a whole new presentation — so a failure
+    /// recorded before the reload was drawn over by the reload that followed it.
+    private func republish() {
+        guard let problem else { return }
+        presentation = LibraryPresentation(
+            rows: presentation.rows, total: presentation.total, search: presentation.search,
+            filter: presentation.filter, scriptFiltered: presentation.scriptFiltered,
+            selection: presentation.selection, hasMore: presentation.hasMore,
+            canConfirm: presentation.canConfirm, suggestions: presentation.suggestions,
+            exported: presentation.exported,
+            selectionIsPaused: presentation.selectionIsPaused,
+            selectionIsArchived: presentation.selectionIsArchived,
+            undoable: presentation.undoable, setAside: presentation.setAside,
+            tagVocabulary: presentation.tagVocabulary, tag: presentation.tag,
+            retention: presentation.retention, inspector: presentation.inspector,
+            problem: problem)
     }
 
     /// Writes the collection out and remembers where it went.
