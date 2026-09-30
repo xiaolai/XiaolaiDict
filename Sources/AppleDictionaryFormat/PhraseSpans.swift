@@ -386,7 +386,10 @@ public struct PhraseSpans: Sendable, Equatable {
                 // index 2 kept span 0...2 over 2...4, and the outer ranking never saw the placement this
                 // had already discarded.
                 let taken = Self.borrowedForms(runs, at: starts, in: words)
-                if best == nil || gap < best!.gap || (gap == best!.gap && taken < borrowed) {
+                // `best.map { … } ?? true` rather than `best == nil || best!…`: the same shape the
+                // capture paths use for "nothing yet, or better than what there is", and it does not
+                // rest on a short-circuit to make a force unwrap safe.
+                if best.map({ gap < $0.gap || (gap == $0.gap && taken < borrowed) }) ?? true {
                     best = Match(phrase: template.phrase, words: span, separation: separation)
                     borrowed = taken
                 }
