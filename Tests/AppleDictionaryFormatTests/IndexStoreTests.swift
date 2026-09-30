@@ -648,3 +648,54 @@ import XiaolaiDictTestSupport
         #expect(throws: IndexStore.Failure.self) { try IndexStoreTests.register(reading) }
     }
 }
+
+/// **A query short of the columns its reader asks for is refused, not answered.**
+///
+/// `Row` had no bounds check at all, which is the `Ledger`'s defect in the other direction: SQLite
+/// answers an out-of-range read with NULL, so `text(9)` on a two-column `SELECT` came back as "this row
+/// has no value" and every caller believed it. The ledger caught the same mistake by ending the process.
+/// One rule now, and neither outcome — ADR-0042.
+struct IndexStoreProjectionTests {
+    /// The refusal names the column and the width, because the mistake is in the SQL and that is what
+    /// tells the next reader which `SELECT` to look at.
+    @Test func acolumnPastTheProjectionIsRefused() throws {
+        let store = try IndexStore(path: ":memory:")
+        do {
+            try store.query("SELECT 'a', 'b'", bind: []) { row in _ = row.text(9) }
+            Issue.record("a read nine columns past a two-column SELECT was answered")
+        } catch let failure as IndexStore.Failure {
+            #expect(failure.description == "column 9 is outside this query's 2 columns")
+        }
+    }
+
+    @Test func anegativeColumnIsRefusedToo() throws {
+        let store = try IndexStore(path: ":memory:")
+        #expect(throws: IndexStore.Failure.self) {
+            try store.query("SELECT 1", bind: []) { row in _ = row.int(-1) }
+        }
+    }
+
+    /// The positive control: a query that reads what it projects is not refused, and answers.
+    @Test func areadInsideTheProjectionIsNotRefused() throws {
+        let store = try IndexStore(path: ":memory:")
+        var text: String?
+        var number: Int64 = 0
+        try store.query("SELECT 'seven', 7", bind: []) { row in
+            text = row.text(0)
+            number = row.int(1)
+        }
+        #expect(text == "seven")
+        #expect(number == 7)
+    }
+
+    /// The bytes and their count must come from the same column, or a clamped index reads past the end of
+    /// a buffer. Two spellings were harmless only while nothing could clamp.
+    @Test func textIsReadByByteCountOfItsOwnColumn() throws {
+        let store = try IndexStore(path: ":memory:")
+        var read: [String?] = []
+        try store.query("SELECT 'short', 'a much longer value than the first'", bind: []) { row in
+            read = [row.text(0), row.text(1)]
+        }
+        #expect(read == ["short", "a much longer value than the first"])
+    }
+}

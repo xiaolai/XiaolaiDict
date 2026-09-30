@@ -79,10 +79,14 @@ public final class IndexStore {
         /// A read-only open found an index written under a different schema. **Refused rather than
         /// migrated or discarded**: the reader owns this file, and only a rebuild may throw it away.
         case unsupportedSchema(found: Int, expected: Int)
+        /// A query asked for a column its `SELECT` does not project — a mistake in this file's SQL, and
+        /// never anything the reader's index can cause. See `IndexStore.ProjectionFault`.
+        case projection(String)
         public var description: String {
             switch self {
             case .open(let s): return "could not open the index: \(s)"
             case .sql(let s): return s
+            case .projection(let s): return s
             case .foreignKeysUnavailable:
                 return "SQLite would not enable foreign keys; the schema's constraints would not hold"
             case .unsupportedSchema(let found, let expected):
@@ -713,14 +717,48 @@ public final class IndexStore {
     /// One row of a result set, read by column index.
     public struct Row {
         let statement: OpaquePointer
+        let fault: ProjectionFault
+
         /// Read by byte count rather than to the first NUL, so a stored U+0000 round-trips instead of
         /// truncating what comes back.
         public func text(_ column: Int32) -> String? {
+            // One checked column for both calls: the bytes and their count must come from the same one.
+            let column = inRange(column)
             guard let bytes = sqlite3_column_text(statement, column) else { return nil }
             let count = Int(sqlite3_column_bytes(statement, column))
             return String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
         }
-        public func int(_ column: Int32) -> Int64 { sqlite3_column_int64(statement, column) }
+
+        public func int(_ column: Int32) -> Int64 { sqlite3_column_int64(statement, inRange(column)) }
+
+        /// A column this query does not project, recorded so `query` can refuse it.
+        ///
+        /// **There was no check here at all**, which is the same defect as the `Ledger`'s in the other
+        /// direction: SQLite answers an out-of-range read with NULL, so `text(9)` on a two-column
+        /// `SELECT` returned "this row has no value" and every caller believed it. The ledger caught
+        /// that and ended the process; this did not catch it and answered wrongly. One rule now, and
+        /// neither outcome.
+        private func inRange(_ column: Int32) -> Int32 {
+            let count = sqlite3_column_count(statement)
+            guard column >= 0, column < count else {
+                fault.record("column \(column) is outside this query's \(count) columns")
+                return 0
+            }
+            return column
+        }
+    }
+
+    /// Where a read outside a query's projection is recorded, so the query is refused rather than
+    /// answered from a NULL. A class because `query`'s row closure takes a `Row` by value and cannot
+    /// throw — the column indices are constants in this file's own SQL, not anything the reader's index
+    /// can affect.
+    public final class ProjectionFault {
+        private(set) var first: String?
+
+        func record(_ what: String) {
+            guard first == nil else { return }
+            first = what
+        }
     }
 
     /// Binds the parameters of one statement. Takes `[Any?]` and **rejects an unsupported type at
@@ -746,8 +784,10 @@ public final class IndexStore {
                 status = sqlite3_bind_int64(statement, index, Int64(i))
             case let d as Double:
                 status = sqlite3_bind_double(statement, index, d)
-            default:
-                throw Failure.sql("cannot bind \(type(of: value!)) at parameter \(index)")
+            // `case nil` above took the only nil, so `some` binds what is left without a `!` —
+            // which reads as an assertion the compiler can already make.
+            case .some(let unsupported):
+                throw Failure.sql("cannot bind \(type(of: unsupported)) at parameter \(index)")
             }
             guard status == SQLITE_OK else { throw error() }
         }
@@ -803,13 +843,23 @@ public final class IndexStore {
         }
     }
 
-    private func query(_ sql: String, bind values: [Any?], _ row: (Row) -> Void) throws {
+    /// Not `private`, so a query short of the columns its reader asks for can be exercised directly:
+    /// every real caller here projects what it reads, which is exactly why the refusal needs a test of
+    /// its own rather than one that waits for a mistake.
+    func query(_ sql: String, bind values: [Any?], _ row: (Row) -> Void) throws {
         let statement = try prepareOne(sql)
         defer { sqlite3_finalize(statement) }
         try bind(values, to: statement)
+        // Shared by every row of this statement, so the first bad read is the one reported.
+        let fault = ProjectionFault()
         while true {
             let status = sqlite3_step(statement)
-            if status == SQLITE_ROW { row(Row(statement: statement)); continue }
+            if status == SQLITE_ROW {
+                row(Row(statement: statement, fault: fault))
+                // Per row rather than at the end, so a whole result set is not read from NULLs first.
+                if let what = fault.first { throw Failure.projection(what) }
+                continue
+            }
             guard status == SQLITE_DONE else { throw error() }
             break
         }

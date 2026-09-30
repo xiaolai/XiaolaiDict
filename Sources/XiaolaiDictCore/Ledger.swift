@@ -1,6 +1,8 @@
 import DictionaryModel
 import Foundation
 import SQLite3
+import XiaolaiDictBase
+import os
 
 /// Whether the dictionaries had the word. A miss is recorded too — usually a typo or a stray
 /// selection, which later triage can tell from a real gap — but it does not rank in the study list.
@@ -122,6 +124,10 @@ public enum LedgerError: Error, Equatable {
     case newerSchema(found: Int, supported: Int)
     /// A row holds a value this schema does not allow — the file was edited or damaged.
     case corruptRow(String)
+    /// A query asked for a column its `SELECT` does not project: a mistake in the query, and **never
+    /// the reader's data**. Refused rather than answered from the NULL SQLite would hand back — see
+    /// `Ledger.ProjectionFault`.
+    case projection(String)
     /// A card asks a question this build has no presentation for. Nothing creates one — every
     /// caller passes `.meaning` — so it means a ledger from a later XiaolaiDict, or one edited.
     case unaskablePrompt(String)
@@ -156,6 +162,10 @@ final class Connection {
 
 public final class Ledger {
     public static let schemaVersion = 12
+    /// A mistake in this file's own SQL has to reach the log whatever a caller does with the thrown
+    /// error — see `ProjectionFault`. Nothing reader-facing is written here: `XiaolaiDictCore` carries
+    /// no display text (ADR-0025).
+    static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "ledger")
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.
     static let busyTimeoutMilliseconds: Int32 = 2_000
@@ -1009,12 +1019,50 @@ public final class Ledger {
                 }
             guard status == SQLITE_OK else { throw error() }
         }
+        // Shared by every row of this statement, so the first bad read is the one reported.
+        let fault = ProjectionFault()
         while true {
             switch sqlite3_step(statement) {
-            case SQLITE_ROW: try row(Row(statement: statement))
+            case SQLITE_ROW:
+                do {
+                    try row(Row(statement: statement, fault: fault))
+                } catch {
+                    // **The cause, not the symptom.** A text column read past the end is NULL, which
+                    // `text(_:)` reports as a corrupt row — true of the value and useless about why.
+                    if let what = fault.first { throw LedgerError.projection(what) }
+                    throw error
+                }
+                // Per row rather than at the end, so a whole result set is not decoded from NULLs first.
+                if let what = fault.first { throw LedgerError.projection(what) }
             case SQLITE_DONE: return
             default: throw error()
             }
+        }
+    }
+
+    /// Where a read outside a query's projection is recorded, so `run` can refuse the query **instead of
+    /// ending the process**.
+    ///
+    /// This was a `precondition` in `Row.inRange`, and the reasoning for being loud there was right: an
+    /// out-of-range read comes back as NULL, indistinguishable from a column that is genuinely empty,
+    /// which is how `history()` came to read a `part_of_speech` its `SELECT` never projected and pass
+    /// every test. What was wrong was the *severity*. A mistake in one query's `SELECT` ended the app,
+    /// taking the lookup path down with the study table — the one thing ADR-0034 exists to prevent.
+    ///
+    /// The numeric accessors cannot simply throw: `integer`, `real` and `isNull` are read as plain
+    /// values at some 160 call sites, and a query's column indices are constants, not data. So the fault
+    /// is carried out of the row closure and `run` turns it into a `LedgerError`.
+    ///
+    /// **Logged as well as thrown.** A caller writing `try?` would otherwise restore exactly the silence
+    /// the precondition was added to break, and this is a mistake in the code rather than a state the
+    /// reader's file can be in — so it belongs in the log whatever the caller does with the error.
+    final class ProjectionFault {
+        private(set) var first: String?
+
+        func record(_ what: String) {
+            guard first == nil else { return }
+            first = what
+            Ledger.log.fault("ledger: \(what, privacy: .public)")
         }
     }
 
@@ -1024,22 +1072,32 @@ public final class Ledger {
 
     struct Row {
         let statement: OpaquePointer
+        let fault: ProjectionFault
 
         /// An index past the end of the projection is a **mistake in the query, not a NULL**.
         /// SQLite answers out-of-range reads with NULL, which cannot be told from a column that is
         /// genuinely empty — that is how `history()` came to read a `part_of_speech` its SELECT
-        /// never projected, return nil for every row, and pass every test. Loud here, once, rather
-        /// than a wrong answer everywhere.
+        /// never projected, return nil for every row, and pass every test.
+        ///
+        /// **Recorded, not trapped** — see `ProjectionFault`. Column 0 is read in its place, because
+        /// SQLite documents an out-of-range index as undefined and a row that reached here has at least
+        /// one column; the value is discarded, since `run` refuses the query as soon as the closure
+        /// returns.
         private func inRange(_ column: Int32) -> Int32 {
             let count = sqlite3_column_count(statement)
-            precondition(
-                column >= 0 && column < count,
-                "column \(column) is outside this query's \(count) columns")
+            guard column >= 0, column < count else {
+                fault.record("column \(column) is outside this query's \(count) columns")
+                return 0
+            }
             return column
         }
 
         func optionalText(_ column: Int32) -> String? {
-            guard let bytes = sqlite3_column_text(statement, inRange(column)) else { return nil }
+            // **One checked column for both calls.** Reading the bytes at one index and their count at
+            // another is a read past the end of the buffer; the two spellings were harmless only while
+            // an out-of-range index could not come back as a different one.
+            let column = inRange(column)
+            guard let bytes = sqlite3_column_text(statement, column) else { return nil }
             // By the stored length, so an embedded NUL does not end the string early.
             let count = Int(sqlite3_column_bytes(statement, column))
             return String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)

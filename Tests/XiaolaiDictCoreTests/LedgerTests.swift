@@ -252,8 +252,9 @@ struct LedgerTests {
         // spans one scheduling hop rather than a fixed 300 ms that a loaded runner could stretch past
         // the writer's own two-second bound.
         try other.execute("COMMIT")
-        // Throws if the write failed rather than waited, which is the assertion.
-        try await write.value
+        // Throws if the write failed rather than waited, which is the assertion. The row id it
+        // answers with is not the point; that the await did not throw is.
+        _ = try await write.value
         #expect(try Ledger(path: path).history(of: "ephemeral").count == 1)
     }
 
@@ -293,3 +294,64 @@ final class SQLiteFile: @unchecked Sendable {  // used from one task at a time
 }
 
 struct SQLiteFileError: Error { let message: String }
+
+/// **A query short of the columns its reader asks for is refused, not fatal.**
+///
+/// SQLite answers an out-of-range read with NULL, which cannot be told from a column that is genuinely
+/// empty — that is how `history()` came to read a `part_of_speech` its SELECT never projected and pass
+/// every test. The guard against that was a `precondition`, so a mistake in one SELECT ended the
+/// process and took the lookup path down with the study table, which is the one thing ADR-0034 exists
+/// to prevent. Still loud — a `.fault` line and a thrown error — and no longer terminal.
+struct LedgerProjectionTests {
+    @Test func acolumnPastTheProjectionIsRefusedRatherThanFatal() throws {
+        let ledger = try Ledger(path: ":memory:")
+        #expect(throws: LedgerError.projection("column 5 is outside this query's 1 columns")) {
+            try ledger.run("SELECT 1", bind: []) { row in _ = row.integer(5) }
+        }
+    }
+
+    @Test func anegativeColumnIsRefusedToo() throws {
+        let ledger = try Ledger(path: ":memory:")
+        #expect(throws: LedgerError.projection("column -1 is outside this query's 1 columns")) {
+            try ledger.run("SELECT 1", bind: []) { row in _ = row.real(-1) }
+        }
+    }
+
+    /// **The projection is named even where the symptom is a corrupt row.** A text column read past the
+    /// end is NULL, which `text(_:)` reports as `corruptRow` — the symptom of the real fault, and the
+    /// less useful of the two messages.
+    @Test func ashortProjectionIsNamedRatherThanTheCorruptRowItLooksLike() throws {
+        let ledger = try Ledger(path: ":memory:")
+        #expect(throws: LedgerError.projection("column 3 is outside this query's 1 columns")) {
+            try ledger.run("SELECT 'a'", bind: []) { row in _ = try row.text(3) }
+        }
+    }
+
+    /// The positive control. Without it every check above would pass on a rule that refused every query.
+    @Test func areadInsideTheProjectionIsNotRefused() throws {
+        let ledger = try Ledger(path: ":memory:")
+        var number = 0
+        var text: String?
+        var missing = true
+        try ledger.run("SELECT 7, 'seven', NULL", bind: []) { row in
+            number = row.integer(0)
+            text = row.optionalText(1)
+            missing = row.isNull(2)
+        }
+        #expect(number == 7)
+        #expect(text == "seven")
+        #expect(missing)
+    }
+
+    /// **The text is read by the same column the length is.** Reading the bytes at one column and the
+    /// count at another is how a clamped index would read past the end of a buffer; the two spellings
+    /// were there before anything clamped, which is why this pins them together.
+    @Test func textIsReadByByteCountOfItsOwnColumn() throws {
+        let ledger = try Ledger(path: ":memory:")
+        var read: [String?] = []
+        try ledger.run("SELECT 'short', 'a much longer value than the first'", bind: []) { row in
+            read = [row.optionalText(0), row.optionalText(1)]
+        }
+        #expect(read == ["short", "a much longer value than the first"])
+    }
+}
