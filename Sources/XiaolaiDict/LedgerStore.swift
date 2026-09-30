@@ -170,7 +170,6 @@ actor LedgerStore {
 
     func library(_ query: LibraryQuery) throws -> [LibraryRow] { try ledger.library(query) }
     func libraryCount(_ query: LibraryQuery) throws -> Int { try ledger.libraryCount(query) }
-    func answer(of noteID: UUID) throws -> StudyAnswer? { try ledger.answer(of: noteID) }
     func answers(of ids: [UUID]) throws -> [UUID: StudyAnswer] { try ledger.answers(of: ids) }
     func setPaused(_ paused: Bool, ofNotes ids: [UUID]) throws {
         try ledger.setPaused(paused, ofNotes: ids)
@@ -179,6 +178,15 @@ actor LedgerStore {
         try ledger.setEnrollment(enrollment, ofNotes: ids)
     }
     func removeFromStudy(_ ids: [UUID]) throws { try ledger.removeFromStudy(ids) }
+
+    /// **The other deletion** (ADR-0033). *Remove from study* keeps every lookup; this keeps the
+    /// note and takes the readings, leaving it `needsRepair`. Both exist in the ledger; only the
+    /// first had a control, so the reader could not tidy their reading without losing the card.
+    func deleteReading(ofNotes ids: [UUID]) throws {
+        var lookups: [Int] = []
+        for id in ids { lookups += try ledger.lookupIDs(evidencing: id) }
+        try ledger.deleteReading(lookups: lookups)
+    }
 
     /// What a bulk action is about to change, read before it changes it — so putting it back
     /// restores what was there rather than the inverse of what was done.
@@ -222,7 +230,6 @@ actor LedgerStore {
     func ignoreSuggestion(lemma: String, language: String, at when: Date) throws {
         try ledger.ignoreSuggestion(lemma: lemma, language: language, at: when)
     }
-    func deleteReading(lookups ids: [Int]) throws { try ledger.deleteReading(lookups: ids) }
 
     func readingErasureImpact(at path: String) throws
         -> (lookups: Int, notesLeftWithoutACue: Int, backups: Int) {

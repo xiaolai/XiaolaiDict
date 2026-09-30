@@ -1,4 +1,3 @@
-import DictionaryModel
 import Foundation
 import SwiftUI
 import XiaolaiDictCore
@@ -399,6 +398,10 @@ public struct LibraryView: View {
                 Button("Remove \(state.selection.count) from study", role: .destructive) {
                     act(.removeFromStudy)
                 }
+                Button("Delete the reading behind \(state.selection.count)", role: .destructive) {
+                    act(.deleteReading)
+                }
+                .help(Text("Keeps the cards and removes the sentences they were saved from"))
                 TextField("Tag", text: $tag)
                     .frame(maxWidth: Token.Library.tagWidth)
                     .onSubmit {
@@ -512,6 +515,10 @@ public enum LibraryAction: Sendable, Equatable {
     /// reader remembers.
     case undo
     case removeFromStudy
+    /// **The other deletion** (ADR-0033), and never the same as the one above: this keeps the
+    /// card and takes the reading that evidences it, leaving the note repairable. The ledger had
+    /// it from the start and nothing offered it, so tidying reading history meant losing cards.
+    case deleteReading
     /// Label the selection. **Organisation, not a fact about memory** — nothing reschedules.
     case tag(String)
     /// **The reader's own words, for the one row they have open.** Replaces what the card reveals

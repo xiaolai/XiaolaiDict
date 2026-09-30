@@ -321,7 +321,7 @@ final class ReviewModel {
     private func render(_ cue: ReviewCue, in session: ReviewSession) {
         guard let current = session.current else { return }
         presentation = ReviewPresentation(stage: .asking(ReviewPresentation.Question(
-            word: cue.word,
+            word: cue.word, accentKey: cue.lemma,
             // **No sentence where the capture did not get one.** The ledger stores the selection
             // itself when nothing surrounded the word, and drawing that as context would be the
             // word echoed back and dressed as the reader's own reading.

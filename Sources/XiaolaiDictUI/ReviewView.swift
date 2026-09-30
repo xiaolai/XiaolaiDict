@@ -1,4 +1,3 @@
-import DictionaryModel
 import Foundation
 import SwiftUI
 import XiaolaiDictCore
@@ -43,7 +42,10 @@ public struct ReviewView: View {
     /// the model: a colour is a design value, and a model that held one would be deciding how the
     /// card looks. Hashed the same way the drawer hashes it, so one word is one colour everywhere.
     private func accent(for question: ReviewPresentation.Question) -> Color {
-        ReadingPalette.accent(for: question.word).color(in: scheme)
+        // **The lemma, which is what the lookup and the drawer hash.** Hashing the captured
+        // surface gave *ran* and *run* different colours on different surfaces, which is exactly
+        // the consistency the comment above claims.
+        ReadingPalette.accent(for: question.accentKey).color(in: scheme)
     }
 
     // MARK: - Asking
@@ -294,6 +296,9 @@ public struct ReviewPresentation: Sendable, Equatable {
 
     public struct Question: Sendable, Equatable {
         public let word: String
+        /// What the word's colour is hashed from. **The lemma, not the captured surface**, so
+        /// *ran* and *run* are one word here as they are in the lookup card and the drawer.
+        public let accentKey: String
         public let sentence: Sentence?
         public let source: String
         public let position: Int
@@ -312,10 +317,12 @@ public struct ReviewPresentation: Sendable, Equatable {
         /// A write that failed, in the reader's words. Stays until they act again.
         public let problem: String?
 
-        public init(word: String, sentence: Sentence?, source: String, position: Int,
+        public init(word: String, accentKey: String? = nil, sentence: Sentence?, source: String, position: Int,
                     batchSize: Int, isPractice: Bool = false, prompt: Prompt = .meaningHere,
                     answer: Answer? = nil, isCommitting: Bool = false, problem: String? = nil) {
             self.word = word
+            // Defaults to the word, so a caller with no lemma is unchanged.
+            self.accentKey = accentKey ?? word
             self.sentence = sentence
             self.source = source
             self.position = position

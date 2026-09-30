@@ -164,9 +164,6 @@ public enum Token {
         /// The most any label wraps to. Enough of a sentence to be a cue, not so much that a card
         /// becomes a paragraph.
         static let wrapLines = 2
-        /// A dictionary that answers in prose rather than in senses. Enough to be the answer,
-        /// capped because the card is not the entry.
-        static let proseLines = 6
         /// Cards deeper than this hide exactly behind the last visible one, so a fifty-card pile is
         /// no taller — and no more work to draw — than a three-card one.
         static let pileDepth = 2

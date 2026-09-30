@@ -446,6 +446,29 @@ struct LibraryWiringTests {
         #expect(model.presentation.rows.count == 1, "and the library came back")
     }
 
+    /// **The two deletions, and both reachable.** ADR-0033 says *remove from study* keeps every
+    /// lookup and *delete reading* keeps the note. Only the first had a control, so a reader
+    /// tidying their reading history had to lose the card with it — the ledger could do the
+    /// right thing and nothing asked it to.
+    @Test func deletingTheReadingKeepsTheCard() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let note = try save(ledger, "fine")
+
+        let model = model(path)
+        await model.reload()
+        model.act(.select([note.id]))
+        try await settle { model.presentation.selection == [note.id] }
+        model.act(.deleteReading)
+        try await settle { model.presentation.rows.first?.status == .needsRepair }
+
+        let reopened = try Ledger(path: path)
+        #expect(try reopened.notes().count == 1, "the card went with the reading")
+        #expect(try reopened.history(of: "fine").isEmpty, "the reading stayed")
+        #expect(try reopened.readiness(of: note.id) == .needsRepair)
+    }
+
     // MARK: - Bulk actions, and putting them back (M04)
 
     /// **Pause was a one-way door.** `setPaused(false, …)` existed and nothing could reach it, so a

@@ -18,9 +18,13 @@ extension Ledger {
                 bind: [.text(noteID.uuidString), .text(trimmed)]) { _ in }
     }
 
+    /// **Normalised the same way `tag` normalises.** Adding " law " stores `law`, so removing
+    /// " law " matched nothing and the tag stayed attached — the reader typing what they typed
+    /// before could not take it off.
     public func untag(noteID: UUID, _ tag: String) throws {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         try run("DELETE FROM study_tags WHERE note_id = ? AND tag = ?",
-                bind: [.text(noteID.uuidString), .text(tag)]) { _ in }
+                bind: [.text(noteID.uuidString), .text(trimmed)]) { _ in }
     }
 
     public func tags(of noteID: UUID) throws -> [String] {
@@ -60,7 +64,10 @@ extension Ledger {
                    -- evening, and counting them as two made a single sitting look like the
                    -- repeated reading this ranking exists to find.
                    COUNT(DISTINCT \(Self.studyDayExpression(of: "l.looked_up_at"))) AS days,
-                   COUNT(DISTINCT COALESCE(l.source_app, '')) AS sources,
+                   -- **A lookup with no source is not a place.** COALESCE turned every
+                   -- unattributed reading into one shared "source", so a word read twice in
+                   -- nothing at all counted as diversity and outranked one read in two real apps.
+                   COUNT(DISTINCT l.source_app) AS sources,
                    MAX(l.looked_up_at) AS last,
                    COUNT(*) AS lookups
             FROM lookups l

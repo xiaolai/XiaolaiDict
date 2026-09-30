@@ -47,7 +47,6 @@ struct StudySurfaceTests {
         "scheduledDays(stability:": "The scheduler's own arithmetic.",
         "link(noteID:": "Joins a note to a lookup inside enrol, which is the only correct caller.",
         "locators(of:": "Evidence carried with a phrase note; read by the note's own equality.",
-        "lookupIDs(evidencing:": "The timeline's first step, inside the ledger.",
         "existingCard(of:": "Reads without creating; the timeline and the queue use it.",
         "encounters(ofLookup:": "A lookup's senses, read by the reading projection.",
         "repeatedlyLapsed(": """
@@ -56,6 +55,7 @@ struct StudySurfaceTests {
         "backUp(to:": "Taken before a migration changes the ledger's shape; not a reader's command.",
         "history(of:": "A lemma's lookups, read by the drawer's own projection.",
         "reviews(ofCard:": "One card's events, gathered by `timeline`.",
+        "answer(of:": "One note's answer, read by `enroll`, `export` and `revealed`.",
         // **Exposed by the label-aware match**, which stopped one overload vouching for another.
         // Each had an in-Core caller all along and was hidden behind a namesake that did not.
         "lookupIDs(fromSource:": "One source's lookups, counted by the erasure impact.",

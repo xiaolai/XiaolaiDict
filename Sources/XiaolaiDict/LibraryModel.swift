@@ -197,6 +197,9 @@ final class LibraryModel {
         case .removeFromStudy:
             let ids = Array(selection)
             return apply { try await $0.removeFromStudy(ids) }
+        case .deleteReading:
+            let ids = Array(selection)
+            return apply { try await $0.deleteReading(ofNotes: ids) }
         }
         Task { await reload() }
     }

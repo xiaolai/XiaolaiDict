@@ -514,6 +514,10 @@ public struct ReviewCue: Sendable, Equatable {
     public let card: StudyCard
     /// The word as it was on screen, which is not always its dictionary form.
     public let word: String
+    /// What the word's colour is hashed from everywhere else: the lemma. **Not the surface** —
+    /// *ran* and *run* are one word, and hashing the captured form gave them different colours
+    /// on different surfaces.
+    public let lemma: String
     /// The reader's own sentence. **Theirs, not a publisher's** — which is what makes it a cue and
     /// not an answer.
     /// Nil where there is no reading behind the card — a custom one the reader wrote (C07).
@@ -530,10 +534,11 @@ public struct ReviewCue: Sendable, Equatable {
     /// what it is asking about without saying what it means.
     public let target: StudyTarget
 
-    public init(card: StudyCard, word: String, sentence: String?, range: NSRange?,
+    public init(card: StudyCard, word: String, lemma: String? = nil, sentence: String?, range: NSRange?,
                 place: ReadingPlace, readAt: Date?, quality: CaptureQuality?, target: StudyTarget) {
         self.card = card
         self.word = word
+        self.lemma = lemma ?? word
         self.sentence = sentence
         self.range = range
         self.place = place
@@ -575,7 +580,7 @@ extension Ledger {
             .sorted { $0.at > $1.at }
         if let reading = readings.first {
             return ReviewCue(
-                card: card, word: reading.surface, sentence: reading.sentence,
+                card: card, word: reading.surface, lemma: reading.lemma, sentence: reading.sentence,
                 range: reading.sentenceRange, place: reading.place, readAt: reading.at,
                 quality: reading.quality, target: note.target)
         }

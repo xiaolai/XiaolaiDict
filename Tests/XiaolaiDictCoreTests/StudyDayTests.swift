@@ -87,6 +87,19 @@ struct StudyDayTests {
 
     /// A cutoff of midnight is allowed and means what it says; nonsense is clamped rather than
     /// refused, because this is a preference and not a boundary anything hostile reaches.
+    /// **Decoding goes through the clamp too.** Synthesised `Codable` assigns stored properties
+    /// directly, so a persisted 99 came back as 99 and the day boundary landed days away.
+    @Test func adecodedCutoffIsClampedLikeAconstructedOne() throws {
+        let json = Data(#"{"timeZone":{"identifier":"UTC"},"cutoffHour":99}"#.utf8)
+        let decoded = try JSONDecoder().decode(StudyDay.self, from: json)
+        #expect(decoded.cutoffHour == 23, "decoding bypassed the clamp")
+
+        // And a round trip of a legitimate value is unchanged.
+        let original = StudyDay(timeZone: TimeZone(identifier: "UTC")!, cutoffHour: 4)
+        let back = try JSONDecoder().decode(StudyDay.self, from: try JSONEncoder().encode(original))
+        #expect(back == original)
+    }
+
     @Test func anOutOfRangeCutoffIsClamped() {
         #expect(StudyDay(cutoffHour: -3).cutoffHour == 0)
         #expect(StudyDay(cutoffHour: 99).cutoffHour == 23)

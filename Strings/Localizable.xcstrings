@@ -308,6 +308,9 @@
     "Delete all reading history…" : {
 
     },
+    "Delete the reading behind %lld" : {
+
+    },
     "Deleting your reading history keeps the meanings you saved. They will need a new sentence before they can be reviewed again." : {
 
     },
@@ -429,6 +432,9 @@
 
     },
     "Keep this sense as a note" : {
+
+    },
+    "Keeps the cards and removes the sentences they were saved from" : {
 
     },
     "Key" : {

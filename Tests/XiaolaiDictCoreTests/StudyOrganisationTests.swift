@@ -377,6 +377,38 @@ struct StudyOrganisationTests {
         #expect(found.first?.language == "fr")
     }
 
+    /// **A tag comes off the way it went on.** Adding " law " stores `law`; removing " law "
+    /// compared the untrimmed text and matched nothing, so the reader typing exactly what they
+    /// typed before could not take the tag off.
+    @Test func atagIsRemovedByTheWordsTheReaderTyped() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, "fine")
+        try ledger.tag(noteID: note.id, "  law  ")
+        #expect(try ledger.tags(of: note.id) == ["law"], "stored trimmed")
+        try ledger.untag(noteID: note.id, "  law  ")
+        #expect(try ledger.tags(of: note.id).isEmpty, "it went on trimmed and would not come off")
+    }
+
+    /// **A reading with no source is not a place it was read.** `COALESCE(source_app, '')` made
+    /// every unattributed lookup share one synthetic source, so a word read twice in nothing at
+    /// all reported two sources and outranked one genuinely read in two apps.
+    @Test func lookupsWithNoSourceAreNotCountedAsAplace() throws {
+        let ledger = try ledger()
+        let day: TimeInterval = 86_400
+        for offset in [0.0, day] {
+            _ = try ledger.record(LookupRecord(
+                surface: "nowhere", lemma: "nowhere", context: "A sentence with nowhere.",
+                lemmaBasis: .tagger, language: "en", contextRange: nil,
+                place: ReadingPlace(bundleID: nil, name: nil),
+                lookedUpAt: now.addingTimeInterval(offset), result: .found,
+                answeredBy: .dictionaryService, quality: nil, script: .latin))
+        }
+        let found = try #require(
+            try ledger.suggestions(limit: 10, language: "en", studying: [.latin]).first)
+        #expect(found.lemma == "nowhere")
+        #expect(found.distinctSources == 0, "two readings from nowhere are not two places")
+    }
+
     /// **A word already taken up is never suggested**, in any disposition — a word the reader
     /// ignored coming back as a suggestion is the whole point of ignoring it, undone.
     @Test func aWordAlreadyTakenUpIsNotSuggested() throws {

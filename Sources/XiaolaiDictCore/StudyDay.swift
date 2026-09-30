@@ -23,6 +23,15 @@ public struct StudyDay: Sendable, Equatable, Codable {
     /// The default: the reader's own timezone, and Anki's cutoff.
     public static var standard: StudyDay { StudyDay(timeZone: .current, cutoffHour: defaultCutoffHour) }
 
+    /// **Decoded through the initialiser, so the clamp is not optional.** Synthesised `Codable`
+    /// assigns the stored properties directly, so a persisted or hand-written `cutoffHour` of 99
+    /// came back as 99 and `start(containing:)` answered a date three days out.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(timeZone: try values.decode(TimeZone.self, forKey: .timeZone),
+                  cutoffHour: try values.decode(Int.self, forKey: .cutoffHour))
+    }
+
     public init(timeZone: TimeZone = .current, cutoffHour: Int = StudyDay.defaultCutoffHour) {
         self.timeZone = timeZone
         // A cutoff outside the clock is a setting nobody can act on; clamped rather than refused,
