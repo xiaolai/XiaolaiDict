@@ -29,9 +29,39 @@ cd "$(dirname "$SELF")/.."
 host=${1:?usage: e2e.sh <ssh-host> [stage...]}
 shift
 STAGES="$*"
+# **Validated here, before anything is sent.** `ssh host cmd a b` hands the arguments to a remote
+# *shell*, which reparses them — so a stage name carrying `;` or a backtick would run as a command
+# there, and the remote allowlist that rejects unknown names never gets the chance. Stage names are
+# lower-case words; anything else is refused by shape, on this side of the connection.
+case $STAGES in
+    *[!a-z\ ]*) echo "e2e: FAIL: a stage name is a lower-case word; got '$STAGES'" >&2; exit 1 ;;
+esac
 readonly APP=.build/XiaolaiDict.app
 readonly REMOTE_DIR=XiaolaiDictE2E
 fail() { echo "e2e: FAIL: $*" >&2; exit 1; }
+# **One run at a time against a given host.** Two runs share the remote installation, the app's
+# preferences, the model stash and the local helper directory — so one quits the other's app
+# mid-assertion, restores a preference the other is still using, and `stash_models` refuses
+# because a stash it did not make is already there. The second run is refused rather than allowed
+# to corrupt the first: an `flock` on a per-host file, released when this process exits.
+readonly RUN_LOCK="${TMPDIR:-/tmp}/xiaolaidict-e2e-$(printf '%s' "$host" | tr -c 'A-Za-z0-9' '_').lock"
+exec 9>"$RUN_LOCK" || fail "could not open the run lock at $RUN_LOCK"
+if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || fail "another e2e run is already using $host (lock: $RUN_LOCK)"
+else
+    # macOS has no flock(1); shlock's pid file is the portable equivalent and is what this uses.
+    #
+    # **No `trap` here.** This file has exactly one `EXIT` trap — `on_exit`, which runs every
+    # registered cleanup — and a second one silently replaces it. Installed here, the later
+    # `trap on_exit EXIT` overwrote it and the lock leaked; installed later it would have
+    # overwritten the cleanups, which is far worse. Measured: the file survived a completed run.
+    #
+    # Nothing needs to remove it: `shlock` refuses only when the pid it holds is still alive, so
+    # a file left by a finished run is taken over by the next one.
+    if ! /usr/bin/shlock -f "$RUN_LOCK.pid" -p $$; then
+        fail "another e2e run is already using $host (lock: $RUN_LOCK.pid)"
+    fi
+fi
 stage() { echo; echo "== $*"; }
 
 [ -d "$APP" ] || fail "$APP does not exist; run make first"
@@ -476,7 +506,18 @@ chmod 700 "$reports"
 drop_reports() { rm -rf "$reports"; }
 at_exit drop_reports
 
-newest_row_id() { sqlite3 -readonly "$ledger" "select coalesce(max(id), 0) from lookups" 2>/dev/null || echo 0; }
+# **A query that failed is not a ledger with no rows.** Falling back to 0 made every historical
+# lookup count as evidence of the one the stage had just driven — the baseline is what tells this
+# run's row from every earlier run's, so a baseline nobody could read has to stop the stage.
+newest_row_id() {
+    local answer
+    if ! answer=$(sqlite3 -readonly "$ledger" "select coalesce(max(id), 0) from lookups" 2>&1); then
+        flunk "the ledger baseline could not be read, so no row count below means anything ($answer)"
+        printf '%s' "-1"
+        return 0
+    fi
+    printf '%s' "$answer"
+}
 # Rows for one lookup: newer than id $1, of the word $2, read in the app $3. Both halves narrow it
 # — the ledger holds other lookups of the same word from earlier runs and other stages, and the
 # deadline stage looks up this very word. Quotes in the word are doubled rather than trusted: the
@@ -517,6 +558,47 @@ row_after() {
 # Python because it is already a hard dependency of this file — every report validator is one —
 # so it costs no new requirement, and `date +%s.%N` is GNU-only anyway.
 now_seconds() { python3 -c 'import time; print(f"{time.monotonic():.6f}")'; }
+
+# **A stage establishes what it needs rather than inheriting it.** `make e2e STAGES="deadline"`
+# assumed TextEdit already held the fixture and a dictionary service was already running, and
+# `STAGES="drawer"` assumed the ledger already had rows — all of them side effects of stages that
+# had not run. A single stage is how anyone debugs one, and each of these failed on a machine
+# where nothing was wrong.
+ensure_fixture_open() {
+    pgrep -x TextEdit >/dev/null 2>&1 && return 0
+    open -a TextEdit "$helpers/notes.txt"
+    for _ in $(seq 1 40); do pgrep -x TextEdit >/dev/null 2>&1 && return 0; sleep 0.25; done
+    echo "the TextEdit fixture would not open" >&2
+    return 1
+}
+
+# Drives one real lookup, which is what starts the dictionary service and what puts a row in the
+# ledger. Used by the stages that need either and create neither.
+ensure_one_lookup() {
+    ensure_fixture_open || return 1
+    local baseline
+    baseline=$(newest_row_id)
+    "$helpers/select-text" com.apple.TextEdit meeting 2 >/dev/null 2>&1 || return 1
+    assert_default_shortcut || true
+    "$helpers/keys" 2 control option
+    row_after "$baseline" meeting com.apple.TextEdit >/dev/null
+    "$helpers/keys" 53 2>/dev/null || true
+    [ "$(row_id_of "$baseline" meeting com.apple.TextEdit)" -ne 0 ]
+}
+
+# **Four stages press ⌃⌥D, so one of them has to check it is the shortcut.**
+#
+# Nothing established that: a reader who had customised the combination — which the Settings pane
+# exists to let them do — made every lookup-driving stage fail with "no answer card", a sentence
+# about the product over a harness pressing the wrong keys. `lookUpShortcut` is absent while the
+# default is in force, so absent is the answer these stages need; anything else is named.
+assert_default_shortcut() {
+    local saved
+    saved=$(defaults read com.xiaolaidict lookUpShortcut 2>/dev/null || true)
+    [ -z "$saved" ] && return 0
+    flunk "this Mac has a customised lookup shortcut, and these stages press ⌃⌥D: $saved"
+    return 1
+}
 
 # **Why a lookup produced nothing, when the app itself knows.**
 #
@@ -595,16 +677,27 @@ run_bounded() {
 # 6 trials of 6. `read_point` returned as soon as output appeared and never reaped anything, so the
 # recogniser stage's grid started each capture beside the last one still running — the harness
 # breaking a rule this project measured and wrote down.
+# `pgrep -f` takes a **regular expression**, and a filesystem path is not one: a `+` or a `.` in
+# the checkout's name changes what it matches, and an unanchored pattern reaches any process whose
+# command line merely contains this path. Escaped, and anchored at the start.
+#
+# **Anchored at the start only.** A trailing `$` would be tighter and is the wrong trade: an
+# instrument launched with any further argument would stop matching, and a pattern that matches
+# nothing makes this function return "already finished" — the loud failure becomes a silent one,
+# and the next capture starts beside a screen recorder still running.
+escaped_pattern() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|\\]/\\&/g'; }
+
 end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument to end, then insist
-    local pattern="$exe $1"
+    local pattern="^$(escaped_pattern "$exe $1")"
     for _ in $(seq 1 40); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
     pkill -f "$pattern" 2>/dev/null || true
     for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
     pkill -9 -f "$pattern" 2>/dev/null || true
     for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
-    # Said out loud: an instrument that survives its own killing can still capture the screen, and
-    # whatever runs next would be measuring against it.
-    echo "note: $1 would not die; what runs after this is running beside it"
+    # **A flunk, not a note.** An instrument that survives its own killing can still capture the
+    # screen, and two simultaneous captures deadlock — measured, 6 of 6. Printed as a note, every
+    # check after it ran beside a known-live recorder and reported whatever it got.
+    flunk "$1 would not die; every capture after this would run beside it"
     return 1
 }
 
@@ -774,6 +867,15 @@ if printf '%s' "$reading" | grep -q "Accessibility access for XiaolaiDict is off
     flunk "accessibility: not granted to this session — the selection tests cannot run"
     echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
 fi
+# **And an error is not an answer either.** Valid JSON says the instrument ran; it does not say
+# Accessibility works. `{"error": "Finder is not running"}` is valid JSON with no denial sentence
+# in it, and passed this gate — recording a permission as granted on the strength of a report
+# about something else entirely. Only a selection, or a `nothing` that is not a refusal, is
+# evidence; the two of them are exactly "the instrument reached Accessibility and used it".
+if printf '%s' "$reading" | python3 -c 'import json,sys; sys.exit(0 if "error" in json.load(sys.stdin) else 1)' 2>/dev/null; then
+    flunk "accessibility: the instrument answered with an error, which says nothing about the grant ($(printf '%s' "$reading" | head -c 200))"
+    echo; echo "$failures assertion(s) failed, in 1 stage(s)"; exit 1
+fi
 pass "accessibility: readable"
 fi
 
@@ -815,6 +917,7 @@ open -a TextEdit "$helpers/notes.txt"; sleep 1.5
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "shortcut: could not select ($why)"
 else
+    assert_default_shortcut || true
     "$helpers/keys" 2 control option
     # Waits for the lemma *and* the rendered page, rather than polling for the first and sleeping
     # a fixed second for the second. The page is laid out by WebKit after the panel shows, and on
@@ -879,7 +982,11 @@ PY
     sleep 1
     free=$("$helpers/claim-escape" || true)
     closed=$("$helpers/panel" com.xiaolaidict)
-    if [ "$held" = held ] && [ "$free" = free ] && printf '%s' "$closed" | grep -q '"windows":\[\]'; then
+    # **The lookup panel is gone, not every window.** Requiring an empty window list made a
+    # legitimately open Settings or setup board fail a panel that had been dismissed correctly —
+    # the assertion was about the app, and the claim is about one window.
+    if [ "$held" = held ] && [ "$free" = free ] \
+       && ! printf '%s' "$closed" | python3 -c 'import json,sys; sys.exit(0 if any("meeting" in t for w in json.load(sys.stdin)["windows"] for t in w["texts"]) else 1)' 2>/dev/null; then
         pass "escape: held while the panel shows, closes it, and is released"
     else
         flunk "escape: while shown '$held', after '$free', panel after Escape: $closed"
@@ -907,8 +1014,22 @@ if want deadline; then
 #    once and say what it is waiting for; the entry arrives when the deadline gives up and the
 #    public fallback answers. Before this was so, there was no panel at all until then.
 stopped=""
-resume() { [ -z "$stopped" ] || kill -CONT $stopped 2>/dev/null || true; stopped=""; }
+# **A service this run suspended and could not resume is left hung for everything after it**, so
+# the failure is said and the pids are kept — cleared unconditionally, a later cleanup pass had
+# nothing to retry and nothing to report.
+resume() {
+    [ -n "$stopped" ] || return 0
+    if kill -CONT $stopped 2>/dev/null; then
+        stopped=""
+        return 0
+    fi
+    echo "resume: the dictionary service (pids $stopped) could not be resumed and is still suspended" >&2
+    return 1
+}
 at_exit resume
+# Established, not inherited: this stage run on its own found no fixture and no service.
+ensure_fixture_open || flunk "waiting panel: the TextEdit fixture would not open"
+if ! is_running "$service"; then ensure_one_lookup || true; fi
 if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "waiting panel: could not select ($why)"
 else
@@ -919,7 +1040,8 @@ else
         stopped="${PIDS[*]}"
         kill -STOP "${PIDS[@]}"
         started=$(now_seconds)
-        "$helpers/keys" 2 control option
+        assert_default_shortcut || true
+    "$helpers/keys" 2 control option
         shown="" ; waiting=""
         for _ in $(seq 1 200); do
             view=$("$helpers/panel" com.xiaolaidict)
@@ -1069,6 +1191,12 @@ if want drawer; then
 # 150 s: the history report's worst case is three 30 s captures — the first after boot is measured
 # at nearly 15 s — plus about 7 s of appearing, settling and closing, with launch on top.
 history_report() { run_report --history-report 150; }
+# **The drawer needs something to draw**, and this stage creates none. Run on its own against a
+# clean install the report came back empty and every assertion failed on a machine where nothing
+# was wrong. One real lookup is the cheapest honest fixture: it is what a reader's drawer holds.
+if [ "$(newest_row_id)" -le 0 ]; then
+    ensure_one_lookup || flunk "drawer: could not put a reading in the ledger for the drawer to show"
+fi
 # **The machine's glass setting is put back exactly as it was** — the value, or its absence — and
 # however the script ends. It used to be deleted afterwards, which lost a reader's own choice on
 # this machine, and a failure in between left the forced value behind.
@@ -2005,9 +2133,13 @@ for surface in "Reading History" "Settings…"; do
         continue
     fi
     sleep 2
-    seen=$("$helpers/panel" com.xiaolaidict)
-    if printf '%s' "$seen" | grep -q '"windows":\[\]'; then
-        flunk "scenes: $surface opened no window Accessibility can see"
+    # **This surface's window, and drawn** — not "the app has some window". Any window at all
+    # satisfied the old check, including one that was already open before the menu was touched
+    # and one Accessibility can see but the compositor never draws. `on-screen` is the rule this
+    # project already wrote down: ask the compositor, nothing else is evidence.
+    seen=$("$helpers/on-screen" com.xiaolaidict "${surface%…}")
+    if ! printf '%s' "$seen" | grep -q '"drawn":true'; then
+        flunk "scenes: $surface is not a window the compositor draws ($(printf '%s' "$seen" | head -c 200))"
     else
         pass "scenes: $surface is open and readable through Accessibility"
     fi
@@ -2206,6 +2338,7 @@ lookup_driven=no
 # gathered when it exists, not when it is wanted.
 grant_notice=""
 if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+    assert_default_shortcut || true
     "$helpers/keys" 2 control option
     for _ in $(seq 1 100); do ! is_running "$model_service" || break; sleep 0.1; done
     grant_notice=$(missing_grant)
@@ -2261,8 +2394,18 @@ elif [ "${#PIDS[@]}" -eq 0 ]; then
         flunk "model: no model service to kill, so crash isolation was not exercised"
     fi
 else
-    kill -9 "${PIDS[@]}" 2>/dev/null || true
-    for _ in $(seq 1 50); do is_running "$model_service" || break; sleep 0.1; done
+    # **The kill has to have worked, and the service has to have gone.** Both were discarded:
+    # a `kill` that failed and a wait that simply expired left the service running, and the
+    # "app survived" check below then passed over a crash that never happened.
+    if ! kill -9 "${PIDS[@]}" 2>/dev/null; then
+        flunk "model: the model service could not be killed, so crash isolation was not exercised"
+    fi
+    killed=no
+    for _ in $(seq 1 50); do
+        if ! is_running "$model_service"; then killed=yes; break; fi
+        sleep 0.1
+    done
+    [ "$killed" = yes ] || flunk "model: the model service was still running 5 s after being killed"
     sleep 1
     find_pids "$exe"; app_pid_after=${PIDS[0]:-}
     if [ "$app_pid_after" = "$app_pid_before" ]; then
@@ -2286,13 +2429,26 @@ else
     # drives it, and read out of the ledger the lookup wrote.
     ledger_after_kill=$(newest_row_id)
     if why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
-        "$helpers/keys" 2 control option
+        assert_default_shortcut || true
+    "$helpers/keys" 2 control option
         waited_after=$(row_after "$ledger_after_kill" meeting com.apple.TextEdit)
         "$helpers/keys" 53 2>/dev/null || true
-        if [ "$(row_id_of "$ledger_after_kill" meeting com.apple.TextEdit)" -ne 0 ]; then
+        recovered_id=$(row_id_of "$ledger_after_kill" meeting com.apple.TextEdit)
+        if [ "${recovered_id:-0}" -ne 0 ]; then
             pass "model: the app that survived the crash looked a word up again (${waited_after}s)"
+            # **And the model rung answered, which the row alone does not say.** A dictionary
+            # lookup reaches the ledger whether the model resolved the sense, abstained, or was
+            # never asked — so "the client reconnected" was a claim about a path this row does
+            # not touch. The sense the lookup recorded is what says which.
+            after_chosen=$(sqlite3 -readonly "$ledger" "select coalesce(chosen_by, '') from sense_encounters where lookup_id = $recovered_id" 2>/dev/null || echo "")
+            after_abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $recovered_id" 2>/dev/null || echo "")
+            if [ -n "$after_chosen" ] || [ -n "$after_abstained" ]; then
+                pass "model: and its sense path answered after the crash (chosen_by=${after_chosen:-none}, abstention=${after_abstained:-none})"
+            else
+                flunk "model: the lookup landed but its sense path recorded neither a choice nor an abstention — the client did not come back"
+            fi
         else
-            flunk "model: the app survived but its own lookups no longer reach the ledger — its client did not reconnect (waited ${waited_after}s)"
+            flunk "model: the app survived but its own lookups no longer reach the ledger (waited ${waited_after}s)"
         fi
     else
         flunk "model: could not drive a lookup after the kill, so the app's own recovery was not exercised ($why)"
@@ -2443,6 +2599,10 @@ ssh_e2e bash -s -- "$REMOTE_DIR" "$STAGES" <"$remote_scripts/run.sh" | tee "$RUN
 pipeline=("${PIPESTATUS[@]}")
 set -e
 remote_status=${pipeline[0]}
+# **A transport failure is not a set of results.** ssh dying part-way leaves a log holding every
+# PASS the run had reached, and `record` below filed those as this build's verdict — a stage
+# marked green whose final failure never arrived. Recorded only when the remote run said what it
+# thought; see the `record` guard below.
 # **`tee`'s status is the log's, and the log is the evidence.** Only ssh's was read, so a `tee` that
 # could not write — a full disk, a read-only `.build` — left a truncated or empty `RUN_LOG` while the
 # run exited 0, and `record` below then filed whatever stages happened to have reached the file. The
@@ -2465,6 +2625,15 @@ fi
 # read `CFBundleVersion` off the local bundle at record time, so a `make` in another terminal during
 # a ten-minute run credited the new build with the old build's results — a green mark against a
 # bundle that was never on the test Mac.
+# **A transport failure is not a set of results.** ssh dying part-way leaves a log holding every
+# PASS the run had reached and none of the failures it had not, and filing that marks a stage
+# green on a run that never finished. 255 is ssh's own "the connection went"; the remote script
+# exits 0 or 1 and nothing else, so the two cannot be confused.
+if [ "$remote_status" -ge 2 ]; then
+    echo "the connection to $host failed mid-run (ssh exited $remote_status); nothing is recorded" >&2
+    echo "whatever the log holds is a partial run, not this build's verdict" >&2
+    exit "$remote_status"
+fi
 Tools/e2e-status.sh record "$remote_version" <"$RUN_LOG"
 echo
 Tools/e2e-status.sh show
