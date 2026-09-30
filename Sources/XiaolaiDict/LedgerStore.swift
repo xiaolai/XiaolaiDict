@@ -133,7 +133,7 @@ actor LedgerStore {
     /// Whether the reader has saved anything at all. **A different nothing** from having nothing due,
     /// and the review window says so differently.
     func anyNotes() throws -> Bool {
-        try !ledger.notes().isEmpty
+        try ledger.hasAnyNote()
     }
 
     /// The front of a card, and — separately, only when asked — its back.

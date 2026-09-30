@@ -413,13 +413,23 @@ final class LibraryModel {
         do {
             let written = try await ledger.export(dictionary: nil)
             let url = directory.appending(path: "XiaolaiDict-cards-\(Self.stamp(clock())).txt")
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try written.tabSeparated().write(to: url, atomically: true, encoding: .utf8)
+            // **Formatted and written off this actor.** Joining a few thousand rows into one
+            // string and putting it on disk are both unbounded work, and doing them here stopped
+            // the menu bar, the panel and every hot key until the file was closed.
+            try await Self.write(written, to: url, in: directory)
             exported = url.path
         } catch {
             exported = error.localizedDescription
         }
         await reload()
+    }
+
+    nonisolated private static func write(_ cards: StudyExport,
+                                          to url: URL, in directory: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try cards.tabSeparated().write(to: url, atomically: true, encoding: .utf8)
+        }.value
     }
 
     /// `2026-09-30-051351`: sortable, filename-safe, and second-resolution so two exports in one

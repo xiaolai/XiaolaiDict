@@ -41,6 +41,9 @@ struct StudySurfaceTests {
     /// allow-list is how a rule like this dies, and `everyExemptionIsRealAndEveryUnwiredMethodIsListed`
     /// fails in both directions so a name cannot rot here after it gains a caller.
     private static let exempt: [String: String] = [
+        "notes(": """
+            The whole collection, decoded. **No longer a surface**: the app asks hasAnyNote for             existence and library(_:) for a page, both of which read what they need. What is left             is the tests' way of seeing every row after a write, and that is worth keeping.
+            """,
         "isDue(at:": "A predicate on a value, used wherever a card is judged.",
         "readiness(of:": "One note's facts, gathered for the library's own query.",
         "introductions(since:": "The allowance's denominator, counted by dueCards.",

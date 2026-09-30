@@ -121,7 +121,10 @@ extension Ledger {
         var bind = filter.bind
         bind.append(.integer(query.limit))
 
-        var rows: [LibraryRow] = []
+        // **Decoded first, then given their cards in one query.** Asking for a card inside the
+        // row callback ran a statement per row while the page's own statement was still open.
+        var pending: [(note: StudyNote, word: String, excerpt: String,
+                       readAt: Date?, script: ProbeScript?, readiness: StudyReadiness)] = []
         try run("""
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
                    n.sense_key_kind, n.phrase_text, n.enrollment, n.confirmed_at, n.created_at,
@@ -155,8 +158,8 @@ extension Ledger {
                 // The library cannot ask a dictionary anything, so it never claims a sense moved.
                 senseMoved: false,
                 needsReading: { if case .custom = note.target { return false } else { return true } }())
-            rows.append(LibraryRow(
-                note: note, card: try existingCard(of: note.id, prompt: Self.libraryPrompt),
+            pending.append((
+                note: note,
                 // **The reading's word, or the target's own.** A custom card needs no lookup
                 // (C07), so this was empty for every one of them — a blank row in the library
                 // and a blank label in the inspector, for a card the reader had written.
@@ -166,7 +169,20 @@ extension Ledger {
                 script: row.optionalText(15).flatMap(ProbeScript.init(rawValue:)),
                 readiness: StudyReadiness.of(facts)))
         }
-        return rows
+        let cards = try cards(ofNotes: pending.map(\.note.id), prompt: Self.libraryPrompt)
+        return pending.map {
+            LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, excerpt: $0.excerpt,
+                       readAt: $0.readAt, script: $0.script, readiness: $0.readiness)
+        }
+    }
+
+    /// **Whether there is a single note**, which is not the same question as what they all are.
+    /// Loading, sorting and decoding the whole collection to ask it held the ledger for as long
+    /// as the collection was large, and the answer was one bit.
+    public func hasAnyNote() throws -> Bool {
+        var any = false
+        try run("SELECT EXISTS (SELECT 1 FROM study_notes)", bind: []) { any = $0.integer(0) == 1 }
+        return any
     }
 
     /// How many notes the query matches, for a surface that counts its own inventory.

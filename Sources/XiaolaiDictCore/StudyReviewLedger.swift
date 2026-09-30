@@ -75,32 +75,61 @@ extension Ledger {
                 bind: [.optionalReal(when?.timeIntervalSince1970), .text(cardID.uuidString)]) { _ in }
     }
 
+    /// **One projection and one decoder for a card, shared by every query that reads one.**
+    /// Two copies of thirteen columns and their decoding meant every storage field had to be
+    /// added twice, and a query that forgot would decode the wrong column silently.
+    static func cardColumns(_ alias: String) -> String {
+        ["id", "note_id", "prompt", "phase", "stability", "difficulty", "last_review",
+         "due", "paused", "hidden_until", "revision", "scheduler_version", "created_at"]
+            .map { alias.isEmpty ? $0 : "\(alias).\($0)" }
+            .joined(separator: ", ")
+    }
+
+    /// **A row this schema cannot read is corruption, not an absence.** Skipping it returned a
+    /// shorter list that looked exactly like a reader with fewer cards — so a damaged file
+    /// silently lost work, and a queue that should have refused went on handing out questions.
+    static func card(from row: Ledger.Row) throws -> StudyCard {
+        guard let id = UUID(uuidString: try row.text(0)),
+              let noteID = UUID(uuidString: try row.text(1)),
+              let prompt = StudyCard.Prompt(rawValue: try row.text(2)),
+              let phase = SchedulePhase(rawValue: try row.text(3)) else {
+            throw LedgerError.corruptRow("study_cards \(try row.text(0))")
+        }
+        let state: MemoryState? = row.isNull(4)
+            ? nil : MemoryState(stability: row.real(4), difficulty: row.real(5))
+        return StudyCard(
+            id: id, noteID: noteID, prompt: prompt,
+            scheduled: ScheduledCard(
+                state: state, phase: phase,
+                lastReview: row.isNull(6) ? nil : Date(timeIntervalSince1970: row.real(6)),
+                due: row.isNull(7) ? nil : Date(timeIntervalSince1970: row.real(7))),
+            isPaused: row.integer(8) == 1,
+            hiddenUntil: row.isNull(9) ? nil : Date(timeIntervalSince1970: row.real(9)),
+            revision: row.integer(10), schedulerVersion: try row.text(11),
+            createdAt: Date(timeIntervalSince1970: row.real(12)))
+    }
+
     private func cards(where clause: String, bind values: [SQLiteValue]) throws -> [StudyCard] {
         var found: [StudyCard] = []
-        try run(
-            """
-            SELECT id, note_id, prompt, phase, stability, difficulty, last_review, due, paused,
-                   hidden_until, revision, scheduler_version, created_at
-            FROM study_cards \(clause)
-            """,
-            bind: values
-        ) { row in
-            guard let id = UUID(uuidString: try row.text(0)),
-                  let noteID = UUID(uuidString: try row.text(1)),
-                  let prompt = StudyCard.Prompt(rawValue: try row.text(2)),
-                  let phase = SchedulePhase(rawValue: try row.text(3)) else { return }
-            let state: MemoryState? = row.isNull(4)
-                ? nil : MemoryState(stability: row.real(4), difficulty: row.real(5))
-            found.append(StudyCard(
-                id: id, noteID: noteID, prompt: prompt,
-                scheduled: ScheduledCard(
-                    state: state, phase: phase,
-                    lastReview: row.isNull(6) ? nil : Date(timeIntervalSince1970: row.real(6)),
-                    due: row.isNull(7) ? nil : Date(timeIntervalSince1970: row.real(7))),
-                isPaused: row.integer(8) == 1,
-                hiddenUntil: row.isNull(9) ? nil : Date(timeIntervalSince1970: row.real(9)),
-                revision: row.integer(10), schedulerVersion: try row.text(11),
-                createdAt: Date(timeIntervalSince1970: row.real(12))))
+        try run("SELECT \(Self.cardColumns("")) FROM study_cards \(clause)",
+                bind: values) { found.append(try Self.card(from: $0)) }
+        return found
+    }
+
+    /// Every note's card for one prompt, in **one** query.
+    ///
+    /// A library page ran `existingCard` per row, so drawing two hundred rows was two hundred
+    /// statements — on every keystroke of the search field.
+    func cards(ofNotes ids: [UUID], prompt: StudyCard.Prompt) throws -> [UUID: StudyCard] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [UUID: StudyCard] = [:]
+        try run("""
+            SELECT \(Self.cardColumns("")) FROM study_cards
+            WHERE prompt = ?1 AND note_id IN (SELECT value FROM json_each(?2))
+            """, bind: [.text(prompt.rawValue),
+                        .text(Self.jsonArray(of: ids.map(\.uuidString)))]) { row in
+            let card = try Self.card(from: row)
+            found[card.noteID] = card
         }
         return found
     }
@@ -254,31 +283,8 @@ extension Ledger {
 
     private func cardsFromJoin(_ clause: String, bind values: [SQLiteValue]) throws -> [StudyCard] {
         var found: [StudyCard] = []
-        try run(
-            """
-            SELECT c.id, c.note_id, c.prompt, c.phase, c.stability, c.difficulty, c.last_review,
-                   c.due, c.paused, c.hidden_until, c.revision, c.scheduler_version, c.created_at
-            FROM study_cards c \(clause)
-            """,
-            bind: values
-        ) { row in
-            guard let id = UUID(uuidString: try row.text(0)),
-                  let noteID = UUID(uuidString: try row.text(1)),
-                  let prompt = StudyCard.Prompt(rawValue: try row.text(2)),
-                  let phase = SchedulePhase(rawValue: try row.text(3)) else { return }
-            let state: MemoryState? = row.isNull(4)
-                ? nil : MemoryState(stability: row.real(4), difficulty: row.real(5))
-            found.append(StudyCard(
-                id: id, noteID: noteID, prompt: prompt,
-                scheduled: ScheduledCard(
-                    state: state, phase: phase,
-                    lastReview: row.isNull(6) ? nil : Date(timeIntervalSince1970: row.real(6)),
-                    due: row.isNull(7) ? nil : Date(timeIntervalSince1970: row.real(7))),
-                isPaused: row.integer(8) == 1,
-                hiddenUntil: row.isNull(9) ? nil : Date(timeIntervalSince1970: row.real(9)),
-                revision: row.integer(10), schedulerVersion: try row.text(11),
-                createdAt: Date(timeIntervalSince1970: row.real(12))))
-        }
+        try run("SELECT \(Self.cardColumns("c")) FROM study_cards c \(clause)",
+                bind: values) { found.append(try Self.card(from: $0)) }
         return found
     }
 

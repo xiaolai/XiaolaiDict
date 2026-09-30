@@ -669,3 +669,76 @@ struct StudyLibraryQueryTests {
         #expect(found == (try ledger.libraryCount(LibraryQuery(text: "word1"))), "and under a search")
     }
 }
+
+/// **What a card read does with a row it cannot understand, and what asking "is there anything"
+/// costs.** Both are about the shape of an answer rather than its value, so no existing test
+/// could have noticed either.
+struct StudyCardReadTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func save(_ ledger: Ledger, word: String) throws -> StudyNote {
+        let lookup = try ledger.record(LookupRecord(
+            surface: word, lemma: word, context: "A sentence holding \(word).",
+            lemmaBasis: .tagger, language: "en", contextRange: nil,
+            place: ReadingPlace(bundleID: "com.apple.Safari", name: "Safari"),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        return try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-\(word)", senseKey: "e-\(word).001",
+                   senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "what \(word) means"),
+            lookupID: lookup, at: now)
+    }
+
+    /// **A row this schema cannot read is corruption, not an absence.** Skipping it returned a
+    /// shorter list indistinguishable from a reader with fewer cards, so a damaged file lost work
+    /// silently and a queue that should have refused went on handing out questions.
+    @Test func acardRowThisSchemaCannotReadIsRefused() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let note = try save(ledger, word: "settle")
+        try ledger.confirm(noteIDs: [note.id], at: now)
+        let card = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let queue = { try ledger.dueCards(at: self.now, limit: 10, dictionary: nil,
+                                          newAllowance: 20, dayStart: self.now) }
+        #expect(try queue().map(\.id) == [card.id], "the queue can reach it while it is readable")
+
+        // **`prompt`, because `phase` has a CHECK and `prompt` does not.** No code path can write
+        // an unknown prompt — every writer passes the enum — so the only source is a damaged or
+        // hand-edited file, which is exactly the case a read must refuse rather than skip.
+        // The queue is the read that sees it: every prompt-scoped query filters the row out
+        // by its `WHERE`, which is correct and is why this went unnoticed.
+        try ledger.run("UPDATE study_cards SET prompt = 'no-such-prompt' WHERE id = ?",
+                       bind: [.text(card.id.uuidString)]) { _ in }
+        #expect(throws: LedgerError.corruptRow("study_cards \(card.id.uuidString)")) {
+            _ = try queue()
+        }
+    }
+
+    /// **Whether there is a single note is not the same question as what they all are.** The app
+    /// used to load, sort and decode the whole collection to answer one bit.
+    @Test func existenceIsItsOwnQuestion() throws {
+        let ledger = try Ledger(path: ":memory:")
+        #expect(try ledger.hasAnyNote() == false)
+        #expect(try ledger.hasAnyNote() == !(try ledger.notes().isEmpty))
+        _ = try save(ledger, word: "settle")
+        #expect(try ledger.hasAnyNote())
+        #expect(try ledger.hasAnyNote() == !(try ledger.notes().isEmpty))
+    }
+
+    /// **One card query for a page, and every row still gets its own card.** Batching it is only
+    /// a saving if each row is still handed the card that belongs to it.
+    @Test func everyRowOnApageIsHandedItsOwnCard() throws {
+        let ledger = try Ledger(path: ":memory:")
+        var expected: [UUID: UUID] = [:]
+        for index in 0..<8 {
+            let note = try save(ledger, word: "word\(index)")
+            expected[note.id] = try ledger.card(of: note.id, prompt: .meaning, at: now).id
+        }
+        let rows = try ledger.library(LibraryQuery())
+        #expect(rows.count == 8)
+        for row in rows {
+            #expect(row.card?.id == expected[row.note.id], "\(row.word) has its own card")
+        }
+    }
+}
