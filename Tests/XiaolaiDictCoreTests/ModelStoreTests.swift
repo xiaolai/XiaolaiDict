@@ -477,6 +477,31 @@ struct ModelStoreTests {
         #expect(asked.count <= 2, "asked \(asked.count) times of a host that had already sent all it has")
     }
 
+    /// **A model's identity is frozen.** `identifier` names the install directory and the
+    /// completion marker embeds every file's path, size and hash — so reordering `files`,
+    /// repinning one, or adding a host's revision to the identity makes every installed model
+    /// read as absent and download 5.9 GB again. These are the values as they shipped; changing
+    /// one is a migration, not an edit.
+    @Test(arguments: [
+        (LocalModelSize.standard, "mlx-community/Qwen3.5-4B-4bit@ab9c7a42fd31095a40634b3362317779dee9e7fa"),
+        (.large, "mlx-community/Qwen3.5-9B-4bit@27ab860cfc825df921f0ac1453133f3fa963a7f2"),
+    ])
+    func amodelsIdentityIsWhatItWas(size: LocalModelSize, identifier: String) {
+        #expect(size.manifest.identifier == identifier)
+    }
+
+    /// The marker, by its digest, so the freeze covers every file's path, size, hash **and their
+    /// order** without pasting kilobytes of it into a test.
+    @Test(arguments: [
+        (LocalModelSize.standard, "9b9716176dbc675d8c83b1063f00ce304b0aa26dfa5efc9f5b123858c291e56a"),
+        (.large, "94c9818b42dac4ade3ea84788c2a4fe9046f56170fc7f2d637a2ba88e982e2ea"),
+    ])
+    func acompletionMarkerIsWhatItWas(size: LocalModelSize, digest: String) throws {
+        let text = ModelStore.markerText(for: size.manifest)
+        let got = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+        #expect(got == digest, "the marker moved; every installed \(size) model would re-download")
+    }
+
     /// **Both directions, mechanically.** `everyKind` exists so the message test cannot fall
     /// behind the enum — but a list that is itself hand-written needs something checking it, or
     /// it becomes a list nobody has read. This reads the cases out of the source and compares

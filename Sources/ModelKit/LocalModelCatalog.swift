@@ -62,6 +62,38 @@ public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable 
     static let megabyte: UInt64 = 1_048_576
 }
 
+/// Where a model's bytes can be fetched from. **Never part of a model's identity** — the
+/// directory a model installs into, and the marker that says it is whole, are named from the
+/// canonical pin alone, so changing host re-downloads nothing and a download can even resume
+/// across a switch.
+///
+/// The hosts publish the same bytes under different commit hashes, which is why a revision is
+/// per host and a size and a SHA-256 are not: 18 of the 19 small files and both weight shards
+/// were hashed against each host on 2026-09-30 and are identical. The one exception is the
+/// upstream `LICENSE`, which differs — so it is pinned to ModelScope alone and fetched from
+/// there whatever host serves the weights. It is 11 KB; nothing about speed applies to it.
+public enum ModelHost: String, Sendable, Equatable, Hashable, CaseIterable {
+    /// **The canonical host, and the default.** Reachable from mainland China, where Hugging
+    /// Face is not, and a core audience.
+    case modelScope
+    case huggingFace
+
+    /// The two spell a resolve URL differently: ModelScope puts models under `/models/`.
+    func url(repository: String, revision: String, path: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        switch self {
+        case .modelScope:
+            components.host = "modelscope.cn"
+            components.path = "/models/\(repository)/resolve/\(revision)/\(path)"
+        case .huggingFace:
+            components.host = "huggingface.co"
+            components.path = "/\(repository)/resolve/\(revision)/\(path)"
+        }
+        return components.url!
+    }
+}
+
 /// One file of a model, pinned by the host's own listing: which repository, which commit, how many
 /// bytes and what SHA-256. **The hash is the pin.** A file that arrives with any other is refused,
 /// whatever the host says it is.
@@ -70,36 +102,66 @@ public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable 
 /// what it implied was untrue — that these values might arrive from outside, where a path of `..`
 /// or a negative size would be a real risk rather than a typo a test can catch.
 public struct ModelFile: Sendable, Equatable, Hashable {
+    /// The canonical repository and commit — ModelScope's. **These two alone make a model's
+    /// identity**, through `ModelManifest.identifier` and the completion marker, so a second
+    /// host must never reach them.
     public let repository: String
     public let revision: String
     public let path: String
     public let size: Int64
     public let sha256: String
+    /// Where else the identical bytes can be had, by host. Empty for the upstream licence, which
+    /// is the one file the two mirrors do not agree on.
+    public let alternates: [ModelHost: (repository: String, revision: String)]
+
+    public static func == (a: ModelFile, b: ModelFile) -> Bool {
+        a.repository == b.repository && a.revision == b.revision && a.path == b.path
+            && a.size == b.size && a.sha256 == b.sha256
+            && a.alternates.mapValues { [$0.repository, $0.revision] }
+                == b.alternates.mapValues { [$0.repository, $0.revision] }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(repository); hasher.combine(revision); hasher.combine(path)
+        hasher.combine(size); hasher.combine(sha256)
+    }
+
+    /// Where to fetch this file from, given the host that was chosen. **Falls back to the
+    /// canonical host rather than refusing**: the licence has no alternate, and a reader who
+    /// chose Hugging Face still wants their model.
+    public func url(from host: ModelHost) -> URL {
+        if host == .modelScope { return ModelHost.modelScope.url(repository: repository, revision: revision, path: path) }
+        guard let alternate = alternates[host] else {
+            return ModelHost.modelScope.url(repository: repository, revision: revision, path: path)
+        }
+        return host.url(repository: alternate.repository, revision: alternate.revision, path: path)
+    }
+
+    /// Whether this host can serve this file at all — false only for the licence.
+    public func isServed(by host: ModelHost) -> Bool {
+        host == .modelScope || alternates[host] != nil
+    }
 
     /// **Internal**, like the manifest's: every pin in this app is a constant in this file, checked
     /// against what the mirror published and asserted by `LocalModelCatalogPinTests`. A public
     /// initialiser would say these can come from somewhere else — and the values are used as
     /// filesystem paths and byte counts, where "somewhere else" is a path that climbs out of the
     /// model's own directory.
-    init(repository: String, revision: String, path: String, size: Int64, sha256: String) {
+    init(repository: String, revision: String, path: String, size: Int64, sha256: String,
+         alternates: [ModelHost: (repository: String, revision: String)] = [:]) {
         self.repository = repository
         self.revision = revision
         self.path = path
         self.size = size
         self.sha256 = sha256
+        self.alternates = alternates
     }
 
     /// ModelScope's resolve endpoint, **by commit**, never by branch: a file fetched from `master`
     /// is not pinned, and "it worked yesterday" is not a property anyone can rely on. It redirects
     /// to a CDN that honours `Range`, which is what makes a download resumable — measured, 206 with
     /// the requested bytes.
-    public var url: URL {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "modelscope.cn"
-        components.path = "/models/\(repository)/resolve/\(revision)/\(path)"
-        return components.url!
-    }
+    public var url: URL { url(from: .modelScope) }
 }
 
 /// Everything one model needs on disk, as the host listed it at a pinned commit.
@@ -139,6 +201,9 @@ public struct ModelManifest: Sendable, Equatable, Hashable {
 }
 
 extension ModelManifest {
+    /// **ModelScope only, and deliberately.** Hugging Face serves 11,544 bytes where this pins
+    /// 11,343, and no commit of theirs has the pinned bytes — searched 2026-09-30. It is the one
+    /// file the mirrors disagree on, and at 11 KB no argument about speed touches it.
     private static let upstreamLicence = ModelFile(
         repository: "Qwen/Qwen3.5-4B", revision: "ed182e32090db791077e12e0f58d22f3daafa173",
         path: licenceFileName, size: 11_343,
@@ -147,13 +212,19 @@ extension ModelManifest {
     /// Listed 2026-09-22 from ModelScope's files API at each pinned commit. The model's own README,
     /// `.gitattributes` and `configuration.json` are left out: none of them is read to load it, and
     /// the README's licence line is wrong.
+    /// **`onHuggingFace` is the same repository at that host's own commit**, which differs from
+    /// ModelScope's for byte-identical content. Every file it covers was hashed against both
+    /// hosts on 2026-09-30; the licence is excluded because they do not agree on it.
     private static func mirror(
-        _ size: LocalModelSize, _ repository: String, _ revision: String, _ files: [(String, Int64, String)]
+        _ size: LocalModelSize, _ repository: String, _ revision: String,
+        onHuggingFace huggingFace: String, _ files: [(String, Int64, String)]
     ) -> ModelManifest {
         ModelManifest(
             size: size, repository: repository, revision: revision,
             files: files.map {
-                ModelFile(repository: repository, revision: revision, path: $0.0, size: $0.1, sha256: $0.2)
+                ModelFile(repository: repository, revision: revision, path: $0.0, size: $0.1,
+                          sha256: $0.2,
+                          alternates: [.huggingFace: (repository: repository, revision: huggingFace)])
             } + [upstreamLicence])
     }
 
@@ -168,7 +239,8 @@ extension ModelManifest {
     ]
 
     static let qwen35Standard = mirror(
-        .standard, "mlx-community/Qwen3.5-4B-4bit", "ab9c7a42fd31095a40634b3362317779dee9e7fa", [
+        .standard, "mlx-community/Qwen3.5-4B-4bit", "ab9c7a42fd31095a40634b3362317779dee9e7fa",
+        onHuggingFace: "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", [
             ("chat_template.jinja", 7_756, "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"),
             ("config.json", 3_366, "f3efc81b2ea8d96a45301037d3ccccbcccdef44a961845c87f286aaddbc6eaaa"),
             ("model.safetensors", 3_034_300_695, "5fb9acd0246866381cf8c5c354c6db1019f6498eec4ccb4f5edcc71ffeacb2db"),
@@ -176,7 +248,8 @@ extension ModelManifest {
         ] + sharedTokenizer)
 
     static let qwen35Large = mirror(
-        .large, "mlx-community/Qwen3.5-9B-4bit", "27ab860cfc825df921f0ac1453133f3fa963a7f2", [
+        .large, "mlx-community/Qwen3.5-9B-4bit", "27ab860cfc825df921f0ac1453133f3fa963a7f2",
+        onHuggingFace: "8b2b98c00a6b4d291155e4890773ca8f769aee53", [
             ("chat_template.jinja", 7_756, "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"),
             ("config.json", 3_331, "a96942cb6a8a1d3f1d17514d81a1925d04362a6a3233b389d13012211baaa9f8"),
             ("model-00001-of-00002.safetensors", 5_349_771_222, "a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd"),
