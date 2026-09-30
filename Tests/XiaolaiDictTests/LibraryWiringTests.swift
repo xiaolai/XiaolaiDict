@@ -83,6 +83,10 @@ struct LibraryWiringTests {
         model.act(.filterScripts(true))
         try await settle { model.presentation.rows.count == 1 }
         #expect(model.presentation.scriptFiltered)
+        // **Which row survived**, not how many. A filter inverted to keep 水 and drop fine leaves
+        // exactly one row too, and satisfied every assertion here.
+        #expect(model.presentation.rows.first?.word == "fine",
+                "the script filter kept the wrong row: \(model.presentation.rows.map(\.word))")
     }
 
     /// A bulk action lands on exactly the selection and clears it afterwards.
@@ -119,8 +123,12 @@ struct LibraryWiringTests {
         try await settle { model.presentation.selection == [fine.id] }
         model.act(.removeFromStudy)
         try await settle { model.presentation.rows.isEmpty }
+        // **Empty is also what a failed reload looks like**, so the screen being blank is not
+        // evidence the note went. The ledger is.
+        #expect(model.presentation.problem == nil, "the list is empty because the reload failed")
 
         let reopened = try Ledger(path: path)
+        #expect(try reopened.notes().isEmpty, "the note is gone from the ledger, not just the screen")
         #expect(try reopened.history(of: "fine").count == 1, "the reader's reading was not theirs to take")
     }
 
@@ -194,8 +202,15 @@ struct LibraryWiringTests {
         // **And it can be searched by.** A tag that can be written and never found again is half
         // a feature; `allTags` existed with nothing reading it.
         #expect(model.presentation.tagVocabulary.map(\.tag) == ["legal"])
+        // **A second note without the tag**, or filtering by it is satisfied by a query that
+        // ignores tags entirely: with one note, which already had the tag, every result was the
+        // same result.
+        try save(ledger, "untagged")
+        await model.reload()
+        try await settle { model.presentation.rows.count == 2 }
         model.act(.filterTag("legal"))
         try await settle { model.presentation.tag == "legal" && model.presentation.rows.count == 1 }
+        #expect(model.presentation.rows.first?.word == "fine", "the tag filter kept the wrong row")
         model.act(.filterTag(nil))
         try await settle { model.presentation.tag == nil }
 
@@ -881,6 +896,10 @@ struct LibraryOrganisationWiringTests {
         defer { cleanExports() }
         let ledger = try Ledger(path: path)
         try save(ledger, "fine")
+        // A second card whose answer is the *publisher's*, which must not travel.
+        let cited = try save(ledger, "hold")
+        try ledger.setAnswer(StudyAnswer(origin: .dictionary, text: "the publisher's own words"),
+                             of: cited.id, at: now)
         let model = model(path, exportTo: exports)
         await model.reload()
         model.act(.export)
@@ -895,6 +914,11 @@ struct LibraryOrganisationWiringTests {
         let text = try String(contentsOfFile: written, encoding: .utf8)
         #expect(text.contains("what fine means"), "the reader's own answer should travel")
         #expect(text.contains("#columns:XiaolaiDictID"))
+        // **A publisher's gloss has to be present to be excluded.** The fixture seeded only a
+        // reader-authored answer, so an export that leaked dictionary text would have passed:
+        // there was none in the ledger to leak.
+        #expect(text.contains("the publisher's own words") == false,
+                "a dictionary answer travelled with the export")
     }
 
     /// **No export replaces another.** One fixed filename meant a second export silently
@@ -953,6 +977,11 @@ struct LibraryOrganisationWiringTests {
 
         model.act(.ignore(lemma: "recondite", language: "en"))
         try await settle { model.presentation.suggestions.isEmpty }
+        // **Empty is also what a failed reload looks like**, and unchanged notes prove nothing
+        // about whether the declaration was written. The ledger's own row is what says so.
+        #expect(model.presentation.problem == nil, "the suggestions are empty because the reload failed")
+        #expect(try Ledger(path: path).ignoredSuggestions().map(\.lemma) == ["recondite"],
+                "\"already know\" was not written down")
         #expect(try Ledger(path: path).notes().isEmpty, "\"already know\" made a card")
         #expect(try Ledger(path: path).history(of: "recondite").count == 2, "and erased nothing")
     }
