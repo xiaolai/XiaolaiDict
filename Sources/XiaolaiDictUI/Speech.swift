@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import DictionaryModel
 import SwiftUI
@@ -34,13 +35,75 @@ public enum Speech {
     /// caveat is advisory, so a stale "only a compact voice" for one session is a fair price for a
     /// panel that renders.
     private static var cachedVoices: [AVSpeechSynthesisVoice]?
+    private static var watching = false
     private static var cachedCaveats: [String: String?] = [:]
 
     public static var installedVoices: [AVSpeechSynthesisVoice] {
+        // **Before the early return, not after it.** Registering on the cold path alone means a
+        // cache warmed by any other route is never watched — and the observer that drops it never
+        // exists. It reads as working right up until the reader downloads a voice.
+        watchForNewVoices()
         if let cachedVoices { return cachedVoices }
         let voices = AVSpeechSynthesisVoice.speechVoices()
         cachedVoices = voices
         return voices
+    }
+
+    /// Whether the voice list has been read and kept. **Only a test asks** — the point of the cache
+    /// is that nothing else can tell it is there.
+    static var cacheIsWarm: Bool { cachedVoices != nil }
+
+    /// How many times the list has been dropped because macOS said the voices changed.
+    ///
+    /// **A count rather than the cache's state, because the state cannot be asserted.** This cache
+    /// is one static shared by the whole test process, and tests run in parallel: asserting it is
+    /// *cold* passed alone and failed in the full suite, where another test read the list and
+    /// re-warmed it between the post and the check. What the observer promises is that it runs,
+    /// and a count is that promise without the race.
+    static private(set) var timesVoicesChanged = 0
+
+    /// **The cache is dropped when macOS says the list changed**, so a voice downloaded while
+    /// XiaolaiDict is running is used at once.
+    ///
+    /// This file used to say a new voice "will not be noticed until the next launch", and treated
+    /// that as the price of memoising a 43 ms call. It is not the price: macOS posts
+    /// `availableVoicesDidChangeNotification` for exactly this, on macOS 14 and later, which is
+    /// under this app's floor. Downloading a voice takes minutes and the reader is plainly hoping
+    /// to hear it — telling them to quit and reopen the app is the sort of instruction nobody
+    /// should have to be given.
+    ///
+    /// Registered once, from the first read, and never torn down: `Speech` lives as long as the
+    /// process, so there is no window in which the observer outlives what it updates.
+    private static func watchForNewVoices() {
+        guard !watching else { return }
+        watching = true
+        // **`queue: nil`, and the hop to the main actor made explicitly.** Handing this
+        // `OperationQueue.main` assumes a running main run loop, which a test host does not have —
+        // the block simply never ran, and the first version of this went green only because the
+        // assertion was the one thing that noticed. It also assumed macOS posts on the main thread,
+        // which nothing documents. Running wherever the post lands and hopping deliberately is true
+        // on both counts.
+        NotificationCenter.default.addObserver(
+            forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
+            object: nil, queue: nil
+        ) { _ in
+            Task { @MainActor in
+                // Both, because the caveat is derived from the list and would otherwise go on
+                // apologising for a compact voice the reader has just replaced.
+                cachedVoices = nil
+                cachedCaveats.removeAll()
+                timesVoicesChanged += 1
+            }
+        }
+    }
+
+    /// Takes the reader to where voices are installed. **Opening it is all we can do** — there is no
+    /// API to install one: `AVSpeechSynthesisVoice(identifier:)` "returns nil if the identifier is
+    /// valid, but the voice is not available on device (i.e. not yet downloaded by the user)", and
+    /// nothing in the speech headers offers a download. So the app takes them to the door.
+    @discardableResult
+    public static func openVoiceLibrary() -> Bool {
+        NSWorkspace.shared.open(voiceLibraryURL)
     }
 
     /// The best voice installed for `language`, preferring premium, then enhanced, then compact.

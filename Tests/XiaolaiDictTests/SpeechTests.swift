@@ -74,6 +74,25 @@ struct SpeechTests {
         #expect(Speech.caveat(for: voice.language, among: good) == nil)
     }
 
+    /// **A voice downloaded while the app is running is used at once.** The cache is why this
+    /// needs asserting at all: it exists because `speechVoices()` costs 43 ms a call, and it used
+    /// to mean the reader had to quit and reopen after a download that takes minutes.
+    @Test func downloadingAVoiceDropsTheCachedList() async throws {
+        _ = Speech.installedVoices
+        #expect(Speech.cacheIsWarm, "the list was not kept, so this test proves nothing")
+        let before = Speech.timesVoicesChanged
+        NotificationCenter.default.post(
+            name: AVSpeechSynthesizer.availableVoicesDidChangeNotification, object: nil)
+        // The observer hops to the main actor, so give it a turn before asking.
+        for _ in 0..<50 where Speech.timesVoicesChanged == before {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(Speech.timesVoicesChanged > before,
+                "a new voice would not be noticed until the next launch")
+        // And the list is still readable afterwards, so the invalidation is not a one-way door.
+        #expect(!Speech.installedVoices.isEmpty)
+    }
+
     /// The recommendation is a claim about macOS, so it says which languages it is making one for.
     @Test func onlyLanguagesWithAMeasuredAnswerAreRecommended() {
         #expect(Speech.recommendation(for: "en-US") == "Ava")
