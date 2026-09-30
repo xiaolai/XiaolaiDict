@@ -620,21 +620,16 @@ struct DictionaryPane: View {
 
 struct PermissionsPane: View {
     var model: SettingsModel
-    var openSetup: (() -> Void)?
 
     var body: some View {
         Form {
             Section {
                 Text(verbatim: verdict).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                // The other way into the board. This pane answers "are my permissions on"; the
-                // board answers "is any of this working", which is the question a reader who came
-                // here actually has.
-                if let openSetup {
-                    Button("Set Up…") { openSetup() }
-                        .buttonStyle(.glass)
-                        .controlSize(.small)
-                }
+                // **No button to the board any more.** This pane answers "are my permissions on";
+                // Setup answers "is any of this working" — and it is a sibling tab now rather than
+                // a separate window, so a button that opened one from the other would be a control
+                // that does what the tab beside it already does.
             }
             ForEach(model.report.states) { state in
                 Section {

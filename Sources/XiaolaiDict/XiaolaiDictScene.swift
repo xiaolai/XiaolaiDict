@@ -25,7 +25,6 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
-    static let setupID = "setup"
     static let reviewID = "review"
     static let libraryID = "library"
 
@@ -96,17 +95,6 @@ struct XiaolaiDictScene: App {
             return WindowPlacement(frame.origin, size: frame.size)
         }
 
-        // A `Window`, never a `UtilityWindow` — measured in this bundle: a `UtilityWindow` is
-        // created and reports `isVisible`, but the compositor never lists it and Accessibility
-        // never sees it. Suppressed at launch and opened deliberately, once per install, by
-        // `XiaolaiDictApp.openSetupOnFirstLaunch`.
-        Window("Set Up XiaolaiDict", id: Self.setupID) {
-            XiaolaiDictSetup(app: delegate)
-        }
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
         // **A window the reader chose, so it comes forward and keeps focus.** Unlike the panel and
         // the drawer, which must never activate the app: this one is typed into. The reader asked
         // for it from the menu, it is theirs to manage, and it keeps its title bar for that reason.
@@ -161,49 +149,29 @@ struct XiaolaiDictSettings: View {
             hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
             dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
-            openSetup: { app.showSetup() },
             modelLicence: app.models.licenceURL,
             erase: app.eraseModel.presentation,
-            eraseAction: { [model = app.eraseModel] in model.act($0) })
-        .xiaolaiDictAppearance(app.appearance)
-        // Identified from inside, for `--settings-report` to measure.
-        .background(WindowAccessor { app.settingsWindow = $0 })
-    }
-}
-
-/// The setup board, as a **view** rather than as scene-body code — the same rule
-/// `XiaolaiDictSettings` above records. `app.dictionary.enabled` arrives when the XPC probe answers, and
-/// reading it in `XiaolaiDictScene.body` would re-evaluate every scene in the app.
-struct XiaolaiDictSetup: View {
-    let app: XiaolaiDictApp
-
-    var body: some View {
-        SetupView(
-            model: app.setup,
-            dictionary: app.dictionary.choice,
-            shortcut: app.shortcuts.choice,
+            eraseAction: { [model = app.eraseModel] in model.act($0) },
+            // The setup board's own inputs. It is a pane of this window now, so what it needs
+            // arrives here rather than through a second scene.
+            setup: app.setup,
             // Whether the hot key actually registered, not merely whether the combination is
             // well-formed: another app can hold it exclusively, and the row drew "Ready" over a
             // shortcut that answered nothing.
             shortcutIsRegistered: app.shortcuts.isRegistered,
-            // The model row: its state from the store and the download in flight, and the
-            // download the reader can agree to or decline.
             localModel: app.models.choice,
-            // Each button opens the pane it is about. `showSettings()` alone opens whichever pane
-            // was last looked at — Reading, on a fresh install — so "Choose…" under the dictionary
-            // row landed the reader on text size.
-            openSettings: { pane in app.showSettings(on: pane) },
             refreshDictionaries: { await app.dictionary.askAgain() })
         .xiaolaiDictAppearance(app.appearance)
-        // Identified from inside, so the app can tell when the reader has actually seen the board
-        // — its window becoming key — rather than merely that it was opened.
-        .background(WindowAccessor { app.setupWindow = $0 })
-        // The dictionary list is fetched lazily, on menu open. A reader who never opens the menu
-        // would otherwise see "Asking which dictionaries are enabled…" forever.
+        // Identified from inside, for `--settings-report` to measure — and so the app can tell when
+        // the reader has actually *seen* the setup pane, which is this window becoming key while
+        // that pane is the one selected.
+        .background(WindowAccessor { app.settingsWindow = $0 })
+        // The dictionary list is fetched lazily. A reader who never opens the menu would otherwise
+        // see "Asking which dictionaries are enabled…" forever on the setup pane.
         .task {
             // Re-read, so a model removed from Finder while the app ran is not still called ready.
             app.models.refresh()
-            await app.askForDictionaries()
+            await app.dictionary.askAgain()
         }
     }
 }

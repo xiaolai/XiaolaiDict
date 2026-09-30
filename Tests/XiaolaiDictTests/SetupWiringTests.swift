@@ -214,12 +214,12 @@ struct SetupWiringTests {
     @Test func theAppHandsTheBoardEveryPartOfItsState() throws {
         try expectArguments(
             [
-                ("model:", "app.setup"), ("dictionary:", "app.dictionary.choice"),
+                ("setup:", "app.setup"), ("dictionary:", "app.dictionary.choice"),
                 ("shortcut:", "app.shortcuts.choice"), ("shortcutIsRegistered:", "app.shortcuts.isRegistered"),
-                ("localModel:", "app.models.choice"), ("openSettings:", "app.showSettings("),
+                ("localModel:", "app.models.choice"),
                 ("refreshDictionaries:", "app.dictionary.askAgain("),
             ],
-            of: "SetupView", in: try code("Sources/XiaolaiDict/XiaolaiDictScene.swift"),
+            of: "SettingsView", in: try code("Sources/XiaolaiDict/XiaolaiDictScene.swift"),
             "the board would silently lose what it carries")
     }
 
@@ -289,11 +289,16 @@ struct SetupWiringTests {
 
     /// The other way in. §4 of the plan asks for both, and a menu item alone leaves a reader who is
     /// already in Settings with no way to the board.
-    @Test func settingsCanOpenTheBoard() throws {
-        try expectArguments(
-            [("openSetup:", "app.showSetup(")],
-            of: "SettingsView", in: try code("Sources/XiaolaiDict/XiaolaiDictScene.swift"),
-            "the settings window cannot open the setup board")
+    /// **The board is a pane of the settings window, and `showSetup` selects it.** It had a window
+    /// of its own until 2026-10-01 — a second surface over the same facts, and the only place the
+    /// reader could choose which model answers, which is a standing preference rather than
+    /// something a fresh install is missing.
+    @Test func showingTheBoardSelectsItsPane() throws {
+        let app = try code("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        #expect(app.contains("showSettings(on: .setup)"),
+                "showSetup no longer routes to the setup pane")
+        #expect(SettingsPane.allCases.first == .setup,
+                "the board is not the first pane a fresh install lands on")
     }
 
     /// About names the model's licence from the file that came with the weights. **The value, not
@@ -332,12 +337,13 @@ struct SetupWiringTests {
     /// Comment lines are dropped first, for the same reason the Screen Recording scan drops them:
     /// this file explains at length why a `UtilityWindow` is *not* used, and a scanner that cannot
     /// tell a declaration from an explanation reports the explanation as the offence.
-    @Test func theBoardIsAWindowSceneAndNotAUtilityWindow() throws {
-        // Both halves read the comment-stripped source. The second already did; the first did not,
-        // so the scene declaration it looks for could have been satisfied by a line explaining what
-        // the scene ought to be — in the one file that spends a paragraph explaining exactly that.
+    @Test func theBoardHasNoWindowOfItsOwn() throws {
+        // Comment-stripped, for the same reason the Screen Recording scan is: this file explains at
+        // length why the board no longer has a scene, and a scanner that cannot tell a declaration
+        // from an explanation reports the explanation as the offence.
         let scene = try code("Sources/XiaolaiDict/XiaolaiDictScene.swift")
-        #expect(scene.contains("Window(\"Set Up XiaolaiDict\", id: Self.setupID)"))
+        #expect(!scene.contains("Set Up XiaolaiDict"), "the board's own window scene is back")
+        #expect(!scene.contains("setupID"), "the board's own scene id is back")
         #expect(!scene.contains("UtilityWindow"), "a UtilityWindow is created and never drawn")
     }
 }

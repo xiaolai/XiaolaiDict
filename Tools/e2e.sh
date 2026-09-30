@@ -1518,9 +1518,15 @@ restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its m
     echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
     return 1
 }
+# **Matched on "Setup", the settings window's own title while the board is its pane.**
+# The board had a window called "Set Up XiaolaiDict" until 2026-10-01; it is a pane now, and
+# Accessibility names the settings window after whichever pane is selected — which the scenes stage
+# already records ("Accessibility calls the Settings window after its pane"). So this is a stronger
+# check than the old one rather than a weaker substitute: it says the board is the pane on screen,
+# where the old title only said the board's own window existed.
 board_on_screen() {  # board_on_screen: 0 drawn, 1 absent, 2 exists but not drawn
     local seen
-    seen=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    seen=$("$helpers/on-screen" com.xiaolaidict "Setup")
     printf '%s' "$seen" | grep -q '"drawn":true' && return 0
     # Found by title but not drawn is neither "open" nor "absent", and must not read as either.
     printf '%s' "$seen" | grep -q '"matches":\[\]' || return 2
@@ -1538,7 +1544,7 @@ settle_after_launch() {
 # Frontmost app, and whether the board is main/focused, in one line — what a failed "came forward"
 # or "was remembered" check needs to say, since the two can fail independently.
 board_state() {
-    local s; s=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+    local s; s=$("$helpers/on-screen" com.xiaolaidict "Setup")
     printf 'front=%s drawn=%s main=%s focused=%s' \
         "$(printf '%s' "$s" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')" \
         "$(printf '%s' "$s" | grep -q '"drawn":true' && echo yes || echo no)" \
@@ -1663,7 +1669,7 @@ else
     # over SSH never has it.
     drawn=""
     for _ in $(seq 1 30); do
-        drawn=$("$helpers/on-screen" com.xiaolaidict "Set Up")
+        drawn=$("$helpers/on-screen" com.xiaolaidict "Setup")
         printf '%s' "$drawn" | grep -q '"drawn":true' && break
         sleep 0.2
     done
@@ -1717,12 +1723,22 @@ fi
 # `close-window` takes the window's **title**, not a bundle id. Passing the bundle id closes
 # nothing and exits non-zero, which under `|| true` would leave the board open — and the reopen
 # check below would then pass against a window that was never closed.
-if ! "$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1; then
+# **Closed by the title the window actually has.** The board had one of its own until 2026-10-01;
+# it is a settings pane now, and Accessibility names that window after its selected pane.
+if ! "$helpers/close-window" "Setup" >/dev/null 2>&1; then
     flunk "setup: could not close the board, so reopening cannot be tested"
 else
     pass "setup: the board closes"
 fi
 sleep 1
+# **And it is gone before the reopen is tried.** The comment above already knew this shape: a close
+# that quietly does nothing leaves the board up, and the reopen below then passes against a window
+# that was never closed. Measured 2026-10-01 — the close failed on a stale title, its own `flunk`
+# fired, and "reopening gives the board again" passed anyway on the window still on screen. One
+# failed assertion is a finding; a second one passing because of it is a check that cannot fail.
+if board_on_screen; then
+    flunk "setup: the board is still drawn after being closed, so reopening tests nothing ($(board_state))"
+fi
 defaults write com.xiaolaidict SetupWindowShown -bool true
 if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
     flunk "setup: could not reopen the board after it had been shown once"
@@ -1742,7 +1758,7 @@ fi
 # the flag is what decides, so it is cleared, the app is restarted, and the board must appear with
 # nobody having asked for it. Then the flag is set, the app is restarted again, and it must not.
 
-"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+"$helpers/close-window" "Setup" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
 # The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
 # model. Put back at the end of the stage, before anything that needs the weights. Idempotent: the
@@ -1949,7 +1965,7 @@ else
     fi
 fi
 
-"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+"$helpers/close-window" "Setup" >/dev/null 2>&1 || true
 if ! restart_app; then
     flunk "setup: XiaolaiDict did not come back after the second restart"
 else
@@ -1972,7 +1988,7 @@ fi
 # Left as the reader found it. A board still on screen would be in front of whatever stage runs
 # next, and the scenes stage measures which app is frontmost. The flag itself is put back by
 # `restore_setup_shown`, registered before anything was launched.
-"$helpers/close-window" "Set Up XiaolaiDict" >/dev/null 2>&1 || true
+"$helpers/close-window" "Setup" >/dev/null 2>&1 || true
 # And the model store is put back here rather than at exit, because the model stage runs after this
 # one and would otherwise measure a Mac with no weights on it.
 unstash_models || flunk "setup: the model store was not put back"
