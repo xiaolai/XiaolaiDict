@@ -20,6 +20,9 @@ struct ModelStoreTests {
         /// that is not coming back, which is the only way to reach the end of the retry budget.
         let alwaysDrops = Recorder<Set<String>>([])
         let alwaysDropsAfter = 1_000
+        /// Bytes of `path` to send before returning **normally**, once — a host that ends a
+        /// range response early without failing, which is not an error the transport can raise.
+        let shortfalls = Recorder<[String: Int]>([:])
         /// Every request, as (path, offset) — what a resume actually asked for.
         let requests = Recorder<[(String, Int64)]>([])
 
@@ -47,12 +50,15 @@ struct ModelStoreTests {
             var slice = body.dropFirst(Int(from))
             var cut = interruptions.withLock { $0.removeValue(forKey: file.path) }
             if alwaysDrops.withLock({ $0.contains(file.path) }) { cut = alwaysDropsAfter }
+            let short = shortfalls.withLock { $0.removeValue(forKey: file.path) }
+            if let short { slice = slice.prefix(short) }
             if let cut { slice = slice.prefix(cut) }
             let handle = try FileHandle(forWritingTo: destination)
             try handle.seekToEnd()
             try handle.write(contentsOf: slice)
             try handle.close()
             progress(from + Int64(slice.count))
+            // A shortfall returns normally: the host simply stopped sending.
             if cut != nil { throw Dropped() }
         }
     }
@@ -418,6 +424,45 @@ struct ModelStoreTests {
         // before it — `aHostThatIgnoresTheRangeStartsTheFileAgain` asserts that drop directly, at
         // the writer, where the truncation actually happens.
         #expect(received.allSatisfy { $0 <= manifest.totalBytes }, "progress counted a discarded front")
+    }
+
+    /// **A host that ends a range response early has not failed**, so nothing throws — and the
+    /// retry loop used to take that as the file being done, report a size mismatch, and stop with
+    /// attempts unspent. Raised by a second reader against this loop the day it was written.
+    @Test func acleanlyShortResponseIsRetriedFromTheNewOffset() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        let manifest = Self.manifest(Self.bodies)
+        let transport = MemoryTransport(Self.bodies)
+        transport.shortfalls.withLock { $0["model.safetensors"] = 30_000 }
+        let downloader = ModelDownloader(store: store, transport: transport,
+                                         freeDisk: { _ in .max }, retryPause: .zero)
+
+        let directory = try await downloader.install(manifest)
+        let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
+        #expect(asked == [0, 30_000], "the short response was taken for a finished file")
+        #expect(try Data(contentsOf: directory.appending(path: "model.safetensors")) == Self.bodies["model.safetensors"])
+    }
+
+    /// **And a host with nothing more to give is not retried for ever.** A clean return that
+    /// advanced nothing ends the attempts, whatever the budget, so the size mismatch is reported
+    /// rather than the loop spinning against a file the host does not have.
+    @Test func acleanResponseThatAddsNothingStopsRatherThanSpinning() async throws {
+        let (store, scratch) = try store()
+        defer { _ = scratch }
+        var listed = Self.bodies
+        listed["model.safetensors"]! += Data(count: 1_000)
+        let manifest = Self.manifest(Self.bodies, listedAs: listed)
+        let transport = MemoryTransport(Self.bodies)
+        let downloader = ModelDownloader(store: store, transport: transport,
+                                         freeDisk: { _ in .max }, retryPause: .zero)
+
+        await #expect(throws: ModelDownloadError.sizeMismatch(
+            path: "model.safetensors", expected: 101_000, received: 100_000)) {
+            try await downloader.install(manifest)
+        }
+        let asked = transport.requests.withLock { $0.filter { $0.0 == "model.safetensors" }.map(\.1) }
+        #expect(asked.count <= 2, "asked \(asked.count) times of a host that had already sent all it has")
     }
 
     /// **The default request timeout is the defect.** `URLSession.shared` fails a request after

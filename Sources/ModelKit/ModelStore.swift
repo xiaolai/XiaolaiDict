@@ -469,7 +469,15 @@ public struct ModelDownloader: Sendable {
                 try await transport.fetch(file, from: offset, appendingTo: partial) { onDisk in
                     progress(ModelDownloadProgress(received: others + min(onDisk, file.size), total: total))
                 }
-                break
+                // **A host that ends a range response early has not failed**, so nothing is
+                // thrown — and taking a clean return for a finished file reported a size
+                // mismatch with attempts unspent. Retried only where the attempt actually
+                // advanced: a return that added nothing means the host has no more to give, and
+                // the size check below is the right place for that to be reported.
+                let now = size(of: partial)
+                if now >= file.size || now <= offset { break }
+                attemptsLeft -= 1
+                guard attemptsLeft > 0 else { break }
             } catch {
                 // **Cancellation is not a drop.** The reader stopped it, and retrying would carry
                 // on downloading after they asked for it to stop. `URLSession` reports it as
