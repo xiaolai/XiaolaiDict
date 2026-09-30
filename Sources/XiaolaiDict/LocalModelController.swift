@@ -28,6 +28,11 @@ final class LocalModelController {
     /// The reader's choice of where weights come from. Read at each download rather than held,
     /// so changing it in Settings takes effect on the next one without anything being rebuilt.
     @ObservationIgnored private let sources: ModelSourceStore
+    @ObservationIgnored private let choices: ModelChoiceStore
+    @ObservationIgnored private let physicalMemory: UInt64
+    /// **Read at each question, and injected like the clock.** Free memory changes minute to
+    /// minute, and a test that asked the real machine would be measuring the machine.
+    @ObservationIgnored private let availableMemory: @Sendable () -> UInt64?
     /// What each size downloads — the pinned manifests; a test hands in small ones.
     @ObservationIgnored private let manifest: @Sendable (LocalModelSize) -> ModelManifest
     @ObservationIgnored private var download: Task<Void, Never>?
@@ -42,6 +47,7 @@ final class LocalModelController {
     init(
         defaults: UserDefaults, store: ModelStore = .standard(),
         physicalMemory: UInt64 = SystemMemory.physical,
+        availableMemory: @escaping @Sendable () -> UInt64? = { SystemMemory.available() },
         transport: any ModelFileTransport = URLSessionModelTransport(),
         probe: any ModelHostProbe = URLSessionModelHostProbe(),
         manifest: @escaping @Sendable (LocalModelSize) -> ModelManifest = { $0.manifest }
@@ -52,6 +58,11 @@ final class LocalModelController {
         let sources = ModelSourceStore(defaults: defaults)
         self.sources = sources
         source = sources.load()
+        let choices = ModelChoiceStore(defaults: defaults)
+        self.choices = choices
+        wanted = choices.load()
+        self.physicalMemory = physicalMemory
+        self.availableMemory = availableMemory
         self.manifest = manifest
         declines = LocalModelDeclineStore(defaults: defaults)
         declined = declines.hasDeclined()
@@ -310,6 +321,44 @@ final class LocalModelController {
         default:
             return String(localized: "the download could not be completed", comment: "Why the model download stopped")
         }
+    }
+
+    /// Which model the reader has chosen to answer, or nil where they have not said.
+    private(set) var wanted: LocalModelSize?
+
+    /// Every model on disk this Mac can be offered, smallest first — what the switch lists.
+    var installedSizes: [LocalModelSize] {
+        store.installedManifests(among: offered.map(manifest)).map(\.size).sorted()
+    }
+
+    /// **Which model answers, and whether it is the one that was asked for.** Recomputed rather
+    /// than stored: free memory changes minute to minute, so a stored verdict goes stale in the
+    /// one direction that matters — claiming a model will load when it will not.
+    var answeringChoice: ModelChoice {
+        ModelSizing.answering(
+            wanted: wanted, installed: installedSizes,
+            physicalMemory: physicalMemory, availableMemory: availableMemory() ?? 0)
+    }
+
+    /// Chooses which installed model answers. **Takes effect on the next question**, and is kept
+    /// even where that model cannot be loaded right now: the reader's choice is a preference, not
+    /// an assertion about this minute's free memory.
+    func choose(_ size: LocalModelSize?) {
+        guard size != wanted else { return }
+        wanted = size
+        choices.save(size)
+        log.notice("model: the reader chose \(size?.rawValue ?? "no model in particular", privacy: .public)")
+        refresh()
+    }
+
+    /// Removes a model the reader no longer wants, and forgets it as their choice if it was one.
+    func remove(_ size: LocalModelSize) {
+        let store = store
+        let manifest = manifest(size)
+        if wanted == size { choose(nil) }
+        Task.detached(priority: .utility) { try? store.remove(manifest) }
+        log.notice("model: removing \(manifest.identifier, privacy: .public)")
+        refresh()
     }
 
     /// Where the reader has said weights should come from. **Observed**, so the picker redraws

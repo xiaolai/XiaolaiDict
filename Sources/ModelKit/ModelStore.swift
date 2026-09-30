@@ -75,10 +75,13 @@ public struct ModelStore: Sendable, Equatable {
         manifests.filter { installed($0) != nil }
     }
 
-    /// Removes a model and anything of it still staged. **Not `public`, and not called by the
-    /// app**: pruning is `removeStrays(keeping:)`, which holds off while an install is in flight.
-    /// This is the tests' own way of putting a store into a state.
-    func remove(_ manifest: ModelManifest) throws {
+    /// Removes a model and anything of it still staged.
+    ///
+    /// **The reader's own command, and the only way a model leaves now.** It used to be neither
+    /// public nor called by the app, because pruning to a single model took models away without
+    /// being asked; that is what stopped, so removing one has to be something they can ask for —
+    /// ADR-0041. Pruning is still `removeStrays(keeping:)`, which takes only what nobody chose.
+    public func remove(_ manifest: ModelManifest) throws {
         for directory in [directory(for: manifest), stagingDirectory(for: manifest)]
         where FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)

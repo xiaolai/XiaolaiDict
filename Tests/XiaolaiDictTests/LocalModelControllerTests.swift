@@ -79,6 +79,8 @@ struct LocalModelControllerTests {
         let store = ModelStore(root: scratch.url)
         return (LocalModelController(
             defaults: defaults, store: store, physicalMemory: memory,
+            // Plenty free, so a test about choosing is not a test about this machine's load.
+            availableMemory: { memory / 2 },
             transport: Transport(fails: fails), probe: FixedProbe(), manifest: Self.manifest), store)
     }
 
@@ -390,6 +392,74 @@ struct LocalModelControllerTests {
     @Test func orderingSaysNothingAboutHowLargeAreadingIs() {
         let order = ProgressOrder()
         for _ in 0..<5 { #expect(order.isNewest(order.next())) }
+    }
+
+    /// **A reader with two models can switch between them, and switching keeps both.** This is
+    /// the whole point: before, the larger download deleted the smaller, so "switching" meant
+    /// three gigabytes and an hour — ADR-0041.
+    @Test func areaderCanSwitchBetweenTheModelsTheyHave() async {
+        let (controller, store) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        #expect(controller.installedSizes == [.standard, .large], "both models should be on disk")
+
+        controller.choose(.standard)
+        #expect(controller.wanted == .standard)
+        #expect(controller.answeringChoice.answering == .standard, "the choice did not reach the answer")
+        controller.choose(.large)
+        #expect(controller.answeringChoice.answering == .large)
+        // Neither switch cost a download.
+        #expect(store.installed(Self.manifest(.standard)) != nil)
+        #expect(store.installed(Self.manifest(.large)) != nil)
+    }
+
+    /// **The case the whole change exists for**, end to end: the reader chose 9B, the Mac is too
+    /// busy to load it, and the 4B they still have answers — named as standing in, so the card
+    /// cannot read as the answer they asked for. Before, the 4B had been deleted and there was
+    /// nothing at all.
+    @Test func abusyMacAnswersWithTheSmallerModelAndSaysSo() async {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-standin")
+        scratches.withLock { $0.append(scratch) }
+        let store = ModelStore(root: scratch.url)
+        // 32 GB, and the 4,729 MB that was actually free when this was measured.
+        let free: UInt64 = 4_729 * 1_048_576
+        let controller = LocalModelController(
+            defaults: TemporaryDefaults.suite(), store: store,
+            physicalMemory: 32 * Self.gigabyte, availableMemory: { free },
+            transport: Transport(fails: false, asked: nil), probe: FixedProbe(),
+            manifest: Self.manifest)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        controller.choose(.large)
+
+        let choice = controller.answeringChoice
+        #expect(choice == .standingIn(.standard, forWanted: .large))
+        #expect(choice.answering == .standard, "a busy Mac had nothing to answer with")
+        #expect(choice.isStandingIn, "a 4B answer would have read as the 9B the reader chose")
+        #expect(controller.wanted == .large, "the choice was thrown away because it did not fit today")
+    }
+
+    /// **Removing is the reader's, and it forgets the choice with it.** A chosen model that is
+    /// no longer there would otherwise leave every answer standing in for a model nobody has.
+    @Test func removingThechosenModelForgetsTheChoice() async {
+        let (controller, store) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        controller.choose(.large)
+
+        controller.remove(.large)
+        for _ in 0..<200 where store.installed(Self.manifest(.large)) != nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.installed(Self.manifest(.large)) == nil, "the model was not removed")
+        #expect(controller.wanted == nil, "a choice was kept for a model that is gone")
+        #expect(store.installed(Self.manifest(.standard)) != nil, "removing one took the other")
     }
 
     /// **A failing URL must not reach the log.** The weights come through a CDN redirect whose
