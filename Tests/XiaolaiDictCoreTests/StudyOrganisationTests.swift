@@ -255,6 +255,59 @@ struct StudyOrganisationTests {
                 "one day is not a pattern, however many times")
     }
 
+    /// **Suggestions count study days, not calendar days.** Two lookups either side of midnight
+    /// are one evening; counted as two they cleared the two-day minimum and a single sitting was
+    /// offered as repeated reading — the exact pattern this ranking exists to find, invented.
+    @Test func lookupsEitherSideOfMidnightAreOneDay() throws {
+        let ledger = try ledger()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let midnight = calendar.startOfDay(for: now)
+        func at(_ hour: Int, _ minute: Int, dayOffset: Int = 0) throws -> Date {
+            try #require(calendar.date(byAdding: DateComponents(day: dayOffset, hour: hour,
+                                                                minute: minute), to: midnight))
+        }
+        // 23:50 and 00:10 the next calendar day: one study day, on either side of midnight.
+        try read(ledger, "evening", at: try at(23, 50))
+        try read(ledger, "evening", at: try at(0, 10, dayOffset: 1))
+
+        let found = try ledger.suggestions(limit: 10, language: "en", studying: [.latin])
+        #expect(found.isEmpty, "one evening is not two days: \(found.map { "\($0.lemma) \($0.distinctDays)" })")
+    }
+
+    /// **A homograph in another language is a different word.** Saving English *pain* suppressed
+    /// French *pain* as a suggestion: the saved-word exclusion matched the lemma alone while the
+    /// ignored-word check beside it matched lemma and language, so one rule silenced a word the
+    /// reader had never taken up and nothing said why.
+    @Test func savingAwordInOneLanguageDoesNotSilenceItsHomograph() throws {
+        let ledger = try ledger()
+        let day: TimeInterval = 86_400
+        // Read on two days in French, so it qualifies; and saved in English, which must not count.
+        for offset in [0.0, day] {
+            let lookup = try ledger.record(LookupRecord(
+                surface: "pain", lemma: "pain", context: "Le pain est frais.", lemmaBasis: .tagger,
+                language: "fr", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+                lookedUpAt: now.addingTimeInterval(offset), result: .found,
+                answeredBy: .dictionaryService, quality: nil, script: .latin))
+            _ = lookup
+        }
+        let english = try ledger.record(LookupRecord(
+            surface: "pain", lemma: "pain", context: "It caused him pain.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil,
+            script: .latin))
+        _ = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-pain", senseKey: "e-pain.1", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "physical suffering"),
+            lookupID: english, at: now)
+
+        let found = try ledger.suggestions(limit: 10, language: "fr", studying: [.latin])
+        #expect(found.map(\.lemma) == ["pain"],
+                "the French word was silenced by the English one: \(found.map(\.lemma))")
+        #expect(found.first?.language == "fr")
+    }
+
     /// **A word already taken up is never suggested**, in any disposition — a word the reader
     /// ignored coming back as a suggestion is the whole point of ignoring it, undone.
     @Test func aWordAlreadyTakenUpIsNotSuggested() throws {

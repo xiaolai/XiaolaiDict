@@ -56,7 +56,10 @@ extension Ledger {
         var found: [Suggestion] = []
         try run("""
             SELECT l.lemma, COALESCE(l.language, '') AS lang,
-                   COUNT(DISTINCT date(l.looked_up_at, 'unixepoch', 'localtime')) AS days,
+                   -- **Study days, not calendar days.** Lookups at 23:50 and 00:10 are one
+                   -- evening, and counting them as two made a single sitting look like the
+                   -- repeated reading this ranking exists to find.
+                   COUNT(DISTINCT \(Self.studyDayExpression(of: "l.looked_up_at"))) AS days,
                    COUNT(DISTINCT COALESCE(l.source_app, '')) AS sources,
                    MAX(l.looked_up_at) AS last,
                    COUNT(*) AS lookups
@@ -69,7 +72,12 @@ extension Ledger {
               AND NOT EXISTS (
                   SELECT 1 FROM study_note_lookups nl
                   JOIN lookups other ON other.id = nl.lookup_id
+                  -- **Lemma and language, the same key the ignored check below uses.** Matching
+                  -- the lemma alone meant saving English *pain* silently suppressed French
+                  -- *pain* — a word the reader has never taken up, never offered again, with
+                  -- nothing anywhere saying why.
                   WHERE other.lemma = l.lemma
+                    AND COALESCE(other.language, '') = COALESCE(l.language, '')
               )
               -- And nothing they have told us they already know.
               AND NOT EXISTS (
@@ -185,12 +193,26 @@ extension Ledger {
     /// timezone is not represented here, and would need the offset passed in.
     static func lapseDaysExpression(cardAlias card: String) -> String {
         """
-        (SELECT COUNT(DISTINCT date(e.reviewed_at - \(StudyDay.defaultCutoffHour * 3_600),
-                                    'unixepoch', 'localtime'))
+        (SELECT COUNT(DISTINCT \(Self.studyDayExpression(of: "e.reviewed_at")))
          FROM review_events e
          WHERE e.card_id = \(card).id AND e.grade = 1 AND e.voided_at IS NULL
            AND e.kind = 'graded')
         """
+    }
+
+    /// **The study day a timestamp falls in, as SQL** — one spelling, for every query that counts
+    /// days.
+    ///
+    /// **Converted to local time first, then shifted.** Subtracting the cutoff in *seconds* before
+    /// converting is real-time arithmetic across a local-time boundary, and it is wrong on exactly
+    /// the two days a year that are not 24 hours long. Measured in `America/New_York`, 2026:
+    /// 04:30 on 8 March came back as the 7th, and 03:30 on 1 November as the 1st — a day early and
+    /// a day late. Shifting the wall clock after conversion is right on both, and on ordinary days.
+    ///
+    /// The same defect, in Swift, was ADR-0037's; this is its second instance and the reason the
+    /// expression is shared rather than written out at each call site.
+    static func studyDayExpression(of column: String) -> String {
+        "date(datetime(\(column), 'unixepoch', 'localtime'), '-\(StudyDay.defaultCutoffHour) hours')"
     }
 
     /// Distinct days of failure that make a card one the reader is **struggling** with. A product
