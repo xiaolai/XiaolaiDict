@@ -38,7 +38,7 @@ import Testing
     /// **The key index is not the whole inventory**, which is the concrete thing the body walk buys.
     /// Measured 2026-09-29: 9,755 sub-entry labels, 935 of them in no key of any group.
     @Test func thePhrasesAReaderMeetsLiveOnlyInTheSubEntryLabels() throws {
-        guard let url = Self.noad, let bundle = try? DictionaryLocator.describe(url) else {
+        guard let url = Self.noad, let bundle = DictionaryLocator.describe(url) else {
             print("PhraseInventoryTests: XIAOLAIDICT_BUNDLES not set, not measured"); return
         }
         let keys = try PhraseSpans(bundle: url).phrases
@@ -68,7 +68,7 @@ import Testing
     /// NOAD ever started filing `turn something down`, the inference would become unnecessary for it —
     /// and this test is how that would be noticed rather than assumed.
     @Test func aBarePhrasalVerbCarriesNoSlot() throws {
-        guard let url = Self.noad, let bundle = try? DictionaryLocator.describe(url) else {
+        guard let url = Self.noad, let bundle = DictionaryLocator.describe(url) else {
             print("PhraseInventoryTests: XIAOLAIDICT_BUNDLES not set, not measured"); return
         }
         let indexer = EntryIndexer(bundle: bundle)

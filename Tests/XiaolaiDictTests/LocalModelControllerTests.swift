@@ -489,9 +489,12 @@ struct LocalModelControllerTests {
     /// query carries a signature, and `String(describing:)` on a `URLError` puts the whole
     /// failing URL in — measured — into a line marked `.public`. What is wanted for diagnosis is
     /// which error it was, not where it was.
-    @Test func adownloadFailureIsLoggedWithoutItsUrl() {
+    @Test func adownloadFailureIsLoggedWithoutItsUrl() throws {
         let signed = "https://cdn.example.invalid/model.safetensors?sig=SENTINELTOKEN&exp=1"
-        let error = URLError(.timedOut, userInfo: [NSURLErrorFailingURLStringErrorKey: signed])
+        // `NSURLErrorFailingURLErrorKey`, not the string key it deprecated: the key is what Foundation
+        // itself attaches, and a test pinning a leak has to carry the shape the leak arrives in.
+        let error = URLError(.timedOut,
+                             userInfo: [NSURLErrorFailingURLErrorKey: try #require(URL(string: signed))])
         // The premise: this is a real leak, not a hypothetical one.
         #expect(String(describing: error).contains("SENTINELTOKEN"),
                 "the premise has changed — String(describing:) no longer carries the URL")

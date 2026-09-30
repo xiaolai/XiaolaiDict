@@ -66,7 +66,7 @@ struct StudyRecoveryTests {
         defer { clean() }
         let ledger = try Ledger(path: path)
         let note = try save(ledger, "fine")
-        let card = try #require(try ledger.card(of: note.id, at: now))
+        let card = try ledger.card(of: note.id, at: now)
         _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
                              using: try MemoryScheduler())
         let copy = path + ".copy"
@@ -107,7 +107,7 @@ struct StudyRecoveryTests {
         do {
             let ledger = try Ledger(path: path)
             let note = try save(ledger, "fine")
-            let card = try #require(try ledger.card(of: note.id, at: now))
+            let card = try ledger.card(of: note.id, at: now)
             cardID = card.id
             let event = try ledger.grade(cardID: card.id, .good, eventID: eventID,
                                          expectedRevision: 0, at: now, using: try MemoryScheduler())

@@ -506,7 +506,7 @@ struct StudyLibraryTests {
     @Test func pausingAselectionChangesEligibilityAndNothingElse() throws {
         let ledger = try ledger()
         let note = try save(ledger, word: "fine")
-        let card = try #require(try ledger.card(of: note.id, at: now))
+        let card = try ledger.card(of: note.id, at: now)
         _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
                              using: try MemoryScheduler())
         let scheduled = try #require(try ledger.card(id: card.id)).scheduled

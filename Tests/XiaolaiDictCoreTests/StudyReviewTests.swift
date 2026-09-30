@@ -30,7 +30,7 @@ struct StudyReviewTests {
             target(key: key),
             issuer: .live, language: "en", chosenBy: .reader,
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: when)
-        return try #require(try ledger.card(of: note.id, at: when))
+        return try ledger.card(of: note.id, at: when)
     }
 
     private func scheduler() throws -> MemoryScheduler { try MemoryScheduler() }

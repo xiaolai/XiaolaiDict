@@ -180,7 +180,7 @@ struct ReviewWiringTests {
         #expect(after.position == before.position, "the surface moved on over a failed write")
         #expect(after.problem != nil, "and said nothing about it")
         let reopened = try Ledger(path: path)
-        let card = try #require(try reopened.card(of: note.id, at: now))
+        let card = try reopened.card(of: note.id, at: now)
         #expect(try reopened.reviews(ofCard: card.id).isEmpty)
     }
 
@@ -219,7 +219,7 @@ struct ReviewWiringTests {
         let (second, cleanSecond) = scratch()
         defer { cleanSecond() }
         let ledger = try ready(second)
-        let card = try #require(try ledger.card(of: try #require(try ledger.notes().first).id, at: now))
+        let card = try ledger.card(of: try #require(try ledger.notes().first).id, at: now)
         try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
         let upToDate = model(second)
         await upToDate.start()

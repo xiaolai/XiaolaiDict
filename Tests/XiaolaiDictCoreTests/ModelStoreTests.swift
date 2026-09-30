@@ -231,7 +231,7 @@ struct ModelStoreTests {
         defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
-        transport.alwaysDrops.withLock { $0.insert("model.safetensors") }
+        transport.alwaysDrops.withLock { _ = $0.insert("model.safetensors") }
         let downloader = ModelDownloader(store: store, transport: transport,
                                          freeDisk: { _ in .max }, retryPause: .zero)
 
@@ -507,7 +507,7 @@ struct ModelStoreTests {
         defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
-        transport.failingHosts.withLock { $0.insert(.huggingFace) }
+        transport.failingHosts.withLock { _ = $0.insert(.huggingFace) }
         let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
                                          retryPause: .zero, hosts: [.huggingFace, .modelScope])
 
@@ -526,7 +526,7 @@ struct ModelStoreTests {
         defer { _ = scratch }
         let manifest = Self.manifest(Self.bodies)
         let transport = MemoryTransport(Self.bodies)
-        transport.failingHosts.withLock { $0.insert(.modelScope) }
+        transport.failingHosts.withLock { _ = $0.insert(.modelScope) }
         let downloader = ModelDownloader(store: store, transport: transport, freeDisk: { _ in .max },
                                          retryPause: .zero, hosts: [.modelScope])
 

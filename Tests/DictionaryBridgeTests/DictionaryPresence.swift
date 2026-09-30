@@ -15,7 +15,7 @@ import Testing
 /// So: absent dictionaries skip, and the census below says so out loud on every run.
 enum DictionaryPresence {
     /// Cached: every trait below asks, and each call crosses into the private API.
-    nonisolated(unsafe) private static let enabled: Set<String> = {
+    private static let enabled: Set<String> = {
         Set(DictionaryBridge.capabilities().map(\.identity.name))
     }()
 
