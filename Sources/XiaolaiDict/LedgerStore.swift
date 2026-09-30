@@ -250,6 +250,13 @@ actor LedgerStore {
         try ledger.eraseReadingData(at: path)
     }
 
+    /// The newest lookup's id, for an instrument that has to put back exactly what it added.
+    func newestLookupID() throws -> Int { try ledger.newestLookupID() }
+
+    /// Removes every lookup above `baseline`. **An instrument's own rows**, identified by an id
+    /// it took before it wrote any.
+    func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
+
     /// A lookup the reader did not mean to make. The senses met in it go with it.
     func delete(lookup id: Int) throws {
         try ledger.delete(lookup: id)

@@ -101,9 +101,21 @@ enum PanelReport {
         // panel must not change it, and a click on the panel changing it is the finding.
         let frontBefore = frontmost()
         let activeBefore = NSApp.isActive
+        // **Recorded, because a wait that was already satisfied measured nothing.** If the app
+        // was active or the window key before the click, `settle` returns at once and
+        // "afterClick" is sampled before delivery — a click whose effect is unobservable
+        // reported as a click that changed nothing.
+        let wasAlreadyActive = activeBefore
 
         // The app's own hover path, so the panel is filled by `LookupRunner` exactly as it is for a
         // reader — not by a presentation this file made up.
+        // **What the reader's ledger held before this.** The lookup below goes in by the door
+        // hover uses — deliberately, so the card measured is the card the product draws — and
+        // that door records. An instrument that leaves fabricated TextEdit reading behind
+        // changes the drawer, the suggestion ranking and every later measurement on this Mac.
+        let ledgerBefore = await Self.newestLookup(in: app)
+        defer { Task { await Self.removeLookups(after: ledgerBefore, in: app) } }
+
         app.lookUpHovered(selection, at: UpPoint(NSEvent.mouseLocation))
 
         let appeared = await Instrument.settle(until: appearance) {
@@ -180,6 +192,10 @@ enum PanelReport {
         let beforeClick: [String: Any] = [
             "appWasActive": activeBefore,
             "appIsActive": NSApp.isActive,
+            // **Whether this run could observe a change at all.** With the app already active
+            // the after-click reading is not evidence either way, and saying so is the
+            // difference between a measurement and a number.
+            "couldObserveActivation": !wasAlreadyActive,
             "frontmostBefore": frontBefore,
             "frontmostNow": frontmost(),
             // The passing shape: showing the panel changed neither.
@@ -368,7 +384,11 @@ enum PanelReport {
         var fits: [String] = []
         let steps = Int(contentSettling.milliseconds / 50)
         for _ in 0..<steps {
-            try? await Task.sleep(for: .milliseconds(50))
+            // **Cancellation ends the measurement.** `try?` swallowed it, so a cancelled report
+            // counted its immediate returns as stillness — six of them in no time at all — and
+            // declared a moving window settled, then went on posting synthetic clicks past its
+            // own deadline.
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return (false, "cancelled") }
             let now = window.frame.height
             if abs(now - last) >= 1 {
                 seen.append(now)
@@ -401,6 +421,21 @@ enum PanelReport {
             : fits.prefix(4).joined(separator: " ") + " … " + fits.suffix(4).joined(separator: " ")
         return (false, "\(seen.count) distinct heights in \(contentSettling): \(shown); "
                 + "wanted/given: \(wantedGiven)")
+    }
+
+    /// The newest lookup id, or nil where the ledger cannot be reached.
+    private static func newestLookup(in app: XiaolaiDictApp) async -> Int? {
+        guard let opening = app.recorder.store else { return nil }
+        return try? await opening.value.newestLookupID()
+    }
+
+    /// Removes whatever this measurement added, and only that. **Not a general clean-up**: it
+    /// deletes by id above a baseline this instrument took itself, so a lookup the reader made
+    /// while it ran is out of range by construction.
+    private static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
+        guard let baseline, let opening = app.recorder.store,
+              let store = try? await opening.value else { return }
+        try? await store.deleteLookups(after: baseline)
     }
 
     /// The frontmost application's bundle identifier, or its name where it has none.

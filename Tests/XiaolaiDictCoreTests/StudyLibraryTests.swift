@@ -385,6 +385,26 @@ struct StudyLibraryTests {
                 "a later confirm rewrote when the reader agreed")
     }
 
+    /// **An instrument puts back exactly what it added.** `--panel-report` drives a real lookup
+    /// through the app's own door, which records — so a measurement left fabricated reading in
+    /// the reader's ledger, changing the drawer, the suggestion ranking and every later run on
+    /// that Mac. The baseline is taken before the write, so a lookup the reader made meanwhile
+    /// is out of range by construction.
+    @Test func removingAninstrumentsRowsCannotReachTheReadersOwn() throws {
+        let ledger = try ledger()
+        try save(ledger, word: "theirs")
+        let baseline = try ledger.newestLookupID()
+        #expect(baseline > 0)
+
+        try save(ledger, word: "mine")
+        #expect(try ledger.newestLookupID() > baseline)
+
+        try ledger.deleteLookups(after: baseline)
+        #expect(try ledger.newestLookupID() == baseline, "the instrument's row is gone")
+        #expect(try ledger.history(of: "theirs").count == 1, "and the reader's is untouched")
+        #expect(try ledger.history(of: "mine").isEmpty)
+    }
+
     // MARK: - Changing
 
     /// The reader's own words replace what the card reveals; the encounter's snapshot is untouched.

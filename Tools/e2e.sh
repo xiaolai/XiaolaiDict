@@ -2258,6 +2258,12 @@ else:
     # The cost of every control on the card, stated plainly whichever way it went.
     note(f"panel: after a click — appIsActive={after['appIsActive']}, isKeyWindow={after['isKeyWindow']}, "
          f"frontmost={after['frontmost']}, tookTheFront={after['tookTheFront']}")
+    # **Whether this run could have seen a change.** With the app already active before the
+    # click, the reading below is not evidence either way, and a note that does not say so
+    # reads as a measurement.
+    if not after.get("couldObserveActivation", True):
+        note("panel: XiaolaiDict was already active before the click, so this run cannot say "
+             "whether clicking activates it")
     if after["tookTheFront"]:
         note("panel: clicking a control takes the front, so typing goes to XiaolaiDict afterwards — "
              "every footer action costs the reader their focus")

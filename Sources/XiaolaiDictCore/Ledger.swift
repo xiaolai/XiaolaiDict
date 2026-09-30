@@ -669,6 +669,21 @@ public final class Ledger {
     }
 
     /// The reading a lookup was, for a surface that knows which lookup it wants.
+    /// The newest lookup's id, or 0 when there are none.
+    public func newestLookupID() throws -> Int {
+        var newest = 0
+        try run("SELECT COALESCE(MAX(id), 0) FROM lookups", bind: []) { newest = $0.integer(0) }
+        return newest
+    }
+
+    /// Removes every lookup above `baseline`, and with each the senses met in it.
+    ///
+    /// **For an instrument putting back what it added**, never for the reader: the baseline is an
+    /// id taken before the writes, so this cannot reach a row that was already there.
+    public func deleteLookups(after baseline: Int) throws {
+        try run("DELETE FROM lookups WHERE id > ?", bind: [.integer(baseline)]) { _ in }
+    }
+
     public func reading(ofLookup id: Int) throws -> ReadingEntry? {
         var found: ReadingEntry?
         let tagging = Lemmatizer.Pass()
