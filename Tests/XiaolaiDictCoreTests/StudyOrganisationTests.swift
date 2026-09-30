@@ -274,6 +274,40 @@ struct StudyOrganisationTests {
         #expect(report.rate == 1.0 / 3.0)
     }
 
+    /// **A recall the reader just rehearsed is not a delayed recall.** The short-term filter
+    /// measured from the last *scheduled* review, and practice is not one — so answering
+    /// correctly ten seconds after practising the same card counted as remembering it a day
+    /// later. Practice is excluded from the numerator already; it has to disqualify what
+    /// follows it too, or the figure flatters exactly the reader who rehearses before reviewing.
+    @Test func apracticeAttemptDisqualifiesTheRecallThatFollowsIt() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+
+        // Introduced, then a genuine delayed recall a week later: one eligible attempt.
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: scheduler)
+        let week = now.addingTimeInterval(7 * 86_400)
+        var revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision,
+                             at: week, using: scheduler)
+        #expect(try ledger.retention(dictionary: nil).attempts == 1)
+
+        // A week on: practised, then graded ten seconds later. The grade is a week from the last
+        // *review* and ten seconds from the last *attempt*.
+        let fortnight = now.addingTimeInterval(14 * 86_400)
+        _ = try ledger.practise(cardID: card.id, .good, eventID: UUID(), at: fortnight)
+        revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision,
+                             at: fortnight.addingTimeInterval(10), using: scheduler)
+
+        let report = try ledger.retention(dictionary: nil)
+        #expect(report.attempts == 1, "a grade ten seconds after practice counted as delayed recall")
+        #expect(report.shortTerm == 1, "and it is counted as the short-term repeat it is")
+        #expect(report.practice == 1)
+    }
+
     /// A review the reader took back did not happen, and does not enter the denominator.
     @Test func avoidedReviewIsExcludedAndCounted() throws {
         let ledger = try ledger()

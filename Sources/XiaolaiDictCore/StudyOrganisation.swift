@@ -264,21 +264,33 @@ extension Ledger {
             scope = "AND n.dictionary = ?2"
             bind.append(.text(dictionary))
         }
+        // The most recent attempt on each card, *of any kind*, as the rows are walked. Requires
+        // the query to be in time order, which it now asks for.
+        var lastAttempt: [String: Double] = [:]
         try run("""
             SELECT e.kind, e.voided_at, e.before_last_review, e.reviewed_at, e.grade, e.card_id
             FROM review_events e
             JOIN study_cards c ON c.id = e.card_id
             JOIN study_notes n ON n.id = c.note_id
             WHERE e.reviewed_at >= ?1 \(scope)
+            ORDER BY e.reviewed_at, e.rowid
             """, bind: bind) { row in
             let kind = try row.text(0)
             let voided = !row.isNull(1)
-            let hasPrevious = !row.isNull(2)
-            let elapsed = hasPrevious ? row.real(3) - row.real(2) : 0
+            let cardID = try row.text(5)
+            let reviewedAt = row.real(3)
+            // **Since the last *attempt*, not the last scheduled review.** `before_last_review`
+            // tracks graded reviews only, so a practice attempt ten seconds earlier left this
+            // looking like a day's gap — and a recall the reader had just rehearsed counted as
+            // delayed. Practice is excluded from the numerator already; it must also be allowed
+            // to disqualify the attempt that follows it.
+            let scheduledPrevious = row.isNull(2) ? 0 : row.real(2)
+            let previous = max(scheduledPrevious, lastAttempt[cardID] ?? 0)
+            lastAttempt[cardID] = max(lastAttempt[cardID] ?? 0, reviewedAt)
             if kind == ReviewEvent.Kind.practice.rawValue { report.practice += 1; return }
             if voided { report.voided += 1; return }
-            guard hasPrevious else { report.introductions += 1; return }
-            guard elapsed >= 86_400 else { report.shortTerm += 1; return }
+            guard previous > 0 else { report.introductions += 1; return }
+            guard reviewedAt - previous >= 86_400 else { report.shortTerm += 1; return }
             report.attempts += 1
             if row.integer(4) >= Grade.hard.rawValue { report.successes += 1 }
             if let id = UUID(uuidString: try row.text(5)) { report.cardIDs.insert(id) }
