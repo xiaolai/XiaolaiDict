@@ -15,11 +15,7 @@ import XiaolaiDictUI
 struct ReviewWiringTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func scratch() -> (String, () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-review-\(UUID().uuidString).sqlite").path
-        return (path, { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } })
-    }
+    private func scratch() -> (String, () -> Void) { Wiring.scratch("review") }
 
     /// A ledger with `count` cards ready to be asked, and the model pointed at it.
     ///
@@ -498,13 +494,18 @@ struct ReviewWiringTests {
         #expect(summary.wasPractice == false)
     }
 
+    /// A wait that never holds must end its test, not let everything after it run.
+    @Test func awaitThatNeverHoldsStopsTheTest() async throws {
+        await #expect(throws: WiringTimeout.self) {
+            try await Wiring.settle("this never holds") { false }
+        }
+    }
+
     /// Waits for the condition, never for a duration: the model commits in a task of its own, so an
     /// `await` on the call returns before the ledger has anything.
+    /// Forwards to the one shared wait — see `Wiring.settle`, which throws rather than
+    /// letting everything after a missed state run anyway.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<400 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the model never reached the expected state")
+        try await Wiring.settle("the model never reached the expected state", condition)
     }
 }

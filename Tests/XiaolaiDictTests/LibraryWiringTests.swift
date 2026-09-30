@@ -13,11 +13,7 @@ import XiaolaiDictUI
 struct LibraryWiringTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func scratch() -> (String, () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-library-\(UUID().uuidString).sqlite").path
-        return (path, { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } })
-    }
+    private func scratch() -> (String, () -> Void) { Wiring.scratch("library") }
 
     @discardableResult
     private func save(_ ledger: Ledger, _ word: String, script: ProbeScript = .latin) throws -> StudyNote {
@@ -722,12 +718,10 @@ struct LibraryWiringTests {
         #expect(model.presentation.total == 1, "and the count is the filtered one")
     }
 
+    /// Forwards to the one shared wait — see `Wiring.settle`, which throws rather than
+    /// letting everything after a missed state run anyway.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<400 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the model never reached the expected state")
+        try await Wiring.settle("the model never reached the expected state", condition)
     }
 }
 
@@ -830,11 +824,7 @@ extension LibraryWiringTests {
 struct LibraryOrganisationWiringTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func scratch() -> (String, () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-org-\(UUID().uuidString).sqlite").path
-        return (path, { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } })
-    }
+    private func scratch() -> (String, () -> Void) { Wiring.scratch("library") }
 
     @discardableResult
     private func save(_ ledger: Ledger, _ word: String) throws -> StudyNote {
@@ -855,11 +845,7 @@ struct LibraryOrganisationWiringTests {
     /// A scratch directory for this suite's exports. **Never the reader's own Downloads**: the
     /// export test used to write there and then delete what it found, so every `make test` on any
     /// Mac destroyed an export its owner had made.
-    private func exportScratch() -> (URL, () -> Void) {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
-        return (directory, { try? FileManager.default.removeItem(at: directory) })
-    }
+    private func exportScratch() -> (URL, () -> Void) { Wiring.exportScratch() }
 
     private func model(_ path: String, exportTo directory: URL? = nil,
                        at when: Date? = nil) -> LibraryModel {
@@ -971,11 +957,9 @@ struct LibraryOrganisationWiringTests {
         #expect(try Ledger(path: path).history(of: "recondite").count == 2, "and erased nothing")
     }
 
+    /// Forwards to the one shared wait — see `Wiring.settle`, which throws rather than
+    /// letting everything after a missed state run anyway.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<2_000 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the model never reached the expected state")
+        try await Wiring.settle("the model never reached the expected state", condition)
     }
 }
