@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import XiaolaiDictBase
+import os
 
 /// One recognised word. `box` is normalised to the capture: 0...1, top-left origin.
 public struct RecognisedWord: Equatable, Sendable {
@@ -166,11 +168,20 @@ public enum LineJoiner {
     /// the arithmetic above as though the capture were square, and the tests — the only callers
     /// that would have taken it — are precisely where a silently wrong comparison survives. A
     /// caller with a genuinely square capture says so by passing a square size.
+    ///
+    /// **Refused loudly and not fatally, which it could not be before.** This was a `precondition`, on
+    /// the reasoning above: the fallback was silently wrong, so a trap was the lesser evil. That
+    /// reasoning no longer holds — `sameRow` now refuses a degenerate region outright, so a size-less
+    /// capture joins nothing and the block is the seed line alone. Under-joining is the direction this
+    /// file already calls safe, so the remaining job is to *say* the caller passed nonsense, which a
+    /// `.fault` does without ending the reader's app.
     public static func block(
         around index: Int, in lines: [RecognisedLine], region: CGSize,
         maximumGapRatio: CGFloat = 1.0, minimumOverlap: CGFloat = 0.2
     ) -> TextBlock {
-        precondition(region.width > 0 && region.height > 0, "the capture's size is not known")
+        if region.width <= 0 || region.height <= 0 {
+            log.fault("the capture's size is not known: \(region.debugDescription, privacy: .public)")
+        }
         guard lines.indices.contains(index) else { return TextBlock(text: "", offsetShift: 0) }
         // **Rows first: Vision does not return one observation per visual line.** Measured
         // 2026-09-27 on a terminal, it split one line at a sentence boundary — the wide gap after
@@ -390,8 +401,18 @@ public enum LineJoiner {
         return overlap / shorter >= sameRowOverlap
     }
 
+    /// Where a caller's mistake about the capture goes. No reader-facing text: `XiaolaiDictCore` carries
+    /// none (ADR-0025).
+    static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "recognition")
+
     static func sameRow(_ a: CGRect, _ b: CGRect, _ region: CGSize) -> Bool {
         guard sharesRowBand(a, b) else { return false }
+        // **A capture with no size joins nothing.** Both sides below are multiplied by it, so a `.zero`
+        // region compared `0 <= 0` and answered *true* for every pair that shared a band — every
+        // fragment on the page in one row. `block(around:in:region:)`'s precondition is what kept that
+        // unreachable, which made a loud guard load-bearing for a silent wrong answer somewhere else. It
+        // stays; this is what makes removing it a split row rather than a merged page.
+        guard region.width > 0, region.height > 0 else { return false }
         // Negative where the boxes overlap horizontally, which is nearer still. Both sides are put
         // into points before they are compared; see `block(around:in:region:)`.
         let gap = max(a.minX, b.minX) - min(a.maxX, b.maxX)
