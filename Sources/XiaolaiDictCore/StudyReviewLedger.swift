@@ -21,10 +21,10 @@ extension Ledger {
     @discardableResult
     public func card(of noteID: UUID, prompt: StudyCard.Prompt = .meaning,
                      at when: Date) throws -> StudyCard {
-        if let existing = try cards(where: "WHERE note_id = ? AND prompt = ?",
-                                    bind: [.text(noteID.uuidString), .text(prompt.rawValue)]).first {
-            return existing
-        }
+        // **Through the reading accessor**, which is the same query written once. Two spellings
+        // of "does this note already have this card" is two chances for the creating one to stop
+        // finding what the reading one does, and it would then insert a duplicate.
+        if let existing = try existingCard(of: noteID, prompt: prompt) { return existing }
         let card = StudyCard(noteID: noteID, prompt: prompt, createdAt: when)
         try run(
             """
@@ -577,6 +577,7 @@ extension Ledger {
     /// recognise; the others stay in the timeline.
     public func cue(forCard id: UUID) throws -> ReviewCue? {
         guard let card = try card(id: id),
+              try Self.asking(card),
               let note = try notes(where: "WHERE id = ?", bind: [.text(card.noteID.uuidString)]).first
         else { return nil }
         // **The newest reading, by when it was read.** `lookupIDs` is ordered by when the link
@@ -601,9 +602,26 @@ extension Ledger {
             quality: nil, target: note.target)
     }
 
+    /// **Both halves of a card are written for `.meaning`, and say so.** The front is the word
+    /// and the reader's sentence; the back is what it meant there. A production card asks the
+    /// opposite question, and serving it these two would have shown the reader a card labelled
+    /// one thing and asking another — silently, because the prompt is never read.
+    ///
+    /// Nothing creates a production card: every caller passes `.meaning`, and `StudyCards` is
+    /// where the second prompt is declared ahead of the surface that will ask it. So this
+    /// refuses rather than guesses, and the day that surface arrives the refusal is what tells
+    /// whoever builds it that these two need their own answers.
+    private static func asking(_ card: StudyCard) throws -> Bool {
+        guard card.prompt == .meaning else {
+            throw LedgerError.unaskablePrompt(card.prompt.rawValue)
+        }
+        return true
+    }
+
     /// The back of a card. **A separate call on purpose** — see `ReviewCue`.
     public func revealed(cardID: UUID) throws -> ReviewAnswer? {
-        guard let card = try card(id: cardID), let answer = try answer(of: card.noteID),
+        guard let card = try card(id: cardID), try Self.asking(card),
+              let answer = try answer(of: card.noteID),
               answer.isUsable else { return nil }
         guard let note = try notes(where: "WHERE id = ?",
                                    bind: [.text(card.noteID.uuidString)]).first else { return nil }

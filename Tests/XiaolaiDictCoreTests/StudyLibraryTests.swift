@@ -749,3 +749,54 @@ struct StudyCardReadTests {
         }
     }
 }
+
+/// **A card asking a question this build cannot present.** `StudyCards` declares `.production`
+/// ahead of the surface that will ask it, and nothing creates one — so the risk is not that a
+/// reader meets one, it is that the day someone builds the surface, both halves of a card go on
+/// answering as though it were a meaning card.
+struct StudyPromptTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func acardThisBuildCannotAskIsRefusedRatherThanMislabelled() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let lookup = try ledger.record(LookupRecord(
+            surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+        let note = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.001", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
+        let meaning = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let production = try ledger.card(of: note.id, prompt: .production, at: now)
+
+        #expect(try ledger.cue(forCard: meaning.id) != nil, "the card this build does ask")
+        #expect(try ledger.revealed(cardID: meaning.id) != nil)
+        #expect(throws: LedgerError.unaskablePrompt("production")) {
+            _ = try ledger.cue(forCard: production.id)
+        }
+        #expect(throws: LedgerError.unaskablePrompt("production")) {
+            _ = try ledger.revealed(cardID: production.id)
+        }
+    }
+
+    /// **The creating accessor finds what the reading one finds.** Two spellings of "does this
+    /// note already have this card" is two chances for one to stop matching the other, and the
+    /// creating one would then insert a duplicate.
+    @Test func askingForAcardTwiceMakesOne() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let lookup = try ledger.record(LookupRecord(
+            surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+        let note = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.001", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
+        let first = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let again = try ledger.card(of: note.id, prompt: .meaning, at: now.addingTimeInterval(60))
+        #expect(first.id == again.id)
+        #expect(try ledger.existingCard(of: note.id, prompt: .meaning)?.id == first.id)
+        #expect(try ledger.cards(ofNotes: [note.id], prompt: .meaning).count == 1)
+    }
+}

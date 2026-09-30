@@ -411,16 +411,20 @@ enum PanelReport {
             last = now
             if still >= 6 { return (true, "") }
         }
-        // Bounded: a window that changed three hundred times needs the shape, not the log.
-        let shown = seen.count <= 12
-            ? seen.map { "\(Int($0))" }.joined(separator: "→")
-            : seen.prefix(6).map { "\(Int($0))" }.joined(separator: "→")
-                + " … " + seen.suffix(4).map { "\(Int($0))" }.joined(separator: "→")
-        let wantedGiven = fits.count <= 8
-            ? fits.joined(separator: " ")
-            : fits.prefix(4).joined(separator: " ") + " … " + fits.suffix(4).joined(separator: " ")
+        let shown = bounded(seen.map { "\(Int($0))" }, head: 6, tail: 4, separator: "→")
+        let wantedGiven = bounded(fits, head: 4, tail: 4, separator: " ")
         return (false, "\(seen.count) distinct heights in \(contentSettling): \(shown); "
                 + "wanted/given: \(wantedGiven)")
+    }
+
+    /// **Bounded: a run that changed three hundred times needs the shape, not the log.** One
+    /// spelling, because two copies of head-ellipsis-tail with different limits are two places
+    /// for the ellipsis to stop meaning "and more".
+    private static func bounded(_ parts: [String], head: Int, tail: Int,
+                                separator: String) -> String {
+        guard parts.count > head + tail else { return parts.joined(separator: separator) }
+        return parts.prefix(head).joined(separator: separator)
+            + " … " + parts.suffix(tail).joined(separator: separator)
     }
 
     /// The newest lookup id, or nil where the ledger cannot be reached.

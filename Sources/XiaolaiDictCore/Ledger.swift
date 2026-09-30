@@ -122,6 +122,9 @@ public enum LedgerError: Error, Equatable {
     case newerSchema(found: Int, supported: Int)
     /// A row holds a value this schema does not allow — the file was edited or damaged.
     case corruptRow(String)
+    /// A card asks a question this build has no presentation for. Nothing creates one — every
+    /// caller passes `.meaning` — so it means a ledger from a later XiaolaiDict, or one edited.
+    case unaskablePrompt(String)
     case sqlite(code: Int32, message: String)
 }
 
