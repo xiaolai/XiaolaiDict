@@ -1,5 +1,6 @@
 import DictionaryModel
 import ModelKit
+import XiaolaiDictBase
 import XiaolaiDictCore
 import XPC
 
@@ -52,12 +53,16 @@ struct XPCServiceTransport<Request: Encodable & Sendable, Reply: Decodable & Sen
 
     func send(_ request: Request) async throws -> Reply {
         try await withCheckedThrowingContinuation { continuation in
+            // **Resumed exactly once, whatever XPC does.** Two paths reach this continuation — the reply
+            // handler and the `catch` — and nothing says `send` has or has not already called the handler
+            // by the time it throws. Resuming twice is not an error to handle, it ends the process; so
+            // the answer is the first one and any second is dropped, rather than the code resting on a
+            // guarantee it cannot check. `OneShot` carries the rule `DeadlineRace` keeps too.
+            let once = OneShot(continuation)
             do {
-                try session.send(request) { (result: Result<Reply, any Error>) in
-                    continuation.resume(with: result)
-                }
+                try session.send(request) { (result: Result<Reply, any Error>) in once.resume(with: result) }
             } catch {
-                continuation.resume(throwing: error)
+                once.resume(with: .failure(error))
             }
         }
     }
