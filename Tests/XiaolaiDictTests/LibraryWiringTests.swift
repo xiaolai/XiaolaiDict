@@ -1173,6 +1173,40 @@ struct LibraryReversibleRaceTests {
         #expect(model.presentation.inspector?.word == "first", "and keeps the inspector open")
     }
 
+    /// **Show more reads the page after the last row, not the whole prefix again.** Growing the
+    /// limit and re-reading from the top meant the fifth press read five pages to add one.
+    ///
+    /// A newer row written behind the model's back is the instrument: it sorts *before* the
+    /// cursor, so a query that started from the top would pick it up and one that starts from
+    /// the cursor cannot.
+    @Test func showingMoreReadsOnlyThePageAfterTheLastRow() async throws {
+        let (path, clean) = Wiring.scratch("extend"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let total = LibraryModel.pageSize + 1
+        for index in 0..<total {
+            try Wiring.save(ledger, "word\(String(format: "%04d", index))",
+                            at: now.addingTimeInterval(Double(-index)))
+        }
+        let model = LibraryModel(store: Wiring.store(path), studyScripts: { [] }, clock: { now })
+        await model.reload()
+        #expect(model.presentation.rows.count == LibraryModel.pageSize)
+
+        try Wiring.save(ledger, "newest", at: now.addingTimeInterval(60))
+        model.act(.showMore)
+        try await Wiring.settle("the next page arrived") {
+            model.presentation.rows.count == total
+        }
+        #expect(!model.presentation.rows.contains { $0.word == "newest" },
+                "showing more re-read the prefix")
+        #expect(model.presentation.rows.last?.word == "word\(String(format: "%04d", total - 1))",
+                "and the page it did read is the one after the last row")
+
+        await model.reload()
+        #expect(model.presentation.rows.contains { $0.word == "newest" },
+                "a reload does read what is in front of the cursor")
+    }
+
     /// Opened once, awaited by however many callers.
     private actor Gate {
         private var isOpen = false

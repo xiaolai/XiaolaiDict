@@ -139,7 +139,15 @@ final class LibraryModel {
             selection = ids
             Task { await reselect() }
             return
-        case .showMore: pages += 1
+        // **One page, after the last row on screen** — never the whole prefix again. Growing
+        // the limit and re-reading from the top meant the fifth Show more read five pages to
+        // add one, and every page already drawn was decoded again to produce the same rows.
+        // `pages` still governs what a *reload* re-reads, because a reload must show writes
+        // that landed anywhere in what is on screen.
+        case .showMore:
+            pages += 1
+            Task { await extend() }
+            return
         // **One transaction, like every other bulk action.** A loop of separately committed
         // writes leaves an arbitrary subset changed when one fails part-way, and the reader has
         // no way to see which — the same all-or-nothing the pause and archive helpers already
@@ -303,6 +311,35 @@ final class LibraryModel {
             presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
                                                scriptFiltered: scriptFiltered,
                                                problem: String(describing: error))
+        }
+    }
+
+    /// Reads the page after the last row on screen and appends it.
+    ///
+    /// Falls back to a full reload when there is nothing to page from — no reading yet, or a
+    /// reading with no rows, in which case there is no cursor and nothing to append to.
+    private func extend() async {
+        guard let reading, let last = reading.rows.last, let opening = store() else {
+            return await reload()
+        }
+        generation += 1
+        let mine = generation
+        do {
+            let ledger = try await opening.value
+            var next = query()
+            next.after = last.cursor
+            next.limit = Self.pageSize
+            let rows = try await ledger.library(next)
+            let answers = try await ledger.answers(of: rows.map(\.id))
+            guard mine == generation, var grown = self.reading else { return }
+            grown.rows += rows
+            grown.answers.merge(answers) { _, new in new }
+            self.reading = grown
+            await inspect(ledger, generation: mine)
+        } catch {
+            guard mine == generation else { return }
+            problem = String(describing: error)
+            republish()
         }
     }
 
