@@ -115,3 +115,38 @@ struct LadderSentenceExplainerTests {
     // `SentenceQuestion.prompt(for:)`, which is the one place the dropping happens, and the test
     // that lived here built neither a ladder nor a local model to exercise it.
 }
+
+/// **A version skew with the model service must not end the reader's app.**
+///
+/// `.invalidRequest` means this rung and the service disagree about what a sentence question is — a
+/// defect here, not a fact about the reader's Mac. It was an `assertionFailure`, so in a debug build the
+/// app trapped; the service is a separate process that launchd will keep alive across an update, so the
+/// skew is reachable without anything in this binary being wrong today. `LocalModelSenseSelector` had
+/// already ruled the trap out for the same reply on the same wire — ADR-0042.
+struct LadderSentenceExplainerSkewTests {
+    private struct SilentApple: SentenceExplaining {
+        let tier = ExplainerTier.onDevice
+        let asked: Recorder<Int>
+        func explain(_ question: SentenceQuestion) async -> SentenceExplanation {
+            asked.withLock { $0 += 1 }
+            return .explained("Apple's words", tier: .onDevice)
+        }
+    }
+
+    private static let question = SentenceQuestion(
+        sentence: "The ship's hold was full.", term: "hold",
+        senseText: "a large space in the lower part of a ship")
+
+    /// Before the fix this crashed the test process rather than recording a failure, which is why the
+    /// check is worth having even though it looks like it merely reads back a string.
+    @Test func arefusedRequestIsAnsweredRatherThanTrapped() async {
+        let appleAsked = Recorder(0)
+        let explainer = LadderSentenceExplainer(
+            local: { _ in .failure(.invalidRequest("term is empty")) },
+            apple: SilentApple(asked: appleAsked))
+        #expect(await explainer.explain(Self.question) == .unavailable("This sentence could not be explained."))
+        // **And Apple is still not asked.** The original reasoning holds: a second generation on a
+        // question this ladder built wrongly would hide the defect behind an answer.
+        #expect(appleAsked.withLock { $0 } == 0, "the fallback spent a generation on a malformed question")
+    }
+}

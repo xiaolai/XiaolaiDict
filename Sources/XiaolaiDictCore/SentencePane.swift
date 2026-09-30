@@ -1,6 +1,8 @@
 import FoundationModels
 import Foundation
 import ModelKit
+import XiaolaiDictBase
+import os
 
 
 public enum SentenceExplanation: Sendable, Equatable {
@@ -35,6 +37,11 @@ public struct LadderSentenceExplainer: SentenceExplaining {
         self.apple = apple
     }
 
+    /// Where a disagreement with the model service goes instead of into a trap. The rung runs in the
+    /// app, which is the process whose log a reader is asked for — the same arrangement, and the same
+    /// comment, as `LocalModelSenseSelector`.
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "sentence")
+
     public func explain(_ question: SentenceQuestion) async -> SentenceExplanation {
         // Asked of both rungs, before either is woken: an explanation with no sentence or no word
         // is not something a model can be asked, and falling through to Apple with it would only
@@ -47,8 +54,16 @@ public struct LadderSentenceExplainer: SentenceExplaining {
         // **A request the service refused as invalid is a defect in this rung**, not a reason to
         // spend a second generation on the same thing: the bounds it checks are ones this ladder
         // built, and falling through would hide that behind an answer.
+        //
+        // **Logged, never trapped.** This used to `assertionFailure`, which `LocalModelSenseSelector`
+        // had already ruled out for the same reply on the same wire: the model service is a separate
+        // process that may be a different build of this app entirely — launchd will happily keep an old
+        // one alive across an update — and killing the reader's app over a version skew is a worse
+        // answer than saying the sentence could not be explained. The other rung's comment says exactly
+        // this; only this one still trapped, which is what makes it the second instance rather than a
+        // difference of opinion.
         if case .failure(.invalidRequest(let why))? = reply {
-            assertionFailure("the model service refused this rung's own question: \(why)")
+            Self.log.error("the model service refused this rung's own question: \(why, privacy: .public)")
             return .unavailable("This sentence could not be explained.")
         }
         if case .explanation(let text)? = reply {

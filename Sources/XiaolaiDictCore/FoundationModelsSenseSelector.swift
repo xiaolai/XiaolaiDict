@@ -1,6 +1,8 @@
 import FoundationModels
 import Foundation
 import ModelKit
+import XiaolaiDictBase
+import os
 
 /// Rung 2: Apple's on-device model, guided to the candidate set — below the local model, which is
 /// the top rung wherever it is downloaded, and above `NLEmbedding`.
@@ -84,12 +86,14 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
                 }
                 switch error {
                 case .unsupportedGenerationGuide, .unsupportedTranscriptContent, .unsupportedCapability:
-                    // The schema and the instructions are compiled into this binary, so this is a
-                    // defect here rather than a fact about the reader's Mac. It traps in a debug build
-                    // and still abstains in a shipped one: a reader must not lose their lookup over it.
-                    // The trap is right here and wrong in the local rung, where the answer comes from a
-                    // separately-built process that may be a different version of this app.
-                    assertionFailure("this rung's own request was refused: \(error)")
+                    // The schema and the instructions are compiled into this binary — but the framework
+                    // that judges them is not, and **that is what the trap here got wrong.** It was an
+                    // `assertionFailure` on the reasoning that an unsupported guide could only be a
+                    // defect in this binary. A macOS update can withdraw support for a guide this build
+                    // has always sent, which is a fact about the reader's Mac arriving through the same
+                    // case; on a debug build that ended the app for it. Logged instead, and the
+                    // abstention is unchanged, so the reader keeps their lookup either way.
+                    Self.log.fault("this rung's own request was refused: \(String(describing: error), privacy: .public)")
                     return .abstained(.unavailable)
                 case .contextSizeExceeded:
                     // The list outgrew the window. Deliberately not narrowed to fit: dropping
@@ -107,4 +111,8 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
             }
         }
     }
+
+    /// Where a refusal that has no other home goes — the same arrangement, and the same reason, as
+    /// `LocalModelSenseSelector.log`. No reader-facing text: `XiaolaiDictCore` carries none (ADR-0025).
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "sense")
 }
