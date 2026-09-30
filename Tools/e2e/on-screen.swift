@@ -86,11 +86,16 @@ func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
 }
 
 var matches: [[String: Any]] = []
+/// **Every title Accessibility offered**, matched or not. An empty `matches` beside a drawn
+/// window says only that the fragment did not match, and the caller cannot tell a renamed
+/// window from an absent one without seeing what was there.
+var titles: [String] = []
 if !fragment.isEmpty {
     let element = AXUIElementCreateApplication(pid)
     for window in attribute(element, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
-        guard let title = attribute(window, kAXTitleAttribute) as? String, title.contains(fragment)
-        else { continue }
+        let title = attribute(window, kAXTitleAttribute) as? String
+        titles.append(title ?? "<untitled>")
+        guard let title, title.contains(fragment) else { continue }
         var entry: [String: Any] = ["title": title]
         // Whether the window is the app's main and focused one — which, with the app frontmost, is
         // what "the reader has it" means. Reported so a window that is drawn but never became key
@@ -116,6 +121,8 @@ emit([
     "frontmost": front,
     // Accessibility's windows with the title asked for, each with whether the compositor draws it.
     "matches": matches,
+    // What Accessibility called each of the app's windows, so an empty `matches` is readable.
+    "titles": titles,
     // Every window the compositor draws for the app.
     "windows": drawn.map { ["x": Int($0.minX), "y": Int($0.minY),
                             "width": Int($0.width), "height": Int($0.height)] },

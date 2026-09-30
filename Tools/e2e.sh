@@ -2139,20 +2139,27 @@ for surface in "Reading History" "Settings…"; do
     osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
     sleep 1
     before_front=$("$helpers/panel" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+    # **What the compositor already drew for this app**, so the window this menu item opens can
+    # be told from one that was open before it was touched.
+    before_drawn=$("$helpers/on-screen" com.xiaolaidict | python3 -c \
+        'import json,sys; print(json.dumps(sorted(map(str, json.load(sys.stdin)["windows"]))))')
     if ! "$helpers/menu-click" com.xiaolaidict "$surface" >/dev/null 2>&1; then
         flunk "scenes: could not reach $surface in the menu"
         continue
     fi
     sleep 2
-    # **This surface's window, and drawn** — not "the app has some window". Any window at all
-    # satisfied the old check, including one that was already open before the menu was touched
-    # and one Accessibility can see but the compositor never draws. `on-screen` is the rule this
-    # project already wrote down: ask the compositor, nothing else is evidence.
-    seen=$("$helpers/on-screen" com.xiaolaidict "${surface%…}")
-    if ! printf '%s' "$seen" | grep -q '"drawn":true'; then
-        flunk "scenes: $surface is not a window the compositor draws ($(printf '%s' "$seen" | head -c 200))"
+    # **A window that was not there before, and that the compositor draws** — not "the app has
+    # some window", and deliberately not a title match either. Accessibility calls the Settings
+    # window after its pane, so matching "Settings" found nothing while the window was on screen
+    # in front of the reader: a title is what a surface is called today, and an assertion that
+    # rests on one stops matching the day it is renamed while going on looking like a defect.
+    seen=$("$helpers/on-screen" com.xiaolaidict)
+    if [ -z "$(printf '%s' "$seen" | python3 -c \
+            'import json,sys; s=set(json.loads(sys.argv[1])); print("\n".join(w for w in sorted(map(str, json.load(sys.stdin)["windows"])) if w not in s))' \
+            "$before_drawn")" ]; then
+        flunk "scenes: $surface opened no window the compositor draws (before $before_drawn, after $(printf '%s' "$seen" | head -c 300))"
     else
-        pass "scenes: $surface is open and readable through Accessibility"
+        pass "scenes: $surface is open and drawn by the compositor"
     fi
     front=$(printf '%s' "$seen" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
     case "$surface" in
@@ -2225,13 +2232,17 @@ else:
         "panel: a click inside the panel dismissed it — the click-away hit test is not holding")
     # Without this the menu reading is vacuous: a click that missed the item and a click the
     # monitors swallowed look identical, and they are opposite findings.
-    if menu.get("measured") and menu.get("clickPosted") and menu.get("menuItemChosen"):
+    if menu.get("measured") and menu.get("clickPosted") and menu.get("menuTracked"):
         say(menu["itemWasChosen"],
             "panel: the menu click reached the menu item",
             "panel: the menu click never reached the item, so the survival reading below means nothing")
     else:
         say(False, "", "panel: the menu could not be tracked "
-            f"({menu.get('problem', 'itemChosen=' + str(menu.get('menuItemChosen')) + ', clickPosted=' + str(menu.get('clickPosted')))})")
+            f"({menu.get('problem', 'measured=' + str(menu.get('measured'))
+                 + ', menuTracked=' + str(menu.get('menuTracked'))
+                 + ', clickPosted=' + str(menu.get('clickPosted'))
+                 + ', clickedAt=' + str(menu.get('clickedAt'))
+                 + ', menuFrame=' + str(menu.get('menuFrame')))})")
 
     # **The window is the height of the card.** It was the opening default for every card — 240,
     # with the whole footer below a fold the panel gives no sign of having. Three assertions,

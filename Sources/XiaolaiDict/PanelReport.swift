@@ -376,8 +376,12 @@ enum PanelReport {
                     + "be cancelled; see clickPosted for whether the dismissing click was posted",
                 "clickPosted": posted.withLock { $0 },
                 // **`popUp` answers whether an item was chosen**, not whether tracking happened —
-            // a menu that came up and was dismissed returns false. Named for what it is.
-            "menuItemChosen": tracked,
+                // a menu that came up and was dismissed returns false. Named for what it is, and
+                // **named the same on both branches**: this one said `menuItemChosen` while the
+                // measured branch below said `menuTracked`, so the harness — reading the first
+                // name — saw `None` on every successful measurement and failed the stage for a
+                // menu that had tracked perfectly well.
+                "menuTracked": tracked,
             ]
         }
         return [
@@ -387,6 +391,13 @@ enum PanelReport {
             "menuKind": "NSMenu.popUp",
             "menuTracked": tracked,
             "anchor": NSStringFromPoint(anchor),
+            // **Where the click went, against where the menu ended up.** "itemChosen=false" with
+            // a posted click is two different findings — a menu that did not open where it was
+            // asked to, and a click that missed an item that was there — and they read
+            // identically without both frames.
+            "clickedAt": NSStringFromPoint(onItem),
+            "menuFrame": menu.size == .zero ? "unsized" : NSStringFromSize(menu.size),
+            "firstItemIsEnabled": menu.items.first?.isEnabled ?? false,
             "clickPosted": posted.withLock { $0 },
             "itemWasChosen": sentinel.wasChosen,
             // **The finding, either way.** True means a menu is usable in the panel's footer; false

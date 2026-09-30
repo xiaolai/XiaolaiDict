@@ -531,3 +531,86 @@ struct EndToEndTextTests {
         }
     }
 }
+
+/// **Every key the harness reads out of an instrument's report is a key that instrument writes.**
+///
+/// The panel instrument named one field `menuItemChosen` on its bail branch and `menuTracked` on
+/// its measured branch. The harness read the first, so on every *successful* measurement it got
+/// `None`, took the failure path, and failed the stage for a menu that had tracked perfectly
+/// well — with the NOTE line directly underneath reporting the measurement it had just refused.
+///
+/// A missing key in a dictionary read with `.get` is silent by construction, which is why this
+/// cannot be left to the stage to notice. The same class as a reworded surface whose grep stops
+/// matching, and enforced the same way.
+struct EndToEndReportKeyTests {
+    private static var repository: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// The instruments whose reports the harness parses. **Named as a list and checked against
+    /// the disk**, because a rule that names files stops covering its subject the day one moves.
+    private static let instruments = [
+        "Sources/XiaolaiDict/PanelReport.swift",
+        "Sources/XiaolaiDict/HistoryReport.swift",
+        "Sources/XiaolaiDict/SettingsReport.swift",
+        "Sources/XiaolaiDict/ModelReport.swift",
+        "Sources/XiaolaiDict/SenseReport.swift",
+        "Sources/XiaolaiDict/SpeechReport.swift",
+        "Sources/XiaolaiDict/TranslationReport.swift",
+        // The lookup instruments answer through `Codable` types rather than dictionaries.
+        "Sources/XiaolaiDict/LookupCommand.swift",
+        // The helpers that answer the harness directly.
+        "Tools/e2e/panel.swift",
+        "Tools/e2e/on-screen.swift",
+    ]
+
+    @Test func everyInstrumentThisScanNamesIsOnDisk() {
+        for path in Self.instruments {
+            #expect(FileManager.default.fileExists(
+                atPath: Self.repository.appendingPathComponent(path).path),
+                    "\(path) has moved, and this scan stopped covering it silently")
+        }
+    }
+
+    /// Read by the harness as `<dict>.get("key")` or `<dict>["key"]`, in the Python it embeds.
+    @Test func everyKeyTheHarnessReadsIsOneAnInstrumentWrites() throws {
+        let script = try String(contentsOf: Self.repository.appendingPathComponent("Tools/e2e.sh"),
+                                encoding: .utf8)
+        var written: Set<String> = []
+        for path in Self.instruments {
+            let url = Self.repository.appendingPathComponent(path)
+            guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            // A dictionary literal's key: `"name":` at the start of an entry.
+            for match in source.matches(of: /"([A-Za-z][A-Za-z0-9]*)"\s*:/) {
+                written.insert(String(match.1))
+            }
+            // And a key written by subscript rather than in a literal — `report["name"] = …`.
+            // **A scan is only as wide as the spellings it knows**: with the literal alone this
+            // reported `explanation` and `translationToldSense` as unwritten, and both are
+            // written this way three lines apart from keys that are not.
+            for match in source.matches(of: /\]?\["([A-Za-z][A-Za-z0-9]*)"\]\s*=/) {
+                written.insert(String(match.1))
+            }
+            // And a `Codable` report's stored property, which is a key by another spelling —
+            // renaming one renames the key, which is the case this is here to catch.
+            for match in source.matches(of: /\b(?:let|var) ([A-Za-z][A-Za-z0-9]*):/) {
+                written.insert(String(match.1))
+            }
+        }
+        #expect(written.count > 20, "no instrument keys were found, so this checks nothing")
+
+        var read: Set<String> = []
+        for match in script.matches(of: /\.get\("([A-Za-z][A-Za-z0-9]*)"/) { read.insert(String(match.1)) }
+        for match in script.matches(of: /\b(?:menu|w|before|after|report|window)\["([A-Za-z][A-Za-z0-9]*)"\]/) {
+            read.insert(String(match.1))
+        }
+        #expect(read.count > 10, "no harness reads were found, so this checks nothing")
+
+        let unwritten = read.subtracting(written).sorted()
+        #expect(unwritten.isEmpty, """
+            the harness reads keys no instrument writes, and a missing key reads as a failing \
+            measurement rather than as a typo: \(unwritten)
+            """)
+    }
+}

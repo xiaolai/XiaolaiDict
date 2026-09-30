@@ -7,7 +7,15 @@ let arguments = CommandLine.arguments
 guard arguments.count == 3 else {
     FileHandle.standardError.write(Data("usage: select-web <bundle-id> <needle>\n".utf8)); exit(64)
 }
-func fail(_ reason: String) -> Never { FileHandle.standardError.write(Data("select-web: \(reason)\n".utf8)); exit(1) }
+/// Apps this helper hid to get the front, put back by **every** exit — see the activation loop.
+var hidden: [NSRunningApplication] = []
+func restoreHidden() { for app in hidden { app.unhide() }; hidden = [] }
+
+func fail(_ reason: String) -> Never {
+    restoreHidden()
+    FileHandle.standardError.write(Data("select-web: \(reason)\n".utf8))
+    exit(1)
+}
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
@@ -71,16 +79,34 @@ guard let pageFrame = frame(page), pageFrame.width > 40, pageFrame.height > 40 e
 // left open on the test Mac failed all three Safari checks with "the click did not move focus
 // into the page", which reads as a defect in the selection reader rather than as a window in
 // the way.
+/// **An app that will not give up the front is hidden, and unhidden on the way out.**
+///
+/// Activating once was not enough: a background app on the test Mac raised itself between the
+/// activation and the click, and the stage then reported "the click did not move focus into the
+/// page" — which reads as a defect in the selection reader rather than as a window in the way.
+/// A stage measures the machine it is run on, and this machine accumulates apps; what it sets
+/// aside it puts back.
 if let pid = processID(), let app = NSRunningApplication(processIdentifier: pid) {
-    app.activate()
-    let deadline = Date().addingTimeInterval(5)
-    while Date() < deadline {
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { break }
-        usleep(100_000)
+    var front: NSRunningApplication?
+    for attempt in 0..<3 {
+        app.activate()
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { break }
+            usleep(100_000)
+        }
+        front = NSWorkspace.shared.frontmostApplication
+        if front?.processIdentifier == pid { break }
+        // Last resort, and only for something that has already refused twice: hiding is
+        // reversible, and it is the only thing that stops an app raising itself again.
+        if attempt > 0, let other = front, other.processIdentifier != pid,
+           other.bundleIdentifier != Bundle.main.bundleIdentifier, other.hide() {
+            hidden.append(other)
+        }
     }
     if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"
-        fail("\(arguments[1]) would not come to the front (\(front) is there); a click would only raise it")
+        let name = front?.bundleIdentifier ?? "nothing"
+        fail("\(arguments[1]) would not come to the front (\(name) is there, and hiding it did not help)")
     }
 }
 // Read again once it is in front: raising a window can move it.
@@ -108,7 +134,10 @@ func isInside(_ element: AXUIElement, _ ancestor: AXUIElement) -> Bool {
 guard let pid = processID(),
       let focused = attribute(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
       CFGetTypeID(focused) == AXUIElementGetTypeID(), isInside(focused as! AXUIElement, page)
-else { fail("the click did not move focus into the page (is another window in front?)") }
+else {
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"
+    fail("the click did not move focus into the page (\(front) is in front now)")
+}
 
 let range = text.range(of: arguments[2])
 guard let first = parameterized(page, "AXTextMarkerForIndex", range.location as CFNumber),
@@ -117,3 +146,4 @@ guard let first = parameterized(page, "AXTextMarkerForIndex", range.location as 
 else { fail("no text markers for '\(arguments[2])'") }
 let status = AXUIElementSetAttributeValue(page, "AXSelectedTextMarkerRange" as CFString, selection)
 guard status == .success else { fail("setting the selection failed: AXError \(status.rawValue)") }
+restoreHidden()
