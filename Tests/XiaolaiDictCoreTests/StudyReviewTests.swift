@@ -401,6 +401,19 @@ struct StudyReviewTests {
         }
         #expect(bySQL == bySwift, "the queue and `readiness(of:)` disagree about which notes are askable")
         #expect(bySQL == [ok.noteID], "and the one they agree on is the only one that should be")
+
+        // **And the filtering happens before the `LIMIT`, which the comparison above cannot see.**
+        // `askableNoteIDs()` has no limit and does not go through `dueCards`, so moving
+        // eligibility into a Swift filter *after* the queue's `LIMIT` — the defect this ledger has
+        // had once — would leave every assertion above passing. Six askable cards behind five
+        // unaskable ones: asked for three, a queue that filters afterwards hands back none.
+        for index in 0..<6 {
+            _ = try ready(ledger, "wanted\(index)", key: "w\(index)")
+        }
+        let batch = try ledger.dueCards(at: now, limit: 3, dictionary: "noad",
+                                        newAllowance: .max, dayStart: .distantPast)
+        #expect(batch.count == 3,
+                "asked for 3 of 7 askable cards and got \(batch.count) — filtered after the LIMIT")
         // Named so a future reader can see the states this was measured over, not just the count.
         #expect([unconfirmed.noteID, archived.noteID, answerless.noteID, readingless.noteID,
                  entryRung.id].allSatisfy { !bySQL.contains($0) })
