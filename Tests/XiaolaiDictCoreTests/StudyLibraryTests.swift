@@ -49,16 +49,17 @@ struct StudyLibraryTests {
     /// Search matches the word, the reader's own sentence, and the answer.
     @Test func searchLooksInTheWordTheSentenceAndTheAnswer() throws {
         let ledger = try ledger()
-        try save(ledger, word: "hold", sentence: "The cargo was lowered into the hold.",
-                 answer: "the compartment of a ship below deck")
-        // Its own sentence, because the default one — "A sentence holding fine." — contains
-        // *holding*, and a fixture that matches the search by accident proves nothing.
-        try save(ledger, word: "fine", sentence: "He paid the fine.",
-                 answer: "a sum exacted as a penalty")
+        // **Each term appears in exactly one field.** The sentence used to be "…into the hold",
+        // so searching for *hold* matched through the sentence and the word search could have
+        // been deleted with this test still green. Three searches, three fields, no overlap.
+        let hold = try save(ledger, word: "hold", sentence: "The cargo went downstairs.",
+                            answer: "a ship's storage space")
+        try save(ledger, word: "fine", sentence: "He paid it.", answer: "a penalty")
 
-        #expect(try ledger.library(LibraryQuery(text: "hold")).count == 1)
-        #expect(try ledger.library(LibraryQuery(text: "cargo")).count == 1, "the reader's own sentence")
-        #expect(try ledger.library(LibraryQuery(text: "penalty")).count == 1, "the answer")
+        #expect(try ledger.library(LibraryQuery(text: "hold")).map(\.id) == [hold.id], "the word")
+        #expect(try ledger.library(LibraryQuery(text: "downstairs")).map(\.id) == [hold.id],
+                "the reader's own sentence")
+        #expect(try ledger.library(LibraryQuery(text: "storage")).map(\.id) == [hold.id], "the answer")
         #expect(try ledger.library(LibraryQuery(text: "nothing here")).isEmpty)
     }
 
@@ -397,22 +398,27 @@ struct StudyLibraryTests {
     /// resumed both and called it an undo.
     @Test func anUndoOfAbulkPauseRestoresEachCardsOwnState() throws {
         let ledger = try ledger()
-        let alreadyPaused = try save(ledger, word: "resting")
-        let running = try save(ledger, word: "working")
-        _ = try ledger.card(of: alreadyPaused.id, at: now)
-        _ = try ledger.card(of: running.id, at: now)
-        try ledger.setPaused(true, ofNotes: [alreadyPaused.id])
+        // **One note with two cards in different states**, which is the whole claim: pause is per
+        // card. Two notes of one card each could be satisfied by an implementation that stored a
+        // single pause state per *note* — exactly the shape this is written against.
+        let note = try save(ledger, word: "fine")
+        let meaning = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let production = try ledger.card(of: note.id, prompt: .production, at: now)
+        try ledger.setPaused(true, ofCard: production.id)
 
-        let ids = [alreadyPaused.id, running.id]
+        let ids = [note.id]
         let before = try ledger.pauseStates(ofNotes: ids)
-        #expect(before.values.filter { $0 }.count == 1)
+        #expect(before[meaning.id] == false)
+        #expect(before[production.id] == true, "one card of this note is resting and one is not")
 
         try ledger.setPaused(true, ofNotes: ids)
         #expect(try ledger.pauseStates(ofNotes: ids).values.allSatisfy { $0 })
 
         try ledger.restorePauseStates(before)
-        #expect(try ledger.pauseStates(ofNotes: ids) == before,
-                "the one that was already resting stays resting")
+        let after = try ledger.pauseStates(ofNotes: ids)
+        #expect(after == before, "each card went back to its own state, not the note's")
+        #expect(after[meaning.id] == false, "the card that was running is running again")
+        #expect(after[production.id] == true)
     }
 
     /// The same for archiving, which is per note. **`.active` is not the answer** — a candidate the
@@ -435,7 +441,14 @@ struct StudyLibraryTests {
                 "restored to what each was, not to active")
     }
 
-    /// A bulk action lands on exactly the set it was given, all of it or none.
+    /// A bulk action lands on **exactly the set it was given** — every one of them, and nothing
+    /// else.
+    ///
+    /// **Not all-or-nothing, which is not reachable from here.** Every statement these bulk
+    /// helpers run is an `UPDATE` that matches nothing when its id is absent, so no iteration can
+    /// fail and the savepoint has nothing to roll back. The transaction is belt-and-braces
+    /// against a future statement that *can* fail; saying this test covers it would be a claim
+    /// nobody has checked.
     @Test func abulkActionAffectsExactlyTheSelection() throws {
         let ledger = try ledger()
         let a = try save(ledger, word: "a"), b = try save(ledger, word: "b")
@@ -483,11 +496,22 @@ struct StudyLibraryTests {
     @Test func deletingReadingLeavesTheCardNeedingRepair() throws {
         let ledger = try ledger()
         let note = try save(ledger, word: "fine")
+        // **The card and its schedule are what "keeps the card" means.** Asserting the note and
+        // its answer left the claim untested: deleting the reader's study progress while keeping
+        // the note would have passed.
+        let card = try ledger.card(of: note.id, at: now)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: try MemoryScheduler())
+        let scheduled = try #require(try ledger.card(id: card.id)).scheduled
+
         try ledger.deleteReading(lookups: try ledger.lookupIDs(evidencing: note.id))
         #expect(try ledger.history(of: "fine").isEmpty)
         #expect(try ledger.library(LibraryQuery()).count == 1)
         #expect(try ledger.readiness(of: note.id) == .needsRepair)
         #expect(try ledger.answer(of: note.id) != nil, "and the answer it had is still there")
+        let kept = try #require(try ledger.existingCard(of: note.id))
+        #expect(kept.scheduled == scheduled, "the schedule the reader earned is untouched")
+        #expect(try ledger.reviews(ofCard: card.id).count == 1, "and so is what they answered")
     }
 
     /// **Previewed before it is offered**, because clearing a source cannot be undone: how much

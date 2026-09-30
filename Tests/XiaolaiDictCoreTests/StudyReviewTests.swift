@@ -139,12 +139,23 @@ struct StudyReviewTests {
     @Test func afailedGradeLeavesNeitherAnEventNorAmovedCard() throws {
         let ledger = try Ledger(path: ":memory:")
         let card = try ready(ledger)
-        // A clock that has gone backwards makes the scheduler throw *after* the eligibility checks
-        // pass, which is the interesting place for the transaction to be interrupted.
+        // A clock that has gone backwards makes the scheduler throw after the eligibility checks.
+        //
+        // **This does not exercise the savepoint's rollback, and must not be read as doing so.**
+        // Every throw in `grade` happens before both of its writes — idempotency, the card, the
+        // revision, eligibility and the scheduler all come first — so there is nothing for
+        // `ROLLBACK TO` to undo. Reaching the window between `insert` and `write` needs a failure
+        // the ledger cannot currently produce: the scheduler refuses to return a `new` phase with
+        // a stability, which is the one `study_cards` CHECK an injected value could violate. A
+        // test-only seam in transaction code would reach it and is a design decision, not an
+        // effort one. What this *does* prove is that a throw leaves neither an event nor a moved
+        // card behind.
         _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
                              at: now, using: try scheduler())
         let before = try #require(try ledger.card(id: card.id))
-        #expect(throws: (any Error).self) {
+        // **The error this expects, not any error.** `(any Error).self` passed for a typo in the
+        // fixture as readily as for the refusal being asserted.
+        #expect(throws: SchedulerError.self) {
             try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 1,
                              at: self.now.addingTimeInterval(-60), using: try self.scheduler())
         }
@@ -286,7 +297,9 @@ struct StudyReviewTests {
     /// Study state belongs to one dictionary, so a session's queue must not mix two namespaces.
     @Test func thequeueIsScopedToOneDictionary() throws {
         let ledger = try Ledger(path: ":memory:")
-        _ = try ready(ledger)
+        let mineCard = try ready(ledger)
+        let note = try #require(try ledger.notes().first { $0.target.dictionary == "noad" })
+        _ = mineCard
         let lookup = try ledger.record(LookupRecord(
             surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
             language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
@@ -297,12 +310,17 @@ struct StudyReviewTests {
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
         _ = try ledger.card(of: other.id, at: now)
 
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "noad",
-                                        newAllowance: .max, dayStart: .distantPast).count == 1)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: "oxford",
-                                        newAllowance: .max, dayStart: .distantPast).count == 1)
-        #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
-                                        newAllowance: .max, dayStart: .distantPast).count == 2,
+        // **Which card, not how many.** Both scopes hold exactly one card, so a count of 1 is
+        // satisfied by returning the *other* dictionary's — the precise failure this is for.
+        let mine = try #require(try ledger.existingCard(of: note.id))
+        let theirs = try #require(try ledger.existingCard(of: other.id))
+        func queue(_ dictionary: String?) throws -> [UUID] {
+            try ledger.dueCards(at: now, limit: 10, dictionary: dictionary,
+                                newAllowance: .max, dayStart: .distantPast).map(\.id)
+        }
+        #expect(try queue("noad") == [mine.id])
+        #expect(try queue("oxford") == [theirs.id])
+        #expect(try Set(queue(nil)) == [mine.id, theirs.id],
                 "no scope is the library's view, not a session's")
     }
 
