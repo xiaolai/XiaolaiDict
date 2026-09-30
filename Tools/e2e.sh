@@ -2214,13 +2214,13 @@ else:
         "panel: a click inside the panel dismissed it — the click-away hit test is not holding")
     # Without this the menu reading is vacuous: a click that missed the item and a click the
     # monitors swallowed look identical, and they are opposite findings.
-    if menu.get("measured") and menu.get("clickPosted") and menu.get("menuTracked"):
+    if menu.get("measured") and menu.get("clickPosted") and menu.get("menuItemChosen"):
         say(menu["itemWasChosen"],
             "panel: the menu click reached the menu item",
             "panel: the menu click never reached the item, so the survival reading below means nothing")
     else:
         say(False, "", "panel: the menu could not be tracked "
-            f"({menu.get('problem', 'tracked=' + str(menu.get('menuTracked')) + ', clickPosted=' + str(menu.get('clickPosted')))})")
+            f"({menu.get('problem', 'itemChosen=' + str(menu.get('menuItemChosen')) + ', clickPosted=' + str(menu.get('clickPosted')))})")
 
     # **The window is the height of the card.** It was the opening default for every card — 240,
     # with the whole footer below a fold the panel gives no sign of having. Three assertions,

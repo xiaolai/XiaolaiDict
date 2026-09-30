@@ -55,6 +55,9 @@ enum PanelReport {
     /// `popUp` holds the main thread, so `withDeadline` cannot fire. Generous against
     /// `menuSettling`, so a slow but working click is never cut off.
     static let menuTrackingBound: Duration = .seconds(8)
+    /// How long the runloop is given after menu tracking ends, before the panel's survival is
+    /// read. A dismissal is not synchronous with `popUp` returning.
+    static let dismissalSettling: Duration = .milliseconds(400)
     /// How long the panel is given to stop resizing before its height is read. Long enough for the
     /// dictionaries, the memory strip and the sense to have arrived and grown it.
     static let contentSettling: Duration = .seconds(15)
@@ -185,7 +188,7 @@ enum PanelReport {
 
         // **A click inside the panel.** At its centre, over the card's own text.
         let inside = NSPoint(x: window.frame.midX, y: window.frame.midY)
-        let clicked = post(.leftMouse, at: inside)
+        let clicked = post(at: inside)
         _ = await Instrument.settle(until: delivery) { NSApp.isActive || window.isKeyWindow }
         let afterClick: [String: Any] = [
             "clickPosted": clicked,
@@ -247,6 +250,12 @@ enum PanelReport {
         // One item, so the first row sits just below the anchor. A few points in, to clear the menu's
         // own rounded corner.
         let onItem = NSPoint(x: anchor.x + 30, y: anchor.y - 14)
+        // **The click, not only the anchor.** The anchor was checked against the panel and the
+        // click is offset from it, so on a narrow screen the point actually clicked could land
+        // inside the panel — which is the one place a click-away test must not click.
+        guard !window.frame.contains(onItem) else {
+            return ["measured": false, "problem": "the panel covers the point the menu would be clicked at"]
+        }
         // **Converted here, on the main actor, and handed over as a plain point.** The thread below
         // touches nothing but CoreGraphics: reading `NSScreen` from it would be exactly the
         // main-actor-isolated access that Swift 6 refuses, and the conversion is the only part that
@@ -255,10 +264,18 @@ enum PanelReport {
             return ["measured": false, "problem": "no primary display to convert a click through"]
         }
         let posted = OSAllocatedUnfairLock(initialState: false)
+        // **Disarmed when tracking ends.** The thread slept and then clicked regardless, so a menu
+        // that closed early — cancelled, or dismissed by something else — left a click landing on
+        // whatever was underneath it, in whichever app that was.
+        let tracking = OSAllocatedUnfairLock(initialState: true)
+        defer { tracking.withLock { $0 = false } }
         let wait = menuSettling.milliseconds / 1000
         Thread.detachNewThread {
             Thread.sleep(forTimeInterval: wait)
+            guard tracking.withLock({ $0 }) else { return }
             posted.withLock { $0 = Self.postClick(atFlipped: target) }
+            // See `postClick`: what this records is that the events were created and posted, not
+            // that anything received them.
         }
         // **The one deadline in this file that cannot be a deadline.** `popUp` blocks the main
         // thread for the whole of tracking, so the report's own `withDeadline` — which needs the
@@ -282,8 +299,10 @@ enum PanelReport {
         MenuBail.cancelPreviousPerformRequests(withTarget: bail,
                                                selector: #selector(MenuBail.cancel), object: nil)
 
-        // After tracking ends. The panel's state is the observable consequence of whether the
-        // click-away monitors saw a mouse-down they were not offered before.
+        // After tracking ends — **and after the runloop has had a turn**. A dismissal travels
+        // through a monitor, SwiftUI and the compositor, none of which has run at the instant
+        // `popUp` returns, so reading here reported "survived" for a panel that was closing.
+        try? await Task.sleep(for: dismissalSettling)
         let survived = panelStillUp()
         // **A menu this cancelled measured nothing.** The click never landed, so whether the panel
         // is still up says nothing about the click-away monitors — and reporting it as a finding
@@ -298,7 +317,9 @@ enum PanelReport {
                 "problem": "the menu was still up after \(menuTrackingBound) and tracking had to "
                     + "be cancelled; see clickPosted for whether the dismissing click was posted",
                 "clickPosted": posted.withLock { $0 },
-                "menuTracked": tracked,
+                // **`popUp` answers whether an item was chosen**, not whether tracking happened —
+            // a menu that came up and was dismissed returns false. Named for what it is.
+            "menuItemChosen": tracked,
             ]
         }
         return [
@@ -324,11 +345,18 @@ enum PanelReport {
         async -> (settled: Bool, movement: String) {
         // **The answer first, then the stillness.** Waiting for the frame to hold still alone settles
         // on the waiting state, which is stable and short — 73 points of "Looking up…", measured.
+        // `hasAnswered` is the *dictionary's* outcome; the memory strip and the sense mark arrive
+        // after it and resize the card again. Waiting on it alone declared a panel settled that
+        // had two more growths to come — which is why the stillness run below is what decides,
+        // and this is only the point from which it is worth watching.
         guard await Instrument.settle(until: contentSettling, {
             app.panelModel.content?.hasAnswered == true
         }) else { return (false, "the card never answered") }
         var last = window.frame.height
         var still = 0
+        /// Where the run of stillness began, so drift is measured against it rather than against
+        /// the previous sample.
+        var restingAt: CGFloat?
         // **What it did, not just that it would not stop.** "Still resizing after 271 pt" cannot be
         // diagnosed from another machine: a window creeping by two points and one oscillating
         // between two sizes are different defects and read identically. The distinct heights it
@@ -349,7 +377,17 @@ enum PanelReport {
                     if fits.last != pair { fits.append(pair) }
                 }
             }
-            still = abs(now - last) < 1 ? still + 1 : 0
+            // **Against the height it settled at, not the one before it.** Comparing only
+            // consecutive samples accepted six 0.5-point steps as stillness while the window
+            // moved three points — a drift no single comparison could see.
+            if abs(now - last) < 1 {
+                still += 1
+                if let anchor = restingAt, abs(now - anchor) >= 1 { still = 1; restingAt = now }
+                if restingAt == nil { restingAt = now }
+            } else {
+                still = 0
+                restingAt = nil
+            }
             last = now
             if still >= 6 { return (true, "") }
         }
@@ -376,7 +414,9 @@ enum PanelReport {
     /// **`false` is a real answer and is reported as one.** Posting needs the Accessibility grant, and
     /// a run that could not post has measured nothing about clicking — which must not read as a click
     /// that changed nothing.
-    private static func post(_ button: CGMouseButton.ClickKind, at point: NSPoint) -> Bool {
+    /// **No button parameter**: the helper below posts a left click and nothing reads which kind
+    /// was asked for, so accepting one was a promise this could not keep.
+    private static func post(at point: NSPoint) -> Bool {
         guard let target = flipped(point) else { return false }
         return postClick(atFlipped: target)
     }
