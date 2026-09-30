@@ -105,7 +105,11 @@ struct StudyOrganisationTests {
                              expectedRevision: answered.revision, at: now, using: try MemoryScheduler())
         let next = try ledger.dueCards(at: now, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast)
-        #expect(next.contains { $0.noteID == note.id }, "the sibling never came back")
+        // **The sibling, by identity.** Matching on the note alone was satisfied by the card just
+        // answered coming back — which is the opposite of the rule being asserted.
+        let returned = try #require(next.first { $0.noteID == note.id }, "the sibling never came back")
+        #expect(returned.id != answered.id, "the card just answered came back, not its sibling")
+        #expect(returned.prompt != answered.prompt)
     }
 
     // MARK: - Practice (R10)
@@ -177,6 +181,28 @@ struct StudyOrganisationTests {
         #expect(report.successes == 1)
         #expect(report.rate == 1)
         #expect(report.cards == 1, "one card, however many attempts")
+
+        // **A second card, failed, so neither number is its own denominator.** With one card at
+        // 100% a rate of 1 was satisfied by counting attempts, by counting cards, or by returning
+        // a constant; `cards == 1` likewise could not tell distinct cards from attempts.
+        let second = try save(ledger, "hold")
+        let other = try ledger.card(of: second.id, at: now)
+        _ = try ledger.grade(cardID: other.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: scheduler)
+        let otherRevision = try #require(try ledger.card(id: other.id)).revision
+        _ = try ledger.grade(cardID: other.id, .again, eventID: UUID(), expectedRevision: otherRevision,
+                             at: now.addingTimeInterval(200_000), using: scheduler)
+        // **A second eligible recall on the first card**, so attempts and cards are different
+        // numbers. With one each, `cards` counting attempts satisfied the assertion — measured.
+        revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(), expectedRevision: revision,
+                             at: now.addingTimeInterval(400_000), using: scheduler)
+
+        report = try ledger.retention(dictionary: nil)
+        #expect(report.attempts == 3, "three eligible recalls across two cards")
+        #expect(report.cards == 2, "distinct cards, not attempts")
+        #expect(report.successes == 1)
+        #expect(report.rate == 1.0 / 3.0)
     }
 
     /// A review the reader took back did not happen, and does not enter the denominator.
@@ -205,16 +231,28 @@ struct StudyOrganisationTests {
     @Test func suggestionsRankByDistinctDaysNotByCount() throws {
         let ledger = try ledger()
         let day: TimeInterval = 86_400
-        // `spread` on three days, once each. `burst` four times in one afternoon.
+        // `spread` on three days, once each. `burst` four times in one afternoon. **And `middling`
+        // on two days**, which is the candidate that makes the ordering assertion mean something:
+        // with `burst` excluded by the two-day minimum there was only ever one eligible word, so
+        // any ordering — including none — put it first.
         for offset in [0.0, day, 2 * day] { try read(ledger, "spread", at: now.addingTimeInterval(offset)) }
+        // **More lookups, fewer days**, which is the only shape that separates the two rules.
+        // A runner-up with fewer of both left ordering by raw count indistinguishable from
+        // ordering by distinct days — measured: the by-count mutant passed.
+        for offset in [0.0, 600.0, 1_200.0, day, day + 600] {
+            try read(ledger, "clumped", at: now.addingTimeInterval(offset))
+        }
         for offset in [0.0, 600.0, 1_200.0, 1_800.0] {
             try read(ledger, "burst", at: now.addingTimeInterval(offset))
         }
         let found = try ledger.suggestions(limit: 10, language: "en", studying: [.latin])
-        #expect(found.first?.lemma == "spread", "got \(found.map(\.lemma))")
+        #expect(found.map(\.lemma) == ["spread", "clumped"], "got \(found.map(\.lemma))")
         #expect(found.first?.distinctDays == 3)
         #expect(found.first?.lookups == 3)
-        #expect(found.contains { $0.lemma == "burst" } == false, "one day is not a pattern")
+        #expect(found.last?.distinctDays == 2, "and the runner-up is ranked by days…")
+        #expect(found.last?.lookups == 5, "…despite having been looked up more often")
+        #expect(found.contains { $0.lemma == "burst" } == false,
+                "one day is not a pattern, however many times")
     }
 
     /// **A word already taken up is never suggested**, in any disposition — a word the reader
