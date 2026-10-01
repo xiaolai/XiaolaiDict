@@ -116,7 +116,14 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             // `.fixedSize(vertical: true)` in the chain the panel took its natural height and the
             // cap did nothing — `noPanelIsTallerThanTheCap` failed against a 1,200-point panel.
             // Fixing a size vertically is the opposite of letting a scroll view bound it.
-            .frame(maxHeight: scrollCap)
+            // **A floor as well as a cap**, because the window's fit answers nothing for a scroll
+            // view given no height, and with the bar pinned outside it that is how this one
+            // opened: the bars and a zero-height list (E2E Mac, 2026-10-02 — a 113-point window
+            // with the footer and none of the entry).
+            // **Above the bar, not from zero**: the frame holds the bar too and the fit reads the
+            // container, which excludes it. A floor of 28 under a 44-point bar was still a
+            // container of nothing — the same E2E Mac, the same day, a 98-point window.
+            .frame(minHeight: scrollFloor, maxHeight: scrollCap)
             // **And the window is as tall as that.** The cap bounds the scrolling region; nothing
             // made the *window* take the height the content asked for, so it stayed at the opening
             // default — measured 398 × 240 for every card, three runs. `LookupPanelController.show`
@@ -169,6 +176,12 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     /// is 0 until the reading has been recorded and its controls set its height after that.
     private var scrollCap: CGFloat {
         max(0, scale.space.cardMaxHeight - statusHeight)
+    }
+
+    /// The least the scrolling region is laid out at: the pinned bar, and room above it for the
+    /// fit to read as a container.
+    private var scrollFloor: CGFloat {
+        barHeight + scale.space.panelScrollFloor
     }
 
     /// **Where the window stops growing, in the fit's own terms: the room left for content.**

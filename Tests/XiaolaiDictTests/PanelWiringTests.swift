@@ -146,7 +146,9 @@ struct PanelWiringTests {
     /// **And the fit is bounded by the same cap the scrolling region has.** Unbounded, the window
     /// would grow past the height its content is clipped to and hold empty space under the card.
     @Test func theFitStopsWhereTheScrollingStarts() {
-        let capped = surface.contains(".frame(maxHeight: scrollCap)")
+        // Matched on the bound alone: the frame carries a floor beside it since 2026-10-02, and
+        // the rule here is about the ceiling.
+        let capped = surface.contains("maxHeight: scrollCap)")
         #expect(capped, "the scrolling region is no longer capped, so the fit's ceiling means nothing")
         // **One number for both**, and it comes from the card's cap: the fit's ceiling and the
         // frame's bound are the same property, less the status row pinned under the scrolling
