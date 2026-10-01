@@ -123,7 +123,10 @@ final class HistoryDrawerController {
     }
 
     func show() {
-        guard !isVisible else { return }
+        guard !isVisible else {
+            log.notice("drawer: asked to show while it believes it is showing (on screen: \(self.window?.isVisible ?? false, privacy: .public))")
+            return
+        }
         guard let screen = DrawerPlacement.screen(under: pointer(), among: screens()) else {
             log.error("no display to open the drawer on")
             return
@@ -136,7 +139,8 @@ final class HistoryDrawerController {
 
         // The environment's real action, captured from the menu-bar label. `EnvironmentValues()`
         // built on the spot is wired to nothing and silently opens no window at all.
-        WindowActions.shared.openWindow(id: XiaolaiDictScene.drawerID)
+        let opened = WindowActions.shared.openWindow(id: XiaolaiDictScene.drawerID)
+        log.notice("drawer: shown (the window action answered \(opened, privacy: .public))")
         escape.claim { [weak self] in self?.hide() }
         installClickAway()
         refresh()
