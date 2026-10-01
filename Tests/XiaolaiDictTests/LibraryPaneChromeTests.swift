@@ -201,7 +201,9 @@ struct LibraryPaneChromeTests {
     @Test func aCardCanBeSelectedWithoutAPointer() throws {
         let collection = try source("LibraryCollection.swift")
         #expect(collection.contains(".accessibilityAction { select(item, command: false, shift: false) }"))
-        #expect(collection.contains(".isButton"))
+        #expect(collection.contains(".accessibilityAction(named: Text(\"Select\"))"))
+        // Never the button trait: a button is a leaf, and the card's own buttons vanished under it.
+        #expect(!collection.contains(".isButton"), "a card marked as a button hides the buttons inside it")
         #expect(collection.contains("LibraryCollectionCommand.command(for: press.key, modifiers: press.modifiers)"))
         #expect(collection.contains(".onDeleteCommand {"))
         #expect(collection.contains(".onExitCommand {"))

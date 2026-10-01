@@ -221,8 +221,15 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
             // **A card can be chosen without a pointer.** Selection was a tap gesture and nothing
             // else, so VoiceOver's press landed on the buttons inside a card and never on the
             // card: the inspector and every action on a selection were out of its reach.
-            .accessibilityAddTraits(selection.contains(item.id) ? [.isButton, .isSelected] : .isButton)
+            //
+            // **By an action, never by the button trait.** A button is a leaf to Accessibility:
+            // with that trait here the card's own Discard, Save and Say It Aloud stopped being
+            // elements at all, and their identifiers surfaced on the card with the card's frame —
+            // measured on the E2E Mac 2026-10-02, where a click on `discard-reading-1` selected
+            // the card and discarded nothing. The card stays a container and offers selecting.
+            .accessibilityAddTraits(selection.contains(item.id) ? .isSelected : [])
             .accessibilityAction { select(item, command: false, shift: false) }
+            .accessibilityAction(named: Text("Select")) { select(item, command: false, shift: false) }
             .onGeometryChange(for: Bool.self) { geometry in
                 let bounds = geometry.frame(in: .scrollView)
                 return bounds.minY <= 0 && bounds.maxY > 0
