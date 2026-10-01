@@ -795,9 +795,6 @@
     "Screen Recording is off — hover cannot read the screen" : {
       "comment" : "Menu warning when only Screen Recording is missing"
     },
-    "Search" : {
-
-    },
     "Select a word anywhere and press %@." : {
 
     },
