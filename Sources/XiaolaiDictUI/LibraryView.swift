@@ -46,8 +46,6 @@ public struct LibraryView: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            toolbar
-            Divider()
             // **Above every branch, because a failure is not a state of the list.** `problem` was
             // drawn only by the empty view, so a database error under the Suggested filter — or
             // one that arrived while rows were on screen — read as "Nothing to suggest yet", or
@@ -78,6 +76,39 @@ public struct LibraryView: View {
             }
             Divider()
             footer
+        }
+        // **The system's chrome, not a row of our own.** The title, the search field and the two
+        // filters were drawn as content with a `Divider` under them — the pre-Big Sur shape, and
+        // the reason this window read as old beside Notes or Finder. A real toolbar is also what
+        // insets the sidebar: on macOS 26 and later `NavigationSplitView` gives its sidebar
+        // floating Liquid Glass, and the detail's safe area is what it floats against.
+        .navigationTitle("Library")
+        .searchable(text: Binding(get: { state.search }, set: { act(.search($0)) }))
+        .toolbar {
+            // **Absent until there is something to pick.** A tag menu over no tags is a control
+            // that cannot do anything, which reads as one that is broken. Hidden under Suggested,
+            // which has no tags: a control that appears to narrow what is on screen and silently
+            // narrows something else is worse than one that refuses a click.
+            if !state.tagVocabulary.isEmpty, state.filter != .suggested {
+                ToolbarItem {
+                    Picker("Tag", selection: Binding(
+                        get: { state.tag },
+                        set: { act(.filterTag($0)) })) {
+                        Text("Any tag").tag(String?.none)
+                        ForEach(state.tagVocabulary) { entry in
+                            Text(verbatim: "\(entry.tag) (\(entry.count))").tag(String?.some(entry.tag))
+                        }
+                    }
+                }
+            }
+            // **Offered, off by default.** The reader's study-scripts setting filters their
+            // reading; applying it here unasked would hide scheduled work, and a filtered library
+            // and an empty one look exactly alike.
+            ToolbarItem {
+                Toggle("Only my study scripts", isOn: Binding(
+                    get: { state.scriptFiltered },
+                    set: { act(.filterScripts($0)) }))
+            }
         }
     }
 
@@ -234,41 +265,6 @@ public struct LibraryView: View {
     }
 
     // MARK: - Finding
-
-    private var toolbar: some View {
-        HStack(spacing: scale.space.inline) {
-            TextField("Search", text: Binding(
-                get: { state.search },
-                set: { act(.search($0)) }))
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: Token.Library.searchWidth)
-            // **Absent until there is something to pick.** A tag menu over no tags is a control
-            // that cannot do anything, which reads as one that is broken.
-            // **Hidden under Suggested**, which has no tags to filter by: a control that
-            // appears to narrow what is on screen and silently narrows something else is worse
-            // than one that refuses a click.
-            if !state.tagVocabulary.isEmpty, state.filter != .suggested {
-                Picker("Tag", selection: Binding(
-                    get: { state.tag },
-                    set: { act(.filterTag($0)) })) {
-                    Text("Any tag").tag(String?.none)
-                    ForEach(state.tagVocabulary) { entry in
-                        Text(verbatim: "\(entry.tag) (\(entry.count))").tag(String?.some(entry.tag))
-                    }
-                }
-                .frame(maxWidth: Token.Library.tagWidth)
-            }
-            Spacer(minLength: 0)
-            // **Offered, off by default.** The reader's study-scripts setting filters their reading;
-            // applying it here unasked would hide scheduled work, and a filtered library and an
-            // empty one look exactly alike.
-            Toggle("Only my study scripts", isOn: Binding(
-                get: { state.scriptFiltered },
-                set: { act(.filterScripts($0)) }))
-                .toggleStyle(.checkbox)
-        }
-        .padding(scale.space.padAcross)
-    }
 
     private var list: some View {
         List(state.rows, selection: Binding(
