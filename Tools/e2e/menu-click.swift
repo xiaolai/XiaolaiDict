@@ -10,7 +10,9 @@ import ApplicationServices
 let bundleID = CommandLine.arguments.count > 2 ? CommandLine.arguments[1] : ""
 let wanted = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : ""
 guard !bundleID.isEmpty, !wanted.isEmpty else {
-    FileHandle.standardError.write(Data("usage: menu-click <bundle-id> <item title>\n".utf8)); exit(2)
+    FileHandle.standardError.write(
+        Data("usage: menu-click <bundle-id> <item title>|--ready|--describe|--left-click\n".utf8))
+    exit(2)
 }
 guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
     FileHandle.standardError.write(Data("\(bundleID) is not running\n".utf8)); exit(1)
@@ -31,14 +33,22 @@ func centre(of element: AXUIElement) -> CGPoint? {
     AXValueGetValue(extent as! AXValue, .cgSize, &size)
     return CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
 }
-func click(_ point: CGPoint) {
+/// A real click, with the button the surface expects.
+///
+/// **The menu bar item takes a right click now**; a left one opens the reading history, which is
+/// the point of the split. A menu *entry* is still chosen with the left button, the way a reader
+/// chooses one — so the button is an argument rather than a constant, and the two call sites below
+/// say which they mean.
+func click(_ point: CGPoint, button: CGMouseButton = .left) {
+    let down: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
+    let up: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
         .post(tap: .cghidEventTap)
     usleep(120_000)
-    CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?
+    CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: point, mouseButton: button)?
         .post(tap: .cghidEventTap)
     usleep(80_000)
-    CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?
+    CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button)?
         .post(tap: .cghidEventTap)
 }
 
@@ -56,7 +66,36 @@ else { FileHandle.standardError.write(Data("no menu-bar item\n".utf8)); exit(1) 
 // a harness that never checked its own precondition.
 if wanted == "--ready" { print("menu-bar item present"); exit(0) }
 
-click(itemCentre)
+// `--describe`: what the icon says about itself, without clicking it.
+//
+// **The witness that the lookup hot key is registered.** It used to be the menu's first item,
+// `Look Up Selection    ⌃⌥D`, which named the combination and nothing when there was none. That
+// item was cut — a reader does not reach for it, they press the shortcut — and the naming moved to
+// the item's tooltip, which Accessibility reports as `AXHelp`. Read passively on purpose: the
+// stage asks this *after* the settings field has been used, and opening a menu to find out would
+// itself move the focus the answer depends on.
+if wanted == "--describe" {
+    guard let help = value(item, kAXHelpAttribute as String) as? String, !help.isEmpty else {
+        FileHandle.standardError.write(Data("the menu-bar item says nothing about itself\n".utf8))
+        exit(1)
+    }
+    print(help)
+    exit(0)
+}
+
+// `--left-click`: the reading history, which is what a left click on the icon opens.
+//
+// Not a menu item any more, and deliberately not: an item that repeats the click which opened the
+// menu is a line the reader reads past. So the surface is still driven the way a reader drives it,
+// with the button they would use.
+if wanted == "--left-click" {
+    click(itemCentre, button: .left)
+    usleep(900_000)
+    print("clicked the menu-bar item")
+    exit(0)
+}
+
+click(itemCentre, button: .right)
 usleep(700_000)
 
 guard let menu = children(item).first,

@@ -1635,8 +1635,8 @@ stash_models || true
 # Opened from the menu, the way a reader reaches it after the first launch. The app was launched
 # moments ago by the set-up above, so the menu is not driven until the launch has settled.
 settle_after_launch
-if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
-    flunk "setup: could not reach Set Up… in the menu"
+if ! "$helpers/menu-click" com.xiaolaidict "Settings…" >/dev/null 2>&1; then
+    flunk "setup: could not reach Settings… in the menu"
 else
     # Waited for rather than slept for: the first click on an inactive app only brings it forward.
     front=""
@@ -1656,7 +1656,7 @@ else
     # long it took is printed, because the first run of this stage failed this at 6 s with Bambu
     # Studio in front and every hand-driven repeat passed — a bound nobody reads cannot say which.
     if [ "$front" = com.xiaolaidict ]; then
-        pass "setup: choosing Set Up… brings XiaolaiDict forward ($((front_waited / 5)).$(( (front_waited % 5) * 2 ))s)"
+        pass "setup: choosing Settings… brings XiaolaiDict forward ($((front_waited / 5)).$(( (front_waited % 5) * 2 ))s)"
     else
         flunk "setup: the board never came forward in 10 s — $front is in front (frontmost:$front_seen; $(board_state))"
     fi
@@ -1740,7 +1740,7 @@ if board_on_screen; then
     flunk "setup: the board is still drawn after being closed, so reopening tests nothing ($(board_state))"
 fi
 defaults write com.xiaolaidict SetupWindowShown -bool true
-if ! "$helpers/menu-click" com.xiaolaidict "Set Up…" >/dev/null 2>&1; then
+if ! "$helpers/menu-click" com.xiaolaidict "Settings…" >/dev/null 2>&1; then
     flunk "setup: could not reopen the board after it had been shown once"
 else
     sleep 1.5
@@ -1860,8 +1860,8 @@ else
     # same reason as above — and `menu-click` failing is reported, never swallowed: under `|| true`
     # a click that never happened read as the app failing to remember one.
     settle_after_launch
-    if ! reach=$("$helpers/menu-click" com.xiaolaidict "Set Up…" 2>&1); then
-        flunk "setup: could not reach Set Up… after the restart ($reach)"
+    if ! reach=$("$helpers/menu-click" com.xiaolaidict "Settings…" 2>&1); then
+        flunk "setup: could not reach Settings… after the restart ($reach)"
     fi
     seen=""
     for _ in $(seq 1 50); do
@@ -2084,15 +2084,15 @@ fi
 # on screen when it closed — which is how the settings window came to appear by itself. What has to
 # hold now is that the control on the Lookup pane is reachable and live: a field that drew the
 # right combination and never saw a key press would look exactly like a working one.
-# The field is armed by clicking the combination it shows, which the menu names too — read
-# **before** Settings opens. Dumping the menu in between opened and dismissed XiaolaiDict's menu, which
-# handed focus back to the app behind it (Ghostty, in a full run), so the click meant to arm the
-# field only brought an inactive window forward. `|| true` inside the pipe because asking for an
-# item that is not there is how the menu is dumped — it exits 1 on purpose — and `q` in `sed`
-# rather than `| head`, which can close the pipe under `sed` and fail the pipeline for succeeding.
-current=$({ "$helpers/menu-click" com.xiaolaidict "ZZZ-dump-the-menu" 2>&1 || true; } \
-    | sed -n 's/.*Look Up Selection  *\([^"]*\)".*/\1/p;/Look Up Selection  *[^"]/q')
-"$helpers/keys" 53 2>/dev/null || true
+# The field is armed by clicking the combination it shows, which the menu-bar icon names too — read
+# **before** Settings opens, and now read without opening anything. Dumping the menu in between
+# opened and dismissed XiaolaiDict's menu, which handed focus back to the app behind it (Ghostty,
+# in a full run), so the click meant to arm the field only brought an inactive window forward.
+# `--describe` touches nothing: it reads the icon's tooltip through Accessibility, which is where
+# the registered combination is named now that Look Up Selection has left the menu. Empty is the
+# answer for no shortcut registered, which the two reads below are both allowed to be.
+current=$({ "$helpers/menu-click" com.xiaolaidict --describe 2>/dev/null || true; } \
+    | sed -n 's/.*press \(.*\) to look up.*/\1/p')
 sleep 0.5
 if ! "$helpers/menu-click" com.xiaolaidict "Settings…" >/dev/null 2>&1; then
     flunk "shortcut: could not reach Settings… in the menu"
@@ -2173,10 +2173,12 @@ else
     # which is what an earlier line here asked for and, being `|| true`, silently never closed.
     pane=$("$helpers/panel" com.xiaolaidict | python3 -c '
 import json, sys
-# Every pane's `name`, and it must stay that way: `SettingsPaneNamesTests` compares this literal
-# against `SettingsPane.allCases`, because a set that quietly falls behind finds no window and the
-# close below then closes whatever "Lookup" happens to be. It was already stale once — Setup was
-# added and this was not.
+# Every pane name, and it must stay that way: SettingsPaneNamesTests compares this literal
+# against SettingsPane.allCases, because a set that quietly falls behind finds no window and the
+# close below then closes whatever Lookup happens to be. It was already stale once: Setup was
+# added and this was not. Keep every apostrophe out of this block: it is passed to python3 as a
+# single-quoted argument, and one apostrophe ends that argument. bash -n accepted the broken
+# version anyway, by luck of what re-balanced after it; the remote script is where it was caught.
 names = {"Setup", "Reading", "Lookup", "Dictionary", "About"}
 print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] if t in names), ""))')
     if ! why=$("$helpers/close-window" "${pane:-Lookup}" 2>&1); then
@@ -2184,12 +2186,13 @@ print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] i
     fi
     sleep 1
     # **However that went, the reader's shortcut must be registered again, and be theirs.** The
-    # menu is the witness: it names the combination it answers to, and nothing when there is none.
+    # icon is the witness: its tooltip names the combination XiaolaiDict answers to, and says that
+    # none is registered when the registrar holds no hot key — which is what arming the field makes
+    # true on purpose.
     # Arming the field stands the hot key down on purpose, and a path that forgets to put it back
     # leaves the reader's shortcut quietly dead until XiaolaiDict is relaunched.
-    after=$({ "$helpers/menu-click" com.xiaolaidict "ZZZ-dump-the-menu" 2>&1 || true; } \
-        | sed -n 's/.*Look Up Selection  *\([^"]*\)".*/\1/p;/Look Up Selection  *[^"]/q')
-    "$helpers/keys" 53 2>/dev/null || true
+    after=$({ "$helpers/menu-click" com.xiaolaidict --describe 2>/dev/null || true; } \
+        | sed -n 's/.*press \(.*\) to look up.*/\1/p')
     if [ -z "$after" ]; then
         flunk "shortcut: after the field was used, no shortcut is registered"
     elif [ "$after" != "$current" ]; then
@@ -2199,8 +2202,9 @@ print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] i
     fi
 fi
 
-# The drawer and the settings window, opened the same way, and read through Accessibility — which
-# is what a screen reader uses, and what a SwiftUI `UtilityWindow` is invisible to.
+# The drawer and the settings window, each opened the way a reader opens it, and read through
+# Accessibility — which is what a screen reader uses, and what a SwiftUI `UtilityWindow` is
+# invisible to.
 #
 # **And whether each comes forward**, which is the half that was never asked. Reading a window
 # through Accessibility says it exists, not that the reader can see it: measured, choosing Settings
@@ -2220,8 +2224,20 @@ for surface in "Reading History" "Settings…"; do
     # be told from one that was open before it was touched.
     before_drawn=$("$helpers/on-screen" com.xiaolaidict | python3 -c \
         'import json,sys; print(json.dumps(sorted(map(str, json.load(sys.stdin)["windows"]))))')
-    if ! "$helpers/menu-click" com.xiaolaidict "$surface" >/dev/null 2>&1; then
-        flunk "scenes: could not reach $surface in the menu"
+    # **Each surface is opened the way a reader opens it**, which is no longer one gesture for
+    # both: the reading history is a left click on the icon, and the menu a right click, which is
+    # the whole point of the split. Driving the history through the menu is what this loop used to
+    # do, and it failed the app for an item that was deliberately removed — the click that opens
+    # the menu already opens the history.
+    if [ "$surface" = "Reading History" ]; then
+        opened_by="--left-click"
+        how="a left click on the icon"
+    else
+        opened_by="$surface"
+        how="the menu"
+    fi
+    if ! "$helpers/menu-click" com.xiaolaidict "$opened_by" >/dev/null 2>&1; then
+        flunk "scenes: could not reach $surface through $how"
         continue
     fi
     sleep 2

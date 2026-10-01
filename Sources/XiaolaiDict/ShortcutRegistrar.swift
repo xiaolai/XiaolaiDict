@@ -62,7 +62,9 @@ final class ShortcutRegistrar {
     /// drew the right combination" and "the combination works" are different claims.
     var isRegistered: Bool { hotkey != nil }
 
-    /// What the menu names, and nothing when there is no shortcut. The menu is the witness.
+    /// What the menu-bar icon's tooltip names, and nothing when there is no shortcut — including
+    /// while the settings field is armed, which is when nothing *is* registered. The icon is the
+    /// witness: see `MenuBarItem.description(ofShortcut:)`.
     var label: String? { hotkey?.shortcut.label() }
 
     /// Registers what is on disk. Called when there is a window to draw a lookup into, never at
