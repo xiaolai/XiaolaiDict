@@ -230,6 +230,128 @@ struct LearningLibraryWiringTests {
         #expect(model.archive.hasMore)
     }
 
+    // MARK: - One card per reading
+
+    /// **The archive folds repeats the way the drawer does**, by `ReadingHistory`'s rule: the same
+    /// word in the same sentence on the same day is one card, and the card answers for every
+    /// lookup behind it. It drew a card per lookup — sixty-four identical cards on a real ledger.
+    @Test func aReadingLookedUpThreeTimesIsOneCardThatAnswersForAllThree() async throws {
+        let (path, clean) = Wiring.scratch("archive-fold"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let repeats = try (0..<3).map { try record(ledger, "fine", at: now.addingTimeInterval(Double(-$0))) }
+        let other = try record(ledger, "delirium", at: now.addingTimeInterval(-10))
+        let model = LibraryModel(store: Wiring.store(path), clock: { now }, defaults: TemporaryDefaults.suite())
+        await model.reloadArchive()
+        #expect(model.archive.rows.map(\.lemma) == ["fine", "delirium"])
+        let card = try #require(model.archive.rows.first)
+        #expect(card.times == 3)
+        #expect(Set(card.lookupIDs) == Set(repeats))
+        // The count is still of readings: four were made, on two cards.
+        #expect(model.archive.total == 4)
+        #expect(!model.archive.hasMore)
+        // One card selected is three readings, and discarding the selection takes all three.
+        model.actArchive(.select([card.id]))
+        #expect(model.archive.selection.count == 1)
+        #expect(model.archive.selectedLookupIDs == repeats.sorted())
+        model.actArchive(.discard(model.archive.selectedLookupIDs))
+        try await Wiring.settle { model.archive.rows.map(\.id) == [other] }
+        for id in repeats { #expect(try ledger.disposition(ofLookup: id) == .discarded) }
+        #expect(model.archive.undoCount == 3)
+    }
+
+    /// The fold is the drawer's rule and not a second one: a different sentence, or another day,
+    /// is another card.
+    @Test func differentSentencesAndDifferentDaysStayApart() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let noon = try #require(calendar.date(from: DateComponents(year: 2026, month: 10, day: 2, hour: 12)))
+        func entry(_ id: Int, _ sentence: String, at: Date) -> ReadingEntry {
+            ReadingEntry(id: id, lemma: "fine", surface: "fine", sentence: sentence, sentenceRange: nil,
+                         place: ReadingPlace(bundleID: nil, name: nil), at: at, result: .found, quality: nil)
+        }
+        let cards = LibraryModel.cards(from: [
+            entry(4, "A fine day.", at: noon),
+            entry(3, "A fine day.", at: noon.addingTimeInterval(-60)),
+            entry(2, "He paid the fine.", at: noon.addingTimeInterval(-120)),
+            entry(1, "A fine day.", at: noon.addingTimeInterval(-86_400)),
+        ], now: noon, calendar: calendar)
+        #expect(cards.map(\.id) == [4, 2, 1])
+        #expect(cards.map(\.times) == [2, 1, 1])
+    }
+
+    /// A lookup the reader was sent to is shown by selecting **the card it is drawn on**, which is
+    /// fronted by the newest of the lookups it stands for.
+    @Test func aFocusedLookupInsideAFoldedCardSelectsThatCard() async throws {
+        let (path, clean) = Wiring.scratch("archive-fold-focus"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let newest = try record(ledger, "fine", at: now)
+        let older = try record(ledger, "fine", at: now.addingTimeInterval(-5))
+        let model = LibraryModel(store: Wiring.store(path), clock: { now }, defaults: TemporaryDefaults.suite())
+        model.show(.history, lookup: older)
+        try await Wiring.settle { model.archive.rows.count == 1 && model.archive.focused != nil }
+        #expect(model.archive.focused == newest)
+        #expect(model.archive.selection == [newest])
+        #expect(model.archive.inspector?.lookupIDs.contains(older) == true)
+    }
+
+    // MARK: - The inspector
+
+    /// **Open or closed is the reader's choice, and it is remembered.** It was derived from the
+    /// selection, so it could not be closed over a selected card or opened over none.
+    @Test func theInspectorStaysAsTheReaderLeftIt() {
+        let defaults = TemporaryDefaults.suite()
+        let model = LibraryModel(store: { nil }, defaults: defaults)
+        #expect(model.inspectorShown, "open the first time, so a selection still shows its details")
+        model.setInspector(false)
+        #expect(!model.inspectorShown)
+        #expect(!LibraryModel(store: { nil }, defaults: defaults).inspectorShown)
+        model.setInspector(true)
+        #expect(LibraryModel(store: { nil }, defaults: defaults).inspectorShown)
+    }
+
+    /// Selecting a card and letting go of it leave the inspector alone.
+    @Test func selectingACardDoesNotOpenOrCloseTheInspector() async throws {
+        let (path, clean) = Wiring.scratch("archive-inspector"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let id = try record(ledger, "fine")
+        let model = LibraryModel(store: Wiring.store(path), defaults: TemporaryDefaults.suite())
+        model.setInspector(false)
+        await model.reloadArchive()
+        model.actArchive(.select([id]))
+        #expect(model.archive.inspector?.id == id, "positive control: one card is selected")
+        #expect(!model.inspectorShown)
+        model.setInspector(true)
+        model.actArchive(.select([]))
+        #expect(model.inspectorShown)
+    }
+
+    // MARK: - The way to what needs confirming
+
+    /// **Review offers the way to unconfirmed meanings only when there are some**, so the model
+    /// has to know how many. The control was there on every visit, over nothing.
+    @Test func theModelCountsTheMeaningsWaitingToBeConfirmed() async throws {
+        let (path, clean) = Wiring.scratch("archive-unconfirmed"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let model = LibraryModel(store: Wiring.store(path), defaults: TemporaryDefaults.suite(),
+                                 primary: { PrimaryDictionary(chosen: "noad") })
+        await model.refreshReviewCount()
+        #expect(model.reviewUnconfirmed == 0)
+        let lookup = try record(ledger, "fine")
+        // Saved as the model proposed it: not yet the reader's.
+        _ = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.1", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .model,
+            answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: .now)
+        await model.refreshReviewCount()
+        #expect(model.reviewUnconfirmed == 1)
+        // And the way there is the Saved pane, narrowed to what needs attention.
+        model.findUnconfirmed()
+        #expect(model.pane == .saved)
+        try await Wiring.settle { model.presentation.filter == .needsAttention && model.presentation.rows.count == 1 }
+    }
+
     /// A setting the test changes after the model has captured how to read it.
     @MainActor private final class Setting<Value> {
         var value: Value

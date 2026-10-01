@@ -128,19 +128,21 @@ struct PhraseNoticeView: View {
                     .font(.system(size: scale.text.small))
                     .foregroundStyle(.secondary)
                     .lineLimit(Token.Limit.wrapLines)
+                    // Two lines, and a definition can run past them: what was cut is a hover away
+                    // rather than gone.
+                    .help(Text(verbatim: definition))
             }
+            // **A mark and ordinary text, like the card's own "A guess, not confirmed"** — these
+            // two were orange text with nothing but the hue to say they were caveats, at 2.2:1 on
+            // the light card.
             if let met = phrase.met, met.isHypothesis {
-                Text("The sense here is a guess — not confirmed")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.orange)
+                StatusLabel(.unconfirmed, "The meaning here is a guess, not confirmed")
             }
             if phrase.isGuess {
                 // Said in the same voice the card uses for a proposed sense, because it is the same kind
                 // of claim: the app worked something out and the reader is entitled to know that before
                 // they believe it.
-                Text("A guess — these words may not belong together")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.orange)
+                StatusLabel(.unconfirmed, "A guess: these words may not belong together")
             }
         }
         .fixedSize(horizontal: false, vertical: true)

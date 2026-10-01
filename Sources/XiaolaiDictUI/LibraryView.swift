@@ -11,75 +11,76 @@ import XiaolaiDictCore
 /// **The preview starts on the question side.** A reader managing their collection is not reviewing
 /// it, but a list that prints every meaning is one they cannot skim without being taught — so the
 /// answer is behind the same deliberate reveal the review surface uses, per card, never persisted.
+///
+/// **A pane of the Library window, with no split view of its own.** Its filters are a section of
+/// the window's sidebar; the branch that gave it a sidebar had no caller and still carried
+/// `backgroundExtensionEffect`, which the window had already decided against (deleted 2026-10-02).
 public struct LibraryView: View {
     @Environment(\.scale) private var scale
     @Environment(\.colorScheme) private var scheme
-    private let showsSidebar: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
     public let state: LibraryPresentation
     public let act: @MainActor (LibraryAction) -> Void
 
     private let layout: LibraryLayout
     private let chooseLayout: @MainActor (LibraryLayout) -> Void
+    @Binding private var inspectorShown: Bool
     @State private var interaction = LibraryCollectionInteraction<UUID>()
     private var revealed: Set<UUID> { interaction.revealed }
     @State private var tag = ""
+    /// What is typed in the search field. See `LibrarySearch` for why it is not the model's copy.
+    @State private var searchText = ""
+    /// A removal that cannot be taken back, waiting for the reader to say they mean it.
+    @State private var pending: PendingRemoval?
     /// The inspector's editor, held here rather than in the model: an in-progress edit is not
     /// state the ledger has any business knowing about until the reader saves it.
     @State private var draft = ""
 
-    public init(state: LibraryPresentation, showsSidebar: Bool = true, layout: LibraryLayout = .grid, chooseLayout: @escaping @MainActor (LibraryLayout) -> Void = { _ in }, act: @escaping @MainActor (LibraryAction) -> Void) {
+    public init(state: LibraryPresentation, layout: LibraryLayout = .grid,
+                chooseLayout: @escaping @MainActor (LibraryLayout) -> Void = { _ in },
+                inspectorShown: Binding<Bool> = .constant(true),
+                act: @escaping @MainActor (LibraryAction) -> Void) {
         self.layout = layout
         self.chooseLayout = chooseLayout
-        self.showsSidebar = showsSidebar
+        _inspectorShown = inspectorShown
         self.state = state
         self.act = act
     }
 
     public var body: some View {
-        // **A sidebar, which is what `Filter` has always called itself** — "the sidebar's states,
-        // as one control". Seven of them had been folded into a segmented picker, which gives each
-        // state a sliver and no room to name it. The floating treatment is the system's: the list
-        // beneath extends under it rather than being clipped to a column beside it.
-        if !showsSidebar { detail } else {
-        NavigationSplitView {
-            List(LibraryPresentation.Filter.allCases, id: \.self, selection: Binding(
-                get: { state.filter },
-                set: { chosen in if let chosen { act(.filter(chosen)) } })) { filter in
-                Label(filter.name, systemImage: filter.symbol).tag(filter)
-            }
-            .navigationSplitViewColumnWidth(Token.Library.sidebarWidth)
-        } detail: {
-            detail.backgroundExtensionEffect()
-        }
-        }
-    }
-
-    private var detail: some View {
         Group {
             if state.filter == .suggested { suggestions }
             else if state.rows.isEmpty { empty }
             else { list }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Shown while one card is selected; closing it lets go of the selection.
-        .inspector(isPresented: Binding(get: { state.inspector != nil },
-                                        set: { if !$0 { act(.select([])) } })) {
-            if let inspector = state.inspector { self.inspector(inspector) }
-        }
-        .modifier(LibraryPaneChrome(notice: { notice }, footer: { footer }))
+        // **The reader's to open and close**, and it stays as they left it. Selecting a card no
+        // longer opens it, and closing it no longer lets go of the card.
+        .inspector(isPresented: $inspectorShown) { inspectorColumn }
+        .modifier(LibraryPaneChrome(showsNotice: state.problem != nil || state.exported != nil) { notice })
         // **The system's chrome, not a row of our own.** The title, the search field and the two
         // filters were drawn as content with a `Divider` under them — the pre-Big Sur shape, and
         // the reason this window read as old beside Notes or Finder. A real toolbar is also what
         // insets the sidebar: on macOS 26 and later `NavigationSplitView` gives its sidebar
         // floating Liquid Glass, and the detail's safe area is what it floats against.
         .navigationSubtitle(tally)
-        .modifier(LibrarySearch(text: Binding(get: { state.search }, set: { act(.search($0)) }), layout: layout, chooseLayout: chooseLayout))
+        .modifier(LibrarySearch(text: $searchText, current: state.search, prompt: "Search Saved") { act(.search($0)) })
         .toolbar {
-            // **In the toolbar, because it acts on the collection and not on a selection.** In the
-            // footer it stood beside the selection's own buttons and read as one of them.
+            // Suggested is a plain list of words, with nothing to arrange.
+            if state.filter != .suggested {
+                LibraryLayoutToolbar(layout: layout, choose: chooseLayout)
+            }
+            LibrarySelectionToolbar(count: state.selection.isEmpty ? nil : LibrarySelectionCount(cards: state.selection.count)) {
+                selectionActions(state.selectionTarget, inToolbar: true)
+            }
+            // **Apart from the selection's group**, because putting a bulk action back is not an
+            // operation on whatever happens to be selected now.
+            LibraryUndoToolbar(title: state.undoable?.name) { act(.undo) }
+            // **A toolbar item of its own, because it acts on the collection and not on a
+            // selection.** Beside the selection's own buttons it read as one of them.
             ToolbarItem {
-                Button { act(.export) } label: { Label("Export…", systemImage: "square.and.arrow.up") }
-                    .help("Export…")
+                Button { act(.export) } label: { ActionSymbol.export.label }
+                    .help("Export every saved meaning to a file in Downloads")
             }
             // **Absent until there is something to pick.** A tag menu over no tags is a control
             // that cannot do anything, which reads as one that is broken. Hidden under Suggested,
@@ -90,18 +91,63 @@ public struct LibraryView: View {
                     Picker("Tag", selection: Binding(
                         get: { state.tag },
                         set: { act(.filterTag($0)) })) {
-                        Text("Any tag").tag(String?.none)
+                        Text("Any Tag").tag(String?.none)
                         ForEach(state.tagVocabulary) { entry in
                             Text(verbatim: "\(entry.tag) (\(entry.count))").tag(String?.some(entry.tag))
                         }
                     }
+                    .help("Show only meanings with one tag")
                 }
             }
-
+            LibraryInspectorToolbar(isShown: $inspectorShown)
         }
+        // **Asked first, because neither can be taken back.** Both ran on one click of an icon
+        // that sat a few points from Archive and Pause in the same grey. The button is the
+        // title's own verb, and Cancel is there.
+        .confirmationDialog(pending?.title ?? Text(verbatim: ""), isPresented: Binding(
+            get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { removal in
+                Button(role: .destructive) {
+                    perform(removal.kind == .removeFromSaved ? .removeFromStudy : .deleteReading, on: removal.ids)
+                } label: { removal.kind == .removeFromSaved ? Text("Remove") : Text(ActionSymbol.deletePermanently.title) }
+                Button("Cancel", role: .cancel) {}
+            } message: { removal in removal.message }
     }
 
     // MARK: - The one row that is open
+
+    /// The inspector column: the open row, or what to do to open one.
+    @ViewBuilder private var inspectorColumn: some View {
+        if let inspector = state.inspector {
+            self.inspector(inspector)
+        } else if state.selection.isEmpty || state.filter == .suggested {
+            LibraryInspectorPlaceholder(title: Text("No Selection"),
+                                        description: Text("Select a meaning to see its details"))
+        } else {
+            // Several: nothing to show of any one of them, and the one thing that is done to
+            // several at once here rather than from the toolbar — a tag needs typing.
+            ContentUnavailableView {
+                Text("^[\(state.selection.count) Meaning](inflect: true) Selected")
+            } description: {
+                Text("Select one meaning to see its details")
+            } actions: {
+                tagField
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .modifier(LibraryInspectorColumn())
+        }
+    }
+
+    /// Labels the selection. **In the inspector**, where there is room to type; it was a bare
+    /// field wedged among icons in the corner pill.
+    private var tagField: some View {
+        TextField("Add a tag", text: $tag)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: Token.Library.tagWidth)
+            .onSubmit {
+                act(.tag(tag))
+                tag = ""
+            }
+    }
 
     /// **The answer, and the reader's right to replace it.**
     ///
@@ -111,7 +157,10 @@ public struct LibraryView: View {
     /// publisher's words with their own is the point, not a hidden capability.
     @ViewBuilder
     private func inspector(_ inspector: LibraryPresentation.Inspector) -> some View {
-        let accent = ReadingPalette.accent(for: inspector.word).color(in: scheme)
+        // **The lemma's colour**, so the word is the colour here that it is in History, the drawer
+        // and the lookup card. Hashing the word as it was written made *meeting* orange in this
+        // pane and pink in the one beside it.
+        let accent = ReadingPalette.color(forLemma: inspector.accentKey, in: scheme, contrast: contrast)
         LibraryInspector(accent: accent) {
             HStack(spacing: scale.space.inline) {
                 Text(verbatim: inspector.word)
@@ -125,13 +174,12 @@ public struct LibraryView: View {
                 Spacer(minLength: 0)
             }
             if revealed.contains(inspector.id) {
-                TextField("The answer", text: $draft, axis: .vertical)
+                TextField("Your answer", text: $draft, axis: .vertical)
                     .lineLimit(Token.Limit.answerLinesAtLeast...Token.Limit.answerLinesAtMost)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: scale.text.small))
                 HStack(spacing: scale.space.inline) {
-                    IconButton(title: "Save the answer", symbol: "square.and.arrow.down") { act(.setAnswer(noteID: inspector.id, text: draft)) }
-                        .disabled(!canSave(inspector))
+                    IconButton(.saveAnswer, isEnabled: canSave(inspector)) { act(.setAnswer(noteID: inspector.id, text: draft)) }
                     // **Said, not merely disabled.** A button that refuses a click without a reason
                     // is a broken switch, and "blank" is not guessable from a greyed-out control.
                     if isDraftBlank {
@@ -144,38 +192,32 @@ public struct LibraryView: View {
             } else {
                 switch inspector.closedAnswer {
                 case .reveal:
-                    IconButton(title: "Show the meaning", symbol: "eye") { interaction.revealed.insert(inspector.id) }
+                    IconButton(.showMeaning) { interaction.revealed.insert(inspector.id) }
                 case .write:
                     // **A remedy beside the diagnosis.** The editor was reachable only through the
                     // reveal, so the one answer that most needed writing could never be written.
                     // There is nothing here to give away, so opening the editor teaches nothing early.
-                    Text("No meaning is available for this saved target.").foregroundStyle(.secondary)
-                    IconButton(title: "Write an answer", symbol: "square.and.pencil") { interaction.revealed.insert(inspector.id) }
+                    Text("No meaning is recorded for this one yet.")
+                        .font(.system(size: scale.text.small))
+                        .foregroundStyle(.secondary)
+                    IconButton(.writeAnswer) { interaction.revealed.insert(inspector.id) }
                 }
             }
-            if !inspector.tags.isEmpty {
-                HStack(spacing: scale.space.inline) {
-                    ForEach(inspector.tags, id: \.self) { tag in
-                        // **Readable and removable.** A label the reader can add and never take
-                        // off is a worse state than having no labels.
-                        Button { act(.untag(noteID: inspector.id, tag: tag)) } label: {
-                            Text(verbatim: tag)
-                                .font(.system(size: scale.text.micro))
-                        }
+            HStack(spacing: scale.space.inline) {
+                ForEach(inspector.tags, id: \.self) { tag in
+                    // **Readable and removable.** A label the reader can add and never take
+                    // off is a worse state than having no labels.
+                    Button { act(.untag(noteID: inspector.id, tag: tag)) } label: { Text(verbatim: tag) }
                         .buttonStyle(.bordered)
+                        .controlSize(.small)
                         .help(Text("Remove this tag"))
-                    }
-                    Spacer(minLength: 0)
                 }
+                tagField
+                Spacer(minLength: 0)
             }
-            // **Scrollable, and bounded.** The two histories were unbounded stacks outside the
-            // list, so a word met fifty times pushed its own oldest entries — and everything
-            // below them — past the bottom of the window with no way to reach them.
-            ScrollView {
-                timeline(inspector)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: Token.Library.inspectorHistoryHeight)
+            // **In the inspector's own scroll view, at their full length.** They had a second
+            // scroll view of their own, 220 pt tall, inside the one the column already is.
+            timeline(inspector)
         }
         // **Reset when the row changes, never carried.** A draft left over from the previous
         // selection would be saved onto this word the moment the reader pressed the button.
@@ -191,62 +233,70 @@ public struct LibraryView: View {
     /// Never interleaved. A reading is something the reader did with a text and a review is
     /// something they did with a card; one sequence invites reading a grade as evidence about the
     /// sentence beside it.
+    ///
+    /// **One above the other, and the sentence on a line of its own.** Side by side in a 312 pt
+    /// column the date wrapped to "Oct 1, / 2026", the sentence was cut to "The / meeti…" and the
+    /// source broke mid-word (seen 2026-10-01): the reader's own sentence, unreadable in the one
+    /// place that lists where the word was met. The sentence is not cut short here at all.
     @ViewBuilder
     private func timeline(_ inspector: LibraryPresentation.Inspector) -> some View {
-        HStack(alignment: .top, spacing: scale.space.column) {
+        VStack(alignment: .leading, spacing: scale.space.stack) {
             VStack(alignment: .leading, spacing: scale.space.tight) {
-                Text("Where you met it")
+                Text("Where You Met It")
                     .font(.system(size: scale.text.micro, weight: .medium))
                     .foregroundStyle(.secondary)
+                if inspector.readings.isEmpty {
+                    Text("No reading is recorded.")
+                        .font(.system(size: scale.text.micro))
+                        .foregroundStyle(.secondary)
+                }
                 ForEach(inspector.readings) { reading in
-                    HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
-                        Text(reading.at, format: .dateTime.year().month().day())
-                            .font(.system(size: scale.text.micro))
-                            .foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 0) {
                         Text(verbatim: reading.sentence)
-                            .font(.system(size: scale.text.micro))
-                            .lineLimit(Token.Limit.wrapLines)
-                        if let source = reading.source {
-                            Text(verbatim: source)
-                                .font(.system(size: scale.text.micro))
-                                .foregroundStyle(.tertiary)
+                            .font(.system(size: scale.text.small))
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                            Text(reading.at, format: .dateTime.year().month().day())
+                            if let source = reading.source { Text(verbatim: source) }
                         }
+                        .font(.system(size: scale.text.micro))
+                        .foregroundStyle(.secondary)
                     }
                 }
             }
             VStack(alignment: .leading, spacing: scale.space.tight) {
-                Text("What you answered")
+                Text("Your Reviews")
                     .font(.system(size: scale.text.micro, weight: .medium))
                     .foregroundStyle(.secondary)
                 if inspector.reviews.isEmpty {
                     Text("Not reviewed yet.")
                         .font(.system(size: scale.text.micro))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
                 ForEach(inspector.reviews) { review in
                     HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
                         Text(review.at, format: .dateTime.year().month().day())
                             .font(.system(size: scale.text.micro))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                         Text(review.grade.readerName)
                             .font(.system(size: scale.text.micro))
                         // **Said, not filtered out**: practice moved nothing, and an undone
                         // attempt is still part of the trail.
                         if review.isPractice {
-                            Text("practice")
-                                .font(.system(size: scale.text.micro))
-                                .foregroundStyle(.tertiary)
+                            StatusLabel(.practice, "Practice", size: scale.text.micro, prominence: .secondary)
                         }
                         if review.isVoided {
-                            Text("taken back")
+                            Text("Undone")
                                 .font(.system(size: scale.text.micro))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
             }
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// **One rule for blank**, because the Save button and the sentence under it must agree:
@@ -266,55 +316,68 @@ public struct LibraryView: View {
     private var list: some View {
         LibraryCollection(rows: state.rows, layout: layout, identifier: "library-saved-row",
                           selection: Binding(get: { state.selection }, set: { act(.select($0)) }),
-                          interaction: $interaction) { row in
+                          interaction: $interaction,
+                          keys: keys, more: more,
+                          name: { Text(verbatim: $0.word) }) { row in
             LibraryRowView(row: row)
         } menu: { row in
-            let ids = state.selection.contains(row.id) ? state.selection : [row.id]
-            Button("Pause \(ids.count)") { act(.select(ids)); act(.pause) }
-            Button("Resume \(ids.count)") { act(.select(ids)); act(.resume) }
-            Button("Archive \(ids.count)") { act(.select(ids)); act(.archive) }
-            Button("Remove from study \(ids.count)", role: .destructive) { act(.select(ids)); act(.removeFromStudy) }
+            selectionActions(state.target(of: row), inToolbar: false)
         }
     }
 
-    /// **Offered, never enrolled.** An unopened suggestion costs the reader nothing, and neither
-    /// button here grades anything — "already know" is a declaration about this word, not a
+    private var keys: LibraryCollectionKeys {
+        var keys = LibraryCollectionKeys(toggleInspector: { inspectorShown.toggle() })
+        // Archiving can be taken back, which is what makes it safe on a key.
+        if !state.selectionIsArchived { keys.delete = { act(.archive) } }
+        return keys
+    }
+
+    private var more: (@MainActor () -> Void)? {
+        guard state.hasMore else { return nil }
+        return { act(.showMore) }
+    }
+
+    /// **Offered, never saved from here.** An unopened suggestion costs the reader nothing, and
+    /// neither button here grades anything — "already know" is a declaration about this word, not a
     /// measurement of it.
-    @ViewBuilder
     private var suggestions: some View {
-        if state.suggestions.isEmpty {
-            VStack(spacing: scale.space.line) {
-                Text("Nothing to suggest yet.")
-                Text("A word you look up on more than one day appears here.")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            List(state.suggestions) { suggestion in
-                HStack(spacing: scale.space.inline) {
-                    VStack(alignment: .leading, spacing: scale.space.tight) {
-                        // **Named with its language**, because Study and "already know" both act
-                        // on the lemma *and* the language: two homographs read as one row.
-                        Text(verbatim: suggestion.language.isEmpty
-                             ? suggestion.lemma : "\(suggestion.lemma) · \(suggestion.language)")
-                            .font(.system(size: scale.text.body, weight: .medium))
-                        // The evidence, so the ranking is legible rather than trusted.
-                        Text("Looked up on \(suggestion.days) days, in \(suggestion.sources) places")
-                            .font(.system(size: scale.text.micro))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    IconButton(title: "Study", symbol: "plus.circle") { act(.study(lemma: suggestion.lemma)) }
-                    IconButton(title: "Already know", symbol: "checkmark.circle") {
-                        act(.ignore(lemma: suggestion.lemma, language: suggestion.language))
+        VStack(spacing: 0) {
+            if state.suggestions.isEmpty {
+                LibraryEmptyState {
+                    ContentUnavailableView {
+                        Label("No Suggestions Yet", systemImage: ActionSymbol.suggestedFilter.symbol)
+                    } description: {
+                        Text("A word you look up on more than one day appears here.")
                     }
                 }
-                .padding(.vertical, scale.space.tight)
+            } else {
+                List(state.suggestions) { suggestion in
+                    HStack(spacing: scale.space.inline) {
+                        VStack(alignment: .leading, spacing: scale.space.tight) {
+                            // **Named with its language**, because Save and "already know" both act
+                            // on the lemma *and* the language: two homographs read as one row.
+                            Text(verbatim: suggestion.language.isEmpty
+                                 ? suggestion.lemma : "\(suggestion.lemma) · \(suggestion.language)")
+                                .font(.system(size: scale.text.body, weight: .medium))
+                            // The evidence, so the ranking is legible rather than trusted.
+                            Text("Looked up on ^[\(suggestion.days) day](inflect: true), in ^[\(suggestion.sources) place](inflect: true)")
+                                .font(.system(size: scale.text.micro))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        IconButton(.saveSuggestion, hint: "looks the word up so you can choose its meaning") {
+                            act(.study(lemma: suggestion.lemma))
+                        }
+                        IconButton(.alreadyKnow, hint: "stops suggesting this word") {
+                            act(.ignore(lemma: suggestion.lemma, language: suggestion.language))
+                        }
+                    }
+                    .padding(.vertical, scale.space.tight)
+                }
+                .listStyle(.inset)
             }
-            .listStyle(.inset)
+            setAside
         }
-        setAside
     }
 
     /// **What the reader set aside, and the way back.** Setting a word aside enrols nothing, so
@@ -325,11 +388,11 @@ public struct LibraryView: View {
         if !state.setAside.isEmpty {
             Divider()
             VStack(alignment: .leading, spacing: scale.space.tight) {
-                Text("Words you already know")
+                Text("Words You Already Know")
                     .font(.system(size: scale.text.micro, weight: .medium))
                     .foregroundStyle(.secondary)
-                // Scrollable for the same reason the histories are: this list grows without
-                // bound, and the oldest "Offer it again" went off the bottom of the window.
+                // Scrollable because this list grows without bound, and the oldest "Offer Again"
+                // went off the bottom of the window.
                 ScrollView {
                     VStack(alignment: .leading, spacing: scale.space.tight) {
                         ForEach(state.setAside) { lemma in
@@ -340,11 +403,9 @@ public struct LibraryView: View {
                                      ? lemma.lemma : "\(lemma.lemma) · \(lemma.language)")
                                     .font(.system(size: scale.text.small))
                                 Spacer(minLength: 0)
-                                IconButton(title: "Offer it again", symbol: "arrow.uturn.backward") {
+                                IconButton(.offerAgain) {
                                     act(.unignore(lemma: lemma.lemma, language: lemma.language))
                                 }
-                                .buttonStyle(.link)
-                                .font(.system(size: scale.text.micro))
                             }
                         }
                     }
@@ -356,132 +417,181 @@ public struct LibraryView: View {
         }
     }
 
-    @ViewBuilder
+    /// **Two different nothings**, said differently: a reader who has saved nothing is not a
+    /// reader whose search found nothing.
+    ///
+    /// **Every narrowing counts, not only the search.** The tag picker and the filter also hide
+    /// rows, and ignoring them told a reader with a full collection that they had saved nothing —
+    /// over a filter they could still see set.
     private var empty: some View {
-        VStack(spacing: scale.space.line) {
-            // **Two different nothings**, said differently: a reader who has saved nothing is not a
-            // reader whose search found nothing.
-            //
-            // **Every narrowing counts, not only the search.** The tag picker and the script
-            // toggle also hide rows, and ignoring them told a reader with a full collection that
-            // they had saved nothing — over a filter they could still see set.
+        LibraryEmptyState {
             if state.isUnfiltered {
-                Text("You have not saved any meanings yet.")
-                Text("A meaning you save while reading appears here.")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
+                ContentUnavailableView {
+                    Label("Nothing Saved Yet", systemImage: ActionSymbol.savedPane.symbol)
+                } description: {
+                    Text("A meaning you save while reading appears here.")
+                }
+            } else if !state.search.isEmpty, state.tag == nil, state.filter == .all {
+                // The search alone: the system's own words for it, naming what was looked for.
+                ContentUnavailableView.search(text: state.search)
             } else {
-                Text("Nothing matches.")
-                // **Only the narrowings that are actually on.** "Clear the search" over an empty
-                // search is a recovery button that changes nothing, which is the same broken
-                // switch as one that refuses its click.
-                if !state.search.isEmpty {
-                    IconButton(title: "Clear the search", symbol: "xmark.circle") { act(.search("")) }
-                }
-                if state.tag != nil {
-                    IconButton(title: "Show every tag", symbol: "tag.slash") { act(.filterTag(nil)) }
-                }
-                if state.filter != .all {
-                    IconButton(title: "Show everything saved", symbol: "tray.full") { act(.filter(.all)) }
+                ContentUnavailableView {
+                    Label("Nothing Matches", systemImage: state.filter.action.symbol)
+                } description: {
+                    Text("No saved meaning passes everything this list is narrowed by.")
+                } actions: {
+                    // **Only the narrowings that are actually on.** "Clear Search" over an empty
+                    // search is a recovery button that changes nothing, which is the same broken
+                    // switch as one that refuses its click.
+                    HStack(spacing: scale.space.inline) {
+                        if !state.search.isEmpty {
+                            IconButton(.clearSearch) { searchText = "" }
+                        }
+                        if state.tag != nil {
+                            IconButton(.showEveryTag) { act(.filterTag(nil)) }
+                        }
+                        if state.filter != .all {
+                            IconButton(.showEverything) { act(.filter(.all)) }
+                        }
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Changing
 
-    /// **Three things, each its own view**: what the reader is looking at, what they can do to
-    /// the selection, and where the last export went.
     /// **Above every branch, because a failure is not a state of the list.** `problem` was drawn
     /// only by the empty view, so a database error under the Suggested filter — or one that arrived
     /// while rows were on screen — read as "Nothing to suggest yet", or as nothing at all.
     @ViewBuilder private var notice: some View {
-        if let problem = state.problem {
+        if state.problem != nil || state.exported != nil {
             LibraryNotice {
-                Text(verbatim: problem).foregroundStyle(.orange).textSelection(.enabled)
-                IconButton(title: "Retry", symbol: "arrow.clockwise") { act(.retry) }
-            }
-        }
-    }
-
-    /// Absent with nothing pending: a selection, an undo, more to show, or an export just written.
-    @ViewBuilder private var footer: some View {
-        let showsMore = state.hasMore && state.filter != .suggested && !state.rows.isEmpty
-        let hasFooter = !state.selection.isEmpty || state.undoable != nil || showsMore || state.exported != nil
-        if hasFooter {
-            LibraryFooter {
-                if !state.selection.isEmpty {
-                    // **The scope is on the button**, because a bulk action the reader misjudged is
-                    // the one they cannot see the extent of until it has happened.
-                    Text("\(state.selection.count) selected")
-                        .font(.system(size: scale.text.small))
-                        .foregroundStyle(.secondary)
+                if let problem = state.problem {
+                    StatusLabel(.error, text: Text(verbatim: problem), prominence: .secondary).textSelection(.enabled)
+                    IconButton(.retry) { act(.retry) }
                 }
                 if let exported = state.exported {
                     // The path, because an export the reader cannot find did not happen for them.
                     Text(verbatim: exported)
-                        .font(.system(size: scale.text.micro))
-                        .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(Text(verbatim: exported))
                 }
-                if !state.selection.isEmpty { selectionActions }
-                // **Outside the selection block**, because putting a bulk action back is not an
-                // operation on whatever happens to be selected now.
-                if let undoable = state.undoable {
-                    IconButton(title: undoable.name, symbol: "arrow.uturn.backward") { act(.undo) }
-                }
-                if showsMore { IconButton(title: "Show more", symbol: "arrow.down.circle") { act(.showMore) } }
             }
         }
     }
 
     /// What the reader is looking at, and how well they are remembering it — the window's subtitle.
     private var tally: Text {
-        let cards = Text("\(state.total) cards")
+        let meanings = Text("^[\(state.total) meaning](inflect: true)")
         // **The denominator, always beside the rate** (U03). A percentage on its own is the
         // one figure here nobody can check afterwards, and absent is what it is when there
         // has been nothing eligible to measure.
-        guard let retention = state.retention else { return cards }
-        let recalled = Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
-        return Text("\(cards) · \(recalled)")
+        guard let retention = state.retention else { return meanings }
+        let recalled = Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over ^[\(retention.attempts) review](inflect: true)")
+        return Text("\(meanings) · \(recalled)")
     }
 
-    /// What can be done to the selection, each control named for what it will do to *this* one.
-    @ViewBuilder private var selectionActions: some View {
-        if state.canConfirm {
-            IconButton(title: "Confirm \(state.selection.count)", symbol: "checkmark.seal") { act(.confirm) }
+    /// Selects `ids` if they are not what is selected, then acts. **A right-click on a card outside
+    /// the selection acts on that card**, as it does in Finder, and the model acts on its own
+    /// selection — so the selection is moved first, and the count on the menu row is the count the
+    /// action reaches.
+    private func perform(_ action: LibraryAction, on ids: Set<UUID>) {
+        if ids != state.selection { act(.select(ids)) }
+        act(action)
+    }
+
+    /// What can be done to `target`, each control named for what it will do to *this* one.
+    ///
+    /// **One builder for the toolbar and the right-click menu.** They were written twice and had
+    /// drifted: the menu offered Pause and Resume together where the footer chose one, had no
+    /// Confirm, Unarchive or Delete, and said "Remove from study 1" where the footer said "Remove 1
+    /// from study".
+    @ViewBuilder private func selectionActions(_ target: LibrarySelectionTarget, inToolbar: Bool) -> some View {
+        let size: CGFloat? = inToolbar ? Token.Library.toolbarGlyph : nil
+        let count = target.ids.count
+        if target.canConfirm {
+            IconButton(.confirmMeaning, title: "Confirm ^[\(count) Meaning](inflect: true)", size: size) { perform(.confirm, on: target.ids) }
         }
         // **Named for what it will do to this selection.** A Pause button over rows that
         // are all resting is a control whose label is wrong before it is pressed.
-        if state.selectionIsPaused {
-            IconButton(title: "Resume \(state.selection.count)", symbol: "play") { act(.resume) }
+        if target.isPaused {
+            IconButton(.resume, title: "Resume ^[\(count) Meaning](inflect: true)", size: size) { perform(.resume, on: target.ids) }
         } else {
-            IconButton(title: "Pause \(state.selection.count)", symbol: "pause") { act(.pause) }
+            IconButton(.pause, title: "Pause ^[\(count) Meaning](inflect: true)", size: size) { perform(.pause, on: target.ids) }
         }
-        if state.selectionIsArchived {
-            IconButton(title: "Unarchive \(state.selection.count)", symbol: "arrow.up.bin") { act(.unarchive) }
+        if target.isArchived {
+            IconButton(.unarchive, title: "Unarchive ^[\(count) Meaning](inflect: true)", size: size) { perform(.unarchive, on: target.ids) }
         } else {
-            IconButton(title: "Archive \(state.selection.count)", symbol: "archivebox") { act(.archive) }
+            IconButton(.archive, title: "Archive ^[\(count) Meaning](inflect: true)",
+                       hint: inToolbar ? "or press Delete" : nil, size: size) { perform(.archive, on: target.ids) }
         }
-        // **Two different deletions, named apart.** Removing from study keeps the reading;
-        // deleting the reading keeps the card. A single "Delete" would mean whichever the
-        // reader assumed.
-        IconButton(title: "Remove \(state.selection.count) from study", symbol: "minus.circle", role: .destructive) {
-            act(.removeFromStudy)
+        // **Two different deletions, named apart.** Removing from Saved keeps the reading;
+        // deleting the readings keeps the meaning. A single "Delete" would mean whichever the
+        // reader assumed. Each ends in an ellipsis because each asks before it acts.
+        IconButton(.removeFromSaved, title: "Remove ^[\(count) Meaning](inflect: true) from Saved…", size: size) {
+            pending = PendingRemoval(kind: .removeFromSaved, ids: target.ids)
         }
-        IconButton(title: "Delete the reading behind \(state.selection.count)", symbol: "trash", role: .destructive) {
-            act(.deleteReading)
+        IconButton(.deletePermanently, title: "Delete the Readings Behind ^[\(count) Meaning](inflect: true)…",
+                   hint: "keeps what is saved and deletes the sentences it was saved from", size: size) {
+            pending = PendingRemoval(kind: .deleteReadings, ids: target.ids)
         }
-        .help(Text("Keeps the cards and removes the sentences they were saved from"))
-        TextField("Tag", text: $tag)
-            .frame(maxWidth: Token.Library.tagWidth)
-            .onSubmit {
-                act(.tag(tag))
-                tag = ""
-            }
+    }
+}
+
+/// A removal waiting on the reader's confirmation, with the cards it will reach.
+struct PendingRemoval: Identifiable, Equatable {
+    enum Kind: Equatable { case removeFromSaved, deleteReadings }
+    let kind: Kind
+    let ids: Set<UUID>
+    var id: Set<UUID> { ids }
+
+    var title: Text {
+        switch kind {
+        case .removeFromSaved: Text("Remove ^[\(ids.count) meaning](inflect: true) from Saved?")
+        case .deleteReadings: Text("Delete the readings behind ^[\(ids.count) meaning](inflect: true) permanently?")
+        }
+    }
+
+    var message: Text {
+        switch kind {
+        case .removeFromSaved:
+            Text("The readings stay in History, but review progress is lost. This cannot be undone.")
+        case .deleteReadings:
+            Text("What is saved stays in Saved, but loses the sentences it was saved from and will need attention. This cannot be undone.")
+        }
+    }
+}
+
+/// The cards an action will reach, and what they are — so a control can be named for what it will
+/// do to exactly them.
+struct LibrarySelectionTarget: Equatable {
+    let ids: Set<UUID>
+    /// Every one is paused, so the control says Resume.
+    let isPaused: Bool
+    /// Every one is archived, so the control says Unarchive.
+    let isArchived: Bool
+    /// At least one is waiting for the reader to confirm its meaning.
+    let canConfirm: Bool
+}
+
+extension LibraryPresentation {
+    /// The selection, as the toolbar acts on it.
+    var selectionTarget: LibrarySelectionTarget {
+        LibrarySelectionTarget(ids: selection, isPaused: selectionIsPaused, isArchived: selectionIsArchived,
+                               canConfirm: canConfirm)
+    }
+
+    /// What a right-click on `row` acts on: the selection when the row is part of it, and the row
+    /// alone when it is not — described from the row itself, since the selection's facts are about
+    /// other cards.
+    func target(of row: Row) -> LibrarySelectionTarget {
+        guard !selection.contains(row.id) else { return selectionTarget }
+        return LibrarySelectionTarget(ids: [row.id], isPaused: row.status == .paused,
+                                      isArchived: row.status == .archived,
+                                      canConfirm: row.status == .needsConfirmation)
     }
 }
 
@@ -505,7 +615,12 @@ extension Grade {
 struct LibraryRowView: View {
     @Environment(\.scale) private var scale
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     let row: LibraryPresentation.Row
+
+    /// **Keyed by the lemma, as History, the drawer and the lookup card key it.** Hashing the word
+    /// as written gave one reading two colours in two panes of one window.
+    private var accent: Color { ReadingPalette.color(forLemma: row.accentKey, in: scheme, contrast: contrast) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.tight) {
@@ -513,22 +628,17 @@ struct LibraryRowView: View {
                 // The same face as a History or Review card's word: one reading, one look.
                 Text(verbatim: row.word)
                     .font(.system(size: scale.text.strong, weight: .semibold))
-                    .foregroundStyle(ReadingPalette.accent(for: row.word).color(in: scheme))
-                if let status = row.status {
-                    Text(status.name)
-                        .font(.system(size: scale.text.micro))
-                        .foregroundStyle(.orange)
-                }
+                    .foregroundStyle(accent)
+                if let status = row.status { mark(status) }
                 Spacer(minLength: 0)
                 if let due = row.due {
                     Text(verbatim: due)
                         .font(.system(size: scale.text.micro))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
             }
             if !row.excerpt.isEmpty {
-                ReadingSentence(sentence: row.excerpt, ranges: row.marks,
-                                accent: ReadingPalette.accent(for: row.word).color(in: scheme))
+                ReadingSentence(sentence: row.excerpt, ranges: row.marks, accent: accent)
             }
             HStack(spacing: scale.space.inline) {
                 ReadingPronunciation(word: row.word, sentence: row.excerpt)
@@ -537,7 +647,24 @@ struct LibraryRowView: View {
 
         }
         .padding(scale.space.pad)
-        .modifier(ReadingCardChrome(accent: ReadingPalette.accent(for: row.word).color(in: scheme).opacity(Token.Opacity.accentBorder)))
+        .modifier(ReadingCardChrome(accent: CardSurface.border(accent: accent, contrast: contrast)))
+    }
+
+    /// **A symbol and ordinary text, never coloured text.** The status was orange words beside a
+    /// word that could itself be orange, and orange on a light card measured about 2.2:1. What
+    /// needs the reader is marked as a question or a caution; what is merely put away wears the
+    /// symbol of the filter that lists it.
+    @ViewBuilder private func mark(_ status: LibraryPresentation.Status) -> some View {
+        switch status {
+        case .needsConfirmation:
+            StatusLabel(.unconfirmed, status.name, size: scale.text.micro, prominence: .secondary)
+        case .needsRepair:
+            StatusLabel(.caution, status.name, size: scale.text.micro, prominence: .secondary)
+        case .paused, .archived, .ignored:
+            Label { Text(status.name) } icon: { status.action.image }
+                .font(.system(size: scale.text.micro))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -694,8 +821,8 @@ public struct LibraryPresentation: Sendable, Equatable {
 
         var name: LocalizedStringKey {
             switch self {
-            case .pause(let count): "Undo pausing \(count)"
-            case .archive(let count): "Undo archiving \(count)"
+            case .pause(let count): "Undo Pausing ^[\(count) Meaning](inflect: true)"
+            case .archive(let count): "Undo Archiving ^[\(count) Meaning](inflect: true)"
             }
         }
     }
@@ -765,6 +892,8 @@ public struct LibraryPresentation: Sendable, Equatable {
     public struct Inspector: Sendable, Equatable, Identifiable {
         public let id: UUID
         public let word: String
+        /// What the word's colour is hashed from: the lemma, the same key its row uses.
+        public let accentKey: String
         public let answer: String
         /// Whether the answer shown is the reader's own rather than the dictionary's.
         public let isReaders: Bool
@@ -774,11 +903,12 @@ public struct LibraryPresentation: Sendable, Equatable {
         public let readings: [ReadingMark]
         public let reviews: [ReviewMark]
 
-        public init(id: UUID, word: String, answer: String, isReaders: Bool,
+        public init(id: UUID, word: String, accentKey: String? = nil, answer: String, isReaders: Bool,
                     tags: [String] = [], readings: [ReadingMark] = [],
                     reviews: [ReviewMark] = []) {
             self.id = id
             self.word = word
+            self.accentKey = accentKey ?? word
             self.answer = answer
             self.isReaders = isReaders
             self.tags = tags
@@ -806,29 +936,17 @@ public struct LibraryPresentation: Sendable, Equatable {
     public enum Filter: String, Sendable, CaseIterable {
         case all, due, needsAttention, struggling, paused, archived, suggested
 
-        /// The sidebar's symbol for each state. Named for what the state *is* rather than for a
-        /// mood: `exclamationmark` is the repair list, not a warning about the reader.
-        public var symbol: String {
+        /// The sidebar row's symbol and name, from the one table every symbol comes from — so a
+        /// filter cannot wear a pane's symbol, as All wore Saved's and Due wore History's.
+        public var action: ActionSymbol {
             switch self {
-            case .all: "tray.full"
-            case .due: "clock"
-            case .needsAttention: "exclamationmark.triangle"
-            case .struggling: "arrow.trianglehead.counterclockwise"
-            case .paused: "pause.circle"
-            case .archived: "archivebox"
-            case .suggested: "sparkles"
-            }
-        }
-
-        public var name: LocalizedStringKey {
-            switch self {
-            case .all: "All"
-            case .due: "Due"
-            case .needsAttention: "Needs attention"
-            case .struggling: "Struggling"
-            case .paused: "Paused"
-            case .archived: "Archived"
-            case .suggested: "Suggested"
+            case .all: .allFilter
+            case .due: .dueFilter
+            case .needsAttention: .needsAttentionFilter
+            case .struggling: .strugglingFilter
+            case .paused: .pausedFilter
+            case .archived: .archivedFilter
+            case .suggested: .suggestedFilter
             }
         }
     }
@@ -871,11 +989,23 @@ public struct LibraryPresentation: Sendable, Equatable {
             case .ignored: "Already known"
             }
         }
+
+        /// The mark beside the name: the symbol of the list this state puts the card in.
+        var action: ActionSymbol {
+            switch self {
+            case .needsConfirmation, .needsRepair: .needsAttentionFilter
+            case .paused: .pausedFilter
+            case .archived: .archivedFilter
+            case .ignored: .alreadyKnow
+            }
+        }
     }
 
     public struct Row: Sendable, Equatable, Identifiable {
         public let id: UUID
         public let word: String
+        /// What the word's colour is hashed from: **the lemma**, as on every other surface.
+        public let accentKey: String
         public let excerpt: String
         /// Where the word sits in `excerpt` — `LibraryRow.excerptMarks`, decided below the view.
         public let marks: [NSRange]
@@ -889,10 +1019,13 @@ public struct LibraryPresentation: Sendable, Equatable {
         /// When it comes back, in the reader's words.
         public let due: String?
 
-        public init(id: UUID, word: String, excerpt: String, marks: [NSRange], answer: String,
-                    status: Status?, due: String?) {
+        public init(id: UUID, word: String, accentKey: String? = nil, excerpt: String, marks: [NSRange],
+                    answer: String, status: Status?, due: String?) {
             self.id = id
             self.word = word
+            // The word itself where no lemma was recorded — a card the reader wrote, which was
+            // never looked up.
+            self.accentKey = accentKey ?? word
             self.excerpt = excerpt
             self.marks = marks
             self.answer = answer

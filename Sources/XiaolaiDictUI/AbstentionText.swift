@@ -11,25 +11,25 @@ public extension Abstention {
     var reason: String {
         switch self {
         case .noCandidates:
-            String(localized: "This dictionary does not mark its senses, so the one you read cannot be identified.",
+            String(localized: "This dictionary does not mark its meanings, so the one you read cannot be identified.",
                    comment: "Shown on the lookup card when the dictionary marks no senses to choose between")
         case .noContext:
-            String(localized: "No sentence was captured around the word, so its senses cannot be told apart.",
+            String(localized: "No sentence was captured around the word, so its meanings cannot be told apart.",
                    comment: "Shown on the lookup card when no sentence surrounded the word")
         case .tooClose:
-            String(localized: "Several senses fit this sentence equally well.",
+            String(localized: "Several meanings fit this sentence equally well.",
                    comment: "Shown on the lookup card when two senses cannot be separated")
         case .nothingFits:
-            String(localized: "No sense in this entry clearly fits this sentence.",
+            String(localized: "No meaning in this entry clearly fits this sentence.",
                    comment: "Shown on the lookup card when no sense is close enough to claim")
         case .undecided:
-            String(localized: "This sentence does not settle which sense the word carries.",
+            String(localized: "This sentence does not settle which meaning the word carries.",
                    comment: "Shown on the lookup card when a model answered that the sentence decides nothing")
         case .unavailable:
-            String(localized: "This sentence could not be compared against the senses.",
+            String(localized: "This sentence could not be compared against the meanings.",
                    comment: "Shown on the lookup card when the selector could not run")
         case .refused:
-            String(localized: "The model declined to compare this sentence against the senses.",
+            String(localized: "The model declined to compare this sentence against the meanings.",
                    comment: "Shown on the lookup card when a language model refused to answer for this sentence")
         }
     }

@@ -70,13 +70,22 @@ struct SentenceWindowRenderTests {
     @Test func aLongSentenceStillShowsItsWord() throws {
         let range = (longSentence as NSString).range(of: "ticket")
         #expect(range.location == 114, "the fixture no longer matches the measured row")
-        let card = ReadingCardView(entry: ReadingEntry(
-            id: 36, lemma: "ticket", surface: "ticket", sentence: longSentence, sentenceRange: range,
-            place: ReadingPlace(name: "Ghostty"), at: .distantPast, result: .found,
-            quality: .accessibility(.accessibilityTextRange, context: .complete),
-            partOfSpeech: "noun", sense: nil))
-        let word = try coloredPixelsInside(card)
-        #expect(word > 0, "the card drew the reader's sentence without the word they looked up")
+        func card(_ context: CaptureQuality.Context) -> ReadingCardView {
+            ReadingCardView(entry: ReadingEntry(
+                id: 36, lemma: "ticket", surface: "ticket", sentence: longSentence, sentenceRange: range,
+                place: ReadingPlace(name: "Ghostty"), at: .distantPast, result: .found,
+                quality: .accessibility(.accessibilityTextRange, context: context),
+                partOfSpeech: "noun", sense: nil))
+        }
+        // **Against the card with no sentence at all**, because the headword is in the word's
+        // colour too since 2026-10-02 — so "some colour on the card" is true of every card, and
+        // would have gone on passing with the word cut out of its sentence. A reading captured
+        // with no context draws the headword and no sentence: what the sentence adds on top of
+        // that is the marked word, and nothing else on the card is coloured.
+        let headwordAlone = try coloredPixelsInside(card(.missing))
+        let word = try coloredPixelsInside(card(.complete))
+        #expect(headwordAlone > 0, "the headword is not in the word's colour, so this compares nothing")
+        #expect(word > headwordAlone, "the card drew the reader's sentence without the word they looked up")
     }
 
     // MARK: - Which window the card chooses

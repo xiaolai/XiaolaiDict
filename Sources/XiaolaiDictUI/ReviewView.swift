@@ -15,34 +15,45 @@ public struct ReviewView: View {
     @Environment(\.scale) private var scale
     @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     public let state: ReviewPresentation
     /// What the reader did. The view decides nothing: it reports, and the model commits.
     public let act: @MainActor (ReviewAction) -> Void
+    /// Goes to the saved meanings that are waiting to be confirmed. Nil where this view is shown
+    /// outside the Library, which has nowhere to go.
+    private let findUnconfirmed: (@MainActor () -> Void)?
 
-    public init(state: ReviewPresentation, act: @escaping @MainActor (ReviewAction) -> Void) {
+    public init(state: ReviewPresentation, findUnconfirmed: (@MainActor () -> Void)? = nil,
+                act: @escaping @MainActor (ReviewAction) -> Void) {
         self.state = state
+        self.findUnconfirmed = findUnconfirmed
         self.act = act
     }
 
     public var body: some View {
-        // **Scrollable, because the content is the reader's own writing.** A long sentence and a
-        // long answer shared a fixed stack with the controls, so past a certain length neither
-        // could be read to the end and the buttons went off the bottom of the window.
-        ScrollView {
-            Group {
-                switch state.stage {
-                case .empty(let reason):
-                    VStack(alignment: .leading, spacing: scale.space.stack) { emptyState(reason) }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                case .asking(let asking):
-                    card(asking)
-                case .finished(let summary):
-                    VStack(alignment: .leading, spacing: scale.space.stack) { finishedState(summary) }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
+        switch state.stage {
+        case .empty(let reason):
+            // **Centred in the pane, like every other pane's nothing.** It sat in a
+            // leading-aligned stack, so the message hugged the upper left of an empty window.
+            LibraryEmptyState { emptyState(reason) }
+        case .asking(let asking):
+            sitting { card(asking) }
+        case .finished(let summary):
+            sitting {
+                VStack(alignment: .leading, spacing: scale.space.stack) { finishedState(summary) }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, scale.space.padAcross)
-            .padding(.vertical, scale.space.padDown)
+        }
+    }
+
+    /// **Scrollable, because the content is the reader's own writing.** A long sentence and a
+    /// long answer shared a fixed stack with the controls, so past a certain length neither
+    /// could be read to the end and the buttons went off the bottom of the window.
+    private func sitting(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView {
+            content()
+                .padding(.horizontal, scale.space.padAcross)
+                .padding(.vertical, scale.space.padDown)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -55,7 +66,7 @@ public struct ReviewView: View {
         // **The lemma, which is what the lookup and the drawer hash.** Hashing the captured
         // surface gave *ran* and *run* different colours on different surfaces, which is exactly
         // the consistency the comment above claims.
-        ReadingPalette.accent(for: question.accentKey).color(in: scheme)
+        ReadingPalette.color(forLemma: question.accentKey, in: scheme, contrast: contrast)
     }
 
     // MARK: - Asking
@@ -71,7 +82,7 @@ public struct ReviewView: View {
         VStack(alignment: .leading, spacing: scale.space.stack) { asking(question) }
             .padding(scale.space.pad)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(ReadingCardChrome(accent: accent(for: question).opacity(Token.Opacity.accentBorder)))
+            .modifier(ReadingCardChrome(accent: CardSurface.border(accent: accent(for: question), contrast: contrast)))
     }
 
     /// **The front of a card, and its back only once asked for** — laid out as every other card in
@@ -104,10 +115,10 @@ public struct ReviewView: View {
                 .font(.system(size: scale.text.micro))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                // One line, so the whole of it is a pointer away.
+                .help(Text(verbatim: question.source))
             if question.isPractice {
-                Text("Practice — nothing is scheduled")
-                    .font(.system(size: scale.text.micro))
-                    .foregroundStyle(.orange)
+                StatusLabel(.practice, "Practice. Nothing is scheduled", size: scale.text.micro, prominence: .secondary)
             }
         }
 
@@ -137,86 +148,96 @@ public struct ReviewView: View {
                 // which is why this is absent rather than saying "you".
                 Text(verbatim: dictionary)
                     .font(.system(size: scale.text.small))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// **Icons, each with its key in its tooltip.** Space, 1, 2, S and T were bound and written
+    /// down nowhere a reader could find; `shortcut:` binds the key and names it from one value.
+    /// The grades are thumbs because `xmark` beside `checkmark` reads as Cancel and OK.
     @ViewBuilder
     private func controls(_ question: ReviewPresentation.Question) -> some View {
+        // **Disabled while a grade is committing**, every one of them: a reveal started then could
+        // finish after the sitting had advanced and put this card's answer on the next one.
+        let ready = !question.isCommitting
         HStack(spacing: scale.space.inline) {
             // The word aloud is not its meaning, so the voice is on the front like any other card's.
             ReadingPronunciation(word: question.word, sentence: question.sentence?.text ?? "")
             if question.answer == nil {
-                // **Disabled while a grade is committing**, like the grade buttons beside it: a
-                // reveal started here could finish after the sitting had advanced and put this
-                // card's answer on the next one.
-                IconButton(title: "Show the answer", symbol: "eye") { act(.reveal) }
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(question.isCommitting)
+                IconButton(.showMeaning, shortcut: KeyboardShortcut(.space, modifiers: []), isEnabled: ready) { act(.reveal) }
             }
             Spacer(minLength: 0)
             // **Forgot first, always.** The order is the same on every card, so a reader answering
             // quickly is answering the question and not hunting for the button.
-            IconButton(title: "Forgot", symbol: "xmark") { act(.grade(.again)) }
-                .keyboardShortcut("1", modifiers: [])
-                .disabled(question.isCommitting)
-            IconButton(title: "Remembered", symbol: "checkmark", hint: "You recalled it before revealing the answer") { act(.grade(.good)) }
-                .keyboardShortcut("2", modifiers: [])
-                .disabled(question.isCommitting)
-            IconButton(title: "Skip", symbol: "forward.end", hint: "Still due today; the next batch can have it") { act(.skip) }
-                .keyboardShortcut("s", modifiers: [])
-                .disabled(question.isCommitting)
-            // **"Not today" is not "skip".** A skipped card comes back in this evening's next
+            IconButton(.forgot, shortcut: KeyboardShortcut("1", modifiers: []), isEnabled: ready) { act(.grade(.again)) }
+            IconButton(.remembered, hint: "you recalled it before showing the meaning",
+                       shortcut: KeyboardShortcut("2", modifiers: []), isEnabled: ready) { act(.grade(.good)) }
+            IconButton(.skip, hint: "still due today; the next batch can have it",
+                       shortcut: KeyboardShortcut("s", modifiers: []), isEnabled: ready) { act(.skip) }
+            // **"Not Today" is not "Skip".** A skipped card comes back in this evening's next
             // batch; this one is gone until tomorrow, and the reader has to be able to say which
             // they mean.
-            IconButton(title: "Not today", symbol: "moon.zzz", hint: "Out of the way until tomorrow. Nothing about your memory is recorded") { act(.postpone) }
-                .keyboardShortcut("t", modifiers: [])
-                .disabled(question.isCommitting)
+            IconButton(.notToday, hint: "hidden until tomorrow; nothing about your memory is recorded",
+                       shortcut: KeyboardShortcut("t", modifiers: []), isEnabled: ready) { act(.postpone) }
         }
         if let problem = question.problem {
             // **A failed write stays on screen.** The reader answered; if the ledger did not take it,
             // saying nothing would leave them believing it did.
-            Text(verbatim: problem)
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.orange)
+            StatusLabel(.error, text: Text(verbatim: problem))
         }
     }
 
     // MARK: - The ends
 
+    /// **One message, the pane's own symbol, and the next step as a button where there is one.**
+    /// "Choose or confirm their meanings in Saved" was a sentence with no way to do it: the route
+    /// was an unlabelled warning triangle in the far corner, there whether or not anything needed
+    /// confirming.
     @ViewBuilder
     private func emptyState(_ reason: ReviewPresentation.Empty) -> some View {
         switch reason {
         case .nothingDue:
-            Text("Nothing is due right now.")
-                .font(.system(size: scale.text.body))
+            ContentUnavailableView {
+                Label("Nothing Due", systemImage: ActionSymbol.reviewPane.symbol)
+            } description: {
+                Text("Saved meanings come back here when they are due.")
+            }
         case .needsConfirmation(let count):
-            ContentUnavailableView("\(count) meanings need attention", systemImage: "questionmark.circle", description: Text("Choose or confirm their meanings in Saved before reviewing."))
+            ContentUnavailableView {
+                Label("Meanings to Confirm", systemImage: ActionSymbol.findUnconfirmed.symbol)
+            } description: {
+                Text("^[\(count) saved meaning](inflect: true) cannot be reviewed until you choose or confirm what was meant.")
+            } actions: {
+                if let findUnconfirmed {
+                    Button("Show in Saved") { findUnconfirmed() }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("review-show-in-saved")
+                }
+            }
         case .nothingEnrolled:
-            Text("You have not saved any meanings to study yet.")
-                .font(.system(size: scale.text.body))
+            ContentUnavailableView {
+                Label("Nothing Saved Yet", systemImage: ActionSymbol.reviewPane.symbol)
+            } description: {
+                Text("Save a meaning while reading, and it comes back here when it is due.")
+            }
         case .couldNotBeRead(let problem):
-            Text("Your cards could not be read.")
-                .font(.system(size: scale.text.body))
-            Text(verbatim: problem)
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.orange)
-                .textSelection(.enabled)
+            ContentUnavailableView {
+                Label("Saved Meanings Could Not Be Read", systemImage: ActionSymbol.failure.symbol)
+            } description: {
+                Text(verbatim: problem).textSelection(.enabled)
+            } actions: {
+                Button { act(.anotherBatch) } label: { Text(ActionSymbol.retry.title) }
+            }
         case .heldBackUntilTomorrow(let count):
-            Text("Nothing is due right now.")
-                .font(.system(size: scale.text.body))
-            // **The specific sentence instead of the general one**, never both: "they come back
-            // when they are due" is a vaguer restatement of what the line above just said exactly.
-            Text("\(count) new saved, waiting for tomorrow.")
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.secondary)
-        }
-        if !reason.explainsItself {
-            Text("Saved meanings come back here when they are due.")
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.secondary)
+            ContentUnavailableView {
+                Label("Nothing Due", systemImage: ActionSymbol.reviewPane.symbol)
+            } description: {
+                // **The specific sentence instead of the general one**, never both: "they come back
+                // when they are due" is a vaguer restatement of exactly this.
+                Text("^[\(count) new meaning](inflect: true) will be introduced tomorrow.")
+            }
         }
     }
 
@@ -242,7 +263,7 @@ public struct ReviewView: View {
         // **A different sentence from "skipped".** One is still due this evening and the other is
         // not, and a reader who cannot tell them apart cannot plan the rest of the sitting.
         if summary.postponed > 0 {
-            Text("\(summary.postponed) put off until tomorrow")
+            Text("\(summary.postponed) hidden until tomorrow")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
         }
@@ -250,7 +271,7 @@ public struct ReviewView: View {
         // are not late; without this line a reader who saved thirty and answered five sees twenty-
         // five words go quiet with no explanation.
         if summary.heldBack > 0 {
-            Text("\(summary.heldBack) new saved, waiting for tomorrow")
+            Text("^[\(summary.heldBack) new meaning](inflect: true) will be introduced tomorrow")
                 .font(.system(size: scale.text.small))
                 .foregroundStyle(.secondary)
         }
@@ -258,15 +279,14 @@ public struct ReviewView: View {
             // **Skipped cards are still due**, and were left out of `stillDue` — so skipping
             // the last batch ended the sitting with work outstanding and no way to go on.
             if summary.stillDue > 0 || summary.skipped > 0 {
-                IconButton(title: "Review another batch", symbol: "rectangle.stack.badge.plus") { act(.anotherBatch) }
+                IconButton(.anotherBatch) { act(.anotherBatch) }
             }
             // **Offered when there is nothing due**, which is when a reader who wants to keep
             // going would otherwise have nothing to do but wait.
             if summary.stillDue == 0 && summary.skipped == 0 {
-                IconButton(title: "Practise", symbol: "repeat") { act(.practise) }
+                IconButton(.practise, hint: "nothing is scheduled by it") { act(.practise) }
             }
-            IconButton(title: "Done", symbol: "checkmark.circle") { act(.done) }
-                .keyboardShortcut(.defaultAction)
+            IconButton(.done, shortcut: .defaultAction) { act(.done) }
         }
     }
 }
@@ -320,15 +340,6 @@ public struct ReviewPresentation: Sendable, Equatable {
         /// collection that they were up to date. `problem` was assigned on that path and then
         /// thrown away, because an empty stage had nowhere to put it.
         case couldNotBeRead(String)
-
-        /// Whether this reason has already said when the cards come back, so the surface does not
-        /// follow it with a vaguer version of the same sentence.
-        var explainsItself: Bool {
-            switch self {
-            case .heldBackUntilTomorrow, .couldNotBeRead: true
-            case .nothingDue, .nothingEnrolled, .needsConfirmation: false
-            }
-        }
     }
 
     public struct Question: Sendable, Equatable {

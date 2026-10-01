@@ -232,7 +232,8 @@ func cardRows(_ card: some View) throws -> Int {
 /// The provenance — the source app's icon, and the place and time when the reader asks for them —
 /// used to be a row of its own at the bottom of the card. With the name and the time both off,
 /// which is the default, that row held one 11 pt icon under a full-width card and the bottom of
-/// every card was empty. It now rides the last line of the reader's own sentence.
+/// every card was empty. It rode the last line of the reader's own sentence after that, and since
+/// 2026-10-02 it leads the row the card's actions are on — a row every card has, sentence or not.
 ///
 /// **Checked by height, because that is the thing that regresses.** Moving it back into its own
 /// row would not break a single assertion about what the card contains; it would just quietly make

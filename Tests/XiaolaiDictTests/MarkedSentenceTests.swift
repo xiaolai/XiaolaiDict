@@ -88,13 +88,15 @@ struct MarkedSentenceTests {
         let views = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "Sources/XiaolaiDictUI")
-        // Each surface, and the call that reaches `MarkedSentence` from it. The drawer goes through
-        // `ReadingSentence`, the card the library shares, so the chain is checked a link at a time:
-        // the drawer asks `ReadingSentence` with the reader's emphasis, and `ReadingSentence` asks
-        // `MarkedSentence` with the emphasis it was given.
+        // Each surface, and the call that reaches `MarkedSentence` from it. The history panel draws
+        // the shared reading card, so the chain is checked a link at a time: the panel draws
+        // `ReadingCardView`, the card asks `ReadingSentence` with the reader's emphasis, and
+        // `ReadingSentence` asks `MarkedSentence` with the emphasis it was given. The last two
+        // links are in one file since 2026-10-02, when the card moved beside its components.
         let surfaces = [
             ("LookupCardView.swift", "MarkedSentence.text(", "emphasis: options.emphasis"),
-            ("HistoryDrawerViews.swift", "ReadingSentence(", "emphasis: options.emphasis"),
+            ("HistoryDrawerViews.swift", "ReadingCardView(", "ReadingCardView(entry:"),
+            ("ReadingCardComponents.swift", "ReadingSentence(sentence: entry.sentence", "emphasis: options.emphasis"),
             ("ReadingCardComponents.swift", "MarkedSentence.text(", "emphasis: emphasis"),
         ]
         for (name, marker, emphasis) in surfaces {

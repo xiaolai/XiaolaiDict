@@ -776,6 +776,31 @@ restore_setup_shown() {
 }
 at_exit restore_setup_shown
 
+# **Which pane Settings opens on is set aside too, for the same reason and at the same moment.**
+# Settings opens on the pane the reader last chose once setup is finished, and the setup stage
+# finds the window by the title "Setup" — so on a Mac where someone last looked at Reading, every
+# check of the board would be reading another pane. Deleted before any launch, so the window opens
+# on Setup as a fresh install does, and put back however the run ends.
+if settings_pane_original=$(defaults read com.xiaolaidict SettingsPane 2>/dev/null); then
+    settings_pane_had=yes
+else
+    settings_pane_had=no
+    settings_pane_original=""
+fi
+if setup_unfinished_original=$(defaults read com.xiaolaidict SettingsSetupUnfinished 2>/dev/null); then
+    setup_unfinished_had=yes
+else
+    setup_unfinished_had=no
+    setup_unfinished_original=""
+fi
+restore_settings_pane() {
+    restore_default SettingsPane "$settings_pane_had" "$settings_pane_original"
+    restore_default SettingsSetupUnfinished "$setup_unfinished_had" "$setup_unfinished_original" -bool
+}
+at_exit restore_settings_pane
+defaults delete com.xiaolaidict SettingsPane 2>/dev/null || true
+defaults delete com.xiaolaidict SettingsSetupUnfinished 2>/dev/null || true
+
 # Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
 # asserts that it starts and stays up, which is a different claim and stays a stage of its own.
 # Without this, selecting a later stage failed for want of something an earlier one happened to do.
@@ -1260,20 +1285,7 @@ history_report() { run_report --history-report 150; }
 if [ "$(newest_row_id)" -le 0 ]; then
     ensure_one_lookup || flunk "drawer: could not put a reading in the ledger for the drawer to show"
 fi
-# **The machine's glass setting is put back exactly as it was** — the value, or its absence — and
-# however the script ends. It used to be deleted afterwards, which lost a reader's own choice on
-# this machine, and a failure in between left the forced value behind.
-# Whether the key was there at all is kept apart from its value: a preference set to an empty
-# string is not an absent one, and restoring by "is the value empty" would delete it.
-if original_glass=$(defaults read com.xiaolaidict DrawerGlass 2>/dev/null); then
-    had_glass=yes
-else
-    had_glass=no
-    original_glass=""
-fi
-restore_glass() { restore_default DrawerGlass "$had_glass" "$original_glass"; }
-at_exit restore_glass
-# The stripes image, kept beside the report under the glass it was taken in. Missing is a note, not
+# The stripes image, kept beside the report. Missing is a note, not
 # an abort: an unguarded copy under `set -e` ended the whole run when a capture failed, before its
 # report — which says why — was read. The report clears the old image first, so one that is here
 # is this run's.
@@ -1288,10 +1300,11 @@ keep_stripes() {
         echo "note: no stripes image under $1 glass — see the report's stripesProblem and evidenceProblem"
     fi
 }
-# Frosted first, set explicitly: a machine left on Clear would otherwise flip the comparison below.
-defaults write com.xiaolaidict DrawerGlass frosted
+# One glass: the drawer draws the system's regular glass and has no setting of its own. The
+# Frosted/Clear choice — and the second run that compared the two — went on 2026-10-02; a
+# `DrawerGlass` default left on a machine by an older build is never read.
 drawer=$(history_report) || true
-keep_stripes frosted
+keep_stripes regular
 if ! python3 -c 'import json,sys; json.loads(sys.argv[1])' "$drawer" 2>/dev/null; then
     flunk "drawer: --history-report did not report ($(head -c 160 $reports/history-report.err 2>/dev/null))"
 else
@@ -1368,40 +1381,6 @@ COUNTS
     else
         problem=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("backdropProblem", "?"))' "$drawer")
         flunk "drawer: does not let what is behind it through — $fraction of it changes with the backdrop (problem: $problem)"
-    fi
-    # **The glass setting reaches the screen.** Settings offers Frosted and Clear, and a setting
-    # the drawer never reads would pass every unit test of the setting — the way the pause switch
-    # did. So the same drawer is measured with each. The deciding number is the glass over black,
-    # because a dark window behind the drawer is where the two differ and the case that made
-    # frosted look broken: measured 133 for frosted and 71 for clear. The bar is a 20-point gap —
-    # a third of that, far above the zero an unwired setting would give. The stripes' colour is
-    # reported alongside, and both stripes images are kept beside the report's own.
-    defaults write com.xiaolaidict DrawerGlass clear
-    clear_report=$(history_report) || true
-    keep_stripes clear
-    # The machine's own setting is not the test's to keep.
-    restore_glass
-    # stderr as well: `sys.exit(message)` writes the reason there, and a failure read from stdout
-    # alone reported "drawer: " with nothing after it.
-    if verdict=$(python3 - "$drawer" "$clear_report" 2>&1 <<'PYCHECK'
-import json, sys
-frosted, clear = json.loads(sys.argv[1]), json.loads(sys.argv[2])
-fg, cg = frosted.get("drawerGlass"), clear.get("drawerGlass")
-fb, cb = frosted.get("glassOverBlack", -1), clear.get("glassOverBlack", -1)
-fc, cc = frosted.get("stripesColour", -1), clear.get("stripesColour", -1)
-summary = f"over black frosted {fb}, clear {cb}; stripes' colour frosted {fc:.0f}, clear {cc:.0f}"
-if (fg, cg) != ("frosted", "clear"):
-    sys.exit(f"the report ran with {fg} then {cg}, not frosted then clear ({summary})")
-if fb < 0 or cb < 0:
-    sys.exit(f"the glass over black did not measure ({summary})")
-if fb - cb < 20:
-    sys.exit(f"Clear is not darker than Frosted over a dark window — {summary}")
-print(summary)
-PYCHECK
-    ); then
-        pass "drawer: the Clear setting reaches the screen ($verdict)"
-    else
-        flunk "drawer: $verdict"
     fi
 fi
 fi
@@ -1559,7 +1538,7 @@ settle_after_launch() {
     board_on_screen || return 0     # no board open by itself, so nothing was fetched early
     local _
     for _ in $(seq 1 50); do
-        "$helpers/panel" com.xiaolaidict | grep -q "Asking which dictionaries are enabled" || break
+        "$helpers/panel" com.xiaolaidict | grep -q "Looking for your dictionaries" || break
         sleep 0.2
     done
     sleep 0.5
@@ -1709,7 +1688,7 @@ else
     # the right tool for *text* — it is only the wrong tool for "can the reader see it".
     shown=$("$helpers/panel" com.xiaolaidict)
     missing=""
-    for row in "Accessibility" "Screen Recording" "Study dictionary" "Lookup shortcut" "Translation and sense picking"; do
+    for row in "Accessibility" "Screen Recording" "Study Dictionary" "Lookup Shortcut" "Translation and Meanings"; do
         printf '%s' "$shown" | grep -q "$row" || missing="$missing $row"
     done
     if [ -z "$missing" ]; then
@@ -1722,7 +1701,7 @@ else
     # is 625 KB — so a board asserted the instant it appears is being failed for the service still
     # working, not for a defect. Bounded, so a service that never answers is still a failure.
     dict_waited=0
-    while printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; do
+    while printf '%s' "$shown" | grep -q "Looking for your dictionaries"; do
         [ "$dict_waited" -ge 100 ] && break
         sleep 0.2
         dict_waited=$((dict_waited + 1))
@@ -1731,9 +1710,9 @@ else
     # **Three outcomes, not two.** The row leaves "Asking…" both when the service answers and when
     # it fails, so a loop that only waited for that phrase to go away reported a broken service as
     # a successful one.
-    if printf '%s' "$shown" | grep -q "Asking which dictionaries are enabled"; then
+    if printf '%s' "$shown" | grep -q "Looking for your dictionaries"; then
         flunk "setup: the dictionary row was still asking the service after $((dict_waited / 5))s"
-    elif printf '%s' "$shown" | grep -q "did not answer"; then
+    elif printf '%s' "$shown" | grep -q "could not be read"; then
         flunk "setup: the dictionary service did not answer"
     else
         pass "setup: the dictionary row had the service's answer ($((dict_waited / 5))s)"
@@ -1768,7 +1747,7 @@ if ! "$helpers/menu-click" com.xiaolaidict "Settings…" >/dev/null 2>&1; then
 else
     sleep 1.5
     again=$("$helpers/panel" com.xiaolaidict)
-    if printf '%s' "$again" | grep -q "Study dictionary"; then
+    if printf '%s' "$again" | grep -q "Study Dictionary"; then
         pass "setup: reopening after it has been shown gives the board again"
     else
         flunk "setup: reopening gave something other than the board ($(printf '%s' "$again" | head -c 200))"
@@ -1813,8 +1792,8 @@ else
     else
         pass "setup: nothing had begun downloading a model"
     fi
-    if printf '%s' "$shown" | grep -q "Translation and sense picking"; then
-        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and sense picking" || true)
+    if printf '%s' "$shown" | grep -q "Translation and Meanings"; then
+        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and Meanings" || true)
         # Every state the row can be in, named — and **a download under way is a failure here**, not
         # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
         # the board is first opened is the regression the rule exists to catch: it used to be one of
@@ -1825,7 +1804,7 @@ else
         # the state it read before it. Accepting it as a pass is what let this stage stop measuring
         # the consent controls on the machine it runs on most — the row's "ready" branch was taken on
         # every run after the first, silently, for as long as the stash was not in place.
-        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere."; then
+        if printf '%s' "$shown" | grep -q "Qwen3.5.*translates your sentences and chooses the meaning you met, on this Mac. Nothing is sent anywhere."; then
             flunk "setup: the store was emptied for this check and the row still reports a model — the stash did not take, or the board is showing state from before the restart ($(printf '%s' "$model_row" | head -c 300))"
         elif printf '%s' "$shown" | grep -q "Downloading Qwen3.5"; then
             flunk "setup: a 3 GB download had begun without the reader asking for one — $(printf '%s' "$model_row" | head -c 300)"
@@ -1844,7 +1823,7 @@ else
             # asking for only the first two let a stopped download become the one state the reader
             # could not get out of.
             if printf '%s' "$shown" | grep -q "Resume" && printf '%s' "$shown" | grep -q "misreads some" \
-                && { printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "still one click away"; }; then
+                && { printf '%s' "$shown" | grep -q "Not Now" || printf '%s' "$shown" | grep -q "still one click away"; }; then
                 pass "setup: the model row reports a stopped download, offers to resume it, names what answers meanwhile, and can still be declined"
             else
                 flunk "setup: a stopped download with no way to resume or decline it, or with nothing named as answering meanwhile — $(printf '%s' "$model_row" | head -c 300)"
@@ -1852,7 +1831,7 @@ else
         elif printf '%s' "$shown" | grep -q "misreads some" && printf '%s' "$shown" | grep -q "Download"; then
             # Both choices, unless the reader already chose **Not now** — which the row remembers,
             # and which takes its button away while leaving the download one click from here.
-            if printf '%s' "$shown" | grep -q "Not now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
+            if printf '%s' "$shown" | grep -q "Not Now" || printf '%s' "$shown" | grep -q "Nothing is waiting on you"; then
                 pass "setup: the model row offers the download and Not now, and names the weaker engine meanwhile"
             else
                 flunk "setup: the model row offers a download with no way to decline it — $(printf '%s' "$model_row" | head -c 300)"
@@ -1907,7 +1886,7 @@ else
     # reader was using — that is the point of the check above it — and `click-element` refuses a
     # control in an app that is not frontmost. This is the first moment the board is both on the
     # fresh-reader branch and in front.
-    if printf '%s' "$shown" | grep -q "Not now"; then
+    if printf '%s' "$shown" | grep -q "Not Now"; then
         if declined_original=$(defaults read com.xiaolaidict LocalModelDeclined 2>/dev/null); then
             declined_had=yes
         else
@@ -1923,7 +1902,7 @@ else
         pressed=no
         why=""
         for _ in $(seq 1 50); do
-            if why=$("$helpers/click-element" com.xiaolaidict "Not now" 2>&1); then pressed=yes; break; fi
+            if why=$("$helpers/click-element" com.xiaolaidict "Not Now" 2>&1); then pressed=yes; break; fi
             sleep 0.2
         done
         if [ "$pressed" != yes ]; then
@@ -1939,9 +1918,10 @@ else
                 sleep 0.2
             done
             # **And what the row does about it — asked of the controls, never of the text.** The
-            # board draws "Not now" as a button while the reader has not answered and as the row's
-            # *status word* once they have: the same string either way, so a text dump cannot tell
-            # a button that has gone from one that has not. Two earlier versions of this check
+            # board drew "Not now" as a button while the reader had not answered and as the row's
+            # *status word* once they had: the same string either way, so a text dump could not tell
+            # a button that had gone from one that had not. Since 2026-10-02 the button is "Not Now"
+            # and the state is "Not downloaded", and the controls are still what is asked. Two earlier versions of this check
             # both reported a defect that did not exist — the first asserted a summary sentence
             # the board only draws when nothing else is outstanding, the second asserted that the
             # words were gone when they are deliberately still there.
@@ -1951,12 +1931,12 @@ else
                 declined_shown=$("$helpers/panel" com.xiaolaidict)
                 declined_controls=$(printf '%s' "$declined_shown" \
                     | python3 -c 'import json,sys; print("\n".join(n for w in json.load(sys.stdin)["windows"] for n in w["controls"]))')
-                printf '%s\n' "$declined_controls" | grep -qx "Not now" || break
+                printf '%s\n' "$declined_controls" | grep -qx "Not Now" || break
                 sleep 0.2
             done
             if [ "$declined_flag" != 1 ]; then
                 flunk "setup: Not now did not record the reader's answer (LocalModelDeclined=${declined_flag:-unset})"
-            elif printf '%s\n' "$declined_controls" | grep -qx "Not now"; then
+            elif printf '%s\n' "$declined_controls" | grep -qx "Not Now"; then
                 flunk "setup: Not now is still a button after it was pressed — controls: $(printf '%s' "$declined_controls" | tr '\n' ',' | head -c 200)"
             elif ! printf '%s\n' "$declined_controls" | grep -qx "Download"; then
                 flunk "setup: Not now took the download away — it is supposed to stay one click away (controls: $(printf '%s' "$declined_controls" | tr '\n' ',' | head -c 200))"
@@ -1964,8 +1944,8 @@ else
                 pass "setup: Not now is wired — the answer is recorded, the button goes, the download stays one click away"
             fi
             # The status word replaces the button, which is the row saying the reader answered.
-            if printf '%s' "$declined_shown" | grep -q "Not now"; then
-                pass "setup: the row now says Not now as its state rather than offering it"
+            if printf '%s' "$declined_shown" | grep -q "Not downloaded"; then
+                pass "setup: the row now says Not downloaded as its state rather than offering Not Now"
             else
                 flunk "setup: the row lost its state word, so nothing on it says the reader answered"
             fi
@@ -2253,7 +2233,7 @@ if want scenes; then
 # Measured from inside the bundle, because a resize only happens in a running app and a window that
 # snaps ends at exactly the same height as one that animates. What separates them is whether the
 # window was ever seen part-way, which is what `stepsInBiggestChange` counts.
-# 90 s: opening, the dictionary probe, and six pane changes of at most about 4 s each.
+# 90 s: opening, the dictionary probe, and seven pane changes of at most about 4 s each.
 settings_report() { run_report --settings-report 90; }
 report=$(settings_report) || true
 if [ -z "$report" ]; then
@@ -2279,11 +2259,22 @@ else:
     say(bool(c) and max(c) - min(c) <= 1,
         f"settings: every pane's window is exactly its content, plus {int(c[0]) if c else '?'} pt of title bar and tabs",
         f"settings: the windows are not their panes plus one chrome: {c} across {[p['pane'] for p in panes]}")
+    # **And nothing is left over under the pane.** One constant chrome is also what a window 88 pt
+    # too tall for every pane reports: the title bar and tabs were counted into what each pane
+    # wanted, every short pane ended in a band of empty window, and the check above passed at 176.
+    # `slacks` is the room AppKit gives the content less the pane, so 0 is a fit, more is the
+    # band, and less is a pane that scrolls — which is right only where the screen stopped it.
+    slacks = r.get("slacks")
+    held = r.get("heldByScreen") or []
+    say(bool(slacks) and max(slacks) <= 1
+        and all(s >= -1 or (i < len(held) and held[i]) for i, s in enumerate(slacks)),
+        "settings: the gap under each pane is the same as the margin above it (no empty window)",
+        f"settings: a pane does not fill its window, or overflows it — slack {slacks} across {[p['pane'] for p in panes]} (held by the screen: {held})")
     # The window is the size of its pane: two panes at one height would mean a fixed frame is
     # still deciding — the state this stage was written for, 420 x 320 for all five.
     say(r["distinctHeights"] >= 3,
         f"settings: the window fits each pane ({r['shortest']:g}–{r['tallest']:g} pt over {r['distinctHeights']} heights)",
-        f"settings: only {r['distinctHeights']} distinct heights across five panes — the window is not sizing to its content")
+        f"settings: only {r['distinctHeights']} distinct heights across six panes — the window is not sizing to its content")
     # And moves between them. Zero steps is a jump, however large the change.
     say(r["stepsInBiggestChange"] >= 3,
         f"settings: the {r['biggestChange']:g} pt change to {r['biggestChangePane']} took {r['stepsInBiggestChange']} steps",
@@ -2297,7 +2288,7 @@ else:
     # The Dictionary pane was the reader's, not its loading placeholder: the service answered
     # before anything was measured.
     say(r["dictionariesKnown"], "settings: the dictionary service answered before the panes were measured",
-        "settings: the Dictionary pane was measured while it still said 'Asking the dictionary service…'")
+        "settings: the Dictionary pane was measured while it still said it was looking for the dictionaries")
     # **A recording does not outlive the pane it is on.** Checked in the running app because two
     # fixes for it passed their unit tests and did nothing here: a hidden pane's views are kept
     # alive and not re-evaluated, so the field never learned it had been left.
@@ -2381,7 +2372,7 @@ else
             # armed the field, and the armed field hears the keyboard.
             sleep 1
             armed=$("$helpers/panel" com.xiaolaidict)
-            if ! printf '%s' "$armed" | grep -q "Press a shortcut"; then
+            if ! printf '%s' "$armed" | grep -q "Press a Shortcut"; then
                 flunk "shortcut: clicking '$current' did not arm the field (saw: $(printf '%s' "$armed" | head -c 200))"
             else
                 pass "shortcut: clicking the combination arms the field"
@@ -2400,7 +2391,7 @@ else
                 # key), so a broken Escape would be covered for by the check that followed it.
                 "$helpers/keys" 53
                 sleep 0.5
-                if "$helpers/panel" com.xiaolaidict | grep -q "Press a shortcut"; then
+                if "$helpers/panel" com.xiaolaidict | grep -q "Press a Shortcut"; then
                     flunk "shortcut: Escape did not disarm the field"
                 else
                     pass "shortcut: Escape disarms the field"
@@ -2426,7 +2417,7 @@ import json, sys
 # added and this was not. Keep every apostrophe out of this block: it is passed to python3 as a
 # single-quoted argument, and one apostrophe ends that argument. bash -n accepted the broken
 # version anyway, by luck of what re-balanced after it; the remote script is where it was caught.
-names = {"Setup", "Reading", "Lookup", "Dictionary", "About"}
+names = {"Setup", "General", "Reading", "Lookup", "Dictionary", "About"}
 print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] if t in names), ""))')
     if ! why=$("$helpers/close-window" "${pane:-Lookup}" 2>&1); then
         flunk "shortcut: could not close the settings window afterwards ($why)"

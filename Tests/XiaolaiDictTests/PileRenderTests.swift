@@ -87,8 +87,12 @@ struct PileRenderTests {
         let image = try render(
             DayPileView(day: day, expanded: .constant(false)).padding(12),
             height: 150, scheme: .light)
-        // A quarter down the pile: inside the front card, above its text, below its top edge.
-        let row = try scanline(image, y: Int(Double(image.height) * 0.28))
+        // Inside the front card, above its text, below its top edge. The day's header is 28 pt
+        // tall since 2026-10-02 — it is a button, and that is the smallest target — so the card
+        // starts 49 pt down this 150 pt render and its first line of text 15 pt below that; 0.37
+        // is 55 pt. At the old 0.28 the row fell in the gap under the header, which the guard
+        // below reported as nothing drawn.
+        let row = try scanline(image, y: Int(Double(image.height) * 0.37))
 
         // Everything from the accent edge to the far side of the card, skipping the rounded corner
         // region and the border at each end.
@@ -130,8 +134,8 @@ struct PileRenderTests {
         let image = try render(
             DayPileView(day: day, expanded: .constant(false)).padding(12),
             height: 150, scheme: .light)
-        // Below the day header. It carries a tinted "Show All", measured in rows 31–47 of a
-        // 300-row render against the pile's own 72–254 — a second colour, and not a card's.
+        // Below the day header, which is not a card. (It carried a tinted "Show All" until
+        // 2026-10-02; it is in the label colour now, and still not what this is counting.)
         let hues = try huesPresent(in: image, below: Int(Double(image.height) * 0.25))
         // Asked separately, because "none" and "three" are different problems and the count alone
         // reads as the second. An accent faded past the point of being seen is the first.

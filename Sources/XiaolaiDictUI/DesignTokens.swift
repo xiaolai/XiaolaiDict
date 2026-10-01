@@ -77,6 +77,16 @@ public enum Token {
         /// are the system's own sidebar font, and a sidebar that grew with the reader's chosen text
         /// size would move the list sideways for a reason that has nothing to do with it.
         static let sidebarWidth: CGFloat = 200
+        /// How far the reader may drag the sidebar either way from `sidebarWidth`, which is its
+        /// ideal. The floor still fits *Needs Attention* beside its symbol; the ceiling stops a
+        /// sidebar of seven short labels from taking a column of cards.
+        static let sidebarMinWidth: CGFloat = 180
+        static let sidebarMaxWidth: CGFloat = 280
+        /// The glyph of an icon button in the window's toolbar. Not an em multiple: the toolbar is
+        /// the system's chrome and keeps the system's size, so the selection's buttons there do not
+        /// grow with the reader's text as the same buttons on a card do. The size the system
+        /// draws its own toolbar symbols at.
+        static let toolbarGlyph: CGFloat = 15
         /// The most columns the grid ever has, however wide the window. Newest to oldest runs across
         /// a rank and then down, and past four cards the eye does not find its way back to the start
         /// of the next rank; a wider window makes the cards wider instead. A count, so it does not
@@ -91,6 +101,15 @@ public enum Token {
         /// An opening size only — a window the reader has resized keeps the size they gave it.
         public static let width: CGFloat = 1000 + sidebarWidth
         public static let height: CGFloat = 760
+        /// The smallest the window goes. **The sidebar at its narrowest and two-thirds of a card**
+        /// at the standard text size — enough of a card to read its word and its sentence, which is
+        /// the point below which the window shows the reader nothing they came for. Measured against
+        /// the card and not the em because it is a window's floor, like `width`: at a larger text
+        /// size the grid drops to one column sooner, and the floor does not move under the reader.
+        /// It had none: the window could be dragged down to its toolbar (audit L19, 2026-10-02).
+        public static let minWidth: CGFloat = sidebarMinWidth + Scale.standard.space.cardMinWidth * 2 / 3
+        /// Tall enough for the toolbar and one card of ordinary length, by the same reasoning.
+        public static let minHeight: CGFloat = 360
     }
 
     enum Panel {
@@ -166,6 +185,38 @@ public enum Token {
         /// macOS's own default control size, from Apple's accessibility guidance. Not derived from the
         /// em for the reason above: it is a property of pointing, not of reading.
         static let minimum: CGFloat = 28
+        /// The corner of the edge an icon-only control draws when the reader has turned on Show
+        /// Borders. The platform's own small-control corner, and fixed for the reason the floor is:
+        /// it rounds a 28 pt target, which does not grow with the text.
+        static let edgeRadius: CGFloat = 6
+        /// The smallest an app's icon is drawn. Sixteen points is the smallest size an app icon
+        /// is designed at; drawn at the 10.8 pt of the text beside it, TextEdit's — a ruled white
+        /// page — was a blank white square on every card (measured 2026-10-02: 378 of its 620
+        /// opaque pixels at 32 px are white, against none of Terminal's).
+        static let sourceIcon: CGFloat = 16
+    }
+
+    /// The Reading History panel, measured against the screen it docks to.
+    enum Drawer {
+        /// The widest the panel gets, whatever the reader's text size. Its width grows with the
+        /// em so a card keeps its measure, and stops here so that at `extraLarge` and `huge` it
+        /// still leaves 720 pt of a 1280 pt display to whatever the reader was reading.
+        static let maxWidth: CGFloat = 560
+    }
+
+    /// Type that does **not** grow with the reader's size — which is one value, the floor.
+    enum Text {
+        /// The smallest any text is ever set, whatever the reader chose. Apple's floor for macOS,
+        /// and not an em multiple for the reason it exists: at `compact` the scale's own ratios
+        /// gave `small` 9.90 pt and `micro` 9.35 pt (measured 2026-10-01), so the two tokens that
+        /// carry most of the app's text were under it. `Scale.Text` takes the larger of this and
+        /// its ratio; nothing else reads it.
+        static let minimum: CGFloat = 10
+        /// The system's own control-text size, for the one explicitly sized view — `StatusLabel`
+        /// — when it sits in a settings form. Measured against the platform rather than the em:
+        /// the rows around it are set in the system font, and a status line at the reader's
+        /// reading size would be the only text in the window that moved with it.
+        static var form: CGFloat { NSFont.systemFontSize }
     }
 
     enum Stroke {
@@ -209,13 +260,15 @@ public enum Token {
         /// stay subordinate to the word it is marking, and a full-strength outline all the way
         /// round makes the container the loudest thing on the card.
         static let accentBorder = 0.45
+        /// Both edges with Increase Contrast on. The neutral one goes from a hint to a line — 12%
+        /// of the label colour is about 1.3:1 against the card, this is over 5:1 in both
+        /// appearances — and the accent stops being diluted at all, because the increased shade it
+        /// is drawn in was chosen to be read.
+        static let borderIncreased = 0.60
+        static let accentBorderIncreased = 1.0
         /// A card's lift off the drawer. Load-bearing: in a light appearance a white card on
         /// near-white glass has almost no fill contrast, so this and the border are the edge.
         static let cardShadow = 0.12
-        /// The drawer's own lift off the desktop.
-        static let drawerShadow = 0.22
-        /// The rule under the header: present, not a line to read.
-        static let divider = 0.40
         /// Today's count, which is tinted, against any other day's, which is not.
         static let countToday = 0.18
         static let count = 0.08
@@ -241,6 +294,12 @@ public enum Token {
         static let senseWash = 0.05
         /// A word that was never found has no colour of its own, and its edge says so quietly.
         static let missAccent = 0.45
+        /// A line of text on a card that can be pressed — a disclosure, a row to choose — under
+        /// the pointer, and while it is held down. The wash is the label colour, so it darkens a
+        /// light card and lightens a dark one; the two steps are what a list row does, and the
+        /// press is twice the hover so the change on mouse-down is visible on either paper.
+        static let controlHover = 0.06
+        static let controlPressed = 0.12
     }
 
     /// Waits, as opposed to animations. Both are durations and neither is the other: a spring that
@@ -256,10 +315,6 @@ public enum Token {
         /// because that probe is awaited by the menu refresh, by the setup board's polling and by
         /// `askForDictionaries()` — one unanswering call used to hold all three.
         static let permissionProbe: Duration = .seconds(3)
-        /// How long a removed card can still be brought back. Long enough for the reader to see
-        /// the row and reach it, short enough that a drawer left open all afternoon is not still
-        /// holding a deletion the reader considers done.
-        static let undoGrace: Duration = .seconds(6)
     }
 
     enum Motion {
@@ -267,9 +322,22 @@ public enum Token {
         static let hover = 0.12
         /// The drawer's content sliding in behind its own window.
         static let reveal = 0.16
+        /// The Reading History panel arriving from its screen edge, and leaving for it. Springs,
+        /// and two of them: it arrives with a little give and leaves without any, because a panel
+        /// that bounces on its way out reads as coming back. Named here since 2026-10-02 — they
+        /// were bare numbers in the controller, beside an implicit `.easeOut` on the view that
+        /// replaced them, so the motion these describe was never the one on screen.
+        static let drawerOpenResponse = 0.34
+        static let drawerOpenDamping = 0.86
+        static let drawerCloseResponse = 0.26
+        static let drawerCloseDamping = 0.95
         /// A pile fanning open. A spring, because the cards are objects being dealt.
         static let fanResponse = 0.38
         static let fanDamping = 0.82
+        /// What every custom animation becomes with Reduce Motion on: a short cross-fade, with no
+        /// travel, spring or scale. Long enough to be seen as a change rather than a cut, short
+        /// enough that nothing appears to move.
+        static let reducedFade = 0.15
         /// How far a closed pile rises under the pointer. Small on purpose — it says "one object,
         /// clickable", and anything larger says "this is about to move".
         static let lift = 1.012

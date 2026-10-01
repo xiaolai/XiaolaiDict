@@ -24,15 +24,18 @@ public enum SenseStanding: Equatable {
     /// guessed".
     public var explanation: String {
         switch self {
-        case .confirmed(.reader): String(localized: "You chose this sense")
-        case .confirmed(.onlySense): String(localized: "The only sense in this entry")
+        case .confirmed(.reader): String(localized: "You chose this meaning")
+        case .confirmed(.onlySense): String(localized: "The only meaning in this entry")
         // **`.confirmed(.model)` is unreachable, not merely unused**, and it is written here
         // rather than left to a catch-all so that saying so costs nothing. `standing` and
         // `EntryPresentation.standing(of:in:mark:)` both send `.model` to `.proposed`, which is
         // decision D2 in the one place it is enforced. A catch-all arm gave it a "Confirmed" of
         // its own, and that word sat in the translators' catalog as the only sentence in the app
         // no reader can ever be shown.
-        case .confirmed(.model), .proposed: String(localized: "A guess — not confirmed")
+        //
+        // **A comma, not a dash**, and the word is *meaning* on every surface: the reader is told
+        // the same thing in the same words on the card, in the drawer and on a pinned note.
+        case .confirmed(.model), .proposed: String(localized: "A guess, not confirmed")
         case .unclaimed: String(localized: "Shown without a claim")
         }
     }
@@ -65,6 +68,11 @@ public extension SenseNote {
 /// One sense, as the popup presents it.
 public struct SensePresentation: Equatable, Identifiable {
     public let key: String?
+    /// Which part-of-speech block the sense is in, from 1 — `SensePath.block`. **What `ordinal`
+    /// is an ordinal *of*.** Numbering restarts in every block, so without this the card drew
+    /// 1…8, 1, 3, 4, 1 as one flat list (measured on *meet*, 2026-10-01) and two rows were both
+    /// "1". `LookupCard.alternativeGroups` groups by it.
+    public let block: Int
     public let ordinal: Int
     public let partOfSpeech: String?
     public let label: String
@@ -149,7 +157,8 @@ public struct EntryPresentation: Equatable {
         senses = entry.blocks.flatMap { block in
             block.senses.map { sense in
                 SensePresentation(
-                    key: sense.key, ordinal: sense.path.ordinal, partOfSpeech: block.partOfSpeech,
+                    key: sense.key, block: sense.path.block, ordinal: sense.path.ordinal,
+                    partOfSpeech: block.partOfSpeech,
                     label: sense.label, keyKind: sense.keyKind,
                     standing: Self.standing(of: sense, in: entry, mark: mark),
                     metBefore: entry.entryKey.map {

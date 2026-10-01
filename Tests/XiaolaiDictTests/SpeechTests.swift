@@ -134,6 +134,11 @@ struct SpeechTests {
     /// at the call site — is now `Speech.sayItAloudHelp(for:)`, because the drawer wrote the same
     /// thing out a second time and the two reached the translator differently. The wire is what
     /// still matters here; `theHelpIsTheCaveatWhereThereIsOne` covers what the helper composes.
+    ///
+    /// **The card asks for the caveat alone, and hands the button no help where there is none**
+    /// (2026-10-02). `sayItAloudHelp` falls back to the control's own name, and a help that
+    /// repeats the name is read twice by VoiceOver — `IconButton` uses the name as the tooltip by
+    /// itself when it is given nothing else.
     @Test func theSpeakButtonCarriesTheCaveatAboutTheVoice() throws {
         let card = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -145,8 +150,10 @@ struct SpeechTests {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
-        #expect(source.contains("help: Speech.sayItAloudHelp(for: card.term, in: card.sentence)"),
+        #expect(source.contains("help: Speech.caveat(forSpeaking: card.term, in: card.sentence)"),
                 "the speak button says nothing about the voice it will use")
+        #expect(!source.contains("sayItAloudHelp"),
+                "the speak button is handed its own name as its help, which VoiceOver reads twice")
     }
 
     /// What the extracted helper composes, as opposed to who calls it. A caveat is a sentence
@@ -201,16 +208,22 @@ struct SpeechTests {
         #expect(Speech.language(forSpeaking: "", in: nil) == "en", "an empty word still needs a voice to fall back on")
     }
 
-    /// The drawer's speak button is the second call site, and it had the same `nil`.
+    /// The history card's speak button is the second call site, and it had the same `nil`. The card
+    /// is the shared one in `ReadingCardComponents.swift` since 2026-10-02: it hands the word and
+    /// its sentence to `ReadingPronunciation`, which speaks and caveats with both — and its
+    /// context menu's Say It Aloud is a third call, checked the same way.
     @Test func theDrawersSpeakButtonAlsoReadsTheSentence() throws {
         let drawer = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "Sources/XiaolaiDictUI/HistoryDrawerViews.swift")
+            .appending(path: "Sources/XiaolaiDictUI/ReadingCardComponents.swift")
         let source = try String(contentsOf: drawer, encoding: .utf8)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
+        #expect(source.contains("ReadingPronunciation(word: entry.surface, sentence: entry.sentence)"))
+        #expect(source.contains("Speech.say(word, in: sentence)"))
+        #expect(source.contains("Speech.caveat(forSpeaking: word, in: sentence)"))
         #expect(source.contains("Speech.say(entry.surface, in: entry.sentence)"))
-        #expect(source.contains("Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence)"))
+        #expect(!source.contains("in: nil"), "a speak call has gone back to guessing from the word alone")
     }
 }

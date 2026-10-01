@@ -190,6 +190,40 @@ struct DrawerCornerTests {
         #expect(g.squareCorners == .none)
     }
 
+    /// **Beside the Dock is not against the screen.** With the Dock on the docked side the visible
+    /// frame stops short of the display's, and the drawer stands next to the Dock with desktop
+    /// round it: squared corners there are a panel cut off in mid-air.
+    @Test func aDrawerBesideTheDockIsRoundedAllRound() {
+        func display(dock: DrawerEdge) -> ScreenMetrics {
+            let visible: UpRect
+            switch dock {
+            case .right: visible = UpRect(x: 0, y: 0, width: 2480, height: 1410)
+            case .left: visible = UpRect(x: 80, y: 0, width: 2480, height: 1410)
+            case .bottom: visible = UpRect(x: 0, y: 80, width: 2560, height: 1330)
+            case .top: visible = UpRect(x: 0, y: 0, width: 2560, height: 1410)
+            }
+            return ScreenMetrics(frame: UpRect(x: 0, y: 0, width: 2560, height: 1440), visibleFrame: visible)
+        }
+        for edge in [DrawerEdge.right, .left, .bottom] {
+            let beside = DrawerGeometry.make(DrawerLayout(edge: edge, inset: 0), on: display(dock: edge))
+            #expect(!beside.isFlush, "\(edge): beside the Dock was taken for against the screen")
+            #expect(beside.squareCorners == .none, "\(edge)")
+            // The Dock somewhere else leaves this edge the display's own.
+            let elsewhere: DrawerEdge = edge == .bottom ? .left : .bottom
+            let against = DrawerGeometry.make(DrawerLayout(edge: edge, inset: 0), on: display(dock: elsewhere))
+            #expect(against.isFlush, "\(edge): the Dock on another side unsquared this one")
+        }
+        // Under the menu bar is against a bar the width of the display, and stays square.
+        let top = DrawerGeometry.make(DrawerLayout(edge: .top, inset: 0), on: display(dock: .top))
+        #expect(top.squareCorners == .top)
+    }
+
+    /// The default is the drawer at the standard text size: 32 em of 12 pt.
+    @Test func theDefaultThicknessIsTheStandardSizes() {
+        #expect(DrawerLayout().thickness == 384)
+        #expect(DrawerLayout().cornerRadius == 16)
+    }
+
     @Test func eachEdgeSquaresTheSideItTouches() {
         let expected: [DrawerEdge: DrawerGeometry.SquareCorners] =
             [.right: .trailing, .left: .leading, .top: .top, .bottom: .bottom]

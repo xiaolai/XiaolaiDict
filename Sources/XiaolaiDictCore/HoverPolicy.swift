@@ -17,14 +17,6 @@ public enum HoverGesture: String, Codable, Sendable, CaseIterable {
     /// Tap the key twice, quickly. The key is released by the time the lookup runs.
     case doubleTap
 
-    /// The written name, for the picker.
-    public var name: String {
-        switch self {
-        case .hold: "Hold"
-        case .doubleTap: "Double-tap"
-        }
-    }
-
     /// What the reader does, shown with the key they chose: `⌥` against `⌥⌥`.
     public func label(_ modifier: HoverModifier) -> String {
         switch self {
@@ -154,15 +146,6 @@ public enum HoverModifier: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    /// The written name, for a picker where a lone symbol is a guessing game.
-    public var name: String {
-        switch self {
-        case .option: "Option"
-        case .control: "Control"
-        case .command: "Command"
-        case .shift: "Shift"
-        }
-    }
 }
 
 /// Why a hover did not fire. Every refusal is nameable, because "the popup did not appear" with no
@@ -264,23 +247,23 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     /// A named list rather than a free slider, for the reason the text-size picker is one: every
     /// value here is a rest the hover path has been used at, and a free number lets a reader set
     /// 20 ms and conclude XiaolaiDict is broken when it fires at every word they pass over.
-    public struct Settle: Sendable, Equatable, Identifiable, Codable {
-        public let milliseconds: Int
-        public let name: String
-        public var id: Int { milliseconds }
+    ///
+    /// **A case per rest, and no name here.** Each carried an English `name` — "Quick",
+    /// "Standard" — which the settings picker drew verbatim, so four labels were in no catalog and
+    /// no translator ever saw them. This module has no view layer and may hold no display text;
+    /// `HoverLabels` in the UI module names them, and switches over these cases so a rest added
+    /// here cannot go unnamed there.
+    public enum Settle: Int, Sendable, Equatable, Identifiable, CaseIterable {
+        case quick = 120
+        case standard = 180
+        case relaxed = 300
+        case patient = 500
 
-        public init(milliseconds: Int, name: String) {
-            self.milliseconds = milliseconds
-            self.name = name
-        }
+        public var milliseconds: Int { rawValue }
+        public var id: Int { rawValue }
     }
 
-    public static let settleChoices: [Settle] = [
-        Settle(milliseconds: 120, name: "Quick"),
-        Settle(milliseconds: 180, name: "Standard"),
-        Settle(milliseconds: 300, name: "Relaxed"),
-        Settle(milliseconds: 500, name: "Patient"),
-    ]
+    public static let settleChoices: [Settle] = Settle.allCases
 
     /// **Safety, not taste.** The ledger stores the sentence a word was read in, so a lookup in a
     /// password manager writes a secret to disk. There the whole surface is secrets, which is what
@@ -459,11 +442,7 @@ public struct HoverPause: Sendable, Equatable {
         until = nil
     }
 
-    /// What the menu says, so a paused XiaolaiDict is never silently paused.
-    public func label(at now: Date) -> String {
-        guard let until, now < until else { return "Pause Hover…" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return "Paused — resumes \(formatter.localizedString(for: until, relativeTo: now))"
-    }
+    // **What the menu says about a pause is not here.** `label(at:)` returned the menu's words from
+    // this module, which may hold no display text — they were in no string catalog. The app target's
+    // `HoverPauseMenu` builds them from `until`, localised, since 2026-10-02.
 }

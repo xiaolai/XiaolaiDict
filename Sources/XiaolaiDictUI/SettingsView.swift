@@ -6,24 +6,46 @@ import SwiftUI
 @Observable
 @MainActor
 public final class SettingsModel {
-    /// Empty until the first probe answers. A window that said "everything is fine" before it had
-    /// asked would be the same false green tick this whole probe exists to remove.
-    var report = PermissionsReport(states: [])
-    private(set) var hasAsked = false
-
     /// Which pane is showing. **Held here rather than in the view** so the app can reach it:
     /// `--settings-report` selects each pane in turn and measures what the window does, and a
     /// selection buried in `@State` would leave the window's own resizing unmeasurable.
-    /// **Setup, which is the first tab and what a reader opening Settings is usually checking.**
-    /// It was `.reading` while the board had a menu item of its own; with that item gone — it
-    /// opened the same window as `Settings…` and differed only in the tab — landing anywhere else
-    /// would leave no deliberate route to the board at all.
     ///
-    /// Per launch, not per reader: this model is made when the app starts, so a pane chosen during
-    /// a session is kept for that session and the next launch starts at the board again.
-    public var pane: SettingsPane = .setup {
+    /// **It starts where `SettingsPaneStore` says**: on Setup while something there is still
+    /// needed, otherwise on the pane the reader last chose. It was Setup at every launch, with a
+    /// comment saying there was no other deliberate route to the board; Setup has been the first
+    /// tab since 2026-10-01, so the route exists and the reason does not.
+    ///
+    /// Setting this moves the window and **stores nothing** — that is `choose(_:)`, which the
+    /// tabs call. An instrument walking the panes, or the lookup window's link to the Dictionary
+    /// pane, must not become the reader's preference.
+    public var pane: SettingsPane {
         didSet { if pane != .lookup { shortcutCapture.end() } }
     }
+
+    /// The reader picked a tab: show it, and open there next time.
+    public func choose(_ pane: SettingsPane) {
+        self.pane = pane
+        paneStore?.save(pane)
+    }
+
+    /// What the setup pane found, once it can say. Stored so the *next* launch knows whether to
+    /// open on it — the board itself cannot be asked before the window exists, because its
+    /// permission probe runs only while it is on screen.
+    func note(setupUnfinished: Bool) {
+        paneStore?.save(setupUnfinished: setupUnfinished)
+    }
+
+    /// Whether the menu bar icon is shown. Observable, so the status item can follow it, and
+    /// written through to `MenuBarIconSetting.key` in the app's own suite.
+    public var showsMenuBarIcon: Bool {
+        didSet { if showsMenuBarIcon != oldValue { menuBarIcon?.save(showsMenuBarIcon) } }
+    }
+
+    /// Opening at login, where the app supplied a way to register for it.
+    @ObservationIgnored public let loginItem: LoginItemChoice?
+
+    @ObservationIgnored private let paneStore: SettingsPaneStore?
+    @ObservationIgnored private let menuBarIcon: MenuBarIconSetting?
 
     /// The shortcut field's recorder, **held here rather than in the field it is drawn in.**
     ///
@@ -55,18 +77,22 @@ public final class SettingsModel {
     /// had its fit skipped and never retried, since nothing the fit watches had changed.
     public internal(set) var isLaidOut = false
 
-    public init() {}
-
-    public func refresh() async {
-        show(await .probe())
-    }
-
-    /// Takes a report from wherever it came. Previews use it to show a state this machine is not
-    /// in — a permission being *off* is what the window has to be designed around, and asking the
-    /// system can only ever show how this Mac happens to be set up.
-    public func show(_ report: PermissionsReport) {
-        self.report = report
-        hasAsked = true
+    /// `defaults` is the suite the app was given, never `.standard` reached for here. Nil — a
+    /// preview, a test that is not about persistence — keeps everything in memory and opens on
+    /// Setup with the icon shown.
+    ///
+    /// **No permission state lives here any more.** This held a `PermissionsReport` and polled
+    /// for it once a second; the Permissions pane that read it was absorbed into Setup on
+    /// 2026-10-01 and nothing has read it since — a `SCShareableContent` round trip a second, about
+    /// 70 ms each, feeding a property with no reader, beside `SetupModel`'s identical poll.
+    public init(defaults: UserDefaults? = nil, loginItem: LoginItemChoice? = nil) {
+        let paneStore = defaults.map(SettingsPaneStore.init(defaults:))
+        let menuBarIcon = defaults.map(MenuBarIconSetting.init(defaults:))
+        self.paneStore = paneStore
+        self.menuBarIcon = menuBarIcon
+        self.loginItem = loginItem
+        pane = paneStore?.openingPane() ?? .setup
+        showsMenuBarIcon = menuBarIcon?.load() ?? true
     }
 }
 
@@ -144,7 +170,9 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        TabView(selection: $model.pane) {
+        // **Through `choose`, so a tab the reader clicked is remembered** and a pane something
+        // else selected is not.
+        TabView(selection: Binding(get: { model.pane }, set: { model.choose($0) })) {
             ForEach(SettingsPane.allCases) { pane in
                 Tab(pane.title, systemImage: pane.symbol, value: pane) {
                     content(of: pane)
@@ -204,15 +232,6 @@ public struct SettingsView: View {
                     lowestBottom: window.screen?.visibleFrame.minY, animated: animated)
             }
         }
-        // macOS posts nothing when a permission changes, and the reader grants them in another app
-        // and comes back. Polling is the only way to notice, and `.task` stops it when the window
-        // goes away — which the hand-rolled controller had to remember to do itself.
-        .task {
-            while !Task.isCancelled {
-                await model.refresh()
-                try? await Task.sleep(for: Token.Timing.permissionPoll)
-            }
-        }
     }
 
     /// What a fit depends on. The window is part of it because a pane can measure itself before
@@ -255,13 +274,16 @@ public struct SettingsView: View {
                 SetupView(
                     model: setup, dictionary: dictionary, shortcut: shortcut,
                     shortcutIsRegistered: shortcutIsRegistered, localModel: localModel,
+                    // Not `choose`: the board sent the reader there, they did not pick the tab.
                     openSettings: { model.pane = $0 },
-                    refreshDictionaries: refreshDictionaries)
+                    refreshDictionaries: refreshDictionaries,
+                    onOutstandingChange: { model.note(setupUnfinished: $0) })
             } else {
-                Form { Text("This pane is not connected to the reader's settings.") }
-                    .formStyle(.grouped)
+                Form { Unavailable() }.formStyle(.grouped)
             }
-        case .reading: ReadingPane(appearance: appearance, keepPolicy: keepPolicy, erase: erase, eraseAction: eraseAction)
+        case .general:
+            GeneralPane(model: model, keepPolicy: keepPolicy, erase: erase, eraseAction: eraseAction)
+        case .reading: ReadingPane(appearance: appearance)
         case .lookup:
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
                        shortcut: shortcut, capture: model.shortcutCapture)
@@ -273,6 +295,16 @@ public struct SettingsView: View {
             AboutPane(release: AppRelease(Bundle.main), modelLicence: modelLicence,
                       notices: Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt"))
         }
+    }
+}
+
+/// What a pane says where it was drawn without the app behind it — a preview, an instrument.
+///
+/// One sentence in one place. It was four, each naming what "this pane is not connected to",
+/// which is the app's wiring described to a reader who has no way to connect anything.
+struct Unavailable: View {
+    var body: some View {
+        Text("These settings are not available right now.").foregroundStyle(.secondary)
     }
 }
 
@@ -289,6 +321,9 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// surface over the same facts, and the only place the reader could choose which model answers,
     /// which is a standing preference rather than something a fresh install lacks.
     case setup
+    /// The app itself: when it starts, where it shows, what it saves and deletes. `GeneralPane`
+    /// records why it is a pane of its own.
+    case general
     case reading
     case lookup
     case dictionary
@@ -303,6 +338,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     public var name: String {
         switch self {
         case .setup: "Setup"
+        case .general: "General"
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
@@ -317,6 +353,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     var title: LocalizedStringKey {
         switch self {
         case .setup: "Setup"
+        case .general: "General"
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
@@ -324,11 +361,16 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// A tab's symbol, which is a place and not an action — so it is written here and not in
+    /// `ActionSymbol`. **Lookup is `text.magnifyingglass`, not `magnifyingglass`**: the plain
+    /// glass is the system's Search symbol, and the Library's search field already draws it for
+    /// exactly that; a tab wearing it promised a search of the settings.
     var symbol: String {
         switch self {
         case .setup: "checklist"
+        case .general: "gearshape"
         case .reading: "textformat.size"
-        case .lookup: "magnifyingglass"
+        case .lookup: "text.magnifyingglass"
         case .dictionary: "character.book.closed"
         case .about: "info.circle"
         }
@@ -338,36 +380,35 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
 // MARK: - Previews
 
 #if DEBUG
-@MainActor private func settingsModel(_ states: [PermissionState]) -> SettingsModel {
-    let model = SettingsModel()
+@MainActor private func setupModel(_ states: [PermissionState]) -> SetupModel {
+    let model = SetupModel()
     model.show(PermissionsReport(states: states))
     return model
 }
 
-/// The state worth designing against: something is off, so the row carries what stops working,
+/// The state worth designing against: something is off, so the row carries why it is needed,
 /// where to grant it, and the two buttons. The happy state is the one that needs no thought.
 #Preview("A permission is off") {
-    SettingsView(model: settingsModel([
+    SettingsView(setup: setupModel([
         PermissionState(permission: .accessibility, isGranted: true),
         PermissionState(permission: .screenRecording, isGranted: false),
     ]))
 }
 
 #Preview("Both off") {
-    SettingsView(model: settingsModel(Permission.allCases.map {
+    SettingsView(setup: setupModel(Permission.allCases.map {
         PermissionState(permission: $0, isGranted: false)
     }))
 }
 
 #Preview("Everything granted") {
-    SettingsView(model: settingsModel(Permission.allCases.map {
+    SettingsView(setup: setupModel(Permission.allCases.map {
         PermissionState(permission: $0, isGranted: true)
     }))
 }
 
-/// The dictionary pane with the service still answering, which is the state the warning has to
-/// read well in — a reader who opens this pane before the service replies still needs to know that
-/// switching costs them their study state.
+/// The dictionary pane with the dictionaries still being read, which is a state a reader can
+/// open the pane in.
 #Preview("Dictionary, still asking") {
     SettingsView(dictionary: DictionaryChoice(available: nil, chosen: nil, choose: { _ in }))
 }

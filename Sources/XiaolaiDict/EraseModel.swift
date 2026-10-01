@@ -33,8 +33,10 @@ final class EraseModel {
         guard let opening = store() else { return }
         guard let ledger = try? await opening.value else {
             presentation = ErasePresentation(stage: .failed(
-                String(localized: "The ledger could not be opened.",
-                       comment: "Shown when the erase command cannot reach the reader's ledger")))
+                // "Reading history", which is what the reader asked to delete. It said "the
+                // ledger", the store's name inside this codebase and nowhere a reader has seen.
+                String(localized: "Your reading history could not be opened.",
+                       comment: "Shown when the command that deletes reading history cannot open it")))
             return
         }
         // The store's own path, not one this model guessed: a guess would reach the reader's

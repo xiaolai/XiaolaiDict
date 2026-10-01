@@ -10,7 +10,11 @@ import os
 @MainActor
 final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
-    private let panel = LookupPanelController()
+    /// **Built with the hot-key centre the app was given**, like the drawer below — they share its
+    /// one Escape claim (`EscapeStack`), and a test's fake centre must reach both: built on their
+    /// defaults, each registered Escape with Carbon itself from inside a unit test.
+    private let panel: LookupPanelController
+    private let hotkeys: HotkeyCenter
     private let client = DictionaryClient()
     /// The local model: its store, its download, the service that runs it, and the lifecycle
     /// between them. Owned by `LocalModelCoordinator`, not by this delegate.
@@ -44,7 +48,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// suite stayed green because tests call the initializer Swift can see.
     override convenience init() {
         // The one place the real model directory and the real XPC service are reached for.
-        self.init(defaults: .standard, models: LocalModelCoordinator(defaults: .standard))
+        self.init(defaults: .standard, models: LocalModelCoordinator(defaults: .standard), shell: .appKit)
     }
 
     /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
@@ -56,14 +60,23 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// to the service. **It has no default**, because a default is what made that happen anyway: the
     /// comment said what the parameter was for while `nil` quietly built the production coordinator
     /// for every test that omitted it. `init()` supplies the real one.
+    /// `shell` is a parameter for the same reason again: `showLibrary()` moves the app into the
+    /// Dock and brings it forward, and a test that opened the Library would do both to the test
+    /// runner — taking the keyboard from whoever is at the building Mac.
+    /// **Its default does nothing**, which is the safe way round for this one: forgetting it in a
+    /// test changes nothing on the machine, and the one production caller, `init()`, names
+    /// `.appKit` outright — `ShellActivationWiringTests` reads that line.
     init(
         defaults: UserDefaults, hotkeys: HotkeyCenter = .shared,
-        models: LocalModelCoordinator
+        models: LocalModelCoordinator,
+        shell: ShellActivationController.System = .inert
     ) {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
         preferences = defaults
+        self.hotkeys = hotkeys
+        panel = LookupPanelController(hotkeys: hotkeys)
         keepPolicyStore = LookupKeepPolicyStore(defaults: defaults)
         hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
@@ -72,6 +85,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // driving the GUI on the building Mac, in a unit test.
 
         setupPresentation = SetupPresentationStore(defaults: defaults)
+        // The suite the app was given: which pane Settings opens on and whether the menu bar icon
+        // is shown are the reader's, and a model built without it would keep neither.
+        settings = SettingsModel(defaults: defaults, loginItem: LoginItem.choice)
         self.models = models
         super.init()
         // After `super.init()`: the registrar's press handler captures `self`, which an
@@ -82,7 +98,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         dictionary = StudyDictionary(defaults: defaults) { [client] refreshing in
             await client.dictionaries(reprobing: refreshing)
         }
+        activation = ShellActivationController(
+            system: shell, settingsWindow: { [weak self] in self?.settingsWindow })
     }
+
+    /// Whether the app is in the Dock — see `ShellActivation`. Set in `init` after `super.init()`,
+    /// for the same reason as `dictionary`.
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    @ObservationIgnored private(set) var activation: ShellActivationController!
 
     /// The last permission probe. Cached because asking costs a ScreenCaptureKit round trip and
     /// `menuNeedsUpdate` cannot wait for one; the menu shows what was last known and asks again.
@@ -95,7 +118,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// The history drawer reads the ledger itself, bounded in both directions, and reports a
     /// failure rather than an empty drawer — the two must not look the same.
     private func makeDrawer() -> HistoryDrawerController {
-        let drawer = HistoryDrawerController { [weak self] in
+        // The drawer's width is in ems, so it asks for the reader's text size each time it opens.
+        let drawer = HistoryDrawerController(
+            textSize: { [weak self] in self?.appearance.textSize ?? .standard },
+            hotkeys: hotkeys
+        ) { [weak self] in
             guard let opening = self?.recorder.store else { return .unavailable("The ledger is not open yet.") }
             // **The same setting the hover gate asks, read at open time.** A reader who widens the
             // scripts they study sees the words already in the ledger the next time they open the
@@ -137,8 +164,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         drawer.model.showInLibrary = { [weak self] entry in
             guard let self else { return }
             libraryModel.show(.history, lookup: entry.id)
+            // **Put away first.** The drawer floats, so left open it sat on top of the window it
+            // had just opened — over the Library's own toolbar — and Escape in the Library's search
+            // field closed the drawer instead (audit D11).
+            drawer.hide()
             showLibrary()
         }
+        // The icon shows whether its drawer is open, and AppKit's session for it is ended when
+        // the drawer closes by any route of ours — see `MenuBarItem.historyBecame(visible:)`.
+        drawer.onVisibilityChange = { [weak self] visible in self?.menuBar?.historyBecame(visible: visible) }
         return drawer
     }
 
@@ -186,6 +220,23 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    /// **Opening the app again shows the Library.** From Finder, Spotlight, `open -a`, or the Dock
+    /// icon while a window is open.
+    ///
+    /// Without this the request did nothing at all — measured on the end-to-end Mac 2026-10-02 —
+    /// and it is the only way back for a reader whose menu bar icon is hidden: the icon was the one
+    /// door to the Library, Settings and Quit (audit M1). The Library, because it is the window with
+    /// something in it; Settings is ⌘, from there.
+    ///
+    /// `false`, because the request has been handled: `true` asks AppKit to do its default as well,
+    /// and SwiftUI's default for an app whose scenes are all suppressed is not something to find
+    /// out about in a release.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        log.notice("reopen: showing the Library (visible windows: \(hasVisibleWindows, privacy: .public))")
+        showLibrary()
+        return false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel.onStudySense = { [weak self] encounter, request in
             self?.recorder.study(encounter, request: request)
@@ -214,6 +265,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         menuBar = MenuBarItem(app: self)
         menuBar?.install()
         drawer.statusItemFrame = { [weak menuBar] in menuBar?.screenFrame }
+        activation.watchForClosingWindows()
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.
@@ -386,8 +438,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // the panel's new route would have been the third place to forget. Fire-and-forget on purpose —
         // opening the window must not wait on a probe that parses real entries.
         if pane == .dictionary { Task { await askForDictionaries() } }
-        NSApplication.shared.activate()
-        WindowActions.shared.openSettings()
+        // Into the Dock first, so the window comes forward as a regular app's — `ShellActivation`.
+        activation.bringForward(for: .settings)
+        // A window that could not be opened must not leave a Dock icon standing for it.
+        if !WindowActions.shared.openSettings() { activation.reconsider() }
     }
 
     /// Opens the setup board, bringing XiaolaiDict forward with it.
@@ -400,9 +454,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     /// Opens the Library and brings it forward — a window the reader chose, and types into.
     func showLibrary() {
-        log.notice("library: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
-        NSApplication.shared.activate()
-        WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
+        // `NSApplication.shared`, never `NSApp`: nil in a process that has not made one, where the
+        // log line itself trapped — every unit test that opens the Library.
+        log.notice("library: opened on request (app active before: \(NSApplication.shared.isActive, privacy: .public))")
+        activation.bringForward(for: .library)
+        if !WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID) { activation.reconsider() }
     }
 
     /// Opens the board unasked, once in the life of an install.
@@ -527,7 +583,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// What the settings window is showing — which pane, and the permission probe's last answer.
     /// Owned here rather than inside the window so `--settings-report` can select a pane from
     /// outside and measure what the window does about it.
-    let settings = SettingsModel()
+    let settings: SettingsModel
     /// The setup board's permission state, held here so `SetupView` keeps polling across opens and
     /// an instrument can read it back.
     let setup = SetupModel()
@@ -540,7 +596,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
     /// it is measuring — and on a bad day it measures the menu bar's.
     @ObservationIgnored weak var settingsWindow: NSWindow? {
-        didSet { watchSettingsWindow() }
+        didSet {
+            watchSettingsWindow()
+            // The launch-time setup board opens without coming through `showSettings`, and it is a
+            // window the reader will have to find: it counts toward the Dock like any other.
+            activation.windowAttached()
+        }
     }
 
     /// The reader's text size, and the scale every surface is drawn from. Owned here because it
@@ -555,9 +616,44 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the menu reads
 
-    /// Everything the reader should be told, in the place they already look.
-    var problems: [String] {
-        [permissions.menuWarning, shortcuts.problem, recorder.problem].compactMap { $0 }
+    /// Everything the reader should be told, in the place they already look — each with a few
+    /// words for the menu and the pane where it is put right.
+    ///
+    /// **No error is described here.** The rows used to be the three sources' own sentences, two of
+    /// which interpolate `String(describing: error)`: raw English, a status code, sometimes a path,
+    /// inside a localised sentence and as long as the error cared to be (audit M6). The sentence
+    /// that is fit to read is the row's tooltip; the rest is in the log.
+    var problems: [MenuProblem] {
+        var found: [MenuProblem] = []
+        if let detail = permissions.menuWarning {
+            found.append(MenuProblem(
+                title: Self.title(forMissing: permissions.missing.map(\.permission)), detail: detail, pane: .setup))
+        }
+        if let detail = shortcuts.problem {
+            found.append(MenuProblem(
+                title: String(localized: "Lookup Shortcut Unavailable", comment: "Menu bar warning row"),
+                detail: detail, pane: .lookup))
+        }
+        if recorder.problem != nil {
+            // Setup, because it is the pane that answers "is any of this working"; no pane mends
+            // a ledger that will not open, and the recorder's own sentence carries the raw error.
+            found.append(MenuProblem(
+                title: String(localized: "Readings Are Not Being Saved", comment: "Menu bar warning row"),
+                detail: nil, pane: .setup))
+        }
+        return found
+    }
+
+    /// Names the permission when exactly one is missing — sending the reader to a window to
+    /// discover what three words could have told them is what the probe exists to avoid.
+    static func title(forMissing missing: [Permission]) -> String {
+        guard missing.count == 1, let only = missing.first else {
+            return String(localized: "Permissions Are Off", comment: "Menu bar warning row")
+        }
+        return switch only {
+        case .accessibility: String(localized: "Accessibility Is Off", comment: "Menu bar warning row")
+        case .screenRecording: String(localized: "Screen Recording Is Off", comment: "Menu bar warning row")
+        }
     }
 
     /// Probing parses real entries — Longman's *hold* alone is 625 KB — so it happens when the
@@ -587,6 +683,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     func toggleHistory() {
         drawer.toggle()
     }
+
+    func hideHistory() {
+        drawer.hide()
+    }
+
+    /// Whether the drawer is open, by the controller's own account — what the icon's highlight shows.
+    var historyIsShowing: Bool { drawer.isVisible }
 
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's

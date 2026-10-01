@@ -19,37 +19,54 @@ struct LibraryPaneChromeTests {
             encoding: .utf8)
     }
 
+    private func app(_ name: String) throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/XiaolaiDict/\(name)"),
+            encoding: .utf8)
+    }
+
+    /// Every file of the Library window, for the sweeps that hold of all of them.
+    static let libraryFiles = ["LearningLibraryView.swift", "LibraryView.swift", "LibraryCollection.swift",
+                               "LibraryPaneChrome.swift", "LibraryReviewPane.swift", "ReviewView.swift",
+                               "LibrarySearch.swift", "LibraryLayout.swift"]
+
     @Test(arguments: ["LearningLibraryView.swift", "LibraryView.swift"])
     func aCollectionPaneIsBuiltOnTheSharedSkeleton(file: String) throws {
         #expect(try source(file).contains(".modifier(LibraryPaneChrome("),
                 "\(file) lays its pane out by hand, so its top will not match the others")
     }
 
-    /// Attached to the safe area rather than stacked beside the collection: a stack with the footer
-    /// as a sibling is the shape that pushed the scroll view off the toolbar.
+    /// **Nothing is attached at the bottom, and the notice at the top is a bar.**
     ///
-    /// **The footer is glass controls over the cards, not a bar.** A bar across the bottom was a
-    /// band of blank height for a count and two buttons; the cards now scroll visibly beneath, and
-    /// the controls are glass so they stay legible over whatever is under them.
-    @Test func theSkeletonFloatsItsFooterOverTheCollection() throws {
+    /// Changed 2026-10-02 with the footer's removal. This asserted a top and a bottom
+    /// `safeAreaInset` and *no* `safeAreaBar`: both floated as glass pills. The pill at the bottom
+    /// held the only route to Confirm, Pause, Archive, Remove and Delete in the window's far
+    /// corner, under the inspector when one was open, as glass in the content layer — so its
+    /// contents are toolbar items now and there is no bottom attachment to assert. The notice is
+    /// `safeAreaBar`, which is what registers it with the scroll edge effect.
+    @Test func theNoticeIsABarAndNothingIsAttachedAtTheBottom() throws {
         let chrome = try source("LibraryPaneChrome.swift")
-        #expect(chrome.contains(".safeAreaInset(edge: .top"))
-        #expect(chrome.contains(".safeAreaInset(edge: .bottom"))
-        // A bar, at either edge, is a band with a hard line where it meets the collection — the
-        // hairline under the title bar, seen 2026-10-02 on panes that had no notice to show at all.
-        #expect(!chrome.contains(".safeAreaBar("), "a bar draws a band and a line; these float")
+        #expect(chrome.contains(".safeAreaBar(edge: .top"))
+        #expect(!chrome.contains("edge: .bottom"), "something is attached under the collection again")
+        #expect(!chrome.contains(".safeAreaInset("), "an inset registers no scroll edge effect")
+        // **Only while there is a notice.** An empty bar was measured to draw a hairline under the
+        // title bar on a pane with nothing to say, which is why this used to forbid bars outright.
+        #expect(chrome.contains("if showsNotice {"))
     }
 
-    /// **One pill of glass each, and nothing glass inside it.** The footer's count and its icons,
-    /// and a notice's words, sit on a single surface that makes them legible over the cards; a
-    /// caller that put its own glass label inside would be glass on glass.
-    @Test func theFooterAndTheNoticeAreEachOnePillOfGlass() throws {
-        let chrome = try source("LibraryPaneChrome.swift")
-        #expect(chrome.components(separatedBy: ".modifier(LibraryFooterLabel())").count - 1 == 2)
-        #expect(chrome.contains(".glassEffect()"))
-        for file in ["LearningLibraryView.swift", "LibraryView.swift", "LibraryReviewPane.swift"] {
-            #expect(!(try source(file)).contains("LibraryFooterLabel"), "\(file) puts glass inside the pill")
-        }
+    /// **No glass in the content layer, and no footer.** Was `theFooterAndTheNoticeAreEachOnePillOf
+    /// Glass`, which counted two `LibraryFooterLabel` pills and required `.glassEffect()`: glass is
+    /// for the floating navigation layer, which here is the system's toolbar and sidebar.
+    @Test(arguments: ["LibraryPaneChrome.swift", "LearningLibraryView.swift", "LibraryView.swift",
+                      "LibraryReviewPane.swift", "ReviewView.swift", "LibraryCollection.swift", "LibrarySearch.swift"])
+    func noLibraryFileDrawsGlassOrAFooter(file: String) throws {
+        let text = try source(file)
+        #expect(!text.contains(".glassEffect("), "\(file) draws glass in the content layer")
+        #expect(!text.contains(".buttonStyle(.glass"), "\(file) has a glass button in content")
+        #expect(!text.contains("LibraryFooter {"), "\(file) still builds the footer pill")
+        #expect(!text.contains("LibraryFooterLabel"))
     }
 
     /// **What is always true of the pane is in the title bar; the footer holds only what comes and
@@ -61,21 +78,59 @@ struct LibraryPaneChromeTests {
         #expect(try source(file).contains(".navigationSubtitle("))
     }
 
+    /// Changed 2026-10-02: there is no footer to be absent from, and the label comes from
+    /// `ActionSymbol` rather than a string. What it still holds is that Export is a toolbar item
+    /// of its own and not one of the selection's actions.
     @Test func exportIsAToolbarButton() throws {
         let saved = try source("LibraryView.swift")
-        let footer = try #require(saved.range(of: "private var footer"))
-        let afterFooter = saved[footer.upperBound...]
-        let end = afterFooter.range(of: "\n    }\n")?.lowerBound ?? afterFooter.endIndex
-        #expect(!afterFooter[..<end].contains("Export…"), "Export is still among the selection's buttons")
-        #expect(saved.contains("Label(\"Export…\", systemImage:"))
+        let actions = try #require(saved.range(of: "private func selectionActions"))
+        let afterActions = saved[actions.upperBound...]
+        let end = afterActions.range(of: "\n    }\n")?.lowerBound ?? afterActions.endIndex
+        #expect(afterActions[..<end].contains("IconButton(.archive"), "positive control: this is the selection's builder")
+        #expect(!afterActions[..<end].contains(".export"), "Export is among the selection's buttons")
+        #expect(saved.contains("Button { act(.export) } label: { ActionSymbol.export.label }"))
     }
 
-    /// With nothing selected, nothing to undo and nothing more to show, there is no footer at all —
-    /// not an empty strip holding the cards off the bottom of the window.
+    /// **The selection's actions and Undo are toolbar items, present only while there is a
+    /// selection or something to undo.** Was `aFooterWithNothingInItIsAbsent`, which required
+    /// `LibraryFooter {` and `if hasFooter`; the same rule now holds of the toolbar groups, where
+    /// "absent" is an optional that is nil.
     @Test(arguments: ["LearningLibraryView.swift", "LibraryView.swift"])
-    func aFooterWithNothingInItIsAbsent(file: String) throws {
-        #expect(try source(file).contains("LibraryFooter {"))
-        #expect(try source(file).contains("if hasFooter"))
+    func theSelectionGroupAndUndoAreToolbarItemsOnlyWhileNeeded(file: String) throws {
+        let text = try source(file)
+        #expect(text.contains("LibrarySelectionToolbar(count: "))
+        #expect(text.contains("LibraryUndoToolbar(title: "))
+        #expect(!text.contains("hasFooter"))
+        let chrome = try source("LibraryPaneChrome.swift")
+        #expect(chrome.contains("if let count {"), "the selection group is there with nothing selected")
+        #expect(chrome.contains("if let title {"), "Undo is there with nothing to undo")
+        // Words and icons do not share one background.
+        #expect(chrome.contains(".sharedBackgroundVisibility(.hidden)"))
+    }
+
+    /// **Undo is one visible control on Command-Z in every pane.** History and Saved had an icon
+    /// with no key; Review had a key with no icon — a button at zero opacity, hidden from
+    /// VoiceOver.
+    @Test func undoIsBoundToCommandZAndNeverHidden() throws {
+        let chrome = try source("LibraryPaneChrome.swift")
+        #expect(chrome.contains("IconButton(.undo, title: title, shortcut: KeyboardShortcut(\"z\", modifiers: .command)"))
+        #expect(try source("LibraryReviewPane.swift").contains("LibraryUndoToolbar(title: canUndo ?"))
+        let scene = try app("ReviewModel.swift")
+        #expect(!scene.contains(".opacity(0)"), "Review still hides its Undo")
+        #expect(!scene.contains(".keyboardShortcut(\"z\""), "Command-Z is bound twice")
+        #expect(try app("LibraryModel.swift").contains("canUndo: review.canUndo"))
+    }
+
+    /// **"Show More" is the last row of the collection**, where a reader who reached the end is
+    /// looking; it was an icon among the selection's buttons in the corner pill.
+    @Test func showMoreIsTheLastRowOfTheCollection() throws {
+        let collection = try source("LibraryCollection.swift")
+        let columns = try #require(collection.range(of: "metrics.dealt(rows)"))
+        let more = try #require(collection.range(of: "ActionSymbol.showMore.label"))
+        #expect(columns.upperBound < more.lowerBound, "the row is drawn before the cards")
+        for file in ["LearningLibraryView.swift", "LibraryView.swift"] {
+            #expect(!(try source(file)).contains("IconButton(.showMore"), "\(file) still offers it as an icon")
+        }
     }
 
     /// **The inspector is a card beside the cards**, on one container for both panes. It was bare
@@ -93,13 +148,61 @@ struct LibraryPaneChromeTests {
         #expect(!text.contains(".frame(width: scale.space.libraryInspectorWidth)"),
                 "\(file) still lays its inspector out by hand")
         #expect(try source("LibraryPaneChrome.swift").contains(".modifier(ReadingCardChrome("))
+        // **Open or closed is the reader's, not the selection's.** The binding was `inspector != nil`,
+        // so one click took a column out of the grid and nothing but deselecting gave it back.
+        #expect(!text.contains(".inspector(isPresented: Binding(get: { "), "\(file) welds the inspector to the selection")
+        #expect(text.contains("LibraryInspectorToolbar(isShown: "), "\(file) has no way to toggle it")
+        #expect(text.contains("LibraryInspectorPlaceholder("), "\(file) shows nothing when nothing is selected")
+    }
+
+    /// A toolbar toggle on Option-Command-I, a column the reader can resize, and an empty state.
+    @Test func theInspectorCanBeToggledAndResized() throws {
+        let chrome = try source("LibraryPaneChrome.swift")
+        #expect(chrome.contains(".keyboardShortcut(\"i\", modifiers: [.option, .command])"))
+        #expect(chrome.contains("ActionSymbol.inspector.label"))
+        #expect(chrome.contains(".inspectorColumnWidth(min: scale.space.libraryInspectorMinWidth"))
+        #expect(!chrome.contains(".inspectorColumnWidth(scale.space.libraryInspectorWidth)"), "one fixed width")
+        #expect(try source("LearningLibraryView.swift").contains("Select a reading to see its details"))
+    }
+
+    /// **The Saved inspector's histories are in the inspector's own scroll view, one above the
+    /// other, the sentence uncut.** Side by side in a 312 pt column they wrapped the date, cut the
+    /// sentence to "The / meeti…" and broke the source mid-word; and they had a second scroll view
+    /// inside the column's own.
+    @Test func theSavedInspectorHasOneScrollViewAndAFullSentence() throws {
+        let saved = try source("LibraryView.swift")
+        let start = try #require(saved.range(of: "private func inspector(_ inspector:"))
+        let end = try #require(saved.range(of: "private var isDraftBlank", range: start.upperBound..<saved.endIndex))
+        let inspector = saved[start.upperBound..<end.lowerBound]
+        #expect(inspector.contains("timeline(inspector)"), "positive control: this is the inspector")
+        #expect(!inspector.contains("ScrollView {"), "a scroll view inside the inspector's own")
+        #expect(!inspector.contains("inspectorHistoryHeight"))
+        let timeline = try #require(inspector.range(of: "private func timeline"))
+        #expect(!inspector[timeline.upperBound...].contains(".lineLimit("), "the reader's sentence is cut short")
+        #expect(inspector[timeline.upperBound...].contains("VStack(alignment: .leading, spacing: scale.space.stack)"))
     }
 
     /// **No focus ring around the collection.** The system draws one round whatever takes keyboard
     /// focus — here a rectangle the height of the window round the whole column of cards — and the
     /// selected card already wears a border that says where the keyboard is.
     @Test func theCollectionDrawsNoFocusRing() throws {
-        #expect(try source("LibraryCollection.swift").contains(".focusEffectDisabled()"))
+        let collection = try source("LibraryCollection.swift")
+        #expect(collection.contains(".focusEffectDisabled()"))
+        // **But the card's ring still says whether the keyboard is here.** It was a constant accent
+        // stroke: the same in a window at the back, and the same while the search field had the
+        // keyboard.
+        #expect(collection.contains("SelectionAppearance.ring(appearsActive: appearsActive && hasFocus)"))
+        #expect(!collection.contains("strokeBorder(Color.accentColor"))
+    }
+
+    /// A card is a control: VoiceOver can select it, and the keys beyond the arrows are handled.
+    @Test func aCardCanBeSelectedWithoutAPointer() throws {
+        let collection = try source("LibraryCollection.swift")
+        #expect(collection.contains(".accessibilityAction { select(item, command: false, shift: false) }"))
+        #expect(collection.contains(".isButton"))
+        #expect(collection.contains("LibraryCollectionCommand.command(for: press.key, modifiers: press.modifiers)"))
+        #expect(collection.contains(".onDeleteCommand {"))
+        #expect(collection.contains(".onExitCommand {"))
     }
 
     /// **The title names the pane being shown, not the window.** "Library" over every pane said what
@@ -130,13 +233,11 @@ struct LibraryPaneChromeTests {
         let pane = try source("LibraryReviewPane.swift")
         #expect(pane.contains(".modifier(LibraryPaneChrome("))
         #expect(pane.contains(".navigationSubtitle("))
-        #expect(pane.contains("LibraryFooter {"))
-        let scene = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appending(path: "Sources/XiaolaiDict/LibraryModel.swift"),
-            encoding: .utf8)
-        #expect(scene.contains("LibraryReviewPane("), "the Library still lays Review out by hand")
+        // Was `LibraryFooter {`: the way to the unconfirmed meanings was a warning triangle in a
+        // corner pill on every visit. It is a toolbar item now, and only when there are some.
+        #expect(pane.contains("if unconfirmed > 0 {"))
+        #expect(pane.contains("IconButton(.findUnconfirmed"))
+        #expect(try app("LibraryModel.swift").contains("LibraryReviewPane("), "the Library still lays Review out by hand")
     }
 
     /// **And nothing pads the pane around its collection.** The collection pads its own content; a
@@ -146,5 +247,144 @@ struct LibraryPaneChromeTests {
         let start = try #require(view.range(of: "private var archiveView: some View"))
         let end = try #require(view.range(of: "private var archiveStatus", range: start.upperBound..<view.endIndex))
         #expect(!view[start.upperBound..<end.lowerBound].contains(".padding(scale.space.padAcross)\n        .modifier(LibrarySearch"))
+    }
+
+    // MARK: - The system's controls (2026-10-02)
+
+    /// **The sidebar is the system's list with the system's selection.** Its rows were plain
+    /// buttons marked current by darker text alone.
+    @Test func theSidebarIsAListWithASelection() throws {
+        let view = try source("LearningLibraryView.swift")
+        #expect(view.contains("List(selection: Binding<Set<LibrarySidebarItem>>("))
+        #expect(view.contains(".tag(LibrarySidebarItem.pane(item))"))
+        #expect(view.contains("Section(\"Filters\")"))
+        #expect(!view.contains(".buttonStyle(.plain)"), "a sidebar row is a button again")
+        #expect(!view.contains(".foregroundStyle(pane == item"), "the current row is marked by colour alone")
+        #expect(view.contains(".navigationSplitViewColumnWidth(min: Token.Library.sidebarMinWidth, ideal: Token.Library.sidebarWidth"))
+        // What the end-to-end harness reaches a pane by.
+        #expect(view.contains(".accessibilityIdentifier(\"library-pane-\\(item.rawValue)\")"))
+    }
+
+    /// **Search is the system's field, named for its pane, and nothing wipes it.** It was a
+    /// magnifier that swapped itself for a `TextField` whose close button cleared the query.
+    @Test func searchIsTheSystemsFieldAndIsNeverWiped() throws {
+        let search = try source("LibrarySearch.swift")
+        #expect(search.contains(".searchable(text: $text, placement: .toolbar, prompt: prompt)"))
+        #expect(!search.contains("TextField("))
+        #expect(!search.contains("text = \"\""), "something clears the reader's search for them")
+        #expect(try source("LearningLibraryView.swift").contains("\"Search Discarded\" : \"Search History\""))
+        #expect(try source("LibraryView.swift").contains("prompt: \"Search Saved\""))
+        #expect(!(try source("LibraryReviewPane.swift")).contains("LibrarySearch"), "Review has nothing to search")
+    }
+
+    /// **List or grid is a segmented control in an item of its own**, each segment with a tooltip
+    /// and the identifier the end-to-end harness presses.
+    @Test func theLayoutSwitchIsASegmentedPickerOfItsOwn() throws {
+        let chrome = try source("LibraryPaneChrome.swift")
+        #expect(chrome.contains(".pickerStyle(.segmented)"))
+        #expect(chrome.contains(".help(mode.hint)"))
+        #expect(chrome.contains(".accessibilityIdentifier(\"library-layout-\\(mode.rawValue)\")"))
+        #expect(chrome.contains("ToolbarSpacer(.fixed)"))
+        #expect(!chrome.contains(".toggleStyle(.button)"))
+    }
+
+    /// **Empty states are the system's, with the pane's own symbol**, and a search that found
+    /// nothing names what it looked for. Discarded drew History's clock.
+    @Test(arguments: ["LearningLibraryView.swift", "LibraryView.swift"])
+    func anEmptyPaneSaysSoInTheSystemsWay(file: String) throws {
+        let text = try source(file)
+        #expect(text.contains("ContentUnavailableView.search(text: "))
+        #expect(text.contains("LibraryEmptyState {"))
+        #expect(!text.contains("systemImage: \"clock\""))
+    }
+
+    /// **What cannot be taken back asks first**, with Cancel, and the destructive button is the
+    /// title's own verb. Saved's two removals ran on one click.
+    @Test func irreversibleRemovalsAskFirst() throws {
+        let saved = try source("LibraryView.swift")
+        #expect(saved.contains(".confirmationDialog(pending?.title"))
+        #expect(saved.contains("Button(\"Cancel\", role: .cancel)"))
+        let actions = try #require(saved.range(of: "private func selectionActions"))
+        let builder = saved[actions.upperBound...]
+        let end = builder.range(of: "\n    }\n")?.lowerBound ?? builder.endIndex
+        #expect(builder[..<end].contains("pending = PendingRemoval(kind: .removeFromSaved"))
+        #expect(builder[..<end].contains("pending = PendingRemoval(kind: .deleteReadings"))
+        #expect(!builder[..<end].contains(".removeFromStudy"), "the builder removes without asking")
+        #expect(!builder[..<end].contains("(.deleteReading,"), "the builder deletes without asking")
+        let archive = try source("LearningLibraryView.swift")
+        #expect(archive.contains("Text(ActionSymbol.deletePermanently.title)"))
+        #expect(!archive.contains("Permanently delete reading"))
+    }
+
+    /// One builder serves the toolbar and the right-click menu, in both collection panes.
+    @Test func theMenuAndTheToolbarShareOneBuilder() throws {
+        let saved = try source("LibraryView.swift")
+        #expect(saved.contains("selectionActions(state.selectionTarget, inToolbar: true)"))
+        #expect(saved.contains("selectionActions(state.target(of: row), inToolbar: false)"))
+        let archive = try source("LearningLibraryView.swift")
+        #expect(archive.contains("dispositionActions(archive.selectedLookupIDs, inToolbar: true)"))
+        #expect(archive.contains("dispositionActions(targets(row), inToolbar: false)"))
+    }
+
+    // MARK: - The sweeps
+
+    /// **No action's symbol is written as a string**: it comes from `ActionSymbol`, so one action
+    /// cannot wear two symbols. And none of the retired colours: orange text, and tertiary for
+    /// text that is meant to be read.
+    @Test(arguments: libraryFiles)
+    func symbolsAndColoursComeFromTheSharedTables(file: String) throws {
+        let text = try source(file)
+        #expect(!text.contains("systemImage: \""), "\(file) names a symbol by string")
+        #expect(!text.contains("symbol: \""), "\(file) names a symbol by string")
+        #expect(!text.contains("IconButton(title: "), "\(file) builds an icon button outside ActionSymbol")
+        #expect(!text.contains(".foregroundStyle(.orange)"), "\(file) uses orange text for status")
+        #expect(!text.contains(".foregroundStyle(.tertiary)"), "\(file) sets readable text in tertiary")
+        #expect(!text.contains("accent(for: row.word)"), "\(file) keys a colour by the surface form")
+        #expect(!text.contains(".opacity(Token.Opacity.accentBorder)"), "\(file) ignores Increase Contrast on a card edge")
+    }
+
+    /// **Every count is inflected.** "Discard 1 readings" and "Permanently delete 1 readings?" were
+    /// both on screen. A number followed by a counted noun must sit inside `^[…](inflect: true)`.
+    @Test(arguments: libraryFiles)
+    func everyCountedNounIsInflected(file: String) throws {
+        let text = try source(file)
+        let bare = try NSRegularExpression(
+            pattern: #"(?<!\^\[)\\\([^()]*(?:\([^()]*\))?[^()]*\) (readings?|cards?|meanings?|days?|places?|reviews?|times?)\b"#,
+            options: [.caseInsensitive])
+        let found = bare.matches(in: text, range: NSRange(text.startIndex..., in: text))
+            .compactMap { Range($0.range, in: text).map { String(text[$0]) } }
+        #expect(found.isEmpty, "\(file) counts without inflecting: \(found)")
+    }
+
+    /// The positive control for the scan above: it finds the two strings the audit found.
+    @Test func theInflectionScanFindsAnUninflectedCount() throws {
+        let bare = try NSRegularExpression(
+            pattern: #"(?<!\^\[)\\\([^()]*(?:\([^()]*\))?[^()]*\) (readings?|cards?|meanings?|days?|places?|reviews?|times?)\b"#,
+            options: [.caseInsensitive])
+        func hits(_ text: String) -> Int { bare.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text)) }
+        #expect(hits(#"Text("\(archive.total) reading encounters")"#) == 1)
+        #expect(hits(#""Discard \(ids.count) readings""#) == 1)
+        #expect(hits(#""Discard ^[\(ids.count) Reading](inflect: true)""#) == 0)
+    }
+
+    /// **The dead split-view branch is gone.** `showsSidebar: true` had no caller and still carried
+    /// `backgroundExtensionEffect()`, which the window had already decided against.
+    @Test func theSavedPaneHasNoSplitViewOfItsOwn() throws {
+        let saved = try source("LibraryView.swift")
+        #expect(!saved.contains("showsSidebar"))
+        #expect(!saved.contains("NavigationSplitView {"))
+        #expect(!saved.contains(".backgroundExtensionEffect()"))
+    }
+
+    /// **History draws one card per reading, by the drawer's rule and not a second one.**
+    @Test func theArchiveFoldsRepeatsWithTheDrawersRule() throws {
+        let model = try app("LibraryModel.swift")
+        #expect(model.contains("ReadingHistory.days(from: lookups, now: now, calendar: calendar).flatMap(\\.entries)"))
+        // Drawn by the card both surfaces share: the count beside the word, and the hour for a
+        // reading made today.
+        #expect(try source("LearningLibraryView.swift").contains("ReadingCardView(entry: row, density: .library"))
+        let card = try source("ReadingCardComponents.swift")
+        #expect(card.contains("if entry.times > 1 { timesRead }"))
+        #expect(card.contains("ArchiveCardDate.showsTime(entry.at"))
     }
 }

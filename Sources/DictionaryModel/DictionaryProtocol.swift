@@ -230,16 +230,6 @@ public struct DictionaryCapability: Codable, Sendable, Equatable {
     public var explainsInEnglish: Bool {
         languages.contains { DictionaryLanguages.tag($0.explains)?.languageCode?.identifier == "en" }
     }
-
-    /// What the menu prints beside the dictionary's name.
-    public var note: String {
-        guard probed else { return "not yet known" }
-        switch senseKeyKind {
-        case .publisher: return "senses"
-        case .position: return "senses, by position"
-        case .none: return "whole entries only"
-        }
-    }
 }
 
 /// App → dictionary service.

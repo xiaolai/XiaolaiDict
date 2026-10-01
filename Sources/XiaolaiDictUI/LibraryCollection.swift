@@ -32,6 +32,28 @@ struct LibraryGridMetrics {
 
 enum LibraryNavigation { case left, right, up, down }
 
+/// What a key means to a collection, apart from the arrows. **Decided here, as a value**, so the
+/// rule is tested without a window: the view only carries the answer out.
+enum LibraryCollectionCommand: Equatable {
+    case selectAll, deselectAll, toggleInspector, clearSelection, delete
+
+    /// Command-A selects every card and Shift-Command-A lets go of them, as in Finder; Escape lets
+    /// go too; Delete puts the selection away; Return shows or hides the inspector. Option and
+    /// Control are refused, so a shortcut some other part of the system owns is never taken.
+    static func command(for key: KeyEquivalent, modifiers: EventModifiers) -> LibraryCollectionCommand? {
+        guard !modifiers.contains(.option), !modifiers.contains(.control) else { return nil }
+        let command = modifiers.contains(.command), shift = modifiers.contains(.shift)
+        if String(key.character).lowercased() == "a", command { return shift ? .deselectAll : .selectAll }
+        guard !command, !shift else { return nil }
+        switch key {
+        case .escape: return .clearSelection
+        case .delete, .deleteForward: return .delete
+        case .return: return .toggleInspector
+        default: return nil
+        }
+    }
+}
+
 /// Session state lives above the lazy rows and both layout branches.
 struct LibraryCollectionInteraction<ID: Hashable & Sendable> {
     var focused: ID?
@@ -66,15 +88,46 @@ struct LibraryCollectionInteraction<ID: Hashable & Sendable> {
         let target = ordered[max(0, min(ordered.count - 1, index + distance))]
         return click(target, ordered: ordered, selection: selection, command: false, shift: extend)
     }
+
+    /// Every card on screen. The anchor goes to the first, so a Shift-click afterwards extends
+    /// from the top as it does in Finder; where the keyboard is stays where it was.
+    mutating func selectAll(ordered: [ID]) -> Set<ID> {
+        anchor = ordered.first
+        if focused == nil { focused = ordered.first }
+        return Set(ordered)
+    }
+
+    /// Nothing selected. **Where the keyboard is stays**, so the next arrow key moves from the
+    /// card the reader was on rather than jumping back to the first.
+    mutating func deselectAll() -> Set<ID> {
+        anchor = nil
+        return []
+    }
+}
+
+/// What the keys beyond the arrows do in one pane. The collection knows which key was pressed;
+/// only the pane knows what putting a selection away means there.
+struct LibraryCollectionKeys {
+    /// Delete: discard in History, archive in Saved. **Nil where nothing undoable answers to it** —
+    /// Discarded, whose only removal is permanent and asks first.
+    var delete: (@MainActor () -> Void)?
+    /// Return: show or hide the inspector.
+    var toggleInspector: @MainActor () -> Void = {}
 }
 
 struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View where Row.ID: Hashable & Sendable {
     @Environment(\.scale) private var scale
+    @Environment(\.appearsActive) private var appearsActive
     let rows: [Row]
     let layout: LibraryLayout
     let identifier: String
     @Binding var selection: Set<Row.ID>
     @Binding var interaction: LibraryCollectionInteraction<Row.ID>
+    var keys = LibraryCollectionKeys()
+    /// Asks for the next page. Nil when everything that matched is already here.
+    var more: (@MainActor () -> Void)?
+    /// What VoiceOver calls a card: the word it is about.
+    let name: (Row) -> Text
     @ViewBuilder let row: (Row) -> Content
     @ViewBuilder let menu: (Row) -> Menu
     @FocusState private var hasFocus: Bool
@@ -88,29 +141,55 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
             let metrics = LibraryGridMetrics(availableWidth: geometry.size.width, scale: scale, single: layout == .list)
             ScrollViewReader { proxy in
                 ScrollView {
-                    // **Columns that each pack from the top, not rows.** A `LazyVGrid` gives a row the
-                    // height of its tallest card and centres the rest in it, so a card with no
-                    // sentence sat lower than its neighbour. Each column here is its own lazy stack,
-                    // and a short card simply ends sooner.
-                    HStack(alignment: .top, spacing: scale.space.stack) {
-                        ForEach(Array(metrics.dealt(rows).enumerated()), id: \.offset) { _, column in
-                            LazyVStack(spacing: scale.space.stack) {
-                                ForEach(column) { item in cell(item) }
+                    VStack(spacing: scale.space.stack) {
+                        // **Columns that each pack from the top, not rows.** A `LazyVGrid` gives a row the
+                        // height of its tallest card and centres the rest in it, so a card with no
+                        // sentence sat lower than its neighbour. Each column here is its own lazy stack,
+                        // and a short card simply ends sooner.
+                        HStack(alignment: .top, spacing: scale.space.stack) {
+                            ForEach(Array(metrics.dealt(rows).enumerated()), id: \.offset) { _, column in
+                                LazyVStack(spacing: scale.space.stack) {
+                                    ForEach(column) { item in cell(item) }
+                                }
+                                .frame(width: metrics.cardWidth)
                             }
-                            .frame(width: metrics.cardWidth)
+                        }
+                        // **The way to the next page is the last thing in the collection**, where a
+                        // reader who has read to the end is looking. It was an icon in a pill at
+                        // the window's corner, among the selection's buttons. A row is read, so it
+                        // carries its words.
+                        if let more {
+                            Button(action: more) { ActionSymbol.showMore.label }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("\(identifier)-more")
                         }
                     }
                     .padding(.horizontal, scale.space.padAcross)
                     .padding(.vertical, scale.space.padDown)
                 }
                 .focusable().focused($hasFocus)
-                // The selected card's border says where the keyboard is; the system's ring round the
-                // whole column — a rectangle the height of the window — says it again, worse.
+                // **Deliberate, and the reader's own objection**: the system's ring goes round
+                // whatever takes the keyboard, which here is the whole column — a rectangle the
+                // height of the window. Where the keyboard is, is said by the selected card's ring
+                // instead: accent while this collection has the keyboard and the window is the
+                // one being worked in, grey otherwise (`SelectionAppearance`).
                 .focusEffectDisabled()
                 .onKeyPress(.leftArrow, phases: .down) { navigate(.left, columns: metrics.columns, modifiers: $0.modifiers) }
                 .onKeyPress(.rightArrow, phases: .down) { navigate(.right, columns: metrics.columns, modifiers: $0.modifiers) }
                 .onKeyPress(.upArrow, phases: .down) { navigate(.up, columns: metrics.columns, modifiers: $0.modifiers) }
                 .onKeyPress(.downArrow, phases: .down) { navigate(.down, columns: metrics.columns, modifiers: $0.modifiers) }
+                .onKeyPress(phases: .down) { press in
+                    guard let command = LibraryCollectionCommand.command(for: press.key, modifiers: press.modifiers) else { return .ignored }
+                    return perform(command)
+                }
+                // **The same three, as the commands the system sends.** Where the app's Edit menu
+                // claims Command-A, or AppKit turns Delete and Escape into `delete:` and
+                // `cancelOperation:` before any key press is offered, the key never reaches
+                // `onKeyPress` — and a key that is handled there is never sent as a command, so
+                // one press cannot act twice.
+                .onCommand(#selector(NSResponder.selectAll(_:))) { _ = perform(.selectAll) }
+                .onDeleteCommand { _ = perform(.delete) }
+                .onExitCommand { _ = perform(.clearSelection) }
                 .onAppear { if let id = interaction.viewed { proxy.scrollTo(id) } }
                 .onChange(of: layout) { _, _ in if let id = interaction.viewed { proxy.scrollTo(id) } }
                 .onChange(of: interaction.focused) { _, id in if let id { proxy.scrollTo(id) } }
@@ -123,32 +202,63 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay {
                 if selection.contains(item.id) {
-                    RoundedRectangle(cornerRadius: scale.radius.card).strokeBorder(Color.accentColor, lineWidth: Token.Stroke.selection)
+                    RoundedRectangle(cornerRadius: scale.radius.card)
+                        .strokeBorder(SelectionAppearance.ring(appearsActive: appearsActive && hasFocus),
+                                      lineWidth: Token.Stroke.selection)
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                hasFocus = true
                 let flags = NSEvent.modifierFlags
-                selection = interaction.click(item.id, ordered: rows.map(\.id), selection: selection,
-                                              command: flags.contains(.command), shift: flags.contains(.shift))
+                select(item, command: flags.contains(.command), shift: flags.contains(.shift))
             }
-            // A menu is read, so the actions it shares with the footer show their words here.
+            // A menu is read, so the actions it shares with the toolbar show their words here.
             .contextMenu { menu(item).environment(\.iconButtonShowsTitle, true) }
             .id(item.id)
             .accessibilityElement(children: .contain)
+            .accessibilityLabel(name(item))
             .accessibilityIdentifier("\(identifier)-\(item.id)")
-            .accessibilityAddTraits(selection.contains(item.id) ? .isSelected : [])
+            // **A card can be chosen without a pointer.** Selection was a tap gesture and nothing
+            // else, so VoiceOver's press landed on the buttons inside a card and never on the
+            // card: the inspector and every action on a selection were out of its reach.
+            .accessibilityAddTraits(selection.contains(item.id) ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { select(item, command: false, shift: false) }
             .onGeometryChange(for: Bool.self) { geometry in
                 let bounds = geometry.frame(in: .scrollView)
                 return bounds.minY <= 0 && bounds.maxY > 0
             } action: { atTop in if atTop { interaction.viewed = item.id } }
     }
 
+    private func select(_ item: Row, command: Bool, shift: Bool) {
+        hasFocus = true
+        selection = interaction.click(item.id, ordered: rows.map(\.id), selection: selection,
+                                      command: command, shift: shift)
+    }
+
     private func navigate(_ direction: LibraryNavigation, columns: Int, modifiers: EventModifiers) -> KeyPress.Result {
         guard hasFocus, !rows.isEmpty else { return .ignored }
         selection = interaction.move(direction, ordered: rows.map(\.id), selection: selection,
                                      columns: columns, extend: modifiers.contains(.shift))
+        return .handled
+    }
+
+    /// Carries out what a key meant. **Ignored where it would do nothing**, so Escape with nothing
+    /// selected and Delete in a pane that has no undoable removal go on to whoever else wants them.
+    private func perform(_ command: LibraryCollectionCommand) -> KeyPress.Result {
+        guard hasFocus else { return .ignored }
+        switch command {
+        case .selectAll:
+            guard !rows.isEmpty else { return .ignored }
+            selection = interaction.selectAll(ordered: rows.map(\.id))
+        case .deselectAll, .clearSelection:
+            guard !selection.isEmpty else { return .ignored }
+            selection = interaction.deselectAll()
+        case .delete:
+            guard !selection.isEmpty, let delete = keys.delete else { return .ignored }
+            delete()
+        case .toggleInspector:
+            keys.toggleInspector()
+        }
         return .handled
     }
 }

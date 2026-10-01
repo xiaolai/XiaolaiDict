@@ -28,10 +28,28 @@ enum CardSurface {
     /// A buried card's is not: it keeps the neutral edge. Three coloured borders stacked in one
     /// closed pile is the defect `CardLayer` exists to prevent, and colouring the whole border
     /// rather than one side of it would otherwise have walked straight back into it.
-    static func border(for entry: ReadingEntry, layer: CardLayer, in scheme: ColorScheme) -> Color {
-        guard layer.showsAccent else { return .primary.opacity(Token.Opacity.border) }
-        let accent = ReadingPalette.accent(for: entry)?.color(in: scheme) ?? ReadingPalette.miss
-        return accent.opacity(Token.Opacity.accentBorder)
+    ///
+    /// **Both edges strengthen with Increase Contrast** — `contrast` defaults for the callers that
+    /// predate it, and a caller that leaves it out draws the same 12% hairline for a reader who
+    /// asked the system for more.
+    static func border(
+        for entry: ReadingEntry, layer: CardLayer, in scheme: ColorScheme,
+        contrast: ColorSchemeContrast = .standard
+    ) -> Color {
+        guard layer.showsAccent else { return neutralBorder(contrast: contrast) }
+        return border(accent: ReadingPalette.color(for: entry, in: scheme, contrast: contrast), contrast: contrast)
+    }
+
+    /// A card's edge in a colour the caller already has — the Library's cards and the inspector,
+    /// which hold a lemma rather than a ledger row. Pass the accent at full strength; how much of
+    /// it the edge wears is decided here, so no call site multiplies an opacity of its own.
+    static func border(accent: Color, contrast: ColorSchemeContrast) -> Color {
+        accent.opacity(ContrastAdaptation.accentBorderOpacity(contrast))
+    }
+
+    /// The edge of a card that wears no word's colour: a buried one, a notice, a divider.
+    static func neutralBorder(contrast: ColorSchemeContrast) -> Color {
+        .primary.opacity(ContrastAdaptation.neutralBorderOpacity(contrast))
     }
 
     /// The lookup panel's own surface — **paper, not material.** `.regularMaterial` takes its

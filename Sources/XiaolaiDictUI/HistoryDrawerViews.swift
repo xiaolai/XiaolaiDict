@@ -41,6 +41,7 @@ struct CardStackLayout: Layout {
 /// The panel's content. The window is already at its final docked rect; only this moves.
 public struct HistoryDrawerRootView: View {
     @Bindable var model: HistoryDrawerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(model: HistoryDrawerModel) {
         self.model = model
@@ -50,15 +51,19 @@ public struct HistoryDrawerRootView: View {
         // No geometry yet means the drawer has not been laid out for a display. Drawing nothing is
         // right: a guessed size would be a window the reader can see and cannot explain.
         if let geometry = model.geometry {
-            let offset = model.revealed ? CGSize.zero : geometry.hiddenOffset
+            let parked = model.revealed ? CGSize.zero : geometry.hiddenOffset
             ZStack(alignment: .topLeading) {
                 HistoryDrawerSurface(model: model, geometry: geometry)
                     .frame(width: geometry.contentSize.width, height: geometry.contentSize.height)
+                    // With Reduce Motion the panel does not travel: it is already in place, and
+                    // only the opacity below changes.
                     .offset(
-                        x: geometry.contentOrigin.x + offset.width,
-                        y: geometry.contentOrigin.y + offset.height)
+                        x: geometry.contentOrigin.x + MotionPreference.travel(parked.width, reduceMotion: reduceMotion),
+                        y: geometry.contentOrigin.y + MotionPreference.travel(parked.height, reduceMotion: reduceMotion))
                     .opacity(model.revealed ? 1 : 0)
-                    .animation(.easeOut(duration: Token.Motion.reveal), value: model.revealed)
+                // **No `.animation` here.** `revealed` is animated by whoever changes it — the
+                // controller, with `DrawerMotion` — and an implicit animation on this view would
+                // replace that one, which is what it did until 2026-10-02.
             }
             .frame(
                 width: geometry.windowRect.size.width, height: geometry.windowRect.size.height,
@@ -71,23 +76,31 @@ public struct HistoryDrawerRootView: View {
 
 struct HistoryDrawerSurface: View {
     @Environment(\.scale) private var scale
-    @Environment(\.drawerGlass) private var drawerGlass
     @Bindable var model: HistoryDrawerModel
     let geometry: DrawerGeometry
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().opacity(Token.Opacity.divider)
-            contents
-        }
-        // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
-        // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
-        // is glass, and it brings its own edge treatment, so the hand-drawn border is gone with it.
-        // Which glass is the reader's: frosted reads as a flat grey over a dark terminal, where
-        // clear lets the terminal through.
-        .glassEffect(drawerGlass.glass, in: shape)
-        .shadow(color: .black.opacity(Token.Opacity.drawerShadow), radius: scale.shadow.drawerRadius)
+        contents
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // **A bar, not a header above a rule.** The list scrolls under it and the system's
+            // scroll edge effect is what separates the two; the `Divider` that used to sit here
+            // was a line drawn by hand where the platform draws its own.
+            .safeAreaBar(edge: .top, spacing: 0) { header }
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            // The list now reaches the top of the panel, so it is held to the panel's own shape.
+            .clipShape(shape)
+            // Liquid Glass, not an `NSVisualEffectView`. The spike this drawer came from targets
+            // macOS 14, where vibrancy was the platform's answer; on macOS 26 and later the material
+            // is glass, and it brings its own edge treatment and its own shadow — so there is no
+            // hand-drawn border, and since 2026-10-02 no `.shadow` stacked on the system's either
+            // (a 21.6 pt blur that showed as a grey band across the window beside the panel).
+            //
+            // **Regular, always.** This was the reader's choice between Frosted and Clear. Clear
+            // put secondary text straight onto whatever was behind the panel, with no dimming
+            // layer, and macOS 27 has its own control for how clear glass is; Reduce Transparency
+            // and Increase Contrast are answered by the system's glass too. One material, and the
+            // system's settings decide how it looks.
+            .glassEffect(.regular, in: shape)
     }
 
     /// The corners touching the screen edge stay square, the way system panels do. Which pair that
@@ -118,33 +131,53 @@ struct HistoryDrawerSurface: View {
         }
     }
 
+    /// The panel's name and how much it holds — and, under them, the way back from a discard.
+    ///
+    /// **The platform's own fonts, not the reader's text size.** This is the panel's chrome, the
+    /// way a window's title is; the reader's size is for what they read, which is the cards.
     private var header: some View {
-        HStack(spacing: scale.space.stack) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: scale.text.heading, weight: .medium))
-                .foregroundStyle(.tint)
-            Text("Read recently")
-                .font(.system(size: scale.text.heading, weight: .semibold))
-            Spacer(minLength: scale.space.stack)
-            if model.isLoading {
-                ProgressView().controlSize(.small)
-            } else if model.totalEntries > 0 {
-                // **Words, because that is what it says.** This read `totalEntries`, which is a
-                // count of cards — one per lookup — and a reader meets the same word more than
-                // once: 102 cards over 8 days were 74 words on the ledger this was found on.
-                Text("^[\(model.distinctWords) word](inflect: true) · ^[\(model.days.count) day](inflect: true)")
-                    .font(.system(size: scale.text.body))
+        VStack(alignment: .leading, spacing: scale.space.line) {
+            HStack(spacing: scale.space.stack) {
+                ActionSymbol.historyPane.image
+                    .font(.headline)
                     .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                    .accessibilityHidden(true)
+                Text("Reading History")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: scale.space.stack)
+                if model.isLoading {
+                    ProgressView().controlSize(.small)
+                } else if model.totalEntries > 0 {
+                    // **Readings, the unit every day's count beside it is in.** It said words —
+                    // "4 words · 3 days" over days counting 3, 5 and 1 — so the header and the
+                    // numbers under it could not be added up. A card is a reading; a card's own
+                    // "×N" is how many times that one was met.
+                    Text("^[\(model.totalEntries) reading](inflect: true) · ^[\(model.days.count) day](inflect: true)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
+            if let receipt = model.discardedReceipt { undoRow(receipt) }
         }
         .padding(scale.space.pad)
-        .overlay(alignment: .bottomLeading) {
-            if let receipt = model.discardedReceipt {
-                Button("Undo discarding \(receipt.affected) readings") { model.undoLastDiscard() }
-                    .font(.system(size: scale.text.micro))
-                    .padding(.horizontal, scale.space.padAcross)
+    }
+
+    /// **A row of its own.** Undo was a bordered button laid over the header's bottom padding,
+    /// under the title, and it said "Undo discarding 1 readings". The count is beside the action
+    /// and both inflect.
+    private func undoRow(_ receipt: DispositionResult) -> some View {
+        HStack(spacing: scale.space.inline) {
+            Text("^[\(receipt.affected) reading](inflect: true) discarded")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer(minLength: scale.space.inline)
+            IconButton(.undo, title: "Undo Discarding ^[\(receipt.affected) Reading](inflect: true)") {
+                model.undoLastDiscard()
             }
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -152,49 +185,49 @@ struct HistoryDrawerSurface: View {
     private var contents: some View {
         if let problem = model.problem {
             notice(
-                icon: "exclamationmark.triangle",
+                icon: ActionSymbol.warning.image,
                 title: String(localized: "Your reading history is unavailable",
-                              comment: "Drawer notice when the ledger could not be read"),
+                              comment: "Reading History notice when the reading history could not be read"),
                 // Not localized on purpose: what follows is the failure the ledger reported, in
                 // whatever words it reported it, and inventing a key for a value would leave the
                 // translator a sentence nobody can translate.
                 detail: problem)
         } else if model.days.isEmpty && !model.isLoading {
             notice(
-                icon: "book.closed",
+                icon: ActionSymbol.historyPane.image,
                 title: String(localized: "Nothing read yet",
-                              comment: "Drawer notice when nothing has been looked up yet"),
+                              comment: "Reading History notice when nothing has been looked up yet"),
                 detail: String(localized: "Words you look up appear here, grouped by the day you met them.",
-                               comment: "Drawer notice when nothing has been looked up yet"))
+                               comment: "Reading History notice when nothing has been looked up yet"))
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: scale.space.section) {
                     ForEach(model.days) { day in
-                        if day.isPiled {
+                        if model.showsAsPile(day) {
                             DayPileView(
                                 day: day, model: model,
                                 expanded: Binding(
                                     get: { model.isExpanded(day) },
                                     set: { model.setExpanded($0, for: day) }))
                         } else {
-                            TodayView(day: day, model: model)
+                            DayListView(day: day, model: model)
                         }
                     }
                 }
                 .padding(scale.space.pad)
             }
             .scrollContentBackground(.hidden)
-            .frame(maxHeight: .infinity)
         }
     }
 
     /// `title` and `detail` arrive localized — `detail` may be the ledger's own failure — so both
     /// are drawn verbatim rather than looked up a second time.
-    private func notice(icon: String, title: String, detail: String) -> some View {
+    private func notice(icon: Image, title: String, detail: String) -> some View {
         VStack(spacing: scale.space.stack) {
-            Image(systemName: icon)
+            icon
                 .font(.system(size: scale.text.icon))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(verbatim: title).font(.system(size: scale.text.strong, weight: .semibold))
             Text(verbatim: detail)
                 .font(.system(size: scale.text.body))
@@ -207,60 +240,31 @@ struct HistoryDrawerSurface: View {
     }
 }
 
-/// Today is never piled — it is the part the reader came to read.
-/// A card the reader removed, for as long as they can still change their mind.
-///
-/// It stands in the card's place rather than collapsing it away, so the list does not jump under
-/// the pointer at the moment the reader may be reaching back for it.
-struct RemovedCardView: View {
-    @Environment(\.scale) private var scale
-    let entry: ReadingEntry
-    let undo: () -> Void
-
-    var body: some View {
-        HStack(spacing: scale.space.inline) {
-            Text("Removed “\(entry.lemma)”")
-                .font(.system(size: scale.text.body))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: scale.space.inline)
-            Button("Undo", action: undo)
-                .buttonStyle(.plain)
-                .font(.system(size: scale.text.label, weight: .medium))
-                .foregroundStyle(.tint)
-        }
-        .padding(scale.space.pad)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Dashed and unfilled: the space a card used to occupy, not a card. A solid plate here
-        // would read as a new kind of row rather than as an absence with a way back.
-        .overlay(
-            RoundedRectangle(cornerRadius: scale.radius.card, style: .continuous)
-                .strokeBorder(
-                    Color.primary.opacity(Token.Opacity.border),
-                    style: StrokeStyle(lineWidth: Token.Stroke.hairline, dash: Token.Stroke.absent)))
-        .accessibilityElement(children: .combine)
+extension HistoryDrawerModel {
+    /// What a card in this panel can do — only what is wired. A model in a preview, with no
+    /// ledger behind it, offers nothing it could not carry out.
+    func actions(for entry: ReadingEntry) -> ReadingCardActions {
+        ReadingCardActions(
+            discard: discard == nil ? nil : { [self] in remove(entry) },
+            save: keepForLearning.map { save in { save(entry) } },
+            showInLibrary: showInLibrary == nil ? nil : { [self] in openInLibrary(entry) })
     }
 }
 
-struct TodayView: View {
+/// A day whose cards are simply listed: today, which is the part the reader came to read, and
+/// any day holding a single card — which is not a pile.
+struct DayListView: View {
     @Environment(\.scale) private var scale
     let day: ReadingDay
-    /// Nil in the previews that show cards alone; removing needs somewhere to report to.
+    /// Nil in the previews that show cards alone; an action needs somewhere to report to.
     var model: HistoryDrawerModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
-            DayHeader(day: day, count: day.entries.count, isToday: true)
+            DayHeader(day: day)
             VStack(spacing: scale.space.stack) {
                 ForEach(day.entries) { entry in
-                    if let model, model.removing.contains(entry.id) {
-                        RemovedCardView(entry: entry) { model.keep(entry) }
-                    } else {
-                        ReadingCardView(
-                            entry: entry, onRemove: model.map { m in { m.remove(entry) } },
-                            onKeep: model?.keepForLearning.map { keep in { keep(entry) } },
-                            onLibrary: model?.showInLibrary.map { show in { show(entry) } })
-                    }
+                    ReadingCardView(entry: entry, actions: model?.actions(for: entry) ?? ReadingCardActions())
                 }
             }
         }
@@ -274,6 +278,7 @@ struct DayPileView: View {
     @Binding var expanded: Bool
 
     @Environment(\.scale) private var scale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
 
     /// The same pile the layout places with, so the number of cards built and the number of
@@ -296,85 +301,116 @@ struct DayPileView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
-            Button(action: toggle) {
-                DayHeader(
-                    day: day, count: day.entries.count, isToday: false,
-                    trailing: expanded
-                        ? String(localized: "Show Less", comment: "Closes a day's pile of cards")
-                        : String(localized: "Show All", comment: "Fans a day's pile of cards out"))
-            }
-            .buttonStyle(.plain)
+            // **The one toggle**, for VoiceOver and the keyboard as much as for the pointer. There
+            // were two — this and a clear button laid over the whole pile, announcing "Show all 3
+            // words" for what were three cards.
+            DayHeader(day: day, disclosure: DayHeader.Disclosure(expanded: expanded, toggle: toggle))
 
             CardStackLayout(progress: expanded ? 1 : 0, pile: pile) {
                 // Reversed so the deepest card is drawn first and the newest sits on top.
                 ForEach(cards.reversed()) { card in
-                    ReadingCardView(entry: card.entry, layer: card.layer,
-                        onRemove: expanded ? model.map { m in { m.remove(card.entry) } } : nil,
-                        onKeep: expanded ? model?.keepForLearning.map { keep in { keep(card.entry) } } : nil,
-                        onLibrary: expanded ? model?.showInLibrary.map { show in { show(card.entry) } } : nil)
+                    // **The front card of a closed pile is a working card.** It drew its speaker,
+                    // eye and Dictionary icons at full strength under a button that covered the
+                    // whole pile, so a click on any of them fanned the pile and did nothing else.
+                    // A control that looks live is live; the buried plates take no clicks at all.
+                    ReadingCardView(
+                        entry: card.entry, layer: card.layer,
+                        actions: model?.actions(for: card.entry) ?? ReadingCardActions())
                 }
             }
-            // Piled, the whole pile is one target. Fanned out, clicks belong to the cards.
-            .overlay { if !expanded { pileButton } }
-            // A closed pile is one object, so it answers the pointer as one. The overlay swallows
-            // the cards' own hover, so without this the pile was perfectly clickable and completely
-            // inert under the cursor.
-            .scaleEffect(hovering && !expanded ? Token.Motion.lift : 1, anchor: .top)
-            .animation(.easeOut(duration: Token.Motion.hover), value: hovering)
+            .contentShape(Rectangle())
+            // A click anywhere on a closed pile that is not one of its front card's controls
+            // opens it. A gesture, so it is the pointer's alone — and that is all it has to be,
+            // because the header above is a real button doing the same thing. The cards' own
+            // buttons win over it: a child's gesture is recognised before its ancestor's.
+            .gesture(expanded ? nil : TapGesture().onEnded { toggle() })
+            // A closed pile is one object, so it answers the pointer as one.
+            .onHover { hovering = $0 }
+            .scaleEffect(
+                hovering && !expanded ? MotionPreference.scale(Token.Motion.lift, reduceMotion: reduceMotion) : 1,
+                anchor: .top)
+            .motionAwareAnimation(.easeOut(duration: Token.Motion.hover), value: hovering)
         }
-    }
-
-    /// A `Button`, never an `onTapGesture`: a bare gesture is reachable by the mouse and by nothing
-    /// else, so the pile was invisible to VoiceOver and to the keyboard while looking clickable.
-    private var pileButton: some View {
-        Button(action: toggle) {
-            Rectangle().fill(.clear).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel(Text("^[Show all \(day.entries.count) word](inflect: true)"))
     }
 
     private func toggle() {
         // The pointer is about to be over a fanned list rather than a pile, and the lift belongs to
         // the pile. Left set, it would scale the list the next time the pile closed.
         hovering = false
-        withAnimation(.spring(
-            response: Token.Motion.fanResponse,
-            dampingFraction: Token.Motion.fanDamping)) { expanded.toggle() }
+        // A spring, because the cards are objects being dealt — and a fade for the reader who
+        // asked for less motion, when they simply change places.
+        withAnimation(MotionPreference.animation(
+            .spring(response: Token.Motion.fanResponse, dampingFraction: Token.Motion.fanDamping),
+            reduceMotion: reduceMotion)) { expanded.toggle() }
     }
 }
 
+/// A day's name and how many readings it holds — and, for a pile, the button that opens it.
 private struct DayHeader: View {
+    /// What makes a header a control: the pile it opens, and which way it will go.
+    struct Disclosure {
+        let expanded: Bool
+        let toggle: () -> Void
+
+        var action: ActionSymbol { expanded ? .showLess : .showAll }
+    }
+
     @Environment(\.scale) private var scale
     let day: ReadingDay
-    let count: Int
-    let isToday: Bool
-    /// Localized where it is chosen, so the header draws it rather than deciding it.
-    var trailing: String?
+    /// Nil for a day that is listed rather than piled.
+    var disclosure: Disclosure?
+
+    private var count: Int { day.entries.count }
+    private var isToday: Bool { day.label == .today }
 
     var body: some View {
+        if let disclosure {
+            // The whole row is the target, 28 pt tall: it was the height of its text, about 16.
+            Button(action: disclosure.toggle) { row(disclosure) }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel(Text(
+                    "\(Text(verbatim: title)), ^[\(count) reading](inflect: true), \(Text(disclosure.action.title))"))
+        } else {
+            row(nil)
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel(Text("\(Text(verbatim: title)), ^[\(count) reading](inflect: true)"))
+        }
+    }
+
+    private func row(_ disclosure: Disclosure?) -> some View {
         HStack(spacing: scale.space.inline) {
             Text(verbatim: title)
                 .font(.system(size: scale.text.body, weight: .semibold))
                 .foregroundStyle(.secondary)
+            // A bare number, so the tooltip says what it counts: readings, the header's unit.
             Text(count, format: .number)
                 .font(.system(size: scale.text.small, weight: .medium))
                 .monospacedDigit()
                 .padding(.horizontal, scale.space.inline)
                 .padding(.vertical, scale.space.tight)
+                // Today's is told apart by the wash behind it, not by tinted digits: accent blue
+                // on glass measured 2.10:1.
                 .background(Capsule().fill(isToday
                     ? Color.accentColor.opacity(Token.Opacity.countToday)
                     : Color.primary.opacity(Token.Opacity.count)))
-                .foregroundStyle(isToday ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isToday ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             Spacer(minLength: scale.space.inline)
-            if let trailing {
-                Text(verbatim: trailing)
-                    .font(.system(size: scale.text.label, weight: .medium))
-                    .foregroundStyle(.tint)
+            if let disclosure {
+                // Words and a chevron, in the label colour. It was tint-coloured text with nothing
+                // else to say it could be clicked.
+                HStack(spacing: scale.space.line) {
+                    Text(disclosure.action.title)
+                    disclosure.action.image
+                }
+                .font(.system(size: scale.text.label, weight: .medium))
+                .foregroundStyle(.primary)
             }
         }
+        .frame(minHeight: Token.Target.minimum)
         .contentShape(Rectangle())
+        .help(Text("^[\(count) reading](inflect: true)"))
     }
 
     /// The label is a classification; rendering it is the view's job, in the reader's own locale.
@@ -385,295 +421,6 @@ private struct DayHeader: View {
         case .weekday: return day.date.formatted(.dateTime.weekday(.wide))
         case .date: return day.date.formatted(.dateTime.month(.abbreviated).day())
         }
-    }
-}
-
-/// One lookup.
-///
-/// The word and **the reader's own sentence** — never a definition. A review surface that answers
-/// the question destroys the retrieval that makes reviewing worth anything, which is the same rule
-/// that keeps a gloss off `PriorEncounter`. `ReadingEntry` has nowhere to put one, so this is
-/// enforced by the type rather than by the view remembering.
-struct ReadingCardView: View {
-    @Environment(\.scale) private var scale
-    let entry: ReadingEntry
-    /// Buried cards are drawn as a bare plate and nothing else — see `CardLayer`.
-    var layer: CardLayer = .front
-    /// Nil where removing is not offered — a buried card, or a preview of a card on its own.
-    var onRemove: (() -> Void)?
-    var onKeep: (() -> Void)?
-    var onLibrary: (() -> Void)?
-
-    @Environment(\.cardOptions) private var options
-    @Environment(\.colorScheme) private var scheme
-    @State private var hovering = false
-    /// Per card, and deliberately not remembered. Revealing a meaning is an act the reader
-    /// performs when they want it; a drawer that reopened with every answer already showing would
-    /// be the C2 failure arrived at by a slower route.
-    @State private var revealed = false
-
-    var body: some View {
-        details
-            // The content fades rather than leaving the hierarchy, so a buried card still measures
-            // its real height and the fan does not jump when the pile opens.
-            .opacity(layer.showsContent ? 1 : 0)
-            .padding(scale.space.pad)
-            // **A buried card takes the height the layout gives it.** `CardPile` places every
-            // plate at the front card's height so the slivers peeking below line up evenly — but
-            // a proposed height is only a proposal, and this view had no height constraint, so
-            // each plate sized itself to its own content and poked out by however tall its own
-            // word happened to make it. Measured in the closed pile: the first plate peeked 2.5 pt
-            // and the second 7.5 pt, against a design that says both are `peek`. The arithmetic
-            // was right the whole time and `CardPileTests` passed the whole time; nothing checked
-            // that the view honoured it.
-            //
-            // **Both bounds, never just the upper one.** SwiftUI's frame rule: with only a maximum,
-            // a frame grows to a larger proposal but keeps its child's size when the proposal is
-            // smaller — so a plate could stretch up to the front card's height and never shrink to
-            // it. That passed a test whose front card was the tallest, and on screen, with a
-            // one-line "beauty" in front of two-line cards, the first plate peeked 25 pt against
-            // 7.5. With a minimum as well, the frame "unconditionally adopts the size proposed for
-            // it": the front card's height, in both directions. What overflows is the buried
-            // card's own content, which is already invisible.
-            //
-            // Only when buried. A front card is proposed its own height and must never stretch to
-            // fill whatever frame it happens to be put in — a preview or a test hands it a tall
-            // one, and a card that grew to fill it would be measuring the container.
-            .frame(
-                maxWidth: .infinity,
-                minHeight: layer == .buried ? 0 : nil,
-                maxHeight: layer == .buried ? .infinity : nil,
-                alignment: .topLeading)
-            // Opaque, and deliberately not another material: the drawer around it is already
-            // glass, and layering glass inside glass muddies both.
-            .modifier(ReadingCardChrome(
-                accent: CardSurface.border(for: entry, layer: layer, in: scheme),
-                hovering: hovering && layer.showsContent))
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: Token.Motion.hover), value: hovering)
-            .accessibilityElement(children: .combine)
-            // A buried card is the same lookup as one the reader will see when the pile opens.
-            // Read out twice, it would be two words rather than one shown two ways.
-            .accessibilityHidden(!layer.showsContent)
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: scale.space.stack) {
-            VStack(alignment: .leading, spacing: scale.space.inline) {
-                headline
-                // **The provenance rides the sentence's last line.** On a row of its own it was a
-                // single 11 pt icon alone under a full-width card, and the card read as one that
-                // had forgotten to finish. `lastTextBaseline` is what makes it land in the bottom
-                // corner of the text rather than beside its first line — with a sentence that
-                // wraps, aligning to the first line would leave the gap exactly where it was.
-                if entry.cue != .none {
-                    HStack(alignment: .lastTextBaseline, spacing: scale.space.inline) {
-                        sentenceLine
-                        Spacer(minLength: scale.space.inline)
-                        footnote
-                    }
-                }
-                if revealed, let gloss = entry.sense?.gloss { meaning(gloss) }
-            }
-            // No sentence to ride — a lookup with no context still has to say where it came from,
-            // so there it keeps a row of its own.
-            if entry.cue == .none {
-                HStack(spacing: scale.space.inline) {
-                    Spacer(minLength: 0)
-                    footnote
-                }
-            }
-        }
-    }
-
-    /// The word, what it was doing, which sense it was — and the two things the reader can do with
-    /// it. The dictionary sits at the far end because it leaves the card; the rest belong to it.
-    private var headline: some View {
-        VStack(alignment: .leading, spacing: scale.space.line) {
-            HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
-                Text(entry.lemma)
-                    .font(.system(size: scale.text.strong, weight: .semibold))
-                if entry.times > 1 { timesRead }
-                if entry.result == .notFound { missBadge }
-                Spacer(minLength: scale.space.inline)
-                // Revealed on hover: it is the one control here that destroys something, and a
-                // row of cards each showing a trash can reads as a list of things to delete.
-                if let onRemove, layer.showsContent {
-                    removeButton(onRemove)
-                        .opacity(hovering ? 1 : 0)
-                        .accessibilityHidden(!hovering)
-                }
-                dictionaryButton
-                if let onKeep { Button("Keep for learning", action: onKeep).font(.system(size: scale.text.micro)) }
-                if let onLibrary { Button("Show in Library", action: onLibrary).font(.system(size: scale.text.micro)) }
-            }
-            HStack(spacing: scale.space.inline) {
-                if let partOfSpeech = PartOfSpeechLabel.reader(entry.partOfSpeech) {
-                    Text(partOfSpeech)
-                        .font(.system(size: scale.text.small).italic())
-                        .foregroundStyle(.secondary)
-                }
-                speakButton
-                if revealAvailable { revealButton }
-                // The sense sits at the far end: it is the one thing on the line that is a label
-                // rather than something to do, and the two buttons belong beside the word they act on.
-                Spacer(minLength: scale.space.inline)
-                if let badge = CardBadge(of: entry) { mark(badge) }
-            }
-        }
-    }
-
-    /// **Which** sense, never what it says. A sense the selector proposed is drawn as the
-    /// hypothesis it is — the reader has to be able to tell a guess from their own tap, and a
-    /// marker that looked the same either way would be the ledger's distinction thrown away at
-    /// the last step. What the badge says is `CardBadge`'s to decide, once, so the two kinds this
-    /// card can show cannot drift apart in looks or in wording — and so a refusal is not hidden
-    /// behind the sense count of the entry it was recorded against.
-    private func mark(_ badge: CardBadge) -> some View {
-        Text(badge.text)
-            .modifier(BadgeCapsule(scale: scale))
-            .foregroundStyle(badge.isConfirmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-            .help(Text(badge.explanation))
-    }
-
-    private var revealAvailable: Bool { entry.sense?.canReveal == true }
-
-    /// **Already named before `IconButton` existed** — it was the one of eight that was, with a `Label`
-    /// and `.labelStyle(.iconOnly)`. It goes through the component anyway, for the target floor and so
-    /// the scan has nothing to make an exception for.
-    private var revealButton: some View {
-        IconButton(
-            title: revealed ? "Hide meaning" : "Reveal meaning",
-            symbol: revealed ? "eye.slash" : "eye",
-            help: revealed ? Text("Hide the meaning") : Text("Reveal the meaning"),
-            size: scale.text.small
-        ) {
-            withAnimation(.easeOut(duration: Token.Motion.hover)) { revealed.toggle() }
-        }
-        .foregroundStyle(.tertiary)
-    }
-
-    private var speakButton: some View {
-        ReadingPronunciation(word: entry.surface, sentence: entry.sentence,
-                             help: Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence),
-                             say: { Speech.say(entry.surface, in: entry.sentence) })
-    }
-
-    /// No confirmation dialog. The reason a reader reaches for this is a word they did not mean
-    /// to look up — noticed at once, worth nothing — so a dialog would put friction on the common
-    /// case and still not catch a misclick. The undo row that replaces the card catches that.
-    /// **`role: .destructive`, which it never carried.** This removes a lookup, and it sat 6 pt from
-    /// open-in-Dictionary at 14 × 16 pt — the two controls most worth not confusing, at less than half
-    /// the platform's target size. The floor is `IconButton`'s; the role is so VoiceOver and the
-    /// platform both know what kind of button this is.
-    private func removeButton(_ remove: @escaping () -> Void) -> some View {
-        IconButton(
-            title: "Discard this reading", symbol: "archivebox",
-            size: scale.text.small, role: .destructive, action: remove)
-            .foregroundStyle(.tertiary)
-    }
-
-    private var dictionaryButton: some View {
-        IconButton(
-            title: "Open in Dictionary", symbol: "character.book.closed",
-            help: SystemDictionary.openHelp, size: scale.text.small
-        ) {
-            SystemDictionary.open(entry.lemma)
-        }
-        .foregroundStyle(.tertiary)
-    }
-
-    /// The sentence, whole when it fits the card's lines and cut to a window around the word when
-    /// it does not — the first that fits, chosen at the card's width. Where a window cut the start
-    /// off, the whole sentence is one hover away: it is still the reader's own, and never a gloss.
-    private var sentenceLine: some View {
-        ReadingSentence(sentence: entry.sentence, ranges: entry.markedRanges,
-                        accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary,
-                        emphasis: options.emphasis, truncated: entry.cue == .truncatedSentence)
-    }
-
-    /// Shown only because the reader asked. Set apart from the sentence so it cannot be mistaken
-    /// for it — the sentence is theirs, this is the dictionary's.
-    private func meaning(_ gloss: String) -> some View {
-        Text(gloss)
-            .font(.system(size: scale.text.small))
-            .foregroundStyle(.secondary)
-            .lineSpacing(scale.text.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .setApart()
-            .transition(.opacity)
-    }
-
-    /// Where it was read, and — only if the reader asked for it — when. It is provenance: true,
-    /// and never the thing being reviewed, so it sits at the trailing edge of whatever row it is
-    /// given. **The caller places it**, because where that is depends on whether there is a
-    /// sentence for it to ride.
-    private var footnote: some View {
-        HStack(spacing: scale.space.inline) {
-            if let icon = AppIcons.icon(for: entry.place.bundleID) {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: scale.text.small, height: scale.text.small)
-                    // Named even when the name is hidden: the icon is the only thing saying where
-                    // this was read, and a reader who cannot see it is owed the same fact.
-                    .accessibilityLabel(Text(place ?? ""))
-                    .help(Text(place ?? ""))
-            }
-            if options.showsPlaceName, let where_ = place {
-                Text(where_)
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            if options.showsTime {
-                Text(entry.at.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: scale.text.small))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    /// A miss is recorded on purpose, and shown as one. It is usually a typo or a stray selection,
-    /// and telling that from a real gap is the point.
-    /// **How often this reading was met**, shown only when that is more than once.
-    ///
-    /// Beside the word rather than at the end of the line, because it is about the word: the far
-    /// end is the sense badge, which is about the entry. A numeral and a multiplication sign are
-    /// not prose and compose the same way in every language this ships in, so the mark is
-    /// `verbatim` and the sentence goes in the help and the accessibility label — where it can be
-    /// a sentence.
-    private var timesRead: some View {
-        Text(verbatim: "×\(entry.times)")
-            .modifier(BadgeCapsule(scale: scale))
-            .foregroundStyle(.secondary)
-            // **The sentence is only claimed where there is one.** A reading with no captured
-            // context draws no sentence at all, and saying "in this same sentence" over a card
-            // that shows none is a claim about text the reader was never shown.
-            .help(entry.cue == .none
-                  ? Text("Read ^[\(entry.times) time](inflect: true)")
-                  : Text("Read ^[\(entry.times) time](inflect: true), in this same sentence"))
-            .accessibilityLabel(Text("Read ^[\(entry.times) time](inflect: true)"))
-    }
-
-    private var missBadge: some View {
-        Text("not found")
-            .font(.system(size: scale.text.micro, weight: .medium))
-            .padding(.horizontal, scale.space.inline)
-            .padding(.vertical, scale.space.tight)
-            .background(Capsule().fill(Color.secondary.opacity(Token.Opacity.missBadge)))
-            .foregroundStyle(.secondary)
-    }
-
-    /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
-    /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
-    /// an ellipsis saying so rather than an ending the reader never read.
-
-    /// Where it was read, as precisely as the ledger knows — the page or document title where there
-    /// is one, otherwise the app.
-    private var place: String? {
-        if let label = entry.place.label { return label }
-        return entry.place.name
     }
 }
 
@@ -750,7 +497,7 @@ private let sampleDays: [ReadingDay] = [
 /// and each built the model twice — `HistoryDrawerSurface(model: sampleModel(), geometry:
 /// sampleModel().geometry!)` handed a surface the geometry of a *different* instance.
 private let sampleGeometry = DrawerGeometry.make(
-    DrawerLayout(thickness: 380, edge: .right),
+    DrawerLayout(thickness: Scale.standard.space.drawerWidth, edge: .right),
     on: ScreenMetrics(
         frame: UpRect(x: 0, y: 0, width: 1440, height: 900),
         visibleFrame: UpRect(x: 0, y: 0, width: 1440, height: 870)))
@@ -814,23 +561,3 @@ private let sampleGeometry = DrawerGeometry.make(
         .frame(width: 380, height: 420)
 }
 #endif
-
-/// **The capsule both of a card's small marks wear** — the repeat count beside the word and the
-/// sense badge at the end of the line.
-///
-/// One shape, because they were two copies of the same six modifiers and a change to the padding
-/// or the wash would have had to be made twice or drift. What stays separate is everything that
-/// says what each one *is*: the colour, the help text and the accessibility label. They are the
-/// same furniture carrying different facts, not the same badge.
-struct BadgeCapsule: ViewModifier {
-    let scale: Scale
-
-    func body(content: Content) -> some View {
-        content
-            .font(.system(size: scale.text.micro, weight: .medium))
-            .monospacedDigit()
-            .padding(.horizontal, scale.space.inline)
-            .padding(.vertical, scale.space.tight)
-            .background(Capsule().fill(Color.primary.opacity(Token.Opacity.count)))
-    }
-}

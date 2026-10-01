@@ -87,6 +87,11 @@ enum SettingsReport {
         app.settings.pane = .reading
         let endedWithThePane = !capture.isListening && putBack
         capture.end()
+        // **Left where it was found.** The recording check above ends on Reading, and a report
+        // that leaves the reader's window on a pane they did not choose has changed the machine
+        // it was measuring. `pane` is set, not `choose`d, throughout — so nothing here is stored
+        // as the reader's preference either.
+        app.settings.pane = opening
 
         // What the panes together say about the window. Kept as a comparison rather than as a
         // verdict: e2e.sh makes the assertions, and a report that decided for it could only ever
@@ -120,6 +125,16 @@ enum SettingsReport {
             // clamped the way the window clamps it, floor and ceiling both: without the floor, a
             // short pane padded up to it would report the padding as chrome.
             "chromes": measured.map { ($0.height - $0.fittedHeight).rounded() },
+            // **And the room under the toolbar is the pane's, no more.** `chromes` cannot see a
+            // window that is too tall by the same amount for every pane — it was, by 88 points,
+            // the title bar and tabs counted into what the pane wanted, and `chromes` reported a
+            // constant 176 and passed. This is AppKit's own measure of the content area against
+            // the pane's height: 0 is the passing value, positive is empty window under the last
+            // group, negative is a pane that has to scroll.
+            "slacks": measured.map { $0.slack.rounded() },
+            // Where a negative slack is the screen's doing and not the fit's: the window's
+            // bottom edge was already at the bottom of the usable screen.
+            "heldByScreen": measured.map(\.heldByScreen),
             // The window is the size of its pane: two panes of the same height would mean the
             // fixed frame is still deciding, under another name.
             "distinctHeights": Set(heights).count,
@@ -163,6 +178,14 @@ enum SettingsReport {
         let topDrift: Double
         /// Whether the window came to rest within `restDeadline`.
         let settled: Bool
+        /// The height AppKit gives the content below the title bar and tabs.
+        let contentHeight: Double
+        /// Whether the window's bottom edge sat on the bottom of the usable screen, so it could
+        /// not have grown further whatever the pane wanted.
+        let heldByScreen: Bool
+
+        /// Room under the toolbar the pane does not fill. Zero when the window fits its pane.
+        var slack: Double { contentHeight - fittedHeight }
 
         /// The pane's own height as the window holds it: at least the floor, at most the ceiling.
         var fittedHeight: Double {
@@ -173,7 +196,8 @@ enum SettingsReport {
             ["pane": name, "width": width, "height": height, "measured": measured,
              "change": move.change, "steps": move.steps, "topDrift": topDrift,
              "reversals": move.reversals, "overshoot": move.overshoot,
-             "path": move.path.map { ($0 * 10).rounded() / 10 }, "settled": settled]
+             "path": move.path.map { ($0 * 10).rounded() / 10 }, "settled": settled,
+             "contentHeight": contentHeight, "slack": slack, "heldByScreen": heldByScreen]
         }
     }
 
@@ -218,7 +242,9 @@ enum SettingsReport {
             measured: measured,
             move: FrameTrajectory(from: before.height, samples: heights, to: after.height),
             topDrift: (tops + [before.maxY]).map { abs($0 - after.maxY) }.max() ?? 0,
-            settled: settled)
+            settled: settled,
+            contentHeight: window.contentLayoutRect.height,
+            heldByScreen: window.screen.map { after.minY <= $0.visibleFrame.minY + FrameTrajectory.noise } ?? false)
     }
 
     /// Waits until the window's frame has held still for `rest` **while `measured` is true**, and

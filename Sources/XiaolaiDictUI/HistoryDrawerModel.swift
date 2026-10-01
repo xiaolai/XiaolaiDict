@@ -1,6 +1,7 @@
 import Foundation
 import XiaolaiDictCore
 import Observation
+import SwiftUI
 
 /// What the drawer is showing, and how much of it is fanned open.
 @Observable
@@ -20,94 +21,66 @@ public final class HistoryDrawerModel {
     /// must not look the same.
     public var problem: String?
 
-    /// Cards the reader has removed and can still bring back. The card is gone from the drawer
-    /// the moment they click; the ledger is not touched until the grace window expires.
-    ///
-    /// **Undo by delay, not by restore.** Putting a deleted lookup back would mean re-inserting
-    /// it, and a `ReadingEntry` is not the whole row — it has no lemma basis, no language, no
-    /// answering source — so an undo built that way would silently return a poorer record than
-    /// the one it replaced. Waiting costs nothing and cannot be lossy. If XiaolaiDict quits inside the
-    /// window the lookup simply survives, which is the safe direction to fail.
-    public private(set) var removing: Set<Int> = []
-
-    /// Called once a removal is final. Set by whoever owns the ledger; nil in previews and tests
-    /// that only care about what the drawer shows.
-    public var delete: ((ReadingEntry) -> Void)?
-
     public var discard: (@MainActor (ReadingEntry) async throws -> DispositionResult)?
     public var undoDiscard: (@MainActor (UUID) async throws -> DispositionResult)?
     public var keepForLearning: (@MainActor (ReadingEntry) -> Void)?
     public var showInLibrary: (@MainActor (ReadingEntry) -> Void)?
+    /// Closes the panel. Set by the controller that shows it; nil in previews and tests of the
+    /// contents alone.
+    public var dismiss: (@MainActor () -> Void)?
     public private(set) var discardedReceipt: DispositionResult?
+
+    public init() {}
+
     public func undoLastDiscard() {
         guard let receipt = discardedReceipt, let undoDiscard else { return }
         Task {
             do {
                 let result = try await undoDiscard(receipt.operation)
-                if result.skipped > 0 { problem = String(localized: "Some readings changed since Discard and were left unchanged.") }
+                if result.skipped > 0 {
+                    problem = String(localized: "Some readings changed after they were discarded and were left as they are.")
+                }
                 // **Only this undo's receipt.** A discard made while the ledger was answering has
                 // installed its own, and clearing that one leaves its readings with no way back.
                 if discardedReceipt?.operation == receipt.operation { discardedReceipt = nil }
             } catch { problem = error.localizedDescription }
         }
     }
-    private var pending: [Int: Task<Void, Never>] = [:]
-
-    public init() {}
 
     private var discarding: Set<Int> = []
+
+    /// Discards a reading — reversibly, through the ledger, with a receipt that Undo spends.
+    ///
+    /// **There is no second path.** Until 2026-10-02 a model with no `discard` wired fell back to
+    /// a six-second "Removed … Undo" row that deleted the lookup when the time ran out: an undo
+    /// on a timer, which the shipped app could never reach because it always wires `discard`.
+    /// It lived on in previews and nine tests. Without a ledger to ask there is nothing to
+    /// discard from, so this does nothing.
     public func remove(_ entry: ReadingEntry) {
-        if let discard {
-            guard discarding.insert(entry.id).inserted else { return }
-            Task {
-                defer { discarding.remove(entry.id) }
-                do { let receipt = try await discard(entry); if receipt.affected > 0 { discardedReceipt = receipt } }
-                catch { problem = error.localizedDescription }
-            }
-            return
-        }
-        guard !removing.contains(entry.id) else { return }
-        removing.insert(entry.id)
-        pending[entry.id] = Task { [weak self] in
-            try? await Task.sleep(for: Token.Timing.undoGrace)
-            guard !Task.isCancelled else { return }
-            self?.commitRemoval(of: entry)
+        guard let discard, discarding.insert(entry.id).inserted else { return }
+        Task {
+            defer { discarding.remove(entry.id) }
+            do {
+                let receipt = try await discard(entry)
+                if receipt.affected > 0 { discardedReceipt = receipt }
+            } catch { problem = error.localizedDescription }
         }
     }
 
-    /// Undo: the ledger was never asked, so this is a cancellation rather than a restore.
-    public func keep(_ entry: ReadingEntry) {
-        pending.removeValue(forKey: entry.id)?.cancel()
-        removing.remove(entry.id)
+    /// Opens the reading in the Library **and puts the panel away**. The Library is a window the
+    /// reader is about to work in, and the panel floats: left open it covered the right edge of
+    /// the window it had just opened, toolbar and all (measured 2026-10-01).
+    public func openInLibrary(_ entry: ReadingEntry) {
+        guard let showInLibrary else { return }
+        showInLibrary(entry)
+        dismiss?()
     }
 
-    /// Everything still inside its window goes now — the reader has closed the drawer, which is
-    /// them moving on rather than changing their mind.
-    public func commitRemovals() {
-        for (id, task) in pending {
-            task.cancel()
-            guard let entry = entry(id) else { continue }
-            commitRemoval(of: entry)
-        }
-        pending.removeAll()
-    }
-
-    private func entry(_ id: Int) -> ReadingEntry? {
-        days.lazy.flatMap(\.entries).first { $0.id == id }
-    }
-
-    private func commitRemoval(of entry: ReadingEntry) {
-        pending[entry.id] = nil
-        removing.remove(entry.id)
-        days = days.compactMap { day in
-            let kept = day.entries.filter { $0.id != entry.id }
-            guard kept.count != day.entries.count else { return day }
-            // A day with nothing left in it is not an empty day, it is a day that is no longer
-            // part of the history — and a header over no cards reads as a drawer that is broken.
-            guard !kept.isEmpty else { return nil }
-            return ReadingDay(id: day.id, date: day.date, label: day.label, entries: kept)
-        }
-        delete?(entry)
+    /// Whether a day is drawn as a pile. **One card is not a pile**: it offered "Show All" over a
+    /// single card, and its buttons sat under the pile's own click target, so the reader paid a
+    /// click that revealed nothing in order to use them.
+    public func showsAsPile(_ day: ReadingDay) -> Bool {
+        day.isPiled && day.entries.count > 1
     }
 
     public var totalEntries: Int { days.reduce(0) { $0 + $1.entries.count } }
@@ -115,7 +88,8 @@ public final class HistoryDrawerModel {
     /// How many **lookups** the cards stand for — always at least `totalEntries`, and more wherever
     /// a reading was met again. Three numbers describe this drawer and they are all different:
     /// cards, the lookups behind them, and the words. Reported by `--history-report` so a stage can
-    /// compare them; nothing on screen shows it.
+    /// compare them. On screen the header and each day count cards — readings — so the day counts
+    /// add up to the header's, and a card's own "×N" is the lookups behind that one card.
     public var totalLookups: Int {
         days.reduce(0) { $0 + $1.entries.reduce(0) { $0 + $1.times } }
     }
@@ -125,7 +99,9 @@ public final class HistoryDrawerModel {
     /// A card is one lookup, and a reader meets the same word more than once: measured on a real
     /// ledger 2026-09-30, 102 cards over 8 days carried 74 words, and 19 of those cards repeated a
     /// word already shown that day in the same sentence. The header said "102 words" — it was
-    /// reading `totalEntries`, whose own name says what it counts.
+    /// reading `totalEntries`, whose own name says what it counts. Since 2026-10-02 the header
+    /// says readings and counts `totalEntries`, the unit the day counts beside it are in; this is
+    /// reported by `--history-report` and shown nowhere.
     ///
     /// Counted over `days` rather than over the ledger, so a filtered drawer's header describes the
     /// drawer the reader is looking at. Lemmas, because that is what the ledger keys a word by;
@@ -142,5 +118,36 @@ public final class HistoryDrawerModel {
 
     public func setExpanded(_ expanded: Bool, for day: ReadingDay) {
         if expanded { expandedDays.insert(day.id) } else { expandedDays.remove(day.id) }
+    }
+}
+
+/// How wide the Reading History panel is for a reader's text size. **Public**, because the
+/// controller that docks it lives in the app target and has to lay the window out before any view
+/// exists to read the scale from.
+public enum DrawerMetrics {
+    public static func thickness(for size: TextSize) -> CGFloat { Scale(size).space.drawerWidth }
+}
+
+/// **The one animation that owns the panel's arrival and departure.**
+///
+/// There were two. The controller wrapped `revealed` in a spring, and the view that drew it
+/// carried `.animation(.easeOut(0.16), value: revealed)` — and an implicit animation on a view
+/// replaces the transaction's for that view, so the springs the controller's comments described
+/// were never what played, and the close's `completion:` belonged to an animation that was not
+/// the one running. The view's is gone; this is the only definition.
+///
+/// With Reduce Motion the panel does not travel at all — the view holds it in place — and this
+/// becomes the short fade its opacity takes.
+public enum DrawerMotion {
+    public static func open(reduceMotion: Bool) -> Animation {
+        MotionPreference.animation(
+            .spring(response: Token.Motion.drawerOpenResponse, dampingFraction: Token.Motion.drawerOpenDamping),
+            reduceMotion: reduceMotion)
+    }
+
+    public static func close(reduceMotion: Bool) -> Animation {
+        MotionPreference.animation(
+            .spring(response: Token.Motion.drawerCloseResponse, dampingFraction: Token.Motion.drawerCloseDamping),
+            reduceMotion: reduceMotion)
     }
 }

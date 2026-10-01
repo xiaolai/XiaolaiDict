@@ -30,9 +30,6 @@ struct PanelTicket: Equatable {
     let number: Int
 }
 
-/// The lookup panel: floats over the app being read — in its Space, even full screen — without
-/// activating XiaolaiDict or taking keyboard focus, so typing stays where the reader left it. A click in
-/// the panel focuses it; Escape closes it either way.
 /// What the panel is showing. A scene's content reads this; nothing hands a window a view.
 @Observable
 @MainActor
@@ -42,6 +39,33 @@ final class LookupPanelModel {
     var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize
 }
 
+/// The lookup panel: floats over the app being read — in its Space, even full screen — without
+/// activating XiaolaiDict or taking keyboard focus, so typing stays where the reader left it.
+///
+/// ## What that costs, and why it is paid (recorded 2026-10-02)
+///
+/// **The panel never becomes key, so nothing on the card can be reached from the keyboard.** Its
+/// scene is `.plain`, which gives a borderless window whose `canBecomeKey` is false (measured
+/// 2026-09-25 by `--panel-report`). Escape closes it, through a claimed hot key; confirming a
+/// meaning, choosing another, saving, discarding, copying, pinning, translating and explaining are
+/// pointer-only. A reader who works from the keyboard can open the panel and close it, and
+/// nothing between. This comment used to say "a click in the panel focuses it"; it never did.
+///
+/// It is a departure from the platform's keyboard guidance and it is deliberate. The alternative
+/// to a window that cannot take the keyboard is a window that takes it — and this one appears
+/// beside a word the reader hovered or selected, usually while their hands are on the keyboard in
+/// another app. A panel that became key would swallow the next thing they typed.
+///
+/// **Giving the card's actions claimed hot keys, the way Escape has one, was considered and not
+/// done.** A Carbon hot key is system-wide and exclusive: while it is held, the key does not reach
+/// the app being read at all. Escape is a fair trade — the reader is dismissing something. Return
+/// to confirm, or a letter to save, is not: a hover panel appears without the reader asking for
+/// it mid-sentence, and for as long as it was up their editor would not receive that key. The
+/// failure is silent and lands in somebody else's document, which is the one thing this panel is
+/// built never to do.
+///
+/// What a keyboard reader has instead is the Library, a window they chose and which takes focus:
+/// every reading is there, with the same confirm, choose, save and discard.
 @MainActor
 final class LookupPanelController: LookupPanelPresenting {
     let model = LookupPanelModel()
@@ -129,8 +153,9 @@ final class LookupPanelController: LookupPanelPresenting {
     /// `if let panel = window as? NSPanel`, and whether a SwiftUI `Window` scene with
     /// `.windowStyle(.plain)` satisfies that has never been measured.
     var window: NSWindow? {
-        NSApplication.shared.windows.first { $0.identifier?.rawValue.contains(XiaolaiDictScene.lookupID) == true }
-            ?? NSApplication.shared.windows.first { $0.title == XiaolaiDictScene.lookupTitle }
+        // **By the scene's identifier and nothing else.** A second lookup by title stood here as a
+        // fallback, and a title is localisable: in any translated build it matched nothing, quietly.
+        XiaolaiDictScene.window(of: XiaolaiDictScene.lookupID)
     }
 
     func newRequest() -> PanelTicket {
@@ -176,10 +201,13 @@ final class LookupPanelController: LookupPanelPresenting {
         return true
     }
 
-    /// Fills in a panel already on screen. Same kind, so the size and the minimum stay as they
-    /// were, and **the placement is not touched**: the reader may have moved or resized it while
-    /// waiting. Setting the content is all it takes — a scene is not re-placed because its content
-    /// changed, which the hand-built panel had to be careful to preserve.
+    /// Fills in a panel already on screen. Same kind, so the minimum stays as it was, and **the
+    /// placement is not touched**: the reader may have dragged the card aside while waiting — it
+    /// moves by its background, see `LookupPanelSceneView` — and it must not jump back when its
+    /// entry arrives. (It cannot be *resized*: the window is borderless and has no edge to drag.
+    /// Its height follows its content.) Setting the content is all it takes — a scene is not
+    /// re-placed because its content changed, which the hand-built panel had to be careful to
+    /// preserve.
     func update(_ content: PanelContent, for ticket: PanelTicket) {
         guard isCurrent(ticket), shownKind == content.kind else {
             // A kind that changed mid-lookup is a mistake in the caller, not something to paper
@@ -364,10 +392,13 @@ struct LookupPanelSceneView: View {
     var body: some View {
         Group {
             if let content = model.content {
-                VStack(spacing: 0) {
-                    PanelView(content: content)
-                    LookupKeepStatusViewBridge()
-                }
+                // **Nothing is stacked under the card.** The row that says whether the reading was
+                // saved used to be a sibling here, below `PanelView` — and the window is clear, so
+                // it was drawn on whatever app was behind (measured 2026-10-01: black at alpha 60
+                // over the Library, near-white over nothing in a dark appearance). The card draws
+                // it now, inside its own surface; what it needs still arrives through the
+                // environment below.
+                PanelView(content: content)
                     .onChange(of: LedgerChanges.shared.revision) { _, _ in
                         if let request = content.request { Task { await recorder?.refreshStatus(request: request) } }
                     }
@@ -415,6 +446,15 @@ struct LookupPanelSceneView: View {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = false
+            // **The card can be pushed aside.** It is placed beside the pointer, which is beside
+            // the word — so it can land on the sentence being read, and with style mask 0 there
+            // was no way to move it. Two comments in this file already spoke of a panel "the
+            // reader has dragged"; nothing let them.
+            //
+            // It does not fight the click-away dismissal: that closes the panel for a click
+            // *outside* its frame, and a drag begins inside it. Nor the card's controls: a button
+            // takes its own mouse-down, and only the paper between them drags.
+            window.isMovableByWindowBackground = true
             controller.watchForResize(of: window)
         }
         // The reader closing the window is as final as Escape: whatever is still arriving for this
@@ -422,37 +462,48 @@ struct LookupPanelSceneView: View {
         .onDisappear { controller.closed() }
     }
 }
-/// Accessibility it never hears it.)
+/// One surface's claim on Escape, held only while that surface shows.
+///
+/// A hot key rather than a key monitor: a global monitor cannot consume the press — the app being
+/// read gets it too — and without Accessibility it never hears it.
 @MainActor
 final class EscapeKey {
-    static let shortcut = Shortcut(keyCode: UInt32(kVK_Escape), modifiers: 0)
+    static let shortcut = EscapeStack.shortcut
 
+    /// Kept, though only the stack is used: the stack refers to its centre without owning it, so
+    /// something has to keep the centre alive for as long as this claim can be made.
     private let hotkeys: HotkeyCenter
-    private var held: Hotkey?
-    private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
+    private let stack: EscapeStack
+    private var entry: EscapeStack.Entry?
 
+    /// **A place in the centre's one Escape stack, not a registration of its own.** Each surface
+    /// used to register Escape for itself; the second was refused as a duplicate, and the panel lost
+    /// Escape whenever the drawer was open — see `EscapeStack`.
     init(hotkeys: HotkeyCenter) {
         self.hotkeys = hotkeys
+        stack = hotkeys.escape
     }
 
-    var isHeld: Bool { held != nil }
+    /// Whether Escape reaches this surface: it is in the stack, and the stack holds the key.
+    var isHeld: Bool { entry != nil && stack.isClaimed }
 
+    /// Called every time the surface is shown. A surface already waiting moves to the top, so
+    /// Escape dismisses whichever was shown last.
     func claim(_ action: @escaping @MainActor () -> Void) {
-        guard held == nil else { return }
-        do {
-            held = try hotkeys.register(Self.shortcut, action: action)
-        } catch {
-            // **Not "the panel still has its close button".** It has none: the scene is
-            // `.windowStyle(.plain)`, which draws no title bar and no traffic lights. What is left is
-            // the click-away dismissal — a click anywhere outside the panel — and Escape stays with
-            // the app being read. Worth logging loudly for that reason: the reader keeps one way out
-            // rather than two, and nothing on screen says so.
-            log.error("Escape not claimed for the panel: \(String(describing: error), privacy: .public)")
+        if let entry, stack.contains(entry) {
+            stack.raise(entry)
+        } else {
+            entry = stack.push(action)
         }
     }
 
     func release() {
-        held = nil
+        if let entry { stack.pop(entry) }
+        entry = nil
+    }
+
+    isolated deinit {
+        if let entry { stack.pop(entry) }
     }
 }
 

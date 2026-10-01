@@ -64,17 +64,33 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
-    /// What stops working without it. A request that does not say what it buys is one a reader is
-    /// right to refuse, so this is stated in terms of what XiaolaiDict can no longer do —
-    /// never "XiaolaiDict requires this permission".
-    public var blocks: String {
-        switch self {
-        case .accessibility:
-            String(localized: "Reading the selection under your shortcut, and the fast hover path.",
-                   comment: "What stops working without the Accessibility permission")
-        case .screenRecording:
-            String(localized: "Reading words by hover from apps that expose no text — a terminal, a canvas, an image.",
-                   comment: "What stops working without the Screen Recording permission")
+    /// Why the app wants it, as a sentence for the state it is in.
+    ///
+    /// A request that does not say what it buys is one a reader is right to refuse, so the
+    /// ungranted sentence says what the access is for and what does not work without it.
+    ///
+    /// **One sentence per state, because one sentence for both was wrong in one of them.** This
+    /// was `blocks` — "what stops working" — a fragment written for the missing grant and drawn
+    /// unchanged under a row that said Ready: "Reading the selection under your shortcut, and the
+    /// fast hover path." A reader with the grant in place was shown a list of things that had
+    /// stopped working, in the app's own vocabulary.
+    ///
+    /// These name the app, which reader-facing text otherwise does not: a permission is the one
+    /// place the reader has to find it by that name, in a list in System Settings.
+    public func explanation(isGranted: Bool) -> String {
+        switch (self, isGranted) {
+        case (.accessibility, true):
+            String(localized: "XiaolaiDict can read the text you select and the word under the pointer.",
+                   comment: "Setup row for the Accessibility permission, once it is granted")
+        case (.accessibility, false):
+            String(localized: "XiaolaiDict needs Accessibility to read the text you select and the word under the pointer. Without it, neither the lookup shortcut nor hover can read anything.",
+                   comment: "Setup row for the Accessibility permission, while it is not granted")
+        case (.screenRecording, true):
+            String(localized: "XiaolaiDict can read the word under the pointer in apps that expose no text, such as a terminal, a canvas or an image.",
+                   comment: "Setup row for the Screen Recording permission, once it is granted")
+        case (.screenRecording, false):
+            String(localized: "XiaolaiDict needs Screen Recording to read the word under the pointer in apps that expose no text, such as a terminal, a canvas or an image. Without it, hover finds nothing there.",
+                   comment: "Setup row for the Screen Recording permission, while it is not granted")
         }
     }
 

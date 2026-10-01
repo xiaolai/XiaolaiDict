@@ -242,7 +242,7 @@ struct SenselessEntryTests {
         #expect(
             !text.contains("could not be identified"),
             "a dictionary that marks no senses was reported as a failure to identify one")
-        #expect(text.contains("does not mark senses"))
+        #expect(text.contains("does not mark separate meanings"))
     }
 }
 
@@ -333,7 +333,7 @@ struct SenseToKeepTests {
 
 /// **A card that is claiming a guess has to say so, whether or not a sentence was captured.**
 ///
-/// `standing` — "A guess — not confirmed", drawn in orange — was rendered from inside
+/// `standing` — "A guess, not confirmed" — was rendered from inside
 /// `evidence(_:)`, which the card draws only `if let sentence = card.sentence, !sentence.isEmpty`.
 /// So on a card with no sentence the caveat did not exist, and the selector's hypothesis rendered
 /// exactly as confidently as the reader's own tap. That is "a failure must never render as
@@ -518,17 +518,17 @@ struct CopyableTextTests {
         #expect(!text.contains("guess"))
     }
 
-    /// **A guess says so in the copied text.** The panel's orange does not travel with a paste.
+    /// **A guess says so in the copied text.** The panel's mark does not travel with a paste.
     @Test func aGuessCarriesItsCaveatIntoThePasteboard() throws {
         let text = try #require(card(.chosen(key: "m_en_gbus0362750.020", by: .model)).copyableText)
-        #expect(text.contains("a guess — not confirmed"))
+        #expect(text.contains("a guess, not confirmed"))
     }
 
     /// And so does the near miss the ambiguous card leads with.
     @Test func anAmbiguousFavouriteCarriesOneToo() throws {
         let nearest = NearMiss(key: "m_en_gbus0362750.024", margin: 0.01, among: 3)
         let text = try #require(card(.couldNot(.tooClose, nearest: nearest)).copyableText)
-        #expect(text.contains("a guess — not confirmed"))
+        #expect(text.contains("a guess, not confirmed"))
     }
 
     /// **Prose is copyable and un-pinnable, and that is the distinction.** A dictionary that answered

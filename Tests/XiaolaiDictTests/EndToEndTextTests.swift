@@ -286,8 +286,8 @@ struct EndToEndTextTests {
     /// setup board came to be asserted by the harness and guarded by nothing.
     private static let expandedGreps: [(grep: String, stands: [String])] = [
         (grep: #"grep -q "$row""#,
-         stands: ["Accessibility", "Screen Recording", "Study dictionary", "Lookup shortcut",
-                  "Translation and sense picking"]),
+         stands: ["Accessibility", "Screen Recording", "Study Dictionary", "Lookup Shortcut",
+                  "Translation and Meanings"]),
     ]
 
     // MARK: - The checks
@@ -415,7 +415,7 @@ struct EndToEndTextTests {
         // it rather than far below, because that is the difference between noticing a matcher moved
         // and noticing only that the whole mechanism collapsed.
         #expect(phrases.count >= 17, "only \(phrases.count) reader phrases found in Tools/e2e.sh")
-        #expect(phrases.contains("Not now"), "a phrase known to be asserted was not extracted")
+        #expect(phrases.contains("Not Now"), "a phrase known to be asserted was not extracted")
         // From the alternation at the waiting-panel poll — the three that were unguarded until `|`
         // stopped disqualifying a pattern. `could not all be asked` is there because splitting them
         // out is what exposed that the harness had been grepping for `could not be asked`, wording

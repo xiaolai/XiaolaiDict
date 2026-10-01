@@ -35,7 +35,6 @@ final class HistoryDrawerController {
     /// `defaultWindowPlacement`. A scene cannot be handed a frame.
     private(set) var placement: CGRect?
     private let escape: EscapeKey
-    private let layout: DrawerLayout
 
     /// Reading the ledger. Injected so the drawer can be driven in a test without a database.
     private let load: @MainActor () async -> HistoryReading
@@ -44,8 +43,8 @@ final class HistoryDrawerController {
     private let pointer: @MainActor () -> UpPoint
     private let clock: @MainActor () -> Date
 
-    /// Fires for clicks delivered to *other* applications. Clicks inside the drawer are local
-    /// events and never reach it, which is exactly what is wanted. Mouse monitors need no
+    /// Fires for clicks delivered to *other* applications. Clicks in this app's own windows are
+    /// local events and never reach it — `clickInApp` is the monitor for those. Mouse monitors need no
     /// permission; a global **key** monitor would need Accessibility, which is why Escape is a
     /// claimed hot key instead.
     private var clickAway: Any?
@@ -61,29 +60,54 @@ final class HistoryDrawerController {
     /// The read in flight. Internal so a test can await it rather than sleeping.
     private(set) var reload: Task<Void, Never>?
 
-    private(set) var isVisible = false
+    /// Told on every change, by whatever route it came: the status item highlights while the drawer
+    /// is open, and ends the session AppKit runs for it when the drawer closes itself.
+    private(set) var isVisible = false {
+        didSet { if isVisible != oldValue { onVisibilityChange?(isVisible) } }
+    }
+    var onVisibilityChange: (@MainActor (Bool) -> Void)?
 
     /// The owned status button's live screen rectangle. Its clicks belong to its own action,
     /// so repeated opening preserves the drawer's current session.
     var statusItemFrame: (@MainActor () -> CGRect?)?
 
-    private let openAnimation = Animation.spring(response: 0.34, dampingFraction: 0.86)
-    private let closeAnimation = Animation.spring(response: 0.26, dampingFraction: 0.95)
+    /// The reader's text size, asked each time the drawer opens: the drawer's width is in ems, so
+    /// that a card keeps its measure at every size.
+    private let textSize: @MainActor () -> TextSize
+    /// Whether the reader asked the system for less motion. Injected so both answers can be tested.
+    private let reduceMotion: @MainActor () -> Bool
+
+    /// The drawer as it docks for a reader's text size. One function, so the instrument that
+    /// checks where the window landed asks for the same rectangle the controller did.
+    static func layout(for size: TextSize) -> DrawerLayout {
+        DrawerLayout(thickness: DrawerMetrics.thickness(for: size), edge: .right)
+    }
+
+    private var layout: DrawerLayout { Self.layout(for: textSize()) }
+
+    /// Fires for clicks in **this app's own** other windows — the Library, Settings, a pinned
+    /// note — which the global monitor above never sees. Without it the drawer stayed open over
+    /// the window the reader had gone to work in.
+    private var clickInApp: Any?
 
     init(
-        layout: DrawerLayout = DrawerLayout(thickness: 380, edge: .right),
+        textSize: @escaping @MainActor () -> TextSize = { .standard },
+        reduceMotion: @escaping @MainActor () -> Bool = { MotionPreference.systemReduceMotion },
         hotkeys: HotkeyCenter = .shared,
         screens: @escaping @MainActor () -> [ScreenMetrics] = { NSScreen.screens.map(ScreenMetrics.init) },
         pointer: @escaping @MainActor () -> UpPoint = { UpPoint(NSEvent.mouseLocation) },
         clock: @escaping @MainActor () -> Date = { .now },
         load: @escaping @MainActor () async -> HistoryReading
     ) {
-        self.layout = layout
+        self.textSize = textSize
+        self.reduceMotion = reduceMotion
         self.escape = EscapeKey(hotkeys: hotkeys)
         self.screens = screens
         self.pointer = pointer
         self.clock = clock
         self.load = load
+        // "Show in Library" opens a window the reader is about to work in; the drawer leaves.
+        model.dismiss = { [weak self] in self?.hide() }
 
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -119,9 +143,11 @@ final class HistoryDrawerController {
 
         // One runloop turn, so the parked frame is on screen before the spring starts. A turn, not
         // a duration — there is no interval here that a slow machine can invalidate.
+        // **`DrawerMotion` is the only animation `revealed` has**, and it is a fade with Reduce
+        // Motion on: the view holds the drawer in place then, so nothing slides.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isVisible else { return }
-            withAnimation(self.openAnimation) { self.model.revealed = true }
+            withAnimation(DrawerMotion.open(reduceMotion: self.reduceMotion())) { self.model.revealed = true }
         }
     }
 
@@ -135,7 +161,7 @@ final class HistoryDrawerController {
         // The window is ordered out by the animation's own completion, not after a duration chosen
         // to match it. The spike used 0.38 s beside a spring it had to be kept in step with by
         // hand; a completion cannot drift out of step with the animation it belongs to.
-        withAnimation(closeAnimation) {
+        withAnimation(DrawerMotion.close(reduceMotion: reduceMotion())) {
             model.revealed = false
         } completion: { [weak self] in
             guard let self, !self.isVisible else { return }
@@ -152,7 +178,9 @@ final class HistoryDrawerController {
     /// `NSApplication!` and is nil in a process that has not made one — which is every unit test,
     /// where this trapped rather than answering "no window".
     private var window: NSWindow? {
-        attachedWindow ?? NSApplication.shared.windows.first { $0.title == "Reading History" }
+        // **Never by title**: `Window("Reading History", …)` is localised, so a title comparison
+        // found nothing in any translated build, and said nothing about it.
+        attachedWindow ?? XiaolaiDictScene.window(of: XiaolaiDictScene.drawerID)
     }
 
     /// Placement is a scene default only once. Apply the docked frame to the actual window too,
@@ -242,6 +270,14 @@ final class HistoryDrawerController {
         hide()
     }
 
+    /// A click that arrived as one of this app's own events. In the drawer it is the drawer's
+    /// business; anywhere else — the Library, Settings, a pinned note, the lookup card — the reader
+    /// has moved on, and the same decision as a click in another app applies, status item and all.
+    func clickedInApp(window clicked: NSWindow?, at point: CGPoint) {
+        if let clicked, clicked === window { return }
+        clickedOutside(at: point)
+    }
+
     private func installClickAway() {
         removeClickAway()
         clickAway = NSEvent.addGlobalMonitorForEvents(
@@ -251,11 +287,24 @@ final class HistoryDrawerController {
                 self?.clickedOutside(at: NSEvent.mouseLocation)
             }
         }
+        // The event is always handed on: this watches, it does not take. A menu's own tracking
+        // loop consumes its clicks before a local monitor sees them, so choosing from a card's
+        // context menu does not count as clicking away.
+        clickInApp = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.clickedInApp(window: event.window, at: NSEvent.mouseLocation)
+            }
+            return event
+        }
     }
 
     private func removeClickAway() {
         if let clickAway { NSEvent.removeMonitor(clickAway) }
         clickAway = nil
+        if let clickInApp { NSEvent.removeMonitor(clickInApp) }
+        clickInApp = nil
     }
 
     /// `isolated` so it can reach both registrations: a nonisolated `deinit` cannot touch a

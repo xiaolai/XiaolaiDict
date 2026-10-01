@@ -29,12 +29,23 @@ import XiaolaiDictCore
 
 /// What a fresh install still needs, as a board the reader can open whenever they like.
 ///
-/// Rows tick themselves: the permission poll below is the same one the settings window runs,
-/// because macOS posts nothing when a permission changes. Nothing here has a Next button, and
-/// nothing is hidden once it is done.
+/// Rows settle themselves: the permission poll below is the only one in the window, because
+/// macOS posts nothing when a permission changes. Nothing here has a Next button, and nothing is
+/// hidden once it is done.
+///
+/// **The type is the system's, like every other pane.** The rows were set from the reader's
+/// text size — 12 pt at Standard beside the 13 pt of Reading, Lookup and Dictionary — so the
+/// window changed type size from tab to tab and only two panes answered the Size control. That
+/// control is for what is *read*: cards, sentences, the lookup window. Settings is chrome.
+/// Spacing still comes from the scale, which is where spacing lives.
 public struct SetupView: View {
     @Environment(\.scale) private var scale
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var model: SetupModel
+    /// A model the reader asked to remove, held until they confirm: it is gigabytes, and getting
+    /// it back is a download.
+    @State private var removing: LocalModelChoice.InstalledModel?
     /// Optional so a preview can show the board without the app behind it.
     private var dictionary: DictionaryChoice?
     private var shortcut: ShortcutChoice?
@@ -47,6 +58,9 @@ public struct SetupView: View {
     private var shortcutIsRegistered: Bool
     /// The local model's row: its state, and the download the reader can agree to or decline.
     private var localModel: LocalModelChoice?
+    /// Told whether anything here still needs the reader, whenever that is known and changes —
+    /// so the window can open on this pane next time while something does.
+    private var onOutstandingChange: ((Bool) -> Void)?
 
     public init(
         model: SetupModel = SetupModel(), dictionary: DictionaryChoice? = nil,
@@ -56,7 +70,8 @@ public struct SetupView: View {
         // known" and offers nothing, with nothing to say it was a mistake rather than a state.
         localModel: LocalModelChoice?,
         openSettings: ((SettingsPane) -> Void)? = nil,
-        refreshDictionaries: (() async -> Void)? = nil
+        refreshDictionaries: (() async -> Void)? = nil,
+        onOutstandingChange: ((Bool) -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         self.dictionary = dictionary
@@ -65,6 +80,15 @@ public struct SetupView: View {
         self.localModel = localModel
         self.openSettings = openSettings
         self.refreshDictionaries = refreshDictionaries
+        self.onOutstandingChange = onOutstandingChange
+    }
+
+    /// Whether something still needs the reader — nil until the board can say. Before the first
+    /// probe answers, and while the dictionaries are still being read, "nothing outstanding" would
+    /// be a guess, and a guess stored is how the window stops opening here on a fresh install.
+    var isUnfinished: Bool? {
+        guard model.hasAsked, !board.isAsking else { return nil }
+        return !board.outstanding.isEmpty
     }
 
     /// Built fresh on every evaluation, from whatever is true now. Storing it is how a board starts
@@ -83,23 +107,28 @@ public struct SetupView: View {
 
     public var body: some View {
         Form {
-            Section {
-                summary.foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             ForEach(board.steps) { step in
-                Section { row(step) }
+                Section {
+                    row(step)
+                } header: {
+                    // **The summary is the header of the first group, not a group of its own.**
+                    // Alone in a section it was grey text in a white box — the shape of a
+                    // disabled field — above the rows it was summarising.
+                    if step == board.steps.first {
+                        summary
+                            .font(.body)
+                            .textCase(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
-        // The same width as the settings window. Not a duplicated number but the same role: this is
-        // the width a form of grouped sections reads well at, and the two surfaces are the same
-        // kind of surface. If that width moves, both should move together.
-        .frame(width: Token.Panel.settingsWidth)
-        // **As tall as it is, not as tall as SwiftUI's default.** A grouped `Form` scrolls, so it
-        // offers the window no height — and the board opened at 450 with the model row's buttons
-        // below the fold on exactly the Mac the row is for: one with no model downloaded.
-        .fitsItsContent(width: Token.Panel.settingsWidth)
+        // **No frame and no window fit of its own.** This was a window once and carried
+        // `.frame(width:)` and `.fitsItsContent(width:)` into the tab it became — a second mover
+        // on the settings window, with no ceiling, beside `SettingsView`'s clamped one. The pane
+        // now only reports its height, like the other five, and `SettingsView` moves the window.
+        //
         // macOS posts nothing when a permission changes, and the reader grants them in another app
         // and comes back. Polling is the only way to notice, and `.task` stops it when the window
         // goes away.
@@ -108,6 +137,21 @@ public struct SetupView: View {
                 await model.refresh()
                 try? await Task.sleep(for: Token.Timing.permissionPoll)
             }
+        }
+        .onChange(of: isUnfinished, initial: true) { _, unfinished in
+            if let unfinished { onOutstandingChange?(unfinished) }
+        }
+        .confirmationDialog(
+            "Remove this model?",
+            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+            presenting: removing
+        ) { model in
+            Button("Remove \(model.size.displayName)", role: .destructive) {
+                localModel?.removeModel(model.size)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text("\(model.size.displayName) frees \(Self.bytes(model.bytes)) on this Mac. Using it again means downloading it again.")
         }
     }
 
@@ -143,10 +187,10 @@ public struct SetupView: View {
                 // "above" was wrong: this summary sits before every row, so the model row is below
                 // it. Named rather than pointed at, because which direction it is in depends on a
                 // layout this sentence should not have to know.
-                Text("Nothing is waiting on you. The local model is still one click away, in the translation row.")
+                Text("Nothing is waiting on you. The local model is still one click away, in the last row.")
             case 0: Text("Everything needed is in place. Anything here can still be changed.")
             case 1: Text("One thing is still needed.")
-            default: Text("\(board.outstanding.count) things are still needed.")
+            default: Text("^[\(board.outstanding.count) thing](inflect: true) are still needed.")
             }
         }
     }
@@ -154,17 +198,13 @@ public struct SetupView: View {
     @ViewBuilder private func row(_ step: SetupBoard.Step) -> some View {
         VStack(alignment: .leading, spacing: scale.space.stack) {
             HStack(spacing: scale.space.inline) {
-                let (symbol, colour) = symbolAndColour(step)
-                Image(systemName: symbol).foregroundStyle(colour)
-                title(step).font(.system(size: scale.text.heading, weight: .medium))
+                mark(step)
+                title(step).font(.headline)
                 Spacer(minLength: scale.space.inline)
-                state(step)
-                    .font(.system(size: scale.text.body, weight: .medium))
-                    .foregroundStyle(.secondary)
+                state(step).foregroundStyle(.secondary)
             }
 
             detail(step)
-                .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -173,18 +213,20 @@ public struct SetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The unsettled symbol. A step the reader need not act on is not a warning.
-    private func symbol(_ step: SetupBoard.Step) -> String {
-        step.needsReader ? "exclamationmark.triangle.fill" : "circle"
+    /// The marks a row can carry. State, not actions — which is why they are named here and not
+    /// in `ActionSymbol`, except the warning, which is that enum's own.
+    private enum Mark {
+        static let settled = "checkmark.circle.fill"
+        static let open = "circle"
     }
 
     @ViewBuilder private func title(_ step: SetupBoard.Step) -> some View {
         switch step {
         case .accessibility: Text("Accessibility")
         case .screenRecording: Text("Screen Recording")
-        case .dictionary: Text("Study dictionary")
-        case .shortcut: Text("Lookup shortcut")
-        case .localModel: Text("Translation and sense picking")
+        case .dictionary: Text("Study Dictionary")
+        case .shortcut: Text("Lookup Shortcut")
+        case .localModel: Text("Translation and Meanings")
         }
     }
 
@@ -202,8 +244,10 @@ public struct SetupView: View {
 
     @ViewBuilder private func detail(_ step: SetupBoard.Step) -> some View {
         switch step {
-        case .accessibility: Text(Permission.accessibility.blocks)
-        case .screenRecording: Text(Permission.screenRecording.blocks)
+        case .accessibility:
+            Text(Permission.accessibility.explanation(isGranted: board.isGranted(.accessibility)))
+        case .screenRecording:
+            Text(Permission.screenRecording.explanation(isGranted: board.isGranted(.screenRecording)))
         case .dictionary: dictionaryDetail
         case .shortcut: shortcutDetail
         case .localModel: modelDetail
@@ -220,32 +264,34 @@ public struct SetupView: View {
             // dictionary's study history instead of theirs. "No sense can be marked" was untrue,
             // and so is "they will not be recorded".
             Text("""
-                 The dictionary you study from is no longer enabled in Dictionary. Senses are \
-                 being marked against whichever dictionary answers instead, and study history is \
-                 kept per dictionary — so those marks build up apart from yours.
+                 The dictionary you study from is no longer turned on in the Dictionary app. \
+                 Meanings are being matched in whichever dictionary answers instead, and study \
+                 progress is kept separately for each dictionary, so it is building up apart \
+                 from yours.
                  """)
         } else if let chosen = board.chosenDictionary {
-            Text("Studying from \(chosen.identity.name) — \(chosen.note).")
+            Text(DictionaryLabels.studying(from: chosen))
         } else if board.isAsking {
             // **Asked and failed is not still asking.** The list is fetched once, in a task that
             // has already ended, so without this distinction a service that answered nothing left
             // the row saying "Asking…" for the life of the window.
             if dictionary?.hasAsked == true {
-                Text("The dictionary service did not answer, so no dictionary can be suggested.")
+                Text("Your dictionaries could not be read, so none can be suggested.")
             } else {
-                Text("Asking which dictionaries are enabled…")
+                Text("Looking for your dictionaries…")
             }
         } else {
             switch board.proposal {
             case .propose(let one):
                 Text("""
-                     \(one.identity.name) matches your language. One dictionary is studied from \
-                     at a time, and changing it later starts your study over.
+                     \(one.identity.name) matches your language. You study from one dictionary \
+                     at a time, and changing it later starts review over.
                      """)
             case .choose(let several):
                 Text("""
-                     \(several.count) enabled dictionaries match your language. Choose the one to \
-                     study from — changing it later starts your study over.
+                     ^[\(several.count) dictionary](inflect: true) that you have turned on match \
+                     your language. Choose the one to study from. Changing it later starts review \
+                     over.
                      """)
             case .nothingSuitable:
                 // **"None declares it" is not "you have none".** Three of the seven dictionaries
@@ -273,17 +319,17 @@ public struct SetupView: View {
                     // "this will notice" would have the reader waiting for something that never
                     // happens. The button beside it is the answer.
                     Text("""
-                         No enabled dictionary explains English in your language. Enable one in \
-                         Dictionary, under Settings, then choose Check again.
+                         None of your dictionaries explains English in your language. Turn one on \
+                         in the Dictionary app, under Settings, then choose Check Again.
                          """)
                 } else {
                     // "Some", not "none": a reader can have NOAD — which declares its languages
                     // and is simply not for them — beside an undeclared conversion, and a sentence
                     // claiming nothing declares anything would be false in front of them.
                     Text("""
-                         Some enabled dictionaries do not say which language they explain English \
-                         in, so none can be suggested. Choose one yourself, or enable a dictionary \
-                         for your language in Dictionary.
+                         Some of your dictionaries do not say which language they explain English \
+                         in, so none can be suggested. Choose one yourself, or turn on a dictionary \
+                         for your language in the Dictionary app.
                          """)
                 }
             }
@@ -299,16 +345,29 @@ public struct SetupView: View {
         case .tooLittleMemory: Text("Not available")
         case nil: Text("Not known")
         case .ready: nil
-        case .notDownloaded, .stopped: board.modelDeclined ? Text("Not now") : nil
+        case .notDownloaded, .stopped: board.modelDeclined ? Text("Not downloaded") : nil
         }
     }
 
     /// The tick, the warning, or neither. **A step this Mac cannot have gets no tick**: a green
     /// check over "Not available" would claim the reader had received something they have not.
-    private func symbolAndColour(_ step: SetupBoard.Step) -> (String, AnyShapeStyle) {
-        guard board.isAvailable(step) else { return ("circle", AnyShapeStyle(.secondary)) }
-        if board.isSettled(step) { return ("checkmark.circle.fill", AnyShapeStyle(.green)) }
-        return (symbol(step), step.needsReader ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+    ///
+    /// The warning's tint comes from `StatusPalette`, which holds 3:1 on the form's ground in
+    /// both appearances and steps up under Increase Contrast. It was the system orange, which
+    /// does neither. Each mark is a different shape as well as a different colour, and the state
+    /// word sits at the other end of the row.
+    @ViewBuilder private func mark(_ step: SetupBoard.Step) -> some View {
+        if !board.isAvailable(step) {
+            Image(systemName: Mark.open).foregroundStyle(.secondary)
+        } else if board.isSettled(step) {
+            Image(systemName: Mark.settled).foregroundStyle(.green)
+        } else if step.needsReader {
+            ActionSymbol.warning.image
+                .foregroundStyle(StatusPalette.caution.color(in: scheme, contrast: contrast))
+        } else {
+            // A step the reader need not act on is not a warning.
+            Image(systemName: Mark.open).foregroundStyle(.secondary)
+        }
     }
 
     /// What the model does, what it costs, and — while it is absent — what does its jobs instead.
@@ -319,7 +378,7 @@ public struct SetupView: View {
     @ViewBuilder private var modelDetail: some View {
         switch board.model {
         case .ready(let size):
-            Text("\(size.displayName) translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere.")
+            Text("\(size.displayName) translates your sentences and chooses the meaning you met, on this Mac. Nothing is sent anywhere.")
         case .downloading(let progress, let size, let replacing):
             VStack(alignment: .leading, spacing: scale.space.line) {
                 if let replacing {
@@ -351,11 +410,11 @@ public struct SetupView: View {
                 fallbackDetail(untilThen: false)
             }
         case nil:
-            Text("This board was opened without the model's state, so it cannot say what is here.")
+            Text("What this Mac can do about the local model is not known yet.")
         case .notDownloaded:
             VStack(alignment: .leading, spacing: scale.space.line) {
                 if let size = localModel?.recommended {
-                    Text("\(size.displayName) translates your sentences and picks the sense you met, on this Mac — a \(Self.bytes(size.manifest.totalBytes)) download.")
+                    Text("\(size.displayName) translates your sentences and chooses the meaning you met, on this Mac — a \(Self.bytes(size.manifest.totalBytes)) download.")
                 }
                 fallbackDetail()
             }
@@ -374,30 +433,31 @@ public struct SetupView: View {
         if untilThen {
             if board.engine.isOnDevice {
                 Text("""
-                     Until then, senses are picked by Apple's on-device model, and a simpler match \
-                     where it declines. Sentences are translated by Apple where its language pack is \
-                     installed — which cannot be told which sense you met, and misreads some.
+                     Until then, meanings are chosen by Apple's on-device model, and by a simpler \
+                     match where it declines. Sentences are translated by Apple where its language \
+                     pack is installed — which cannot be told which meaning you met, and misreads \
+                     some.
                      """)
             } else {
                 Text("""
-                     Until then, senses are picked by a simpler match. Sentences are translated by \
-                     Apple where its language pack is installed — which cannot be told which sense you \
-                     met, and misreads some.
+                     Until then, meanings are chosen by a simpler match. Sentences are translated \
+                     by Apple where its language pack is installed — which cannot be told which \
+                     meaning you met, and misreads some.
                      """)
             }
         } else {
             if board.engine.isOnDevice {
                 Text("""
-                     Without a local model, senses are picked by Apple's on-device model, and a \
-                     simpler match where it declines. Sentences are translated by Apple where its \
-                     language pack is installed — which cannot be told which sense you met, and \
+                     Without a local model, meanings are chosen by Apple's on-device model, and by \
+                     a simpler match where it declines. Sentences are translated by Apple where its \
+                     language pack is installed — which cannot be told which meaning you met, and \
                      misreads some.
                      """)
             } else {
                 Text("""
-                     Without a local model, senses are picked by a simpler match. Sentences are \
-                     translated by Apple where its language pack is installed — which cannot be told \
-                     which sense you met, and misreads some.
+                     Without a local model, meanings are chosen by a simpler match. Sentences are \
+                     translated by Apple where its language pack is installed — which cannot be \
+                     told which meaning you met, and misreads some.
                      """)
             }
         }
@@ -410,7 +470,7 @@ public struct SetupView: View {
 
     @ViewBuilder private var shortcutDetail: some View {
         if let shortcut = shortcut?.shortcut, shortcut.isUsable, shortcutIsRegistered {
-            Text("Select a word anywhere and press \(shortcut.label()).")
+            Text("Select a word in any app and press \(shortcut.label()).")
         } else if let shortcut = shortcut?.shortcut, shortcut.isUsable {
             // **Registered is not the same as well-formed.** Another app can hold the combination
             // exclusively, and telling the reader to press one that was refused sends them to try
@@ -424,12 +484,22 @@ public struct SetupView: View {
             // reaches for, and a refusal that offers a route which does not exist sends them
             // looking for it.
             Text("""
-                 \(shortcut.label()) is not registered, so it will not look anything up. Choose \
+                 \(shortcut.label()) could not be set up, so it will not look anything up. Choose \
                  another combination.
                  """)
         } else {
-            Text("No shortcut is registered, so a selection cannot be looked up until you choose one.")
+            Text("No shortcut is set, so a selection cannot be looked up until you choose one.")
         }
+    }
+
+    /// **Whether this step's action is the one drawn prominent — at most one on the whole pane.**
+    ///
+    /// Every primary action was prominent, independently: with both grants missing, no dictionary
+    /// chosen and no model, a fresh install showed four filled buttons, and when everything is
+    /// prominent nothing says what to do first. The first step still needing the reader is the
+    /// answer to that question, and it is the only one that gets the fill.
+    private func isNext(_ step: SetupBoard.Step) -> Bool {
+        board.outstanding.first == step
     }
 
     @ViewBuilder private func actions(_ step: SetupBoard.Step) -> some View {
@@ -437,17 +507,20 @@ public struct SetupView: View {
         case .accessibility, .screenRecording:
             let permission: Permission = step == .accessibility ? .accessibility : .screenRecording
             if !board.isGranted(permission) {
+                // Secondary, not tertiary: this is the path the reader is being sent to find.
                 Text(permission.location)
-                    .font(.system(size: scale.text.label))
-                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                 HStack(spacing: scale.space.stack) {
                     // macOS prompts only the first time ever, which is why the second button
                     // exists and why the list is named above it.
-                    Button("Ask macOS…") { permission.request() }
-                        .buttonStyle(.glassProminent)
-                    Button("Open Settings…") { NSWorkspace.shared.open(permission.settingsURL) }
-                        .buttonStyle(.glass)
+                    Button("Request Access…") { permission.request() }
+                        .stepAction(prominent: isNext(step))
+                    // *System* Settings: this button is inside the app's own Settings window,
+                    // where "Open Settings…" named the window the reader was already in.
+                    Button("Open System Settings…") { NSWorkspace.shared.open(permission.settingsURL) }
+                        .stepAction()
                 }
                 .controlSize(.small)
             }
@@ -458,7 +531,7 @@ public struct SetupView: View {
         case .shortcut:
             if let openSettings {
                 Button("Change…") { openSettings(.lookup) }
-                    .buttonStyle(.glass)
+                    .stepAction()
                     .controlSize(.small)
             }
         }
@@ -467,36 +540,42 @@ public struct SetupView: View {
     /// **The models on this Mac, and which one answers.** Shown only where there is a choice to
     /// make — one model is not a switch, it is a label — and each row says what it occupies, so
     /// keeping it can be weighed against what it costs.
+    ///
+    /// **A radio group, which is what "one of these" is.** It was a column of plain buttons each
+    /// drawing `largecircle.fill.circle` or `circle`: it looked like radio buttons and told
+    /// VoiceOver nothing about which was selected. Removing a model sat beside each as a plain
+    /// 10-point word that deleted gigabytes on one click; it is a menu now, and it asks.
     @ViewBuilder private func modelSwitch(_ localModel: LocalModelChoice) -> some View {
         if localModel.onDisk.count > 1 {
             VStack(alignment: .leading, spacing: scale.space.inline) {
-                ForEach(localModel.onDisk) { model in
-                    HStack(spacing: scale.space.inline) {
-                        Button {
-                            localModel.choose(model.size)
-                        } label: {
-                            Label(
-                                model.size.displayName,
-                                systemImage: localModel.chosen == model.size
-                                    ? "largecircle.fill.circle" : "circle")
-                        }
-                        .buttonStyle(.plain)
-                        Text(Self.bytes(model.bytes))
-                            .font(.system(size: scale.text.micro))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                        Button("Remove") { localModel.removeModel(model.size) }
-                            .buttonStyle(.plain)
-                            .font(.system(size: scale.text.micro))
+                Picker(
+                    "Answer with",
+                    selection: Binding(get: { localModel.chosen }, set: { localModel.choose($0) })
+                ) {
+                    ForEach(localModel.onDisk) { model in
+                        // A name and a size, composed: neither is prose for a translator.
+                        Text(verbatim: "\(model.size.displayName) — \(Self.bytes(model.bytes))")
+                            .tag(LocalModelSize?.some(model.size))
                     }
                 }
+                .pickerStyle(.radioGroup)
                 // **Said where it is true, and only then.** A reader comparing answers must know
                 // when the one in front of them is not from the model they chose.
                 if case .standingIn(let answering, let wanted) = localModel.answering {
                     Text("\(wanted.displayName) needs more free memory than this Mac has right now, so \(answering.displayName) is answering.")
-                        .font(.system(size: scale.text.micro))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                Menu("Remove a Model") {
+                    ForEach(localModel.onDisk) { model in
+                        Button { removing = model } label: {
+                            Text(verbatim: "\(model.size.displayName) (\(Self.bytes(model.bytes)))…")
+                        }
+                    }
+                }
+                .fixedSize()
+                .controlSize(.small)
             }
         }
     }
@@ -511,8 +590,8 @@ public struct SetupView: View {
             selection: Binding(get: { localModel.source }, set: { localModel.chooseSource($0) })
         ) {
             Text("Fastest available").tag(ModelSource.fastest)
-            Text("ModelScope").tag(ModelSource.modelScope)
-            Text("Hugging Face").tag(ModelSource.huggingFace)
+            Text(verbatim: "ModelScope").tag(ModelSource.modelScope)
+            Text(verbatim: "Hugging Face").tag(ModelSource.huggingFace)
         }
         .pickerStyle(.menu)
         .labelsHidden()
@@ -520,7 +599,7 @@ public struct SetupView: View {
     }
 
     /// **A download never starts unasked**, so it is always a button — and it stays in the row after
-    /// Not now, one click away, for as long as there is something to download.
+    /// Not Now, one click away, for as long as there is something to download.
     @ViewBuilder private var modelActions: some View {
         if let localModel {
             VStack(alignment: .leading, spacing: scale.space.inline) {
@@ -529,7 +608,7 @@ public struct SetupView: View {
                 switch localModel.state {
                 case .downloading:
                     Button("Stop") { localModel.cancel() }
-                        .buttonStyle(.glass)
+                        .stepAction()
                 case .notDownloaded, .stopped:
                     // The size a stopped download was of, so Resume finishes what is on disk rather
                     // than starting a second model beside it.
@@ -537,19 +616,21 @@ public struct SetupView: View {
                         Button(localModel.state == .notDownloaded ? "Download" : "Resume") {
                             localModel.download(size)
                         }
-                        .buttonStyle(.glassProminent)
+                        .stepAction(prominent: isNext(.localModel))
                         sourcePicker(localModel)
                         if !localModel.declined {
-                            Button("Not now") { localModel.decline() }
-                                .buttonStyle(.glass)
+                            Button("Not Now") { localModel.decline() }
+                                .stepAction()
                         }
                     }
                 case .ready:
                     if let larger = localModel.larger {
-                        Button("Use the larger model (\(Self.bytes(larger.manifest.totalBytes)))") {
+                        // **"Download", because that is what one click does.** It said "Use the
+                        // larger model", which reads as a switch and starts six gigabytes.
+                        Button("Download Larger Model (\(Self.bytes(larger.manifest.totalBytes)))") {
                             localModel.download(larger)
                         }
-                        .buttonStyle(.glass)
+                        .stepAction()
                     }
                 case .tooLittleMemory:
                     EmptyView()
@@ -564,37 +645,38 @@ public struct SetupView: View {
         HStack(spacing: scale.space.stack) {
             if case .propose(let one) = board.proposal, board.chosenDictionary == nil {
                 Button("Use \(one.identity.name)") { dictionary?.choose(one.identity.key) }
-                    .buttonStyle(.glassProminent)
+                    .stepAction(prominent: isNext(.dictionary))
             }
             if case .nothingSuitable = board.proposal, !board.isAsking {
-                // The sideways offer comes first and is prominent, because for a reader who installed
-                // a dictionary for their own language it is the answer — and "Open Dictionary…" would
-                // send them back to a list they have already set.
+                // The sideways offer comes first and is the step's action, because for a reader
+                // who installed a dictionary for their own language it is the answer — and "Open
+                // Dictionary…" would send them back to a list they have already set.
                 if let sideways = board.englishForAnotherLanguage.first {
                     Button("Use \(sideways.identity.name)") { dictionary?.choose(sideways.identity.key) }
-                        .buttonStyle(.glassProminent)
+                        .stepAction(prominent: isNext(.dictionary))
                     Button("Open Dictionary…") { openDictionaryApp() }
+                        .stepAction()
                 } else {
                     Button("Open Dictionary…") { openDictionaryApp() }
-                        .buttonStyle(.glassProminent)
+                        .stepAction(prominent: isNext(.dictionary))
                 }
             }
             if let openSettings, !board.isAsking {
                 Button(board.chosenDictionary == nil ? "Choose…" : "Change…") {
                     openSettings(.dictionary)
                 }
-                .buttonStyle(.glass)
+                .stepAction()
             }
-            // **The way back from a service that never answered.** The list is fetched once, in a
-            // task that has already ended, and the permission poll does not retry it — so without
-            // this a failed or slow probe leaves the row saying "Asking…" for the life of the
-            // window. It is also how the board notices a dictionary enabled in Dictionary.app,
-            // which the "enable one" sentence above promises it will.
+            // **The way back from dictionaries that could not be read.** The list is fetched
+            // once, in a task that has already ended, and the permission poll does not retry it —
+            // so without this a failed or slow probe leaves the row saying it is still looking for
+            // the life of the window. It is also how the pane notices a dictionary turned on in
+            // Dictionary.app, which the "turn one on" sentence above promises it will.
             if let refreshDictionaries {
-                Button(board.isAsking ? "Try again" : "Check again") {
+                Button(board.isAsking ? "Try Again" : "Check Again") {
                     Task { await refreshDictionaries() }
                 }
-                .buttonStyle(.glass)
+                .stepAction()
             }
         }
         .controlSize(.small)
@@ -627,6 +709,22 @@ public struct SetupView: View {
             if let error {
                 Self.log.fault("Dictionary.app would not open: \(String(describing: error), privacy: .public)")
             }
+        }
+    }
+}
+
+private extension View {
+    /// A setup row's button: bordered, and filled only where it is the next thing to do.
+    ///
+    /// **Bordered, never glass.** These are rows of a grouped form — content — and glass is for
+    /// what floats over content. They were `.glass` and `.glassProminent`, twelve of them, in a
+    /// file whose own header says the rows dropped their glass because glass inside glass muddies
+    /// both.
+    @ViewBuilder func stepAction(prominent: Bool = false) -> some View {
+        if prominent {
+            buttonStyle(.borderedProminent)
+        } else {
+            buttonStyle(.bordered)
         }
     }
 }

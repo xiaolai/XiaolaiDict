@@ -22,9 +22,42 @@ struct TextSizeTests {
     @Test func everySizeIsOneSomebodyCouldRead() {
         for size in TextSize.allCases {
             #expect(size.em >= 11, "\(size) is below the platform's smallest UI size")
-            #expect(size.em <= 18, "\(size) is larger than a window can lay out")
+            #expect(size.em <= 24, "\(size) is larger than twice the default")
             #expect(!size.label.isEmpty, "\(size) has no name to show the reader")
         }
+    }
+
+    /// **Nothing is set under 10 pt, at any size.** Measured 2026-10-01: at `compact`, `small` was
+    /// 9.90 pt and `micro` 9.35 pt, and those two tokens carried 93 of the 147 uses of the scale —
+    /// so most of the app's text was under the platform's floor at the size offered for density.
+    @Test func noTextTokenIsSetUnderTenPoints() {
+        for size in TextSize.allCases {
+            let text = Scale(size).text
+            let tokens: [(String, CGFloat)] = [
+                ("display", text.display), ("heading", text.heading), ("strong", text.strong),
+                ("body", text.body), ("label", text.label), ("small", text.small),
+                ("micro", text.micro), ("icon", text.icon),
+            ]
+            for (name, points) in tokens {
+                #expect(points >= Token.Text.minimum, "\(size) sets \(name) at \(points) pt")
+            }
+        }
+        #expect(Token.Text.minimum == 10)
+    }
+
+    /// The floor must not flatten the scale where it does not bite: at the default size `micro`
+    /// is still smaller than `small`, or two roles have quietly become one.
+    @Test func theFloorLeavesTheDefaultScaleAlone() {
+        let text = Scale.standard.text
+        #expect(text.micro < text.small)
+        #expect(text.small < text.label)
+    }
+
+    /// **The largest size is twice the default.** It was 1.25× — 15 pt against 12 — which is a
+    /// narrower range than the platform's own guidance asks an app that sets its own type to offer.
+    @Test func theLargestSizeIsTwiceTheDefault() throws {
+        let largest = try #require(TextSize.allCases.map(\.em).max())
+        #expect(largest / TextSize.standard.em == 2)
     }
 
     /// The default matters more than the extremes: it is what almost every reader will ever see.

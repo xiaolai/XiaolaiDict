@@ -27,6 +27,21 @@ public struct TranslationPane: Equatable {
     public let body: Body
     /// Said under Apple's answer, and under nothing else.
     public let caveat: String?
+    /// **Who wrote the translation, where the caveat does not already say.** The local model's
+    /// answer had no label at all, so a generated sentence sat under a dictionary definition, in
+    /// the same card, looking like the publisher's text. Nil for Apple's answer — its caveat names
+    /// it — and for every outcome that is not a translation.
+    public let attribution: String?
+
+    /// What the pane says under a translation: the weaker engine's caveat, or the model's label.
+    /// One line, because both answer "who said this, and how far to trust it".
+    public var provenance: String? { caveat ?? attribution }
+
+    /// The translation itself, where there is one — what the pane's Copy takes.
+    public var translatedText: String? {
+        guard case .text(let text) = body else { return nil }
+        return text
+    }
     /// Whether this **outcome** is one to offer a download beside. Whether the app can actually
     /// start one is read live where the pane is drawn: a download that began while the translation
     /// was in flight would otherwise still be offered by a snapshot taken before it.
@@ -69,30 +84,42 @@ public struct TranslationPane: Equatable {
         case .translated(let text, by: .localModel):
             body = .text(text)
             caveat = nil
+            attribution = Self.localModel
             offersDownload = false
         case .translated(let text, by: .appleTranslation):
             body = .text(text)
             caveat = Self.weakerEngine
+            attribution = nil
             offersDownload = true
         case .needsLanguagePack(let source, let target):
             body = .languagePack(source: source, target: target)
             caveat = nil
+            attribution = nil
             offersDownload = true
         case .sameLanguage:
             body = .sameLanguage
             caveat = nil
+            attribution = nil
             offersDownload = false
         case .unavailable:
             body = .unavailable
             caveat = nil
+            attribution = nil
             offersDownload = true
         }
     }
 
     /// The weaker engine, said as what it means for this sentence rather than as a ranking.
     static var weakerEngine: String {
-        String(localized: "Translated by Apple, which cannot be told which sense you met and misreads some sentences.",
+        String(localized: "Translated by Apple, which cannot be told which meaning you read and misreads some sentences.",
                comment: "Under a translation of the reader's sentence when Apple's Translation framework produced it")
+    }
+
+    /// The model's own label. It says that a model wrote this and that a model can be wrong — the
+    /// two things a reader needs before believing a sentence nobody published.
+    static var localModel: String {
+        String(localized: "Translated by the local model · may be wrong",
+               comment: "Under a translation of the reader's sentence when the downloaded model produced it")
     }
 }
 
@@ -170,71 +197,77 @@ struct TranslationPaneView: View {
     @Environment(\.scale) private var scale
     @Environment(\.translation) private var actions
     let pane: TranslationPane
+    /// Asks again. The footer's own control did this and nothing in the pane said so; beside the
+    /// answer it is the thing to press when the answer is wrong.
+    let retry: () -> Void
     /// Shown when System Settings would not open — a link macOS no longer answers must not read as
     /// a button the reader failed to press.
     @State private var failedToOpenSettings = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: scale.space.line) {
+        ModelPane {
             answer
-            if let caveat = pane.caveat {
-                Text(caveat)
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            ModelPaneFooter(provenance: pane.provenance.map { Text(verbatim: $0) },
+                            copyable: pane.translatedText, retry: retry)
             waysOut
         }
         .onChange(of: pane) { failedToOpenSettings = false }
-        .padding(.horizontal, scale.space.padAcross)
-        .padding(.vertical, scale.space.column)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(Token.Opacity.senseWash))
     }
 
-    /// What came back, or why nothing did.
+    /// What came back, or why nothing did. Set at the card's own sizes: the reader's chosen text
+    /// size reached the definition and stopped short of its translation.
     @ViewBuilder private var answer: some View {
-        switch pane.body {
-        case .text(let text):
-            Text(text).font(.callout).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        case .languagePack(let source, let target):
-            Text("""
-                 Translating \(Self.languageName(source)) into \(Self.languageName(target)) needs \
-                 that language pair. Add it in System Settings, under General → Language & Region → \
-                 Translation Languages.
-                 """)
-                .font(.callout).fixedSize(horizontal: false, vertical: true)
-        case .sameLanguage:
-            Text("This sentence is already in your language.").font(.callout)
-        case .unavailable:
-            Text("This sentence could not be translated.").font(.callout)
+        Group {
+            switch pane.body {
+            case .text(let text):
+                Text(text)
+            case .languagePack(let source, let target):
+                Text("""
+                     Translating \(Self.languageName(source)) into \(Self.languageName(target)) needs \
+                     that language pair. Add it in System Settings, under General → Language & Region → \
+                     Translation Languages.
+                     """)
+            case .sameLanguage:
+                Text("This sentence is already in your language.")
+            case .unavailable:
+                Text("This sentence could not be translated.")
+            }
         }
+        .font(.system(size: scale.text.body))
+        .lineSpacing(scale.text.leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The ways out: where a missing language pair is added, and the download that replaces the
     /// weaker engine. Whether a download can be started is read **now**, not when the translation
     /// came back — one begun since would otherwise be offered by a button that does nothing.
+    ///
+    /// Bordered, not glass: the pane is content on an opaque card, and glass is for controls that
+    /// float over content.
     @ViewBuilder private var waysOut: some View {
-        HStack(spacing: scale.space.stack) {
-            if let settings = TranslationPane.languageSettings, pane.opensLanguageSettings {
-                Button("Open Language & Region…") { open(settings) }
-                    .buttonStyle(.glass)
+        let opensSettings = TranslationPane.languageSettings != nil && pane.opensLanguageSettings
+        let offersDownload = pane.offersDownload && actions.canDownloadModel
+        if opensSettings || offersDownload {
+            HStack(spacing: scale.space.stack) {
+                if let settings = TranslationPane.languageSettings, pane.opensLanguageSettings {
+                    Button("Open Language & Region…") { open(settings) }
+                        .buttonStyle(.bordered)
+                }
+                // Only under the pane that offers the link, and only while it is the same pane:
+                // SwiftUI reuses this view for the next outcome, and a failure left standing under a
+                // translation that has no settings button at all is about nothing the reader can see.
+                if failedToOpenSettings, pane.opensLanguageSettings {
+                    Text("System Settings would not open. Look for Language & Region under General.")
+                        .font(.system(size: scale.text.small))
+                        .foregroundStyle(.secondary)
+                }
+                if offersDownload {
+                    Button("Download Local Model") { actions.downloadModel() }
+                        .buttonStyle(.bordered)
+                }
             }
-            // Only under the pane that offers the link, and only while it is the same pane: SwiftUI
-            // reuses this view for the next outcome, and a failure left standing under a
-            // translation that has no settings button at all is about nothing the reader can see.
-            if failedToOpenSettings, pane.opensLanguageSettings {
-                Text("System Settings would not open. Look for Language & Region under General.")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
-            }
-            if pane.offersDownload, actions.canDownloadModel {
-                Button("Download the local model") { actions.downloadModel() }
-                    .buttonStyle(.glass)
-            }
+            .controlSize(.small)
         }
-        .controlSize(.small)
     }
 
     /// Says so rather than doing nothing: a deep link that a future macOS stops answering would
