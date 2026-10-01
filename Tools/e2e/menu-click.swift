@@ -42,14 +42,21 @@ func centre(of element: AXUIElement) -> CGPoint? {
 func click(_ point: CGPoint, button: CGMouseButton = .left) {
     let down: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
     let up: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
-    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
-    usleep(120_000)
-    CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: point, mouseButton: button)?
-        .post(tap: .cghidEventTap)
-    usleep(80_000)
-    CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button)?
-        .post(tap: .cghidEventTap)
+    // **No modifiers, said rather than inherited.** An event made with no source takes the
+    // session's modifier state, and a `keys … command` posted earlier leaves Command in it — so
+    // this arrived as a Command-click, which on a menu-bar item means "drag me somewhere else" and
+    // never reaches the app. Measured 2026-10-02: after one synthetic ⌘A to TextEdit, three left
+    // clicks in a row opened nothing and the app logged none of them.
+    let sequence: [(CGEventType, CGMouseButton, useconds_t)] = [
+        (.mouseMoved, .left, 120_000), (down, button, 80_000), (up, button, 0)]
+    for (type, pressed, pause) in sequence {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point,
+                                  mouseButton: pressed)
+        else { FileHandle.standardError.write(Data("could not make a mouse event\n".utf8)); exit(1) }
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+        usleep(pause)
+    }
 }
 
 guard let extras = value(ax, "AXExtrasMenuBar"),

@@ -116,7 +116,10 @@ guard let raisedFrame = frame(page), raisedFrame.width > 40, raisedFrame.height 
 let target = CGPoint(x: raisedFrame.maxX - 20, y: raisedFrame.maxY - 20)
 let back = CGEvent(source: nil)?.location ?? target
 for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-    CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: target, mouseButton: .left)?.post(tap: .cghidEventTap)
+    // No modifiers, said rather than inherited from the session — see `menu-click.swift`.
+    let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: target, mouseButton: .left)
+    event?.flags = []
+    event?.post(tap: .cghidEventTap)
     usleep(50_000)
 }
 usleep(300_000)
