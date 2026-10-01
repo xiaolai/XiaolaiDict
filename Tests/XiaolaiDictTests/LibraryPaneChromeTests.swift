@@ -160,7 +160,9 @@ struct LibraryPaneChromeTests {
         let chrome = try source("LibraryPaneChrome.swift")
         #expect(chrome.contains(".keyboardShortcut(\"i\", modifiers: [.option, .command])"))
         #expect(chrome.contains("ActionSymbol.inspector.label"))
-        #expect(chrome.contains(".inspectorColumnWidth(min: scale.space.libraryInspectorMinWidth"))
+        // The floor is the opening width, so the column has one width until the reader drags it:
+        // with a narrower floor it opened at 264 pt or 312 pt depending on the pane visited before.
+        #expect(chrome.contains(".inspectorColumnWidth(min: scale.space.libraryInspectorWidth"))
         #expect(!chrome.contains(".inspectorColumnWidth(scale.space.libraryInspectorWidth)"), "one fixed width")
         #expect(try source("LearningLibraryView.swift").contains("Select a reading to see its details"))
     }

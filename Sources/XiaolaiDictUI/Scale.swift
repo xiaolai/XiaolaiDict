@@ -216,7 +216,6 @@ struct Scale: Equatable, Sendable {
         /// narrowest less the padding it would not have here; the ceiling is the lookup card's own
         /// width, past which the inspector is a second page rather than a detail.
         let libraryInspectorWidth: CGFloat
-        let libraryInspectorMinWidth: CGFloat
         let libraryInspectorMaxWidth: CGFloat
 
         /// How a pile of cards is offset behind its front card. Smaller than `stack`: these are
@@ -256,7 +255,6 @@ struct Scale: Equatable, Sendable {
             cardMaxHeight = em * 32
             panelScrollFloor = em * 2
             libraryInspectorWidth = em * 26
-            libraryInspectorMinWidth = em * 22
             libraryInspectorMaxWidth = em * 33
             peek = em * 0.625
             // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
