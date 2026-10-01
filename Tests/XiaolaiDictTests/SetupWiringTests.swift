@@ -287,16 +287,11 @@ struct SetupWiringTests {
                 + " without Apple Intelligence do not have: \(offenders)"))
     }
 
-    /// The other way in. §4 of the plan asks for both, and a menu item alone leaves a reader who is
-    /// already in Settings with no way to the board.
-    /// **The board is a pane of the settings window, and `showSetup` selects it.** It had a window
-    /// of its own until 2026-10-01 — a second surface over the same facts, and the only place the
-    /// reader could choose which model answers, which is a standing preference rather than
-    /// something a fresh install is missing.
-    @Test func showingTheBoardSelectsItsPane() throws {
-        let app = try code("Sources/XiaolaiDict/XiaolaiDictApp.swift")
-        #expect(app.contains("showSettings(on: .setup)"),
-                "showSetup no longer routes to the setup pane")
+    /// **The board is the settings window's first pane.** It had a window of its own until
+    /// 2026-10-01 — a second surface over the same facts, and the only place the reader could
+    /// choose which model answers, which is a standing preference rather than something a fresh
+    /// install is missing. Being first is what a fresh install lands on.
+    @Test func theBoardIsTheFirstPane() {
         #expect(SettingsPane.allCases.first == .setup,
                 "the board is not the first pane a fresh install lands on")
     }
@@ -323,12 +318,19 @@ struct SetupWiringTests {
             "the pane it opens is handed no licence, whatever the scene passed in")
     }
 
-    /// And the menu, which is where a reader who is not in Settings looks.
-    @Test func theMenuCanOpenTheBoard() throws {
-        // `code`, not `source`: a commented-out `showSetup()` satisfies a raw scan, and the rule
-        // would then read as held while no menu item opened anything.
-        let menu = try code("Sources/XiaolaiDict/XiaolaiDictMenu.swift")
-        #expect(menu.contains("showSetup()"), "no menu item opens the setup board")
+    /// **One door to one window.** "Set Up…" sat beside "Settings…" while the board had a window
+    /// of its own; once it became a pane the two items opened the same window and differed only in
+    /// which tab it landed on. The menu offers Settings, and the board is the tab it opens first.
+    ///
+    /// `code`, not `source`: a commented-out call satisfies a raw scan, and the rule would then
+    /// read as held over a menu that had lost the item entirely.
+    @Test func theMenuOffersOneDoorToSettings() throws {
+        let menu = try code("Sources/XiaolaiDict/MenuBarItem.swift")
+        #expect(menu.contains("showSettings()"), "no menu item opens Settings")
+        #expect(!menu.contains("showSetup()"), """
+            the menu has a second item for the setup board, which is a tab of the window the \
+            item above it already opens
+            """)
     }
 
     /// The board's scene exists and is a `Window`. A `UtilityWindow` is created, reports

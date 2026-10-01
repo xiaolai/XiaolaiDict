@@ -419,12 +419,16 @@ public struct SetupView: View {
             // one, and this surface is not told which occurred — the menu carries the registration
             // error when there is one. Naming a cause the app has not established is how a reader
             // goes looking for the wrong thing.
+            // **Not "or look words up from the menu".** That named an item the menu no longer
+            // carries: Look Up Selection was removed when the menu was cut back to what a reader
+            // reaches for, and a refusal that offers a route which does not exist sends them
+            // looking for it.
             Text("""
                  \(shortcut.label()) is not registered, so it will not look anything up. Choose \
-                 another combination, or look words up from the menu.
+                 another combination.
                  """)
         } else {
-            Text("No shortcut is registered, so selections can be looked up from the menu only.")
+            Text("No shortcut is registered, so a selection cannot be looked up until you choose one.")
         }
     }
 

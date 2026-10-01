@@ -196,6 +196,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // **Not in an instrument run.** An instrument measures the app; a window opening at it
         // unasked is a window in front of whatever it was about to capture.
         if !Self.isInstrumented { openSetupOnFirstLaunch() }
+        // **The history is one click away, not two**, which needs this app to own its menu bar
+        // item — `MenuBarItem` says why `MenuBarExtra` cannot. Installed in every run, instrument
+        // or not: the end-to-end stages drive this menu, and without it there is none to drive.
+        menuBar = MenuBarItem(app: self)
+        menuBar?.install()
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.
@@ -389,18 +394,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
     }
 
-    /// Shows the setup board, which is a **pane of the settings window** rather than a window of
-    /// its own. It had one until 2026-10-01: a second surface over the same facts, and the only
-    /// place the reader could choose which model answers — a standing preference, not something a
-    /// fresh install is missing.
-    func showSetup() {
-        // Logged, because "the board did not come forward" has two very different causes — the
-        // request never arrived, or it arrived and activation was refused — and only the app can
-        // say which. An end-to-end run could not tell them apart from outside.
-        log.notice("setup: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
-        showSettings(on: .setup)
-    }
-
     /// Opens the board unasked, once in the life of an install.
     ///
     /// **Waits for the window actions before opening.** They are captured by `MenuBarLabel`'s
@@ -519,6 +512,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// an instrument can read it back.
     let setup = SetupModel()
 
+    /// The menu bar item, held for the life of the process — `NSStatusBar` keeps its own reference,
+    /// but the object driving it is ours and a released one leaves a dead icon.
+    @ObservationIgnored private var menuBar: MenuBarItem?
+
     /// The settings window, taken from the view inside it rather than searched for among
     /// `NSApp.windows`. A window found by matching its title is a window the report only *believes*
     /// it is measuring — and on a bad day it measures the menu bar's.
@@ -538,7 +535,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the menu reads
 
-    var drawerIsVisible: Bool { drawer.isVisible }
     /// Everything the reader should be told, in the place they already look.
     var problems: [String] {
         [permissions.menuWarning, shortcuts.problem, recorder.problem].compactMap { $0 }

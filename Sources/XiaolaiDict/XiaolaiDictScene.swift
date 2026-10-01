@@ -31,8 +31,17 @@ struct XiaolaiDictScene: App {
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra {
-            XiaolaiDictMenu(app: delegate)
+        // **An empty, uninserted `MenuBarExtra`, kept for one reason**: `MenuBarLabel`'s `.task` is
+        // where `WindowActions.shared` is captured, and it is the only view in this app that lives
+        // as long as the process. The menu bar item itself is `MenuBarItem`, which says why
+        // SwiftUI's cannot tell a left click from a right one.
+        //
+        // **No content**, because none of it could ever be opened. The menu this scene used to
+        // build was a `XiaolaiDictMenu` view, and with `isInserted: false` there is no icon to open
+        // it from — a whole menu's worth of reader-facing text, and a wiring test asserting over
+        // it, describing a surface nobody could reach.
+        MenuBarExtra(isInserted: .constant(false)) {
+            EmptyView()
         } label: {
             MenuBarLabel()
         }
@@ -147,6 +156,9 @@ struct XiaolaiDictSettings: View {
             model: app.settings,
             appearance: app.appearance,
             hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
+            // The watcher, not the policy: whether hover runs at all. It lived only in the menu
+            // bar menu until the menu was trimmed to what a reader reaches for often.
+            hoverEnabled: Binding(get: { app.hover.isWatching }, set: { app.hover.setEnabled($0) }),
             dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
             modelLicence: app.models.licenceURL,

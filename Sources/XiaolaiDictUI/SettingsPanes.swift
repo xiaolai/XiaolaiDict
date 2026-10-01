@@ -254,6 +254,9 @@ struct ReadingPane: View {
 struct LookupPane: View {
     @Environment(\.scale) private var scale
     @Binding var policy: HoverPolicy
+    /// Whether hover is running at all — the *watcher*, not a field of the policy, which is why it
+    /// arrives separately. Nil where the pane is drawn without the app behind it.
+    var hoverEnabled: Binding<Bool>?
     var shortcut: ShortcutChoice?
     /// The shortcut field's recorder. Held by the settings model, because ending it belongs to
     /// whoever knows the reader has left this pane — which this pane cannot see.
@@ -292,6 +295,17 @@ struct LookupPane: View {
     /// What must be true before a hover looks anything up.
     private var gateSection: some View {
         Section {
+            // **The switch, above everything it governs.** It was in the menu bar menu and nowhere
+            // else, so this pane could configure a hover that the reader had no way to turn off
+            // from here — and when the menu was trimmed to the things a reader reaches for often,
+            // switching hover off would have had nowhere left to live.
+            //
+            // Read from the watcher rather than from the setting: if starting it failed, this says
+            // off, which is what is true.
+            if let hoverEnabled {
+                Toggle("Hover Lookup", isOn: hoverEnabled)
+            }
+
             // **Which key, and what the reader does with it — two questions, two rows.** The row
             // was labelled "Hold", which was right only while holding was the only gesture; a
             // label that names the wrong action is worse than none, because the reader does it

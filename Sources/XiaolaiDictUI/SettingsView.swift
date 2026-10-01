@@ -14,7 +14,14 @@ public final class SettingsModel {
     /// Which pane is showing. **Held here rather than in the view** so the app can reach it:
     /// `--settings-report` selects each pane in turn and measures what the window does, and a
     /// selection buried in `@State` would leave the window's own resizing unmeasurable.
-    public var pane: SettingsPane = .reading {
+    /// **Setup, which is the first tab and what a reader opening Settings is usually checking.**
+    /// It was `.reading` while the board had a menu item of its own; with that item gone — it
+    /// opened the same window as `Settings…` and differed only in the tab — landing anywhere else
+    /// would leave no deliberate route to the board at all.
+    ///
+    /// Per launch, not per reader: this model is made when the app starts, so a pane chosen during
+    /// a session is kept for that session and the next launch starts at the board again.
+    public var pane: SettingsPane = .setup {
         didSet { if pane != .lookup { shortcutCapture.end() } }
     }
 
@@ -81,10 +88,9 @@ public struct SettingsView: View {
     /// should not have to build an `Appearance`.
     private var appearance: Appearance?
     private var hover: Binding<HoverPolicy>?
+    private var hoverEnabled: Binding<Bool>?
     private var dictionary: DictionaryChoice?
     private var shortcut: ShortcutChoice?
-    /// Opens the setup board. The board is reachable from the menu too; this is the other way in,
-    /// for a reader already in Settings wondering whether anything is missing.
     /// The local model's licence, downloaded with its weights — nil until there is a model.
     private var modelLicence: URL?
     /// The erase command's state and its action. Optional together: a preview shows the pane
@@ -110,7 +116,8 @@ public struct SettingsView: View {
 
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
-        hover: Binding<HoverPolicy>? = nil, dictionary: DictionaryChoice? = nil,
+        hover: Binding<HoverPolicy>? = nil, hoverEnabled: Binding<Bool>? = nil,
+        dictionary: DictionaryChoice? = nil,
         shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
         erase: ErasePresentation? = nil,
         eraseAction: (@MainActor (EraseAction) -> Void)? = nil,
@@ -121,6 +128,7 @@ public struct SettingsView: View {
         _model = State(initialValue: model)
         self.appearance = appearance
         self.hover = hover
+        self.hoverEnabled = hoverEnabled
         self.dictionary = dictionary
         self.shortcut = shortcut
         self.modelLicence = modelLicence
@@ -251,7 +259,9 @@ public struct SettingsView: View {
                     .formStyle(.grouped)
             }
         case .reading: ReadingPane(appearance: appearance, erase: erase, eraseAction: eraseAction)
-        case .lookup: LookupPane(policy: hover ?? $unattached, shortcut: shortcut, capture: model.shortcutCapture)
+        case .lookup:
+            LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
+                       shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it

@@ -24,7 +24,7 @@
         }
       }
     },
-    "%@ is not registered, so it will not look anything up. Choose another combination, or look words up from the menu." : {
+    "%@ is not registered, so it will not look anything up. Choose another combination." : {
 
     },
     "%@ is unavailable: %@" : {
@@ -240,9 +240,6 @@
     "Archived" : {
 
     },
-    "Ask Again" : {
-
-    },
     "Ask again" : {
 
     },
@@ -250,7 +247,7 @@
 
     },
     "Asking the dictionary service…" : {
-
+      "comment" : "Menu bar item"
     },
     "Asking which dictionaries are enabled…" : {
 
@@ -387,7 +384,7 @@
 
     },
     "First that marks senses" : {
-
+      "comment" : "Menu bar item"
     },
     "Forgot" : {
 
@@ -413,24 +410,14 @@
     "Hard" : {
 
     },
-    "Hide Reading History" : {
-
-    },
     "Hide meaning" : {
 
     },
     "Hide the meaning" : {
 
     },
-    "Hover Lookup    %@ %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hover Lookup    %1$@ %2$@"
-          }
-        }
-      }
+    "Hover Lookup" : {
+
     },
     "Hugging Face" : {
 
@@ -472,7 +459,7 @@
 
     },
     "Library…" : {
-
+      "comment" : "Menu bar item"
     },
     "Licence" : {
 
@@ -481,12 +468,6 @@
 
     },
     "Local model" : {
-
-    },
-    "Look Up Selection" : {
-
-    },
-    "Look Up Selection    %@" : {
 
     },
     "Look up the selection" : {
@@ -568,7 +549,7 @@
     "No sentence was captured around the word, so its senses cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
-    "No shortcut is registered, so selections can be looked up from the menu only." : {
+    "No shortcut is registered, so a selection cannot be looked up until you choose one." : {
 
     },
     "No voice is installed for this language." : {
@@ -697,7 +678,7 @@
       "comment" : "A library row for a card the reader set aside until a date"
     },
     "Quit XiaolaiDict" : {
-
+      "comment" : "Menu bar item"
     },
     "Read ^[%lld time](inflect: true)" : {
 
@@ -712,7 +693,7 @@
 
     },
     "Reading History" : {
-
+      "comment" : "Menu bar item"
     },
     "Reading history" : {
 
@@ -772,7 +753,7 @@
 
     },
     "Review…" : {
-
+      "comment" : "Menu bar item"
     },
     "Save the answer" : {
 
@@ -798,11 +779,8 @@
     "Select a word anywhere and press %@." : {
 
     },
-    "Set Up…" : {
-
-    },
     "Settings…" : {
-
+      "comment" : "Menu bar item"
     },
     "Setup" : {
 
@@ -874,9 +852,6 @@
 
     },
     "Study" : {
-
-    },
-    "Study From" : {
 
     },
     "Study dictionary" : {
@@ -951,7 +926,7 @@
 
     },
     "The dictionary service did not answer." : {
-
+      "comment" : "Menu bar item"
     },
     "The dictionary you study from is no longer enabled in Dictionary. Senses are being marked against whichever dictionary answers instead, and study history is kept per dictionary — so those marks build up apart from yours." : {
 
@@ -1133,10 +1108,16 @@
       "comment" : "Drawer notice when nothing has been looked up yet"
     },
     "XiaolaiDict" : {
-
+      "comment" : "The menu bar icon, for VoiceOver"
     },
     "XiaolaiDict needs Accessibility access" : {
       "comment" : "Lookup panel, when Accessibility has not been granted"
+    },
+    "XiaolaiDict — no lookup shortcut is registered" : {
+      "comment" : "The menu bar icon's tooltip when no lookup shortcut is registered"
+    },
+    "XiaolaiDict — press %@ to look up the selection" : {
+      "comment" : "The menu bar icon's tooltip, naming the registered lookup shortcut"
     },
     "Yes, that’s it" : {
 
@@ -1276,9 +1257,6 @@
     },
     "you stopped it" : {
       "comment" : "Why the model download stopped"
-    },
-    "✓ First that marks senses" : {
-
     }
   },
   "version" : "1.0"
