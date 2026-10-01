@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 
+@testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
 /// **The settings window is resized by one thing, from outside layout, top edge pinned.**
@@ -56,6 +57,50 @@ import Testing
         #expect(window.frame == before)
         SettingsWindowFit.move(window, by: -0.6, width: 580, lowestBottom: nil, animated: false)
         #expect(window.frame == before)
+    }
+
+    /// **A whole point is rounding too, and this is the instance that cost a red gate.** A pane's
+    /// first scroll geometry after the content swaps reported its content one point off its
+    /// container; the window moved down a point and straight back up, and `--settings-report` read
+    /// that as a shudder — one reversal, one point of overshoot, going to the Reading pane.
+    @Test func aWholePointIsNotAMove() {
+        let window = window(height: 400)
+        let before = window.frame
+        SettingsWindowFit.move(window, by: 1, width: 580, lowestBottom: nil, animated: false)
+        #expect(window.frame == before)
+        SettingsWindowFit.move(window, by: -1, width: 580, lowestBottom: nil, animated: false)
+        #expect(window.frame == before)
+    }
+
+    /// **The positive control.** Every assertion above is satisfied by a `move` that does nothing at
+    /// all, so one of them has to be a move that lands — otherwise raising the guard would read as
+    /// four rules holding rather than as the window having stopped resizing.
+    @Test func justOverAPointIsAMove() {
+        let window = window(height: 400)
+        let before = window.frame
+        SettingsWindowFit.move(window, by: 2, width: 580, lowestBottom: nil, animated: false)
+        #expect(window.frame.height == before.height + 2)
+    }
+
+    /// **The mover's threshold must sit above the instrument's noise floor, never on it.**
+    ///
+    /// `FrameTrajectory` counts a change of a whole point as a movement, and `move` admitted a
+    /// delta of a whole point — so the smallest move the window would make was exactly the
+    /// smallest the instrument would call a shudder, and whether the gate went red depended on
+    /// where a layout rounded. Measured 2026-10-01: the same bundle, the same four pane heights,
+    /// failed once and passed on the next run.
+    ///
+    /// Written as the relationship rather than as two numbers, because either one moving on its own
+    /// is what put them level in the first place.
+    @Test func theWindowNeverMovesAtTheInstrumentsNoiseFloor() {
+        #expect(FrameTrajectory.noise <= SettingsWindowFit.rounding,
+                "the instrument sees less than the window moves for, so a move is invisible to it")
+        let window = window(height: 400)
+        let before = window.frame
+        SettingsWindowFit.move(
+            window, by: FrameTrajectory.noise, width: 580, lowestBottom: nil, animated: false)
+        #expect(window.frame == before,
+                "the window moves by exactly what the instrument calls the smallest movement")
     }
 
     /// **Growing stops at the bottom of the screen.** The top edge is pinned, so a pane taller than

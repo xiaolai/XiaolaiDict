@@ -13,6 +13,22 @@ import SwiftUI
 /// want to be, and this moves the window — TYPE's arrangement, arrived at from the same two faults.
 @MainActor
 enum SettingsWindowFit {
+    /// **A change this small is rounding, and nothing moves for it.**
+    ///
+    /// A pane's first scroll geometry after the content swaps can report its content a single point
+    /// off its container, which is the scroll view rounding rather than a pane asking for room.
+    /// Acting on it moved the window a point and straight back — measured 2026-10-01 going to the
+    /// Reading pane, 710 → 709 → 788 — which `--settings-report` correctly calls a shudder: one
+    /// reversal, one point of overshoot.
+    ///
+    /// **The number has to sit below the instrument's noise floor, not on it.** `FrameTrajectory`
+    /// counts a change of a whole point as a movement, so while this guard admitted one too, the
+    /// smallest move the window would make was exactly the smallest the instrument would report —
+    /// and whether the gate went red depended on where a layout happened to round. The same bundle
+    /// failed once and passed on the next run. `theWindowNeverMovesAtTheInstrumentsNoiseFloor`
+    /// holds the two apart.
+    static let rounding: CGFloat = 1
+
     /// How far the window has to move for a pane to fit: what the pane wants against what its
     /// scroll view was given. **Both are the scroll view's own numbers**, so whatever AppKit counts
     /// as content under a toolbar cancels out — the chrome is never counted, and so never
@@ -63,10 +79,11 @@ enum SettingsWindowFit {
             height = max(current.height, min(height, current.maxY - lowestBottom))
         }
         let widthChange = width - current.width
-        // Whole points: less than one is rounding, and moving for it would restart the animation on
-        // a window already where it belongs. `rounded()` took half a point to one, so this does
-        // not use it.
-        guard abs(height - current.height) >= 1 || abs(widthChange) >= 1 else { return }
+        // More than a point: a point or less is rounding, and moving for it would restart the
+        // animation on a window already where it belongs — and put a reversal in front of the
+        // instrument that watches for one. `rounded()` took half a point to one, so this does not
+        // use it.
+        guard abs(height - current.height) > rounding || abs(widthChange) > rounding else { return }
         var frame = current
         frame.size = CGSize(width: width, height: height)
         frame.origin.y = current.maxY - height
@@ -76,7 +93,7 @@ enum SettingsWindowFit {
             // placed it for that width. Narrowed where it stands, it would sit off to one side, so
             // it goes where a newly opened window goes. Only then: a window already at the panes'
             // width was placed by the reader, and stays where they put it.
-            if recentres, abs(widthChange) >= 1 { window.center() }
+            if recentres, abs(widthChange) > rounding { window.center() }
             return
         }
         NSAnimationContext.runAnimationGroup { context in
