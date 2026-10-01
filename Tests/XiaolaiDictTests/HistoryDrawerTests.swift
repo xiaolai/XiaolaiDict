@@ -23,6 +23,7 @@ struct HistoryDrawerTests {
     /// Mutable so a test can unplug a display between calls.
     private final class Displays: @unchecked Sendable {
         var screens: [ScreenMetrics] = []
+        var pointer = UpPoint(x: 100, y: 100)
     }
 
     private func entry(_ lemma: String, _ when: Date) -> ReadingEntry {
@@ -119,6 +120,193 @@ struct HistoryDrawerTests {
         let first = drawer.model.geometry
         drawer.show()
         #expect(drawer.model.geometry == first)
+    }
+
+    /// The first read can still be waiting when the reader clicks again. Count the work,
+    /// preserve the same pending task and keep the reader's open-session state.
+    @Test func repeatedShowingPreservesTheOpenSession() async {
+        let displays = Displays()
+        displays.screens = [wide, neighbour]
+        let backend = FakeBackend()
+        let read = PendingRead()
+        let drawer = HistoryDrawerController(
+            hotkeys: HotkeyCenter(backend: backend), screens: { displays.screens },
+            pointer: { displays.pointer }, clock: { now }, load: { await read.value() })
+        defer { drawer.hide() }
+        drawer.show()
+        await read.started()
+        let firstRead = drawer.reload
+        let placement = drawer.placement
+        let geometry = drawer.model.geometry
+        let registrations = backend.registered.count
+        drawer.model.revealed = true
+        drawer.model.expandedDays = ["yesterday"]
+        displays.pointer = UpPoint(x: 3000, y: 700)
+        for _ in 0..<8 { drawer.show() }
+        #expect(drawer.isVisible)
+        #expect(read.calls == 1, "repeated opening started another ledger read")
+        #expect(firstRead?.isCancelled == false, "repeated opening cancelled the first read")
+        #expect(drawer.model.isLoading)
+        #expect(drawer.model.revealed, "repeated opening reset the reveal animation")
+        #expect(drawer.model.expandedDays == ["yesterday"])
+        #expect(drawer.placement == placement)
+        #expect(drawer.model.geometry == geometry)
+        #expect(backend.registered.count == registrations, "repeated opening claimed Escape again")
+        read.finish(.entries([entry("fine", now)]))
+        await firstRead?.value
+        drawer.show()
+        #expect(read.calls == 1)
+        #expect(!drawer.model.isLoading)
+        #expect(drawer.model.totalEntries == 1)
+    }
+
+    @MainActor private final class PendingRead {
+        private(set) var calls = 0
+        private var waiting: CheckedContinuation<HistoryReading, Never>?
+        private var observer: CheckedContinuation<Void, Never>?
+
+        func value() async -> HistoryReading {
+            calls += 1
+            return await withCheckedContinuation { continuation in
+                waiting = continuation
+                observer?.resume()
+                observer = nil
+            }
+        }
+
+        func started() async {
+            if calls > 0 { return }
+            await withCheckedContinuation { observer = $0 }
+        }
+
+        func finish(_ answer: HistoryReading) {
+            waiting?.resume(returning: answer)
+            waiting = nil
+        }
+    }
+
+    /// Assert the real monitor delegates to the same decision the point fixtures exercise.
+    @Test func theLiveOutsideClickMonitorUsesTheTestedDecision() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repository.appending(path:
+            "Sources/XiaolaiDict/HistoryDrawer.swift"), encoding: .utf8)
+        let code = source.split(separator: "\n").filter {
+            !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+        }.joined(separator: "\n")
+        let monitor = try #require(code.range(of: "NSEvent.addGlobalMonitorForEvents("))
+        let end = try #require(code.range(of: "private func removeClickAway()", range:
+            monitor.upperBound..<code.endIndex))
+        let body = code[monitor.lowerBound..<end.lowerBound]
+        #expect(body.contains("clickedOutside(at: NSEvent.mouseLocation)"),
+                "the live outside-click monitor bypasses the tested screen-point decision")
+    }
+
+    @Test func outsideClicksInsideTheOwnedButtonLeaveTheDrawerOpen() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        let frame = CGRect(x: -240, y: 1420, width: 28, height: 20)
+        drawer.statusItemFrame = { frame }
+        drawer.show()
+        for point in [CGPoint(x: frame.minX + 0.1, y: frame.minY + 0.1),
+                      CGPoint(x: frame.midX, y: frame.midY),
+                      CGPoint(x: frame.maxX - 0.1, y: frame.maxY - 0.1)] {
+            drawer.clickedOutside(at: point)
+            #expect(drawer.isVisible, "a point inside the owned button dismissed the drawer: \(point)")
+            #expect(drawer.isEscapeClaimed)
+        }
+    }
+
+    @Test func outsideClicksJustBeyondEveryButtonEdgeDismiss() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        let frame = CGRect(x: 100, y: 1420, width: 28, height: 20)
+        drawer.statusItemFrame = { frame }
+        for point in [CGPoint(x: frame.minX - 0.1, y: frame.midY),
+                      CGPoint(x: frame.maxX + 0.1, y: frame.midY),
+                      CGPoint(x: frame.midX, y: frame.minY - 0.1),
+                      CGPoint(x: frame.midX, y: frame.maxY + 0.1)] {
+            drawer.show()
+            drawer.clickedOutside(at: point)
+            #expect(!drawer.isVisible, "a point just outside the button was excluded: \(point)")
+            #expect(!drawer.isEscapeClaimed, "outside dismissal did not release Escape")
+        }
+    }
+
+    @Test func outsideClickExclusionReadsTheCurrentRectangleEachTime() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        let rectangle = ButtonRectangle()
+        rectangle.frame = CGRect(x: 100, y: 1420, width: 28, height: 20)
+        drawer.statusItemFrame = { rectangle.read() }
+        drawer.show()
+        drawer.clickedOutside(at: CGPoint(x: 114, y: 1430))
+        #expect(drawer.isVisible)
+        rectangle.frame = CGRect(x: -200, y: -40, width: 28, height: 20)
+        drawer.clickedOutside(at: CGPoint(x: -186, y: -30))
+        #expect(drawer.isVisible, "the changed button rectangle was ignored")
+        drawer.clickedOutside(at: CGPoint(x: 114, y: 1430))
+        #expect(!drawer.isVisible, "the stale button rectangle still excludes clicks")
+        #expect(rectangle.reads == 3, "the button rectangle was cached instead of requested")
+    }
+
+    @MainActor private final class ButtonRectangle {
+        var frame: CGRect?
+        var reads = 0
+        func read() -> CGRect? { reads += 1; return frame }
+    }
+
+    @Test func outsideClicksDismissWhenTheButtonRectangleIsMissing() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        drawer.show()
+        drawer.clickedOutside(at: CGPoint(x: 114, y: 1430))
+        #expect(!drawer.isVisible, "a missing provider swallowed an outside click")
+        drawer.statusItemFrame = { nil }
+        drawer.show()
+        drawer.clickedOutside(at: CGPoint(x: 114, y: 1430))
+        #expect(!drawer.isVisible, "a nil rectangle swallowed an outside click")
+        #expect(!drawer.isEscapeClaimed)
+    }
+
+    @Test func hidingReleasesEscapeAndReopeningClaimsItAgain() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let backend = FakeBackend()
+        let drawer = HistoryDrawerController(hotkeys: HotkeyCenter(backend: backend),
+            screens: { displays.screens }, pointer: { UpPoint(x: 100, y: 100) },
+            load: { .entries([]) })
+        defer { drawer.hide() }
+        drawer.show()
+        #expect(drawer.isEscapeClaimed)
+        #expect(backend.registered.count == 1)
+        drawer.hide()
+        #expect(!drawer.isEscapeClaimed)
+        #expect(backend.unregistered == 1)
+        drawer.show()
+        #expect(drawer.isEscapeClaimed)
+        #expect(backend.registered.count == 2)
+    }
+
+    @Test func emptyHistoryRemainsAnOpenDrawerWithoutAReadProblem() async {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        drawer.show()
+        await drawer.reload?.value
+        #expect(drawer.isVisible)
+        #expect(drawer.model.days.isEmpty)
+        #expect(drawer.model.problem == nil)
+        #expect(!drawer.model.isLoading)
     }
 
     @Test func closingAClosedDrawerIsHarmless() {

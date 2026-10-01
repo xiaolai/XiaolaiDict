@@ -38,6 +38,14 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
         menu.delegate = self
     }
 
+    /// The owned button's current bounds in AppKit screen points.
+    var screenFrame: CGRect? { Self.screenFrame(of: statusItem?.button) }
+
+    static func screenFrame(of button: NSView?) -> CGRect? {
+        guard let button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
@@ -103,7 +111,7 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
         let wantsMenu = event?.type == .rightMouseUp
             || event?.modifierFlags.contains(.control) == true
         guard wantsMenu, let statusItem else {
-            app.toggleHistory()
+            app.showHistory()
             return
         }
         // Attached for this click only, so the next left click is ours again.

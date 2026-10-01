@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -23,6 +24,115 @@ struct MenuBarItemTests {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent()  // XiaolaiDictTests
             .deletingLastPathComponent()                             // Tests
             .deletingLastPathComponent()                             // the repository
+    }
+
+    private func code(_ path: String) throws -> String {
+        try String(contentsOf: Self.repository.appending(path: path), encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+
+    @Test func ordinaryTrayClicksOpenHistoryAndDoNotToggleIt() throws {
+        let source = try code("Sources/XiaolaiDict/MenuBarItem.swift")
+        let start = try #require(source.range(of: "@objc private func clicked()"))
+        let end = try #require(source.range(of: "func menuNeedsUpdate", range:
+            start.upperBound..<source.endIndex))
+        let action = source[start.lowerBound..<end.lowerBound]
+        #expect(action.contains("app.showHistory()"),
+                "ordinary tray clicks do not route to the idempotent open action")
+        #expect(!action.contains("app.toggleHistory()"),
+                "ordinary tray clicks still toggle the open drawer closed")
+    }
+
+    @Test func appRoutesShowingAndInstrumentTogglingSeparately() throws {
+        let source = try code("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        let showing = try NSRegularExpression(pattern:
+            #"func\s+showHistory\s*\(\s*\)\s*\{\s*drawer\.show\(\)\s*\}"#)
+        let toggling = try NSRegularExpression(pattern:
+            #"func\s+toggleHistory\s*\(\s*\)\s*\{\s*drawer\.toggle\(\)\s*\}"#)
+        let range = NSRange(source.startIndex..., in: source)
+        #expect(showing.firstMatch(in: source, range: range) != nil,
+                "the app has no forwarding route to drawer.show()")
+        #expect(toggling.firstMatch(in: source, range: range) != nil,
+                "the existing instrument route no longer toggles the drawer")
+    }
+
+    @Test func dismissalReadsTheOwnedButtonInsteadOfGuessingAStatusBarWindow() throws {
+        let source = try code("Sources/XiaolaiDict/XiaolaiDictApp.swift")
+        #expect(!source.contains("contains(\"StatusBar\")"),
+                "drawer dismissal still guesses ownership from a StatusBar window class")
+        let assignment = try #require(source.range(of: "drawer.statusItemFrame ="))
+        let rest = source[assignment.lowerBound...]
+        #expect(rest.contains("[weak menuBar]"), "the live exclusion does not weakly capture its owner")
+        #expect(rest.contains("menuBar?.screenFrame"),
+                "drawer dismissal is not wired to the owned button's live screen rectangle")
+    }
+
+    private func attachedButton(origin: CGPoint) -> (NSWindow, NSView) {
+        let window = NSWindow(contentRect: CGRect(origin: origin, size: CGSize(width: 300, height: 200)),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        let container = NSView(frame: CGRect(x: 20, y: 30, width: 100, height: 80))
+        let button = NSView(frame: CGRect(x: 7, y: 11, width: 24, height: 18))
+        content.addSubview(container)
+        container.addSubview(button)
+        window.contentView = content
+        window.setFrameOrigin(origin)
+        return (window, button)
+    }
+
+    @Test func ownedButtonBoundsAreConvertedThroughItsAttachedWindow() throws {
+        let (window, button) = attachedButton(origin: CGPoint(x: 320, y: 410))
+        defer { window.close() }
+        let actual = try #require(MenuBarItem.screenFrame(of: button))
+        // Independent fixture arithmetic: window + container + button, all in AppKit points.
+        #expect(actual == CGRect(x: window.frame.minX + 27, y: window.frame.minY + 41,
+                                 width: 24, height: 18), "the result is not in AppKit screen points")
+    }
+
+    @Test func movingTheOwnedWindowRecalculatesItsButtonRectangle() throws {
+        let (window, button) = attachedButton(origin: CGPoint(x: 320, y: 410))
+        defer { window.close() }
+        let initial = try #require(MenuBarItem.screenFrame(of: button))
+        window.setFrameOrigin(CGPoint(x: 920, y: 110))
+        let moved = try #require(MenuBarItem.screenFrame(of: button))
+        #expect(moved != initial, "the button rectangle was cached before its window moved")
+        #expect(moved == CGRect(x: window.frame.minX + 27, y: window.frame.minY + 41,
+                                width: 24, height: 18))
+    }
+
+    @Test func buttonConversionPreservesNegativeScreenCoordinates() throws {
+        let (window, button) = attachedButton(origin: CGPoint(x: -1200, y: -500))
+        defer { window.close() }
+        let actual = try #require(MenuBarItem.screenFrame(of: button))
+        #expect(window.frame.minX < 0 && window.frame.minY < 0, "the negative-coordinate fixture moved")
+        #expect(actual == CGRect(x: window.frame.minX + 27, y: window.frame.minY + 41,
+                                 width: 24, height: 18))
+        #expect(actual.minX < 0 && actual.minY < 0)
+    }
+
+    @Test func unrelatedWindowsDoNotChangeTheOwnedButtonRectangle() throws {
+        let (window, button) = attachedButton(origin: CGPoint(x: 320, y: 410))
+        defer { window.close() }
+        let initial = try #require(MenuBarItem.screenFrame(of: button))
+        let (unrelated, _) = attachedButton(origin: CGPoint(x: -700, y: 900))
+        defer { unrelated.close() }
+        unrelated.setFrameOrigin(CGPoint(x: 800, y: -900))
+        #expect(MenuBarItem.screenFrame(of: button) == initial,
+                "an unrelated window changed the owned button's rectangle")
+    }
+
+    @Test func missingButtonOrWindowHasNoExclusionRectangle() {
+        #expect(MenuBarItem.screenFrame(of: nil) == nil)
+        let detached = NSView(frame: CGRect(x: 20, y: 30, width: 24, height: 18))
+        #expect(MenuBarItem.screenFrame(of: detached) == nil)
+        let (window, button) = attachedButton(origin: CGPoint(x: 320, y: 410))
+        defer { window.close() }
+        button.removeFromSuperview()
+        #expect(MenuBarItem.screenFrame(of: button) == nil,
+                "a formerly attached button still offered a stale exclusion rectangle")
     }
 
     // MARK: - What it says

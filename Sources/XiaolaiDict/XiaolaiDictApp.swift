@@ -197,12 +197,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         }
         panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
         recorder.start()
-        // Where the menu-bar item is, so a click on it is left for the menu rather than taken by
-        // the drawer's click-away dismissal. `MenuBarExtra` exposes no frame, so it is found by its
-        // window: a miss costs the guard, which is visible (the drawer reopens) and not silent.
-        drawer.statusItemFrame = {
-            NSApplication.shared.windows.first { $0.className.contains("StatusBar") }?.frame
-        }
         Task { [weak self] in self?.permissions = await .probe() }
         hover.watcher.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
         // Watching the pointer is something the reader must be able to stop, so it is a setting
@@ -219,6 +213,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // or not: the end-to-end stages drive this menu, and without it there is none to drive.
         menuBar = MenuBarItem(app: self)
         menuBar?.install()
+        drawer.statusItemFrame = { [weak menuBar] in menuBar?.screenFrame }
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.
@@ -596,6 +591,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         await dictionary.refresh(refreshing: refreshing)
     }
 
+
+    func showHistory() {
+        drawer.show()
+    }
 
     func toggleHistory() {
         drawer.toggle()
