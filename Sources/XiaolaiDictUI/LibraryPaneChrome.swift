@@ -239,13 +239,16 @@ struct LibraryInspectorPlaceholder: View {
     }
 }
 
-/// The inspector column's width: the reader may drag it between a floor and a ceiling. It was one
-/// fixed number.
+/// The inspector column's width: the reader may drag it wider, up to a ceiling.
+///
+/// **The floor is the width it opens at.** With a narrower floor the column had two widths and
+/// which one it took depended on the route: 264 points at launch, 312 after a visit to Review —
+/// measured on the E2E Mac 2026-10-02 — so the grid beside it moved when the pane changed.
 struct LibraryInspectorColumn: ViewModifier {
     @Environment(\.scale) private var scale
 
     func body(content: Content) -> some View {
-        content.inspectorColumnWidth(min: scale.space.libraryInspectorMinWidth,
+        content.inspectorColumnWidth(min: scale.space.libraryInspectorWidth,
                                      ideal: scale.space.libraryInspectorWidth,
                                      max: scale.space.libraryInspectorMaxWidth)
     }
