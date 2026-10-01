@@ -613,4 +613,29 @@ struct EndToEndReportKeyTests {
             measurement rather than as a typo: \(unwritten)
             """)
     }
+
+    /// **Every mouse event the harness posts says what modifiers it carries.**
+    ///
+    /// An event made with no source inherits the session's modifier state, and `keys … command`
+    /// leaves Command in it. A click that inherited it reached the menu-bar item as a Command-click
+    /// — "rearrange me" — so the app never saw it and the stage read that as the drawer failing to
+    /// open (2026-10-02; an afternoon went to the app before the harness was suspected).
+    @Test func everySyntheticMouseEventStatesItsModifiers() throws {
+        let directory = Self.repository.appendingPathComponent("Tools/e2e")
+        let helpers = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        var made = 0
+        for helper in helpers {
+            let lines = try String(contentsOf: helper, encoding: .utf8).components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() where line.contains("CGEvent(mouseEventSource:") {
+                made += 1
+                // The assignment follows within the statement that made the event.
+                let after = lines[index..<min(lines.count, index + 6)].joined(separator: "\n")
+                #expect(after.contains(".flags = "),
+                        "\(helper.lastPathComponent):\(index + 1) posts a mouse event with inherited modifiers")
+            }
+        }
+        // A scan that found nothing proves nothing: seven sites on 2026-10-02.
+        #expect(made >= 5, "only \(made) synthetic mouse events found under Tools/e2e")
+    }
 }
