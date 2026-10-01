@@ -235,7 +235,7 @@ struct LibraryPaneChromeTests {
         #expect(pane.contains(".navigationSubtitle("))
         // Was `LibraryFooter {`: the way to the unconfirmed meanings was a warning triangle in a
         // corner pill on every visit. It is a toolbar item now, and only when there are some.
-        #expect(pane.contains("if unconfirmed > 0 {"))
+        #expect(pane.contains("if unconfirmed > 0, !sittingOffersFind {"))
         #expect(pane.contains("IconButton(.findUnconfirmed"))
         #expect(try app("LibraryModel.swift").contains("LibraryReviewPane("), "the Library still lays Review out by hand")
     }

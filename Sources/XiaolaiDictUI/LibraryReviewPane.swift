@@ -19,15 +19,19 @@ public struct LibraryReviewPane<Sitting: View>: View {
     let problem: String?
     let heldBack: Int
     let unconfirmed: Int
+    /// The sitting is already showing the way to the unconfirmed meanings — its empty state has
+    /// the button — so the toolbar does not offer the same thing a second time above it.
+    let sittingOffersFind: Bool
     let canUndo: Bool
     let undo: @MainActor () -> Void
     let findUnconfirmed: @MainActor () -> Void
     let sitting: Sitting
 
     public init(due: Int, dictionary: String?, problem: String?, heldBack: Int, unconfirmed: Int,
-                canUndo: Bool, undo: @escaping @MainActor () -> Void,
+                sittingOffersFind: Bool = false, canUndo: Bool, undo: @escaping @MainActor () -> Void,
                 findUnconfirmed: @escaping @MainActor () -> Void, @ViewBuilder sitting: () -> Sitting) {
         self.due = due; self.dictionary = dictionary; self.problem = problem; self.heldBack = heldBack
+        self.sittingOffersFind = sittingOffersFind
         self.unconfirmed = unconfirmed; self.canUndo = canUndo; self.undo = undo
         self.findUnconfirmed = findUnconfirmed; self.sitting = sitting()
     }
@@ -40,7 +44,7 @@ public struct LibraryReviewPane<Sitting: View>: View {
                 // **Undo is the window's**, not a button on the card: it is about the review just
                 // committed, which is no longer on screen.
                 LibraryUndoToolbar(title: canUndo ? "Undo the Last Review" : nil, undo: undo)
-                if unconfirmed > 0 {
+                if unconfirmed > 0, !sittingOffersFind {
                     ToolbarItem {
                         IconButton(.findUnconfirmed, title: "Find ^[\(unconfirmed) Meaning](inflect: true) to Confirm",
                                    hint: "shows them in Saved", size: Token.Library.toolbarGlyph, action: findUnconfirmed)

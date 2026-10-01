@@ -324,6 +324,13 @@ public struct ReviewPresentation: Sendable, Equatable {
         case finished(ReviewSession.Summary)
     }
 
+    /// Whether what is on screen already offers the way to the unconfirmed meanings — the empty
+    /// state that says they are what is holding review up has the button itself.
+    public var offersFindUnconfirmed: Bool {
+        if case .empty(.needsConfirmation) = stage { return true }
+        return false
+    }
+
     public enum Empty: Sendable, Equatable {
         /// Cards exist; none is due.
         case nothingDue
