@@ -265,6 +265,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         menuBar?.install()
         drawer.statusItemFrame = { [weak menuBar] in menuBar?.screenFrame }
         activation.watchForClosingWindows()
+        // The lookup window opens as wide as the card is at the reader's text size.
+        panel.textSize = { [weak self] in self?.appearance.textSize ?? .standard }
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.

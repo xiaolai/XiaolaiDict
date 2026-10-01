@@ -90,11 +90,33 @@ struct PanelPlacementTests {
 
     /// Each kind of content has its own size; a lookup never gets a message's.
     @Test func eachKindHasItsOwnSizes() {
-        #expect(PanelContent.Kind.lookup.defaultSize != PanelContent.Kind.message.defaultSize)
+        #expect(PanelContent.Kind.lookup.defaultSize(for: .standard) != PanelContent.Kind.message.defaultSize(for: .standard))
         for kind in [PanelContent.Kind.lookup, .message] {
-            #expect(kind.minimumSize.width <= kind.defaultSize.width)
-            #expect(kind.minimumSize.height <= kind.defaultSize.height)
+            for size in TextSize.allCases {
+                #expect(kind.minimumSize(for: size).width <= kind.defaultSize(for: size).width)
+                #expect(kind.minimumSize(for: size).height <= kind.defaultSize(for: size).height)
+            }
         }
+    }
+
+    /// **The lookup window opens as wide as the card is at the reader's text size.** It opened at
+    /// the standard size's width whatever the setting, and the card's own minimum grows with the
+    /// text: at Huge the card wanted 624 points in a 396-point window and was cut off on both
+    /// sides — seen on the E2E Mac 2026-10-02, the headword and the last two actions out of view.
+    @MainActor @Test func theLookupWindowOpensAtTheReadersTextSize() {
+        for size in TextSize.allCases {
+            let scale = Scale(size)
+            let opening = PanelContent.Kind.lookup.defaultSize(for: size)
+            #expect(opening.width == scale.space.cardWidth)
+            #expect(opening.width >= scale.space.cardMinWidth + scale.shadow.glowBefore + scale.shadow.glowAfter,
+                    "at \(size) the window is narrower than the least its card can be")
+            #expect(PanelContent.Kind.lookup.minimumSize(for: size).width == scale.space.cardMinWidth)
+        }
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
+        panel.textSize = { .huge }
+        let ticket = panel.newRequest()
+        #expect(panel.show(.nothingToLookUp("x"), near: UpPoint(CGPoint(x: 100, y: 500)), for: ticket))
+        #expect(panel.placement.width == PanelContent.Kind.message.defaultSize(for: .huge).width)
     }
 }
 
