@@ -50,37 +50,6 @@ struct MenuBarItemTests {
                 "ordinary tray clicks still toggle the open drawer closed")
     }
 
-    /// **A plain click shows the history and nothing routes to a toggle** — ab9cb7e, the owner's
-    /// decision, which the audit's M5 (an opinion) does not overrule. The decision has no toggle
-    /// case at all, so a repeated click cannot close the drawer through it.
-    @Test func aPlainClickShowsTheHistoryAndASecondaryOneOpensTheMenu() {
-        #expect(StatusItemClick.route(isSecondary: false, handledBySession: false) == .showHistory)
-        #expect(StatusItemClick.route(isSecondary: true, handledBySession: false) == .menu)
-    }
-
-    /// **The session and the action must not both answer one click.**
-    @Test func aClickTheSessionAlreadyHandledDoesNothingMore() {
-        for secondary in [false, true] {
-            #expect(StatusItemClick.route(isSecondary: secondary, handledBySession: true) == .nothing)
-        }
-    }
-
-    /// **AppKit ending the session on a repeated click must not close the drawer.** A menu bar
-    /// extra's second click ends its session; here that click keeps the history open, and every
-    /// other ending — a click elsewhere, another extra — closes it.
-    @Test func aSessionEndedByARepeatedClickLeavesTheHistoryOpen() throws {
-        #expect(!StatusItemClick.sessionEndHidesHistory(endedByPlainClickOnTheIcon: true))
-        #expect(StatusItemClick.sessionEndHidesHistory(endedByPlainClickOnTheIcon: false))
-        let source = try code("Sources/XiaolaiDict/MenuBarItem.swift")
-        let ended = try #require(source.range(of: "func statusItemDidEndExpandedInterfaceSession"))
-        let body = source[ended.lowerBound...].prefix(1200)
-        #expect(body.contains("StatusItemClick.sessionEndHidesHistory("),
-                "the session's end closes the drawer without asking what ended it")
-        let guarded = try #require(body.range(of: "StatusItemClick.sessionEndHidesHistory("))
-        let hide = try #require(body.range(of: "app.hideHistory()"))
-        #expect(guarded.lowerBound < hide.lowerBound, "the drawer is hidden before the cause is asked")
-    }
-
     private func mouse(_ type: NSEvent.EventType, flags: NSEvent.ModifierFlags = [], number: Int = 7) throws -> NSEvent {
         try #require(NSEvent.mouseEvent(
             with: type, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
@@ -99,48 +68,38 @@ struct MenuBarItemTests {
         #expect(!StatusItemClick.isSecondary(nil))
     }
 
-    /// A mouse-down and its mouse-up carry one number, which is how the action recognises the click
-    /// a session callback already answered. A key event has none — and asking one raises.
-    @Test func aClicksNumberIsSharedByItsDownAndUpAndAbsentForAKey() throws {
-        #expect(StatusItemClick.number(of: try mouse(.leftMouseDown, number: 41))
-                == StatusItemClick.number(of: try mouse(.leftMouseUp, number: 41)))
-        #expect(StatusItemClick.number(of: try mouse(.leftMouseUp, number: 42)) == 42)
-        let key = try #require(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
-            context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
-        #expect(StatusItemClick.number(of: key) == nil)
-        #expect(StatusItemClick.number(of: nil) == nil)
-        #expect(StatusItemClick.isKeyboard(key))
-        #expect(!StatusItemClick.isKeyboard(try mouse(.leftMouseUp)))
-    }
-
-    /// A session shows the drawer for a plain click and the menu otherwise: the drawer cannot take
-    /// the keyboard, so a reader who arrived by keyboard is given the surface that can.
-    @Test func aSessionBegunByKeyboardOrRightClickShowsTheMenuNotTheDrawer() {
-        #expect(StatusItemClick.sessionShowsHistory(isSecondary: false, isKeyboard: false))
-        #expect(!StatusItemClick.sessionShowsHistory(isSecondary: true, isKeyboard: false))
-        #expect(!StatusItemClick.sessionShowsHistory(isSecondary: false, isKeyboard: true))
-    }
-
-    /// **The wire.** The decision above is a function nothing has to call; these are the lines that
-    /// call it, adopt the macOS 27 session, and give VoiceOver both surfaces by name.
-    @Test func theItemAdoptsTheSessionAndRoutesItsClicksThroughTheDecision() throws {
+    /// **The macOS 27 expanded-interface session must not come back untested.** It was adopted on
+    /// 2026-10-02 and removed the same day: on a real Mac a right click began a session, and the
+    /// menu opened after cancelling it had items whose actions never arrived — Library did nothing.
+    /// No unit test or locked-screen probe can show that, because a programmatic press begins no
+    /// session; so this fails until someone has clicked the menu on a real Mac and says so here.
+    @Test func theItemDoesNotAdoptTheExpandedInterfaceSession() throws {
         let source = try code("Sources/XiaolaiDict/MenuBarItem.swift")
-        #expect(source.contains("NSStatusItemExpandedInterfaceDelegate"), "the item does not adopt the session protocol")
-        #expect(source.contains("item.expandedInterfaceDelegate = self"), "nothing sets the session delegate")
+        #expect(!source.contains("expandedInterfaceDelegate ="), """
+            MenuBarItem sets expandedInterfaceDelegate. Measured on macOS 27.0 with real mouse \
+            events: with it set, the right-click menu's items do nothing. Re-adopt only with a \
+            real-Mac test of choosing Library from that menu.
+            """)
+        #expect(!source.contains("NSStatusItemExpandedInterfaceDelegate {")
+                && !source.contains("func statusItemDidEndExpandedInterfaceSession"),
+                "the session delegate's conformance or callbacks are back")
+    }
+
+    /// The wire: a secondary click shows the menu the way ab9cb7e did, the icon shows whether its
+    /// drawer is open, and VoiceOver has both surfaces by name.
+    @Test func theItemRoutesClicksHighlightsAndNamesBothSurfaces() throws {
+        let source = try code("Sources/XiaolaiDict/MenuBarItem.swift")
         let start = try #require(source.range(of: "@objc private func clicked()"))
         let end = try #require(source.range(of: "private func showMenu()", range: start.upperBound..<source.endIndex))
         let action = source[start.lowerBound..<end.lowerBound]
-        #expect(action.contains("StatusItemClick.route("), "the click is decided somewhere the tests do not reach")
+        #expect(action.contains("StatusItemClick.isSecondary(") && action.contains("showMenu()"))
         #expect(action.contains("app.showHistory()"), "a plain click does not show the drawer")
-        let ended = try #require(source.range(of: "func statusItemDidEndExpandedInterfaceSession"))
-        #expect(source[ended.lowerBound...].prefix(1200).contains("app.hideHistory()"),
-                "the drawer stays open after AppKit ends its session for any other reason")
+        let menu = source[end.lowerBound...].prefix(300)
+        #expect(menu.contains("statusItem.menu = menu") && menu.contains("performClick(nil)")
+                && menu.contains("statusItem.menu = nil"), "the menu is not attached for one click only")
         let closed = try #require(source.range(of: "func historyBecame(visible: Bool)"))
-        let closing = source[closed.lowerBound...].prefix(400)
-        #expect(closing.contains("expandedInterfaceSession?.cancel()"),
-                "a drawer the app closed leaves AppKit's session open, against the header's contract")
-        #expect(closing.contains("highlight(visible)"), "the icon does not show that its drawer is open")
+        #expect(source[closed.lowerBound...].prefix(200).contains("highlight(visible)"),
+                "the icon does not show that its drawer is open")
         #expect(source.contains("setAccessibilityCustomActions("), "VoiceOver has no named route to the menu")
         #expect(source.contains("\"Show Menu\"") && source.contains("\"Show Reading History\""))
     }

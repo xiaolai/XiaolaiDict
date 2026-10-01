@@ -27,23 +27,18 @@ import os
 /// `isInserted: false` the label still mounts and the capture still happens, so the scene can keep
 /// doing that one job while showing nothing.
 ///
-/// **The drawer is this item's expanded interface, and AppKit is told so** (macOS 27,
-/// `NSStatusItemExpandedInterfaceDelegate`). The contract in `NSStatusItem.h`: AppKit begins a
-/// session and the delegate shows its window; AppKit ends it and the delegate closes the window;
-/// when the app closes the window for a reason of its own, it calls `cancel()` on the session. There
-/// is **no call that begins a session** — only AppKit starts one — so the drawer can also be open
-/// with none, and then this type highlights the button itself.
-///
-/// What a throwaway status item measured on 2026-10-02 (macOS 27.0.1, screen locked, so no real
-/// pointer): with the delegate set, `performClick` and an Accessibility press still send the
-/// button's action and begin **no** session. So the action stays, and it is the route VoiceOver's
-/// default press takes. What a real click or a keyboard walk along the menu bar does was not
-/// measurable there; `StatusItemClick` is written to be right whichever of the two AppKit does.
+/// **The macOS 27 expanded-interface session is not adopted, and was tried** (2026-10-02).
+/// `NSStatusItemExpandedInterfaceDelegate` lets AppKit run a session for a status item's window.
+/// Measured on a real Mac (macOS 27.0, real mouse events) with the delegate set: a right click
+/// *begins a session*; cancelling it and opening the menu a turn later shows the menu with its
+/// items, and **choosing an item does nothing — the action never arrives** (three of three; the
+/// first right click after launch also drew an empty menu for about six seconds). A menu whose
+/// items are dead is the app's front door not opening, so the delegate is not set. Do not adopt it
+/// again without a real pointer on a real Mac: a programmatic or Accessibility press begins no
+/// session at all, so nothing that can be run from a test or a locked screen shows the failure.
+/// `MenuBarItemTests` holds the line.
 @MainActor
-// `@preconcurrency`: the header does not mark the delegate protocol main-actor, and AppKit calls it
-// from the main thread's event handling like every other status item callout — the annotation turns
-// that assumption into a check at the call rather than a silence.
-final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemExpandedInterfaceDelegate {
+final class MenuBarItem: NSObject, NSMenuDelegate {
     /// Where AppKit keeps this item's position and visibility. Named, because the name AppKit
     /// chooses for itself is positional (`Item-0`) and would be inherited by whatever item a later
     /// version created first.
@@ -56,9 +51,6 @@ final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemE
     private let app: XiaolaiDictApp
     private var statusItem: NSStatusItem?
     private let menu = NSMenu()
-    /// The click during which a session began or ended, so the button's action for the *same*
-    /// click does not undo it. See `StatusItemClick`.
-    private var clickTheSessionHandled: Int?
     private var visibilityObservation: NSKeyValueObservation?
     private var defaultsObserver: (any NSObjectProtocol)?
 
@@ -101,7 +93,6 @@ final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemE
         // **Up, not down**: `performClick` runs a menu tracking loop, and starting one from inside
         // a mouse-down leaves the button waiting for an up the loop has already taken.
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        item.expandedInterfaceDelegate = self
         offerBothSurfacesToAssistiveTechnology(on: item.button)
         describeTheIcon()
         followTheVisibilitySetting(of: item)
@@ -197,21 +188,21 @@ final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemE
             """, comment: "The menu bar icon's tooltip, naming both clicks and the registered lookup shortcut")
     }
 
-    // MARK: - Clicks, and the session AppKit runs for the drawer
+    // MARK: - Clicks
 
+    /// The routing of ab9cb7e, which is the one measured to work: a secondary click attaches the
+    /// menu for the length of that click, and anything else shows the history.
     @objc private func clicked() {
-        let event = NSApp.currentEvent
-        let handled = clickTheSessionHandled != nil
-            && clickTheSessionHandled == StatusItemClick.number(of: event)
-        switch StatusItemClick.route(
-            isSecondary: StatusItemClick.isSecondary(event), handledBySession: handled
-        ) {
-        case .nothing: break
-        case .menu: showMenu()
-        // **Shows, never toggles** — the owner's decision in ab9cb7e: a repeated click on the icon
-        // keeps the history open. `showHistory` is idempotent, so the second click is a no-op.
-        case .showHistory: app.showHistory()
+        guard StatusItemClick.isSecondary(NSApp.currentEvent) else {
+            // Said, because a click that did nothing and a click that never arrived look the same
+            // from outside — and did, on the E2E Mac, 2026-10-02.
+            log.notice("menu bar: a click asked for the reading history")
+            // **Shows, never toggles** — the owner's decision in ab9cb7e: a repeated click on the
+            // icon keeps the history open. `showHistory` is idempotent, so the second is a no-op.
+            app.showHistory()
+            return
         }
+        showMenu()
     }
 
     /// Attached for this one showing only, so the next left click is ours again.
@@ -222,73 +213,15 @@ final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemE
         statusItem.menu = nil
     }
 
-    /// AppKit began showing this item's interface: a click, or the keyboard walking the menu bar.
-    ///
-    /// **A right click and a keyboard arrival get the menu, not the drawer.** The right click is
-    /// the item's own rule. The keyboard is a judgement: the drawer is a `.plain` window, which
-    /// cannot become key (`canBecomeKey` false, measured 2026-09-25) and must not activate the
-    /// app, so a reader who arrived by keyboard would be shown cards no key can reach. The menu
-    /// takes arrow keys and Return, and its Library item opens the same history in a window that
-    /// does take the keyboard. Either way the session is cancelled, which the contract allows for
-    /// "other user action", and on the next turn rather than inside AppKit's own callout.
-    func statusItem(
-        _ statusItem: NSStatusItem, didBegin expandedInterfaceSession: NSStatusItemExpandedInterfaceSession
-    ) {
-        let event = NSApp.currentEvent
-        clickTheSessionHandled = StatusItemClick.number(of: event)
-        guard StatusItemClick.sessionShowsHistory(
-            isSecondary: StatusItemClick.isSecondary(event), isKeyboard: StatusItemClick.isKeyboard(event))
-        else {
-            log.notice("menu bar: a session began by right click or keyboard; showing the menu instead")
-            DispatchQueue.main.async { [weak self] in
-                expandedInterfaceSession.cancel()
-                self?.showMenu()
-            }
-            return
-        }
-        app.showHistory()
-    }
-
-    /// AppKit ended the session. **The drawer closes with it — unless what ended it was a plain
-    /// click on the icon itself.** A menu bar extra's second click closes its interface, and AppKit
-    /// ends the session for it; this app's rule is that a repeated click keeps the history open
-    /// (ab9cb7e). So for that one cause the drawer stays, without a session, and the highlight AppKit
-    /// has just taken off is put back — now and a turn later, after AppKit has finished with the
-    /// button. Every other cause (a click elsewhere, Escape in the menu bar, another extra opening)
-    /// closes it, as the header's contract asks.
-    func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
-        let event = NSApp.currentEvent
-        clickTheSessionHandled = StatusItemClick.number(of: event)
-        let onTheIcon = StatusItemClick.number(of: event) != nil && !StatusItemClick.isSecondary(event)
-            && screenFrame?.contains(NSEvent.mouseLocation) == true
-        guard StatusItemClick.sessionEndHidesHistory(endedByPlainClickOnTheIcon: onTheIcon) else {
-            log.notice("menu bar: the session ended on a repeated click; the history stays open")
-            keepTheHighlightWhileTheHistoryIsOpen()
-            DispatchQueue.main.async { [weak self] in self?.keepTheHighlightWhileTheHistoryIsOpen() }
-            return
-        }
-        app.hideHistory()
-    }
-
-    private func keepTheHighlightWhileTheHistoryIsOpen() {
-        statusItem?.button?.highlight(app.historyIsShowing)
-    }
-
     /// The drawer opened or closed, by whatever route — a click, Escape, a click elsewhere, Show in
-    /// Library, an instrument.
-    ///
-    /// **Closing cancels the session**, which is the contract's rule for a window the app closed
-    /// itself; AppKit then calls `statusItemDidEndExpandedInterfaceSession`, which hides a drawer
-    /// that is already hidden, and that is a no-op. **The highlight is set here as well as left to
-    /// the session**, because the drawer can be open without one (see the type's comment), and an
-    /// icon that looks the same open and shut was the audit's M5.
+    /// Library, an instrument. An icon that looks the same open and shut was the audit's M5; the
+    /// highlight is the half of that finding that was kept.
     func historyBecame(visible: Bool) {
         statusItem?.button?.highlight(visible)
-        if !visible { statusItem?.expandedInterfaceSession?.cancel() }
     }
 
     /// **Both surfaces, by name, for a reader who has no right click.** VoiceOver's default press
-    /// arrives as the button's action with no mouse event, so it could only ever toggle the
+    /// arrives as the button's action with no mouse event, so it could only ever show the
     /// history; the menu — Library, Settings, Quit — had no route at all (audit M2). The menu is
     /// opened a turn later: an action handler that runs a menu's tracking loop does not return to
     /// the client that asked until the menu closes.
@@ -440,63 +373,15 @@ final class MenuBarItem: NSObject, NSMenuDelegate, @preconcurrency NSStatusItemE
     }
 }
 
-/// **What one click on the icon does, decided apart from AppKit so it can be tested.**
-///
-/// Two things can answer a click: the session AppKit runs for the drawer (macOS 27), and the
-/// button's own action. What a throwaway status item measured is that the action alone answers a
-/// programmatic or Accessibility press; whether a real click begins a session, sends the action, or
-/// both was not measurable on a locked screen. So the action defers to the session wherever the
-/// session has spoken: one that began or ended **during this same click** has already done the
-/// click's work, and the action adds nothing to it.
-///
-/// **A plain click shows the history and never closes it** (ab9cb7e, the owner's decision): there
-/// is no toggle case here to route to.
-enum StatusItemClick: Equatable {
-    case menu
-    case showHistory
-    case nothing
-
-    static func route(isSecondary: Bool, handledBySession: Bool) -> StatusItemClick {
-        if handledBySession { return .nothing }
-        // **The menu even while the drawer is open**: a right click asks for the menu whatever
-        // else is showing.
-        return isSecondary ? .menu : .showHistory
-    }
-
-    /// Whether the drawer closes when AppKit ends its session. It does, except when the session
-    /// ended because the reader clicked the icon again — which must leave the history open.
-    static func sessionEndHidesHistory(endedByPlainClickOnTheIcon: Bool) -> Bool {
-        !endedByPlainClickOnTheIcon
-    }
-
-    /// What a session beginning shows. The drawer for a plain click; the menu otherwise — see
-    /// `MenuBarItem.statusItem(_:didBegin:)` for why the keyboard is sent to the menu.
-    static func sessionShowsHistory(isSecondary: Bool, isKeyboard: Bool) -> Bool {
-        !isSecondary && !isKeyboard
-    }
-
-    /// **Control-click is a right click**, which is the system's rule and not a courtesy: a reader
-    /// on a trackpad with secondary click switched off has no other way to the menu.
+/// Which click asks for the menu, decided apart from AppKit so it can be tested.
+enum StatusItemClick {
+    /// A right click — and a control-click, **which is the system's rule and not a courtesy**: a
+    /// reader on a trackpad with secondary click switched off has no other way to the menu.
     static func isSecondary(_ event: NSEvent?) -> Bool {
         guard let event else { return false }
         switch event.type {
         case .rightMouseDown, .rightMouseUp: return true
-        case .leftMouseDown, .leftMouseUp: return event.modifierFlags.contains(.control)
-        default: return false
-        }
-    }
-
-    static func isKeyboard(_ event: NSEvent?) -> Bool {
-        event?.type == .keyDown || event?.type == .keyUp
-    }
-
-    /// The number a mouse-down shares with its mouse-up, or nil for anything that is not a click.
-    /// **Asked only of mouse events**: `eventNumber` raises for any other type.
-    static func number(of event: NSEvent?) -> Int? {
-        guard let event else { return nil }
-        switch event.type {
-        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp: return event.eventNumber
-        default: return nil
+        default: return event.modifierFlags.contains(.control)
         }
     }
 }

@@ -170,8 +170,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             drawer.hide()
             showLibrary()
         }
-        // The icon shows whether its drawer is open, and AppKit's session for it is ended when
-        // the drawer closes by any route of ours — see `MenuBarItem.historyBecame(visible:)`.
+        // The icon shows whether its drawer is open — see `MenuBarItem.historyBecame(visible:)`.
         drawer.onVisibilityChange = { [weak self] visible in self?.menuBar?.historyBecame(visible: visible) }
         return drawer
     }
@@ -687,9 +686,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     func hideHistory() {
         drawer.hide()
     }
-
-    /// Whether the drawer is open, by the controller's own account — what the icon's highlight shows.
-    var historyIsShowing: Bool { drawer.isVisible }
 
 
     /// The designer's 22 pt template, marked as a template so the system draws it in the menu bar's
