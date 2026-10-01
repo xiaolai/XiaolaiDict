@@ -92,6 +92,44 @@ public struct LookupCard: Equatable {
     /// call site so the view cannot start counting something else.
     public var otherSenseCount: Int { alternatives.count }
 
+    /// One part-of-speech block's worth of the other senses, in the entry's own order.
+    public struct SenseGroup: Equatable, Identifiable {
+        /// `SensePath.block`, which is what makes two noun blocks two groups rather than one.
+        public let block: Int
+        public let partOfSpeech: String?
+        public let senses: [SensePresentation]
+
+        public var id: Int { block }
+    }
+
+    /// **The other senses, under the block each belongs to.**
+    ///
+    /// A dictionary numbers its senses inside a part-of-speech block and starts again in the next,
+    /// so the flat list this replaces drew *meet* as 1…8, 1, 3, 4, 1 (measured 2026-10-01): two
+    /// rows were both "1", two were "3", and the 2 missing from the second run — the sense the
+    /// card was leading with — read as a lost row. An ordinal identifies a sense only beside the
+    /// block it counts in, which is what `SensePath` says about itself.
+    ///
+    /// Grouped by `block`, never by the label: an entry may carry two blocks with one part of
+    /// speech, and merging them would put two "1"s back under one header. A block whose every
+    /// sense is the one on screen has no group — there is nothing in it to turn to.
+    public var alternativeGroups: [SenseGroup] {
+        var groups: [SenseGroup] = []
+        for sense in alternatives {
+            if let last = groups.last, last.block == sense.block {
+                groups[groups.count - 1] = SenseGroup(
+                    block: last.block, partOfSpeech: last.partOfSpeech, senses: last.senses + [sense])
+            } else {
+                groups.append(SenseGroup(block: sense.block, partOfSpeech: sense.partOfSpeech, senses: [sense]))
+            }
+        }
+        return groups
+    }
+
+    /// Whether the groups are named. **Only where the numbering restarts** — one block's senses
+    /// under the part of speech the heading already prints would be that word twice.
+    public var namesAlternativeGroups: Bool { alternativeGroups.count > 1 }
+
     /// Whether the card is claiming something it might be wrong about. Drives how the answer is
     /// drawn, and it is deliberately true for `proposed` and false for a reader's own tap.
     public var isHypothesis: Bool {
@@ -162,7 +200,7 @@ public struct LookupCard: Equatable {
         // One literal per branch, never a concatenation: `" " + String(localized:)` puts a bare space
         // through the view layer's prose scan, and the space belongs to the sentence anyway — a
         // translator decides whether their language wants one.
-        let caveat = String(localized: " (a guess — not confirmed)",
+        let caveat = String(localized: " (a guess, not confirmed)",
                             comment: "Appended to copied text where the sense was not confirmed")
         switch answer {
         case .sense(let sense):
@@ -250,7 +288,7 @@ public extension LookupCard {
             // own prose needs plain text `EntryDocument` does not keep. What changes here is that
             // the reader is no longer told something untrue about it.
             answer = .undecided(reason: String(
-                localized: "This dictionary does not mark senses, so none can be pointed at here.",
+                localized: "This dictionary does not mark separate meanings, so none can be pointed at here.",
                 comment: "Shown where a dictionary's entries carry no sense structure at all"))
         } else {
             answer = .undecided(reason: nil)

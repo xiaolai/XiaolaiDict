@@ -75,8 +75,8 @@ final class HoverControl {
     /// hover that is not running — which is why the menu reads this and not `isEnabled`.
     private(set) var isWatching = false
 
-    /// What the pause control says. Observed, so pausing redraws the menu without being told to.
-    var pauseLabel: String { pauseSwitch.label(at: .now) }
+    /// Whether hover is paused now. What the menu *says* about it is `HoverPauseMenu`'s, built from
+    /// `pauseSwitch.until`.
     var isPaused: Bool { pauseSwitch.isPaused(at: .now) }
 
     func pause(for duration: Duration) { pauseSwitch.pause(for: duration, from: .now) }

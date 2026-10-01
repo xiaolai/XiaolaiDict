@@ -45,13 +45,32 @@ struct PermissionsTests {
     }
 
     /// A permission request that does not say what it buys is one a reader refuses.
-    @Test func eachPermissionSaysWhatStopsWorkingWithoutIt() {
+    @Test func eachPermissionSaysWhyItIsNeeded() {
         for permission in Permission.allCases {
-            #expect(!permission.blocks.isEmpty, "\(permission) does not say what it blocks")
             #expect(!permission.name.isEmpty)
+            let needed = permission.explanation(isGranted: false)
+            #expect(needed.contains("needs"), "\(permission) does not say it is needed: \(needed)")
+            #expect(needed.contains("Without it"), "\(permission) does not say what stops working: \(needed)")
         }
-        #expect(Permission.accessibility.blocks.contains("selection"))
-        #expect(Permission.screenRecording.blocks.contains("hover"))
+        #expect(Permission.accessibility.explanation(isGranted: false).contains("select"))
+        #expect(Permission.screenRecording.explanation(isGranted: false).contains("hover"))
+    }
+
+    /// **A granted permission is not described as a loss.** The row drew one fragment for both
+    /// states — "what stops working" — so under "Ready" it listed what had stopped working, and
+    /// called part of it "the fast hover path".
+    @Test func aGrantedPermissionReadsAsGranted() {
+        for permission in Permission.allCases {
+            let granted = permission.explanation(isGranted: true)
+            let needed = permission.explanation(isGranted: false)
+            #expect(granted != needed, "\(permission) says the same thing whether or not it is granted")
+            #expect(!granted.contains("needs") && !granted.contains("Without it"),
+                    "\(permission), granted, still reads as a request: \(granted)")
+            for sentence in [granted, needed] {
+                #expect(sentence.hasSuffix("."), "not a sentence: \(sentence)")
+                #expect(!sentence.contains("path"), "internal vocabulary reached the reader: \(sentence)")
+            }
+        }
     }
 
     /// After a refusal macOS never prompts again, so every permission has to be able to send the

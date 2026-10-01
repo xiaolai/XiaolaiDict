@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 
 @testable import XiaolaiDict
@@ -149,6 +150,79 @@ import Testing
         SettingsWindowFit.move(window, by: 0, width: 580, lowestBottom: nil, animated: false)
         #expect(window.frame.width == 580)
         #expect(window.frame.height == 400)
+    }
+}
+
+/// **What a pane wants is its content, and what it has is its container — the toolbar is in
+/// neither.**
+///
+/// Measured 2026-10-02 in a `Settings` scene with toolbar tabs: a three-row grouped form in a
+/// 450-point window reported `contentSize` 176, `contentInsets.top` 88 and `containerSize` 362.
+/// The container is already the room below the title bar and tabs. Adding the inset to what the
+/// pane wanted counted the chrome on one side only, and every pane that did not scroll ended in
+/// 88 points of empty window.
+@MainActor
+struct ContentFitTests {
+    private func geometry(content: CGFloat, topInset: CGFloat, container: CGFloat) -> ScrollGeometry {
+        ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: -topInset),
+            contentSize: CGSize(width: 580, height: content),
+            contentInsets: EdgeInsets(top: topInset, leading: 0, bottom: 0, trailing: 0),
+            containerSize: CGSize(width: 580, height: container))
+    }
+
+    /// The measured numbers. With the inset counted, `wanted` was 264 and the window settled 88
+    /// points taller than its pane.
+    @Test func theToolbarsInsetIsNotPartOfWhatThePaneWants() {
+        let fit = ContentFit(of: geometry(content: 176, topInset: 88, container: 362))
+        #expect(fit.wanted == 176)
+        #expect(fit.given == 362)
+        #expect(SettingsWindowFit.shortfall(wanted: fit.wanted, given: fit.given) == -186)
+    }
+
+    /// **A window that fits its pane asks for nothing more.** This is the dead band stated as a
+    /// fixed point: content 176 in a container of 176 is finished, with the toolbar's 88 points
+    /// reported or not.
+    @Test func aPaneThatFitsItsContainerIsAtRest() {
+        let fit = ContentFit(of: geometry(content: 176, topInset: 88, container: 176))
+        #expect(SettingsWindowFit.shortfall(wanted: fit.wanted, given: fit.given) == 0)
+    }
+
+    /// **The inset arriving late must not change the answer.** The same scroll view reports twice
+    /// as it settles — first with no inset, then with 88 — so a fit that counted it saw one pane
+    /// want two heights, 88 apart, which is the size of the old shudder.
+    @Test func theInsetArrivingDoesNotMoveTheTarget() {
+        let before = ContentFit(of: geometry(content: 509, topInset: 0, container: 362))
+        let after = ContentFit(of: geometry(content: 509, topInset: 88, container: 362))
+        #expect(before == after)
+    }
+}
+
+/// **Reduce Motion makes the pane resize a jump.**
+@MainActor
+struct SettingsWindowMotionTests {
+    private func window() -> NSWindow {
+        NSWindow(
+            contentRect: NSRect(x: 100, y: 200, width: 580, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: true)
+    }
+
+    /// Asked to animate with the setting on, the frame is where it is going when `move` returns —
+    /// an animated resize has only begun by then.
+    @Test func withReduceMotionTheWindowArrivesAtOnce() {
+        let window = window()
+        let before = window.frame
+        SettingsWindowFit.move(
+            window, by: 120, width: 580, lowestBottom: nil, animated: true, reduceMotion: true)
+        #expect(window.frame.height == before.height + 120)
+        #expect(window.frame.maxY == before.maxY)
+    }
+
+    /// And the source reads the setting where the animation is decided, so no caller can forget.
+    @Test func theMoveReadsTheSettingItself() throws {
+        let fit = try SettingsSources.code("SettingsWindowFit.swift")
+        #expect(fit.contains("reduceMotion: Bool = MotionPreference.systemReduceMotion"))
+        #expect(fit.contains("guard animated, !reduceMotion else {"))
     }
 }
 

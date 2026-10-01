@@ -192,12 +192,17 @@ struct ReviewWiringTests {
         let model = model(path)
         await model.start()
         let first = try #require(question(model))
+        #expect(!model.canUndo, "a sitting nothing has been answered in has nothing to undo")
         model.act(.grade(.good))
         try await settle { self.question(model)?.position == 2 }
 
+        // **Undo is offered exactly while there is an answer to take back**: the toolbar item is
+        // present on this and absent otherwise, where it was an invisible button on a key.
+        #expect(model.canUndo)
         model.act(.undo)
         try await settle { self.question(model)?.position == 1 }
         #expect(question(model)?.word == first.word)
+        #expect(!model.canUndo, "nothing is left to take back, so nothing offers to")
 
         let ledger = try Ledger(path: path)
         let events = try ledger.notes().compactMap { try ledger.card(of: $0.id, at: self.now) }

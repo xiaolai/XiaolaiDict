@@ -17,6 +17,10 @@ import XiaolaiDictUI
 @Observable
 final class LibraryModel {
     private(set) var layout: LibraryLayout
+    /// Whether the inspector column is open. **The reader's choice, kept in the defaults suite the
+    /// layout is kept in** — the scene has restoration turned off, so scene storage would forget it.
+    /// Open the first time, so the details a selection used to bring with it are still there.
+    private(set) var inspectorShown: Bool
     private var archiveSelections: [LibraryPane: Set<Int>] = [:]
     private var extendingArchive: Int?
     /// How many pages of the archive the reader has opened. **A refresh re-reads all of them**:
@@ -36,6 +40,9 @@ final class LibraryModel {
     private(set) var reviewProblem: String?
     private(set) var reviewCount = 0
     private(set) var reviewHeldBack = 0
+    /// How many saved meanings are waiting for the reader to choose or confirm them. What decides
+    /// whether Review offers the way to them at all.
+    private(set) var reviewUnconfirmed = 0
     private(set) var reviewDictionary: String?
     private let primaryName: @MainActor (String?) -> String?
     private let primary: @MainActor () -> PrimaryDictionary
@@ -140,6 +147,7 @@ final class LibraryModel {
         self.reopen = reopen
         self.defaults = defaults
         layout = defaults.string(forKey: "libraryLayout").flatMap(LibraryLayout.init(rawValue:)) ?? .grid
+        inspectorShown = defaults.object(forKey: "libraryInspector") as? Bool ?? true
         self.primary = primary
         self.primaryName = primaryName
         self.studying = studying
@@ -153,6 +161,11 @@ final class LibraryModel {
     func setLayout(_ layout: LibraryLayout) {
         self.layout = layout
         defaults.set(layout.rawValue, forKey: "libraryLayout")
+    }
+
+    func setInspector(_ shown: Bool) {
+        inspectorShown = shown
+        defaults.set(shown, forKey: "libraryInspector")
     }
 
     func show(_ pane: LibraryPane, lookup: Int? = nil) {
@@ -171,6 +184,13 @@ final class LibraryModel {
         focusedLookup = lookup
         Task { await refreshPane() }
     }
+    /// Goes to the saved meanings waiting to be chosen or confirmed: the Saved pane, narrowed to
+    /// Needs Attention. One spelling, for the toolbar button and the empty state's.
+    func findUnconfirmed() {
+        show(.saved)
+        act(.filter(.needsAttention))
+    }
+
     func refreshPane() async {
         if pane == .saved { await reload() }
         else if pane != .review { await reloadArchive() }
@@ -183,8 +203,10 @@ final class LibraryModel {
             let scope = primary().chosen; let now = clock()
             let counts = try await ledger.queueCounts(at: now, dictionary: scope,
                 newAllowance: ReviewModel.newCardsPerDay, dayStart: StudyDay.standard.start(containing: now))
+            let unconfirmed = try await ledger.attentionCount(dictionary: scope)
             reviewProblem = nil
             reviewCount = counts.due; reviewHeldBack = counts.heldBack; reviewDictionary = primaryName(scope)
+            reviewUnconfirmed = unconfirmed
         } catch { reviewProblem = error.localizedDescription; publishArchiveProblem(error.localizedDescription) }
     }
     func importLegacy() async {
@@ -239,23 +261,40 @@ final class LibraryModel {
                 archiveRows += rows.filter { !existing.contains($0.id) }
                 archivePages += 1
             } else { archiveRows = rows }
-            let shown = focus.map { row in archiveRows.contains(where: { $0.id == row.id }) ? archiveRows : [row] + archiveRows } ?? archiveRows
+            var shown = Self.cards(from: archiveRows, now: clock())
+            // A focus beyond the pages read is put first, as a card of its own, where the reader
+            // sent there will see it; one already on a page is on the card that stands for it.
+            if let focus, !shown.contains(where: { $0.lookupIDs.contains(focus.id) }) { shown.insert(focus, at: 0) }
             let visible = Set(shown.map(\.id))
             var selected = (archiveSelections[pane] ?? []).intersection(visible)
-            if let requestedFocus, visible.contains(requestedFocus) { selected = [requestedFocus] }
+            // **The card the focused lookup is drawn on**, which need not be the lookup's own: a
+            // reading made three times is one card, fronted by one of the three.
+            let focusedCard = requestedFocus.flatMap { id in shown.first { $0.lookupIDs.contains(id) }?.id }
+            if let focusedCard { selected = [focusedCard] }
             archiveSelections[pane] = selected
             archive = ArchivePresentation(rows: shown, total: total, search: requestedSearch,
                 hasMore: archiveRows.count < total, undoCount: archiveUndo?.affected ?? 0,
-                focused: requestedFocus, selection: selected)
+                focused: focusedCard, selection: selected)
         } catch {
             guard mine >= archivePublishedGeneration, requestedPane == pane, requestedSearch == archiveSearch else { return }
             publishArchiveProblem(error.localizedDescription)
         }
     }
+    /// One card per reading rather than per lookup, newest first — **the drawer's rule, not a second
+    /// one**: `ReadingHistory.days` groups by calendar day and folds the lookups a card would draw
+    /// identically, and this is its days laid end to end. The archive drew a card per lookup, which
+    /// on a real ledger was sixty-four identical cards for one word in one sentence.
+    ///
+    /// `archiveRows` stays one per lookup: the paging cursor and "is there more" are both counted
+    /// in lookups, which is what the ledger pages by.
+    static func cards(from lookups: [ReadingEntry], now: Date, calendar: Calendar = .current) -> [ReadingEntry] {
+        ReadingHistory.days(from: lookups, now: now, calendar: calendar).flatMap(\.entries)
+    }
+
     private func publishArchiveProblem(_ problem: String) {
         archive = ArchivePresentation(rows: archive.rows, total: archive.total, search: archiveSearch,
             hasMore: archive.hasMore, problem: problem, undoCount: archiveUndo?.affected ?? 0,
-            focused: focusedLookup, selection: archiveSelections[pane] ?? [])
+            focused: archive.focused, selection: archiveSelections[pane] ?? [])
     }
     private var failedArchiveAction: ArchiveAction?
     func actArchive(_ action: ArchiveAction) {
@@ -782,7 +821,7 @@ final class LibraryModel {
     static func row(_ row: LibraryRow, answer: String,
                     at now: Date) -> LibraryPresentation.Row {
         LibraryPresentation.Row(
-            id: row.id, word: row.word, excerpt: row.excerpt, marks: row.excerptMarks, answer: answer,
+            id: row.id, word: row.word, accentKey: row.lemma, excerpt: row.excerpt, marks: row.excerptMarks, answer: answer,
             status: status(of: row), due: due(of: row, at: now))
     }
 
@@ -798,7 +837,7 @@ final class LibraryModel {
               let row = rows.first(where: { $0.id == id }) else { return nil }
         let answer = answers[id]
         return LibraryPresentation.Inspector(
-            id: id, word: row.word, answer: answer?.text ?? "",
+            id: id, word: row.word, accentKey: row.lemma, answer: answer?.text ?? "",
             isReaders: answer?.origin == .reader,
             tags: tags,
             readings: (timeline?.readings ?? []).map {
@@ -836,7 +875,7 @@ final class LibraryModel {
         // drew "Due" or "New" over it, which is the list telling them work is waiting that
         // nothing will hand them.
         if let hidden = card.hiddenUntil, hidden > now {
-            return String(localized: "Put off until \(hidden.formatted(date: .abbreviated, time: .omitted))",
+            return String(localized: "Hidden until \(hidden.formatted(date: .abbreviated, time: .omitted))",
                           comment: "A library row for a card the reader set aside until a date")
         }
         guard let due = card.scheduled.due else { return String(localized: "New",
@@ -852,11 +891,15 @@ struct LibrarySceneView: View {
     let review: ReviewModel
     var body: some View {
         LearningLibraryView(pane: model.pane, saved: model.presentation, archive: model.archive,
-            layout: model.layout, chooseLayout: { model.setLayout($0) }, choose: { model.show($0) }, savedAction: { model.act($0) }, archiveAction: { model.actArchive($0) }) {
+            layout: model.layout, chooseLayout: { model.setLayout($0) },
+            inspectorShown: model.inspectorShown, showInspector: { model.setInspector($0) },
+            choose: { model.show($0) }, savedAction: { model.act($0) }, archiveAction: { model.actArchive($0) }) {
             LibraryReviewPane(due: model.reviewCount, dictionary: model.reviewDictionary,
                               problem: model.reviewProblem, heldBack: model.reviewHeldBack,
-                              findUnconfirmed: { model.show(.saved); model.act(.filter(.needsAttention)) }) {
-                ReviewSceneView(model: review)
+                              unconfirmed: model.reviewUnconfirmed,
+                              canUndo: review.canUndo, undo: { review.act(.undo) },
+                              findUnconfirmed: { model.findUnconfirmed() }) {
+                ReviewSceneView(model: review, findUnconfirmed: { model.findUnconfirmed() })
             }
         }
         .task { await model.refreshPane(); await model.importLegacy() }

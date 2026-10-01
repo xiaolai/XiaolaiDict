@@ -80,8 +80,11 @@ final class ShortcutRegistrar {
             problem = nil
             return nil
         } catch {
-            problem = String(localized: "\(shortcut.label()) is unavailable: \(String(describing: error))",
-                             comment: "Menu warning when the lookup shortcut could not be registered")
+            // **The reason in the reader's language, not `String(describing:)`.** That put raw
+            // English — and for an unexpected status, "OSStatus -9878" — inside a localised
+            // sentence (audit M6). The log line below keeps the exact error.
+            problem = String(localized: "\(shortcut.label()) is unavailable. \(error.readerText)",
+                             comment: "Menu warning when the lookup shortcut could not be registered; the second placeholder is a sentence saying why")
             log.error("hotkey unavailable: \(String(describing: error), privacy: .public)")
             return error
         }
@@ -119,10 +122,10 @@ final class ShortcutRegistrar {
             let restored = register(previous) == nil
             problem = refused.map {
                 restored
-                    ? String(localized: "\($0) — still using \(previous.label())",
-                             comment: "The new shortcut was refused and the old one still works")
-                    : String(localized: "\($0) — and \(previous.label()) could not be put back, so no shortcut is registered",
-                             comment: "Both the new shortcut and the old one were refused")
+                    ? String(localized: "\($0) Still using \(previous.label()).",
+                             comment: "The new shortcut was refused and the old one still works; the first placeholder is one or two whole sentences")
+                    : String(localized: "\($0) \(previous.label()) could not be put back either, so no shortcut is registered.",
+                             comment: "Both the new shortcut and the old one were refused; the first placeholder is one or two whole sentences")
             }
             return refusal
         }
@@ -130,7 +133,7 @@ final class ShortcutRegistrar {
             try store.save(chosen)
         } catch {
             log.error("shortcut not saved: \(String(describing: error), privacy: .public)")
-            problem = String(localized: "\(chosen.label()) works now but was not saved: \(String(describing: error))",
+            problem = String(localized: "\(chosen.label()) works now but could not be saved, so it will not survive a restart.",
                              comment: "The shortcut registered but could not be written to disk")
         }
         return nil
@@ -146,7 +149,8 @@ final class ShortcutRegistrar {
             choose: { [weak self] shortcut in
                 // An app that is gone registered nothing, and must not be reported as having done so.
                 guard let self else { return String(localized: "The app is not running") }
-                return choose(shortcut)?.description
+                // The localised sentence: this is drawn under the field in Settings.
+                return choose(shortcut)?.readerText
             },
             suspend: { [weak self] in self?.suspend($0) })
     }

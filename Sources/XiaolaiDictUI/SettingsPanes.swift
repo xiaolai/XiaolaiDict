@@ -85,8 +85,10 @@ struct SpeakingVoiceSection: View {
                 // a button that leads nowhere is worse than none, and this is the one screen where
                 // that would waste a trip.
                 if advice != .nothingBetter {
-                    Button("Open VoiceOver Utility") { Speech.openVoiceLibrary() }
-                        .buttonStyle(.glass)
+                    // Bordered, not glass: glass is for controls floating over content, and
+                    // this is a row of a form.
+                    Button("Open VoiceOver Utility…") { Speech.openVoiceLibrary() }
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
             }
@@ -115,38 +117,22 @@ struct SpeakingVoiceSection: View {
     }
 }
 
+/// How a reading looks and sounds: the type, what a card carries, the voice.
+///
+/// What is saved for study and the command that deletes the reading history were here too, under
+/// a text-size icon; they are the app's behaviour rather than a card's appearance and moved to
+/// `GeneralPane` on 2026-10-02, which is where the reasoning is.
 struct ReadingPane: View {
     var appearance: Appearance?
-    var keepPolicy: Binding<LookupKeepPolicy>? = nil
-    /// The erase command, which lives here because it is about the reader's reading rather than
-    /// about their cards. Nil where the pane is not connected — an instrument, or a preview.
-    var erase: ErasePresentation?
-    var eraseAction: (@MainActor (EraseAction) -> Void)?
 
     var body: some View {
         Form {
             if let appearance {
                 Bound(appearance: appearance)
             } else {
-                Section {
-                    Text("This pane is not connected to the reader's settings.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let keepPolicy {
-                Section("Learning") {
-                    Picker("Keep lookups for learning", selection: keepPolicy) {
-                        Text("Automatically").tag(LookupKeepPolicy.automatic)
-                        Text("Only when I choose Keep").tag(LookupKeepPolicy.manual)
-                    }
-                    Text("Lookups enter History in both modes. Automatic keeping prepares meanings from your study dictionary; uncertain meanings need your confirmation before Review.")
-                        .foregroundStyle(.secondary)
-                }
+                Section { Unavailable() }
             }
             SpeakingVoiceSection()
-            if let erase, let eraseAction {
-                EraseReadingSection(state: erase, act: eraseAction)
-            }
         }
         .formStyle(.grouped)
     }
@@ -157,16 +143,22 @@ struct ReadingPane: View {
         @Environment(\.scale) private var scale
         /// The specimen's accent follows the appearance, the way a card's does.
         @Environment(\.colorScheme) private var scheme
+        @Environment(\.colorSchemeContrast) private var contrast
         @Bindable var appearance: Appearance
 
         var body: some View {
-            // A segmented picker rather than a slider: every step is a size the surfaces have been
+            // A named list rather than a slider: every step is a size the surfaces have been
             // looked at, and a free number would let the reader build a layout nobody designed.
+            //
+            // **A pop-up, not segments.** It was segmented while there were four sizes. With six
+            // — Extra Large and Huge arrived 2026-10-02 — the segments do not fit a 580-point
+            // pane, and past about five choices a pop-up is the control for one-of-many anyway.
+            // The sample below is what shows the difference; the menu only has to name it.
             Section {
                 Picker("Size", selection: $appearance.textSize) {
                     ForEach(TextSize.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
 
                 Picker("Mark the word", selection: $appearance.emphasis) {
                     ForEach(WordEmphasis.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -176,9 +168,10 @@ struct ReadingPane: View {
                 Text("Text")
             } footer: {
                 // Set in the chosen size and marked the chosen way, so the controls show what they
-                // do rather than describing it.
+                // do rather than describing it. In the label colour a card's sentence is set in:
+                // a grey sample would preview the size and misreport the contrast.
                 Text(specimen)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                     .lineSpacing(appearance.scale.text.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, scale.space.stack)
@@ -188,7 +181,7 @@ struct ReadingPane: View {
                 Toggle("Name the app a word was read in", isOn: $appearance.showsPlaceName)
                 Toggle("Show the time a word was looked up", isOn: $appearance.showsTime)
             } header: {
-                Text("On a card")
+                Text("On a Card")
             }
 
             Section {
@@ -196,7 +189,7 @@ struct ReadingPane: View {
                     "Say when a word was read off the screen",
                     isOn: $appearance.warnsAboutScreenReading)
             } header: {
-                Text("In the panel")
+                Text("In the Lookup Window")
             } footer: {
                 // One literal with backslash continuations, so it stays a literal: a `+` makes it
                 // a String and SwiftUI takes the verbatim overload, which extracts nothing.
@@ -205,26 +198,6 @@ struct ReadingPane: View {
                      the one way of reading a word that can be wrong rather than simply missing — \
                      and you can check it yourself, because the word it read is the one shown.
                      """)
-            }
-
-            // Which glass is right depends on what is usually behind the drawer, and only the
-            // reader knows that. Frosted over a black terminal is flat grey — working glass that
-            // looks broken — which is why this is a choice rather than a constant.
-            Section {
-                Picker("Glass", selection: $appearance.drawerGlass) {
-                    ForEach(DrawerGlass.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            } header: {
-                Text("Reading history drawer")
-            } footer: {
-                Text("""
-                     Frosted keeps cards and headings easy to read over any window. Clear shows \
-                     more of what is behind the drawer — over a dark terminal it stays dark \
-                     instead of turning grey.
-                     """)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             }
         }
 
@@ -248,14 +221,16 @@ struct ReadingPane: View {
             return MarkedSentence.text(
                 sentence, marking: [(sentence as NSString).range(of: emphasised)],
                 size: appearance.scale.text.body, emphasis: appearance.emphasis,
-                accent: ReadingPalette.accent(for: emphasised).color(in: scheme))
+                // Keyed by the word itself: a specimen has no lemma to look up, and all this needs
+                // is the same word giving the same hue every time.
+                accent: ReadingPalette.color(forLemma: emphasised, in: scheme, contrast: contrast))
         }
     }
 }
 
 // MARK: - Lookup
 
-/// How a lookup starts: the shortcut, and the hover gate.
+/// How a lookup starts: the shortcut, and hovering.
 ///
 /// Every control here edits a field `HoverPolicy` has had since it was written and that nothing
 /// could reach: the only policy that existed was the hardcoded `.shipped`. The exception is the
@@ -272,14 +247,13 @@ struct LookupPane: View {
     /// The shortcut field's recorder. Held by the settings model, because ending it belongs to
     /// whoever knows the reader has left this pane — which this pane cannot see.
     var capture = ShortcutCapture()
-    @State private var host = ""
 
     var body: some View {
         Form {
             shortcutSection
-            gateSection
+            hoverSection
+            scriptsSection
             appsSection
-            sitesSection
         }
         .formStyle(.grouped)
     }
@@ -292,19 +266,19 @@ struct LookupPane: View {
             if let shortcut {
                 ShortcutField(choice: shortcut, capture: capture)
             } else {
-                Text("This pane is not connected to the shortcut.").foregroundStyle(.secondary)
+                Unavailable()
             }
         } header: {
             Text("Shortcut")
         } footer: {
-            Text("Whatever is selected is looked up, wherever you are.")
+            Text("Looks up the text you have selected, in any app.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     /// What must be true before a hover looks anything up.
-    private var gateSection: some View {
+    private var hoverSection: some View {
         Section {
             // **The switch, above everything it governs.** It was in the menu bar menu and nowhere
             // else, so this pane could configure a hover that the reader had no way to turn off
@@ -314,7 +288,7 @@ struct LookupPane: View {
             // Read from the watcher rather than from the setting: if starting it failed, this says
             // off, which is what is true.
             if let hoverEnabled {
-                Toggle("Hover Lookup", isOn: hoverEnabled)
+                Toggle("Look up on hover", isOn: hoverEnabled)
             }
 
             // **Which key, and what the reader does with it — two questions, two rows.** The row
@@ -323,55 +297,70 @@ struct LookupPane: View {
             // and nothing happens.
             Picker("Key", selection: $policy.modifier) {
                 ForEach(HoverModifier.allCases, id: \.self) { modifier in
-                    Text(verbatim: "\(modifier.name)  \(modifier.symbol)").tag(modifier)
+                    // Composed from a localized name and the key's own glyph, so it is verbatim
+                    // here and the name is in the catalog — see `HoverLabels`.
+                    Text(verbatim: "\(HoverLabels.name(of: modifier))  \(modifier.symbol)").tag(modifier)
                 }
             }
 
             Picker("Gesture", selection: $policy.gesture) {
                 ForEach(HoverGesture.allCases, id: \.self) { gesture in
-                    Text(verbatim: "\(gesture.name)  \(gesture.label(policy.modifier))").tag(gesture)
+                    Text(verbatim: "\(HoverLabels.name(of: gesture))  \(gesture.label(policy.modifier))").tag(gesture)
                 }
             }
             .pickerStyle(.segmented)
 
             Picker("Rest the pointer", selection: $policy.settleMilliseconds) {
-                ForEach(HoverPolicy.settleChoices) { Text($0.name).tag($0.milliseconds) }
+                ForEach(HoverPolicy.settleChoices) { Text(HoverLabels.name(of: $0)).tag($0.milliseconds) }
             }
             .pickerStyle(.segmented)
+        } header: {
+            Text("Hover")
+        } footer: {
+            Text("A word is looked up when you use the key and the pointer has stopped over it.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            // **Scripts, because only a script is decidable from one word.** A row saying
-            // "English only" would be a promise the code cannot keep: a single word gives
-            // `NLLanguageRecognizer` far too little to separate English from German, and the
-            // hover path often has no sentence to offer it. Naming the writing system says
-            // exactly what is checked.
+    /// Which writing systems a hover looks up.
+    ///
+    /// **Scripts, because only a script is decidable from one word.** A row saying "English only"
+    /// would be a promise the code cannot keep: a single word gives `NLLanguageRecognizer` far too
+    /// little to separate English from German, and the hover path often has no sentence to offer
+    /// it. Naming the writing system says exactly what is checked.
+    ///
+    /// **Checkboxes, in a section of their own.** They were switches at the end of the hover
+    /// section while the text around them said "ticked" — a set of independent choices is what a
+    /// checkbox is for, and a switch is for one thing that is on or off.
+    private var scriptsSection: some View {
+        Section {
             ForEach(ProbeScript.allCases, id: \.self) { script in
                 // **The last remaining box is disabled, not silently refused.** The binding
                 // still guards — an empty set looks up almost nothing — but a control that
                 // accepts a click and does nothing reads as a broken switch. Disabled, the
                 // reason is visible before the click rather than inferred after it.
                 Toggle(isOn: binding(for: script)) { Self.label(for: script) }
+                    .toggleStyle(.checkbox)
                     .disabled(isTheOnlyScriptChosen(script))
             }
             if policy.scripts.count == 1 {
-                Text("At least one script has to stay ticked.")
-                    .font(.caption)
+                Text("At least one script has to stay selected.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("The gate")
+            Text("Scripts")
         } footer: {
-            // **The second sentence is the whole reason this footer changed.** A word in an
-            // unticked script is read and then dropped, and hover's refusals are otherwise silent
+            // **This footer is where a silent refusal gets explained.** A word in a script that
+            // is not selected is read and then dropped, and hover's refusals are otherwise silent
             // — "you did not hold the key" explains itself, this does not. A reader who never
             // opened this pane still gets the default, so the place they will go looking when
             // nothing happens over a Chinese word has to answer them.
             Text("""
-                 A hover only fires when you ask with the key and the pointer has stopped. \
-                 There is no setting for asking with nothing. \
-                 Hovering a word in a script you have not ticked looks nothing up, and your \
-                 reading history shows only the scripts ticked here. Looking a word up from \
-                 a selection still works whatever it is written in. Nothing is deleted: \
-                 ticking a script back shows its words again.
+                 Hover looks up only words written in the selected scripts, and Reading History \
+                 shows only those. Looking up a selection works in any script. Nothing is \
+                 deleted: selecting a script again shows its words again.
                  """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -401,57 +390,29 @@ struct LookupPane: View {
                         .buttonStyle(.link)
                 }
             }
-            Button("Add an app…") { addApp() }
+            Button("Add an App…") { addApp() }
         } header: {
-            Text("Never look up in these apps")
+            Text("Never Look Up in These Apps")
         } footer: {
             Text("""
-                 Password managers cannot be removed. The sentence a word was read in is \
-                 recorded, and there every sentence is a secret.
+                 Password managers cannot be removed. The sentence a word was read in is saved \
+                 with it, and in a password manager every sentence is a secret.
                  """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// Sites XiaolaiDict never looks up on.
-    private var sitesSection: some View {
-        Section {
-            ForEach(policy.excludedHosts.sorted(), id: \.self) { site in
-                HStack {
-                    Text(site)
-                    Spacer(minLength: scale.space.inline)
-                    Button("Remove") { policy.excludedHosts.remove(site) }
-                        .buttonStyle(.link)
-                }
-            }
-            HStack {
-                TextField("example.com", text: $host)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addHost)
-                Button("Add", action: addHost)
-                    .disabled(HoverPolicy.normalisedHost(host).isEmpty)
-            }
-        } header: {
-            Text("Never look up on these sites")
-        } footer: {
-            // **This says what is true, which is not what the header promises.** An audit found
-            // the list is never consulted: the one `HoverSite` built in the hover path carries no
-            // host, so `excludedHosts` cannot refuse anything. A control that quietly does nothing
-            // is worse than no control, and worst of all when a reader is relying on it to keep a
-            // site out of their history. Enforcing it means resolving the page's host *before*
-            // the capture — which the gate deliberately does not do today, because the cheapest
-            // refusal must not touch Accessibility — so it is a decision, not a patch, and until
-            // it is made the honest thing is to say so here rather than let the header imply it.
-            Text("""
-                 Not yet enforced — hovering is not refused on these sites. \
-                 What you add here is kept and will apply once it is. \
-                 Subdomains are covered too, so example.com also excludes docs.example.com.
-                 """)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
+    // **There is no "Never look up on these sites" section, and its absence is deliberate.**
+    // There was one: a text field, Add and Remove, under a header that read as a privacy promise
+    // and a footer that took it back — "Not yet enforced". The list is never consulted: the one
+    // `HoverSite` built in the hover path carries no host, so `excludedHosts` cannot refuse
+    // anything, and a reader who trusted the header had their sentences saved on those sites.
+    // Enforcing it means resolving the page's host *before* the capture, which the hover rules
+    // deliberately do not do today because the cheapest refusal must not touch Accessibility —
+    // a decision, not a patch. Until it is made the control is gone, 2026-10-02. What a reader
+    // already added stays in `HoverPolicy.excludedHosts`, stored and untouched, so the section
+    // can come back with their list in it.
 
     /// The apps the reader added, which are the only ones they can take away again.
     private var readersOwn: [String] {
@@ -481,7 +442,7 @@ struct LookupPane: View {
         switch script {
         case .latin: Text("Latin — English and most European languages")
         // **Named for what it governs, not for what Unicode calls it.** `日本語` is written
-        // entirely in kanji and classifies as han, so a Japanese reader who ticks only
+        // entirely in kanji and classifies as han, so a Japanese reader who selects only
         // "Japanese kana" is refused most of their own language. "Chinese characters" alone
         // hid that, and the reader had no way to find out except by it not working.
         case .han: Text("Chinese characters / Japanese kanji")
@@ -490,12 +451,12 @@ struct LookupPane: View {
         }
     }
 
-    /// Whether `script` is the only one left ticked, which is what makes its box read-only.
+    /// Whether `script` is the only one left selected, which is what makes its box read-only.
     private func isTheOnlyScriptChosen(_ script: ProbeScript) -> Bool {
         policy.scripts == [script]
     }
 
-    /// One box per script, and **the last one cannot be unticked**.
+    /// One box per script, and **the last one cannot be cleared**.
     ///
     /// An empty set looks up nothing at all, which is not a preference any reader is expressing —
     /// it is a state a settings pane can walk into one click at a time, and the reader would then
@@ -514,15 +475,6 @@ struct LookupPane: View {
                 guard !scripts.isEmpty else { return }
                 policy.scripts = scripts
             })
-    }
-
-    /// Normalised on the way in, for the reason `HoverPolicy` normalises on the way out: an
-    /// exclusion typed as `EXAMPLE.COM.` that fails to match `example.com` is not an exclusion.
-    private func addHost() {
-        let normalised = HoverPolicy.normalisedHost(host)
-        guard !normalised.isEmpty else { return }
-        policy.excludedHosts.insert(normalised)
-        host = ""
     }
 
     /// The bundle identifier is read from the app the reader picked, never typed. Asking someone
@@ -555,14 +507,14 @@ private struct AppRow: View {
                 // in: a glyph standing with its text, not a picture beside it.
                 Image(nsImage: icon)
                     .resizable()
-                    .frame(width: scale.text.body, height: scale.text.body)
+                    .frame(width: Token.Text.form, height: Token.Text.form)
                     .accessibilityHidden(true)
             }
             if let name = AppNames.name(for: bundleID) {
                 Text(name)
             } else {
                 Text(bundleID)
-                    .font(.system(size: scale.text.label).monospaced())
+                    .font(.callout.monospaced())
                     .foregroundStyle(.secondary)
             }
         }
@@ -575,69 +527,142 @@ private struct AppRow: View {
 /// Decision D7: the reader studies from **one** dictionary.
 struct DictionaryPane: View {
     var choice: DictionaryChoice?
+    /// The dictionary the reader clicked, held until they confirm. Doubly optional because
+    /// "Automatic" is itself a choice, and its tag is nil.
+    @State private var pending: PendingSwitch?
+
+    /// One switch awaiting the reader's answer.
+    private struct PendingSwitch: Equatable {
+        let key: String?
+    }
 
     var body: some View {
         Form {
             Section {
                 if let choice, let available = choice.available {
+                    // **Radio buttons, because it is one of several and each needs its note.**
+                    // `.inline` in a grouped form drew the unselected choices as filled grey
+                    // discs at the trailing edge, which read as disabled. A pop-up would fit
+                    // eight names and lose the line under each that says what choosing it gives.
                     Picker("Dictionary", selection: binding(choice)) {
-                        Text("First that marks senses").tag(String?.none)
+                        Text("Automatic — the first dictionary that can mark a meaning").tag(String?.none)
                         ForEach(available, id: \.identity.key) { capability in
-                            // What choosing it can key, beside its name: a dictionary that marks
+                            // What choosing it can key, under its name: a dictionary that marks
                             // senses with nothing a parser can read only ever gives whole-entry
                             // cards, and the reader should see that before choosing rather than
                             // after a week of them.
-                            Text(verbatim: "\(capability.identity.name) — \(capability.note)")
-                                .tag(String?.some(capability.identity.key))
+                            VStack(alignment: .leading) {
+                                Text(verbatim: capability.identity.name)
+                                Text(DictionaryLabels.capability(capability))
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .tag(String?.some(capability.identity.key))
                         }
                     }
                     .labelsHidden()
-                    .pickerStyle(.inline)
+                    .pickerStyle(.radioGroup)
                 } else if let choice, !choice.hasAsked {
-                    Text("Asking the dictionary service…").foregroundStyle(.secondary)
-                } else if choice != nil {
+                    Text("Looking for your dictionaries…").foregroundStyle(.secondary)
+                } else if let choice {
                     // **Asked and answered with nothing is not still asking.** The pane said
                     // "Asking…" for as long as it was open whenever discovery finished without
                     // a list — a spinner that never resolves, describing a request that had
                     // already come back. `hasAsked` is the flag the app already sets and
                     // `SetupView` already reads; this pane was simply not looking at it.
                     VStack(alignment: .leading) {
-                        Text("The dictionary service did not answer.")
+                        Text("Your dictionaries could not be read.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        if let choice { Button("Ask again") { choice.reask() } }
+                        Button("Try Again") { choice.reask() }
                     }
                 } else {
-                    Text("This pane is not connected to the dictionary service.")
-                        .foregroundStyle(.secondary)
+                    Unavailable()
                 }
             } header: {
-                Text("Study from")
-            }
-
-            Section {
-                Label {
-                    Text("Switching dictionaries starts study over.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                }
+                Text("Study From")
+            } footer: {
+                // **A plain note, and the warning at the moment it applies.** This was a
+                // permanent orange triangle, shown whether or not anything was being switched —
+                // a caution that is always on is one nobody reads. The cost of switching is now
+                // asked about when the reader switches.
                 Text("""
-                     A sense id only means anything inside the dictionary that issued it, so \
-                     what has been learned about your senses cannot follow you to another one. \
-                     Your reading history is kept either way.
+                     Study progress is kept separately for each dictionary. Your reading history \
+                     is kept whichever you choose.
                      """)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "Switch the study dictionary?",
+            isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
+            presenting: pending
+        ) { switching in
+            Button("Switch Dictionary") { choice?.choose(switching.key) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("""
+                 Review starts over with the new dictionary: what you have learned is kept with \
+                 the dictionary it was learned from, and is there again if you switch back. Your \
+                 reading history is not affected.
+                 """)
+        }
     }
 
     /// A binding rather than a button per row, so the pane says "one of these" the way the
-    /// decision does.
+    /// decision does. **A change is asked about before it is made** — switching starts study
+    /// over, and the control used to apply it on one click under a warning nobody was reading.
     private func binding(_ choice: DictionaryChoice) -> Binding<String?> {
-        Binding(get: { choice.chosen }, set: { choice.choose($0) })
+        Binding(get: { choice.chosen }, set: { wanted in
+            guard wanted != choice.chosen else { return }
+            pending = PendingSwitch(key: wanted)
+        })
+    }
+}
+
+/// What a dictionary can do for study, in the reader's words.
+///
+/// **Here, and not on `DictionaryCapability`.** It had a `note` property, below the view layer,
+/// answering "senses", "senses, by position" and "whole entries only" — unlocalized, and in the
+/// parser's vocabulary. It was drawn verbatim in this pane and on the setup pane, which is the
+/// same defect the hover pickers had; these were its only two readers, so it is deleted. Both
+/// functions switch over the key kind, so a kind added later fails to compile here.
+enum DictionaryLabels {
+    /// The line under a dictionary's name in the picker.
+    static func capability(_ capability: DictionaryCapability) -> String {
+        guard capability.probed else {
+            return String(localized: "Not checked yet",
+                          comment: "Under a dictionary's name: what it can do for study is not known yet")
+        }
+        return switch capability.senseKeyKind {
+        case .publisher:
+            String(localized: "Marks the meaning you met",
+                   comment: "Under a dictionary's name: it can mark which meaning a word had")
+        case .position:
+            String(localized: "Marks the meaning you met, by its place in the entry",
+                   comment: "Under a dictionary's name: it can mark a meaning, by position rather than by the publisher's id")
+        case .none:
+            String(localized: "Whole entries only",
+                   comment: "Under a dictionary's name: it cannot mark a single meaning")
+        }
+    }
+
+    /// The setup row's sentence about the dictionary being studied from.
+    static func studying(from capability: DictionaryCapability) -> String {
+        let name = capability.identity.name
+        guard capability.probed else {
+            return String(localized: "Studying from \(name).")
+        }
+        return switch capability.senseKeyKind {
+        case .publisher:
+            String(localized: "Studying from \(name). It can mark the meaning you met.")
+        case .position:
+            String(localized: "Studying from \(name). It can mark the meaning you met, by its place in the entry.")
+        case .none:
+            String(localized: "Studying from \(name). It shows whole entries and cannot mark a single meaning.")
+        }
     }
 }
 
@@ -707,6 +732,9 @@ struct AboutPane: View {
     /// Built once and checked, rather than force-unwrapped at the call site. A link that is nil is
     /// a link that is not drawn — never a crash on a settings pane.
     private static let site = URL(string: "https://lixiaolai.com")
+    /// The author's own page. The Author row opened `site`, the same address as the Website row
+    /// under it — two rows, one destination.
+    private static let profile = URL(string: "https://github.com/xiaolai")
     /// The licence as published. **Readable before the download, not only after it**: a reader
     /// deciding whether to fetch 3 GB is owed the terms first, and the copy that comes with the
     /// weights does not exist yet. Once it does, it is the one opened — same text, no network.
@@ -735,16 +763,20 @@ struct AboutPane: View {
                         .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: scale.space.line) {
+                    // Semantic fonts, like every other pane: this one and Setup were set from
+                    // the reader's text size, so the window changed type size from tab to tab.
                     Text("XiaolaiDict")
-                        .font(.system(size: scale.text.display, weight: .semibold))
+                        .font(.title2.weight(.semibold))
                     Text("A menu-bar dictionary for macOS.")
                         .foregroundStyle(.secondary)
                     // Nothing is invented where the bundle says nothing: a pane that printed
                     // "unknown" would be claiming to have looked and found that answer.
                     if let release {
+                        // Secondary: tertiary is how an unavailable control is drawn, and this
+                        // is text a reader copies into a bug report.
                         Text(release.label)
-                            .font(.system(size: scale.text.label))
-                            .foregroundStyle(.tertiary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
                 }
@@ -757,8 +789,8 @@ struct AboutPane: View {
     @ViewBuilder private var author: some View {
         Section {
             LabeledContent("Author") {
-                if let site = Self.site {
-                    Link(destination: site) { Text(verbatim: "@xiaolai") }
+                if let profile = Self.profile {
+                    Link(destination: profile) { Text(verbatim: "@xiaolai") }
                 } else {
                     Text(verbatim: "@xiaolai")
                 }
@@ -773,10 +805,12 @@ struct AboutPane: View {
 
     /// Which model, whose, and under what terms — named whether or not it is downloaded.
     @ViewBuilder private var localModel: some View {
-        Section("Local model") {
+        Section("Local Model") {
             LabeledContent("Model") { Text(verbatim: LocalModelAttribution.family) }
             LabeledContent("Made by") { Text(verbatim: LocalModelAttribution.publisher) }
-            LabeledContent("Licence") {
+            // "License", as the licence itself is named beside it — the row read "Licence — Apache
+            // License 2.0", two spellings of one word a line apart.
+            LabeledContent("License") {
                 if let destination = modelLicence ?? Self.licence {
                     Button { open(destination) } label: { Text(verbatim: LocalModelAttribution.licenceName) }
                         .buttonStyle(.link)
@@ -786,9 +820,9 @@ struct AboutPane: View {
             }
             if licenceWouldNotOpen {
                 // The name is not a place. A reader who cannot open the link is given the address.
-                Text("The licence could not be opened. It is published under \(LocalModelAttribution.licenceName), at \(LocalModelAttribution.licenceURL?.absoluteString ?? "apache.org").")
+                Text("The license could not be opened. It is published under \(LocalModelAttribution.licenceName), at \(LocalModelAttribution.licenceURL?.absoluteString ?? "apache.org").")
                     .textSelection(.enabled)
-                    .font(.system(size: scale.text.small))
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
@@ -803,16 +837,16 @@ struct AboutPane: View {
     /// nothing to open, and a button that cannot do anything is worse than no button.
     @ViewBuilder private var openSource: some View {
         if let notices {
-            Section("Open source") {
-                LabeledContent("Licences") {
-                    Button { open(notices, missing: $noticesWouldNotOpen) } label: { Text("Third-party notices") }
+            Section("Open Source") {
+                LabeledContent("Licenses") {
+                    Button { open(notices, missing: $noticesWouldNotOpen) } label: { Text("Third-Party Notices") }
                         .buttonStyle(.link)
                 }
                 if noticesWouldNotOpen {
                     // The reader is told where it is, so the text is reachable without this button.
                     Text("The notices could not be opened. They are in the app itself, at \(notices.path()).")
                         .textSelection(.enabled)
-                        .font(.system(size: scale.text.small))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }

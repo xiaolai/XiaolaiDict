@@ -31,7 +31,10 @@ public enum DrawerEdge: String, CaseIterable, Codable, Sendable {
 
 /// What the reader has chosen about the drawer's shape.
 public struct DrawerLayout: Equatable, Sendable {
-    /// Width when docked left or right, height when docked top or bottom.
+    /// Width when docked left or right, height when docked top or bottom. The app derives it from
+    /// the reader's text size (`DrawerMetrics.thickness(for:)`, in the view layer, which this
+    /// module cannot import); the default below is that value at the standard size, for a caller
+    /// that only wants a drawer.
     public var thickness: CGFloat
     public var edge: DrawerEdge
     /// How much of the edge to span, or nil for the whole of it. Stored as one optional rather than
@@ -39,6 +42,14 @@ public struct DrawerLayout: Equatable, Sendable {
     public var spanFraction: CGFloat?
     /// Gap between the drawer and the screen edge. 0 is flush.
     public var inset: CGFloat
+    /// The radius of the corners that are not against the screen edge.
+    ///
+    /// **Sixteen points, which is macOS 27's own window corner** — measured on 27.0.1 (26A434),
+    /// 2026-10-02: a titled `NSWindow`, with and without a toolbar, reports a 16 pt corner. The
+    /// drawer is a borderless window with nothing of its own to be concentric with — it is inset
+    /// in a transparent window 48 pt larger, so SwiftUI's `ConcentricRectangle` would resolve
+    /// against a rectangle the reader cannot see — and it sits beside the reader's windows, so
+    /// theirs is the corner it matches. Not scaled with the text: a window's corner is not.
     public var cornerRadius: CGFloat
 
     /// Slack around the drawer for its shadow to land in. The window is grown by this much and then
@@ -47,7 +58,7 @@ public struct DrawerLayout: Equatable, Sendable {
     public static let shadowMargin: CGFloat = 48
 
     public init(
-        thickness: CGFloat = 380,
+        thickness: CGFloat = 384,
         edge: DrawerEdge = .right,
         spanFraction: CGFloat? = nil,
         inset: CGFloat = 0,
@@ -79,8 +90,12 @@ public struct DrawerGeometry: Equatable, Sendable {
     public let hiddenOffset: CGSize
     public let edge: DrawerEdge
     public let cornerRadius: CGFloat
-    /// True when the drawer sits against the screen edge with no gap.
+    /// True when the drawer sits against the screen edge with no gap — the display's own edge, not
+    /// merely the edge of what the Dock leaves.
     public let isFlush: Bool
+
+    /// How close counts as touching: under a point, which is rounding and not a gap.
+    static let edgeTolerance: CGFloat = 1
 
     /// Which pair of corners stays square. A panel flush against an edge keeps the corners touching
     /// that edge square, the way system panels do; lift it off and it rounds all round.
@@ -155,6 +170,20 @@ public struct DrawerGeometry: Equatable, Sendable {
         case .bottom: hidden = CGSize(width: 0, height: window.height - originY)
         }
 
+        // **Against the screen's edge, or only against the Dock?** With the Dock on the docked
+        // side the visible frame stops short of the display's, and a drawer flush with the visible
+        // frame stands beside the Dock with open desktop round it — squaring its corners there
+        // made a panel that looked cut off in mid-air. The menu bar is different: it is a bar the
+        // full width of the display, and a panel under it is against it.
+        let frame = screen.frame.cg
+        let reachesTheEdge: Bool
+        switch layout.edge {
+        case .right: reachesTheEdge = visible.maxX >= frame.maxX - DrawerGeometry.edgeTolerance
+        case .left: reachesTheEdge = visible.minX <= frame.minX + DrawerGeometry.edgeTolerance
+        case .bottom: reachesTheEdge = visible.minY <= frame.minY + DrawerGeometry.edgeTolerance
+        case .top: reachesTheEdge = true
+        }
+
         return DrawerGeometry(
             windowRect: UpRect(window),
             contentSize: content.size,
@@ -162,7 +191,7 @@ public struct DrawerGeometry: Equatable, Sendable {
             hiddenOffset: hidden,
             edge: layout.edge,
             cornerRadius: layout.cornerRadius,
-            isFlush: inset < 1)
+            isFlush: inset < DrawerGeometry.edgeTolerance && reachesTheEdge)
     }
 }
 

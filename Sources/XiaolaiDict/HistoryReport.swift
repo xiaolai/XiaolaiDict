@@ -44,7 +44,7 @@ enum HistoryReport {
         }
         let screens = NSScreen.screens.map(ScreenMetrics.init)
         let expected = DrawerPlacement.screen(under: UpPoint(NSEvent.mouseLocation), among: screens)
-            .map { DrawerGeometry.make(DrawerLayout(thickness: 380, edge: .right), on: $0) }
+            .map { DrawerGeometry.make(HistoryDrawerController.layout(for: app.appearance.textSize), on: $0) }
 
         app.toggleHistory()
         // Asks the compositor, not the controller. The controller's own answer is what once
@@ -82,7 +82,7 @@ enum HistoryReport {
         var reopenedDocked = false
         var reopenedFrame = CGRect.zero
         var reopenedClosed = false
-        if let retained = NSApplication.shared.windows.first(where: { $0.title == "Reading History" }) {
+        if let retained = XiaolaiDictScene.window(of: XiaolaiDictScene.drawerID) {
             retained.setFrameOrigin(CGPoint(x: frame.minX - frame.width, y: frame.minY))
             app.toggleHistory()
             _ = await Instrument.settle(until: appearance) { app.drawerIsDrawn && app.drawerModel.revealed }
@@ -123,10 +123,9 @@ enum HistoryReport {
             "backdropShowsThrough": backdrop.reading.map { $0.showsThrough as Any } ?? "unmeasured",
             "backdropChangedFraction": backdrop.reading?.changedFraction ?? -1,
             "backdropProblem": backdrop.problem ?? "none",
-            // The glass this instance loaded from the reader's settings, and how much of the
-            // stripes' colour came through it. e2e.sh runs the report once per glass and compares:
-            // a setting the drawer never reads would score the same both times.
-            "drawerGlass": app.appearance.drawerGlass.rawValue,
+            // How much of the stripes' colour came through the glass, and how the glass reads over
+            // black. The drawer has one glass — the system's regular — since the Frosted/Clear
+            // setting went on 2026-10-02, so these describe it rather than compare two.
             "stripesColour": backdrop.stripesColour ?? -1,
             "glassOverBlack": backdrop.reading?.glassOverBlack ?? -1,
             // The stripes are a picture to look at, not a score — so their failing is reported on

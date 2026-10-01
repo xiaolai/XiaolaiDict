@@ -248,7 +248,7 @@ struct SetupWiringTests {
         // And the panel puts both into the environment the card reads — **on the view that shows
         // the card**, not merely somewhere in the file.
         let chain = try modifiers(
-            try code("Sources/XiaolaiDict/LookupPanel.swift"), on: "VStack(spacing: 0)")
+            try code("Sources/XiaolaiDict/LookupPanel.swift"), on: "PanelView(content: content)")
         #expect(chain.contains("environment(\\.translation, translation())"),
                 "the translator is not put into the environment on the view that draws the card")
         #expect(chain.contains("environment(\\.explainer, explainer())"),

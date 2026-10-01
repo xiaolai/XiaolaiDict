@@ -24,7 +24,7 @@ struct TranslationPaneTests {
     /// The label says what it means for this sentence, in the reader's terms.
     @Test func theLabelSaysWhatTheWeakerEngineCannotDo() throws {
         let caveat = try #require(TranslationPane(.translated("x", by: .appleTranslation), of: Self.key).caveat)
-        #expect(caveat.contains("which sense"))
+        #expect(caveat.contains("which meaning"))
         #expect(caveat.contains("misreads"))
     }
 
@@ -82,7 +82,7 @@ struct TranslationPaneTests {
 
     private static var cargo: SensePresentation {
         SensePresentation(
-            key: "m_en_gbus0472980.005", ordinal: 1, partOfSpeech: "noun",
+            key: "m_en_gbus0472980.005", block: 1, ordinal: 1, partOfSpeech: "noun",
             label: "a large space in the lower part of a ship in which cargo is stored",
             keyKind: .publisher, standing: .proposed, metBefore: false)
     }

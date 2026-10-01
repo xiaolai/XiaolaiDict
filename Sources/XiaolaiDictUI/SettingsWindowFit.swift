@@ -30,9 +30,10 @@ enum SettingsWindowFit {
     static let rounding: CGFloat = 1
 
     /// How far the window has to move for a pane to fit: what the pane wants against what its
-    /// scroll view was given. **Both are the scroll view's own numbers**, so whatever AppKit counts
-    /// as content under a toolbar cancels out — the chrome is never counted, and so never
-    /// miscounted, which is the error that made the window overshoot.
+    /// scroll view was given. **Both are the scroll view's own numbers, and neither includes the
+    /// toolbar** — `ContentFit` records the measurement — so the chrome is never counted, and so
+    /// never miscounted, which is the error that made the window overshoot and, counted on one
+    /// side only, left 88 points of empty window under every short pane.
     ///
     /// Nil while the scroll view has not been given a height at all: it is laid out at zero before
     /// its window has a size, and fitting against that zero grew the first pane by its whole height
@@ -68,9 +69,12 @@ enum SettingsWindowFit {
     /// its content by the scene — measured at 398 for a 396-point card — and correctly so; only its
     /// height is not. Passing a width there would mean deriving the window's width from the card's
     /// plus the shadow padding, which is a number to keep in step for no gain.
+    /// **`reduceMotion` is read here rather than at each call site**, so no caller can forget it;
+    /// it is a parameter only so a test can say which way it is set.
     static func move(
         _ window: NSWindow, by delta: CGFloat, width: CGFloat?, lowestBottom: CGFloat?,
-        animated: Bool, recentres: Bool = true
+        animated: Bool, recentres: Bool = true,
+        reduceMotion: Bool = MotionPreference.systemReduceMotion
     ) {
         let current = window.frame
         let width = width ?? current.width
@@ -87,7 +91,10 @@ enum SettingsWindowFit {
         var frame = current
         frame.size = CGSize(width: width, height: height)
         frame.origin.y = current.maxY - height
-        guard animated else {
+        // **Reduce Motion is a jump, not a shorter glide.** The resize is the window travelling,
+        // which is the kind of movement the setting exists to remove; the pane's content is
+        // swapped by the system either way, so nothing is lost by arriving at once.
+        guard animated, !reduceMotion else {
             window.setFrame(frame, display: true)
             // SwiftUI opened the window at a default width of its own — measured at 900 — and
             // placed it for that width. Narrowed where it stands, it would sit off to one side, so
@@ -205,20 +212,34 @@ private struct FitsItsContent: ViewModifier {
 
 }
 
-/// **What a scroll view reports: the height its content wants, and the height it has** — with
-/// the insets on both sides, so whatever sits over the content is in each and cancels.
+/// **What a scroll view reports: the height its content wants, and the height it has for it.**
+///
+/// **Content against container, and the insets in neither.** This added `contentInsets` to
+/// `wanted` on the belief that the container carried them too, so that they cancelled. They do
+/// not. Measured 2026-10-02 in a `Settings` scene with toolbar tabs, a three-row grouped form in
+/// a 450-point window: `contentSize` 176, `contentInsets.top` 88, `containerSize` **362** — the
+/// window less the title bar and tabs — while `visibleRect` was 450 tall. The container is
+/// already the room below the toolbar; the inset describes the part of the scroll view that
+/// lies *under* it, which is outside the container. So `wanted` counted the chrome and `given`
+/// did not, and every pane that did not scroll ended in exactly 88 points of empty window:
+/// three screenshots, the last group 108 points above the bottom edge against 20 below the
+/// toolbar.
+///
+/// It was also a second source of the shudder. The same scroll view reports twice as it
+/// settles — first with no inset, then with 88 — so `wanted` changed by 88 between two
+/// readings of an unchanged pane. Content against container reads 176 against 362 both times.
 ///
 /// One type and one conversion, shared by the fit and by the pane that feeds it. Two copies of a
-/// two-field measurement and its `onScrollGeometryChange` mapping is two places for the inset
-/// rule to drift, and a window sized from one reading of it while a pane reported the other
-/// would chase a target nothing agrees on.
+/// two-field measurement and its `onScrollGeometryChange` mapping is two places for the rule to
+/// drift, and a window sized from one reading of it while a pane reported the other would chase
+/// a target nothing agrees on. `--settings-report` holds the result against AppKit's own number
+/// (`contentLayoutRect`), so this arithmetic going wrong again is a red stage, not a white band.
 struct ContentFit: Equatable {
     let wanted: CGFloat
     let given: CGFloat
 
     init(of geometry: ScrollGeometry) {
-        wanted = geometry.contentSize.height + geometry.contentInsets.top
-            + geometry.contentInsets.bottom
+        wanted = geometry.contentSize.height
         given = geometry.containerSize.height
     }
 }
@@ -235,13 +256,17 @@ private final class PendingFit {
 }
 
 extension View {
-    /// Makes the window this view is in as tall as the view's scrolling content, at `width`.
-    /// Inert where there is no window — a preview, a test — so the view is unchanged there.
-    func fitsItsContent(width: CGFloat) -> some View { modifier(FitsItsContent(width: width)) }
-
-    /// The same **for the height alone**, for a surface that bounds its own scrolling region and is
-    /// placed by its owner rather than by SwiftUI: it grows to its content up to `ceiling`, scrolls
-    /// past it, does not animate, is never re-centred, and keeps whatever width it has.
+    /// Makes the window this view is in as tall as the view's scrolling content — **for the height
+    /// alone**, for a surface that bounds its own scrolling region and is placed by its owner
+    /// rather than by SwiftUI: it grows to its content up to `ceiling`, scrolls past it, does not
+    /// animate, is never re-centred, and keeps whatever width it has.
+    ///
+    /// **The only spelling left.** There was a second, `fitsItsContent(width:)`, for the setup
+    /// board while it was a window of its own. The board became a settings pane on 2026-10-01 and
+    /// kept the modifier, so that pane had two movers: the settings window's own, clamped at
+    /// `settingsMaxHeight`, and this one with no ceiling at all, re-firing on every frame of the
+    /// other's animation. It is deleted rather than left unused so it cannot be put back on a
+    /// pane by mistake — `theSetupPaneHasNoMoverOfItsOwn` reads the source for it.
     ///
     /// This is the lookup panel, and it is the third surface to need this. The first two were a
     /// scroll view that offered its window no height; this one is a window whose frame its controller

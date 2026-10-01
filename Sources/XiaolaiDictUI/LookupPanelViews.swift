@@ -16,19 +16,207 @@ public struct PanelView: View {
     public var body: some View {
         switch content {
         case .message(let title, let detail):
-            // Both arrive localized — `detail` is sometimes the reason a reader was given for a
-            // selection that could not be read — so neither is looked up a second time here.
-            VStack(alignment: .leading, spacing: scale.space.stack) {
-                Text(verbatim: title).font(.headline)
-                Text(verbatim: detail).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            // **On the card, like everything else the window shows.** This was two `Text`s with
+            // padding and no background, in a window that is clear on purpose: measured
+            // 2026-10-01, every non-text pixel of the "Nothing to look up" panel was alpha 0, so
+            // the Accessibility-permission message was black text over whatever was behind it.
+            //
+            // It sizes to what it says, too. The window opens at `Token.Panel.messageHeight` and
+            // stayed there, half empty for two lines; the surface's fit now moves it.
+            PanelSurface(accent: nil) {
+                // Both arrive localized — `detail` is sometimes the reason a reader was given for a
+                // selection that could not be read — so neither is looked up a second time here.
+                VStack(alignment: .leading, spacing: scale.space.stack) {
+                    Text(verbatim: title)
+                        .font(.system(size: scale.text.heading, weight: .semibold))
+                    // Primary, not secondary: this sentence is the whole message, and one of the
+                    // two it can be is the instruction for granting a permission.
+                    Text(verbatim: detail)
+                        .font(.system(size: scale.text.body))
+                        .lineSpacing(scale.text.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(scale.space.pad)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            } bar: {
+                EmptyView()
             }
-            .padding(scale.space.pad)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .lookup(let presentation):
             LookupPanelContent(presentation: presentation, waiting: content.waitingDescription)
                 .id(presentation.request)
         }
+    }
+}
+
+/// **The lookup window's one surface: the paper, its edge, its lift, and what is pinned to it.**
+///
+/// The window is borderless and clear, so whatever is not drawn here is drawn on nothing. That was
+/// true of two things (measured 2026-10-01): the panel's messages, which had no fill at all, and
+/// the row saying whether the reading was saved, which the scene stacked *under* the card. Both
+/// took their contrast from the app behind. One wrapper, so a third thing cannot be added outside
+/// it without the compiler being asked where it goes.
+///
+/// Top to bottom it holds:
+///
+/// 1. **What scrolls**, bounded by `cardMaxHeight` — a sense list is unbounded (49 for *hold* in
+///    the bilingual Oxford, 73 for *run* in NOAD) and the window follows its content, so without
+///    the bound it grew off the display.
+/// 2. **The bar**, pinned under it with `safeAreaBar`. The card's actions were the last thing in
+///    the scrolled stack, so with a long list open they sat below a fold the card gave no sign of
+///    having. The system's scroll-edge effect is the sign.
+/// 3. **The status row**, outside the scrolling region altogether.
+///
+/// `.scrollBounceBehavior(.basedOnSize)` so a short panel does not rubber-band: a two-line answer
+/// is not a scrollable thing and must not behave like one.
+struct PanelSurface<Scrolling: View, Bar: View>: View {
+    @Environment(\.scale) private var scale
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.reportPanelFit) private var reportPanelFit
+    /// The word's own colour, which the card's second shadow is thrown in. Nil for a message,
+    /// which is about no word.
+    let accent: Color?
+    private let scrolling: Scrolling
+    private let bar: Bar
+    /// How tall the status row is drawn, so the scrolling region can give that much up.
+    @State private var statusHeight: CGFloat = 0
+    /// How tall the pinned bar is drawn, which the window fit has to be told — see `contentCap`.
+    @State private var barHeight: CGFloat = 0
+
+    init(accent: Color?, @ViewBuilder scrolling: () -> Scrolling, @ViewBuilder bar: () -> Bar) {
+        self.accent = accent
+        self.scrolling = scrolling()
+        self.bar = bar()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                scrolling
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            // A long list says it is one: the indicator shows itself once as the content arrives,
+            // whatever the reader's scroll-bar setting.
+            .scrollIndicatorsFlash(onAppear: true)
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                // In a stack so that an empty bar still reports a height — of nothing.
+                //
+                // **No background here.** `EmptyView().background(fill)` is not nothing: measured
+                // 2026-10-02, it drew the fill over the whole scroll view, so a message panel came
+                // out as a blank card — the defect this surface exists to prevent, by another
+                // road. A bar that needs paper under it brings its own (`pinnedToTheCard`).
+                VStack(spacing: 0) { bar }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barHeight = $0 }
+            }
+            // A hard edge, not a soft one: the list under the bar is dense text, and macOS draws a
+            // dividing line there only while something is scrolled beneath it.
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
+            // **After the width frame, and `fixedSize` no longer fixes the height.** Measured: with
+            // `.fixedSize(vertical: true)` in the chain the panel took its natural height and the
+            // cap did nothing — `noPanelIsTallerThanTheCap` failed against a 1,200-point panel.
+            // Fixing a size vertically is the opposite of letting a scroll view bound it.
+            .frame(maxHeight: scrollCap)
+            // **And the window is as tall as that.** The cap bounds the scrolling region; nothing
+            // made the *window* take the height the content asked for, so it stayed at the opening
+            // default — measured 398 × 240 for every card, three runs. `LookupPanelController.show`
+            // writes the frame by hand, and a frame set by hand is not one SwiftUI revisits.
+            //
+            // Bounded by the same cap, so growing stops exactly where scrolling starts: a taller
+            // window would hold empty space under the content.
+            .fitsItsContent(upTo: contentCap, report: reportPanelFit)
+            VStack(spacing: 0) {
+                LookupKeepStatusRow()
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
+        }
+        .frame(
+            minWidth: scale.space.cardMinWidth,
+            idealWidth: scale.space.cardWidth,
+            maxWidth: scale.space.cardMaxWidth,
+            alignment: .leading)
+        // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
+        // the surface, the edge and the lift are the card's own — and they live here, in the
+        // layer that has the tokens, rather than as literals in the scene that hosts it.
+        .background(CardSurface.panel(for: scheme), in: shape)
+        // Through `CardSurface`, so the hairline becomes a line when the reader has asked the
+        // system for more contrast. At 12% of the label colour it was a hint either way.
+        .overlay(shape.strokeBorder(
+            CardSurface.neutralBorder(contrast: contrast), lineWidth: Token.Stroke.hairline))
+        .clipShape(shape)
+        // Depth first, then colour. The neutral shadow is what actually lifts the card off the
+        // desktop; the accent one is the word's colour thrown under it, and on its own it would
+        // either stain the wallpaper or do nothing.
+        .shadow(
+            color: .black.opacity(Token.Opacity.cardLift),
+            radius: scale.shadow.panelRadius,
+            x: scale.shadow.panelOffset, y: scale.shadow.panelOffset)
+        .modifier(AccentGlow(accent: accent))
+        // Asymmetric, because the shadows are. Uniform padding would leave dead space above and
+        // to the left of a window that is exactly the size of its content.
+        .padding(.top, scale.shadow.glowBefore)
+        .padding(.leading, scale.shadow.glowBefore)
+        .padding(.bottom, scale.shadow.glowAfter)
+        .padding(.trailing, scale.shadow.glowAfter)
+    }
+
+    /// **How tall the scrolling region may grow: the card's cap, less the row pinned under it.**
+    ///
+    /// The cap is the *card's* — `PanelWindow.tallest`, which `--panel-report` holds the window to,
+    /// is this plus the chrome and nothing else. With the status row inside the card and the whole
+    /// cap still given to the scrolling region, a long sense list made the window taller than its
+    /// own ceiling by the height of that row. The row is measured rather than assumed because it
+    /// is 0 until the reading has been recorded and its controls set its height after that.
+    private var scrollCap: CGFloat {
+        max(0, scale.space.cardMaxHeight - statusHeight)
+    }
+
+    /// **Where the window stops growing, in the fit's own terms: the room left for content.**
+    ///
+    /// The fit compares what the content wants with the scroll view's *container*, and a
+    /// container excludes whatever a safe-area bar covers — measured 2026-10-02: a 200-point
+    /// scroll view under a 40-point `safeAreaBar` reports a container of 160. So the ceiling it
+    /// is given has to exclude the bar too. Handed `scrollCap` — the frame's bound, bar included
+    /// — a long list asked for one bar's height more than the frame can give, for ever, and the
+    /// window grew by that much past the card.
+    private var contentCap: CGFloat {
+        max(0, scrollCap - barHeight)
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous)
+    }
+}
+
+/// The word's colour thrown under its card — and **no modifier at all** where there is no word.
+///
+/// Not a clear shadow: drawn into a bitmap, a surface with `.shadow(color: .clear, …)` came out
+/// with its fill and none of its text (measured 2026-10-02, the message panel, light appearance),
+/// which is the same blank card the surface exists to prevent. A message has no accent, so it has
+/// no second shadow.
+private struct AccentGlow: ViewModifier {
+    @Environment(\.scale) private var scale
+    let accent: Color?
+
+    func body(content: Content) -> some View {
+        if let accent {
+            content.shadow(
+                color: accent.opacity(Token.Opacity.accentShadow),
+                radius: scale.shadow.glowRadius,
+                x: scale.shadow.glowOffset, y: scale.shadow.glowOffset)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// **Paper under a pinned bar**, so the list scrolling beneath it cannot show through its
+    /// controls. The system's edge effect softens the boundary; it is not what keeps a row of
+    /// icons legible over a line of text. Applied by the bar itself, never by `PanelSurface` —
+    /// which cannot tell an empty bar from a full one.
+    func pinnedToTheCard(in scheme: ColorScheme) -> some View {
+        background(CardSurface.panel(for: scheme))
     }
 }
 
@@ -43,10 +231,11 @@ struct WaitingView: View {
             ProgressView().controlSize(.small)
             Text(verbatim: detail ?? String(localized: "Looking up…",
                                             comment: "Shown while a lookup is still being made"))
+                .font(.system(size: scale.text.body))
                 .foregroundStyle(.secondary)
         }
         .padding(scale.space.pad)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -56,23 +245,127 @@ struct WaitingView: View {
 /// `LookupCardView.action(_:help:)` already carries. `Label(someString, …)` takes the verbatim
 /// overload, so a caller that interpolated its message handed this English in a translated build
 /// and the sentence never reached the catalog at all.
+///
+/// **A mark and ordinary text, not orange text.** The sentence was set in system orange on an
+/// orange wash, which measured about 2.0:1 on the light card (2026-10-01) — the caveat was the
+/// hardest thing on the card to read. `StatusLabel` carries the kind in a symbol and leaves the
+/// words in the label colour; the wash stays, as the thing that says *this is a note about the
+/// answer and not the answer*.
 public struct Notice: View {
     @Environment(\.scale) private var scale
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     public let text: Text
-    public var symbol = "exclamationmark.triangle"
 
-    public init(text: Text, symbol: String = "exclamationmark.triangle") {
+    public init(text: Text) {
         self.text = text
-        self.symbol = symbol
     }
 
     public var body: some View {
-        Label { text } icon: { Image(systemName: symbol) }
-            .font(.callout)
-            .foregroundStyle(.orange)
-            .padding(scale.space.pad)
+        StatusLabel(.caution, text: text, size: scale.text.body)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, scale.space.padAcross)
+            .padding(.vertical, scale.space.column)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.orange.opacity(Token.Opacity.caveatWash))
+            .background(
+                StatusPalette.caution.color(in: scheme, contrast: contrast)
+                    .opacity(Token.Opacity.caveatWash))
+    }
+}
+
+/// **The tinted block a model's answer is drawn in**, so the explanation and the translation are
+/// one kind of thing on the card and visibly not the dictionary's text.
+struct ModelPane<Content: View>: View {
+    @Environment(\.scale) private var scale
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: scale.space.line) {
+            content
+        }
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.vertical, scale.space.column)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(Token.Opacity.senseWash))
+    }
+}
+
+/// **Under a model's answer: who wrote it, and the two things to do with it.**
+///
+/// Who wrote it, because a generated paragraph under a dictionary definition, in the same card,
+/// reads as the publisher's (2026-10-01: the explanation's only label was "on this Mac" in
+/// tertiary, the local model's translation had none). Copy, because nothing on this card can be
+/// selected — the window cannot become key, and `textSelection` needs a key window, so the
+/// modifier both panes carried did nothing. Retry, because asking again meant finding the same
+/// footer icon a second time.
+struct ModelPaneFooter: View {
+    @Environment(\.scale) private var scale
+    /// Nil where the pane holds no generated text — a missing language pair, a refusal.
+    let provenance: Text?
+    /// What Copy takes. Nil where there is nothing to take, and then there is no Copy.
+    let copyable: String?
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: scale.space.inline) {
+            if let provenance {
+                provenance
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Group {
+                if let copyable { CopyTextButton(text: copyable) }
+                IconButton(.retry, size: scale.text.small, action: retry)
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Copies one string, and shows that it has. The checkmark is the *symbol* and never the name:
+/// what was copied is a state, and VoiceOver needs the control's name.
+struct CopyTextButton: View {
+    @Environment(\.scale) private var scale
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        IconButton(
+            title: "Copy", symbol: (copied ? ActionSymbol.done : ActionSymbol.copy).symbol,
+            size: scale.text.small
+        ) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+        }
+        // The checkmark is about what is on the pasteboard, and a new answer is not on it.
+        .onChange(of: text) { copied = false }
+    }
+}
+
+/// **A model is working, and on what.** Waiting was an icon in the footer changing to an
+/// ellipsis — Apple's symbol for *More* — in a row that could be scrolled out of sight. This is
+/// where the answer will be, saying which answer.
+struct ModelWaitingPane: View {
+    @Environment(\.scale) private var scale
+    let message: Text
+
+    var body: some View {
+        ModelPane {
+            HStack(spacing: scale.space.inline) {
+                ProgressView().controlSize(.small)
+                message
+                    .font(.system(size: scale.text.body))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -81,41 +374,50 @@ public struct Notice: View {
 struct SentencePaneView: View {
     @Environment(\.scale) private var scale
     public let explanation: SentenceExplanation
+    /// Asks again, with the same question.
+    let retry: () -> Void
 
     public var body: some View {
-        switch explanation {
-        case .explained(let text, let tier):
-            VStack(alignment: .leading, spacing: scale.space.line) {
-                Text(text).font(.callout).textSelection(.enabled)
+        ModelPane {
+            switch explanation {
+            case .explained(let text, let tier):
+                // At the card's own sizes. The reader's chosen text size reached the definition
+                // and stopped short of its explanation, which was set in the system's `.callout`.
+                Text(text)
+                    .font(.system(size: scale.text.body))
+                    .lineSpacing(scale.text.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                // Which tier answered, so "this stayed on my Mac" is visible rather than promised.
-                //
-                // **The remote arm draws nothing today, and stays.** Every `SentenceExplaining`
-                // declares `tier = .onDevice`, so only the first line can currently be shown, and
-                // the second sits in the catalog as a key nothing draws — a real but small cost.
-                // Dropping it costs more: `ExplainerTier` is a *licence* boundary, Milestone 3's
-                // frontier model is what will set `.remote`, and a pane with one label would then
-                // tell a reader their sentence stayed on this Mac while it was being sent away.
-                // That is the one thing the tier split exists to prevent.
-                //
-                // A `switch` rather than the ternary it replaced, so a third tier is a compile
-                // error here instead of silently taking the remote wording.
-                Group {
-                    switch tier {
-                    case .onDevice: Text("on this Mac")
-                    case .remote: Text("sent to a remote service")
-                    }
-                }
-                .font(.caption2).foregroundStyle(.tertiary)
+                ModelPaneFooter(provenance: Self.provenance(tier), copyable: text, retry: retry)
+            case .unavailable(let why):
+                // `why` is already a localised sentence from the model layer, so it is shown
+                // verbatim rather than re-keyed — which is what `Text(verbatim:)` says out loud.
+                StatusLabel(.caution, text: Text(verbatim: why), size: scale.text.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                ModelPaneFooter(provenance: nil, copyable: nil, retry: retry)
             }
-            .padding(.horizontal, scale.space.padAcross)
-            .padding(.vertical, scale.space.column)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(Token.Opacity.senseWash))
-        case .unavailable(let why):
-            // `why` is already a localised sentence from the model layer, so it is shown verbatim
-            // rather than re-keyed — which is what `Text(verbatim:)` says out loud.
-            Notice(text: Text(verbatim: why), symbol: "text.bubble")
+        }
+    }
+
+    /// Who explained it, where, and that it may be wrong.
+    ///
+    /// **"A model on this Mac", not "the local model".** The pane asks the downloaded model first
+    /// and falls to Apple's on-device model below it with no label between them, so naming the
+    /// downloaded one would be untrue for a reader who has not downloaded it. Both are models, and
+    /// both ran here — which is what the tier says, and what "this stayed on my Mac" rests on.
+    ///
+    /// **The remote arm draws nothing today, and stays.** Every `SentenceExplaining` declares
+    /// `tier = .onDevice`, so only the first line can currently be shown, and the second sits in
+    /// the catalog as a key nothing draws — a real but small cost. Dropping it costs more:
+    /// `ExplainerTier` is a *licence* boundary, Milestone 3's frontier model is what will set
+    /// `.remote`, and a pane with one label would then tell a reader their sentence stayed on this
+    /// Mac while it was being sent away. That is the one thing the tier split exists to prevent.
+    ///
+    /// A `switch` rather than a ternary, so a third tier is a compile error here instead of
+    /// silently taking the remote wording.
+    static func provenance(_ tier: ExplainerTier) -> Text {
+        switch tier {
+        case .onDevice: Text("Explained by a model on this Mac · may be wrong")
+        case .remote: Text("Explained by a remote model · may be wrong")
         }
     }
 }

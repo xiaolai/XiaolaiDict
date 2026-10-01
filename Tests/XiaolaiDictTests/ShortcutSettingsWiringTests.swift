@@ -83,7 +83,7 @@ import XiaolaiDictTestSupport
     /// A combination another app holds is refused, and the reader keeps the one that worked —
     /// registered, and still the one on disk. Refusing *and* leaving them with nothing would be
     /// the worse half of the same failure.
-    @Test func aRefusedShortcutLeavesTheOldOneWorking() {
+    @Test func aRefusedShortcutLeavesTheOldOneWorking() throws {
         let suite = TemporaryDefaults.suite()
         let backend = FakeBackend()
         let app = app(backend, defaults: suite)
@@ -94,8 +94,12 @@ import XiaolaiDictTestSupport
         #expect(app.shortcuts.current == .defaultLookUp, "the reader lost the shortcut that worked")
         #expect(app.shortcuts.isRegistered)
         #expect(ShortcutStore(defaults: suite).load() == .defaultLookUp, "the refused shortcut was saved")
-        #expect(app.problems.contains { $0.contains("still using") },
-                "a refusal the reader is never told about is a shortcut that silently did nothing")
+        // The menu row is a few words and the pane that fixes it; the sentence is its tooltip.
+        let row = try #require(app.problems.first { $0.pane == .lookup },
+                               "a refusal the reader is never told about is a shortcut that silently did nothing")
+        #expect(row.detail?.contains("Still using") == true, "the row does not say the old shortcut still works: \(row)")
+        #expect(row.detail?.contains("OSStatus") == false && row.detail?.contains("RegistrationFailed") == false,
+                "a raw error reached the reader: \(row)")
     }
 
     /// **A refusal says why.** The field said "is already taken" for every refusal, while the hot-key
@@ -108,7 +112,7 @@ import XiaolaiDictTestSupport
         let app = app(backend)
         backend.refused = [Self.other]
         let reason = app.shortcuts.choice.choose(Self.other)
-        #expect(reason?.contains("another app") == true, "the field was told \(String(describing: reason))")
+        #expect(reason?.contains("Another app") == true, "the field was told \(String(describing: reason))")
 
         backend.refused = []
         backend.registerStatus = OSStatus(paramErr)

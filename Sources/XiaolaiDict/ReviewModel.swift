@@ -95,6 +95,12 @@ final class ReviewModel {
         }
     }
 
+    /// Whether there is an answered card to go back to — what puts Undo in the toolbar. The same
+    /// question `undo()` asks before it does anything, so the button is never there over nothing.
+    var canUndo: Bool {
+        session?.presentations.contains { $0.isAnswered } ?? false
+    }
+
     @ObservationIgnored private var resuming = false
     /// Returns to the held sitting, or draws one where none is held — or where the reader has
     /// switched the primary since it was drawn.
@@ -205,7 +211,7 @@ final class ReviewModel {
             // refused, instead of advancing the sitting past a card nobody was shown.
             session?.record(.postponed, for: attempt)
         } catch {
-            problem = String(localized: "It could not be put off: \(error.localizedDescription)",
+            problem = String(localized: "It could not be hidden until tomorrow: \(error.localizedDescription)",
                              comment: "Shown on a review card when postponing it failed to save")
         }
         await draw()
@@ -400,19 +406,16 @@ final class ReviewModel {
 /// **A view, not scene-body code.** Reading observable state in an `App`'s `body` invalidates every
 /// scene in it — measured in this project as a sibling window whose menu item opened nothing — so the
 /// model is read here, one level down.
+///
+/// **Undo is not here.** It is the window's — a toolbar item on Command-Z, put there by
+/// `LibraryReviewPane` — where it was a button at zero opacity behind this view, hidden from
+/// VoiceOver, that only a reader who guessed the key could reach.
 struct ReviewSceneView: View {
     let model: ReviewModel
+    var findUnconfirmed: (@MainActor () -> Void)?
 
     var body: some View {
-        ReviewView(state: model.presentation) { model.act($0) }
-            // **Undo is the window's**, not a button on the card: it is about the review just
-            // committed, which is no longer on screen. Command-Z is where a reader looks for it.
-            .background {
-                Button("Undo the last review") { model.act(.undo) }
-                    .keyboardShortcut("z", modifiers: .command)
-                    .opacity(0)
-                    .accessibilityHidden(true)
-            }
+        ReviewView(state: model.presentation, findUnconfirmed: findUnconfirmed) { model.act($0) }
             .task { await model.resume() }
     }
 }

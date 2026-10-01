@@ -156,6 +156,129 @@ struct EscapeKeyTests {
         #expect(closed)
     }
 
+    // MARK: - One claim, several surfaces (audit M4, 2026-10-02)
+
+    private func press(_ center: HotkeyCenter, _ backend: FakeBackend) throws {
+        let registered = try #require(backend.registered.last, "Escape is not registered at all")
+        #expect(center.route(EventHotKeyID(signature: HotkeyCenter.signature, id: registered.id)) == noErr)
+    }
+
+    /// **The defect.** The panel and the drawer each registered Escape; the second was refused as
+    /// XiaolaiDict's own duplicate and only logged, so with the drawer open a lookup's panel had no
+    /// Escape at all. Each handler here releases its own claim, as `close()` and `hide()` do.
+    @Test func withBothShowingEscapeDismissesTheTopmostAndThenTheOther() throws {
+        let backend = FakeBackend()
+        let center = HotkeyCenter(backend: backend)
+        let drawer = EscapeKey(hotkeys: center)
+        let panel = EscapeKey(hotkeys: center)
+        var dismissed: [String] = []
+        drawer.claim { dismissed.append("drawer"); drawer.release() }
+        panel.claim { dismissed.append("panel"); panel.release() }
+        #expect(drawer.isHeld && panel.isHeld, "the second surface was refused Escape")
+        #expect(backend.registered.count == 1, "Escape was registered once per surface, not once")
+
+        try press(center, backend)
+        #expect(dismissed == ["panel"], "the first press did not dismiss the surface shown last")
+        #expect(center.registrationCount == 1, "Escape was given back with a surface still showing")
+        try press(center, backend)
+        #expect(dismissed == ["panel", "drawer"], "the second press did not reach the surface beneath")
+        #expect(center.registrationCount == 0, "Escape is still claimed with nothing left to dismiss")
+        #expect(backend.unregistered == 1)
+    }
+
+    /// The same, through the two controllers that actually claim it — the wire, not the model.
+    @Test func thePanelOverAnOpenDrawerClosesFirstAndTheDrawerNext() throws {
+        let backend = FakeBackend()
+        let center = HotkeyCenter(backend: backend)
+        let drawer = HistoryDrawerController(
+            hotkeys: center,
+            screens: { [ScreenMetrics(frame: UpRect(x: 0, y: 0, width: 2560, height: 1440),
+                                      visibleFrame: UpRect(x: 0, y: 0, width: 2560, height: 1410))] },
+            pointer: { UpPoint(x: 100, y: 100) }, load: { .entries([]) })
+        let panel = LookupPanelController(hotkeys: center, windows: .alwaysOpen)
+        defer { drawer.hide(); panel.close() }
+
+        drawer.show()
+        #expect(panel.show(.accessibilityIsOff, near: UpPoint(x: 200, y: 200), for: panel.newRequest()))
+        #expect(backend.registered.count == 1, "the panel and the drawer each registered Escape")
+
+        try press(center, backend)
+        #expect(panel.model.content == nil, "Escape did not close the panel shown over the drawer")
+        #expect(drawer.isVisible, "Escape closed the drawer under the panel instead")
+        try press(center, backend)
+        #expect(!drawer.isVisible, "the second Escape went nowhere")
+        #expect(center.registrationCount == 0)
+    }
+
+    /// A surface shown again moves to the top: the panel reopens for every lookup, and the one the
+    /// reader is looking at is the one Escape should take.
+    @Test func aSurfaceShownAgainIsDismissedFirst() throws {
+        let backend = FakeBackend()
+        let center = HotkeyCenter(backend: backend)
+        let panel = EscapeKey(hotkeys: center)
+        let drawer = EscapeKey(hotkeys: center)
+        var dismissed: [String] = []
+        panel.claim { dismissed.append("panel"); panel.release() }
+        drawer.claim { dismissed.append("drawer"); drawer.release() }
+        panel.claim { Issue.record("a second claim replaced the handler instead of raising it") }
+        try press(center, backend)
+        #expect(dismissed == ["panel"])
+    }
+
+    /// One surface leaving must not take Escape from the other, in either order.
+    @Test func releasingTheLowerSurfaceLeavesTheUpperOnesEscape() throws {
+        let backend = FakeBackend()
+        let center = HotkeyCenter(backend: backend)
+        let drawer = EscapeKey(hotkeys: center)
+        let panel = EscapeKey(hotkeys: center)
+        var closed = false
+        drawer.claim { Issue.record("a released surface was dismissed") }
+        panel.claim { closed = true }
+        drawer.release()
+        #expect(panel.isHeld && !drawer.isHeld)
+        try press(center, backend)
+        #expect(closed)
+    }
+
+    /// **A refused claim is said, and tried again.** Another app holding bare Escape exclusively
+    /// leaves the reader one way out instead of two, with nothing on screen to say so — so it must
+    /// not be read as held, and the next surface to show asks again rather than inheriting a
+    /// refusal from a moment that has passed.
+    @Test func aRefusedClaimIsNotReportedAsHeldAndIsRetried() throws {
+        let backend = FakeBackend()
+        backend.registerStatus = OSStatus(eventHotKeyExistsErr)
+        let center = HotkeyCenter(backend: backend)
+        let drawer = EscapeKey(hotkeys: center)
+        let panel = EscapeKey(hotkeys: center)
+        drawer.claim {}
+        #expect(!drawer.isHeld, "a claim Carbon refused is reported as held")
+        #expect(center.escape.depth == 1, "the refused surface lost its place in the stack")
+
+        backend.registerStatus = noErr
+        var closed = false
+        panel.claim { closed = true }
+        #expect(panel.isHeld && drawer.isHeld, "the next surface did not try the claim again")
+        try press(center, backend)
+        #expect(closed)
+    }
+
+    /// **And the refusal is logged as an error**, which no test can hear — so the source is read
+    /// for it. The catch that swallows a refused Escape must be the one that says so.
+    @Test func aRefusedClaimIsLoggedLoudly() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/XiaolaiDict/Hotkey.swift"), encoding: .utf8)
+        let claim = try #require(source.range(of: "private func claimIfNeeded()"))
+        let end = try #require(source.range(of: "private func pressed()", range: claim.upperBound..<source.endIndex))
+        let body = source[claim.lowerBound..<end.lowerBound]
+        let caught = try #require(body.range(of: "} catch {"), "the claim no longer catches a refusal")
+        #expect(body[caught.upperBound...].contains("log.error(\"Escape not claimed"),
+                "a refused Escape claim is swallowed without an error in the log")
+        // Positive control: the same scan must not be satisfied by the text before the catch.
+        #expect(!body[..<caught.lowerBound].contains("log.error("))
+    }
+
     /// Held only while the panel shows: released, Escape belongs to the app being read again.
     @Test func escapeIsReleasedWhenThePanelCloses() {
         let backend = FakeBackend()

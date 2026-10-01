@@ -6,26 +6,36 @@ import SwiftUI
 /// A short named set rather than a free number. macOS has no system-wide UI text size — unlike
 /// iOS Dynamic Type, an app that does not offer one offers nothing — so this is the only control
 /// the reader has, and it has to be a control rather than a slider that can produce a layout
-/// nobody designed. Four steps is what a reading app offers, and each one is a size the drawer has
-/// actually been looked at.
+/// nobody designed.
+///
+/// **Six steps, the largest twice the default.** There were four and the range was 1.25× — 15 pt
+/// against 12 — which is narrower than the platform asks of an app that sets its own type
+/// (2026-10-02). `extraLarge` and `huge` close that. A new case here is a size somebody has to
+/// look at on every surface before it ships — at `huge` a lookup card is 792 pt wide, so that
+/// is a real look and not a formality.
 public enum TextSize: String, CaseIterable, Codable, Sendable {
     case compact
     case standard
     case comfortable
     case large
+    case extraLarge
+    case huge
 
     /// The em this size sets. Everything spatial in the app is a multiple of it.
     ///
     /// `compact` is the platform's `smallSystemFontSize`, which is a size for secondary chrome;
     /// it is offered because some readers want density, and it is not the default because the
     /// drawer's content is prose. `large` exists for CJK especially: Chinese glyphs need more size
-    /// than Latin to resolve their strokes at all.
+    /// than Latin to resolve their strokes at all. `extraLarge` is 1.5× the default and `huge`
+    /// 2×, for a reader who needs the size rather than prefers it.
     public var em: CGFloat {
         switch self {
         case .compact: return 11
         case .standard: return 12
         case .comfortable: return 13.5
         case .large: return 15
+        case .extraLarge: return 18
+        case .huge: return 24
         }
     }
 
@@ -37,6 +47,8 @@ public enum TextSize: String, CaseIterable, Codable, Sendable {
         case .standard: return String(localized: "Standard")
         case .comfortable: return String(localized: "Comfortable")
         case .large: return String(localized: "Large")
+        case .extraLarge: return String(localized: "Extra Large")
+        case .huge: return String(localized: "Huge")
         }
     }
 }
@@ -78,11 +90,12 @@ struct Scale: Equatable, Sendable {
     /// Type, as ratios of the em. A short scale on purpose: every extra step is one more
     /// near-identical choice at a call site, and a surface this small cannot show the difference.
     ///
-    /// Only where a size is set explicitly. The **pinned note** uses the platform's own semantic
-    /// fonts — `.title3`, `.body`, `.caption` — and replacing those with points would be a
-    /// downgrade dressed as tidying.
+    /// The **pinned note** used the platform's own semantic fonts — `.title3`, `.body`,
+    /// `.caption` — and no longer does (2026-10-02): they take no notice of the reader's chosen
+    /// size, so a note pinned from a card set at Large came out smaller than the card. It is
+    /// reading content and is set from here, like the card it is a copy of.
     ///
-    /// The lookup panel was in that sentence and no longer is. `LookupCardView` sets every size
+    /// The lookup panel left that list earlier. `LookupCardView` sets every size
     /// from here, because the card's width is `space.cardWidth` and a measure only holds if the
     /// type it measures is the type this scale describes: semantic fonts would size themselves
     /// against the system while the card sized itself against the em, and the line length the
@@ -99,8 +112,11 @@ struct Scale: Equatable, Sendable {
         /// An action that is not a button — "Show All", a settings hint.
         let label: CGFloat
         /// Where it was read, and when. Present, never competing with the word.
+        /// **Never under `Token.Text.minimum`**, so at `compact` this and `micro` are the same
+        /// 10 pt: two roles sharing a size at the one setting chosen for density, which costs less
+        /// than either of them being text nobody can read.
         let small: CGFloat
-        /// Inside a capsule, which supplies its own emphasis.
+        /// Inside a capsule, which supplies its own emphasis. Floored like `small`.
         let micro: CGFloat
         /// A glyph standing in for a whole empty state.
         let icon: CGFloat
@@ -125,8 +141,8 @@ struct Scale: Equatable, Sendable {
             strong = em * 1.15
             body = em * 1.00
             label = em * 0.95
-            small = em * 0.90
-            micro = em * 0.85
+            small = max(Token.Text.minimum, em * 0.90)
+            micro = max(Token.Text.minimum, em * 0.85)
             icon = em * 2.00
             leading = em * 0.20
         }
@@ -189,14 +205,30 @@ struct Scale: Equatable, Sendable {
         /// It is a default and not a ceiling: the reader can drag the panel taller and
         /// `rememberChosenSize` keeps that size for the next lookup of the same kind.
         let cardMaxHeight: CGFloat
-        /// A bounded detail column beside a Library collection.
+        /// A bounded detail column beside a Library collection — its ideal width, and how far the
+        /// reader may drag it. In ems because what it holds is reading: the sentence and the
+        /// meaning, which need the same measure at every size. The floor is a card at its
+        /// narrowest less the padding it would not have here; the ceiling is the lookup card's own
+        /// width, past which the inspector is a second page rather than a detail.
         let libraryInspectorWidth: CGFloat
+        let libraryInspectorMinWidth: CGFloat
+        let libraryInspectorMaxWidth: CGFloat
 
         /// How a pile of cards is offset behind its front card. Smaller than `stack`: these are
         /// the same cards shown stacked rather than listed, so the gap has to read as depth
         /// rather than as separation.
         let peek: CGFloat
         let sideInset: CGFloat
+
+        /// **The Reading History panel's width**, in ems for the reason the card's is: it was a
+        /// fixed 380 pt while the padding inside it grew with the text, so at `large` a card's
+        /// text column was down to about 290 pt. Thirty-two ems is 384 pt at `standard`. Capped,
+        /// because a panel docked to a screen edge answers to the screen as well — see
+        /// `Token.Drawer.maxWidth`.
+        let drawerWidth: CGFloat
+        /// The icon of the app a word was read in, beside the card's actions: about the size of
+        /// the word, and never under the size an app icon is drawn for.
+        let sourceIcon: CGFloat
 
         init(em: CGFloat) {
             tight = em * 0.125
@@ -218,6 +250,8 @@ struct Scale: Equatable, Sendable {
             cardMaxWidth = em * 46
             cardMaxHeight = em * 32
             libraryInspectorWidth = em * 26
+            libraryInspectorMinWidth = em * 22
+            libraryInspectorMaxWidth = em * 33
             peek = em * 0.625
             // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
             // side step was larger than the vertical one, so the second plate gave up 19.2 pt of
@@ -225,6 +259,8 @@ struct Scale: Equatable, Sendable {
             // three different sizes rather than as one card with two behind it. Depth is announced
             // by the peek; the inset only has to hint that the edges are not the same edge.
             sideInset = em * 0.40
+            drawerWidth = min(em * 32, Token.Drawer.maxWidth)
+            sourceIcon = max(Token.Target.sourceIcon, em * 1.15)
         }
     }
 
@@ -246,7 +282,6 @@ struct Scale: Equatable, Sendable {
         let cardRadius: CGFloat
         /// Down only: light comes from above, so a card sits on the drawer rather than floating.
         let cardOffset: CGFloat
-        let drawerRadius: CGFloat
 
         /// **The lookup card's own shadow — small, because the card is.** Kept apart from the
         /// drawer's: that is a docked panel the width of a sidebar and needs a shadow to match,
@@ -276,7 +311,6 @@ struct Scale: Equatable, Sendable {
         init(em: CGFloat) {
             cardRadius = em * 0.25
             cardOffset = em * 0.10
-            drawerRadius = em * 1.80
             panelRadius = em * 0.50
             glowRadius = em * 0.85
             panelOffset = em * 0.35
@@ -333,11 +367,6 @@ public final class Appearance {
         }
     }
 
-    /// How much of what is behind the history drawer shows through it.
-    public var drawerGlass: DrawerGlass {
-        didSet { if drawerGlass != oldValue { store.save(drawerGlass) } }
-    }
-
     private let store: AppearanceStore
 
     public init(store: AppearanceStore = AppearanceStore()) {
@@ -347,7 +376,6 @@ public final class Appearance {
         showsPlaceName = store.loadShowsPlaceName()
         emphasis = store.loadEmphasis()
         warnsAboutScreenReading = store.loadWarnsAboutScreenReading()
-        drawerGlass = store.loadDrawerGlass()
     }
 
     var scale: Scale { Scale(textSize) }
@@ -365,7 +393,6 @@ public struct AppearanceStore {
     static let warnsAboutScreenReadingKey = "WarnsAboutScreenReading"
     static let showsPlaceNameKey = "CardShowsPlaceName"
     static let emphasisKey = "WordEmphasis"
-    static let drawerGlassKey = "DrawerGlass"
 
     private let defaults: UserDefaults
 
@@ -421,15 +448,6 @@ public struct AppearanceStore {
     func save(_ emphasis: WordEmphasis) {
         defaults.set(emphasis.rawValue, forKey: Self.emphasisKey)
     }
-
-    /// Unrecognised is the default, never a failure — the same rule as the text size.
-    func loadDrawerGlass() -> DrawerGlass {
-        defaults.string(forKey: Self.drawerGlassKey).flatMap(DrawerGlass.init(rawValue:)) ?? .standard
-    }
-
-    func save(_ glass: DrawerGlass) {
-        defaults.set(glass.rawValue, forKey: Self.drawerGlassKey)
-    }
 }
 
 /// Draws a view — and everything inside it — the way the reader has asked for.
@@ -454,6 +472,5 @@ private struct ScaledContent<Content: View>: View {
         content
             .environment(\.scale, appearance.scale)
             .environment(\.cardOptions, appearance.cardOptions)
-            .environment(\.drawerGlass, appearance.drawerGlass)
     }
 }

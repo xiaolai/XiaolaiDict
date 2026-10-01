@@ -1,6 +1,8 @@
 import AppKit
+import XiaolaiDictBase
 import XiaolaiDictUI
 import SwiftUI
+import os
 
 /// XiaolaiDict as a SwiftUI app.
 ///
@@ -22,10 +24,27 @@ import SwiftUI
 /// `main()` is called from `main.swift` rather than `@main`, because XiaolaiDict's other launch modes —
 /// the lookup, the reports, the instruments — must be able to run without a scene at all.
 struct XiaolaiDictScene: App {
-    static let drawerID = "reading-history"
-    static let lookupID = "lookup"
-    static let lookupTitle = "XiaolaiDict"
-    static let libraryID = "library"
+    // `nonisolated`: they are constants, and what classifies a window by them (`ShellActivation`) is
+    // a pure function that should not need the main actor to compare two strings.
+    nonisolated static let drawerID = "reading-history"
+    nonisolated static let lookupID = "lookup"
+    nonisolated static let libraryID = "library"
+    /// Where AppKit keeps the Library window's frame between launches.
+    static let libraryFrameName = "XiaolaiDictLibraryWindow"
+
+    /// The window SwiftUI made for a scene, found by the scene's id.
+    ///
+    /// **By identifier, never by title.** SwiftUI gives a `Window` scene's window an identifier that
+    /// begins with the scene's id, and a title that is the localised one: three lookups compared
+    /// titles against an English literal, so in any translated build they found nothing and said
+    /// nothing (audit M10, 2026-10-02).
+    ///
+    /// `NSApplication.shared`, never `NSApp`: the latter is implicitly unwrapped and nil in a
+    /// process that has not made one — every unit test — where it traps instead of answering nil.
+    @MainActor
+    static func window(of sceneID: String) -> NSWindow? {
+        NSApplication.shared.windows.first { $0.identifier?.rawValue.contains(sceneID) == true }
+    }
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
 
@@ -45,7 +64,9 @@ struct XiaolaiDictScene: App {
             MenuBarLabel()
         }
 
-        Window(Self.lookupTitle, id: Self.lookupID) {
+        // **Titled for what it is.** The title is not drawn — the window is `.plain` — but VoiceOver,
+        // Mission Control and every window list read it, and it was the app's name (audit M9).
+        Window("Lookup", id: Self.lookupID) {
             LookupPanelSceneView(
                 controller: delegate.panelController, recorder: delegate.lookupRecorder, model: delegate.panelModel,
                 translation: { [delegate] in delegate.models.translationActions },
@@ -93,6 +114,10 @@ struct XiaolaiDictScene: App {
             if let id {
                 PinnedNoteSceneView(controller: delegate.panelController.notes, id: id)
                     .xiaolaiDictAppearance(delegate.appearance)
+                    // **Each note is named for its word.** A `WindowGroup` with no title falls back
+                    // to the app's name, so three notes were three windows called "XiaolaiDict".
+                    // Verbatim: a headword is the dictionary's spelling, not prose to translate.
+                    .navigationTitle(Text(verbatim: delegate.panelController.notes.note(id)?.heading ?? ""))
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -109,10 +134,22 @@ struct XiaolaiDictScene: App {
         Window("Library", id: Self.libraryID) {
             LibrarySceneView(model: delegate.libraryModel, review: delegate.reviewModel)
                 .xiaolaiDictAppearance(delegate.appearance)
+                // The floor: the sidebar and enough of one card to read it. Below this the split
+                // view has nothing left to give and the toolbar starts dropping its items.
+                .frame(minWidth: Token.Library.minWidth, minHeight: Token.Library.minHeight)
+                .background(WindowAccessor { LibraryWindowFrame.restore(on: $0) })
         }
         .defaultLaunchBehavior(.suppressed)
+        // **Still disabled, and the frame is kept another way.** What this switches off is the
+        // system *reopening* the window at launch — and a menu bar app that starts at login must
+        // not open a 1,200-point window at the reader unasked, which is why it was set (it arrived
+        // with the scene in 3a95599, copied from the panel's, with no reason written down). The
+        // audit's complaint was the other half of restoration: a window the reader had sized came
+        // back at the default (L19). `LibraryWindowFrame` restores that half alone.
         .restorationBehavior(.disabled)
         .defaultSize(width: Token.Library.width, height: Token.Library.height)
+        // The content's minimum is the window's; the reader sizes it freely above that.
+        .windowResizability(.contentMinSize)
 
         // `.contentMinSize`, not `.contentSize`: the panes fill the window rather than sizing it,
         // and `SettingsWindowFit` moves the window. With `.contentSize` SwiftUI also resized it
@@ -174,6 +211,26 @@ struct XiaolaiDictSettings: View {
             // Re-read, so a model removed from Finder while the app ran is not still called ready.
             app.models.refresh()
             await app.dictionary.askAgain()
+        }
+    }
+}
+
+/// **The Library window's frame, kept between launches by AppKit's own autosave.**
+///
+/// Applied once per window: `WindowAccessor` calls back on every SwiftUI update, and re-applying
+/// the saved frame on each would snap the window back while the reader was dragging its edge.
+/// `setFrameUsingName` first, because naming the autosave does not by itself move a window that is
+/// already on screen; then the name, so every later move is written.
+@MainActor
+enum LibraryWindowFrame {
+    static func restore(on window: NSWindow) {
+        guard window.frameAutosaveName != XiaolaiDictScene.libraryFrameName else { return }
+        window.setFrameUsingName(XiaolaiDictScene.libraryFrameName)
+        if !window.setFrameAutosaveName(XiaolaiDictScene.libraryFrameName) {
+            // Another window holds the name — a second Library, which a `Window` scene cannot
+            // make. Said rather than swallowed: the frame would silently stop being kept.
+            Logger(subsystem: XiaolaiDictIdentity.app, category: "windows")
+                .fault("library: the frame autosave name is already in use; the frame will not be kept")
         }
     }
 }

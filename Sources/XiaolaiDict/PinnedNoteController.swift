@@ -76,7 +76,8 @@ final class PinnedNoteController {
 /// `.hiddenTitleBar` hides the bar and leaves the three traffic lights floating over the content —
 /// which is why the note used to reserve room at its top for them, and why it did not look like the
 /// card it came from. A reader asked for the card's own chrome instead (2026-09-27), so the note is
-/// put away by its own button, revealed under the pointer.
+/// put away by its own button, revealed under the pointer — and, since 2026-10-02, by Command-W,
+/// Escape or its context menu, because a pointer is not something every reader has.
 ///
 /// A named type rather than a closure inside the scene: a window is configured in AppKit, where
 /// nothing about it is assertable from a view, and this is the one line standing between the reader

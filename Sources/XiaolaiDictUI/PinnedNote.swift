@@ -45,11 +45,11 @@ public struct PinnedNote: Equatable, Identifiable {
                 return nil
             case .proposed:
                 return String(
-                    localized: "A guess — not confirmed",
+                    localized: "A guess, not confirmed",
                     comment: "On a pinned note whose sense the selector proposed")
             case .ambiguous:
                 return String(
-                    localized: "Several senses fitted — this is the nearest",
+                    localized: "Several meanings fit. This is the nearest",
                     comment: "On a pinned note whose sense was one of several that fitted")
             }
         }
@@ -99,6 +99,9 @@ public struct PinnedNoteView: View {
     let unpin: () -> Void
     /// Revealed under the pointer rather than always drawn, so a note is its words and not a widget.
     @State private var pointerIsOver = false
+    /// And revealed when the keyboard reaches it: a control that has focus and cannot be seen is
+    /// worse than one that is always drawn.
+    @FocusState private var unpinIsFocused: Bool
 
     public init(note: PinnedNote, unpin: @escaping () -> Void) {
         self.note = note
@@ -107,32 +110,44 @@ public struct PinnedNoteView: View {
 
     public var body: some View {
         ScrollView {
+            // **At the reader's text size, like the card it was pinned from.** These were the
+            // system's semantic fonts, which take no notice of the setting: at Large the card's
+            // meaning was 17 pt and the note made from it 13.
             VStack(alignment: .leading, spacing: scale.space.stack) {
                 // The unpin button's own width, kept clear whether or not it is showing: a heading
                 // that reflowed when the pointer arrived would be worse than the button appearing.
-                HStack(alignment: .firstTextBaseline, spacing: scale.space.stack) {
-                    Text(note.heading).font(.title3.weight(.semibold))
-                    if let partOfSpeech = note.partOfSpeech {
-                        Text(partOfSpeech).font(.caption).italic().foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                    Text(note.heading)
+                        .font(.system(size: scale.text.display, weight: .semibold))
+                    if let partOfSpeech = PartOfSpeechLabel.reader(note.partOfSpeech) {
+                        Text(partOfSpeech)
+                            .font(.system(size: scale.text.body).italic())
+                            .foregroundStyle(.secondary)
                     }
                     if let pronunciation = note.pronunciation {
-                        Text(pronunciation).font(.caption).foregroundStyle(.secondary)
+                        Text(pronunciation)
+                            .font(.system(size: scale.text.body))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.trailing, Token.Target.minimum)
-                Text(note.text).font(.body).textSelection(.enabled)
+                Text(note.text)
+                    .font(.system(size: scale.text.strong))
+                    .lineSpacing(scale.text.leading)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 // **Where the panel's badge goes when the panel is gone.** Only the uncertain
-                // standings say anything; a note announcing its own certainty would be noise.
+                // standings say anything; a note announcing its own certainty would be noise. A
+                // mark and ordinary text, as on the card — it was orange text.
                 if let caveat = note.standing.caveat {
-                    Text(verbatim: caveat)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    StatusLabel(.unconfirmed, text: Text(verbatim: caveat))
                 }
                 Spacer(minLength: scale.space.line)
                 // What it is a copy of, and from when. A note that outlives its dictionary can
-                // still say where it came from.
-                Text(note.provenance).font(.caption2).foregroundStyle(.tertiary)
+                // still say where it came from. Secondary: it is there to be read.
+                Text(note.provenance)
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, scale.space.padAcross)
             // Symmetric with the bottom, because nothing floats over the top any more. This was a
@@ -143,17 +158,40 @@ public struct PinnedNoteView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         // On the scroll view, so it stays in the corner rather than scrolling away with the words.
-        .overlay(alignment: .topTrailing) {
-            if pointerIsOver {
-                IconButton(title: "Unpin this note", symbol: "xmark") { unpin() }
-                    .foregroundStyle(.secondary)
-                    .padding(.top, scale.space.padDown)
-                    .padding(.trailing, scale.space.padAcross)
-                    .transition(.opacity)
-            }
+        .overlay(alignment: .topTrailing) { unpinControl }
+        // The same act from the pointer's other button, for a reader who looks there first.
+        .contextMenu {
+            Button(action: unpin) { ActionSymbol.unpinNote.label }
         }
-        .onHover { isOver in
-            withAnimation(.easeInOut(duration: Token.Motion.hover)) { pointerIsOver = isOver }
+        // **Escape puts a focused note away**, as it does a panel. A second, undrawn button
+        // because a control has one key: Command-W is on the one the reader can see.
+        .background {
+            Button(action: unpin) { Text(ActionSymbol.unpinNote.title) }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
+        .onHover { pointerIsOver = $0 }
+    }
+
+    /// **Always in the view tree, and so always in the accessibility tree.**
+    ///
+    /// It was `if pointerIsOver { IconButton(…) }`: with no pointer over the note there was no
+    /// button at all, and the note's window has no traffic lights — so a VoiceOver or keyboard
+    /// reader could make an always-on-top window and had no way to remove it (2026-10-01). The
+    /// reader asked for the control to stay out of sight until wanted, and it still does: that is
+    /// the opacity. Its existence no longer depends on a pointer.
+    ///
+    /// Command-W is bound here, and named in the tooltip, because this window has no menu to
+    /// offer Close from.
+    private var unpinControl: some View {
+        IconButton(.unpinNote, shortcut: KeyboardShortcut("w", modifiers: .command), action: unpin)
+            .focused($unpinIsFocused)
+            .foregroundStyle(.secondary)
+            .padding(.top, scale.space.padDown)
+            .padding(.trailing, scale.space.padAcross)
+            .opacity(pointerIsOver || unpinIsFocused ? 1 : 0)
+            .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: pointerIsOver)
+            .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: unpinIsFocused)
     }
 }

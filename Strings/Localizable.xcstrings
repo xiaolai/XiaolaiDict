@@ -1,8 +1,40 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    " (a guess — not confirmed)" : {
+    " (a guess, not confirmed)" : {
       "comment" : "Appended to copied text where the sense was not confirmed"
+    },
+    "%@ %@ could not be put back either, so no shortcut is registered." : {
+      "comment" : "Both the new shortcut and the old one were refused; the first placeholder is one or two whole sentences",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ could not be put back either, so no shortcut is registered."
+          }
+        }
+      }
+    },
+    "%@ (%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
+    "%@ Still using %@." : {
+      "comment" : "The new shortcut was refused and the old one still works; the first placeholder is one or two whole sentences",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ Still using %2$@."
+          }
+        }
+      }
     },
     "%@ answered with %@, which is not the word you looked up." : {
       "localizations" : {
@@ -24,16 +56,29 @@
         }
       }
     },
-    "%@ is not registered, so it will not look anything up. Choose another combination." : {
+    "%@ could not be set up, so it will not look anything up. Choose another combination." : {
 
     },
-    "%@ is unavailable: %@" : {
-      "comment" : "Menu warning when the lookup shortcut could not be registered",
+    "%@ frees %@ on this Mac. Using it again means downloading it again." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ is unavailable: %2$@"
+            "value" : "%1$@ frees %2$@ on this Mac. Using it again means downloading it again."
+          }
+        }
+      }
+    },
+    "%@ is a standard shortcut that other apps rely on — try another." : {
+
+    },
+    "%@ is unavailable. %@" : {
+      "comment" : "Menu warning when the lookup shortcut could not be registered; the second placeholder is a sentence saying why",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is unavailable. %2$@"
           }
         }
       }
@@ -41,7 +86,7 @@
     "%@ looks up English but explains it in another language. If that is the language you read, study from it." : {
 
     },
-    "%@ matches your language. One dictionary is studied from at a time, and changing it later starts your study over." : {
+    "%@ matches your language. You study from one dictionary at a time, and changing it later starts review over." : {
 
     },
     "%@ needs more free memory than this Mac has right now, so %@ is answering." : {
@@ -57,39 +102,31 @@
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
 
     },
-    "%@ recalled, over %lld reviews" : {
+    "%@ recalled, over ^[%lld review](inflect: true)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ recalled, over %2$lld reviews"
+            "value" : "%1$@ recalled, over ^[%2$lld review](inflect: true)"
           }
         }
       }
     },
-    "%@ translates your sentences and picks the sense you met, on this Mac — a %@ download." : {
+    "%@ translates your sentences and chooses the meaning you met, on this Mac — a %@ download." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ translates your sentences and picks the sense you met, on this Mac — a %2$@ download."
+            "value" : "%1$@ translates your sentences and chooses the meaning you met, on this Mac — a %2$@ download."
           }
         }
       }
     },
-    "%@ translates your sentences and picks the sense you met, on this Mac. Nothing is sent anywhere." : {
+    "%@ translates your sentences and chooses the meaning you met, on this Mac. Nothing is sent anywhere." : {
 
     },
-    "%@ works now but was not saved: %@" : {
-      "comment" : "The shortcut registered but could not be written to disk",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ works now but was not saved: %2$@"
-          }
-        }
-      }
+    "%@ works now but could not be saved, so it will not survive a restart." : {
+      "comment" : "The shortcut registered but could not be written to disk"
     },
     "%@ · %@" : {
       "localizations" : {
@@ -111,59 +148,53 @@
         }
       }
     },
-    "%@ — and %@ could not be put back, so no shortcut is registered" : {
-      "comment" : "Both the new shortcut and the old one were refused",
+    "%@, ^[%lld reading](inflect: true)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ — and %2$@ could not be put back, so no shortcut is registered"
+            "value" : "%1$@, ^[%2$lld reading](inflect: true)"
           }
         }
       }
     },
-    "%@ — still using %@" : {
-      "comment" : "The new shortcut was refused and the old one still works",
+    "%@, ^[%lld reading](inflect: true), %@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ — still using %2$@"
+            "value" : "%1$@, ^[%2$lld reading](inflect: true), %3$@"
           }
         }
       }
     },
-    "%lld backup copies could not be deleted." : {
+    "%@: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@: %2$@"
+          }
+        }
+      }
+    },
+    "%lld Selected" : {
 
     },
-    "%lld backup copies made by XiaolaiDict will be deleted too." : {
-
+    "%lld Selected, ^[%lld Reading](inflect: true)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld Selected, ^[%2$lld Reading](inflect: true)"
+          }
+        }
+      }
     },
-    "%lld cards" : {
-
-    },
-    "%lld enabled dictionaries match your language. Choose the one to study from — changing it later starts your study over." : {
-
-    },
-    "%lld lookups deleted." : {
-
-    },
-    "%lld lookups will be deleted." : {
-
-    },
-    "%lld meanings need attention" : {
+    "%lld hidden until tomorrow" : {
 
     },
     "%lld more due" : {
-
-    },
-    "%lld new meanings are held until tomorrow." : {
-
-    },
-    "%lld new saved, waiting for tomorrow" : {
-
-    },
-    "%lld new saved, waiting for tomorrow." : {
 
     },
     "%lld of %lld" : {
@@ -179,19 +210,7 @@
     "%lld permissions are off — selections and the screen cannot be read" : {
       "comment" : "Menu warning when more than one permission is missing"
     },
-    "%lld put off until tomorrow" : {
-
-    },
-    "%lld reading encounters" : {
-
-    },
     "%lld reviewed" : {
-
-    },
-    "%lld saved meanings will lose their sentence." : {
-
-    },
-    "%lld selected" : {
 
     },
     "%lld skipped" : {
@@ -200,16 +219,10 @@
     "%lld skipped, still due" : {
 
     },
-    "%lld things are still needed." : {
-
-    },
-    "A guess — not confirmed" : {
+    "A guess, not confirmed" : {
       "comment" : "On a pinned note whose sense the selector proposed"
     },
-    "A guess — these words may not belong together" : {
-
-    },
-    "A hover only fires when you ask with the key and the pointer has stopped. There is no setting for asking with nothing. Hovering a word in a script you have not ticked looks nothing up, and your reading history shows only the scripts ticked here. Looking a word up from a selection still works whatever it is written in. Nothing is deleted: ticking a script back shows its words again." : {
+    "A guess: these words may not belong together" : {
 
     },
     "A meaning you save while reading appears here." : {
@@ -218,7 +231,7 @@
     "A menu-bar dictionary for macOS." : {
 
     },
-    "A sense id only means anything inside the dictionary that issued it, so what has been learned about your senses cannot follow you to another one. Your reading history is kept either way." : {
+    "A word is looked up when you use the key and the pointer has stopped over it." : {
 
     },
     "A word you look up on more than one day appears here." : {
@@ -230,19 +243,22 @@
     "Accessibility" : {
       "comment" : "The Accessibility permission, as macOS names it in System Settings"
     },
+    "Accessibility Is Off" : {
+      "comment" : "Menu bar warning row"
+    },
     "Accessibility is off — your selection cannot be read" : {
       "comment" : "Menu warning when only Accessibility is missing"
     },
-    "Add" : {
+    "Add a tag" : {
 
     },
-    "Add an app…" : {
+    "Add an App…" : {
 
     },
     "All" : {
 
     },
-    "Already know" : {
+    "Already Know" : {
 
     },
     "Already known" : {
@@ -251,37 +267,40 @@
     "Always" : {
 
     },
+    "Ambiguous: ^[%lld meaning](inflect: true) fit this sentence" : {
+
+    },
     "An answer cannot be blank." : {
 
     },
     "An entry in %@ could not be read, so what is shown is not all of it." : {
 
     },
-    "Any tag" : {
+    "Another app has claimed this shortcut." : {
+      "comment" : "Why a lookup shortcut was refused"
+    },
+    "Answer with" : {
 
     },
-    "Archive %lld" : {
+    "Any Tag" : {
+
+    },
+    "Archive" : {
+
+    },
+    "Archive ^[%lld Meaning](inflect: true)" : {
 
     },
     "Archived" : {
 
     },
-    "Ask again" : {
-
-    },
-    "Ask macOS…" : {
-
-    },
-    "Asking the dictionary service…" : {
-      "comment" : "Menu bar item"
-    },
-    "Asking which dictionaries are enabled…" : {
-
-    },
-    "At least one script has to stay ticked." : {
+    "At least one script has to stay selected." : {
 
     },
     "Author" : {
+
+    },
+    "Automatic — the first dictionary that can mark a meaning" : {
 
     },
     "Automatically" : {
@@ -296,10 +315,13 @@
     "Cancel" : {
 
     },
+    "Caution" : {
+
+    },
     "Change…" : {
 
     },
-    "Check again" : {
+    "Check Again" : {
 
     },
     "Checking…" : {
@@ -308,70 +330,76 @@
     "Chinese characters / Japanese kanji" : {
 
     },
-    "Choose a dictionary that marks senses…" : {
+    "Choose Another Dictionary…" : {
 
     },
-    "Choose a meaning" : {
-
-    },
-    "Choose or confirm their meanings in Saved before reviewing." : {
+    "Choose a Meaning" : {
 
     },
     "Choose…" : {
 
     },
-    "Clear" : {
+    "Clear Search" : {
 
     },
-    "Clear the search" : {
-
-    },
-    "Close search" : {
+    "Collapsed" : {
 
     },
     "Comfortable" : {
 
     },
+    "Command" : {
+      "comment" : "The Command key, in the hover key picker"
+    },
     "Compact" : {
 
     },
-    "Confirm %lld" : {
+    "Confirm This Meaning" : {
+
+    },
+    "Confirm ^[%lld Meaning](inflect: true)" : {
 
     },
     "Confirm the meaning" : {
 
     },
-    "Confirm this meaning" : {
-
-    },
-    "Context may be cut" : {
-
+    "Control" : {
+      "comment" : "The Control key, in the hover key picker"
     },
     "Copies you made yourself — Time Machine, an exported file, anything you duplicated — are not affected and cannot be reached from here." : {
 
     },
-    "Copy the word and this sense" : {
+    "Copy" : {
 
     },
-    "Copy this definition" : {
+    "Copy This Definition" : {
 
     },
-    "Could not keep this lookup" : {
+    "Copy the Word and This Meaning" : {
 
     },
-    "Delete %lld lookups" : {
+    "Delete All Reading History…" : {
 
     },
-    "Delete all reading history…" : {
+    "Delete Permanently" : {
 
     },
-    "Delete the reading behind %lld" : {
+    "Delete ^[%lld Reading](inflect: true)" : {
+
+    },
+    "Delete ^[%lld Reading](inflect: true) Permanently…" : {
+
+    },
+    "Delete ^[%lld reading](inflect: true) permanently?" : {
+
+    },
+    "Delete the Readings Behind ^[%lld Meaning](inflect: true)…" : {
+
+    },
+    "Delete the readings behind ^[%lld meaning](inflect: true) permanently?" : {
 
     },
     "Deleting your reading history keeps the meanings you saved. They will need a new sentence before they can be reviewed again." : {
-
-    },
-    "Deliberate lookups appear here. Saved meanings become reviewable after confirmation." : {
 
     },
     "Device Control and Data Access" : {
@@ -380,34 +408,31 @@
     "Dictionary" : {
 
     },
-    "Dictionary answer unavailable" : {
-
-    },
     "Discard" : {
 
     },
-    "Discard %@" : {
-
-    },
-    "Discard %lld readings" : {
-
-    },
-    "Discard this reading" : {
+    "Discard ^[%lld Reading](inflect: true)" : {
 
     },
     "Discarded" : {
 
     },
-    "Discarded readings remain recoverable until you permanently delete them." : {
+    "Discarded readings remain recoverable until you delete them permanently." : {
 
     },
     "Done" : {
 
     },
+    "Double-Tap" : {
+      "comment" : "Hover gesture: tap the key twice"
+    },
     "Download" : {
 
     },
-    "Download the local model" : {
+    "Download Larger Model (%@)" : {
+
+    },
+    "Download Local Model" : {
 
     },
     "Downloading" : {
@@ -439,26 +464,56 @@
     "Easy" : {
 
     },
+    "Error" : {
+
+    },
+    "Every reading is kept in Reading History either way. Meanings saved automatically come from your study dictionary, and a meaning that was a guess needs your confirmation before it can be reviewed." : {
+
+    },
     "Everything needed is in place. Anything here can still be changed." : {
 
     },
     "Everything this Mac can do is in place. Anything here can still be changed." : {
 
     },
-    "Explain this sentence" : {
+    "Expanded" : {
+
+    },
+    "Explain" : {
+
+    },
+    "Explain This Sentence" : {
+
+    },
+    "Explained by a model on this Mac · may be wrong" : {
+
+    },
+    "Explained by a remote model · may be wrong" : {
+
+    },
+    "Explaining this sentence…" : {
+
+    },
+    "Export every saved meaning to a file in Downloads" : {
 
     },
     "Export…" : {
 
     },
+    "Extra Large" : {
+
+    },
     "Fastest available" : {
 
     },
-    "Find meanings needing confirmation" : {
+    "Filters" : {
 
     },
-    "First that marks senses" : {
-      "comment" : "Menu bar item"
+    "Find Meanings to Confirm" : {
+
+    },
+    "Find ^[%lld Meaning](inflect: true) to Confirm" : {
+
     },
     "Forgot" : {
 
@@ -469,16 +524,10 @@
     "From the dictionary" : {
 
     },
-    "Frosted" : {
-
-    },
-    "Frosted keeps cards and headings easy to read over any window. Clear shows more of what is behind the drawer — over a dark terminal it stays dark instead of turning grey." : {
+    "General" : {
 
     },
     "Gesture" : {
-
-    },
-    "Glass" : {
 
     },
     "Grid" : {
@@ -487,28 +536,46 @@
     "Hard" : {
 
     },
-    "Hide meaning" : {
+    "Hidden until %@" : {
+      "comment" : "A library row for a card the reader set aside until a date"
+    },
+    "Hide Inspector (⌥⌘I)" : {
 
     },
-    "Hide the meaning" : {
+    "Hide the Meaning" : {
 
     },
     "History" : {
 
     },
-    "History kept · Choose Keep for learning to study" : {
+    "Hold" : {
+      "comment" : "Hover gesture: hold the key down"
+    },
+    "Hover" : {
 
     },
-    "Hover Lookup" : {
+    "Hover is turned off in Settings" : {
+      "comment" : "Why Pause Hover is unavailable in the menu bar menu"
+    },
+    "Hover looks up only words written in the selected scripts, and Reading History shows only those. Looking up a selection works in any script. Nothing is deleted: selecting a script again shows its words again." : {
 
     },
-    "Hugging Face" : {
+    "Hover resumes %@" : {
+      "comment" : "Menu bar status line; the placeholder is a relative time such as 'in 14 minutes'"
+    },
+    "Huge" : {
 
     },
-    "In the panel" : {
+    "In the Lookup Window" : {
 
     },
-    "It could not be put off: %@" : {
+    "In your reading history, not saved" : {
+
+    },
+    "Inspector" : {
+
+    },
+    "It could not be hidden until tomorrow: %@" : {
       "comment" : "Shown on a review card when postponing it failed to save"
     },
     "It reads your selection through Accessibility. Allow XiaolaiDict in %@, then press the shortcut again." : {
@@ -518,30 +585,6 @@
 
     },
     "Japanese kana" : {
-
-    },
-    "Keep for learning" : {
-
-    },
-    "Keep lookups for learning" : {
-
-    },
-    "Keep this sense as a note" : {
-
-    },
-    "Keeping…" : {
-
-    },
-    "Keeps the cards and removes the sentences they were saved from" : {
-
-    },
-    "Kept for learning" : {
-
-    },
-    "Kept · Choose a meaning" : {
-
-    },
-    "Kept · Confirm this meaning in Library" : {
 
     },
     "Key" : {
@@ -556,39 +599,45 @@
     "Latin — English and most European languages" : {
 
     },
+    "Layout" : {
+
+    },
     "Learning" : {
 
     },
     "Library" : {
-
-    },
-    "Library…" : {
       "comment" : "Menu bar item"
     },
-    "Licence" : {
+    "License" : {
 
     },
-    "Licences" : {
+    "Licenses" : {
 
     },
     "List" : {
 
     },
-    "Local model" : {
+    "Local Model" : {
+
+    },
+    "Look up on hover" : {
 
     },
     "Look up the selection" : {
 
     },
-    "Looked up on %lld days, in %lld places" : {
+    "Looked up on ^[%lld day](inflect: true), in ^[%lld place](inflect: true)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Looked up on %1$lld days, in %2$lld places"
+            "value" : "Looked up on ^[%1$lld day](inflect: true), in ^[%2$lld place](inflect: true)"
           }
         }
       }
+    },
+    "Looking for your dictionaries…" : {
+
     },
     "Looking up “%@” in your dictionaries…" : {
       "comment" : "Shown while the dictionaries are being asked; the placeholder is the word"
@@ -596,8 +645,17 @@
     "Looking up…" : {
       "comment" : "Shown while a lookup is still being made"
     },
+    "Looks up the text you have selected, in any app." : {
+
+    },
     "Lookup" : {
 
+    },
+    "Lookup Shortcut" : {
+
+    },
+    "Lookup Shortcut Unavailable" : {
+      "comment" : "Menu bar warning row"
     },
     "Lookup shortcut" : {
 
@@ -605,19 +663,25 @@
     "Lookups are not being recorded: %@" : {
       "comment" : "Menu warning when the ledger could not be opened"
     },
-    "Lookups enter History in both modes. Automatic keeping prepares meanings from your study dictionary; uncertain meanings need your confirmation before Review." : {
-
-    },
     "Made by" : {
 
     },
     "Mark the word" : {
 
     },
-    "Model" : {
+    "Marks the meaning you met" : {
+      "comment" : "Under a dictionary's name: it can mark which meaning a word had"
+    },
+    "Marks the meaning you met, by its place in the entry" : {
+      "comment" : "Under a dictionary's name: it can mark a meaning, by position rather than by the publisher's id"
+    },
+    "Meanings to Confirm" : {
 
     },
-    "ModelScope" : {
+    "Menu Bar" : {
+
+    },
+    "Model" : {
 
     },
     "Name the app a word was read in" : {
@@ -626,58 +690,67 @@
     "Needed" : {
 
     },
+    "Needs Attention" : {
+
+    },
     "Needs attention" : {
 
     },
-    "Never look up in these apps" : {
-
-    },
-    "Never look up on these sites" : {
+    "Never Look Up in These Apps" : {
 
     },
     "New" : {
       "comment" : "A library row for a card that has never been reviewed"
     },
-    "No discarded readings" : {
+    "No Discarded Readings" : {
 
     },
-    "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, then choose Check again." : {
+    "No Reading History" : {
+
+    },
+    "No Selection" : {
+
+    },
+    "No Suggestions Yet" : {
+
+    },
+    "No dictionary entry was recorded." : {
 
     },
     "No entry for “%@” in your dictionaries." : {
 
     },
+    "No meaning in this entry clearly fits this sentence." : {
+      "comment" : "Shown on the lookup card when no sense is close enough to claim"
+    },
     "No meaning is available for this reading." : {
 
     },
-    "No meaning is available for this saved target." : {
+    "No meaning is recorded for this one yet." : {
+
+    },
+    "No meaning was identified, so there is nothing to copy" : {
+
+    },
+    "No meaning was identified, so there is nothing to pin" : {
 
     },
     "No model is available to explain this sentence." : {
       "comment" : "Shown in the sentence pane when nothing can explain the sentence"
     },
-    "No reading history" : {
+    "No reading is recorded." : {
 
     },
-    "No readings match this search." : {
+    "No saved meaning passes everything this list is narrowed by." : {
 
     },
-    "No sense in this entry clearly fits this sentence." : {
-      "comment" : "Shown on the lookup card when no sense is close enough to claim"
-    },
-    "No sense was identified, so there is nothing to copy" : {
-
-    },
-    "No sense was identified, so there is nothing to keep" : {
-
-    },
-    "No sentence was captured around the word, so its senses cannot be told apart." : {
+    "No sentence was captured around the word, so its meanings cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
     "No sentence was captured." : {
 
     },
-    "No shortcut is registered, so a selection cannot be looked up until you choose one." : {
+    "No shortcut is set, so a selection cannot be looked up until you choose one." : {
 
     },
     "No voice is installed for this language." : {
@@ -686,7 +759,25 @@
     "None installed" : {
 
     },
+    "None of your dictionaries explains English in your language. Turn one on in the Dictionary app, under Settings, then choose Check Again." : {
+
+    },
+    "Not Now" : {
+
+    },
+    "Not Today" : {
+
+    },
     "Not available" : {
+
+    },
+    "Not checked yet" : {
+      "comment" : "Under a dictionary's name: what it can do for study is not known yet"
+    },
+    "Not confirmed" : {
+
+    },
+    "Not downloaded" : {
 
     },
     "Not found" : {
@@ -695,46 +786,37 @@
     "Not known" : {
 
     },
-    "Not now" : {
-
-    },
     "Not reviewed yet." : {
 
     },
     "Not set" : {
 
     },
-    "Not today" : {
+    "Nothing Due" : {
 
     },
-    "Not yet enforced — hovering is not refused on these sites. What you add here is kept and will apply once it is. Subdomains are covered too, so example.com also excludes docs.example.com." : {
+    "Nothing Matches" : {
 
     },
-    "Nothing is due right now." : {
+    "Nothing Saved Yet" : {
 
     },
-    "Nothing is waiting on you. The local model is still one click away, in the translation row." : {
+    "Nothing is waiting on you. The local model is still one click away, in the last row." : {
 
     },
     "Nothing is waiting on you. What this Mac can do about the local model is not known yet." : {
 
     },
-    "Nothing matches." : {
-
-    },
     "Nothing read yet" : {
-      "comment" : "Drawer notice when nothing has been looked up yet"
+      "comment" : "Reading History notice when nothing has been looked up yet"
     },
     "Nothing to look up" : {
       "comment" : "Lookup panel, when there was no word to look up"
     },
-    "Nothing to suggest yet." : {
+    "Offer Again" : {
 
     },
-    "Offer it again" : {
-
-    },
-    "On a card" : {
+    "On a Card" : {
 
     },
     "One thing is still needed." : {
@@ -757,7 +839,7 @@
     "Only a compact voice is installed. Better ones may be available in %@." : {
 
     },
-    "Only when I choose Keep" : {
+    "Only when I choose Save" : {
 
     },
     "Open Dictionary…" : {
@@ -766,56 +848,71 @@
     "Open Language & Region…" : {
 
     },
-    "Open Settings…" : {
+    "Open Login Items Settings…" : {
 
     },
-    "Open VoiceOver Utility" : {
+    "Open Source" : {
+
+    },
+    "Open System Settings…" : {
+
+    },
+    "Open VoiceOver Utility…" : {
+
+    },
+    "Open at login" : {
 
     },
     "Open in Dictionary" : {
 
     },
-    "Open source" : {
-
-    },
-    "Out of the way until tomorrow. Nothing about your memory is recorded" : {
-
+    "Option" : {
+      "comment" : "The Option key, in the hover key picker"
     },
     "Password managers" : {
 
     },
-    "Password managers cannot be removed. The sentence a word was read in is recorded, and there every sentence is a secret." : {
+    "Password managers cannot be removed. The sentence a word was read in is saved with it, and in a password manager every sentence is a secret." : {
 
     },
-    "Pause %lld" : {
+    "Patient" : {
+      "comment" : "How long the pointer rests before a hover lookup: longest"
+    },
+    "Pause" : {
+
+    },
+    "Pause Hover" : {
+      "comment" : "Menu bar item, parent of the pause lengths"
+    },
+    "Pause ^[%lld Meaning](inflect: true)" : {
 
     },
     "Paused" : {
 
     },
-    "Permanently delete %lld readings" : {
+    "Permissions Are Off" : {
+      "comment" : "Menu bar warning row"
+    },
+    "Pin as a Note" : {
 
     },
-    "Permanently delete %lld readings?" : {
+    "Practice" : {
 
     },
-    "Permanently delete reading" : {
-
-    },
-    "Practice — nothing is scheduled" : {
+    "Practice. Nothing is scheduled" : {
 
     },
     "Practise" : {
 
     },
+    "Press a Shortcut…" : {
+
+    },
     "Press a combination including ⌘, ⌃ or ⌥. Escape cancels." : {
 
     },
-    "Press a shortcut…" : {
-
-    },
-    "Put off until %@" : {
-      "comment" : "A library row for a card the reader set aside until a date"
+    "Quick" : {
+      "comment" : "How long the pointer rests before a hover lookup: shortest"
     },
     "Quit XiaolaiDict" : {
       "comment" : "Menu bar item"
@@ -826,7 +923,7 @@
     "Read ^[%lld time](inflect: true), in this same sentence" : {
 
     },
-    "Read recently" : {
+    "Read before" : {
 
     },
     "Reading" : {
@@ -835,17 +932,8 @@
     "Reading History" : {
       "comment" : "Menu bar item"
     },
-    "Reading history" : {
-
-    },
-    "Reading history drawer" : {
-
-    },
-    "Reading the selection under your shortcut, and the fast hover path." : {
-      "comment" : "What stops working without the Accessibility permission"
-    },
-    "Reading words by hover from apps that expose no text — a terminal, a canvas, an image." : {
-      "comment" : "What stops working without the Screen Recording permission"
+    "Readings Are Not Being Saved" : {
+      "comment" : "Menu bar warning row"
     },
     "Readings you discard appear here and can be restored." : {
 
@@ -853,8 +941,20 @@
     "Ready" : {
 
     },
-    "Record this as the sense you met" : {
+    "Record this as the meaning you read" : {
 
+    },
+    "Recording" : {
+      "comment" : "VoiceOver: the shortcut field is waiting for a key combination"
+    },
+    "Records a new shortcut" : {
+
+    },
+    "Records this as the meaning you read" : {
+
+    },
+    "Relaxed" : {
+      "comment" : "How long the pointer rests before a hover lookup: longer"
     },
     "Remembered" : {
 
@@ -862,16 +962,28 @@
     "Remove" : {
 
     },
-    "Remove %lld from study" : {
+    "Remove %@" : {
 
     },
-    "Remove from study %lld" : {
+    "Remove ^[%lld Meaning](inflect: true) from Saved…" : {
+
+    },
+    "Remove ^[%lld meaning](inflect: true) from Saved?" : {
+
+    },
+    "Remove a Model" : {
+
+    },
+    "Remove from Saved" : {
+
+    },
+    "Remove this model?" : {
 
     },
     "Remove this tag" : {
 
     },
-    "Removed “%@”" : {
+    "Request Access…" : {
 
     },
     "Rest the pointer" : {
@@ -880,46 +992,67 @@
     "Restore" : {
 
     },
-    "Restore %@" : {
-
-    },
-    "Restore %lld readings" : {
+    "Restore ^[%lld Reading](inflect: true)" : {
 
     },
     "Resume" : {
 
     },
-    "Resume %lld" : {
+    "Resume Hover" : {
+      "comment" : "Menu bar item"
+    },
+    "Resume ^[%lld Meaning](inflect: true)" : {
 
     },
     "Retry" : {
 
     },
-    "Reveal meaning" : {
-
-    },
-    "Reveal the meaning" : {
-
-    },
     "Review" : {
 
     },
-    "Review another batch" : {
+    "Review Another Batch" : {
+
+    },
+    "Review starts over with the new dictionary: what you have learned is kept with the dictionary it was learned from, and is there again if you switch back. Your reading history is not affected." : {
 
     },
     "Review today · %lld" : {
 
     },
-    "Save the answer" : {
+    "Save" : {
+
+    },
+    "Save This Meaning" : {
+
+    },
+    "Save a meaning while reading, and it comes back here when it is due." : {
+
+    },
+    "Save meanings for study" : {
+
+    },
+    "Save the Answer" : {
 
     },
     "Saved" : {
 
     },
-    "Saved filters" : {
+    "Saved Meanings Could Not Be Read" : {
 
     },
     "Saved meanings come back here when they are due." : {
+
+    },
+    "Saved, not confirmed yet" : {
+
+    },
+    "Saved, with no meaning chosen yet" : {
+
+    },
+    "Saving…" : {
+
+    },
+    "Say It Aloud" : {
 
     },
     "Say it aloud" : {
@@ -934,13 +1067,40 @@
     "Screen Recording" : {
       "comment" : "The Screen Recording permission, as macOS names it in System Settings"
     },
+    "Screen Recording Is Off" : {
+      "comment" : "Menu bar warning row"
+    },
     "Screen Recording is off — hover cannot read the screen" : {
       "comment" : "Menu warning when only Screen Recording is missing"
+    },
+    "Scripts" : {
+
     },
     "Search" : {
 
     },
-    "Select a word anywhere and press %@." : {
+    "Search Discarded" : {
+
+    },
+    "Search History" : {
+
+    },
+    "Search Saved" : {
+
+    },
+    "Select a meaning to see its details" : {
+
+    },
+    "Select a reading to see its details" : {
+
+    },
+    "Select a word in any app and press %@." : {
+
+    },
+    "Select one meaning to see its details" : {
+
+    },
+    "Select one reading to see its details" : {
 
     },
     "Settings…" : {
@@ -949,11 +1109,14 @@
     "Setup" : {
 
     },
-    "Several senses fit this sentence equally well." : {
+    "Several meanings fit this sentence equally well." : {
       "comment" : "Shown on the lookup card when two senses cannot be separated"
     },
-    "Several senses fitted — this is the nearest" : {
+    "Several meanings fit. This is the nearest" : {
       "comment" : "On a pinned note whose sense was one of several that fitted"
+    },
+    "Shift" : {
+      "comment" : "The Shift key, in the hover key picker"
     },
     "Shortcut" : {
 
@@ -961,31 +1124,52 @@
     "Show All" : {
       "comment" : "Fans a day's pile of cards out"
     },
+    "Show Every Tag" : {
+
+    },
+    "Show Everything" : {
+
+    },
+    "Show Inspector (⌥⌘I)" : {
+
+    },
     "Show Less" : {
       "comment" : "Closes a day's pile of cards"
     },
-    "Show every tag" : {
+    "Show Menu" : {
+      "comment" : "VoiceOver action on the menu bar icon"
+    },
+    "Show More" : {
 
     },
-    "Show everything saved" : {
+    "Show Reading History" : {
+      "comment" : "VoiceOver action on the menu bar icon"
+    },
+    "Show as a grid" : {
+
+    },
+    "Show as a list" : {
 
     },
     "Show in Library" : {
 
     },
-    "Show more" : {
+    "Show in Saved" : {
 
     },
-    "Show more history" : {
+    "Show in menu bar" : {
 
     },
-    "Show the answer" : {
+    "Show only meanings with one tag" : {
 
     },
-    "Show the meaning" : {
+    "Show the Meaning" : {
 
     },
     "Show the time a word was looked up" : {
+
+    },
+    "Show where you read this word before" : {
 
     },
     "Shown without a claim" : {
@@ -997,22 +1181,25 @@
     "Skip" : {
 
     },
-    "Some enabled dictionaries do not say which language they explain English in, so none can be suggested. Choose one yourself, or enable a dictionary for your language in Dictionary." : {
-
-    },
     "Some of this could not be checked." : {
 
     },
-    "Some readings changed since Discard and were left unchanged." : {
+    "Some of your dictionaries do not say which language they explain English in, so none can be suggested. Choose one yourself, or turn on a dictionary for your language in the Dictionary app." : {
+
+    },
+    "Some readings changed after they were discarded and were left as they are." : {
+
+    },
+    "Space" : {
 
     },
     "Speaking" : {
 
     },
     "Standard" : {
-
+      "comment" : "How long the pointer rests before a hover lookup: the default"
     },
-    "Still due today; the next batch can have it" : {
+    "Startup" : {
 
     },
     "Stop" : {
@@ -1021,29 +1208,34 @@
     "Struggling" : {
 
     },
-    "Study" : {
+    "Study Dictionary" : {
 
     },
-    "Study dictionary" : {
+    "Study From" : {
 
     },
-    "Study from" : {
+    "Study progress is kept separately for each dictionary. Your reading history is kept whichever you choose." : {
 
     },
-    "Studying from %@ — %@." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Studying from %1$@ — %2$@."
-          }
-        }
-      }
+    "Studying from %@." : {
+
+    },
+    "Studying from %@. It can mark the meaning you met, by its place in the entry." : {
+
+    },
+    "Studying from %@. It can mark the meaning you met." : {
+
+    },
+    "Studying from %@. It shows whole entries and cannot mark a single meaning." : {
+
     },
     "Suggested" : {
 
     },
-    "Switching dictionaries starts study over." : {
+    "Switch Dictionary" : {
+
+    },
+    "Switch the study dictionary?" : {
 
     },
     "System Settings would not open. Look for Language & Region under General." : {
@@ -1060,6 +1252,9 @@
     },
     "That answer was not saved: %@" : {
       "comment" : "Shown on a review card when the grade could not be written"
+    },
+    "That could not be changed: %@" : {
+
     },
     "That could not be done: %@" : {
 
@@ -1080,42 +1275,27 @@
     "The Qwen team, Alibaba Cloud" : {
       "comment" : "About pane: who published the local model's weights"
     },
-    "The answer" : {
-
-    },
     "The answer could not be read: %@" : {
       "comment" : "Shown on a review card when its answer could not be loaded"
     },
     "The app is not running" : {
 
     },
-    "The dictionary service did not answer, so no dictionary can be suggested." : {
-
-    },
-    "The dictionary service did not answer." : {
-      "comment" : "Menu bar item"
-    },
-    "The dictionary you study from is no longer enabled in Dictionary. Senses are being marked against whichever dictionary answers instead, and study history is kept per dictionary — so those marks build up apart from yours." : {
+    "The dictionary you study from is no longer turned on in the Dictionary app. Meanings are being matched in whichever dictionary answers instead, and study progress is kept separately for each dictionary, so it is building up apart from yours." : {
 
     },
     "The frontmost app could not be identified, so its selection cannot be read." : {
       "comment" : "Lookup panel, when no app is frontmost"
     },
-    "The gate" : {
-
-    },
     "The last lookup was not recorded: %@" : {
       "comment" : "Menu warning when a lookup could not be written to the ledger"
     },
-    "The ledger could not be opened." : {
-      "comment" : "Shown when the erase command cannot reach the reader's ledger"
-    },
-    "The licence could not be opened. It is published under %@, at %@." : {
+    "The license could not be opened. It is published under %@, at %@." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The licence could not be opened. It is published under %1$@, at %2$@."
+            "value" : "The license could not be opened. It is published under %1$@, at %2$@."
           }
         }
       }
@@ -1123,65 +1303,80 @@
     "The local model needs 16 GB of memory. This Mac has less, so it cannot run it." : {
 
     },
-    "The model declined to compare this sentence against the senses." : {
+    "The meaning here is a guess, not confirmed" : {
+
+    },
+    "The meaning you read could not be identified." : {
+
+    },
+    "The model declined to compare this sentence against the meanings." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
     },
     "The notices could not be opened. They are in the app itself, at %@." : {
 
     },
-    "The only sense in this entry" : {
+    "The only meaning in this entry" : {
 
     },
     "The quick brown fox jumps over the lazy dog." : {
       "comment" : "Type specimen in the Reading pane; any sentence that shows off the reader's script will do"
     },
-    "The sense here is a guess — not confirmed" : {
+    "The readings stay in History, but review progress is lost. This cannot be undone." : {
 
     },
-    "The sense you read could not be identified." : {
+    "The sentence may be cut short" : {
 
+    },
+    "The system would not register this shortcut (error %d)." : {
+      "comment" : "Why a lookup shortcut was refused; the placeholder is a system error number"
     },
     "The write-ahead log could not be truncated: another connection is reading it." : {
       "comment" : "Reported when an erase cannot clear the database's sidecar log"
     },
-    "Third-party notices" : {
+    "There is no reading history to delete." : {
 
     },
-    "This board was opened without the model's state, so it cannot say what is here." : {
+    "These settings are not available right now." : {
 
     },
-    "This cannot be undone. App-managed migration backups will also be removed. Copies you made remain outside this app. Saved targets remain, but may need a new reading cue." : {
+    "Third-Party Notices" : {
 
     },
-    "This dictionary cannot name this entry, so it cannot be studied" : {
+    "This cannot be undone. Backup copies this app made are deleted too; copies you made yourself are not touched. Saved meanings stay, but may need a new sentence." : {
 
     },
-    "This dictionary does not mark its senses, so the one you read cannot be identified." : {
+    "This could not be saved" : {
+
+    },
+    "This dictionary cannot name this entry, so it cannot be saved" : {
+
+    },
+    "This dictionary does not mark its meanings, so the one you read cannot be identified." : {
       "comment" : "Shown on the lookup card when the dictionary marks no senses to choose between"
     },
-    "This dictionary does not mark senses, so none can be pointed at here." : {
+    "This dictionary does not mark separate meanings, so none can be pointed at here." : {
       "comment" : "Shown where a dictionary's entries carry no sense structure at all"
     },
-    "This pane is not connected to the dictionary service." : {
+    "This reading could not be saved" : {
 
     },
-    "This pane is not connected to the reader's settings." : {
-
-    },
-    "This pane is not connected to the shortcut." : {
-
-    },
-    "This sentence could not be compared against the senses." : {
+    "This sentence could not be compared against the meanings." : {
       "comment" : "Shown on the lookup card when the selector could not run"
     },
     "This sentence could not be translated." : {
 
     },
-    "This sentence does not settle which sense the word carries." : {
+    "This sentence does not settle which meaning the word carries." : {
       "comment" : "Shown on the lookup card when a model answered that the sentence decides nothing"
     },
     "This sentence is already in your language." : {
 
+    },
+    "This shortcut could not be released earlier. Quit and reopen the app to free it." : {
+      "comment" : "Why a lookup shortcut was refused"
+    },
+    "This shortcut is already used for something else in this app." : {
+      "comment" : "Why a lookup shortcut was refused"
     },
     "This word was read off the screen, so it may not be exactly right." : {
 
@@ -1189,11 +1384,17 @@
     "Today" : {
 
     },
-    "Translate this sentence" : {
+    "Translate" : {
 
     },
-    "Translated by Apple, which cannot be told which sense you met and misreads some sentences." : {
+    "Translate This Sentence" : {
+
+    },
+    "Translated by Apple, which cannot be told which meaning you read and misreads some sentences." : {
       "comment" : "Under a translation of the reader's sentence when Apple's Translation framework produced it"
+    },
+    "Translated by the local model · may be wrong" : {
+      "comment" : "Under a translation of the reader's sentence when the downloaded model produced it"
     },
     "Translating %@ into %@ needs that language pair. Add it in System Settings, under General → Language & Region → Translation Languages." : {
       "localizations" : {
@@ -1205,43 +1406,49 @@
         }
       }
     },
-    "Translation and sense picking" : {
+    "Translating this sentence…" : {
 
     },
-    "Try again" : {
+    "Translation and Meanings" : {
 
     },
-    "Unarchive %lld" : {
+    "Try Again" : {
+
+    },
+    "Unarchive" : {
+
+    },
+    "Unarchive ^[%lld Meaning](inflect: true)" : {
 
     },
     "Undo" : {
 
     },
-    "Undo archiving %lld" : {
+    "Undo Archiving ^[%lld Meaning](inflect: true)" : {
 
     },
-    "Undo discarding %lld readings" : {
+    "Undo Discarding ^[%lld Reading](inflect: true)" : {
 
     },
-    "Undo pausing %lld" : {
+    "Undo Pausing ^[%lld Meaning](inflect: true)" : {
 
     },
-    "Undo the last review" : {
+    "Undo the Last Review" : {
 
     },
-    "Unpin this note" : {
+    "Undone" : {
 
     },
-    "Until then, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+    "Unpin" : {
 
     },
-    "Until then, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+    "Until then, meanings are chosen by Apple's on-device model, and by a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which meaning you met, and misreads some." : {
+
+    },
+    "Until then, meanings are chosen by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which meaning you met, and misreads some." : {
 
     },
     "Use %@" : {
-
-    },
-    "Use the larger model (%@)" : {
 
     },
     "Voice" : {
@@ -1250,107 +1457,170 @@
     "VoiceOver Utility → Speech" : {
       "comment" : "Where macOS installs voices — use the system's own wording for both names"
     },
+    "Warning" : {
+
+    },
     "Website" : {
 
     },
     "What does this mean here?" : {
 
     },
-    "What you answered" : {
+    "What is saved stays in Saved, but loses the sentences it was saved from and will need attention. This cannot be undone." : {
 
     },
-    "Whatever is selected is looked up, wherever you are." : {
+    "What this Mac can do about the local model is not known yet." : {
 
     },
-    "Where you met it" : {
+    "Where You Met It" : {
 
     },
-    "Without a local model, senses are picked by Apple's on-device model, and a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+    "Whole entries only" : {
+      "comment" : "Under a dictionary's name: it cannot mark a single meaning"
+    },
+    "With the icon hidden, the lookup shortcut and hover keep working. Open XiaolaiDict again from Finder or Spotlight to show the Library, where ⌘, opens these settings." : {
 
     },
-    "Without a local model, senses are picked by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which sense you met, and misreads some." : {
+    "Without a local model, meanings are chosen by Apple's on-device model, and by a simpler match where it declines. Sentences are translated by Apple where its language pack is installed — which cannot be told which meaning you met, and misreads some." : {
+
+    },
+    "Without a local model, meanings are chosen by a simpler match. Sentences are translated by Apple where its language pack is installed — which cannot be told which meaning you met, and misreads some." : {
+
+    },
+    "Words You Already Know" : {
 
     },
     "Words in a terminal, a canvas or an image are read from the pixels. That is the one way of reading a word that can be wrong rather than simply missing — and you can check it yourself, because the word it read is the one shown." : {
 
     },
-    "Words you already know" : {
+    "Words you look up appear here, grouped by the day you met them." : {
+      "comment" : "Reading History notice when nothing has been looked up yet"
+    },
+    "Words you look up while reading appear here." : {
 
     },
-    "Words you look up appear here, grouped by the day you met them." : {
-      "comment" : "Drawer notice when nothing has been looked up yet"
-    },
-    "Write an answer" : {
+    "Write an Answer" : {
 
     },
     "XiaolaiDict" : {
       "comment" : "The menu bar icon, for VoiceOver"
     },
+    "XiaolaiDict can read the text you select and the word under the pointer." : {
+      "comment" : "Setup row for the Accessibility permission, once it is granted"
+    },
+    "XiaolaiDict can read the word under the pointer in apps that expose no text, such as a terminal, a canvas or an image." : {
+      "comment" : "Setup row for the Screen Recording permission, once it is granted"
+    },
     "XiaolaiDict needs Accessibility access" : {
       "comment" : "Lookup panel, when Accessibility has not been granted"
     },
-    "XiaolaiDict — no lookup shortcut is registered" : {
+    "XiaolaiDict needs Accessibility to read the text you select and the word under the pointer. Without it, neither the lookup shortcut nor hover can read anything." : {
+      "comment" : "Setup row for the Accessibility permission, while it is not granted"
+    },
+    "XiaolaiDict needs Screen Recording to read the word under the pointer in apps that expose no text, such as a terminal, a canvas or an image. Without it, hover finds nothing there." : {
+      "comment" : "Setup row for the Screen Recording permission, while it is not granted"
+    },
+    "XiaolaiDict — click for Reading History, right-click for the menu, press %@ to look up the selection" : {
+      "comment" : "The menu bar icon's tooltip, naming both clicks and the registered lookup shortcut"
+    },
+    "XiaolaiDict — click for Reading History, right-click for the menu. No lookup shortcut is registered." : {
       "comment" : "The menu bar icon's tooltip when no lookup shortcut is registered"
     },
-    "XiaolaiDict — press %@ to look up the selection" : {
-      "comment" : "The menu bar icon's tooltip, naming the registered lookup shortcut"
-    },
-    "Yes, that’s it" : {
+    "Yes, That’s It" : {
 
     },
     "Yesterday" : {
 
     },
-    "You chose this sense" : {
+    "You chose this meaning" : {
 
     },
-    "You have met this sense before" : {
+    "You have read this meaning before" : {
 
     },
-    "You have not saved any meanings to study yet." : {
+    "Your Reviews" : {
 
     },
-    "You have not saved any meanings yet." : {
-
-    },
-    "You recalled it before revealing the answer" : {
-
-    },
-    "Your cards could not be read." : {
+    "Your answer" : {
 
     },
     "Your dictionaries could not all be asked, so this may not be the whole answer." : {
 
     },
+    "Your dictionaries could not be read, so none can be suggested." : {
+
+    },
+    "Your dictionaries could not be read." : {
+
+    },
     "Your own answer" : {
 
     },
+    "Your reading history could not be opened." : {
+      "comment" : "Shown when the command that deletes reading history cannot open it"
+    },
     "Your reading history is unavailable" : {
-      "comment" : "Drawer notice when the ledger could not be read"
+      "comment" : "Reading History notice when the reading history could not be read"
+    },
+    "^[%lld Meaning](inflect: true) Selected" : {
+
+    },
+    "^[%lld backup copy](inflect: true) could not be deleted." : {
+
+    },
+    "^[%lld backup copy](inflect: true) made by XiaolaiDict will be deleted too." : {
+
+    },
+    "^[%lld dictionary](inflect: true) that you have turned on match your language. Choose the one to study from. Changing it later starts review over." : {
+
+    },
+    "^[%lld meaning](inflect: true)" : {
+
+    },
+    "^[%lld new meaning](inflect: true) will be introduced tomorrow" : {
+
+    },
+    "^[%lld new meaning](inflect: true) will be introduced tomorrow." : {
+
     },
     "^[%lld other dictionary](inflect: true)" : {
 
     },
-    "^[%lld other sense](inflect: true)" : {
+    "^[%lld other meaning](inflect: true)" : {
 
     },
-    "^[%lld word](inflect: true) · ^[%lld day](inflect: true)" : {
+    "^[%lld reading](inflect: true)" : {
+
+    },
+    "^[%lld reading](inflect: true) deleted." : {
+
+    },
+    "^[%lld reading](inflect: true) discarded" : {
+
+    },
+    "^[%lld reading](inflect: true) of this word" : {
+
+    },
+    "^[%lld reading](inflect: true) will be deleted." : {
+
+    },
+    "^[%lld reading](inflect: true) · ^[%lld day](inflect: true)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "^[%1$lld word](inflect: true) · ^[%2$lld day](inflect: true)"
+            "value" : "^[%1$lld reading](inflect: true) · ^[%2$lld day](inflect: true)"
           }
         }
       }
     },
-    "^[Ambiguous — %lld sense](inflect: true) fit this sentence" : {
+    "^[%lld saved meaning](inflect: true) cannot be reviewed until you choose or confirm what was meant." : {
 
     },
-    "^[Show all %lld word](inflect: true)" : {
+    "^[%lld saved meaning](inflect: true) will be left without a sentence." : {
 
     },
-    "^[You have looked this up %lld time](inflect: true)" : {
+    "^[%lld thing](inflect: true) are still needed." : {
 
     },
     "^[and %lld more](inflect: true)" : {
@@ -1371,7 +1641,7 @@
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
-    "example.com" : {
+    "hidden until tomorrow; nothing about your memory is recorded" : {
 
     },
     "it ended before every file had arrived" : {
@@ -1383,22 +1653,31 @@
     "jumps" : {
       "comment" : "The one word of the specimen shown in the reader's chosen emphasis; it must occur in that sentence"
     },
-    "not found" : {
+    "keeps what is saved and deletes the sentences it was saved from" : {
+
+    },
+    "looks the word up so you can choose its meaning" : {
+
+    },
+    "macOS is waiting for you to allow this in Login Items." : {
+
+    },
+    "nothing is scheduled by it" : {
 
     },
     "noun" : {
 
     },
-    "on this Mac" : {
+    "or press Delete" : {
 
     },
-    "practice" : {
+    "shows them in Saved" : {
 
     },
-    "sent to a remote service" : {
+    "still due today; the next batch can have it" : {
 
     },
-    "taken back" : {
+    "stops suggesting this word" : {
 
     },
     "the connection failed" : {
@@ -1429,6 +1708,9 @@
       "comment" : "History card badge: a model answered that the sentence settles no sense"
     },
     "verb" : {
+
+    },
+    "you recalled it before showing the meaning" : {
 
     },
     "you stopped it" : {

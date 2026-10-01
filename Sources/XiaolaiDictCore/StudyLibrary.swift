@@ -81,6 +81,10 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
     public let card: StudyCard?
     /// The word as the reader met it, from the newest reading that evidences the note.
     public let word: String
+    /// The reading's lemma, which is what a surface hashes the word's colour from — *meet* for
+    /// *meeting* — so a saved word is the colour it is in the history. Nil for a note with no
+    /// reading behind it.
+    public let lemma: String?
     /// Their own sentence, for recognising the row. **Not the answer** — the library lists what the
     /// reader saved, and a list that prints the meanings is a list that teaches nothing.
     public let excerpt: String
@@ -96,12 +100,13 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
 
     public var id: UUID { note.id }
 
-    public init(note: StudyNote, card: StudyCard?, word: String, excerpt: String,
+    public init(note: StudyNote, card: StudyCard?, word: String, lemma: String? = nil, excerpt: String,
                 excerptMarks: [NSRange], readAt: Date?,
                 script: ProbeScript?, readiness: StudyReadiness) {
         self.note = note
         self.card = card
         self.word = word
+        self.lemma = lemma
         self.excerpt = excerpt
         self.excerptMarks = excerptMarks
         self.readAt = readAt
@@ -129,7 +134,7 @@ extension Ledger {
 
         // **Decoded first, then given their cards in one query.** Asking for a card inside the
         // row callback ran a statement per row while the page's own statement was still open.
-        var pending: [(note: StudyNote, word: String, excerpt: String, excerptMarks: [NSRange],
+        var pending: [(note: StudyNote, word: String, lemma: String?, excerpt: String, excerptMarks: [NSRange],
                        readAt: Date?, script: ProbeScript?, readiness: StudyReadiness)] = []
         try run("""
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
@@ -175,6 +180,7 @@ extension Ledger {
                 // (C07), so this was empty for every one of them — a blank row in the library
                 // and a blank label in the inspector, for a card the reader had written.
                 word: row.optionalText(12) ?? note.target.ownText ?? "",
+                lemma: row.optionalText(19),
                 excerpt: excerpt,
                 excerptMarks: row.optionalText(12).map {
                     Lemmatizer.parts(of: row.optionalText(19) ?? $0, surface: $0, in: excerpt, at: range)
@@ -185,7 +191,7 @@ extension Ledger {
         }
         let cards = try cards(ofNotes: pending.map(\.note.id), prompt: Self.libraryPrompt)
         return pending.map {
-            LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, excerpt: $0.excerpt,
+            LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, lemma: $0.lemma, excerpt: $0.excerpt,
                        excerptMarks: $0.excerptMarks, readAt: $0.readAt, script: $0.script, readiness: $0.readiness)
         }
     }

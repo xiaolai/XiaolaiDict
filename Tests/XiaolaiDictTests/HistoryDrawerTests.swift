@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import XiaolaiDictCore
+@testable import XiaolaiDictCore
 import Testing
 
 @testable import XiaolaiDict
@@ -327,6 +327,115 @@ struct HistoryDrawerTests {
         #expect(!drawer.isVisible)
     }
 
+    // MARK: - Leaving for the Library, and clicks in this app's own windows
+
+    /// The controller is what closes the panel when a card asks for the Library.
+    @Test func showInLibraryHidesTheDrawer() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        var shown: [Int] = []
+        drawer.model.showInLibrary = { shown.append($0.id) }
+        drawer.show()
+        drawer.model.openInLibrary(entry("fine", now))
+        #expect(shown == [1])
+        #expect(!drawer.isVisible, "the drawer stayed open over the Library it had just opened")
+        #expect(!drawer.isEscapeClaimed)
+    }
+
+    /// **A click in another of this app's windows closes it; a click in the drawer does not.** The
+    /// global monitor never fires for the app's own windows, so the drawer stayed open over the
+    /// Library and Settings.
+    @Test func aClickInAnotherOfTheAppsWindowsClosesTheDrawer() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        let own = NSWindow(contentRect: CGRect(x: 500, y: 300, width: 428, height: 900),
+                           styleMask: .borderless, backing: .buffered, defer: true)
+        let library = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+                               styleMask: .titled, backing: .buffered, defer: true)
+        drawer.show()
+        drawer.attach(own)
+
+        drawer.clickedInApp(window: own, at: CGPoint(x: 600, y: 400))
+        #expect(drawer.isVisible, "a click inside the drawer closed it")
+
+        drawer.clickedInApp(window: library, at: CGPoint(x: 100, y: 100))
+        #expect(!drawer.isVisible, "a click in the app's own Library left the drawer open")
+    }
+
+    /// The status item's window is this app's too, and its click belongs to its own action.
+    @Test func aClickOnTheStatusItemIsStillItsOwn() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        defer { drawer.hide() }
+        let frame = CGRect(x: 100, y: 1420, width: 28, height: 20)
+        drawer.statusItemFrame = { frame }
+        drawer.show()
+        drawer.clickedInApp(window: nil, at: CGPoint(x: frame.midX, y: frame.midY))
+        #expect(drawer.isVisible, "the status item's own click dismissed the drawer under it")
+    }
+
+    /// The live monitor for this app's own windows asks the decision tested above.
+    @Test func theLiveInAppClickMonitorUsesTheTestedDecision() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repository.appending(path:
+            "Sources/XiaolaiDict/HistoryDrawer.swift"), encoding: .utf8)
+        let monitor = try #require(source.range(of: "NSEvent.addLocalMonitorForEvents("))
+        let end = try #require(source.range(of: "private func removeClickAway()", range:
+            monitor.upperBound..<source.endIndex))
+        let body = source[monitor.lowerBound..<end.lowerBound]
+        #expect(body.contains("clickedInApp(window: event.window, at: NSEvent.mouseLocation)"))
+        #expect(body.contains("return event"), "the monitor swallowed the click it was watching")
+    }
+
+    // MARK: - Width
+
+    /// **The drawer's width follows the reader's text**, and is asked for when it opens. It was a
+    /// fixed 380 pt while the padding inside it grew with the text.
+    @Test func theDrawerIsAsWideAsTheReadersTextSizeAsks() throws {
+        let displays = Displays()
+        displays.screens = [wide]
+        // A box, because the controller asks again on each opening and the answer changes between.
+        @MainActor final class Chosen { var size = TextSize.standard }
+        let chosen = Chosen()
+        let drawer = HistoryDrawerController(
+            textSize: { chosen.size }, hotkeys: HotkeyCenter(backend: FakeBackend()),
+            screens: { displays.screens }, pointer: { UpPoint(x: 100, y: 100) },
+            load: { .entries([]) })
+        defer { drawer.hide() }
+        drawer.show()
+        let standard = try #require(drawer.model.geometry).contentSize.width
+        #expect(standard == DrawerMetrics.thickness(for: .standard))
+        drawer.hide()
+        chosen.size = .large
+        drawer.show()
+        let large = try #require(drawer.model.geometry).contentSize.width
+        #expect(large == DrawerMetrics.thickness(for: .large))
+        #expect(large > standard, "the drawer did not widen for larger text")
+    }
+
+    /// Wider with the text, and never so wide that the smallest display it runs on is mostly
+    /// drawer: at every size it leaves more than half of a 1280 pt display.
+    @Test func atEverySizeTheDrawerLeavesMostOfASmallDisplay() {
+        let small: CGFloat = 1280
+        var last: CGFloat = 0
+        for size in TextSize.allCases {
+            let width = DrawerMetrics.thickness(for: size)
+            #expect(width >= last, "\(size) is narrower than the size below it")
+            #expect(width <= small - width, "\(size): \(width) pt is over half of a \(small) pt display")
+            // Room for a card's row of six 28 pt actions inside the list's and the card's padding.
+            let column = width - Scale(size).space.padAcross * 4
+            #expect(column >= Token.Target.minimum * 6, "\(size): \(column) pt cannot hold the actions")
+            last = width
+        }
+        #expect(DrawerMetrics.thickness(for: .huge) == Token.Drawer.maxWidth, "the cap is not what stops it")
+        #expect(DrawerMetrics.thickness(for: .standard) < Token.Drawer.maxWidth)
+    }
+
     // MARK: - Contents
 
     @Test func whatTheLedgerReturnsBecomesDays() async {
@@ -400,13 +509,14 @@ struct HistoryDrawerTests {
     }
 }
 
-/// Removing a lookup the reader did not mean to make.
+/// What the panel's model counts, what it lets a card do, and what discarding a reading asks of
+/// the ledger.
 ///
-/// The card leaves the drawer at once and the ledger is not touched until the grace window runs
-/// out, so undo is a cancellation rather than a restore — a `ReadingEntry` is not the whole row,
-/// and putting one back would return a poorer record than the one it replaced.
+/// Discarding is reversible and goes through the ledger, with a receipt that Undo spends —
+/// `HistoryDrawerUndoTests` has the undo. The six-second "Removed … Undo" row that used to be
+/// tested here is deleted with its code: the shipped app could never reach it.
 @MainActor
-struct HistoryRemovalTests {
+struct HistoryDrawerModelTests {
     private func entry(_ lemma: String, id: Int) -> ReadingEntry {
         ReadingEntry(
             id: id, lemma: lemma, surface: lemma, sentence: "A sentence.", sentenceRange: nil,
@@ -495,63 +605,96 @@ struct HistoryRemovalTests {
         #expect(model.distinctWords == 1)
     }
 
-    @Test func aRemovedCardLeavesTheDrawerAtOnce() {
+    // MARK: - Discarding
+
+    /// **The six-second removal is gone, not waiting.** With no `discard` wired the model used to
+    /// hide the card, start a timer and delete the lookup when it ran out — an undo on a clock,
+    /// reachable only from previews and from the tests that stood here. Nothing is wired, so
+    /// nothing happens: the card stays, and no receipt appears for an Undo to spend.
+    @Test func withNoLedgerToAskDiscardingDoesNothing() async {
         let model = model(["qqqq", "fine"])
         model.remove(entry("qqqq", id: 1))
-        #expect(model.removing.contains(1))
-        // Still in `days`, so the row keeps its place and the list does not jump while the
-        // reader may be reaching back for it.
+        await Task.yield()
         #expect(model.days[0].entries.count == 2)
+        #expect(model.discardedReceipt == nil)
+        #expect(model.problem == nil)
     }
 
-    /// The ledger must not be asked until the reader is out of time.
-    @Test func theLedgerIsNotToldWhileUndoIsStillOffered() {
+    /// Two clicks on the same card are one discard: the second arrives while the ledger is still
+    /// answering the first.
+    @Test func discardingTwiceAsksTheLedgerOnce() async throws {
         let model = model(["qqqq"])
-        var deleted: [Int] = []
-        model.delete = { deleted.append($0.id) }
+        var asked = 0
+        let (release, releasing) = AsyncStream<Void>.makeStream()
+        model.discard = { _ in
+            asked += 1
+            for await _ in release { break }
+            return DispositionResult(operation: UUID(), affected: 1, skipped: 0)
+        }
         model.remove(entry("qqqq", id: 1))
-        #expect(deleted.isEmpty, "the row was deleted before the reader could undo")
+        model.remove(entry("qqqq", id: 1))
+        for _ in 0..<500 where asked == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        releasing.yield()
+        for _ in 0..<500 where model.discardedReceipt == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(asked == 1, "the ledger was asked \(asked) times for one card")
+        #expect(model.discardedReceipt?.affected == 1)
     }
 
-    @Test func undoPutsTheCardBackAndNeverTouchesTheLedger() {
-        let model = model(["qqqq"])
-        var deleted: [Int] = []
-        model.delete = { deleted.append($0.id) }
-        model.remove(entry("qqqq", id: 1))
-        model.keep(entry("qqqq", id: 1))
-        #expect(model.removing.isEmpty)
-        #expect(deleted.isEmpty)
+    // MARK: - What a card can do
+
+    /// A card offers only what is wired. A preview's model, with no ledger behind it, used to
+    /// offer a Discard that ran the timer above.
+    @Test func aCardOffersOnlyWhatIsWired() {
+        let model = model(["fine"])
+        let bare = model.actions(for: entry("fine", id: 1))
+        #expect(bare.discard == nil && bare.save == nil && bare.showInLibrary == nil && bare.restore == nil)
+
+        model.discard = { _ in DispositionResult(operation: UUID(), affected: 1, skipped: 0) }
+        model.keepForLearning = { _ in }
+        model.showInLibrary = { _ in }
+        let wired = model.actions(for: entry("fine", id: 1))
+        #expect(wired.discard != nil && wired.save != nil && wired.showInLibrary != nil)
+        #expect(wired.restore == nil, "nothing in the panel is discarded, so nothing is restored there")
     }
 
-    /// Closing the drawer is the reader moving on, not changing their mind.
-    @Test func closingTheDrawerFinishesWhatWasRemoved() {
-        let model = model(["qqqq", "fine"])
-        var deleted: [Int] = []
-        model.delete = { deleted.append($0.id) }
-        model.remove(entry("qqqq", id: 1))
-        model.commitRemovals()
-        #expect(deleted == [1])
-        #expect(model.days[0].entries.map(\.lemma) == ["fine"])
+    /// **Show in Library puts the panel away.** It floats, and left open it covered the right edge
+    /// of the window it had just opened — toolbar and all.
+    @Test func showingAReadingInTheLibraryDismissesThePanel() {
+        let model = model(["fine"])
+        var shown: [Int] = []
+        var dismissed = 0
+        model.showInLibrary = { shown.append($0.id) }
+        model.dismiss = { dismissed += 1 }
+        model.actions(for: entry("fine", id: 1)).showInLibrary?()
+        #expect(shown == [1])
+        #expect(dismissed == 1, "the panel stayed open over the Library")
     }
 
-    /// A header over no cards reads as a drawer that is broken, not as an empty day.
-    @Test func aDayWithNothingLeftInItGoesToo() {
-        let model = model(["qqqq"])
-        model.delete = { _ in }
-        model.remove(entry("qqqq", id: 1))
-        model.commitRemovals()
-        #expect(model.days.isEmpty)
+    /// With nothing to open the Library, there is nothing to close the panel for.
+    @Test func withNoLibraryToShowThePanelStays() {
+        let model = model(["fine"])
+        var dismissed = 0
+        model.dismiss = { dismissed += 1 }
+        model.openInLibrary(entry("fine", id: 1))
+        #expect(dismissed == 0)
     }
 
-    /// Two clicks on the same card is one removal, not two deletions.
-    @Test func removingTwiceIsRemovingOnce() {
-        let model = model(["qqqq"])
-        var deleted: [Int] = []
-        model.delete = { deleted.append($0.id) }
-        model.remove(entry("qqqq", id: 1))
-        model.remove(entry("qqqq", id: 1))
-        model.commitRemovals()
-        #expect(deleted == [1])
+    // MARK: - Piles
+
+    /// **One card is not a pile.** Tuesday held a single reading, said "Show All" over it, and put
+    /// its buttons under the pile's click target.
+    @Test func aDayOfOneCardIsNotAPile() {
+        let model = HistoryDrawerModel()
+        func day(_ label: DayLabel, _ count: Int) -> ReadingDay {
+            ReadingDay(id: "\(label)-\(count)", date: .distantPast, label: label,
+                       entries: (1...count).map { entry("word\($0)", id: $0) })
+        }
+        #expect(!model.showsAsPile(day(.yesterday, 1)), "a single card was piled")
+        #expect(model.showsAsPile(day(.yesterday, 2)))
+        #expect(model.showsAsPile(day(.weekday, 5)))
+        // Today is listed however many it holds: it is what the reader came to read.
+        #expect(!model.showsAsPile(day(.today, 1)))
+        #expect(!model.showsAsPile(day(.today, 9)))
     }
 }
 

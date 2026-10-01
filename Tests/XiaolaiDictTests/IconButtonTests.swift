@@ -18,29 +18,92 @@ struct IconButtonTests {
     @Test func anIconButtonKeepsItsNameAsTooltipAndLabel() throws {
         let button = try source("IconButton.swift")
         #expect(button.contains(".help(tooltip)"))
-        #expect(button.contains("Label(title, systemImage: symbol)"), "without a label the icon has no name for VoiceOver")
+        #expect(button.contains("Label { name } icon: { Image(systemName: symbol) }"),
+                "without a label the icon has no name for VoiceOver")
         #expect(button.contains(".labelStyle(.iconOnly)"))
         // A hint is said after the name, never instead of it.
-        #expect(button.contains("Text(\"\\(Text(title)) — \\(Text(hint))\")"))
+        #expect(button.contains("Text(\"\\(namedWithShortcut) — \\(hint)\")"))
     }
 
-    /// A worded `Button("…")` survives only where an icon alone cannot be read: the rows of a
-    /// right-click menu and the buttons of a confirmation dialog. The counts are those, per file —
-    /// a new worded button anywhere else moves a count and fails here.
+    /// **The key is in the tooltip, after the name, and it is the key the button answers to** —
+    /// one value both binds and names it.
+    @Test func theShortcutIsNamedInTheTooltipAndBoundFromTheSameValue() throws {
+        let button = try source("IconButton.swift")
+        #expect(button.contains("Text(\"\\(name) (\\(Text(verbatim: ShortcutLabel.text(for: shortcut))))\")"))
+        #expect(button.components(separatedBy: ".keyboardShortcut(shortcut)").count - 1 == 2,
+                "bound as an icon and as a menu row")
+    }
+
+    /// **VoiceOver hears the name once.** `.help` is also the element's `AXHelp`, read after the
+    /// name — measured from a second process: `.help("Say it aloud")` on a button labelled *Say it
+    /// aloud* gave `AXHelp = "Say it aloud"`, and `.accessibilityHint(Text(""))` after it gave an
+    /// empty one. So the hint is set after the tooltip, and holds only what the tooltip adds.
+    @Test func theSpokenHintIsSetAfterTheTooltipAndNeverRepeatsTheName() throws {
+        let button = try source("IconButton.swift")
+        let help = try #require(button.range(of: ".help(tooltip)"))
+        let hint = try #require(button.range(of: ".accessibilityHint(spokenHint)"))
+        #expect(help.upperBound <= hint.lowerBound, "the hint has to come after `.help`, or `.help` wins")
+        #expect(button.contains("private var spokenHint: Text { help ?? hint ?? Text(verbatim: \"\") }"))
+    }
+
+    /// A destructive control is red — `.plain` draws no role — it shows an edge when the reader
+    /// asked for edges, and the 28 pt floor is still there.
+    @Test func aDestructiveIconIsTintedAndEveryIconCanShowAnEdge() throws {
+        let button = try source("IconButton.swift")
+        #expect(button.contains("guard role == .destructive, isEnabled else { return nil }"))
+        #expect(button.contains("StatusPalette.destructive.color(in: scheme, contrast: contrast)"))
+        #expect(button.contains(".modifier(Tinted(tint: tint))"))
+        #expect(button.contains(".showBordersEdge()"))
+        #expect(button.contains(".frame(minWidth: Token.Target.minimum, minHeight: Token.Target.minimum)"))
+        #expect(try source("AccessibilityAdaptation.swift").contains("@Environment(\\.accessibilityShowBorders)"))
+    }
+
+    /// Outside a menu it is an icon and nothing else: no worded mode was added.
+    @Test func thereIsNoTitleAndIconModeOutsideAMenu() throws {
+        let button = try source("IconButton.swift")
+        #expect(!button.contains(".titleAndIcon"))
+    }
+
+    /// A worded `Button("…")` survives only where an icon alone cannot be read: Cancel in a
+    /// confirmation dialog, and the one next step an empty state offers. The counts are those, per
+    /// file — a new worded button anywhere else moves a count and fails here.
+    ///
+    /// **Changed 2026-10-02.** The counts were 2 and 4: the erase dialog's action and Cancel, and
+    /// the Saved row's four hand-written menu rows. The menu is now the toolbar's own builder, so
+    /// its rows are `IconButton`s drawn with their titles; each dialog's destructive button takes
+    /// its title from `ActionSymbol` and so is not a `Button("…")` either. Review gained one — the
+    /// empty state's "Show in Saved", the remedy its sentence used to name and not offer. And
+    /// every icon button is built from an `ActionSymbol` case, so `IconButton(title:` — which
+    /// this used to require — is now what must not appear.
     @Test(arguments: [
-        ("LearningLibraryView.swift", 2),  // the permanent-delete dialog: its action, and Cancel
-        ("LibraryView.swift", 4),          // the Saved row's right-click menu
-        ("ReviewView.swift", 0),
+        ("LearningLibraryView.swift", 1),  // Cancel, in the permanent-delete dialog
+        ("LibraryView.swift", 1),          // Cancel, in the Saved removals' dialog
+        ("ReviewView.swift", 1),           // "Show in Saved", in the empty state
         ("LibraryReviewPane.swift", 0),
     ])
     func wordedButtonsAreOnlyInMenusAndDialogs(file: String, worded: Int) throws {
         let text = try source(file)
         #expect(text.components(separatedBy: " Button(\"").count - 1 == worded)
-        #expect(text.contains("IconButton(title: "))
+        #expect(text.contains("IconButton(."))
+        #expect(!text.contains("IconButton(title: "))
         #expect(!text.contains("Button(undoable.name)"))
     }
 
-    /// **A menu shows the words.** The disposition actions are one builder for the footer and the
+    /// **The Review grades are icons, with thumbs and their keys.** The key is passed as
+    /// `shortcut:`, which binds it and names it in the tooltip; a separate `.keyboardShortcut`
+    /// beside it would bind the key twice.
+    @Test func theReviewGradesNameTheirKeys() throws {
+        let review = try source("ReviewView.swift")
+        #expect(review.contains("IconButton(.forgot, shortcut: KeyboardShortcut(\"1\", modifiers: [])"))
+        #expect(review.contains("IconButton(.remembered, hint: "))
+        #expect(review.contains("shortcut: KeyboardShortcut(\"2\", modifiers: [])"))
+        #expect(review.contains("shortcut: KeyboardShortcut(\"s\", modifiers: [])"))
+        #expect(review.contains("shortcut: KeyboardShortcut(\"t\", modifiers: [])"))
+        #expect(review.contains("IconButton(.showMeaning, shortcut: KeyboardShortcut(.space, modifiers: [])"))
+        #expect(!review.contains(".keyboardShortcut("), "a key is bound outside the button that names it")
+    }
+
+    /// **A menu shows the words.** The disposition actions are one builder for the toolbar and the
     /// right-click menu, so the same buttons have to read as icons in one and as rows in the other.
     @Test func aRightClickMenuShowsTitles() throws {
         #expect(try source("LibraryCollection.swift").contains(".environment(\\.iconButtonShowsTitle, true)"))

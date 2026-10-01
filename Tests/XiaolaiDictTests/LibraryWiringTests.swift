@@ -365,6 +365,33 @@ struct LibraryWiringTests {
         #expect(model.presentation.total == 2, "and the count agrees with the list")
     }
 
+    /// **The row and its inspector carry the lemma, which is what the colour is hashed from.**
+    /// The view hashed the word as written, so *meeting* was one colour here and another in
+    /// History, which hashes *meet*. A model that did not pass the lemma on would leave the view
+    /// nothing to key by but the surface again.
+    @Test func aSavedRowCarriesItsLemmaForTheColour() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let lookup = try ledger.record(LookupRecord(
+            surface: "meeting", lemma: "meet", context: "We stopped meeting at noon.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil, script: .latin))
+        let note = try ledger.enroll(
+            .sense(dictionary: "noad", entryID: "e-meet", senseKey: "e-meet.1", senseKeyKind: .publisher),
+            issuer: .live, language: "en", chosenBy: .reader,
+            answer: StudyAnswer(origin: .dictionary, text: "come together"), lookupID: lookup, at: now)
+
+        let model = model(path)
+        await model.reload()
+        let row = try #require(model.presentation.rows.first)
+        #expect(row.word == "meeting")
+        #expect(row.accentKey == "meet")
+        model.act(.select([note.id]))
+        try await settle { model.presentation.inspector != nil }
+        #expect(model.presentation.inspector?.accentKey == "meet")
+    }
+
     /// **A card put off until tomorrow does not say "Due".** The library read the schedule and
     /// not `hiddenUntil`, so a card the reader had deliberately set aside sat in the list looking
     /// exactly like work waiting for them — and no batch that day would offer it.
@@ -381,6 +408,8 @@ struct LibraryWiringTests {
         let row = try #require(model.presentation.rows.first)
         #expect(row.due != "Due", "a card nothing will offer today is not due")
         #expect(row.due != "New", "and it is not waiting to be introduced either")
+        // In the reader's word for it: "Not Today" hides a card until tomorrow.
+        #expect(row.due?.hasPrefix("Hidden until") == true, "\(row.due ?? "nil")")
     }
 
     /// **A change that did not land is said.** Both apply helpers wrapped the write in `try?`,

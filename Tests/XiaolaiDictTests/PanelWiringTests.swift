@@ -34,6 +34,9 @@ struct PanelWiringTests {
     }
 
     private var cardView: String { (try? source("Sources/XiaolaiDictUI/LookupCardView.swift")) ?? "" }
+    /// Where `PanelSurface` lives: the scrolling region, its cap and the window fit moved there
+    /// when the message panel and the status row came onto the same surface as the card.
+    private var surface: String { (try? source("Sources/XiaolaiDictUI/LookupPanelViews.swift")) ?? "" }
 
     /// **The confirmation is handed to the card.** Without this the control is a parameter defaulting
     /// to nil that nothing supplies — the `HoverPause` shape exactly, and every test over
@@ -136,15 +139,26 @@ struct PanelWiringTests {
         // argument this rule has no opinion about, and pinning the exact spelling made the scan fail
         // the moment one was added — a scan that breaks on its subject changing shape teaches people
         // to loosen it.
-        #expect(cardView.contains(".fitsItsContent(upTo: scale.space.cardMaxHeight"),
+        #expect(surface.contains(".fitsItsContent(upTo: contentCap"),
                 "nothing asks the panel's window to be the height of its content")
     }
 
     /// **And the fit is bounded by the same cap the scrolling region has.** Unbounded, the window
     /// would grow past the height its content is clipped to and hold empty space under the card.
     @Test func theFitStopsWhereTheScrollingStarts() {
-        let capped = cardView.contains(".frame(maxHeight: scale.space.cardMaxHeight)")
+        let capped = surface.contains(".frame(maxHeight: scrollCap)")
         #expect(capped, "the scrolling region is no longer capped, so the fit's ceiling means nothing")
+        // **One number for both**, and it comes from the card's cap: the fit's ceiling and the
+        // frame's bound are the same property, less the status row pinned under the scrolling
+        // region — which is inside the card now, and would otherwise make the window taller than
+        // the ceiling `--panel-report` holds it to.
+        #expect(surface.contains("max(0, scale.space.cardMaxHeight - statusHeight)"),
+                "the scrolling cap is no longer derived from the card's own cap")
+        // **And the fit's ceiling excludes the pinned bar**, because the container it is compared
+        // against does. With the frame's own bound as the ceiling, a long list asked for a bar's
+        // height more than the frame could give and the window outgrew the card by that much.
+        #expect(surface.contains("max(0, scrollCap - barHeight)"),
+                "the fit's ceiling counts the pinned bar, which its container does not")
     }
 
     /// **And that route starts the discovery its destination depends on.** Nothing asks the

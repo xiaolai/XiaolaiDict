@@ -52,11 +52,19 @@ import XiaolaiDictTestSupport
 
     /// A paused XiaolaiDict says so where the reader is looking. "Never *silently* paused" is the claim
     /// `HoverPause.label(at:)` was written to keep, and until now no surface read it.
+    ///
+    /// The words moved out of `XiaolaiDictCore` on 2026-10-02 — it may hold no display text — so
+    /// this now asserts the wire the menu actually reads: the app's own pause value, handed to
+    /// `HoverPauseMenu`.
     @Test func thePausedStateIsVisibleInTheMenu() {
         let app = app()
-        #expect(app.hover.pauseLabel == "Pause Hover…")
+        let now = Date.now
+        #expect(HoverPauseMenu.entries(hoverIsOn: true, pausedUntil: app.hover.pauseSwitch.until, now: now)
+                == [.pause])
         app.hover.pause(for: .seconds(900))
-        #expect(app.hover.pauseLabel.hasPrefix("Paused"), "the menu read \(app.hover.pauseLabel)")
+        let paused = HoverPauseMenu.entries(hoverIsOn: true, pausedUntil: app.hover.pauseSwitch.until, now: now)
+        #expect(paused.last == .resume, "the menu offered \(paused)")
+        #expect(paused.count == 2, "a paused hover is not said to be paused: \(paused)")
     }
 
     /// **And the policy, by the same argument as the pause.** `HoverPolicy` was taken as a closure
