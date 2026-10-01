@@ -364,6 +364,7 @@ struct LookupPanelSceneView: View {
         Group {
             if let content = model.content {
                 PanelView(content: content)
+                    .environment(\.closeLookup) { [controller] in controller.close() }
                     .environment(\.pinNote) { [controller] note in
                         controller.notes.pin(note, near: controller.lastPointer)
                     }

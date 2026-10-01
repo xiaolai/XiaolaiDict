@@ -156,7 +156,7 @@ public enum PanelContent {
 
         public var minimumSize: NSSize {
             switch self {
-            case .lookup: NSSize(width: Scale.standard.space.cardMinWidth, height: Token.Panel.messageMinHeight)
+            case .lookup: NSSize(width: Scale.standard.space.lookupMinWidth, height: Token.Panel.messageMinHeight)
             case .message: NSSize(width: Token.Panel.messageMinWidth, height: Token.Panel.messageMinHeight)
             }
         }

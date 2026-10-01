@@ -176,7 +176,17 @@ private struct OpenDictionarySettingsKey: EnvironmentKey {
     public static let defaultValue: @MainActor () -> Void = {}
 }
 
+private struct CloseLookupKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
 extension EnvironmentValues {
+    /// The close button takes the same path as Escape and clicking outside the card.
+    public var closeLookup: @MainActor () -> Void {
+        get { self[CloseLookupKey.self] }
+        set { self[CloseLookupKey.self] = newValue }
+    }
+
     /// Settings, on its Dictionary pane, **with the dictionary discovery its destination depends on
     /// already started.** Nothing asks the service until a menu is opened, so a route that opened the
     /// pane directly could leave it reading "Asking the dictionary service…" for good — the app's own

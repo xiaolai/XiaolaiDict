@@ -27,16 +27,20 @@ public struct LookupCardView: View {
     /// tappable senses were the other ones, so every answer the selector got right stayed a hypothesis
     /// for good and a reader who agreed had no way to say so.
     public var onConfirm: (() -> Void)?
+    /// Expansion from the compact card reveals all meanings immediately.
+    public var showsAllMeanings: Bool
     @State private var showingAlternatives = false
     @State private var showingMemory = false
 
     public init(
         card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil,
-        onConfirm: (() -> Void)? = nil
+        onConfirm: (() -> Void)? = nil, showsAllMeanings: Bool = false
     ) {
         self.card = card
         self.onChoose = onChoose
         self.onConfirm = onConfirm
+        self.showsAllMeanings = showsAllMeanings
+        _showingAlternatives = State(initialValue: showsAllMeanings)
     }
 
     public var body: some View {
@@ -361,7 +365,7 @@ public struct LookupCardView: View {
             // `task(id:)` rather than `onChange`: it runs on first appearance too, so one rule
             // covers both and there is no `openedOnce` to get out of step.
             .task(id: card.heading) {
-                showingAlternatives = card.opensAlternatives
+                showingAlternatives = showsAllMeanings || card.opensAlternatives
             }
         }
     }
@@ -394,19 +398,10 @@ public struct LookupCardView: View {
     }
 }
 
-/// One lookup, as the panel shows it: the card, and the few things that belong around it.
-///
-/// **What this replaced, and why each piece went.** The panel used to be a 260 pt sidebar listing
-/// every dictionary and every sense, beside the publisher's entry rendered in a `WKWebView`, with
-/// the chosen sense marked somewhere inside it. That is a reference work. The sidebar's job — reach
-/// any sense — is done by the card's own "other senses", one click instead of a permanent column.
-/// The web view's job — the publisher's full treatment, its examples, its etymology — is done by
-/// Dictionary.app, which is one click in the heading and is better at it than a pane this size
-/// could be.
-///
-/// What did *not* go: the memory strip, the notices, the waiting state, and every action the old
-/// chrome carried — speak, copy, explain, pin, and studying an auxiliary dictionary's sense (D8).
-/// Those were the panel doing its job rather than the panel being a dictionary.
+/// An optional short dictionary preview expands into the existing reading card, all its meanings,
+/// the publisher's examples, and the study actions. The existing reading card remains the default.
+/// The request identity in `PanelView` resets the disclosure for each new word; late answers for
+/// the current word leave the reader's choice of compact or expanded intact.
 public struct LookupPanelContent: View {
     @Environment(\.scale) private var scale
     @Environment(\.pinNote) private var pin
@@ -418,6 +413,7 @@ public struct LookupPanelContent: View {
     @Environment(\.explainer) private var explainer
     @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.closeLookup) private var close
     public let presentation: LookupPresentation
     /// What it is waiting for, in words. Nil once the dictionaries have answered.
     public let waiting: String?
@@ -467,14 +463,16 @@ public struct LookupPanelContent: View {
     /// from a test: keyed by the entry it was made in, and answering whether the selector's late
     /// proposal still changes what is on screen.
     @State private var selection = PanelSelection()
+    @State private var showingDetails: Bool
 
-    public init(presentation: LookupPresentation, waiting: String? = nil) {
+    public init(presentation: LookupPresentation, waiting: String? = nil, detailsInitiallyExpanded: Bool = false) {
         self.presentation = presentation
         self.waiting = waiting
+        _showingDetails = State(initialValue: detailsInitiallyExpanded)
     }
 
-    /// The word's own colour, which the card's shadow is thrown in. The same accent the marked
-    /// word in the sentence wears, so the glow under the card and the word inside it agree.
+    private var isCompact: Bool { options.usesCompactLookup && !showingDetails }
+
     private var accent: Color {
         ReadingPalette.accent(for: presentation.lemma.text).color(in: scheme)
     }
@@ -529,9 +527,9 @@ public struct LookupPanelContent: View {
         ScrollView { content }
         .scrollBounceBehavior(.basedOnSize)
         .frame(
-            minWidth: scale.space.cardMinWidth,
-            idealWidth: scale.space.cardWidth,
-            maxWidth: scale.space.cardMaxWidth,
+            minWidth: isCompact ? scale.space.lookupMinWidth : scale.space.cardMinWidth,
+            idealWidth: isCompact ? scale.space.lookupWidth : scale.space.cardWidth,
+            maxWidth: isCompact ? scale.space.lookupWidth : scale.space.cardMaxWidth,
             alignment: .leading)
         // **After the width frame, and `fixedSize` no longer fixes the height.** Measured: with
         // `.fixedSize(vertical: true)` still in the chain the panel took its natural height and the
@@ -557,15 +555,13 @@ public struct LookupPanelContent: View {
         .overlay(shape.strokeBorder(
             Color.primary.opacity(Token.Opacity.border), lineWidth: Token.Stroke.hairline))
         .clipShape(shape)
-        // Depth first, then colour. The neutral shadow is what actually lifts the card off the
-        // desktop; the accent one is the word's colour thrown under it, and on its own it would
-        // either stain the wallpaper or do nothing.
+        // A neutral shadow keeps the quick card quiet over the reader's document.
         .shadow(
             color: .black.opacity(Token.Opacity.cardLift),
             radius: scale.shadow.panelRadius,
             x: scale.shadow.panelOffset, y: scale.shadow.panelOffset)
         .shadow(
-            color: accent.opacity(Token.Opacity.accentShadow),
+            color: isCompact ? .clear : accent.opacity(Token.Opacity.accentShadow),
             radius: scale.shadow.glowRadius,
             x: scale.shadow.glowOffset, y: scale.shadow.glowOffset)
         // Asymmetric, because the shadows are. Uniform padding would leave dead space above and
@@ -577,6 +573,10 @@ public struct LookupPanelContent: View {
         // The panel has gone: nothing is waiting for this answer, and a generation running for a
         // closed panel is one the reader is paying for twice.
         .onDisappear { translating?.cancel(); explaining?.cancel() }
+        .onChange(of: showing) { clearPanes() }
+        .onChange(of: presentation.sense) {
+            if let entry, !selection.hasChosen(in: entry) { clearPanes() }
+        }
         // **Off the layout path, and keyed by the sentence.** `NLLanguageRecognizer` is the same cost
         // that forced `Speech.caveat` to memoise at 43 ms a call, so a view body may not ask it.
         .task(id: presentation.sentence) {
@@ -594,11 +594,65 @@ public struct LookupPanelContent: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous)
+        RoundedRectangle(cornerRadius: isCompact ? scale.radius.lookup : scale.radius.panel, style: .continuous)
     }
 
     @ViewBuilder
     private var content: some View {
+        if !options.usesCompactLookup {
+            detailedContent
+        } else if showingDetails {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Button {
+                        showingDetails = false
+                    } label: {
+                        Label("Fewer details", systemImage: "chevron.left")
+                            .frame(minHeight: Token.Target.minimum)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                    IconButton(title: "Close lookup", symbol: "xmark", action: close)
+                }
+                .font(.system(size: scale.text.label))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, scale.space.padAcross)
+                .padding(.top, scale.space.padDown)
+                detailedContent
+            }
+        } else {
+            switch presentation.outcome {
+            case .none:
+                WaitingView(detail: waiting)
+            case .notFound:
+                compactCard(cardWithoutAnEntry(.absent))
+            case .plainText(let text, _):
+                compactCard(cardWithoutAnEntry(.prose(text)))
+            case .entries:
+                if let entry { compactCard(card(for: entry)) }
+            }
+        }
+    }
+
+    private func compactCard(_ card: LookupCard) -> some View {
+        CompactLookupCardView(card: card, incomplete: compactIsIncomplete) {
+            showingDetails = true
+        }
+    }
+
+    /// Keep a short quality signal visible; expansion carries the precise explanation and remedy.
+    private var compactIsIncomplete: Bool {
+        if PanelCaveats.serviceUnanswered(presentation.outcome)
+            || PanelCaveats.readOffTheScreen(presentation.capture, warning: options.warnsAboutScreenReading) {
+            return true
+        }
+        if let entry, PanelCaveats.answeredAnotherWord(entry) { return true }
+        if case .entries(_, let unreadable) = presentation.outcome { return !unreadable.isEmpty }
+        return false
+    }
+
+    @ViewBuilder
+    private var detailedContent: some View {
         switch presentation.outcome {
         case .none:
             WaitingView(detail: waiting)
@@ -646,20 +700,7 @@ public struct LookupPanelContent: View {
                         // condition for drawing it.
                         onConfirm: confirmable(entry).map { encounter in
                             { confirm(encounter, in: entry) }
-                        })
-                        // A different dictionary is a different card: what was translated for the
-                        // last one is neither shown nor still being worked on.
-                        // A different dictionary is a different card — and so is the same card once
-                        // the sense mark arrives, which happens *after* it is first drawn: an
-                        // explanation written while the card said nothing about the sense would
-                        // otherwise sit under a card that now names one.
-                        .onChange(of: showing) { clearPanes() }
-                        // **Only where it changes the card.** A reader who has already chosen a
-                        // sense here has the mark they asked for, and clearing on the selector's
-                        // late answer took away a translation they had asked for after choosing.
-                        .onChange(of: presentation.sense) {
-                            if !selection.hasChosen(in: entry) { clearPanes() }
-                        }
+                        }, showsAllMeanings: options.usesCompactLookup)
                     // Only beside the card it was made for. A different dictionary, or a sense that
                     // arrived after it was asked, is a different card.
                     if let translation, translation.of == translationKey(for: entry) {
@@ -674,6 +715,7 @@ public struct LookupPanelContent: View {
                     }
                     matchCaveat(entry)
                     senseKeyCaveat(entry)
+                    if options.usesCompactLookup { DictionaryDetailsView(entry: entry) }
                     footer(entry)
                 }
             }

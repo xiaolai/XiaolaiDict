@@ -294,6 +294,9 @@
     "Clear the search" : {
 
     },
+    "Close lookup" : {
+
+    },
     "Comfortable" : {
 
     },
@@ -380,6 +383,9 @@
     "Everything this Mac can do is in place. Anything here can still be changed." : {
 
     },
+    "Examples and details" : {
+
+    },
     "Explain this sentence" : {
 
     },
@@ -387,6 +393,9 @@
 
     },
     "Fastest available" : {
+
+    },
+    "Fewer details" : {
 
     },
     "First that marks senses" : {
@@ -405,6 +414,9 @@
 
     },
     "Frosted keeps cards and headings easy to read over any window. Clear shows more of what is behind the drawer — over a dark terminal it stays dark instead of turning grey." : {
+
+    },
+    "Full dictionary entry" : {
 
     },
     "Gesture" : {
@@ -526,10 +538,16 @@
     "Mark the word" : {
 
     },
+    "Meaning in context is uncertain" : {
+
+    },
     "Model" : {
 
     },
     "ModelScope" : {
+
+    },
+    "More meanings" : {
 
     },
     "Name the app a word was read in" : {
@@ -669,6 +687,9 @@
     "Open VoiceOver Utility" : {
 
     },
+    "Open details to read this dictionary entry" : {
+
+    },
     "Open in Dictionary" : {
 
     },
@@ -676,6 +697,9 @@
 
     },
     "Out of the way until tomorrow. Nothing about your memory is recorded" : {
+
+    },
+    "Partial result" : {
 
     },
     "Password managers" : {
@@ -839,6 +863,12 @@
     },
     "Show Less" : {
       "comment" : "Closes a day's pile of cards"
+    },
+    "Show a short dictionary preview, with More meanings for the full reading card." : {
+
+    },
+    "Show all meanings, examples, and context" : {
+
     },
     "Show every script" : {
 
@@ -1115,6 +1145,9 @@
 
     },
     "Use %@" : {
+
+    },
+    "Use a compact lookup card" : {
 
     },
     "Use the larger model (%@)" : {

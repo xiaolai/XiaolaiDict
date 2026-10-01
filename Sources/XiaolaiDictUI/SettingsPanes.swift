@@ -181,6 +181,8 @@ struct ReadingPane: View {
             }
 
             Section {
+                Toggle("Use a compact lookup card", isOn: $appearance.usesCompactLookup)
+                    .help(Text("Show a short dictionary preview, with More meanings for the full reading card."))
                 Toggle(
                     "Say when a word was read off the screen",
                     isOn: $appearance.warnsAboutScreenReading)
