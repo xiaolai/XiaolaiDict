@@ -63,9 +63,8 @@ final class HistoryDrawerController {
 
     private(set) var isVisible = false
 
-    /// Where the status item is, so a click on it is left for the status item's own action. Without
-    /// this the click-away dismissal fires first and the toggle immediately reopens the drawer,
-    /// which the reader experiences as a drawer that cannot be closed from the menu bar.
+    /// The owned status button's live screen rectangle. Its clicks belong to its own action,
+    /// so repeated opening preserves the drawer's current session.
     var statusItemFrame: (@MainActor () -> CGRect?)?
 
     private let openAnimation = Animation.spring(response: 0.34, dampingFraction: 0.86)
@@ -238,19 +237,18 @@ final class HistoryDrawerController {
 
     // MARK: - Dismissal
 
+    func clickedOutside(at point: CGPoint) {
+        if let frame = statusItemFrame?(), frame.contains(point) { return }
+        hide()
+    }
+
     private func installClickAway() {
         removeClickAway()
         clickAway = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                // A click on the status item belongs to the status item. Letting the dismissal
-                // have it too is what made the spike need a 250 ms cooldown on top: the drawer
-                // closed here and the toggle reopened it microseconds later. Removing the click
-                // from this monitor removes the race rather than outrunning it.
-                if let frame = self.statusItemFrame?(), frame.contains(NSEvent.mouseLocation) { return }
-                self.hide()
+                self?.clickedOutside(at: NSEvent.mouseLocation)
             }
         }
     }
