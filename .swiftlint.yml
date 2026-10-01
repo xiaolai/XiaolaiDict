@@ -1,0 +1,22 @@
+# Correctness rules only. Style is the house's, set by the code and AGENTS.md, and SwiftLint's
+# default rules disagree with it in 712 places — noise that would bury the findings below.
+# A rule is added here when it finds bugs, never because it is on by default.
+#
+# An exception is made in place with `// swiftlint:disable:next <rule>` under a comment saying why
+# the code is right — never by widening `excluded`.
+
+included:
+  - Sources
+
+only_rules:
+  - discarded_notification_center_observer
+  - duplicate_enum_cases
+  - duplicate_imports
+  - duplicated_key_in_dictionary_literal
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - unhandled_throwing_task
+  - unowned_variable_capture
+  - weak_delegate

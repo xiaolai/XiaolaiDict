@@ -285,7 +285,7 @@ struct PhraseInventoryStoreTests {
             explanations: ["kick the bucket": [
                 PhraseExplanation(parentEntryID: "b1", blockID: "b1.01", definitions: ["die"])]])
         try store.write(inventory, for: "noad")
-        #expect(try store.read("noad") == inventory)
+        #expect(store.read("noad") == inventory)
         _ = scratch
     }
 
@@ -373,7 +373,7 @@ struct PhraseInventoryStoreTests {
     /// dictionary that genuinely has no phrases, and would never be re-read.
     @Test func nothingStoredIsNothingRatherThanEmpty() throws {
         let (store, scratch) = store()
-        #expect(try store.read("noad") == nil)
+        #expect(store.read("noad") == nil)
         _ = scratch
     }
 
@@ -382,7 +382,7 @@ struct PhraseInventoryStoreTests {
         let (store, scratch) = store()
         try FileManager.default.createDirectory(at: scratch.url, withIntermediateDirectories: true)
         try Data("phrases".utf8).write(to: store.file(for: "noad"))
-        #expect(try store.read("noad") == nil)
+        #expect(store.read("noad") == nil)
     }
 
     /// **The file is named by identifier, never by display name.** A name is localized, so a Chinese

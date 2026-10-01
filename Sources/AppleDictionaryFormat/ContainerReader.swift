@@ -302,15 +302,15 @@ public enum ContainerReader {
         // exactly the declared size" from "produced more and was cut off". With room for one more byte,
         // `written > expecting` is detectable and a chunk claiming the wrong size fails loudly.
         var output = Data(count: expecting + 1)
-        // **Both `baseAddress!` below are non-nil by the guards above**, which is the whole reason they
-        // are there: `baseAddress` is nil only for an *empty* buffer, `input.count >= 7` leaves `raw` at
-        // least one byte, and `expecting > 0` leaves `output` at least two.
+        // **Both base addresses below are non-nil by the guards above**: `baseAddress` is nil only for
+        // an *empty* buffer, `input.count >= 7` leaves `raw` at least one byte, and `expecting > 0`
+        // leaves `output` at least two. Were that ever wrong, writing nothing throws "did not
+        // decompress" below — a bad chunk, not a trap in the reader's process.
         let written: Int = raw.withUnsafeBytes { source in
             output.withUnsafeMutableBytes { destination in
-                compression_decode_buffer(
-                    destination.bindMemory(to: UInt8.self).baseAddress!, expecting + 1,
-                    source.bindMemory(to: UInt8.self).baseAddress!, raw.count,
-                    nil, COMPRESSION_ZLIB)
+                guard let into = destination.bindMemory(to: UInt8.self).baseAddress,
+                      let from = source.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(into, expecting + 1, from, raw.count, nil, COMPRESSION_ZLIB)
             }
         }
         guard written > 0 else { throw Failure.badChunk("chunk did not decompress") }

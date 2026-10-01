@@ -132,3 +132,10 @@ let package = Package(
         .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
     ]
 )
+
+// **A warning is an error in every target of this package, and only this package.** Set here, after
+// the list, so a target added later is covered without anyone remembering to. Not
+// `-Xswiftc -warnings-as-errors`: that reaches the MLX dependencies too, whose warnings are not ours.
+for target in package.targets {
+    target.swiftSettings = (target.swiftSettings ?? []) + [.treatAllWarnings(as: .error)]
+}

@@ -82,7 +82,9 @@ public enum Speech {
         // the block simply never ran, and the first version of this went green only because the
         // assertion was the one thing that noticed. It also assumed macOS posts on the main thread,
         // which nothing documents. Running wherever the post lands and hopping deliberately is true
-        // on both counts.
+        // on both counts. The observer is never removed: `watching` makes it one per process, and it
+        // is wanted for as long as the process runs.
+        // swiftlint:disable:next discarded_notification_center_observer
         NotificationCenter.default.addObserver(
             forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
             object: nil, queue: nil
