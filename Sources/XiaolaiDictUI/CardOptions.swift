@@ -25,6 +25,8 @@ public enum WordEmphasis: String, CaseIterable, Codable, Sendable {
 
 /// The reader's choices about what a card shows, as opposed to how large it is.
 struct CardOptions: Equatable, Sendable {
+    /// Opt in to a short preview; the existing reading card remains the default.
+    var usesCompactLookup = false
     /// **Off by default.** The time a word was looked up is a fact the ledger keeps and the reader
     /// almost never wants: the day is already the group the card sits in, and to the minute is
     /// precision nobody reviews by. It is a switch rather than a deletion because it is occasionally
@@ -85,6 +87,17 @@ public enum SystemDictionary {
 /// against `d:pos` without a mapping table; localising *that* would make a stored value depend on
 /// the machine's language, which is the kind of thing that only ever breaks for someone else.
 enum PartOfSpeechLabel {
+    /// Familiar dictionary abbreviations keep each quick meaning on a short line.
+    static func compact(_ stored: String?) -> String? {
+        switch stored {
+        case "noun": "n."
+        case "verb", "transitive verb", "intransitive verb": "v."
+        case "adjective": "adj."
+        case "adverb": "adv."
+        default: stored
+        }
+    }
+
     static func reader(_ stored: String?) -> String? {
         switch stored {
         case "noun": return String(localized: "noun")

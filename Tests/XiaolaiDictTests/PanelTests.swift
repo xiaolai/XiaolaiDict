@@ -110,7 +110,11 @@ struct PanelPlacementTests {
             #expect(opening.width == scale.space.cardWidth)
             #expect(opening.width >= scale.space.cardMinWidth + scale.shadow.glowBefore + scale.shadow.glowAfter,
                     "at \(size) the window is narrower than the least its card can be")
-            #expect(PanelContent.Kind.lookup.minimumSize(for: size).width == scale.space.cardMinWidth)
+            // The window's floor is the narrowest card it may hold, which is the compact preview's: a floor at the
+            // reading card's minimum would leave the preview in a window wider than itself. The reading card's own
+            // minimum is the card's to enforce, and `opening.width` above is what holds the two together.
+            #expect(PanelContent.Kind.lookup.minimumSize(for: size).width == scale.space.lookupMinWidth)
+            #expect(scale.space.lookupMinWidth <= scale.space.cardMinWidth)
         }
         let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
         panel.textSize = { .huge }

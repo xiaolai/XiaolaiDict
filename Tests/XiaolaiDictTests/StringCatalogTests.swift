@@ -104,6 +104,8 @@ struct StringCatalogTests {
             + "that is not listed under it — the same failure `PrivacySettings` localizes its "
             + "paths to avoid, arrived at from the opposite direction",
         "Serena": "a voice's name, for the reason given under Ava",
+        "transitive verb": "a dictionary part-of-speech identifier mapped to the compact label v.",
+        "intransitive verb": "a dictionary part-of-speech identifier mapped to the compact label v.",
     ]
 
     /// Every literal in a file, with what preceded it, and continuations rejoined.

@@ -50,6 +50,9 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     case listLayout, gridLayout, inspector
     // The lookup card and a history card.
     case sayAloud, openInDictionary, copy, pinNote, unpinNote, translate, explain
+    // The compact preview has no other way out: Escape and a click outside both close the panel, and a reader
+    // who has neither to hand needs a button that does.
+    case closeLookup, fewerDetails
     // A history card in the Reading History panel, and a day's pile of them there.
     case showInLibrary, showAll, showLess
     // Not actions: the mark in front of a caveat, and of a failure. Never a button's symbol.
@@ -121,6 +124,10 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .showAll: "chevron.down"
         case .showLess: "chevron.up"
         case .openInDictionary: "character.book.closed"
+        // The platform's Close. It is free for this now that the grade *Forgot* no longer borrows it.
+        case .closeLookup: "xmark"
+        // Back from the full card to the compact preview: a step back, not a disclosure.
+        case .fewerDetails: "chevron.left"
         // Apple's name for Copy since the symbols were redrawn; `doc.on.doc` is its old alias.
         case .copy: "document.on.document"
         case .pinNote: "pin"
@@ -210,6 +217,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .showAll: "Show All"
         case .showLess: "Show Less"
         case .openInDictionary: "Open in Dictionary"
+        case .closeLookup: "Close Lookup"
+        case .fewerDetails: "Fewer Details"
         case .copy: "Copy"
         case .pinNote: "Pin as a Note"
         case .unpinNote: "Unpin"

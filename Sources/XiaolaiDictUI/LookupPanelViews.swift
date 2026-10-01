@@ -77,6 +77,9 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     /// The word's own colour, which the card's second shadow is thrown in. Nil for a message,
     /// which is about no word.
     let accent: Color?
+    /// Whether this is the compact preview: the quick card's own, shorter measure and rounder corner. The
+    /// expanded card and every message use the reading card's.
+    let compact: Bool
     private let scrolling: Scrolling
     private let bar: Bar
     /// How tall the status row is drawn, so the scrolling region can give that much up.
@@ -84,8 +87,9 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     /// How tall the pinned bar is drawn, which the window fit has to be told — see `contentCap`.
     @State private var barHeight: CGFloat = 0
 
-    init(accent: Color?, @ViewBuilder scrolling: () -> Scrolling, @ViewBuilder bar: () -> Bar) {
+    init(accent: Color?, compact: Bool = false, @ViewBuilder scrolling: () -> Scrolling, @ViewBuilder bar: () -> Bar) {
         self.accent = accent
+        self.compact = compact
         self.scrolling = scrolling()
         self.bar = bar()
     }
@@ -138,9 +142,9 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
         }
         .frame(
-            minWidth: scale.space.cardMinWidth,
-            idealWidth: scale.space.cardWidth,
-            maxWidth: scale.space.cardMaxWidth,
+            minWidth: compact ? scale.space.lookupMinWidth : scale.space.cardMinWidth,
+            idealWidth: compact ? scale.space.lookupWidth : scale.space.cardWidth,
+            maxWidth: compact ? scale.space.lookupWidth : scale.space.cardMaxWidth,
             alignment: .leading)
         // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
         // the surface, the edge and the lift are the card's own — and they live here, in the
@@ -197,7 +201,7 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: scale.radius.panel, style: .continuous)
+        RoundedRectangle(cornerRadius: compact ? scale.radius.lookup : scale.radius.panel, style: .continuous)
     }
 }
 
@@ -491,7 +495,17 @@ private struct OpenDictionarySettingsKey: EnvironmentKey {
     public static let defaultValue: @MainActor () -> Void = {}
 }
 
+private struct CloseLookupKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
 extension EnvironmentValues {
+    /// The close button takes the same path as Escape and clicking outside the card.
+    public var closeLookup: @MainActor () -> Void {
+        get { self[CloseLookupKey.self] }
+        set { self[CloseLookupKey.self] = newValue }
+    }
+
     /// Settings, on its Dictionary pane, **with the dictionary discovery its destination depends on
     /// already started.** Nothing asks the service until a menu is opened, so a route that opened the
     /// pane directly could leave it reading "Asking the dictionary service…" for good — the app's own

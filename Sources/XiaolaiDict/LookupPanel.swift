@@ -529,6 +529,8 @@ private struct LookupCardWiring: ViewModifier {
                 case .undo: recorder?.undoDiscard(request: request)
                 }
             }
+            // The close button takes the same path as Escape and a click outside the card.
+            .environment(\.closeLookup) { [controller] in controller.close() }
             .environment(\.pinNote) { [controller] note in
                 controller.notes.pin(note, near: controller.lastPointer)
             }

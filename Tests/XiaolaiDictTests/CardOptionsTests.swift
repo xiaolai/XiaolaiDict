@@ -10,6 +10,17 @@ import XiaolaiDictTestSupport
 
 /// What a card shows, and how it marks the word.
 struct CardOptionsTests {
+    @MainActor
+    @Test func compactLookupIsOptInAndSurvivesRelaunchAndDisabling() {
+        let defaults = TemporaryDefaults.suite()
+        let first = Appearance(store: AppearanceStore(defaults: defaults))
+        #expect(!first.usesCompactLookup)
+        first.usesCompactLookup = true
+        let reopened = Appearance(store: AppearanceStore(defaults: defaults))
+        #expect(reopened.cardOptions.usesCompactLookup)
+        reopened.usesCompactLookup = false
+        #expect(!Appearance(store: AppearanceStore(defaults: defaults)).usesCompactLookup)
+    }
     /// The time is a fact the ledger keeps and the reader almost never wants: the day is already
     /// the group the card sits in. Off unless asked for.
     /// Both are facts the card can show and the reader almost never wants: the day is already the

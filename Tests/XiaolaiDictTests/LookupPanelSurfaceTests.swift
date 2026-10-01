@@ -219,7 +219,9 @@ struct LookupPanelSurfaceWiringTests {
         // Both kinds of panel go through it.
         #expect(views.contains("PanelSurface(accent: nil"), "a message is not drawn on the surface")
         let card = try source("Sources/XiaolaiDictUI/LookupCardView.swift")
-        #expect(card.contains("PanelSurface(accent: accent"), "a lookup is not drawn on the surface")
+        // The compact preview is drawn on the same surface, with no glow and no pinned bar of its own.
+        #expect(card.contains("PanelSurface(accent: isCompact ? nil : accent, compact: isCompact)"),
+                "a lookup is not drawn on the surface")
     }
 
     /// **P3 — the footer is pinned, not scrolled.** Last in the scrolled stack, the dictionary

@@ -121,6 +121,11 @@ public enum Token {
     }
 
     enum Panel {
+        /// How many distinct meanings the compact preview lists, and how many lines each and the prose
+        /// fallback may take. Counts, not sizes: they do not grow with the reader's text.
+        static let compactMeaningLimit = 3
+        static let compactMeaningLines = 2
+        static let compactProseLines = 4
         /// A two-line answer with its sentence, roughly — **the size the window opens at, before its
         /// content has any say.** Wrong for a long answer and wrong for a short one, which is why
         /// `fitsItsContent(upTo:)` then moves the window to the height the card actually wants.

@@ -103,6 +103,8 @@ struct Scale: Equatable, Sendable {
     struct Text: Equatable, Sendable {
         /// A window's own title.
         let display: CGFloat
+        /// The prominent headword in the compact lookup.
+        let lookupWord: CGFloat
         /// A section or row title — and the drawer's header.
         let heading: CGFloat
         /// The word on a card. The one thing the eye should land on first.
@@ -137,6 +139,7 @@ struct Scale: Equatable, Sendable {
 
         init(em: CGFloat) {
             display = em * 1.36
+            lookupWord = em * 1.80
             heading = em * 1.18
             strong = em * 1.15
             body = em * 1.00
@@ -188,6 +191,9 @@ struct Scale: Equatable, Sendable {
         let cardWidth: CGFloat
         let cardMinWidth: CGFloat
         let cardMaxWidth: CGFloat
+        /// A quick lookup has a shorter measure than the expanded reading card.
+        let lookupWidth: CGFloat
+        let lookupMinWidth: CGFloat
 
         /// **How tall the card may grow before it scrolls instead.**
         ///
@@ -252,6 +258,8 @@ struct Scale: Equatable, Sendable {
             cardWidth = em * 33
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
+            lookupWidth = em * 25
+            lookupMinWidth = em * 23
             cardMaxHeight = em * 32
             panelScrollFloor = em * 2
             // **26 em, until that would leave the grid less than one whole card.** Measured against
@@ -280,10 +288,12 @@ struct Scale: Equatable, Sendable {
         let card: CGFloat
         /// A raised surface in a window, which is larger than a card and rounds a little more.
         let panel: CGFloat
+        let lookup: CGFloat
 
         init(em: CGFloat) {
             card = em * 0.90
             panel = em * 1.00
+            lookup = em * 1.50
         }
     }
 
@@ -348,6 +358,9 @@ extension EnvironmentValues {
 @Observable
 @MainActor
 public final class Appearance {
+    public var usesCompactLookup: Bool {
+        didSet { if usesCompactLookup != oldValue { store.save(usesCompactLookup: usesCompactLookup) } }
+    }
     public var textSize: TextSize {
         didSet { if textSize != oldValue { store.save(textSize) } }
     }
@@ -384,6 +397,7 @@ public final class Appearance {
     /// with it, past the suite the app was given (audit-fix round 1). Naming it is the check.
     public init(store: AppearanceStore) {
         self.store = store
+        usesCompactLookup = store.loadUsesCompactLookup()
         textSize = store.loadTextSize()
         showsTime = store.loadShowsTime()
         showsPlaceName = store.loadShowsPlaceName()
@@ -394,6 +408,7 @@ public final class Appearance {
     var scale: Scale { Scale(textSize) }
     var cardOptions: CardOptions {
         CardOptions(
+            usesCompactLookup: usesCompactLookup,
             showsTime: showsTime, showsPlaceName: showsPlaceName, emphasis: emphasis,
             warnsAboutScreenReading: warnsAboutScreenReading)
     }
@@ -401,6 +416,7 @@ public final class Appearance {
 
 /// The reader's appearance choices, kept across launches.
 public struct AppearanceStore {
+    static let usesCompactLookupKey = "UsesCompactLookup"
     static let defaultsKey = "TextSize"
     static let showsTimeKey = "CardShowsTime"
     static let warnsAboutScreenReadingKey = "WarnsAboutScreenReading"
@@ -431,6 +447,14 @@ public struct AppearanceStore {
     /// fresh install — the same app disagreeing with itself about what "default" means.
     func loadShowsTime() -> Bool {
         defaults.object(forKey: Self.showsTimeKey) as? Bool ?? CardOptions().showsTime
+    }
+
+    func loadUsesCompactLookup() -> Bool {
+        defaults.object(forKey: Self.usesCompactLookupKey) as? Bool ?? CardOptions().usesCompactLookup
+    }
+
+    func save(usesCompactLookup: Bool) {
+        defaults.set(usesCompactLookup, forKey: Self.usesCompactLookupKey)
     }
 
     func save(showsTime: Bool) {

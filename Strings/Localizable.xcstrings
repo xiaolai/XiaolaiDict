@@ -425,6 +425,9 @@
     "Clear Search" : {
 
     },
+    "Close Lookup" : {
+
+    },
     "Collapsed" : {
 
     },
@@ -571,6 +574,9 @@
     "Everything this Mac can do is in place. Anything here can still be changed." : {
 
     },
+    "Examples and details" : {
+
+    },
     "Expanded" : {
 
     },
@@ -599,6 +605,9 @@
 
     },
     "Fastest available" : {
+
+    },
+    "Fewer Details" : {
 
     },
     "Filters" : {
@@ -630,6 +639,9 @@
 
     },
     "From the dictionary" : {
+
+    },
+    "Full dictionary entry" : {
 
     },
     "General" : {
@@ -795,10 +807,16 @@
     "Marks the meaning you met, by its place in the entry" : {
       "comment" : "Under a dictionary's name: it can mark a meaning, by position rather than by the publisher's id"
     },
+    "Meaning in context is uncertain" : {
+
+    },
     "Menu Bar" : {
 
     },
     "Model" : {
+
+    },
+    "More meanings" : {
 
     },
     "Name the app a word was read in" : {
@@ -1030,11 +1048,17 @@
     "Open at login" : {
 
     },
+    "Open details to read this dictionary entry" : {
+
+    },
     "Open in Dictionary" : {
 
     },
     "Option" : {
       "comment" : "The Option key, in the hover key picker"
+    },
+    "Partial result" : {
+
     },
     "Password managers" : {
 
@@ -1374,6 +1398,12 @@
     "Show Reading History" : {
       "comment" : "VoiceOver action on the menu bar icon"
     },
+    "Show a short dictionary preview, with More meanings for the full reading card." : {
+
+    },
+    "Show all meanings, examples, and context" : {
+
+    },
     "Show as a grid" : {
 
     },
@@ -1597,6 +1627,9 @@
         }
       }
     },
+    "The sense you read could not be identified." : {
+
+    },
     "The sentence may be cut short" : {
 
     },
@@ -1752,6 +1785,9 @@
 
     },
     "Use %@" : {
+
+    },
+    "Use a compact lookup card" : {
 
     },
     "Use a different dictionary" : {
