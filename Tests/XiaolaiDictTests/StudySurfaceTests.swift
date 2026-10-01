@@ -41,6 +41,7 @@ struct StudySurfaceTests {
     /// allow-list is how a rule like this dies, and `everyExemptionIsRealAndEveryUnwiredMethodIsListed`
     /// fails in both directions so a name cannot rot here after it gains a caller.
     private static let exempt: [String: String] = [
+        "hasAnyNote(": "Compatibility existence query; effective collection surfaces use collectedCount.",
         "notes(": """
             The whole collection, decoded. **No longer a surface**: the app asks hasAnyNote for             existence and library(_:) for a page, both of which read what they need. What is left             is the tests' way of seeing every row after a write, and that is worth keeping.
             """,
@@ -51,7 +52,6 @@ struct StudySurfaceTests {
         "link(noteID:": "Joins a note to a lookup inside enrol, which is the only correct caller.",
         "locators(of:": "Evidence carried with a phrase note; read by the note's own equality.",
         "existingCard(of:": "Reads without creating; the timeline and the queue use it.",
-        "encounters(ofLookup:": "A lookup's senses, read by the reading projection.",
         "repeatedlyLapsed(": """
             R09's programmatic form. Its surface is the library's Struggling filter, which shares             lapseDaysExpression rather than the function — a page narrowed in Swift after the             LIMIT is a short page (ADR-0033).
             """,
@@ -64,7 +64,6 @@ struct StudySurfaceTests {
         "lookupIDs(fromSource:": "One source's lookups, counted by the erasure impact.",
         "remove(noteID:": "One note, removed by `removeFromStudy`.",
         "note(for:": "Looks a target up during `enroll`, to decide new against existing.",
-        "reading(ofLookup:": "One lookup's projection, read by the drawer and the timeline.",
         "interval(stability:": "The scheduler's own arithmetic.",
         "recall(elapsedDays:": "The forgetting curve; the scheduler's own arithmetic.",
         // Newly visible once `public static func` stopped being skipped: the erasure path's own

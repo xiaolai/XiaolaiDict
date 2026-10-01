@@ -1,6 +1,7 @@
 import DictionaryModel
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 @testable import XiaolaiDictCore
 
 /// **Recovery and erasure.** WI-006, and the gate P0 closes on.
@@ -251,6 +252,7 @@ struct StudyRecoveryTests {
         #expect(try ledger.history(of: "fine").count == 1)
         #expect(try ledger.recentLookups(since: now.addingTimeInterval(-60), limit: 10,
                                          studying: [.latin]).count == 1)
+        #expect(try ledger.readingArchive(ReadingArchiveQuery()).count == 1)
         // And enrolling fails loudly rather than pretending it worked.
         #expect(throws: (any Error).self) {
             try ledger.enroll(.entry(dictionary: "noad", entryID: "e1"), issuer: .live,
@@ -258,5 +260,87 @@ struct StudyRecoveryTests {
                               answer: StudyAnswer(origin: .reader, text: "x"), lookupID: id,
                               at: self.now)
         }
+    }
+
+    /// The schema-13 tables gone, so the ledger opens at `version` and upgrades.
+    private static let unwindThirteen = """
+        DROP TRIGGER remember_removed_target; DROP TRIGGER study_keep_new_note;
+        DROP TABLE removed_keep_targets; DROP TABLE lookup_disposition_receipts;
+        DROP TABLE lookup_disposition_operations; DROP TABLE study_keep_metadata; DROP TABLE keep_backfill;
+        DROP INDEX lookups_archive; ALTER TABLE lookups DROP COLUMN disposition;
+        ALTER TABLE lookups DROP COLUMN disposition_revision; ALTER TABLE lookups DROP COLUMN primary_dictionary;
+        ALTER TABLE lookups DROP COLUMN keep_policy;
+        """
+
+    /// **An upgrade is not a study write the lookup path may depend on.** A ledger whose study tables are
+    /// gone must still open, record and show history; only study is unavailable. 12 reaches schema 13's
+    /// study half, 11 the `review_events` column added at 12. `survivingLinks` drops `study_notes` alone,
+    /// with foreign keys off, so its links, answer, card and tag are left pointing at nothing — the
+    /// damage the upgrade's foreign-key check must report rather than abort on.
+    @Test(arguments: [12, 11], [false, true])
+    func aledgerWithoutStudyTablesStillUpgradesForLookup(from version: Int, survivingLinks: Bool) throws {
+        let directory = TemporaryDirectory()
+        let path = directory.appending("ledger.sqlite").path
+        do {
+            let ledger = try Ledger(path: path)
+            let first = try ledger.record(LookupRecord(
+                surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
+                language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+                lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+            let note = try ledger.enroll(.entry(dictionary: "noad", entryID: "e1"), issuer: .live,
+                                         language: "en", chosenBy: nil,
+                                         answer: StudyAnswer(origin: .reader, text: "x"), lookupID: first, at: now)
+            try ledger.tag(noteID: note.id, "kept")
+            let organisation = version < 12
+                ? StudyMigrationTests.tablesCreated(by: Ledger.studyOrganisationSchema).map { "DROP TABLE \($0);" }
+                : []
+            // Below 12, `review_events` goes too: its `kind` column came with 12, and an 11 whose
+            // events are gone is the guarded step's case.
+            let study = survivingLinks
+                ? ["PRAGMA foreign_keys = OFF;", "DROP TABLE study_notes;"]
+                    + (version < 12 ? ["DROP TABLE review_events;"] : [])
+                : ["DROP TABLE review_events; DROP TABLE study_cards; DROP TABLE study_answers;",
+                   "DROP TABLE study_note_lookups; DROP TABLE study_locators; DROP TABLE study_notes;"]
+            try ledger.execute(([Self.unwindThirteen] + organisation + study
+                                + ["PRAGMA user_version = \(version);"]).joined(separator: "\n"))
+            if survivingLinks {
+                var orphans = 0
+                try ledger.run("SELECT COUNT(*) FROM study_note_lookups", bind: []) { orphans = $0.integer(0) }
+                #expect(orphans == 1, "positive control: a link survives its note")
+            }
+        }
+        let migrated = try Ledger(path: path)
+        let id = try migrated.recordForLearning(LookupRecord(
+            surface: "hold", lemma: "hold", context: "Hold on.", lemmaBasis: .tagger,
+            language: "en", contextRange: nil, place: ReadingPlace(bundleID: nil, name: nil),
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil),
+            with: nil, policy: .automatic, primary: "noad")
+        #expect(id > 0)
+        #expect(try migrated.recentLookups(since: now.addingTimeInterval(-60), limit: 10,
+                                           studying: [.latin]).count == 2)
+        #expect(try migrated.readingArchive(ReadingArchiveQuery()).count == 2)
+        _ = try migrated.changeDisposition(.discarded, lookups: [id], operation: UUID())
+        #expect(try migrated.readingArchive(ReadingArchiveQuery()).count == 1)
+    }
+
+    /// **The other half of the scope: lookup damage still stops the upgrade.** An encounter whose
+    /// lookup is gone is the lookup path's own integrity, and passing it would be the quiet default.
+    @Test func adanglingLookupReferenceStillAbortsTheUpgrade() throws {
+        let directory = TemporaryDirectory()
+        let path = directory.appending("ledger.sqlite").path
+        do {
+            let ledger = try Ledger(path: path)
+            try ledger.execute(Self.unwindThirteen + """
+                PRAGMA foreign_keys = OFF;
+                INSERT INTO sense_encounters (lookup_id, dictionary_id, dictionary_name, entry_id,
+                    sense_key_kind, entry_sense_count) VALUES (999, 'noad', 'NOAD', 'e', 'none', 1);
+                PRAGMA user_version = 12;
+                """)
+        }
+        #expect(throws: LedgerError.self) { _ = try Ledger(path: path) }
+        #expect(Ledger.studyTables.isSuperset(of: ["study_notes", "study_note_lookups", "review_events",
+                                                   "study_tags", "study_keep_metadata"]))
+        #expect(Ledger.studyTables.isDisjoint(with: ["lookups", "sense_encounters",
+                                                     "lookup_disposition_receipts", "keep_backfill"]))
     }
 }

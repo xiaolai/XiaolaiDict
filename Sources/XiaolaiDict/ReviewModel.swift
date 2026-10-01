@@ -43,10 +43,20 @@ final class ReviewModel {
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     private let primary: @MainActor () -> PrimaryDictionary
     private let clock: @MainActor () -> Date
+    /// What Done closes. Review is a pane of the Library window, so by default that window.
+    private let finish: @MainActor () -> Void
+    /// The primary dictionary the held sitting was drawn from. **Study state belongs to one
+    /// dictionary**, so a sitting kept across pane switches (ADR-0044) is not kept across a switch of
+    /// the primary — its cards are the old dictionary's.
+    private var sittingScope: String?
 
     init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
          primary: @escaping @MainActor () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
-         clock: @escaping @MainActor () -> Date = { .now }) {
+         clock: @escaping @MainActor () -> Date = { .now },
+         finish: @escaping @MainActor () -> Void = {
+             WindowActions.shared.dismissWindow(id: XiaolaiDictScene.libraryID)
+         }) {
+        self.finish = finish
         self.store = store
         self.primary = primary
         self.clock = clock
@@ -64,8 +74,10 @@ final class ReviewModel {
         isPractice = true
         do {
             let ledger = try await opening.value
+            let scope = primary().chosen
+            sittingScope = scope
             let cards = try await ledger.practisableCards(limit: Self.batchSize,
-                                                          dictionary: primary().chosen)
+                                                          dictionary: scope)
             guard !cards.isEmpty else {
                 session = nil
                 presentation = ReviewPresentation(stage: .empty(.nothingDue))
@@ -83,6 +95,16 @@ final class ReviewModel {
         }
     }
 
+    @ObservationIgnored private var resuming = false
+    /// Returns to the held sitting, or draws one where none is held — or where the reader has
+    /// switched the primary since it was drawn.
+    func resume() async {
+        guard session == nil || sittingScope != primary().chosen, !resuming else { return }
+        resuming = true
+        defer { resuming = false }
+        await start()
+    }
+
     func start() async {
         guard let opening = store() else { return }
         problem = nil
@@ -90,6 +112,7 @@ final class ReviewModel {
         do {
             let ledger = try await opening.value
             let scope = primary().chosen
+            sittingScope = scope
             let now = clock()
             studyDay = .standard
             let dayStart = studyDay.start(containing: now)
@@ -108,7 +131,13 @@ final class ReviewModel {
                     presentation = ReviewPresentation(stage: .empty(.heldBackUntilTomorrow(counts.heldBack)))
                     return
                 }
-                let any = try await ledger.anyNotes()
+                let pending = try await ledger.attentionCount(dictionary: scope)
+                if pending > 0 {
+                    session = nil
+                    presentation = ReviewPresentation(stage: .empty(.needsConfirmation(pending)))
+                    return
+                }
+                let any = try await ledger.anyNotes(dictionary: scope)
                 session = nil
                 presentation = ReviewPresentation(stage: .empty(any ? .nothingDue : .nothingEnrolled))
                 return
@@ -150,7 +179,11 @@ final class ReviewModel {
         case .practise:
             Task { await startPractice() }
         case .done:
-            WindowActions.shared.dismissWindow(id: XiaolaiDictScene.reviewID)
+            // **The sitting ends with it**, so the next visit draws a fresh batch — what reopening the
+            // Review window did before Review became a pane, and what a resumed finished summary
+            // would not.
+            session = nil
+            finish()
         }
     }
 
@@ -166,6 +199,7 @@ final class ReviewModel {
         do {
             let ledger = try await opening.value
             try await ledger.postpone(cardID: card.cardID, until: until)
+            LedgerChanges.shared.committed()
             // **For this attempt, not for whatever is current now.** Two presses during the write
             // both arrive here; the second finds a different card in front of the reader and is
             // refused, instead of advancing the sitting past a card nobody was shown.
@@ -269,6 +303,7 @@ final class ReviewModel {
                 try await opening.value.grade(cardID: current.cardID, grade, eventID: current.id,
                                               expectedRevision: current.revision, at: clock())
             }
+            LedgerChanges.shared.committed()
             committing = false
             self.session?.record(.graded(grade), for: attempt)
             await draw()
@@ -295,6 +330,7 @@ final class ReviewModel {
             case .graded:
                 let ledger = try await opening.value
                 try await ledger.undoLatestReview(ofCard: last.cardID, at: clock())
+                LedgerChanges.shared.committed()
                 restored = try await ledger.revision(ofCard: last.cardID)
             case .postponed:
                 // **Taking it back reaches the ledger too.** Undo reversed a grade durably and a
@@ -302,6 +338,7 @@ final class ReviewModel {
                 // hidden until tomorrow in every query behind it: the reader undid the action and
                 // it was still in force.
                 try await opening.value.postpone(cardID: last.cardID, until: nil)
+                LedgerChanges.shared.committed()
             case .skipped, .none:
                 break
             }
@@ -376,6 +413,6 @@ struct ReviewSceneView: View {
                     .opacity(0)
                     .accessibilityHidden(true)
             }
-            .task { await model.start() }
+            .task { await model.resume() }
     }
 }

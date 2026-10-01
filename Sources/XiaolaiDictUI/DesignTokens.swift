@@ -158,6 +158,8 @@ public enum Token {
     }
 
     enum Stroke {
+        /// A selection edge must remain distinct from the card’s hairline on a desktop display.
+        static let selection: CGFloat = 2
         /// One point. Not derived from the em: a hairline is a property of the display, and a
         /// border that grew with the type would stop being a hairline.
         static let hairline: CGFloat = 1

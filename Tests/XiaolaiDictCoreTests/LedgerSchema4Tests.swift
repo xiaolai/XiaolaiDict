@@ -113,7 +113,7 @@ struct LedgerSchema4Tests {
     /// 12: WI-007 — `review_events.kind` for practice, `study_tags`, and `study_ignored_lemmas`.
     /// `StudyOrganisationTests`.
     @Test func theSchemaIsTwelve() {
-        #expect(Ledger.schemaVersion == 12)
+        #expect(Ledger.schemaVersion == 13)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

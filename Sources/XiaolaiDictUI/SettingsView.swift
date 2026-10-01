@@ -86,6 +86,7 @@ public struct SettingsView: View {
     @State private var model: SettingsModel
     /// Optional so a preview can show the window without one. A preview of the permission rows
     /// should not have to build an `Appearance`.
+    private var keepPolicy: Binding<LookupKeepPolicy>?
     private var appearance: Appearance?
     private var hover: Binding<HoverPolicy>?
     private var hoverEnabled: Binding<Bool>?
@@ -116,6 +117,7 @@ public struct SettingsView: View {
 
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
+        keepPolicy: Binding<LookupKeepPolicy>? = nil,
         hover: Binding<HoverPolicy>? = nil, hoverEnabled: Binding<Bool>? = nil,
         dictionary: DictionaryChoice? = nil,
         shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
@@ -126,6 +128,7 @@ public struct SettingsView: View {
         refreshDictionaries: (() async -> Void)? = nil
     ) {
         _model = State(initialValue: model)
+        self.keepPolicy = keepPolicy
         self.appearance = appearance
         self.hover = hover
         self.hoverEnabled = hoverEnabled
@@ -258,7 +261,7 @@ public struct SettingsView: View {
                 Form { Text("This pane is not connected to the reader's settings.") }
                     .formStyle(.grouped)
             }
-        case .reading: ReadingPane(appearance: appearance, erase: erase, eraseAction: eraseAction)
+        case .reading: ReadingPane(appearance: appearance, keepPolicy: keepPolicy, erase: erase, eraseAction: eraseAction)
         case .lookup:
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
                        shortcut: shortcut, capture: model.shortcutCapture)

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import XiaolaiDictCore
@@ -59,6 +60,46 @@ struct HistoryDrawerTests {
         let geometry = drawer.model.geometry
         #expect(geometry != nil)
         #expect(geometry.map { neighbour.frame.cg.union($0.windowRect.cg) == neighbour.frame.cg } == true)
+    }
+
+    @Test func aWindowAttachedAfterOpeningUsesTheDockedFrame() throws {
+        let displays = Displays()
+        displays.screens = [wide, neighbour]
+        let drawer = controller(displays: displays, pointer: UpPoint(x: 3000, y: 700))
+        drawer.show()
+        let window = NSWindow(contentRect: CGRect(x: 500, y: 300, width: 428, height: 900),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        drawer.attach(window)
+        #expect(window.frame == drawer.placement)
+        #expect(window.frame.maxX == neighbour.frame.cg.maxX)
+    }
+
+    @Test func anotherWindowAttachmentDoesNotRetainTheFirstWindowsPosition() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        drawer.show()
+        for x in [100.0, 900.0] {
+            let window = NSWindow(contentRect: CGRect(x: x, y: 200, width: 428, height: 900),
+                                  styleMask: .borderless, backing: .buffered, defer: true)
+            drawer.attach(window)
+            #expect(window.frame == drawer.placement)
+        }
+    }
+
+    @Test func reopeningRepositionsARetainedHiddenWindow() {
+        let displays = Displays()
+        displays.screens = [wide]
+        let drawer = controller(displays: displays)
+        let window = NSWindow(contentRect: CGRect(x: 500, y: 300, width: 428, height: 900),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        drawer.show()
+        drawer.attach(window)
+        drawer.hide()
+        window.setFrameOrigin(CGPoint(x: 500, y: 300))
+        #expect(!window.isVisible)
+        drawer.show()
+        #expect(window.frame == drawer.placement)
     }
 
     /// With no display there is nothing to dock to. The drawer stays shut rather than being placed

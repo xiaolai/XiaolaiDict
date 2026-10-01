@@ -117,6 +117,7 @@ struct SpeakingVoiceSection: View {
 
 struct ReadingPane: View {
     var appearance: Appearance?
+    var keepPolicy: Binding<LookupKeepPolicy>? = nil
     /// The erase command, which lives here because it is about the reader's reading rather than
     /// about their cards. Nil where the pane is not connected — an instrument, or a preview.
     var erase: ErasePresentation?
@@ -129,6 +130,16 @@ struct ReadingPane: View {
             } else {
                 Section {
                     Text("This pane is not connected to the reader's settings.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let keepPolicy {
+                Section("Learning") {
+                    Picker("Keep lookups for learning", selection: keepPolicy) {
+                        Text("Automatically").tag(LookupKeepPolicy.automatic)
+                        Text("Only when I choose Keep").tag(LookupKeepPolicy.manual)
+                    }
+                    Text("Lookups enter History in both modes. Automatic keeping prepares meanings from your study dictionary; uncertain meanings need your confirmation before Review.")
                         .foregroundStyle(.secondary)
                 }
             }

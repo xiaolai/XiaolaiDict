@@ -88,14 +88,22 @@ struct MarkedSentenceTests {
         let views = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "Sources/XiaolaiDictUI")
-        let surfaces = ["LookupCardView.swift", "HistoryDrawerViews.swift"]
-        for name in surfaces {
+        // Each surface, and the call that reaches `MarkedSentence` from it. The drawer goes through
+        // `ReadingSentence`, the card the library shares, so the chain is checked a link at a time:
+        // the drawer asks `ReadingSentence` with the reader's emphasis, and `ReadingSentence` asks
+        // `MarkedSentence` with the emphasis it was given.
+        let surfaces = [
+            ("LookupCardView.swift", "MarkedSentence.text(", "emphasis: options.emphasis"),
+            ("HistoryDrawerViews.swift", "ReadingSentence(", "emphasis: options.emphasis"),
+            ("ReadingCardComponents.swift", "MarkedSentence.text(", "emphasis: emphasis"),
+        ]
+        for (name, marker, emphasis) in surfaces {
             // Thrown rather than defaulted: a surface that has been renamed must fail this test
             // loudly, not pass it by having nothing left to read.
             let source = try String(contentsOf: views.appending(path: name), encoding: .utf8)
-            #expect(source.contains("MarkedSentence.text("),
+            #expect(source.contains(marker),
                     "\(name) no longer marks the word through MarkedSentence")
-            #expect(source.contains("emphasis: options.emphasis"),
+            #expect(source.contains(emphasis),
                     "\(name) is not passing the reader's emphasis setting through")
         }
 

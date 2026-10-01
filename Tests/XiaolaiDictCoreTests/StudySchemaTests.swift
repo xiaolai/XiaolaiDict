@@ -321,6 +321,14 @@ struct StudyMigrationTests {
     private func windBack(to version: Int, at path: String) throws {
         let ledger = try Ledger(path: path)
         var statements: [String] = []
+        if version < 13 {
+            statements += ["DROP TRIGGER remember_removed_target;", "DROP TRIGGER study_keep_new_note;",
+                "DROP TABLE lookup_disposition_receipts;", "DROP TABLE lookup_disposition_operations;",
+                "DROP TABLE study_keep_metadata;", "DROP TABLE removed_keep_targets;", "DROP TABLE keep_backfill;",
+                "DROP INDEX lookups_archive;", "ALTER TABLE lookups DROP COLUMN disposition;",
+                "ALTER TABLE lookups DROP COLUMN disposition_revision;", "ALTER TABLE lookups DROP COLUMN primary_dictionary;",
+                "ALTER TABLE lookups DROP COLUMN keep_policy;"]
+        }
         if version < 12 {
             // **Read out of the schema, not repeated here.** This branch listed its tables by hand
             // and fell behind three times — each new table meant a migration test failing on

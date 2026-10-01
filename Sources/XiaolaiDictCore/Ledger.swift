@@ -9,6 +9,7 @@ import os
 public enum LookupResult: String, Sendable, CaseIterable {
     case found
     case notFound
+    case pending
 }
 
 /// What answered a lookup: the dictionary service with its rich entries, or — when it could not —
@@ -161,7 +162,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 12
+    public static let schemaVersion = 13
     /// A mistake in this file's own SQL has to reach the log whatever a caller does with the thrown
     /// error — see `ProjectionFault`. Nothing reader-facing is written here: `XiaolaiDictCore` carries
     /// no display text (ADR-0025).
@@ -581,7 +582,8 @@ public final class Ledger {
     /// review surface asking for the one reading a study note rests on. A second copy is a second
     /// reader of one rule — the shape that let `history()` read a `part_of_speech` its own SELECT never
     /// projected and answer nil for every row while passing every test.
-    static let readingProjection = """
+    static func readingProjection(withStudy: Bool) -> String {
+        """
             SELECT l.id, l.surface, l.lemma, l.context, l.looked_up_at, l.result,
                    l.context_range_location, l.context_range_length,
                    l.source_app, l.source_name, l.source_document, l.source_page,
@@ -603,7 +605,18 @@ public final class Ledger {
                    -- **Appended, never inserted.** Every reader of this projection is
                    -- positional, so a column added in the middle silently re-points all of
                    -- them. The tail is the only safe end.
-                   l.language
+                   l.language, l.disposition,
+                   -- The note this reading is kept under and readiness's facts about it, all off
+                   -- **one** association: the answer revealed beside "Confirm this meaning" must
+                   -- belong to the note that confirming reaches.
+                   -- And the encounter of *that note's* target, for the labels beside it: the
+                   -- newest encounter above can be an auxiliary tap, and a primary note's meaning
+                   -- drawn under another dictionary's name and sense is a misattribution.
+                   \(withStudy ? """
+                       kn.id, kn.confirmed_at, kn.target_kind, ka.is_usable, ka.text, ka.origin,
+                       ks.dictionary_name, ks.sense_block, ks.sense_ordinal, ks.entry_sense_count,
+                       ks.gloss, ks.chosen_by
+                       """ : "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL")
             FROM lookups l
             -- By id rather than by lookup_id, so a lookup with more than one encounter contributes
             -- one row and not several. Only the primary dictionary is recorded, so there should be
@@ -611,7 +624,73 @@ public final class Ledger {
             LEFT JOIN sense_encounters se ON se.id = (
                 SELECT id FROM sense_encounters WHERE lookup_id = l.id ORDER BY id DESC LIMIT 1
             )
+            \(withStudy ? """
+                LEFT JOIN study_notes kn ON kn.id = (
+                    SELECT note_id FROM study_note_lookups WHERE lookup_id = l.id
+                    ORDER BY recorded_at DESC, note_id DESC LIMIT 1)
+                LEFT JOIN study_answers ka ON ka.note_id = kn.id
+                -- The newest encounter in this reading that is the note's own target: its
+                -- dictionary and entry, and its sense key where the note is a sense — an entry
+                -- rung's encounter carries none it can key. No such encounter is no label, never
+                -- someone else's.
+                LEFT JOIN sense_encounters ks ON ks.id = (
+                    SELECT id FROM sense_encounters
+                    WHERE lookup_id = l.id AND dictionary_id = kn.dictionary AND entry_id = kn.entry_id
+                      AND ((kn.target_kind = 'sense' AND sense_key = kn.sense_key
+                            AND sense_key_kind = kn.sense_key_kind)
+                           OR (kn.target_kind = 'entry' AND (sense_key IS NULL OR sense_key_kind = 'none')))
+                    ORDER BY id DESC LIMIT 1)
+                """ : "")
         """
+    }
+
+    /// **Lookup integrity is a gate; study damage is a report.** A dangling reference in a lookup
+    /// table means the upgrade itself is wrong, and it aborts loudly. One in a study table is optional
+    /// storage already broken — a link left behind by a `study_notes` that is gone — and aborting on it
+    /// took the lookup path down with it, against ADR-0034. So it is logged, and study reports itself
+    /// unavailable where it is used.
+    ///
+    /// A table is study's when a study schema creates it, read off the schema constants, so a new
+    /// study table is covered without a list to update — and a table nobody classified is checked as
+    /// a lookup table, failing closed.
+    private func checkForeignKeysAfterMigrating() throws {
+        var lookupViolations: [String] = [], studyViolations = 0
+        try run("PRAGMA foreign_key_check", bind: []) { row in
+            let table = try row.text(0)
+            if Self.studyTables.contains(table) { studyViolations += 1 } else { lookupViolations.append(table) }
+        }
+        if studyViolations > 0 {
+            Self.log.error("study storage has \(studyViolations) dangling references; lookups upgraded regardless")
+        }
+        guard lookupViolations.isEmpty else {
+            throw LedgerError.corruptRow("foreign keys in \(Set(lookupViolations).sorted().joined(separator: ", "))")
+        }
+    }
+
+    /// Every table a study schema creates.
+    static let studyTables: Set<String> = Set(
+        [studySchema, studyAnswerSchema, studyCardSchema, studyOrganisationSchema, studyKeepingSchema]
+            .flatMap { schema in
+                schema.components(separatedBy: "CREATE TABLE ").dropFirst().map { rest in
+                    String(rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" })
+                }
+            })
+
+    /// Whether this database holds a table called `name`.
+    func hasTable(_ name: String) throws -> Bool {
+        var found = false
+        try run("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+                bind: [.text(name)]) { found = $0.integer(0) == 1 }
+        return found
+    }
+
+    /// Lookup remains usable when optional study storage is unavailable: the study columns read as
+    /// NULL — no note — rather than the reading failing (ADR-0034).
+    func availableReadingProjection() throws -> String {
+        var count = 0
+        try run("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('study_notes','study_note_lookups','study_answers')", bind:[]) { count = $0.integer(0) }
+        return Self.readingProjection(withStudy: count == 3)
+    }
 
     /// Misses come back too, marked. A lookup that found nothing is usually a typo or a stray
     /// selection, and telling that from a real gap is the reason the row was recorded at all.
@@ -638,8 +717,8 @@ public final class Ledger {
         let tagging = Lemmatizer.Pass()
         try run(
             """
-            \(Self.readingProjection)
-            WHERE l.looked_up_at >= ?1
+            \(try availableReadingProjection())
+            WHERE l.disposition = 'kept' AND l.looked_up_at >= ?1
               -- The reader's script filter, applied by SQLite so `LIMIT` still counts rows they
               -- will actually see. `IS NULL` first and deliberately: every row written before
               -- schema 7 has no script, and unknown is drawn rather than dropped.
@@ -682,7 +761,28 @@ public final class Ledger {
             at: Date(timeIntervalSince1970: row.real(4)),
             result: try row.result(5), quality: try row.quality(14),
             partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
-            senseAbstention: try row.abstention(24), language: row.optionalText(25))
+            senseAbstention: try row.abstention(24), language: row.optionalText(25),
+            disposition: row.optionalText(26).flatMap(LookupDisposition.init(rawValue:)) ?? .kept,
+            studyNoteID: row.optionalText(27).flatMap(UUID.init(uuidString:)),
+            studyStatus: row.isNull(27) ? nil : StudyReadiness.of(readinessFacts(from: row)),
+            studyAnswer: row.optionalText(31), studySense: try row.senseNote(33))
+    }
+
+    /// Readiness's facts about the note a reading is kept under — **facts, not a verdict**: the rule is
+    /// `StudyReadiness.of`, and a second spelling of it here disagreed with the library about every
+    /// entry rung the reader had answered in their own words.
+    private static func readinessFacts(from row: Row) -> StudyReadiness.Facts {
+        let kind = row.optionalText(29).flatMap(StudyTarget.Kind.init(rawValue:))
+        return StudyReadiness.Facts(
+            isConfirmed: !row.isNull(28),
+            hasUsableAnswer: !row.isNull(30) && row.integer(30) == 1,
+            answerIsPublishers: row.optionalText(32) == StudyAnswer.Origin.dictionary.rawValue,
+            isEntryRung: kind == .entry,
+            // Reached through this very reading's link, so a reading evidences it by construction.
+            hasReading: true,
+            // A reading cannot ask a dictionary anything, so it never claims a sense moved.
+            senseMoved: false,
+            needsReading: kind != .custom)
     }
 
     /// The reading a lookup was, for a surface that knows which lookup it wants.
@@ -704,7 +804,7 @@ public final class Ledger {
     public func reading(ofLookup id: Int) throws -> ReadingEntry? {
         var found: ReadingEntry?
         let tagging = Lemmatizer.Pass()
-        try run("\(Self.readingProjection)\nWHERE l.id = ?1", bind: [.integer(id)]) { row in
+        try run("\(try availableReadingProjection())\nWHERE l.id = ?1", bind: [.integer(id)]) { row in
             found = try Self.reading(from: row, tagging: tagging)
         }
         return found
@@ -906,7 +1006,10 @@ public final class Ledger {
                 // provenance is worse than an absent one because it cannot be told from a recorded one.
                 try execute("ALTER TABLE sense_encounters ADD COLUMN key_issuer TEXT;")
             }
-            if found == 8 {
+            // Every step that alters a study table asks whether it is there: one whose study tables are
+            // gone still upgrades for lookup, because a broken study system still looks words up
+            // (ADR-0034). The steps that *create* study tables need no guard.
+            if found == 8, try hasTable("study_notes") {
                 // **Schema 8 shipped `readiness` as a column and it should not have been one.** Every
                 // fact it rests on — an answer, a confirmation, whether any reading still evidences the
                 // note — changes somewhere else, so a stored value goes on claiming `ready` with nothing
@@ -929,7 +1032,7 @@ public final class Ledger {
                 // before there was one would be a first review they never sat.
                 try execute(Self.studyCardSchema)
             }
-            if found == 10 {
+            if found == 10, try hasTable("study_answers") {
                 // Schema 10's `study_answers` had SQL judging whether an answer was blank, with
                 // `trim()`, which removes ordinary spaces and nothing else. Swift's judgement is
                 // stored from 11 on, and the existing rows are re-judged by it here rather than by
@@ -945,7 +1048,7 @@ public final class Ledger {
                             bind: [.integer(usable ? 1 : 0), .text(id)]) { _ in }
                 }
             }
-            if found >= 10, found < 12 {
+            if found >= 10, found < 12, try hasTable("review_events") {
                 // **Only for a database that already has the table**, because a fresh one builds it
                 // from `studyCardSchema`, which declares `kind` — and adding it again is a
                 // duplicate-column error on every first launch. The same shape as the `found == 8`
@@ -956,6 +1059,11 @@ public final class Ledger {
                 // WI-007's tags: the reader's own labels, belonging to no dictionary.
                 try execute(Self.studyOrganisationSchema)
             }
+            if found < 13 {
+                try execute(Self.keepingSchema)
+                if try hasTable("study_notes") { try execute(Self.studyKeepingSchema) }
+            }
+            try checkForeignKeysAfterMigrating()
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")
         } catch {

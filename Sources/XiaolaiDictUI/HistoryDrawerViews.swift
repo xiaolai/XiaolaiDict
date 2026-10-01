@@ -139,6 +139,13 @@ struct HistoryDrawerSurface: View {
             }
         }
         .padding(scale.space.pad)
+        .overlay(alignment: .bottomLeading) {
+            if let receipt = model.discardedReceipt {
+                Button("Undo discarding \(receipt.affected) readings") { model.undoLastDiscard() }
+                    .font(.system(size: scale.text.micro))
+                    .padding(.horizontal, scale.space.padAcross)
+            }
+        }
     }
 
     @ViewBuilder
@@ -165,7 +172,7 @@ struct HistoryDrawerSurface: View {
                     ForEach(model.days) { day in
                         if day.isPiled {
                             DayPileView(
-                                day: day,
+                                day: day, model: model,
                                 expanded: Binding(
                                     get: { model.isExpanded(day) },
                                     set: { model.setExpanded($0, for: day) }))
@@ -250,7 +257,9 @@ struct TodayView: View {
                         RemovedCardView(entry: entry) { model.keep(entry) }
                     } else {
                         ReadingCardView(
-                            entry: entry, onRemove: model.map { m in { m.remove(entry) } })
+                            entry: entry, onRemove: model.map { m in { m.remove(entry) } },
+                            onKeep: model?.keepForLearning.map { keep in { keep(entry) } },
+                            onLibrary: model?.showInLibrary.map { show in { show(entry) } })
                     }
                 }
             }
@@ -261,6 +270,7 @@ struct TodayView: View {
 /// An earlier day: a header and a pile of that day's cards, fanning open on a click.
 struct DayPileView: View {
     let day: ReadingDay
+    var model: HistoryDrawerModel?
     @Binding var expanded: Bool
 
     @Environment(\.scale) private var scale
@@ -298,7 +308,10 @@ struct DayPileView: View {
             CardStackLayout(progress: expanded ? 1 : 0, pile: pile) {
                 // Reversed so the deepest card is drawn first and the newest sits on top.
                 ForEach(cards.reversed()) { card in
-                    ReadingCardView(entry: card.entry, layer: card.layer)
+                    ReadingCardView(entry: card.entry, layer: card.layer,
+                        onRemove: expanded ? model.map { m in { m.remove(card.entry) } } : nil,
+                        onKeep: expanded ? model?.keepForLearning.map { keep in { keep(card.entry) } } : nil,
+                        onLibrary: expanded ? model?.showInLibrary.map { show in { show(card.entry) } } : nil)
                 }
             }
             // Piled, the whole pile is one target. Fanned out, clicks belong to the cards.
@@ -388,6 +401,8 @@ struct ReadingCardView: View {
     var layer: CardLayer = .front
     /// Nil where removing is not offered — a buried card, or a preview of a card on its own.
     var onRemove: (() -> Void)?
+    var onKeep: (() -> Void)?
+    var onLibrary: (() -> Void)?
 
     @Environment(\.cardOptions) private var options
     @Environment(\.colorScheme) private var scheme
@@ -396,10 +411,6 @@ struct ReadingCardView: View {
     /// performs when they want it; a drawer that reopened with every answer already showing would
     /// be the C2 failure arrived at by a slower route.
     @State private var revealed = false
-
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: scale.radius.card, style: .continuous)
-    }
 
     var body: some View {
         details
@@ -435,21 +446,9 @@ struct ReadingCardView: View {
                 alignment: .topLeading)
             // Opaque, and deliberately not another material: the drawer around it is already
             // glass, and layering glass inside glass muddies both.
-            .background(shape.fill(CardSurface.fill(
-                for: scheme, hovering: hovering && layer.showsContent)))
-            // The whole edge carries the word's colour — `strokeBorder`, never `stroke`, so all of
-            // it lands inside the card. A stroke centres on its path and would hang half its width
-            // over the edge: measured at x=85–90 against a fill that began at 91.
-            .overlay(shape.strokeBorder(
-                CardSurface.border(for: entry, layer: layer, in: scheme),
-                lineWidth: Token.Stroke.hairline))
-            // Grouped first, so the card casts one shadow rather than the plate and the border
-            // each casting their own.
-            .compositingGroup()
-            .shadow(
-                color: .black.opacity(Token.Opacity.cardShadow),
-                radius: scale.shadow.cardRadius, y: scale.shadow.cardOffset)
-            .contentShape(shape)
+            .modifier(ReadingCardChrome(
+                accent: CardSurface.border(for: entry, layer: layer, in: scheme),
+                hovering: hovering && layer.showsContent))
             .onHover { hovering = $0 }
             .animation(.easeOut(duration: Token.Motion.hover), value: hovering)
             .accessibilityElement(children: .combine)
@@ -495,7 +494,7 @@ struct ReadingCardView: View {
                 Text(entry.lemma)
                     .font(.system(size: scale.text.strong, weight: .semibold))
                 if entry.times > 1 { timesRead }
-                if entry.result != .found { missBadge }
+                if entry.result == .notFound { missBadge }
                 Spacer(minLength: scale.space.inline)
                 // Revealed on hover: it is the one control here that destroys something, and a
                 // row of cards each showing a trash can reads as a list of things to delete.
@@ -505,6 +504,8 @@ struct ReadingCardView: View {
                         .accessibilityHidden(!hovering)
                 }
                 dictionaryButton
+                if let onKeep { Button("Keep for learning", action: onKeep).font(.system(size: scale.text.micro)) }
+                if let onLibrary { Button("Show in Library", action: onLibrary).font(.system(size: scale.text.micro)) }
             }
             HStack(spacing: scale.space.inline) {
                 if let partOfSpeech = PartOfSpeechLabel.reader(entry.partOfSpeech) {
@@ -553,14 +554,9 @@ struct ReadingCardView: View {
     }
 
     private var speakButton: some View {
-        IconButton(
-            title: "Say it aloud", symbol: "speaker.wave.2",
-            help: Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence),
-            size: scale.text.small
-        ) {
-            Speech.say(entry.surface, in: entry.sentence)
-        }
-        .foregroundStyle(.tertiary)
+        ReadingPronunciation(word: entry.surface, sentence: entry.sentence,
+                             help: Speech.sayItAloudHelp(for: entry.surface, in: entry.sentence),
+                             say: { Speech.say(entry.surface, in: entry.sentence) })
     }
 
     /// No confirmation dialog. The reason a reader reaches for this is a word they did not mean
@@ -572,7 +568,7 @@ struct ReadingCardView: View {
     /// platform both know what kind of button this is.
     private func removeButton(_ remove: @escaping () -> Void) -> some View {
         IconButton(
-            title: "Remove from history", symbol: "trash",
+            title: "Discard this reading", symbol: "archivebox",
             size: scale.text.small, role: .destructive, action: remove)
             .foregroundStyle(.tertiary)
     }
@@ -591,12 +587,9 @@ struct ReadingCardView: View {
     /// it does not — the first that fits, chosen at the card's width. Where a window cut the start
     /// off, the whole sentence is one hover away: it is still the reader's own, and never a gloss.
     private var sentenceLine: some View {
-        SentenceWindowText(
-            windows: SentenceExcerpt.windows(sentence: entry.sentence, marks: entry.markedRanges),
-            fullSentence: entry.sentence,
-            style: sentence(in:))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        ReadingSentence(sentence: entry.sentence, ranges: entry.markedRanges,
+                        accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary,
+                        emphasis: options.emphasis, truncated: entry.cue == .truncatedSentence)
     }
 
     /// Shown only because the reader asked. Set apart from the sentence so it cannot be mistaken
@@ -675,23 +668,6 @@ struct ReadingCardView: View {
     /// The sentence with the word the reader looked up picked out, so the card reads as the cue it
     /// is rather than as a line of prose — and, where the capture ran out before the sentence did,
     /// an ellipsis saying so rather than an ending the reader never read.
-    private func sentence(in window: SentenceExcerpt) -> AttributedString {
-        // `markedRanges`, never `sentenceRange`: the captured range covers the surface as it was
-        // found, so emphasising it drew **temper**ed — the word broken in half — and a phrasal
-        // verb read as "took it over" needs two marks rather than one span over the pronoun.
-        // How a marked word *looks* is `MarkedSentence`'s, shared with the lookup card.
-        //
-        // **A window that contains the word, never the sentence's opening.** The line limit cuts
-        // from the end, so a long sentence with its word late showed two lines of the reader's
-        // text without the word they looked up. `SentenceWindowText` shows the tightest window it
-        // needs to, and no tighter.
-        var text = MarkedSentence.text(
-            window.text, marking: window.marks, size: scale.text.body,
-            emphasis: options.emphasis,
-            accent: ReadingPalette.accent(for: entry)?.color(in: scheme) ?? .primary)
-        if entry.cue == .truncatedSentence { text.append(AttributedString("…")) }
-        return text
-    }
 
     /// Where it was read, as precisely as the ledger knows — the page or document title where there
     /// is one, otherwise the app.

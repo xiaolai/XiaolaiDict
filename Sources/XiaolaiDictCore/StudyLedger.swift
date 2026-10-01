@@ -432,7 +432,7 @@ extension Ledger {
     @discardableResult
     public func enroll(_ target: StudyTarget, issuer: KeyIssuer, language: String,
                        chosenBy: SenseChoice?, answer: StudyAnswer?, lookupID: Int,
-                       at when: Date) throws -> StudyNote {
+                       at when: Date, explicitly: Bool = true) throws -> StudyNote {
         let existing = try note(for: target, issuer: issuer, language: language)
         let note = existing ?? StudyNote(
             target: target, issuer: issuer, language: language, enrollment: .active,
@@ -443,6 +443,7 @@ extension Ledger {
         try execute("SAVEPOINT enroll")
         do {
             if existing == nil { try add(note) }
+            if explicitly { try explicitlyKeep(noteID: note.id) }
             try link(noteID: note.id, toLookup: lookupID, at: when)
             // **The first answer stays.** A later save does not overwrite what the card already reveals:
             // rewriting an answer the reader has been reviewing against changes the question under them,

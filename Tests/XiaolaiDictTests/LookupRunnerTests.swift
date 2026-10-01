@@ -261,6 +261,22 @@ private struct AnswersWith: DictionaryTransport {
     func cancel(reason: String) {}
 }
 
+private struct AnswersWithPhrase: DictionaryTransport {
+    let entry: DictionaryEntry
+    let hit: PhraseHit
+    func send(_ request: ServiceRequest) async throws -> ServiceReply {
+        .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: []), phrase: .found([hit])))
+    }
+    func cancel(reason: String) {}
+}
+
+private struct Abstains: SenseSelecting {
+    func choose(
+        from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?
+    ) async -> SenseSelection { .abstained(.tooClose) }
+}
+
 /// A selector during which the reader presses the shortcut again.
 private final class SupersedingSelector: SenseSelecting, @unchecked Sendable {
     let panel: RecordingPanel
@@ -329,4 +345,70 @@ extension PanelContent {
         guard case .lookup(let presentation) = self else { return false }
         return presentation.outcome != nil
     }
+}
+
+@MainActor
+struct AutomaticKeepWiringTests {
+    @Test func displayedWaitingLookupStartsRecordingBeforeDictionaryReply() async throws {
+        let panel = RecordingPanel()
+        var received: [LookupRecording] = []
+        let runner = LookupRunner(client: DictionaryClient(deadline: .milliseconds(30),
+            connect: { _ in NeverReplies() }, fallback: { _ in nil }), panel: panel,
+            initialRecording: { row, _ in received.append(row) })
+        let selection = Selection(text: "fine", sentence: "A fine day.", rangeInSentence: nil,
+            quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())
+        let pending = Task { await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest()) }
+        try await panel.waitForShow()
+        #expect(received.count == 1)
+        #expect(received.first?.encounter == nil)
+        _ = await pending.value
+    }
+    @Test(arguments: [nil, "unavailable", "noad"] as [String?])
+    func effectivePrimaryUsesFrozenChoiceAndOnlyFallsBackWhenUnset(_ chosen: String?) async throws {
+        let panel = RecordingPanel()
+        let entry = DictionaryEntry(dictionary:DictionaryIdentity(name:"NOAD",identifier:"noad"),headword:"fine",lookedUp:"fine",html:"<p/>",
+            document:EntryDocument(isStyled:true,entryID:"e",homograph:nil,blocks:[SenseBlock(number:1,partOfSpeech:"noun",
+                senses:[DictionarySense(path:SensePath(block:1,ordinal:1),key:"s",keyKind:.publisher,definition:"meaning",text:"meaning")])]))
+        var preference = PrimaryDictionary(chosen:chosen)
+        var received: [LookupRecording] = []
+        let runner = LookupRunner(client:DictionaryClient(connect:{ _ in AnswersWith(entry:entry) }),panel:panel,
+            primary:{ preference },keepPolicy:{ .automatic },initialRecording:{ row,_ in
+                received.append(row); preference = PrimaryDictionary(chosen:"changed-in-flight")
+            })
+        let selection = Selection(text:"fine",sentence:"A fine day.",rangeInSentence:nil,
+            quality:.accessibility(.accessibilityTextRange,context:.complete),place:ReadingPlace())
+        let result = await runner.run(selection,near:.zero,requestedAt:.now,ticket:panel.newRequest())
+        #expect(result?.primaryDictionary == (chosen ?? "noad"))
+        #expect(received.last?.primaryDictionary == (chosen ?? "noad"))
+        #expect(result?.keepPolicy == .automatic)
+    }
+
+    /// **The early recording claims no more than the resolver will.** A word with one sense inside a
+    /// phrase the primary also defines is two readings; recorded before the selector answered as
+    /// `.onlySense`, automatic keeping confirmed the word's sense while the card was still deciding.
+    @Test func earlyRecordingBesideAPhraseClaimsNoSense() async throws {
+        let panel = RecordingPanel()
+        func entry(_ id: String, _ key: String) -> DictionaryEntry {
+            DictionaryEntry(dictionary: DictionaryIdentity(name: "NOAD", identifier: "noad"), headword: "fine",
+                lookedUp: "fine", html: "<p/>", document: EntryDocument(isStyled: true, entryID: id, homograph: nil,
+                    blocks: [SenseBlock(number: 1, partOfSpeech: "noun", senses: [DictionarySense(
+                        path: SensePath(block: 1, ordinal: 1), key: key, keyKind: .publisher,
+                        definition: "meaning", text: "meaning")])]))
+        }
+        let hit = PhraseHit(phrase: "fine print", location: 2, length: 10, separation: .none,
+                            meaning: PhraseMeaning(ownEntries: [entry("p", "p.1")]))
+        let word = entry("e", "s")
+        var received: [LookupRecording] = []
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in AnswersWithPhrase(entry: word, hit: hit) }), panel: panel,
+            selector: Abstains(), keepPolicy: { .automatic }, initialRecording: { row, _ in received.append(row) })
+        let selection = Selection(text: "fine", sentence: "A fine print day.", rangeInSentence: NSRange(location: 2, length: 4),
+            quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())
+        let result = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        let early = try #require(received.last?.encounter)
+        #expect(early.entryID == "e")
+        #expect(early.chosenBy == nil, "the word's only sense was recorded before the phrase was weighed")
+        #expect(result?.encounter?.chosenBy == nil)
+    }
+
 }

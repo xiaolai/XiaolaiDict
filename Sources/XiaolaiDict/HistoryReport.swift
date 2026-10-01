@@ -77,18 +77,35 @@ enum HistoryReport {
         app.toggleHistory()
         let released = await Instrument.settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
 
+        // A first-open test misses a retained window's stale frame. Simulate an old inward
+        // position while hidden, then exercise the same reopening path the status item uses.
+        var reopenedDocked = false
+        var reopenedFrame = CGRect.zero
+        var reopenedClosed = false
+        if let retained = NSApplication.shared.windows.first(where: { $0.title == "Reading History" }) {
+            retained.setFrameOrigin(CGPoint(x: frame.minX - frame.width, y: frame.minY))
+            app.toggleHistory()
+            _ = await Instrument.settle(until: appearance) { app.drawerIsDrawn && app.drawerModel.revealed }
+            reopenedFrame = app.drawerWindowFrame
+            reopenedDocked = app.drawerIsDrawn && expected.map { $0.windowRect.cg == reopenedFrame } == true
+            app.toggleHistory()
+            reopenedClosed = await Instrument.settle(until: .seconds(2)) { !app.drawerHoldsEscape && !app.drawerIsDrawn }
+        }
+
         let report: [String: Any] = [
             "bundle": Bundle.main.bundleIdentifier ?? "none",
             "insideBundle": Bundle.main.bundleIdentifier != nil,
             "screens": screens.count,
             "appeared": appeared,
             "dockedWhereAsked": docked,
+            "reopenedDockedWhereAsked": reopenedDocked,
+            "reopenedFrame": NSStringFromRect(reopenedFrame),
             "frame": NSStringFromRect(frame),
             // False is the passing value. True means the drawer stole focus from whatever the
             // reader was reading, which is the whole reason this report exists.
             "activatedTheApp": activatedUs,
             "claimedEscapeWhileShown": claimedEscape,
-            "releasedEscapeAfterClosing": released,
+            "releasedEscapeAfterClosing": released && reopenedClosed,
             "days": app.drawerModel.days.count,
             // **Three numbers, because they are three different things.** This published one, named
             // `entries`, and a card became one *reading* rather than one lookup — so the stage went
@@ -120,7 +137,8 @@ enum HistoryReport {
             "evidenceProblem": backdrop.evidenceProblem ?? "none",
         ]
         guard Instrument.write(report) else { return .internalError }
-        return appeared && drawn && docked && !activatedUs && claimedEscape && released ? .success : .failure
+        return appeared && drawn && docked && reopenedDocked && !activatedUs && claimedEscape
+            && released && reopenedClosed ? .success : .failure
     }
 
     // MARK: - What the drawer does to what is behind it

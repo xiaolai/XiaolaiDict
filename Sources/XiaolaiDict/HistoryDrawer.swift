@@ -50,9 +50,14 @@ final class HistoryDrawerController {
     /// claimed hot key instead.
     private var clickAway: Any?
 
+    /// The screen-parameters observer. A block-based observer is **not** removed when its owner
+    /// goes: `NotificationCenter` keeps it until `removeObserver`, which `deinit` does.
+    private var screenObserver: (any NSObjectProtocol)?
+
     /// Resolved when the drawer opens and held until it closes, so moving the pointer mid-session
     /// does not make the drawer hop displays.
     private var activeScreen: ScreenMetrics?
+    private weak var attachedWindow: NSWindow?
     /// The read in flight. Internal so a test can await it rather than sleeping.
     private(set) var reload: Task<Void, Never>?
 
@@ -81,7 +86,7 @@ final class HistoryDrawerController {
         self.clock = clock
         self.load = load
 
-        NotificationCenter.default.addObserver(
+        screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
@@ -148,7 +153,15 @@ final class HistoryDrawerController {
     /// `NSApplication!` and is nil in a process that has not made one — which is every unit test,
     /// where this trapped rather than answering "no window".
     private var window: NSWindow? {
-        NSApplication.shared.windows.first { $0.title == "Reading History" }
+        attachedWindow ?? NSApplication.shared.windows.first { $0.title == "Reading History" }
+    }
+
+    /// Placement is a scene default only once. Apply the docked frame to the actual window too,
+    /// including when SwiftUI attaches a replacement after the controller calculated its geometry.
+    func attach(_ window: NSWindow) {
+        attachedWindow = window
+        guard isVisible, let placement, window.frame != placement else { return }
+        window.setFrame(placement, display: true)
     }
 
     /// Whether the **compositor** has this window on screen — not the controller's bookkeeping,
@@ -170,7 +183,7 @@ final class HistoryDrawerController {
     // MARK: - Contents
 
     /// Re-reads the ledger. The read itself is off the main actor; only the result lands on it.
-    private func refresh() {
+    func refresh() {
         reload?.cancel()
         model.isLoading = true
         reload = Task { [weak self] in
@@ -200,9 +213,11 @@ final class HistoryDrawerController {
         let geometry = DrawerGeometry.make(layout, on: screen)
         model.geometry = geometry
         placement = geometry.windowRect.cg
-        // A scene already on screen is not re-placed by `defaultWindowPlacement`, so a relayout
-        // while it shows has to move the window itself.
-        if let window, window.isVisible { window.setFrame(geometry.windowRect.cg, display: true) }
+        // SwiftUI retains hidden scene windows and does not rerun defaultWindowPlacement on
+        // reopening. Position the retained window before it is ordered front as well.
+        if let window, window.frame != geometry.windowRect.cg {
+            window.setFrame(geometry.windowRect.cg, display: true)
+        }
     }
 
     /// Also called by the screen-parameters notification. Internal so the unplug path can be
@@ -243,6 +258,15 @@ final class HistoryDrawerController {
     private func removeClickAway() {
         if let clickAway { NSEvent.removeMonitor(clickAway) }
         clickAway = nil
+    }
+
+    /// `isolated` so it can reach both registrations: a nonisolated `deinit` cannot touch a
+    /// non-`Sendable` property. Neither the observer nor the click monitor is removed by AppKit when
+    /// this goes, and the weak captures that stop them retaining the controller are what stop anyone
+    /// noticing — the same lesson `LookupPanelController.deinit` records.
+    isolated deinit {
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        removeClickAway()
     }
 }
 

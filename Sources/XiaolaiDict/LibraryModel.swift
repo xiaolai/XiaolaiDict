@@ -16,16 +16,42 @@ import XiaolaiDictUI
 @MainActor
 @Observable
 final class LibraryModel {
+    private(set) var layout: LibraryLayout
+    private var archiveSelections: [LibraryPane: Set<Int>] = [:]
+    private var extendingArchive: Int?
+    /// How many pages of the archive the reader has opened. **A refresh re-reads all of them**:
+    /// every ledger change reloads the pane, and reloading one page dropped the older readings they
+    /// had paged to, and the selection with them. One again whenever the pane or the search changes.
+    private var archivePages = 1
+    private(set) var pane: LibraryPane = .history
+    private(set) var archive = ArchivePresentation()
+    private let defaults: UserDefaults
+    private var archiveRows: [ReadingEntry] = []
+    private var archiveSearch = ""
+    private var archiveGeneration = 0
+    private var archivePublishedGeneration = 0
+    private var archiveUndo: DispositionResult?
+    private var focusedLookup: Int?
+    private var imported = false
+    private(set) var reviewProblem: String?
+    private(set) var reviewCount = 0
+    private(set) var reviewHeldBack = 0
+    private(set) var reviewDictionary: String?
+    private let primaryName: @MainActor (String?) -> String?
+    private let primary: @MainActor () -> PrimaryDictionary
+    /// The scripts the reader studies, or nil for every script. **The setting the drawer reads**:
+    /// History is the reading history too, and the two must agree about what was read.
+    private let studying: @MainActor () -> Set<ProbeScript>?
     private(set) var presentation = LibraryPresentation(rows: [], total: 0)
     private var search = ""
     private var filter = LibraryPresentation.Filter.all
-    private var scriptFiltered = false
     /// One of the reader's own tags, or nil for all. Part of the query, never a filter on the page.
     private var tag: String?
     private var selection: Set<UUID> = []
     /// How many pages the reader has asked for. **Grown rather than offset**, so a card enrolled
     /// while they are reading does not shift a boundary underneath them.
     private var pages = 1
+    private var savedPageTask: Task<Void, Never>?
     private var exported: String?
     /// The last bulk pause or archive, while it can still be put back. **One level**: an undo that
     /// outlives the reader's memory of what it reverses is a worse control than none.
@@ -34,6 +60,7 @@ final class LibraryModel {
     /// `problem`**, which is about reading; this one is about writing, and both reach the same
     /// field on the presentation.
     private var problem: String?
+    private var retrySaved: (@MainActor () -> Void)?
     /// Which action is the latest. **Not the reload's generation**: a reload is about what is
     /// read and this is about what was written, and an action can outlive several reloads.
     private var actions = 0
@@ -82,8 +109,8 @@ final class LibraryModel {
     /// silently, which is worse than one that is disabled. C06 says a suggestion is *offered*,
     /// never enrolled: this hands the word to the lookup path and the reader decides from the
     /// card, exactly as if they had met it while reading.
+    private let reopen: @MainActor (ReadingEntry) -> Void
     private let lookUp: @MainActor (String) -> Void
-    private var scripts: Set<ProbeScript> = []
 
     /// How many rows one page holds. The library is paged rather than capped: a reader looking for
     /// something from March must be able to reach March.
@@ -93,7 +120,6 @@ final class LibraryModel {
     static let suggestionCount = 5
 
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
-    private let studyScripts: @MainActor () -> Set<ProbeScript>
     private let clock: @MainActor () -> Date
     /// Where an export is written. **A parameter, like the clock**, because a test that exercised
     /// the real path wrote into the reader's own Downloads folder and then deleted what it found
@@ -101,22 +127,204 @@ final class LibraryModel {
     private let exportDirectory: @MainActor () -> URL
 
     init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
-         studyScripts: @escaping @MainActor () -> Set<ProbeScript> = { HoverPolicyStore().load().scripts },
          clock: @escaping @MainActor () -> Date = { .now },
          exportDirectory: @escaping @MainActor () -> URL = {
              FileManager.default.homeDirectoryForCurrentUser.appending(path: "Downloads")
          },
-         lookUp: @escaping @MainActor (String) -> Void = { _ in }) {
+         lookUp: @escaping @MainActor (String) -> Void = { _ in },
+         reopen: @escaping @MainActor (ReadingEntry) -> Void = { _ in },
+         defaults: UserDefaults = .standard,
+         primary: @escaping @MainActor () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
+         primaryName: @escaping @MainActor (String?) -> String? = { _ in nil },
+         studying: @escaping @MainActor () -> Set<ProbeScript>? = { nil }) {
+        self.reopen = reopen
+        self.defaults = defaults
+        layout = defaults.string(forKey: "libraryLayout").flatMap(LibraryLayout.init(rawValue:)) ?? .grid
+        self.primary = primary
+        self.primaryName = primaryName
+        self.studying = studying
+        pane = defaults.string(forKey: "libraryPane").flatMap(LibraryPane.init(rawValue:)) ?? .history
         self.store = store
-        self.studyScripts = studyScripts
         self.clock = clock
         self.exportDirectory = exportDirectory
         self.lookUp = lookUp
     }
 
+    func setLayout(_ layout: LibraryLayout) {
+        self.layout = layout
+        defaults.set(layout.rawValue, forKey: "libraryLayout")
+    }
+
+    func show(_ pane: LibraryPane, lookup: Int? = nil) {
+        archiveGeneration += 1
+        archivePublishedGeneration = archiveGeneration
+        // **Another pane's rows go at once, not when the new ones arrive.** The controls change with
+        // the pane, so Discarded's Restore and permanent delete stood over History's kept readings —
+        // and their selection — for as long as the read took.
+        if pane != self.pane {
+            archiveRows = []
+            archivePages = 1
+            archive = ArchivePresentation(search: archiveSearch, undoCount: archiveUndo?.affected ?? 0)
+        }
+        self.pane = pane
+        defaults.set(pane.rawValue, forKey: "libraryPane")
+        focusedLookup = lookup
+        Task { await refreshPane() }
+    }
+    func refreshPane() async {
+        if pane == .saved { await reload() }
+        else if pane != .review { await reloadArchive() }
+        await refreshReviewCount()
+    }
+    func refreshReviewCount() async {
+        guard let opening = store() else { return }
+        do {
+            let ledger = try await opening.value
+            let scope = primary().chosen; let now = clock()
+            let counts = try await ledger.queueCounts(at: now, dictionary: scope,
+                newAllowance: ReviewModel.newCardsPerDay, dayStart: StudyDay.standard.start(containing: now))
+            reviewProblem = nil
+            reviewCount = counts.due; reviewHeldBack = counts.heldBack; reviewDictionary = primaryName(scope)
+        } catch { reviewProblem = error.localizedDescription; publishArchiveProblem(error.localizedDescription) }
+    }
+    func importLegacy() async {
+        guard !imported, LookupKeepPolicyStore(defaults: defaults).load() == .automatic, let opening = store() else { return }
+        imported = true
+        defer { imported = false }
+        do {
+            let ledger = try await opening.value
+            while !Task.isCancelled, LookupKeepPolicyStore(defaults: defaults).load() == .automatic {
+                let count = try await ledger.backfillKeptDrafts(limit: Self.pageSize)
+                if count == 0 { break }
+                LedgerChanges.shared.committed()
+                await Task.yield()
+            }
+        } catch { publishArchiveProblem(error.localizedDescription) }
+    }
+    private func archiveQuery(after: ReadingArchiveCursor? = nil, pages: Int = 1) -> ReadingArchiveQuery {
+        ReadingArchiveQuery(text: archiveSearch, disposition: pane == .discarded ? .discarded : .kept,
+            scripts: studying(), after: after, limit: pages * Self.pageSize)
+    }
+    func reloadArchive(extending: Bool = false) async {
+        guard let opening = store() else { return }
+        if extending, extendingArchive != nil { return }
+        archiveGeneration += 1; let mine = archiveGeneration
+        let requestedPane = pane
+        let requestedSearch = archiveSearch
+        let requestedFocus = focusedLookup
+        if extending { extendingArchive = mine }
+        defer { if extendingArchive == mine { extendingArchive = nil } }
+        let query = extending
+            ? archiveQuery(after: archiveRows.last.map { ReadingArchiveCursor(at: $0.at, id: $0.id) })
+            : archiveQuery(pages: archivePages)
+        do {
+            let ledger = try await opening.value
+            let rows = try await ledger.readingArchive(query)
+            var focus: ReadingEntry?
+            // **Asked through the pane's own query**, so a focused reading obeys every filter the list
+            // does — disposition and studied scripts alike, narrowed to the focus by id: it comes
+            // back exactly when the focus passes them.
+            if let id = requestedFocus, requestedSearch.isEmpty, let row = try await ledger.reading(ofLookup: id) {
+                var probe = query
+                probe.after = nil
+                probe.only = id
+                probe.limit = 1
+                if try await ledger.readingArchive(probe).first?.id == id { focus = row }
+            }
+            let total = try await ledger.readingArchiveCount(query)
+            guard mine >= archivePublishedGeneration, requestedPane == pane, requestedSearch == archiveSearch else { return }
+            archivePublishedGeneration = mine
+            if extending {
+                let existing = Set(archiveRows.map(\.id))
+                archiveRows += rows.filter { !existing.contains($0.id) }
+                archivePages += 1
+            } else { archiveRows = rows }
+            let shown = focus.map { row in archiveRows.contains(where: { $0.id == row.id }) ? archiveRows : [row] + archiveRows } ?? archiveRows
+            let visible = Set(shown.map(\.id))
+            var selected = (archiveSelections[pane] ?? []).intersection(visible)
+            if let requestedFocus, visible.contains(requestedFocus) { selected = [requestedFocus] }
+            archiveSelections[pane] = selected
+            archive = ArchivePresentation(rows: shown, total: total, search: requestedSearch,
+                hasMore: archiveRows.count < total, undoCount: archiveUndo?.affected ?? 0,
+                focused: requestedFocus, selection: selected)
+        } catch {
+            guard mine >= archivePublishedGeneration, requestedPane == pane, requestedSearch == archiveSearch else { return }
+            publishArchiveProblem(error.localizedDescription)
+        }
+    }
+    private func publishArchiveProblem(_ problem: String) {
+        archive = ArchivePresentation(rows: archive.rows, total: archive.total, search: archiveSearch,
+            hasMore: archive.hasMore, problem: problem, undoCount: archiveUndo?.affected ?? 0,
+            focused: focusedLookup, selection: archiveSelections[pane] ?? [])
+    }
+    private var failedArchiveAction: ArchiveAction?
+    func actArchive(_ action: ArchiveAction) {
+        switch action {
+        case .retry: if let failedArchiveAction { actArchive(failedArchiveAction) } else { Task { await reloadArchive() } }
+        case .search(let text): archiveGeneration += 1; archivePublishedGeneration = archiveGeneration; focusedLookup = nil; archiveSearch = text; archivePages = 1; Task { await reloadArchive() }
+        case .select(let ids):
+            let selected = ids.intersection(Set(archive.rows.map(\.id)))
+            archiveSelections[pane] = selected
+            archive = ArchivePresentation(rows: archive.rows, total: archive.total, search: archive.search,
+                hasMore: archive.hasMore, problem: archive.problem, undoCount: archive.undoCount,
+                focused: archive.focused, selection: selected)
+        case .more: Task { await reloadArchive(extending: true) }
+        case .clarify(let id): if let row = archive.rows.first(where: { $0.id == id }) { reopen(row) }
+        default: runArchive(action)
+        }
+    }
+
+    /// A write, then what it changed: the commit is announced and the pane and the review count are
+    /// read again. A failure is kept for Retry and said on the pane.
+    private func runArchive(_ action: ArchiveAction) {
+        guard let opening = store() else { return }
+        Task {
+            do {
+                guard try await mutateArchive(action, in: try await opening.value) else { return }
+                failedArchiveAction = nil
+                LedgerChanges.shared.committed()
+                await reloadArchive()
+                await refreshReviewCount()
+            } catch {
+                failedArchiveAction = action
+                publishArchiveProblem(error.localizedDescription)
+            }
+        }
+    }
+
+    /// The ledger write an archive action asks for. **False where nothing was written** — a reading
+    /// with no evidence to keep, which is handed back to the reader to clarify instead.
+    private func mutateArchive(_ action: ArchiveAction, in ledger: LedgerStore) async throws -> Bool {
+        switch action {
+        case .confirm(let id): try await ledger.confirm(noteID: id, at: clock())
+        case .discard(let ids):
+            let receipt = try await ledger.changeDisposition(.discarded, lookups: ids, operation: UUID())
+            if receipt.affected > 0 { archiveUndo = receipt }
+        case .restore(let ids): _ = try await ledger.changeDisposition(.kept, lookups: ids, operation: UUID())
+        case .undo:
+            guard let receipt = archiveUndo else { break }
+            let result = try await ledger.undoDisposition(operation: receipt.operation)
+            archiveUndo = nil
+            if result.skipped > 0 { throw LedgerError.corruptRow("undo skipped newer dispositions: \(result.skipped)") }
+        case .keep(let id):
+            guard try await ledger.keepHistory(id) != nil else {
+                if let row = archive.rows.first(where: { $0.id == id }) { reopen(row) }
+                return false
+            }
+        case .erase(let ids):
+            let report = try await ledger.eraseReadings(ids)
+            if !report.isComplete { throw LedgerError.corruptRow("incomplete erasure: \(report.backupsLeft)") }
+        case .retry, .search, .select, .more, .clarify: break
+        }
+        return true
+    }
+
     func act(_ action: LibraryAction) {
         problem = nil
         switch action {
+        case .retry:
+            if let retrySaved { retrySaved() } else { Task { await reload() } }
+            return
         // Any change to what is being looked at starts the paging over: a page count carried
         // across a new search is a "show more" button that reveals rows from the old one.
         case .search(let text): search = text; pages = 1
@@ -130,7 +338,6 @@ final class LibraryModel {
             if value == .suggested || filter == .suggested { selection = [] }
             filter = value
             pages = 1
-        case .filterScripts(let on): scriptFiltered = on; pages = 1
         case .filterTag(let name): tag = name; pages = 1
         // **The one action that reads nothing.** Selecting writes nothing, so the rows, the
         // count, the answers, the retention scan and the tag vocabulary are all still true;
@@ -145,8 +352,12 @@ final class LibraryModel {
         // `pages` still governs what a *reload* re-reads, because a reload must show writes
         // that landed anywhere in what is on screen.
         case .showMore:
+            guard savedPageTask == nil else { return }
             pages += 1
-            Task { await extend() }
+            savedPageTask = Task {
+                await extend()
+                savedPageTask = nil
+            }
             return
         // **One transaction, like every other bulk action.** A loop of separately committed
         // writes leaves an arbitrary subset changed when one fails part-way, and the reader has
@@ -245,7 +456,6 @@ final class LibraryModel {
         let mine = generation
         do {
             let ledger = try await opening.value
-            scripts = studyScripts()
             let query = self.query()
             let rows = try await ledger.library(query)
             let total = try await ledger.libraryCount(query)
@@ -266,17 +476,13 @@ final class LibraryModel {
             let answers = try await ledger.answers(of: rows.map(\.id))
             // Only under the suggested filter: a list nobody is looking at is a query nobody
             // should pay for on every keystroke.
-            // **The controls on screen govern what is on screen.** Suggestions ignored the
-            // search box entirely and applied the study-scripts narrowing whether or not the
-            // toggle was on — so the two visible controls were quietly filtering the *library*
-            // rows behind this list while appearing to do nothing, and the toggle did the
-            // opposite of what it said.
+            // Search also narrows suggestions, before the visible limit.
             var suggested: [Ledger.Suggestion] = []
             if filter == .suggested {
                 let narrowing = search.trimmingCharacters(in: .whitespaces).lowercased()
                 let all = try await ledger.suggestions(
                     limit: Self.suggestionCount * 4, language: nil,
-                    studying: scriptFiltered ? scripts : [])
+                    studying: [])
                 suggested = Array(all.lazy
                     .filter { narrowing.isEmpty || $0.lemma.lowercased().contains(narrowing) }
                     .prefix(Self.suggestionCount))
@@ -307,10 +513,12 @@ final class LibraryModel {
             // screen otherwise, and the reader is owed the difference. Still only for the current
             // reload: an overtaken one's failure is not this screen's.
             guard mine == generation else { return }
-            reading = nil
-            presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
-                                               scriptFiltered: scriptFiltered,
-                                               problem: String(describing: error))
+            problem = String(describing: error)
+            if reading != nil { republish() }
+            else {
+                presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
+                                                   problem: problem)
+            }
         }
     }
 
@@ -357,9 +565,8 @@ final class LibraryModel {
             await inspect(try await opening.value, generation: mine)
         } catch {
             guard mine == generation else { return }
-            presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
-                                               scriptFiltered: scriptFiltered,
-                                               problem: String(describing: error))
+            problem = String(describing: error)
+            republish()
         }
     }
 
@@ -387,8 +594,7 @@ final class LibraryModel {
         let rows = reading.rows
         presentation = LibraryPresentation(
             rows: rows.map { Self.row($0, answer: reading.answers[$0.id]?.text ?? "", at: reading.at) },
-            total: reading.total, search: search, filter: filter, scriptFiltered: scriptFiltered,
-            selection: selection,
+            total: reading.total, search: search, filter: filter, selection: selection,
             // **Offered only when there is more.** The count is of everything that matched, so
             // a library of exactly one page must not show a button that does nothing.
             hasMore: reading.total > rows.count,
@@ -431,23 +637,26 @@ final class LibraryModel {
     /// the edit having thrown them out.
     private func apply(keepingSelection: Bool = false,
                        _ change: @escaping @Sendable (LedgerStore) async throws -> Void) {
+        let priorUndo = undoable
         undoable = nil
         actions += 1
+        let mine = actions
         guard let opening = store() else { return }
-        Task {
-            // **A write that did not happen is said, not dropped.** `try?` on both calls meant a
-            // failed archive, pause, tag or removal cleared the selection and redrew a list that
-            // looked exactly as if it had worked — the reader believing a change landed is worse
-            // than the change not landing.
-            var failure: String?
+        Task { [self] in
             do {
                 try await change(try await opening.value)
+                LedgerChanges.shared.committed()
+                guard mine == actions else { return }
+                retrySaved = nil
+                if !keepingSelection { selection = [] }
+                await reload()
             } catch {
-                failure = error.localizedDescription
+                guard mine == actions else { return }
+                undoable = priorUndo
+                problem = error.localizedDescription
+                retrySaved = { [weak self] in self?.apply(keepingSelection: keepingSelection, change) }
+                republish()
             }
-            if !keepingSelection { selection = [] }
-            await reload()
-            if let failure { problem = failure; republish() }
         }
     }
 
@@ -459,25 +668,27 @@ final class LibraryModel {
         _ ids: [UUID],
         _ change: @escaping @Sendable (LedgerStore, [UUID]) async throws -> Undo
     ) {
+        let priorUndo = undoable
         undoable = nil
         guard let opening = store(), !ids.isEmpty else { return }
-        // **This action's turn.** An earlier reversible task finishing after a later one had
-        // retired the undo reinstalled its own, stale record — pressing Undo then put rows back
-        // to a state two actions ago. Two overlapping ones could also publish in completion
-        // order rather than in the order the reader pressed them.
         actions += 1
         let mine = actions
-        Task {
-            var failure: String?
+        Task { [self] in
             do {
                 let recorded = try await change(try await opening.value, ids)
-                if mine == actions { undoable = recorded }
+                LedgerChanges.shared.committed()
+                guard mine == actions else { return }
+                undoable = recorded
+                retrySaved = nil
+                selection = []
+                await reload()
             } catch {
-                failure = error.localizedDescription
+                guard mine == actions else { return }
+                undoable = priorUndo
+                problem = error.localizedDescription
+                retrySaved = { [weak self] in self?.applyReversible(ids, change) }
+                republish()
             }
-            selection = []
-            await reload()
-            if let failure { problem = failure; republish() }
         }
     }
 
@@ -489,8 +700,7 @@ final class LibraryModel {
         guard let problem else { return }
         presentation = LibraryPresentation(
             rows: presentation.rows, total: presentation.total, search: presentation.search,
-            filter: presentation.filter, scriptFiltered: presentation.scriptFiltered,
-            selection: presentation.selection, hasMore: presentation.hasMore,
+            filter: presentation.filter, selection: presentation.selection, hasMore: presentation.hasMore,
             canConfirm: presentation.canConfirm, suggestions: presentation.suggestions,
             exported: presentation.exported,
             selectionIsPaused: presentation.selectionIsPaused,
@@ -553,7 +763,7 @@ final class LibraryModel {
         LibraryQuery(
             text: search,
             enrollment: filter == .archived ? [.archived] : nil,
-            scripts: scriptFiltered ? scripts : nil,
+
             tag: tag,
             state: {
                 switch filter {
@@ -572,7 +782,7 @@ final class LibraryModel {
     static func row(_ row: LibraryRow, answer: String,
                     at now: Date) -> LibraryPresentation.Row {
         LibraryPresentation.Row(
-            id: row.id, word: row.word, excerpt: row.excerpt, answer: answer,
+            id: row.id, word: row.word, excerpt: row.excerpt, marks: row.excerptMarks, answer: answer,
             status: status(of: row), due: due(of: row, at: now))
     }
 
@@ -639,9 +849,20 @@ final class LibraryModel {
 /// The Library window's content. A view, not scene-body code — see `ReviewSceneView`.
 struct LibrarySceneView: View {
     let model: LibraryModel
-
+    let review: ReviewModel
     var body: some View {
-        LibraryView(state: model.presentation) { model.act($0) }
-            .task { await model.reload() }
+        LearningLibraryView(pane: model.pane, saved: model.presentation, archive: model.archive,
+            layout: model.layout, chooseLayout: { model.setLayout($0) }, choose: { model.show($0) }, savedAction: { model.act($0) }, archiveAction: { model.actArchive($0) }) {
+            VStack {
+                if let failure = model.reviewProblem { Text(verbatim: failure).foregroundStyle(.orange) }
+                else { Text("Review today · \(model.reviewCount)") }
+                if let dictionary = model.reviewDictionary { Text(verbatim: dictionary).foregroundStyle(.secondary) }
+                if model.reviewHeldBack > 0 { Text("\(model.reviewHeldBack) new meanings are held until tomorrow.") }
+                ReviewSceneView(model: review)
+                Button("Find meanings needing confirmation") { model.show(.saved); model.act(.filter(.needsAttention)) }
+            }
+        }
+        .task { await model.refreshPane(); await model.importLegacy() }
+        .onChange(of: LedgerChanges.shared.revision) { _, _ in Task { await model.refreshPane() } }
     }
 }

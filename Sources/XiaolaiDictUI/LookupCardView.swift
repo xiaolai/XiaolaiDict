@@ -432,9 +432,6 @@ public struct LookupPanelContent: View {
     /// the sense, and only the translation noticed. Same shape as `TranslationPane`, arrived at the
     /// hard way.
     @State private var explanation: SentencePane?
-    /// Whether this card's enrol button has been pressed. Per card and never persisted: it says the
-    /// write was asked for, not that the ledger holds it.
-    @State private var enrolled = false
     /// The explanation in flight — **held, like the translation, rather than started and
     /// forgotten**. A bare task outlives the card that started it, and the answer it eventually
     /// writes lands on whatever card is there by then. Cancelling stops this side waiting; a
@@ -977,22 +974,19 @@ public struct LookupPanelContent: View {
     /// cannot rather than silently doing nothing: a dictionary that marks no senses can still be
     /// studied at the entry rung, but an entry with no id of its own cannot be named at all, and a
     /// control that refuses a click is a broken switch.
-    ///
-    /// The checkmark is this card's own `@State` and claims nothing about the ledger beyond the write
-    /// having been asked for — the same honesty the copy button's checkmark keeps.
     private func enrolButton(_ entry: DictionaryEntry) -> some View {
         let target = enrollable(entry)
         return IconButton(
-            title: enrolled ? "Added to study" : "Study this meaning",
-            symbol: enrolled ? "checkmark" : "rectangle.stack.badge.plus",
+            title: "Keep for learning",
+            symbol: "rectangle.stack.badge.plus",
             help: target == nil
                 ? Text("This dictionary cannot name this entry, so it cannot be studied")
                 : nil,
-            isEnabled: target != nil && !enrolled
+            isEnabled: target != nil
         ) {
             guard let target else { return }
             enrolSense(target)
-            enrolled = true
+            // Durable acknowledgement is drawn by the request-keyed keep status.
         }
         .foregroundStyle(.secondary)
     }
