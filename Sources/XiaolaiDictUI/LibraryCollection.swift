@@ -1,13 +1,32 @@
 import AppKit
 import SwiftUI
 
+/// How many columns the grid has and how wide a card in one is — decided by the width the grid is
+/// given, never chosen. Resizing the window, opening the inspector and changing the text size all
+/// move that width, so a count the reader picked would be one the window could not always hold.
 struct LibraryGridMetrics {
     let columns: Int
     let cardWidth: CGFloat
-    init(availableWidth: CGFloat, scale: Scale) {
+    /// `single` is list layout: one column the width of the pane, whatever would fit.
+    init(availableWidth: CGFloat, scale: Scale, single: Bool = false) {
         let width = max(0, availableWidth - scale.space.padAcross - scale.space.padAcross)
-        columns = max(1, Int((width + scale.space.stack) / (scale.space.cardMinWidth + scale.space.stack)))
+        let fitting = Int((width + scale.space.stack) / (scale.space.cardMinWidth + scale.space.stack))
+        columns = single ? 1 : min(Token.Library.maxColumns, max(1, fitting))
         cardWidth = max(0, (width - CGFloat(columns - 1) * scale.space.stack) / CGFloat(columns))
+    }
+
+    /// The rows as columns, dealt in turn: the first to the first column, the next to the second,
+    /// and round again.
+    ///
+    /// **In turn, not to whichever column is shortest.** The shortest-column rule packs tighter, but
+    /// it puts a card wherever the heights before it happened to leave room — so newest-to-oldest
+    /// stops reading across, and the arrow keys stop meaning anything. Dealt in turn, `index + 1` is
+    /// the card beside and `index + columns` the card below, which is the rule
+    /// `LibraryCollectionInteraction.move` already keeps.
+    func dealt<Row>(_ rows: [Row]) -> [[Row]] {
+        var dealt = Array(repeating: [Row](), count: columns)
+        for (index, row) in rows.enumerated() { dealt[index % columns].append(row) }
+        return dealt
     }
 }
 
@@ -62,27 +81,32 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
 
     var body: some View {
         GeometryReader { geometry in
-            let metrics = LibraryGridMetrics(availableWidth: geometry.size.width, scale: scale)
+            // **One arrangement, with list layout as its one-column case.** A `List` was the other
+            // branch, and it brought the system's own selection with it: a slab of accent colour
+            // behind the row and the row's text turned white, over a card that is white — and the
+            // pane's own selection running on the same click. One code path has one selection.
+            let metrics = LibraryGridMetrics(availableWidth: geometry.size.width, scale: scale, single: layout == .list)
             ScrollViewReader { proxy in
-                Group {
-                    if layout == .list {
-                        List(rows, selection: $selection) { item in
-                            cell(item).tag(item.id)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        }
-                        .listStyle(.inset)
-                    } else {
-                        ScrollView {
-                            LazyVGrid(columns: Array(repeating: GridItem(.fixed(metrics.cardWidth), spacing: scale.space.stack), count: metrics.columns), spacing: scale.space.stack) {
-                                ForEach(rows) { item in cell(item) }
+                ScrollView {
+                    // **Columns that each pack from the top, not rows.** A `LazyVGrid` gives a row the
+                    // height of its tallest card and centres the rest in it, so a card with no
+                    // sentence sat lower than its neighbour. Each column here is its own lazy stack,
+                    // and a short card simply ends sooner.
+                    HStack(alignment: .top, spacing: scale.space.stack) {
+                        ForEach(Array(metrics.dealt(rows).enumerated()), id: \.offset) { _, column in
+                            LazyVStack(spacing: scale.space.stack) {
+                                ForEach(column) { item in cell(item) }
                             }
-                            .padding(.horizontal, scale.space.padAcross)
-                            .padding(.vertical, scale.space.padDown)
+                            .frame(width: metrics.cardWidth)
                         }
                     }
+                    .padding(.horizontal, scale.space.padAcross)
+                    .padding(.vertical, scale.space.padDown)
                 }
                 .focusable().focused($hasFocus)
+                // The selected card's border says where the keyboard is; the system's ring round the
+                // whole column — a rectangle the height of the window — says it again, worse.
+                .focusEffectDisabled()
                 .onKeyPress(.leftArrow, phases: .down) { navigate(.left, columns: metrics.columns, modifiers: $0.modifiers) }
                 .onKeyPress(.rightArrow, phases: .down) { navigate(.right, columns: metrics.columns, modifiers: $0.modifiers) }
                 .onKeyPress(.upArrow, phases: .down) { navigate(.up, columns: metrics.columns, modifiers: $0.modifiers) }
@@ -109,7 +133,8 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
                 selection = interaction.click(item.id, ordered: rows.map(\.id), selection: selection,
                                               command: flags.contains(.command), shift: flags.contains(.shift))
             }
-            .contextMenu { menu(item) }
+            // A menu is read, so the actions it shares with the footer show their words here.
+            .contextMenu { menu(item).environment(\.iconButtonShowsTitle, true) }
             .id(item.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("\(identifier)-\(item.id)")
@@ -123,7 +148,7 @@ struct LibraryCollection<Row: Identifiable, Content: View, Menu: View>: View whe
     private func navigate(_ direction: LibraryNavigation, columns: Int, modifiers: EventModifiers) -> KeyPress.Result {
         guard hasFocus, !rows.isEmpty else { return .ignored }
         selection = interaction.move(direction, ordered: rows.map(\.id), selection: selection,
-                                     columns: layout == .list ? 1 : columns, extend: modifiers.contains(.shift))
+                                     columns: columns, extend: modifiers.contains(.shift))
         return .handled
     }
 }

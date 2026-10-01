@@ -853,13 +853,10 @@ struct LibrarySceneView: View {
     var body: some View {
         LearningLibraryView(pane: model.pane, saved: model.presentation, archive: model.archive,
             layout: model.layout, chooseLayout: { model.setLayout($0) }, choose: { model.show($0) }, savedAction: { model.act($0) }, archiveAction: { model.actArchive($0) }) {
-            VStack {
-                if let failure = model.reviewProblem { Text(verbatim: failure).foregroundStyle(.orange) }
-                else { Text("Review today · \(model.reviewCount)") }
-                if let dictionary = model.reviewDictionary { Text(verbatim: dictionary).foregroundStyle(.secondary) }
-                if model.reviewHeldBack > 0 { Text("\(model.reviewHeldBack) new meanings are held until tomorrow.") }
+            LibraryReviewPane(due: model.reviewCount, dictionary: model.reviewDictionary,
+                              problem: model.reviewProblem, heldBack: model.reviewHeldBack,
+                              findUnconfirmed: { model.show(.saved); model.act(.filter(.needsAttention)) }) {
                 ReviewSceneView(model: review)
-                Button("Find meanings needing confirmation") { model.show(.saved); model.act(.filter(.needsAttention)) }
             }
         }
         .task { await model.refreshPane(); await model.importLegacy() }

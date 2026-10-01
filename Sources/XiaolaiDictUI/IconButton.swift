@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// True inside a menu, where a row has to be read: an `IconButton` there shows its title beside
+    /// its icon. Everywhere else it is the icon alone.
+    @Entry var iconButtonShowsTitle = false
+}
+
 /// **An icon-only control that is named and can be hit.** One component, because these were two
 /// properties everybody had to remember and seven of eight call sites did not.
 ///
@@ -27,12 +33,17 @@ import SwiftUI
 /// translated.
 struct IconButton: View {
     @Environment(\.scale) private var scale
+    @Environment(\.iconButtonShowsTitle) private var showsTitle
     let title: LocalizedStringKey
     let symbol: String
     /// Where the tooltip says more than the name does — the voice a word will be spoken in, why a
     /// control is refusing. Nil where the name is the whole story, and then the name is the tooltip,
     /// so a pointer still gets an answer.
     var help: Text?
+    /// What pressing it will mean, said after the name: "Skip — Still due today…". For a button
+    /// that wore its name as a label and kept this as its tooltip; as an icon it needs both, name
+    /// first, or the pointer is told the consequence of an action it has not been told the name of.
+    var hint: LocalizedStringKey?
     /// The type size the glyph is set at. `text.body` on the lookup card, `text.small` on a history
     /// card, which is why it is a parameter rather than a constant here.
     var size: CGFloat?
@@ -41,6 +52,23 @@ struct IconButton: View {
     let action: () -> Void
 
     var body: some View {
+        if showsTitle {
+            // **A menu row, which is read.** The actions a footer offers as icons are offered by the
+            // right-click menu too, from one builder, and a menu of bare glyphs is not a menu.
+            Button(role: role, action: action) { Label(title, systemImage: symbol) }
+                .disabled(!isEnabled)
+        } else {
+            icon
+        }
+    }
+
+    private var tooltip: Text {
+        if let help { return help }
+        guard let hint else { return Text(title) }
+        return Text("\(Text(title)) — \(Text(hint))")
+    }
+
+    private var icon: some View {
         Button(role: role, action: action) {
             Label(title, systemImage: symbol)
                 .labelStyle(.iconOnly)
@@ -54,7 +82,7 @@ struct IconButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .help(help ?? Text(title))
+        .help(tooltip)
     }
 }
 

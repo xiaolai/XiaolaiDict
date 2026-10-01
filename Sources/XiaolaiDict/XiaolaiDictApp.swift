@@ -397,18 +397,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// and one they are about to act in. "No panel may activate XiaolaiDict" governs the surfaces
     /// that appear while they are mid-sentence in another app. The launch-time open does **not**
     /// come through here — see `openSetupOnFirstLaunch` for why it must not ask to activate.
-    /// Opens the Review window and brings it forward.
-    ///
-    /// **`NSApplication.shared.activate()`, unlike the panel and the drawer**, which must never
-    /// activate the app. The reader chose this one from the menu and is about to type into it: a
-    /// window that opened behind their reading, with keyboard shortcuts that go to the app in front,
-    /// would be a review surface that cannot be reviewed in.
-    func showReview() {
-        log.notice("review: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
-        NSApplication.shared.activate()
-        libraryModel.show(.review)
-        WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
-    }
 
     /// Opens the Library and brings it forward — a window the reader chose, and types into.
     func showLibrary() {

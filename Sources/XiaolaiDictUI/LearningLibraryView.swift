@@ -40,6 +40,7 @@ public enum ArchiveAction: Sendable {
 /// One navigation and one detail area. Review never competes with a collection inspector.
 public struct LearningLibraryView<Review: View>: View {
     @Environment(\.scale) private var scale
+    @Environment(\.colorScheme) private var scheme
     let layout: LibraryLayout
     let chooseLayout: @MainActor (LibraryLayout) -> Void
     let pane: LibraryPane
@@ -97,9 +98,18 @@ public struct LearningLibraryView<Review: View>: View {
                 case .history, .discarded: archiveView
                 }
             }
-            .backgroundExtensionEffect()
+            // **The toolbar's background is the system's, and nothing here touches it.** Every pane's
+            // scroll view runs beneath the toolbar, and the scroll edge effect is what keeps the
+            // title legible over the cards passing under it. Hiding the toolbar's background to be
+            // rid of its edge took that with it, and the cards ran straight through the title —
+            // seen 2026-10-02. Apple's guidance is to remove custom effects from toolbars and split
+            // views and let the system decide (Adopting Liquid Glass).
+            //
+            // `backgroundExtensionEffect` stays gone: it mirrors and blurs the pane's edge into the
+            // sidebar, which suits a hero image and smears the top card's colour for a list.
         }
-        .navigationTitle("Library")
+        // The pane, not the window: the sidebar already says this is the Library.
+        .navigationTitle(pane.name)
         .confirmationDialog("Permanently delete \(erasePending.count) readings?", isPresented: Binding(
             get: { !erasePending.isEmpty }, set: { if !$0 { erasePending = [] } })) {
                 Button("Permanently delete reading", role: .destructive) {
@@ -111,44 +121,56 @@ public struct LearningLibraryView<Review: View>: View {
             }
     }
     private var archiveView: some View {
-        VStack(spacing: scale.space.tight) {
-            archiveStatus
-            HStack(alignment: .top, spacing: 0) {
-                if archive.rows.isEmpty { archiveEmpty } else { archiveCollection }
-                if let row = archive.inspector {
-                    Divider()
-                    ScrollView { archiveInspector(row) }
-                        .frame(width: scale.space.libraryInspectorWidth)
-                }
-            }
-            if !archive.selection.isEmpty {
-                HStack(spacing: scale.space.inline) {
-                    Text("\(archive.selection.count) selected")
-                    dispositionActions(archive.selectedLookupIDs)
-                }
-            }
-            if archive.hasMore { Button("Show more history") { archiveAction(.more) } }
-            Text("\(archive.total) reading encounters")
-                .font(.system(size: scale.text.micro)).foregroundStyle(.secondary)
+        Group {
+            if archive.rows.isEmpty { archiveEmpty } else { archiveCollection }
         }
+        // Shown while one reading is selected; closing it lets go of the selection, which is what
+        // its being open meant.
+        .inspector(isPresented: Binding(get: { archive.inspector != nil },
+                                        set: { if !$0 { archiveAction(.select([])) } })) {
+            if let row = archive.inspector { archiveInspector(row) }
+        }
+        .modifier(LibraryPaneChrome(notice: { archiveStatus }, footer: { archiveFooter }))
+        // The count is the window's subtitle, where macOS puts one, rather than a line of its own.
+        .navigationSubtitle(Text("\(archive.total) reading encounters"))
         .onChange(of: archive.focused, initial: true) { _, id in
             if let id { interaction.wrappedValue.focused = id; interaction.wrappedValue.viewed = id }
         }
-        .padding(scale.space.padAcross)
         .modifier(LibrarySearch(text: Binding(get: { archive.search }, set: { archiveAction(.search($0)) }), layout: layout, chooseLayout: chooseLayout))
     }
 
+    /// What is wrong, and what this pane is — above the collection, and absent when there is neither.
     @ViewBuilder private var archiveStatus: some View {
         if let problem = archive.problem {
-            Text(verbatim: problem).foregroundStyle(.orange).textSelection(.enabled)
-            Button("Retry") { archiveAction(.retry) }
+            LibraryNotice {
+                Text(verbatim: problem).foregroundStyle(.orange).textSelection(.enabled)
+                IconButton(title: "Retry", symbol: "arrow.clockwise") { archiveAction(.retry) }
+            }
+        } else if pane == .discarded, !archive.rows.isEmpty {
+            // Over the readings it is about. An empty pane says the same thing in its own words.
+            LibraryNotice {
+                Text("Discarded readings remain recoverable until you permanently delete them.")
+            }
         }
-        if pane == .discarded {
-            Text("Discarded readings remain recoverable until you permanently delete them.")
-                .font(.system(size: scale.text.small)).foregroundStyle(.secondary)
-        }
-        if archive.undoCount > 0 {
-            Button("Undo discarding \(archive.undoCount) readings") { archiveAction(.undo) }
+    }
+
+    /// The selection on the left and what can be done on the right — the same shape as Saved's
+    /// footer, so the two collections read as panes of one window. Absent with nothing pending.
+    @ViewBuilder private var archiveFooter: some View {
+        let hasFooter = !archive.selection.isEmpty || archive.undoCount > 0 || archive.hasMore
+        if hasFooter {
+            LibraryFooter {
+                if !archive.selection.isEmpty {
+                    Text("\(archive.selection.count) selected")
+                        .font(.system(size: scale.text.small))
+                        .foregroundStyle(.secondary)
+                }
+                if !archive.selection.isEmpty { dispositionActions(archive.selectedLookupIDs) }
+                if archive.undoCount > 0 {
+                    IconButton(title: "Undo discarding \(archive.undoCount) readings", symbol: "arrow.uturn.backward") { archiveAction(.undo) }
+                }
+                if archive.hasMore { IconButton(title: "Show more history", symbol: "arrow.down.circle") { archiveAction(.more) } }
+            }
         }
     }
 
@@ -176,10 +198,10 @@ public struct LearningLibraryView<Review: View>: View {
     /// selection footer**, so the two cannot come to offer different actions or different counts.
     @ViewBuilder private func dispositionActions(_ ids: [Int]) -> some View {
         if pane == .discarded {
-            Button("Restore \(ids.count) readings") { archiveAction(.restore(ids)) }
-            Button("Permanently delete \(ids.count) readings", role: .destructive) { erasePending = ids }
+            IconButton(title: "Restore \(ids.count) readings", symbol: "tray.and.arrow.up") { archiveAction(.restore(ids)) }
+            IconButton(title: "Permanently delete \(ids.count) readings", symbol: "trash", role: .destructive) { erasePending = ids }
         } else {
-            Button("Discard \(ids.count) readings") { archiveAction(.discard(ids)) }
+            IconButton(title: "Discard \(ids.count) readings", symbol: "archivebox") { archiveAction(.discard(ids)) }
         }
     }
 
@@ -204,36 +226,54 @@ public struct LearningLibraryView<Review: View>: View {
     /// the dictionary off `row.sense` drew an auxiliary tap's name over the kept note's meaning.
     private func archiveInspector(_ row: ReadingEntry) -> some View {
         let shown = row.shown
-        return VStack(alignment: .leading, spacing: scale.space.stack) {
-            Text(verbatim: row.surface).font(.system(size: scale.text.heading, weight: .semibold))
-            if row.cue != .none { Text(verbatim: row.sentence).textSelection(.enabled) }
-            if let place = row.place.label ?? row.place.name { Text(verbatim: place).foregroundStyle(.secondary) }
-            Text(row.at, format: .dateTime.year().month().day().hour().minute())
+        let accent = ReadingPalette.accent(for: row)?.color(in: scheme) ?? ReadingPalette.miss
+        let revealed = interaction.wrappedValue.revealed.contains(row.id)
+        let meaning = shown.meaning.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        // Laid out as the card beside it is: the word and when, the sentence, the small facts, and a
+        // last row of what can be done.
+        return LibraryInspector(accent: accent) {
+            HStack(spacing: scale.space.inline) {
+                Text(verbatim: row.surface).font(.system(size: scale.text.strong, weight: .semibold)).foregroundStyle(accent)
+                Spacer(minLength: 0)
+                Text(row.at, format: .dateTime.year().month().day().hour().minute())
+            }
+            if row.cue != .none {
+                Text(verbatim: row.sentence).font(.system(size: scale.text.small)).foregroundStyle(.primary).textSelection(.enabled)
+            }
+            if let place = row.place.label ?? row.place.name { Text(verbatim: place) }
             if let sense = shown.sense {
-                Text(verbatim: sense.dictionary).foregroundStyle(.secondary)
+                // The badge names the dictionary too, so it stands in for the name where there is one.
                 if let badge = CardBadge(of: shown) { Text(verbatim: badge.text).help(Text(badge.explanation)) }
+                else { Text(verbatim: sense.dictionary) }
             }
             if row.result == .notFound { Text("Not found") }
             if row.result == .pending { Text("Dictionary answer unavailable") }
             if row.cue == .none { Text("No sentence was captured.") }
             if row.cue == .truncatedSentence { Text("Context may be cut") }
-            if let meaning = shown.meaning, !meaning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if interaction.wrappedValue.revealed.contains(row.id) {
-                    Text(verbatim: meaning).textSelection(.enabled)
-                } else {
-                    Button("Show the meaning") { interaction.wrappedValue.revealed.insert(row.id) }
+            if let meaning, revealed {
+                Text(verbatim: meaning).font(.system(size: scale.text.small)).foregroundStyle(.primary).textSelection(.enabled)
+            } else if meaning == nil {
+                Text("No meaning is available for this reading.")
+            }
+            if pane == .history, row.studyNoteID != nil { Text("Kept for learning") }
+            HStack(spacing: scale.space.inline) {
+                if meaning != nil, !revealed {
+                    IconButton(title: "Show the meaning", symbol: "eye") { interaction.wrappedValue.revealed.insert(row.id) }
                 }
-            } else { Text("No meaning is available for this reading.") }
-            if pane == .history {
-                if row.studyNoteID != nil { Text("Kept for learning") }
-                else { Button("Keep for learning") { archiveAction(.keep(row.id)) } }
-                if row.studyStatus == .needsConfirmation, interaction.wrappedValue.revealed.contains(row.id), let note = row.studyNoteID {
-                    Button("Confirm this meaning") { archiveAction(.confirm(note)) }
+                Spacer(minLength: 0)
+                if pane == .history {
+                    if row.studyNoteID == nil {
+                        IconButton(title: "Keep for learning", symbol: "tray.and.arrow.down") { archiveAction(.keep(row.id)) }
+                    }
+                    if row.studyStatus == .needsConfirmation, revealed, let note = row.studyNoteID {
+                        IconButton(title: "Confirm this meaning", symbol: "checkmark.seal") { archiveAction(.confirm(note)) }
+                    }
+                    IconButton(title: "Choose a meaning", symbol: "checklist") { archiveAction(.clarify(row.id)) }
                 }
-                Button("Choose a meaning") { archiveAction(.clarify(row.id)) }
             }
         }
-        .font(.system(size: scale.text.small)).padding(scale.space.pad)
+        .font(.system(size: scale.text.micro))
+        .foregroundStyle(.secondary)
     }
 
 }
@@ -264,9 +304,9 @@ private struct ArchiveCard: View {
                 ReadingPronunciation(word: row.surface, sentence: row.sentence)
                 Spacer(minLength: 0)
                 if discarded {
-                    Button("Restore", action: restore).accessibilityLabel("Restore \(row.surface)").accessibilityIdentifier("restore-reading-\(row.id)")
+                    IconButton(title: "Restore", symbol: "tray.and.arrow.up", action: restore).accessibilityLabel("Restore \(row.surface)").accessibilityIdentifier("restore-reading-\(row.id)")
                 } else {
-                    Button("Discard", action: discard).accessibilityLabel("Discard \(row.surface)").accessibilityIdentifier("discard-reading-\(row.id)")
+                    IconButton(title: "Discard", symbol: "archivebox", action: discard).accessibilityLabel("Discard \(row.surface)").accessibilityIdentifier("discard-reading-\(row.id)")
                 }
             }
             .font(.system(size: scale.text.micro))

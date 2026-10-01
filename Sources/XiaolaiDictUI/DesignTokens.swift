@@ -77,9 +77,20 @@ public enum Token {
         /// are the system's own sidebar font, and a sidebar that grew with the reader's chosen text
         /// size would move the list sideways for a reason that has nothing to do with it.
         static let sidebarWidth: CGFloat = 200
+        /// The most columns the grid ever has, however wide the window. Newest to oldest runs across
+        /// a rank and then down, and past four cards the eye does not find its way back to the start
+        /// of the next rank; a wider window makes the cards wider instead. A count, so it does not
+        /// grow with the reader's text — the width a card needs does, and that is `cardMinWidth`.
+        static let maxColumns = 4
         /// The window, which is the sidebar and the list beside it.
-        public static let width: CGFloat = 720 + sidebarWidth
-        public static let height: CGFloat = 480
+        ///
+        /// **Wide enough for two columns of cards beside the inspector** at the standard text size:
+        /// two cards at their narrowest and their gutters come to 669 pt, the inspector to 312. At
+        /// 720 pt the inspector's arrival took the grid from two columns to one, so the card just
+        /// clicked moved under the pointer. Tall enough for four or five cards rather than two.
+        /// An opening size only — a window the reader has resized keeps the size they gave it.
+        public static let width: CGFloat = 1000 + sidebarWidth
+        public static let height: CGFloat = 760
     }
 
     enum Panel {

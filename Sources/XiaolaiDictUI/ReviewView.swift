@@ -29,18 +29,20 @@ public struct ReviewView: View {
         // long answer shared a fixed stack with the controls, so past a certain length neither
         // could be read to the end and the buttons went off the bottom of the window.
         ScrollView {
-            VStack(alignment: .leading, spacing: scale.space.stack) {
+            Group {
                 switch state.stage {
                 case .empty(let reason):
-                    emptyState(reason)
+                    VStack(alignment: .leading, spacing: scale.space.stack) { emptyState(reason) }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 case .asking(let asking):
-                    self.asking(asking)
+                    card(asking)
                 case .finished(let summary):
-                    finishedState(summary)
+                    VStack(alignment: .leading, spacing: scale.space.stack) { finishedState(summary) }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
-            .padding(scale.space.padAcross)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, scale.space.padAcross)
+            .padding(.vertical, scale.space.padDown)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -58,12 +60,56 @@ public struct ReviewView: View {
 
     // MARK: - Asking
 
+    /// **The question is a card, like every other reading in this window.** Review was a window of
+    /// its own once, and the window was the card; as a pane of the Library its content sat bare on
+    /// the background beside panes full of cards. The same paper, edge and lift as theirs, in the
+    /// word's own colour, and edge to edge as a History card in a list is.
+    ///
+    /// Nothing here reserves room for the answer: the card is as tall as what it shows, and grows
+    /// when the reader asks.
+    private func card(_ question: ReviewPresentation.Question) -> some View {
+        VStack(alignment: .leading, spacing: scale.space.stack) { asking(question) }
+            .padding(scale.space.pad)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(ReadingCardChrome(accent: accent(for: question).opacity(Token.Opacity.accentBorder)))
+    }
+
+    /// **The front of a card, and its back only once asked for** — laid out as every other card in
+    /// this window is: the word and a small detail beside it, the reader's sentence with the word
+    /// marked, where it was met, and a last row with the voice on the left and what can be done on
+    /// the right. The same components draw them, so a reading looks the same whether it is being
+    /// browsed or asked.
     @ViewBuilder
-    /// **The front of a card, and its back only once asked for.** Four parts: where in the batch
-    /// this is, the cue, the question, and the controls.
     private func asking(_ question: ReviewPresentation.Question) -> some View {
-        standing(question)
-        cue(question)
+        VStack(alignment: .leading, spacing: scale.space.tight) {
+            HStack(spacing: scale.space.inline) {
+                Text(verbatim: question.word)
+                    .font(.system(size: scale.text.strong, weight: .semibold))
+                    .foregroundStyle(accent(for: question))
+                Spacer(minLength: 0)
+                // Where in the batch this is — the place the other cards give their date.
+                Text("\(question.position) of \(question.batchSize)")
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.secondary)
+            }
+            // **The reader's own sentence, with the word marked** — the cue, and the only thing on
+            // the front that is prose. A capture that produced no real sentence shows none rather
+            // than the word echoed back and dressed as context. **The reader's emphasis setting**
+            // goes through, as it does on the lookup card and the drawer.
+            if let sentence = question.sentence {
+                ReadingSentence(sentence: sentence.text, ranges: sentence.range.map { [$0] } ?? [],
+                                accent: accent(for: question), emphasis: options.emphasis)
+            }
+            Text(verbatim: question.source)
+                .font(.system(size: scale.text.micro))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if question.isPractice {
+                Text("Practice — nothing is scheduled")
+                    .font(.system(size: scale.text.micro))
+                    .foregroundStyle(.orange)
+            }
+        }
 
         switch question.prompt {
         case .meaningHere:
@@ -77,50 +123,7 @@ public struct ReviewView: View {
             revealed(answer)
         }
 
-        Spacer(minLength: 0)
         controls(question)
-    }
-
-    /// Where in the batch this is, whether it counts, and where the reader met it.
-    private func standing(_ question: ReviewPresentation.Question) -> some View {
-        HStack {
-            Text("\(question.position) of \(question.batchSize)")
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.secondary)
-            if question.isPractice {
-                Text("Practice — nothing is scheduled")
-                    .font(.system(size: scale.text.micro))
-                    .foregroundStyle(.orange)
-            }
-            Spacer(minLength: 0)
-            Text(verbatim: question.source)
-                .font(.system(size: scale.text.small))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        }
-    }
-
-    /// The reader's own sentence with the word marked, and the word itself.
-    @ViewBuilder private func cue(_ question: ReviewPresentation.Question) -> some View {
-        // **The reader's own sentence, with the word marked** — the cue, and the only thing on the
-        // front that is prose. A capture that produced no real sentence shows none rather than the
-        // word echoed back and dressed as context.
-        if let sentence = question.sentence {
-            // The same marking the lookup card and the drawer use, so the word the reader met looks
-            // the same wherever it is shown to them.
-            Text(MarkedSentence.text(
-                sentence.text,
-                marking: sentence.range.map { [$0] } ?? [],
-                // **The reader's emphasis setting**, which the lookup card and the drawer both
-                // honour through the same helper. Hardcoding `.bold` made this the one surface
-                // that ignored it.
-                size: scale.text.body, emphasis: options.emphasis,
-                accent: accent(for: question)))
-        }
-
-        Text(verbatim: question.word)
-            .font(.system(size: scale.text.heading, weight: .medium))
-            .foregroundStyle(accent(for: question))
     }
 
     @ViewBuilder
@@ -143,35 +146,34 @@ public struct ReviewView: View {
     @ViewBuilder
     private func controls(_ question: ReviewPresentation.Question) -> some View {
         HStack(spacing: scale.space.inline) {
+            // The word aloud is not its meaning, so the voice is on the front like any other card's.
+            ReadingPronunciation(word: question.word, sentence: question.sentence?.text ?? "")
             if question.answer == nil {
                 // **Disabled while a grade is committing**, like the grade buttons beside it: a
                 // reveal started here could finish after the sitting had advanced and put this
                 // card's answer on the next one.
-                Button("Show the answer") { act(.reveal) }
+                IconButton(title: "Show the answer", symbol: "eye") { act(.reveal) }
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(question.isCommitting)
             }
             Spacer(minLength: 0)
             // **Forgot first, always.** The order is the same on every card, so a reader answering
             // quickly is answering the question and not hunting for the button.
-            Button("Forgot") { act(.grade(.again)) }
+            IconButton(title: "Forgot", symbol: "xmark") { act(.grade(.again)) }
                 .keyboardShortcut("1", modifiers: [])
                 .disabled(question.isCommitting)
-            Button("Remembered") { act(.grade(.good)) }
+            IconButton(title: "Remembered", symbol: "checkmark", hint: "You recalled it before revealing the answer") { act(.grade(.good)) }
                 .keyboardShortcut("2", modifiers: [])
                 .disabled(question.isCommitting)
-                .help(Text("You recalled it before revealing the answer"))
-            Button("Skip") { act(.skip) }
+            IconButton(title: "Skip", symbol: "forward.end", hint: "Still due today; the next batch can have it") { act(.skip) }
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(question.isCommitting)
-                .help(Text("Still due today; the next batch can have it"))
             // **"Not today" is not "skip".** A skipped card comes back in this evening's next
             // batch; this one is gone until tomorrow, and the reader has to be able to say which
             // they mean.
-            Button("Not today") { act(.postpone) }
+            IconButton(title: "Not today", symbol: "moon.zzz", hint: "Out of the way until tomorrow. Nothing about your memory is recorded") { act(.postpone) }
                 .keyboardShortcut("t", modifiers: [])
                 .disabled(question.isCommitting)
-                .help(Text("Out of the way until tomorrow. Nothing about your memory is recorded"))
         }
         if let problem = question.problem {
             // **A failed write stays on screen.** The reader answered; if the ledger did not take it,
@@ -256,14 +258,14 @@ public struct ReviewView: View {
             // **Skipped cards are still due**, and were left out of `stillDue` — so skipping
             // the last batch ended the sitting with work outstanding and no way to go on.
             if summary.stillDue > 0 || summary.skipped > 0 {
-                Button("Review another batch") { act(.anotherBatch) }
+                IconButton(title: "Review another batch", symbol: "rectangle.stack.badge.plus") { act(.anotherBatch) }
             }
             // **Offered when there is nothing due**, which is when a reader who wants to keep
             // going would otherwise have nothing to do but wait.
             if summary.stillDue == 0 && summary.skipped == 0 {
-                Button("Practise") { act(.practise) }
+                IconButton(title: "Practise", symbol: "repeat") { act(.practise) }
             }
-            Button("Done") { act(.done) }
+            IconButton(title: "Done", symbol: "checkmark.circle") { act(.done) }
                 .keyboardShortcut(.defaultAction)
         }
     }
