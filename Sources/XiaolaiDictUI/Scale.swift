@@ -254,8 +254,15 @@ struct Scale: Equatable, Sendable {
             cardMaxWidth = em * 46
             cardMaxHeight = em * 32
             panelScrollFloor = em * 2
-            libraryInspectorWidth = em * 26
-            libraryInspectorMaxWidth = em * 33
+            // **26 em, until that would leave the grid less than one whole card.** Measured against
+            // the Library's opening window rather than the text alone: at Huge 26 em is 624 of the
+            // detail column's 1,000 points, and the card beside it broke its words mid-word. So it
+            // stops growing where a card at its minimum still fits: 304 pt at Huge, 8 short of the
+            // standard size's 312, which is the card's claim winning — it is what is being read.
+            let roomBesideOneCard = Token.Library.width - Token.Library.sidebarWidth - cardMinWidth - padAcross - padAcross
+            let inspector = min(em * 26, max(0, roomBesideOneCard))
+            libraryInspectorWidth = inspector
+            libraryInspectorMaxWidth = max(inspector, min(em * 33, roomBesideOneCard))
             peek = em * 0.625
             // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
             // side step was larger than the vertical one, so the second plate gave up 19.2 pt of

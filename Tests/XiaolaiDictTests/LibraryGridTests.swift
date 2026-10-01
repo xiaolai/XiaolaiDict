@@ -43,6 +43,22 @@ struct LibraryGridTests {
         #expect(LibraryGridMetrics(availableWidth: detail, scale: scale).columns >= 2)
     }
 
+    /// **At every text size the opening window keeps a whole card beside the inspector.** The
+    /// inspector's width was 26 em whatever the size: at Huge that is 624 of the detail column's
+    /// 1,000 points, the card beside it got 300 where its minimum is 624, and its words broke
+    /// mid-word — "meeti / ng", "Confi / rm / the / mean / ing" (E2E Mac, 2026-10-02).
+    @Test(arguments: TextSize.allCases)
+    func theOpeningWindowKeepsAWholeCardBesideTheInspector(size: TextSize) {
+        let scale = Scale(size)
+        let beside = Token.Library.width - Token.Library.sidebarWidth - scale.space.libraryInspectorWidth
+        let metrics = LibraryGridMetrics(availableWidth: beside, scale: scale)
+        #expect(metrics.cardWidth >= scale.space.cardMinWidth, "at \(size) a card gets \(metrics.cardWidth) pt")
+        // Capped, not removed: 26 em until that stops fitting, and still a column a sentence fits in.
+        #expect(scale.space.libraryInspectorWidth <= scale.em * 26)
+        #expect(scale.space.libraryInspectorWidth >= Token.Library.sidebarWidth)
+        #expect(scale.space.libraryInspectorMaxWidth >= scale.space.libraryInspectorWidth)
+    }
+
     /// **Never more than the cap, however wide the window.** Newest-to-oldest runs across a rank and
     /// then down, and a rank of seven is not something an eye follows back from.
     @Test func aVeryWideWindowStopsAtTheCap() {
