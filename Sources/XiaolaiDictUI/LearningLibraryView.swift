@@ -294,11 +294,13 @@ public struct LearningLibraryView<Review: View>: View {
         let size: CGFloat? = inToolbar ? Token.Library.toolbarGlyph : nil
         if pane == .discarded {
             IconButton(.restoreReading, title: "Restore ^[\(ids.count) Reading](inflect: true)", size: size) { archiveAction(.restore(ids)) }
+                .accessibilityIdentifier(inToolbar ? "library-selection-restore" : "")
             // An ellipsis, because it asks before it deletes.
             IconButton(.deletePermanently, title: "Delete ^[\(ids.count) Reading](inflect: true) Permanently…", size: size) { erasePending = ids }
         } else {
             IconButton(.discardReading, title: "Discard ^[\(ids.count) Reading](inflect: true)",
                        hint: inToolbar ? "or press Delete" : nil, size: size) { archiveAction(.discard(ids)) }
+                .accessibilityIdentifier(inToolbar ? "library-selection-discard" : "")
         }
     }
 

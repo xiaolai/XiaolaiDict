@@ -68,6 +68,7 @@ struct ShortcutField: View {
                         ? String(localized: "Recording", comment: "VoiceOver: the shortcut field is waiting for a key combination")
                         : Self.spoken(choice.shortcut)))
                 .accessibilityHint(Text("Records a new shortcut"))
+                .accessibilityIdentifier("lookup-shortcut-field")
                 if capture.isArmed {
                     Button(String(localized: "Cancel")) { capture.end() }.buttonStyle(.link)
                 }
