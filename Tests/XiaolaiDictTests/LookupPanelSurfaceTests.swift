@@ -556,4 +556,29 @@ struct LookupSurfaceSweepTests {
         let panel = try code("Sources/XiaolaiDict/LookupPanel.swift")
         #expect(panel.contains("window.isMovableByWindowBackground = true"), "the panel cannot be moved")
     }
+
+    /// **The scrolling region is never laid out at nothing, because the fit will not move from
+    /// nothing.** `SettingsWindowFit.shortfall` answers nil while a scroll view has been given no
+    /// height — the settings window is measured at zero before it has a size — and with the
+    /// card's actions pinned *outside* the scroll view the lookup window opened with exactly that:
+    /// the bars and a zero-height list. Seen on the E2E Mac 2026-10-02: a 113-point window showing
+    /// the footer and the saved row and none of the entry, its text all present to Accessibility.
+    /// A floor gives the fit a positive number to grow from.
+    @MainActor @Test func theScrollingRegionHasAFloorTheFitCanGrowFrom() throws {
+        #expect(SettingsWindowFit.shortfall(wanted: 240, given: 0, ceiling: 400) == nil,
+                "premise: the fit does not move a window whose scroll view has no height")
+        let floor = Scale.standard.space.panelScrollFloor
+        #expect(floor > 0)
+        #expect(SettingsWindowFit.shortfall(wanted: 240, given: floor, ceiling: 400) == 240 - floor)
+        let surface = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/XiaolaiDictUI/LookupPanelViews.swift"),
+            encoding: .utf8)
+        #expect(surface.contains(".frame(minHeight: scrollFloor, maxHeight: scrollCap)"))
+        // The floor clears the pinned bar: the frame includes the bar and the container the fit
+        // reads does not, so a floor under the bar's height is a container of nothing again.
+        #expect(surface.contains("barHeight + scale.space.panelScrollFloor"),
+                "the floor no longer stands above the pinned bar")
+    }
 }

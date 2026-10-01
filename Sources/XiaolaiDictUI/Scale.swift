@@ -205,6 +205,11 @@ struct Scale: Equatable, Sendable {
         /// It is a default and not a ceiling: the reader can drag the panel taller and
         /// `rememberChosenSize` keeps that size for the next lookup of the same kind.
         let cardMaxHeight: CGFloat
+        /// The least the lookup card's scrolling region is ever laid out at — two lines of body
+        /// text. Not a design height: the window's fit will not move from a scroll view that has
+        /// been given nothing, so this is the positive number it grows from. The fit takes the
+        /// region to its content's height at once, shorter or taller.
+        let panelScrollFloor: CGFloat
         /// A bounded detail column beside a Library collection — its ideal width, and how far the
         /// reader may drag it. In ems because what it holds is reading: the sentence and the
         /// meaning, which need the same measure at every size. The floor is a card at its
@@ -249,6 +254,7 @@ struct Scale: Equatable, Sendable {
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
             cardMaxHeight = em * 32
+            panelScrollFloor = em * 2
             libraryInspectorWidth = em * 26
             libraryInspectorMinWidth = em * 22
             libraryInspectorMaxWidth = em * 33
