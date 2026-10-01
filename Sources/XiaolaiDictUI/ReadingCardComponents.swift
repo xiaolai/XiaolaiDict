@@ -396,7 +396,10 @@ struct ReadingCardView: View {
                     .accessibilityLabel(Text(verbatim: place ?? ""))
                     .help(Text(verbatim: place ?? ""))
             }
-            if options.showsPlaceName, let place {
+            // **Named in the Library, whatever the setting.** A card there has the room, and an icon
+            // alone does not always say where: TextEdit's is a white page, which at this size on a
+            // white card reads as a blank placeholder (seen 2026-10-02).
+            if options.showsPlaceName || density == .library, let place {
                 Text(verbatim: place)
                     .font(.system(size: scale.text.small))
                     .lineLimit(1)
