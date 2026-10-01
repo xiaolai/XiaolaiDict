@@ -8,6 +8,7 @@ import time
 import uuid
 
 BUNDLE = "com.xiaolaidict"
+PANES = ("History", "Saved", "Review", "Discarded")
 # One secret per layout, each on its own Saved row. The list pass reveals its answer and checks the
 # reveal survives a layout switch, so that answer is on screen for the rest of the run: a grid pass
 # asking the same row whether selection alone reveals it would be measuring the list pass's reveal.
@@ -19,7 +20,14 @@ RANGE_COLUMNS = ["context_range_location", "context_range_length"]
 
 
 def command(*args):
-    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, timeout=20).strip()
+    # A helper that fails says why on its own output; `check_output` kept that and reported only the
+    # exit status, so fourteen failures on the E2E Mac read as one sentence about nothing.
+    done = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+    if done.returncode != 0:
+        said = done.stdout.strip()[-300:] or "nothing"
+        raise subprocess.SubprocessError(
+            f"{pathlib.Path(args[0]).name} {' '.join(args[1:])} exited {done.returncode}: {said}")
+    return done.stdout.strip()
 
 
 def validate_toolbar(report, layout):
@@ -132,12 +140,24 @@ class Library:
 
     def snapshot(self, name):
         # An absence is meaningful only after the actual Library was read completely.
-        report = json.loads(command(str(self.helpers / "panel"), BUNDLE))
+        #
+        # **Read again until one walk finishes, because a walk can start before the view settles.**
+        # Straight after a layout switch SwiftUI is still rebuilding the window, and every element the
+        # walk had queued answers AXError -25202 (invalid element) — measured on the E2E Mac, grid to
+        # list. That is the tree changing under the walk, not content missing, so it is waited out;
+        # anything else incomplete, or a tree still changing after ten tries, still fails, naming why.
+        for _ in range(10):
+            report = json.loads(command(str(self.helpers / "panel"), BUNDLE))
+            settling = report["incomplete"] and all("AXError -25202" in why for why in report["incomplete"])
+            if report["complete"] or not settling:
+                break
+            time.sleep(0.5)
         (self.evidence / f"{name}.json").write_text(json.dumps(report, indent=2))
         if name.startswith(("layout-", "geometry-")):
             command("screencapture", "-x", str(self.evidence / f"{name}.png"))
-        assert report["complete"], "Accessibility report is incomplete; absence cannot be asserted"
-        windows = [w for w in report["windows"] if w["title"] == "Library"]
+        assert report["complete"], f"Accessibility report is incomplete ({report.get('incomplete')}); absence cannot be asserted"
+        # Titled by its pane, with the count after it; "Library" names no window.
+        windows = [w for w in report["windows"] if w["title"].startswith(PANES)]
         assert len(windows) == 1, "positive control: exactly one live Library window"
         return windows[0]
 
@@ -207,7 +227,7 @@ def check_reveal(library, pane, layout, target, secret):
     hidden = library.snapshot(f"reveal-{pane}-{layout}-hidden")
     assert secret not in str(hidden["texts"]), "criterion 4: selection revealed the answer"
     original_frame = nodes(hidden)[target]["frame"]
-    library.click("Show the meaning")
+    library.click("Show the Meaning")
     shown = library.snapshot(f"reveal-{pane}-{layout}-shown")
     assert secret in str(shown["texts"]), "positive control: deliberate reveal must show this answer"
     assert nodes(shown)[target]["frame"]["height"] == original_frame["height"], "criterion 4: reveal changed card height"
@@ -232,7 +252,9 @@ def check_context_menu(library, pane, layout, ordered):
 def check_grid_geometry(library, pane):
     library.click("library-layout-grid")
     report = library.snapshot(f"geometry-{pane}-standard")
-    frames = [n["frame"] for key, n in nodes(report).items() if key.startswith(f"library-{pane.lower()}-row-") and n.get("frame")]
+    # The cards, not the "Show more" row that ends the collection under the same prefix.
+    frames = [n["frame"] for key, n in nodes(report).items()
+              if key.startswith(f"library-{pane.lower()}-row-") and not key.endswith("-more") and n.get("frame")]
     assert len(frames) > 2, "positive control: populated grid needs visible cards"
     top = min(f["y"] for f in frames)
     first = [f for f in frames if abs(f["y"]-top) < 2]
@@ -254,7 +276,7 @@ def run(helpers, ledger, evidence):
     library = Library(helpers, evidence)
     fixture = json.loads((library.evidence / "layout-fixture.json").read_text())
     for pane in ["History", "Saved", "Discarded"]:
-        library.click(pane)
+        library.click(f"library-pane-{pane.lower()}", "--row")
         time.sleep(0.3)
         # Each pane yields its own baseline failure before dependent checks are attempted.
         if not library.record(f"criterion1_{pane}_accessibleGridDefault", check_grid_default, pane):
@@ -277,7 +299,7 @@ def run(helpers, ledger, evidence):
                            pane, layout, ordered)
         library.record(f"criterion7_{pane}_twoColumnsWithoutOverlap", check_grid_geometry, pane)
 
-    library.click("Review")
+    library.click("library-pane-review", "--row")
     review = library.snapshot("layout-Review")
     library.record("criterion9_ReviewHasNoLayoutOrStudyScriptControls", check_review, review)
     (library.evidence / "layout-results.json").write_text(json.dumps(library.results, indent=2))
@@ -294,11 +316,5 @@ if __name__ == "__main__":
         seed(sys.argv[2], int(sys.argv[3]), sys.argv[4])
     elif sys.argv[1] == "run":
         sys.exit(run(*sys.argv[2:]))
-    elif sys.argv[1] == "check-toolbar":
-        captured = json.loads(pathlib.Path(sys.argv[2]).read_text())
-        assert captured["complete"], "Accessibility report is incomplete; absence cannot be asserted"
-        windows = [w for w in captured["windows"] if w["title"] == "Library"]
-        assert len(windows) == 1, "positive control: exactly one live Library window"
-        validate_toolbar(windows[0], "grid")
     else:
         raise SystemExit("usage: library-layout.py seed <isolated-ledger> <lookup> <manifest> | run <helpers> <ledger> <evidence>")

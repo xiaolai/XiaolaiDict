@@ -546,6 +546,24 @@ row_after() {
     printf '%s' "$((waited / 10)).$((waited % 10))"
 }
 
+# **A lookup's sense is written on a later await than its row**, so the row appearing says nothing
+# about it. Since ADR-0044 a reading is recorded before its sense is chosen; waiting for the row and
+# then reading the sense measured that race, not the path — on the E2E Mac lookups 59 and 60 read as
+# "neither a choice nor an abstention" and carried `chosen_by=model` moments later. This waits for
+# this lookup's own answer, up to 30 s, and sets `sense_chosen`, `sense_abstained` and `sense_waited`
+# (globals: bash 3.2 has no other way to hand back three values).
+sense_after() {
+    local id=$1 waited=0
+    sense_chosen=""; sense_abstained=""
+    while [ "$waited" -lt 300 ]; do
+        sense_chosen=$(sqlite3 -readonly "$ledger" "select coalesce(group_concat(chosen_by), '') from sense_encounters where lookup_id = $id and chosen_by is not null" 2>/dev/null || echo "")
+        sense_abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $id" 2>/dev/null || echo "")
+        [ -n "$sense_chosen$sense_abstained" ] && break
+        sleep 0.1; waited=$((waited + 1))
+    done
+    sense_waited="$((waited / 10)).$((waited % 10))"
+}
+
 # **A wall clock with sub-second resolution, on the shell this file actually runs under.**
 #
 # `$EPOCHREALTIME` is bash 5. The shebang here is `#!/bin/bash`, which on macOS is **3.2** — this
@@ -564,24 +582,55 @@ now_seconds() { python3 -c 'import time; print(f"{time.monotonic():.6f}")'; }
 # `STAGES="drawer"` assumed the ledger already had rows — all of them side effects of stages that
 # had not run. A single stage is how anyone debugs one, and each of these failed on a machine
 # where nothing was wrong.
+# **Open and in front, not merely running.** The lookup shortcut reads the selection of the app in
+# front; a TextEdit that was running behind Finder — which is what a relaunch of XiaolaiDict leaves
+# when nothing else has activated it — answered "Nothing to look up" three presses in a row and the
+# stage called the fixture uncreatable (E2E Mac, 2026-10-02). `open -a` on a running app activates it.
 ensure_fixture_open() {
-    pgrep -x TextEdit >/dev/null 2>&1 && return 0
+    local front=""
     open -a TextEdit "$helpers/notes.txt"
-    for _ in $(seq 1 40); do pgrep -x TextEdit >/dev/null 2>&1 && return 0; sleep 0.25; done
-    echo "the TextEdit fixture would not open" >&2
+    for _ in $(seq 1 40); do
+        front=$(osascript -e 'tell application "System Events" to get bundle identifier of first process whose frontmost is true' 2>/dev/null || true)
+        [ "$front" = com.apple.TextEdit ] && return 0
+        sleep 0.25
+    done
+    echo "the TextEdit fixture would not come to the front (${front:-nothing} is in front)" >&2
     return 1
+}
+
+# **The lookup panel alone, out of a report of every window.** Two checks asked whether "meeting"
+# was anywhere in the app, and an open Library answers yes for ever: its cards carry the same
+# sentence. Measured 2026-10-02 — a dismissed panel read as still showing, and one filled panel read
+# as two. Fails loudly on a report it cannot parse, so a broken report is never an empty answer.
+lookup_windows() {
+    python3 -c '
+import json, sys
+report = json.loads(sys.stdin.read(), strict=False)
+report["windows"] = [w for w in report["windows"] if w.get("title") == "Lookup"]
+print(json.dumps(report, ensure_ascii=False))'
 }
 
 # Drives one real lookup, which is what starts the dictionary service and what puts a row in the
 # ledger. Used by the stages that need either and create neither.
+#
+# **Pressed until it takes, and every refusal says which step refused.** The menu-bar item answering
+# is not the hot key being registered: straight after a launch on an empty ledger the first press
+# was lost one run in two (E2E Mac, 2026-10-02: failed, passed, failed on one bundle), and the
+# caller could only say "could not be created".
 ensure_one_lookup() {
     ensure_fixture_open || return 1
-    local baseline
+    local baseline attempt why
     baseline=$(newest_row_id)
-    "$helpers/select-text" com.apple.TextEdit meeting 2 >/dev/null 2>&1 || return 1
     assert_default_shortcut || true
-    "$helpers/keys" 2 control option
-    row_after "$baseline" meeting com.apple.TextEdit >/dev/null
+    for attempt in 1 2 3; do
+        why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1) \
+            || { echo "could not select the fixture word: $why" >&2; return 1; }
+        "$helpers/keys" 2 control option
+        row_after "$baseline" meeting com.apple.TextEdit >/dev/null
+        [ "$(rows_of "$baseline" meeting com.apple.TextEdit)" -eq 0 ] || break
+        echo "press $attempt of the lookup shortcut recorded nothing in 10 s" >&2
+    done
+    [ "$(rows_of "$baseline" meeting com.apple.TextEdit)" -ne 0 ] || return 1
     if [ "${1:-}" = answered ]; then
         local fresh
         fresh=$(row_id_of "$baseline" meeting com.apple.TextEdit)
@@ -1069,11 +1118,11 @@ PY
     "$helpers/keys" 53
     sleep 1
     free=$("$helpers/claim-escape" || true)
-    closed=$("$helpers/panel" com.xiaolaidict)
+    closed=$("$helpers/panel" com.xiaolaidict | lookup_windows) || closed=unreadable
     # **The lookup panel is gone, not every window.** Requiring an empty window list made a
     # legitimately open Settings or setup board fail a panel that had been dismissed correctly —
     # the assertion was about the app, and the claim is about one window.
-    if [ "$held" = held ] && [ "$free" = free ] \
+    if [ "$held" = held ] && [ "$free" = free ] && [ "$closed" != unreadable ] \
        && ! printf '%s' "$closed" | python3 -c 'import json,sys; sys.exit(0 if any("meeting" in t for w in json.load(sys.stdin)["windows"] for t in w["texts"]) else 1)' 2>/dev/null; then
         pass "escape: held while the panel shows, closes it, and is released"
     else
@@ -1192,7 +1241,7 @@ else
         # the one it actually produces.
         filled=""
         for _ in $(seq 1 100); do
-            view=$("$helpers/panel" com.xiaolaidict)
+            view=$("$helpers/panel" com.xiaolaidict | lookup_windows) || view=""
             # The word's card, still not a miss — "No entry for" carries the word too.
             # Not `"meeting"` as a whole JSON element: the card heads itself with the dictionary's
             # headword, so a primary that lemmatises answers "meeting" with a card headed "meet".
@@ -2020,8 +2069,18 @@ if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; e
 # run's copy under that name, and restoring it would put back a ledger from another day. It is kept
 # when the restore fails — then it may be the only copy — and removed once the restore is proved.
 ledger_digest() {  # ledger_digest <path>: content fingerprint of a ledger that passes integrity_check
-    local out
-    out=$(sqlite3 -readonly "$1" 'PRAGMA integrity_check;' 'PRAGMA user_version;' '.sha3sum --schema' 2>&1) \
+    # **A WAL-mode file with nothing in its -wal is complete by itself, and is read as immutable.** The
+    # ledger is WAL, so its backup, the staged copy and the restored ledger all carry WAL in their header
+    # with no -shm beside them — and /usr/bin/sqlite3 3.54 refuses a read-only open of exactly that:
+    # CANTOPEN (14), because a read-only connection cannot create the -shm. Measured on the E2E Mac.
+    # The live ledger, while the app writes it, has its newest commits in a non-empty -wal that
+    # `immutable` would skip, so it alone is opened plainly — the writer keeps its -shm there.
+    local out db="$1"
+    if [ ! -s "$1-wal" ]; then
+        db=${1//\%/%25}; db=${db// /%20}; db=${db//\?/%3f}; db=${db//\#/%23}
+        db="file:$db?immutable=1"
+    fi
+    out=$(sqlite3 -readonly "$db" 'PRAGMA integrity_check;' 'PRAGMA user_version;' '.sha3sum --schema' 2>&1) \
         || { echo "ledger_digest: $1 could not be read: $out" >&2; return 1; }
     [ "$(printf '%s\n' "$out" | head -1)" = ok ] || { echo "ledger_digest: $1 fails integrity_check: $out" >&2; return 1; }
     printf '%s\n' "$out"
@@ -2038,8 +2097,12 @@ if [ -e "$ledger" ]; then
         flunk "learning: the ledger backup does not match the ledger, so it is left alone ($learning_backup)"; exit 1
     fi
 fi
+learning_restored=no
 restore_learning_fixture() {
     local staged="$ledger.e2e-restore"
+    # Run at the end of the stage, and again from `on_exit` in case the stage died first; the second
+    # call finds nothing to do.
+    [ "$learning_restored" = yes ] && return 0
     stop_app || { echo "restore: XiaolaiDict would not quit, so the ledger was not touched" >&2; return 1; }
     if [ "$learning_had_ledger" = yes ]; then
         # Staged beside the ledger, on the same volume, so the swap below is a rename.
@@ -2071,6 +2134,7 @@ restore_learning_fixture() {
         true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
     esac
     open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    learning_restored=yes
 }
 at_exit restore_learning_fixture
 rm -f "$ledger" "$ledger-wal" "$ledger-shm"
@@ -2081,8 +2145,8 @@ for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/nu
 sw_vers > "$learning_evidence/host.txt"
 codesign -dv "$app" 2> "$learning_evidence/build.txt"
 learning_before=$(newest_row_id)
-if ! ensure_one_lookup answered; then
-    flunk "learning: native lookup fixture could not be created (check Accessibility and shortcut)"
+if ! fixture_why=$(ensure_one_lookup answered 2>&1); then
+    flunk "learning: native lookup fixture could not be created: ${fixture_why:-no reason given}"
 else
     learning_id=$(row_id_of "$learning_before" meeting com.apple.TextEdit)
     targets=0
@@ -2093,25 +2157,30 @@ else
     done
     [ "$targets" -gt 0 ] && pass "learning: automatic collection attached a dictionary target" || flunk "learning: answered fixture did not create an automatic target"
     sqlite3 "$ledger" "SELECT l.id,l.result,l.keep_policy,l.primary_dictionary,n.target_kind,n.confirmed_at FROM lookups l LEFT JOIN study_note_lookups k ON k.lookup_id=l.id LEFT JOIN study_notes n ON n.id=k.note_id WHERE l.id=$learning_id;" > "$learning_evidence/lookup-state.txt"
-    if ! why=$("$helpers/menu-click" com.xiaolaidict "Library…" 2>&1); then
+    if ! why=$("$helpers/menu-click" com.xiaolaidict "Library" 2>&1); then
         flunk "learning: Library menu action failed: $why"
     else
         sleep 1
         for pane in History Saved Review Discarded History; do
-            if "$helpers/click-element" com.xiaolaidict "$pane" >/dev/null 2>&1; then
+            # By identifier: the pane's name is also its window's title and a word on its cards.
+            if "$helpers/click-element" com.xiaolaidict --row "library-pane-$(printf '%s' "$pane" | tr '[:upper:]' '[:lower:]')" >/dev/null 2>&1; then
                 sleep 0.5
                 pane_report=$("$helpers/panel" com.xiaolaidict)
                 printf '%s\n' "$pane_report" > "$learning_evidence/$pane.json"
                 if ! screencapture -x "$learning_evidence/$pane.png" 2> "$learning_evidence/$pane-capture.err"; then flunk "learning: native $pane screenshot capture denied"; fi
-                screen_report=$("$helpers/on-screen" com.xiaolaidict Library)
+                # The window is titled by its pane since 2026-10-02; "Library" names no window.
+                screen_report=$("$helpers/on-screen" com.xiaolaidict "$pane")
                 if python3 - "$pane_report" "$pane" "$screen_report" <<'PYLIBRARY'
 import json,sys
 r=json.loads(sys.argv[1]); pane=sys.argv[2]
 windows=r.get('windows',[])
-assert 'Review' not in json.loads(sys.argv[3]).get('titles',[]), 'separate Review window appeared'
+panes=('History','Saved','Review','Discarded')
+titled=[w.get('title','') for w in windows if w.get('title','').startswith(panes)]
+assert len(titled)==1, f'expected one Library window, found {titled}'
+assert titled[0].startswith(pane), f'the window is titled {titled[0]!r} while showing {pane}'
 text=str(windows)
 assert any(w.get('drawn') for w in json.loads(sys.argv[3]).get('matches',[])), 'Library window is not composited'
-expected={'History':'reading encounters','Saved':'Saved filters','Review':'Review today','Discarded':'Discarded readings remain recoverable'}[pane]
+expected={'History':'reading','Saved':'Filters','Review':'Review today','Discarded':'No Discarded Readings'}[pane]
 assert expected in text, f'{pane} detail absent: {expected}'
 PYLIBRARY
                 then pass "learning: native Library pane $pane detail is visible"
@@ -2120,11 +2189,18 @@ PYLIBRARY
                 flunk "learning: native Library pane $pane is unreachable"
             fi
         done
-        if "$helpers/click-element" com.xiaolaidict "discard-reading-$learning_id" >/dev/null 2>&1; then
+        # **Select the card, then the toolbar: the route a reader without a pointer takes.** The
+        # card is one combined element to Accessibility, so its own Discard is an action of the card
+        # and not an element a click can be aimed at.
+        discard_selected() {
+            "$helpers/click-element" com.xiaolaidict --row "library-history-row-$learning_id" >/dev/null 2>&1 \
+                && sleep 0.6 && "$helpers/click-element" com.xiaolaidict library-selection-discard >/dev/null 2>&1
+        }
+        if discard_selected; then
             sleep 1
             disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
             [ "$disposition" = discarded ] && pass "learning: Discard commits the exact encounter" || flunk "learning: Discard did not persist ($disposition)"
-            if "$helpers/click-element" com.xiaolaidict "Undo discarding 1 readings" >/dev/null 2>&1; then
+            if "$helpers/click-element" com.xiaolaidict library-undo >/dev/null 2>&1; then
                 sleep 1
                 disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
                 [ "$disposition" = kept ] && pass "learning: Undo restores the exact encounter" || flunk "learning: Undo did not persist ($disposition)"
@@ -2134,24 +2210,25 @@ PYLIBRARY
         else
             flunk "learning: Discard control is unreachable or ambiguous"
         fi
-        if "$helpers/click-element" com.xiaolaidict "discard-reading-$learning_id" >/dev/null 2>&1 && restart_app; then
+        if discard_selected && restart_app; then
             reopened=""
             for _ in $(seq 1 40); do
-                if "$helpers/menu-click" com.xiaolaidict "Library…" >/dev/null 2>&1; then reopened=yes; break; fi
+                if "$helpers/menu-click" com.xiaolaidict "Library" >/dev/null 2>&1; then reopened=yes; break; fi
                 sleep 0.25
             done
-            if [ -n "$reopened" ] && "$helpers/click-element" com.xiaolaidict Discarded >/dev/null 2>&1; then
+            if [ -n "$reopened" ] && "$helpers/click-element" com.xiaolaidict --row library-pane-discarded >/dev/null 2>&1; then
                 sleep 1
                 "$helpers/panel" com.xiaolaidict > "$learning_evidence/Discarded-populated.json"
                 screencapture -x "$learning_evidence/Discarded-populated.png" || flunk "learning: populated Discarded capture failed"
                 disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
                 [ "$disposition" = discarded ] && pass "learning: Discard persists across relaunch" || flunk "learning: Discard was lost at relaunch"
-                if "$helpers/click-element" com.xiaolaidict "restore-reading-$learning_id" >/dev/null 2>&1; then
+                if "$helpers/click-element" com.xiaolaidict --row "library-discarded-row-$learning_id" >/dev/null 2>&1 \
+                   && sleep 0.6 && "$helpers/click-element" com.xiaolaidict library-selection-restore >/dev/null 2>&1; then
                     sleep 1
                     disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
                     [ "$disposition" = kept ] && pass "learning: Discarded Restore commits exact encounter after relaunch" || flunk "learning: Restore did not persist"
                 else flunk "learning: Discarded Restore control unreachable"; fi
-                "$helpers/click-element" com.xiaolaidict History >/dev/null 2>&1 || flunk "learning: History return failed"
+                "$helpers/click-element" com.xiaolaidict --row library-pane-history >/dev/null 2>&1 || flunk "learning: History return failed"
             else flunk "learning: Discarded recovery pane unreachable after relaunch"; fi
         else flunk "learning: repeated discard/relaunch failed"; fi
         for appearance in Light Dark; do
@@ -2164,7 +2241,7 @@ PYLIBRARY
             restarted=""
             if why=$(restart_app 2>&1); then
                 for _ in $(seq 1 40); do
-                    if why=$("$helpers/menu-click" com.xiaolaidict "Library…" 2>&1); then restarted=yes; break; fi
+                    if why=$("$helpers/menu-click" com.xiaolaidict "Library" 2>&1); then restarted=yes; break; fi
                     sleep 0.25
                 done
             fi
@@ -2172,7 +2249,7 @@ PYLIBRARY
                 sleep 1
                 "$helpers/panel" com.xiaolaidict > "$learning_evidence/large-$appearance.json"
                 if screencapture -x "$learning_evidence/large-$appearance.png" 2> "$learning_evidence/large-$appearance-capture.err"; then
-                    screen_report=$("$helpers/on-screen" com.xiaolaidict Library)
+                    screen_report=$("$helpers/on-screen" com.xiaolaidict History)
                     if python3 - "$learning_evidence/large-$appearance-window.png" "$screen_report" "$appearance" <<'PYAPPEARANCE'
 # The window frame is in points and a screenshot is in pixels: a Retina display draws two of one
 # per point, so a point used as a pixel sampled a spot up and to the left of the one meant. The
@@ -2211,13 +2288,29 @@ PYAPPEARANCE
             defaults write com.xiaolaidict libraryPane history
             open "$app"
             for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
-            if "$helpers/menu-click" com.xiaolaidict "Library…" >/dev/null 2>&1; then
+            # Clicked until it takes, like the two relaunches above: one attempt straight after a
+            # launch failed on the E2E Mac with the item present, and the reason went to /dev/null.
+            expanded_open=""
+            for _ in $(seq 1 40); do
+                if why=$("$helpers/menu-click" com.xiaolaidict "Library" 2>&1); then expanded_open=yes; break; fi
+                sleep 0.25
+            done
+            if [ -n "$expanded_open" ]; then
                 layout_verdicts=$(python3 "$helpers/library-layout.py" run "$helpers" "$ledger" "$learning_evidence" 2>&1 || true)
                 printf '%s\n' "$layout_verdicts" > "$learning_evidence/layout-run.txt"
                 consume_verdicts learning-layout "$layout_verdicts"
-            else flunk "learning: expanded Library fixture did not open"; fi
+            else flunk "learning: expanded Library fixture did not open ($why)"; fi
         else flunk "learning: expanded isolated fixture failed its positive controls"; fi
     fi
+fi
+# **Put back before the next stage, not when the script ends.** Registered with `at_exit` alone, the
+# restore waited for the whole run, so every stage after this one ran on this stage's fixture ledger
+# and settings: `model` asserted against rows the restore then threw away, and read as a product fault.
+if restore_learning_fixture; then
+    pass "learning: the reader's ledger and settings are back before the next stage"
+else
+    flunk "learning: the reader's ledger could not be put back; the run stops so no stage writes over it"
+    exit 1
 fi
 fi
 
@@ -2365,14 +2458,17 @@ else
         # not there" for a click that was refused for some other reason entirely.
         flunk "shortcut: could not click the Lookup pane — $why"
     else
-        if [ -z "$current" ] || ! "$helpers/click-element" com.xiaolaidict "$current" >/dev/null 2>&1; then
+        # By identifier: the field is labelled "Lookup shortcut" for VoiceOver, so the
+        # combination it draws is its value and no longer a title a click can be aimed at.
+        if [ -z "$current" ] || ! "$helpers/click-element" com.xiaolaidict lookup-shortcut-field >/dev/null 2>&1; then
             flunk "shortcut: nothing on the Lookup pane showing '$current' to arm"
         else
             # Two separate claims, read separately, so a failure says which half broke: the click
             # armed the field, and the armed field hears the keyboard.
             sleep 1
             armed=$("$helpers/panel" com.xiaolaidict)
-            if ! printf '%s' "$armed" | grep -q "Press a Shortcut"; then
+            # "Recording" is the armed field's accessibility value; its drawn title is not exposed.
+            if ! printf '%s' "$armed" | grep -q "Recording"; then
                 flunk "shortcut: clicking '$current' did not arm the field (saw: $(printf '%s' "$armed" | head -c 200))"
             else
                 pass "shortcut: clicking the combination arms the field"
@@ -2391,7 +2487,7 @@ else
                 # key), so a broken Escape would be covered for by the check that followed it.
                 "$helpers/keys" 53
                 sleep 0.5
-                if "$helpers/panel" com.xiaolaidict | grep -q "Press a Shortcut"; then
+                if "$helpers/panel" com.xiaolaidict | grep -q "Recording"; then
                     flunk "shortcut: Escape did not disarm the field"
                 else
                     pass "shortcut: Escape disarms the field"
@@ -2716,19 +2812,19 @@ if [ "$lookup_driven" = yes ]; then
             flunk "model: the lookup wrote no ledger row (waited ${waited}s)"
         fi
     else
-        chosen=$(sqlite3 -readonly "$ledger" "select coalesce(chosen_by, '') from sense_encounters where lookup_id = $lookup_id" 2>/dev/null || echo "")
-        abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $lookup_id" 2>/dev/null || echo "")
+        sense_after "$lookup_id"
+        chosen=$sense_chosen; abstained=$sense_abstained
         # Any of `model`, `reader` or `onlySense` is the sense path having answered; which one it
         # was is reported rather than demanded, because an entry with a single sense is keyed
         # without asking a model at all and that is not a failure.
         if [ -n "$chosen" ]; then
-            pass "model: the reader's own lookup reached the ledger with a sense (chosen_by=$chosen, ${waited}s)"
+            pass "model: the reader's own lookup reached the ledger with a sense (chosen_by=$chosen, row ${waited}s, sense ${sense_waited}s later)"
         elif [ -n "$abstained" ]; then
             # A sense nothing could key is a legitimate answer — but it has to be recorded as one.
             # What must never happen is a lookup that recorded neither.
-            pass "model: the reader's own lookup recorded why no sense was marked ($abstained)"
+            pass "model: the reader's own lookup recorded why no sense was marked ($abstained, ${sense_waited}s after its row)"
         else
-            flunk "model: the lookup recorded neither a chosen sense nor an abstention — the selector's answer never reached the ledger"
+            flunk "model: the lookup recorded neither a chosen sense nor an abstention in ${sense_waited}s — the selector's answer never reached the ledger"
         fi
     fi
 fi
@@ -2788,12 +2884,12 @@ else
             # lookup reaches the ledger whether the model resolved the sense, abstained, or was
             # never asked — so "the client reconnected" was a claim about a path this row does
             # not touch. The sense the lookup recorded is what says which.
-            after_chosen=$(sqlite3 -readonly "$ledger" "select coalesce(chosen_by, '') from sense_encounters where lookup_id = $recovered_id" 2>/dev/null || echo "")
-            after_abstained=$(sqlite3 -readonly "$ledger" "select coalesce(sense_abstention, '') from lookups where id = $recovered_id" 2>/dev/null || echo "")
+            sense_after "$recovered_id"
+            after_chosen=$sense_chosen; after_abstained=$sense_abstained
             if [ -n "$after_chosen" ] || [ -n "$after_abstained" ]; then
-                pass "model: and its sense path answered after the crash (chosen_by=${after_chosen:-none}, abstention=${after_abstained:-none})"
+                pass "model: and its sense path answered after the crash (chosen_by=${after_chosen:-none}, abstention=${after_abstained:-none}, ${sense_waited}s)"
             else
-                flunk "model: the lookup landed but its sense path recorded neither a choice nor an abstention — the client did not come back"
+                flunk "model: the lookup landed but its sense path recorded neither a choice nor an abstention in ${sense_waited}s — the client did not come back"
             fi
         else
             flunk "model: the app survived but its own lookups no longer reach the ledger (waited ${waited_after}s)"

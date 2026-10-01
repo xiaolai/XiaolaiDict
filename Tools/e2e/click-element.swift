@@ -101,7 +101,9 @@ let actionable: Set<String> = [
 ]
 func isEnabledControl(_ element: AXUIElement) -> Bool {
     guard let role = value(element, kAXRoleAttribute) as? String else { return false }
-    let identifiedRow = rowTarget && [kAXRowRole, kAXGroupRole, kAXCellRole].contains(role)
+    // A sidebar row is a static text carrying the pane's identifier (measured 2026-10-02), so it
+    // is a row here too — still only with `--row`, and only under the `library-` prefix.
+    let identifiedRow = rowTarget && [kAXRowRole, kAXGroupRole, kAXCellRole, kAXStaticTextRole].contains(role)
         && (value(element, kAXIdentifierAttribute) as? String)?.hasPrefix("library-") == true
     guard actionable.contains(role) || identifiedRow else { return false }
     let enabled = read(element, kAXEnabledAttribute)
@@ -115,15 +117,28 @@ func isEnabledControl(_ element: AXUIElement) -> Bool {
 /// message. A head index rather than `removeFirst`, which shifts the whole queue on every visit —
 /// and an elapsed-time bound as well as a visit count, because thousands of synchronous
 /// Accessibility requests can outrun any deadline the caller meant to keep even without cycling.
+/// How the last walk ended, for the failure message: a control that is in the tree and was never
+/// reached reads exactly like one that is not there, unless the walk says how far it got.
+var lastWalk = "no walk ran"
 func walk(until deadline: Date, _ visit: (AXUIElement) -> Void) {
     var queue = (value(ax, kAXWindowsAttribute) as? [AXUIElement]) ?? []
     var head = 0
+    let started = Date()
     while head < queue.count, head < visitLimit, Date() < deadline {
         let element = queue[head]
         head += 1
+        // **A row a lazy list has not drawn is skipped at its first read.** SwiftUI's `List` lists
+        // every row as a child and realises a screenful; the rest answer AXError -25202 to
+        // everything. Asking each for its names, state, frame and children spent the whole deadline
+        // on rows that cannot be clicked — measured on the E2E Mac, 303 of 507 elements reached, the
+        // wanted row among the rest — and `panel.swift` skips them for the same reason.
+        var role: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .invalidUIElement { continue }
         visit(element)
         queue += children(element)
     }
+    let why = head >= queue.count ? "finished" : head >= visitLimit ? "stopped at the visit limit" : "stopped at its deadline"
+    lastWalk = "\(why) after \(head) of \(queue.count) elements in \(String(format: "%.1f", Date().timeIntervalSince(started))) s"
 }
 
 func matches(_ title: String, until deadline: Date) -> [AXUIElement] {
@@ -161,8 +176,9 @@ func target(_ title: String) -> (AXUIElement, CGRect) {
         }
         usleep(100_000)
     }
+    let searched = lastWalk
     let seen = clickable(until: Date().addingTimeInterval(1))
-    die("no enabled control called \"\(title)\" came to rest within \(Int(targetDeadline)) s; clickable: \(seen.prefix(40))")
+    die("no enabled control called \"\(title)\" came to rest within \(Int(targetDeadline)) s (the last search \(searched)); clickable: \(seen.prefix(40))")
 }
 
 /// What is actually on top at `point`: nil when it is `element` or inside it, otherwise a
