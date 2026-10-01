@@ -98,6 +98,7 @@ extension AccessibilityReading {
     /// A CF value as `type`, checked by type ID first: `as?` on a CF type always succeeds.
     private func cast<T>(_ value: CFTypeRef?, _ typeID: CFTypeID, as _: T.Type) -> T? {
         guard let value, CFGetTypeID(value) == typeID else { return nil }
+        // swiftlint:disable:next force_cast
         return (value as! T)
     }
 }

@@ -100,7 +100,7 @@ public struct KeyResolver: Sendable {
         var table: [Int: Int] = [:]
         var ambiguous = 0
         for (id, set) in candidates {
-            if set.count == 1 { table[id] = set.first! } else { ambiguous += 1 }
+            if set.count == 1, let only = set.first { table[id] = only } else { ambiguous += 1 }
         }
         self.table = table
         self.ambiguousIDs = ambiguous

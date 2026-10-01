@@ -310,23 +310,31 @@ enum ScreenWordReader {
 
     private static func value(_ point: CGPoint) -> AXValue {
         var point = point
+        // Nil only when the type and the pointer disagree, and they are written together here.
+        // swiftlint:disable:next force_unwrapping
         return AXValueCreate(.cgPoint, &point)!
     }
 
     private static func value(_ range: CFRange) -> AXValue {
         var range = range
+        // Nil only when the type and the pointer disagree, and they are written together here.
+        // swiftlint:disable:next force_unwrapping
         return AXValueCreate(.cfRange, &range)!
     }
 
     private static func rect(_ ref: CFTypeRef?) -> CGRect? {
         guard let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
+        // Type ID checked above; `as?` on a CF type always succeeds, so it would check nothing.
+        // swiftlint:disable:next force_cast
         return AXValueGetValue(ref as! AXValue, .cgRect, &rect) ? rect : nil
     }
 
     private static func range(_ ref: CFTypeRef?) -> CFRange? {
         guard let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
         var range = CFRange()
+        // Type ID checked above; `as?` on a CF type always succeeds, so it would check nothing.
+        // swiftlint:disable:next force_cast
         return AXValueGetValue(ref as! AXValue, .cfRange, &range) ? range : nil
     }
 }

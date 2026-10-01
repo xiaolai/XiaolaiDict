@@ -293,9 +293,11 @@ func sampleLookup(_ mark: SenseMark?) -> LookupPresentation {
     //
     // Force-unwrapped: the list is two literal entries, so nil here would be this preview being
     // wrong about its own sample rather than anything the app could hit.
+    // swiftlint:disable force_unwrapping
     let entries = NonEmpty([
         sampleEntry("New Oxford American Dictionary"), sampleEntry("Oxford Thesaurus"),
     ])!
+    // swiftlint:enable force_unwrapping
     return LookupPresentation(
         request: 2,
         term: "fine",

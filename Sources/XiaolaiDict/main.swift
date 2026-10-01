@@ -15,6 +15,8 @@ case .failure(let error):
     exit(CommandStatus.usage.rawValue)
 
 case .success(.lookup(let term, let repeats, let interval)):
+    // Nothing in this task throws: the `try` is inside the closure `run` calls, and `run` handles it.
+    // swiftlint:disable:next unhandled_throwing_task
     Task {
         let client = DictionaryClient()
         let status = await LookupCommand.run(term: term, repeats: repeats, interval: interval) { term throws(CancellationError) in

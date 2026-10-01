@@ -3,7 +3,8 @@
 #
 #   make          swift test, then bring .build/XiaolaiDict.app up to date
 #   make run      the same, then quit the running copy, open the new one and check it answers
-#   make test     swift test, and the icon generator's tests
+#   make test     lint, swift test, and the icon generator's tests
+#   make lint     SwiftLint's correctness rules over Sources, warnings failing (.swiftlint.yml)
 #   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST).
 #                 STAGES="drawer recogniser" runs only those; with none, all of them. A full run
@@ -25,7 +26,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-tools icon strings e2e e2e-status release clean metal-guard
+.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-status release clean metal-guard
 
 # Machine-local settings, untracked: the name of your end-to-end machine and anything else that
 # belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
@@ -62,13 +63,13 @@ export XIAOLAIDICT_NOTARY_PROFILE := $(NOTARY_PROFILE)
 # from. The icon generator reaches the bundle only by regenerating Resources/, and the script runs
 # its tests with every regeneration — which a change to the generator always triggers — before any
 # bundle is built from the result: they run exactly when they can affect what is published.
-all: test-swift
+all: lint test-swift
 	@Tools/build-bundle.sh build
 
-run: test-swift
+run: lint test-swift
 	@Tools/build-bundle.sh run
 
-test: test-swift test-tools
+test: lint test-swift test-tools
 
 # The Metal toolchain lives on a cryptex whose directory name changes when it remounts, and the
 # build cache keeps the old absolute path — so the next build dies with "unable to spawn process
@@ -92,6 +93,16 @@ test-swift: metal-guard
 # **Tracked, unlike the specification it belongs to.** It first went in under `dev-docs/`, which is
 # gitignored — so this line made `make test` pass here and fail on any fresh clone, discovery of a
 # missing directory being an `ImportError`. A gate that depends on an untracked file is not a gate.
+# Correctness rules only — `.swiftlint.yml` says which and why. `--strict` because a warning nobody
+# fails on is a warning nobody reads. The version is pinned: a new SwiftLint can add findings to a rule,
+# and a gate that moves by itself is not a gate.
+SWIFTLINT_VERSION := 0.65.1
+lint:
+	@command -v swiftlint >/dev/null || { echo "swiftlint not found: brew install swiftlint" >&2; exit 1; }
+	@test "$$(swiftlint version)" = "$(SWIFTLINT_VERSION)" || \
+	  { echo "swiftlint $$(swiftlint version), this gate is pinned to $(SWIFTLINT_VERSION)" >&2; exit 1; }
+	swiftlint lint --strict --quiet
+
 test-tools:
 	python3 -m unittest discover -s Tools/tests
 	python3 -m unittest discover -s Tools/fsrs
@@ -120,7 +131,7 @@ e2e-status:
 
 # Tests first, as for every bundle: nothing is published over a failing suite, and a notarised
 # one least of all, since it is the build other people download.
-release: test-swift
+release: lint test-swift
 	@Tools/release.sh
 
 clean:

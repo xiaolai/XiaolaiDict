@@ -56,6 +56,8 @@ public enum LocalModelSize: String, CaseIterable, Codable, Sendable, Comparable 
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool {
+        // `allCases` holds every case, so neither lookup can be nil.
+        // swiftlint:disable:next force_unwrapping
         allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
     }
 
@@ -90,6 +92,8 @@ public enum ModelHost: String, Sendable, Equatable, Hashable, CaseIterable {
             components.host = "huggingface.co"
             components.path = "/\(repository)/resolve/\(revision)/\(path)"
         }
+        // Scheme and host set, and a path that starts with `/`: the three things `url` checks.
+        // swiftlint:disable:next force_unwrapping
         return components.url!
     }
 }
