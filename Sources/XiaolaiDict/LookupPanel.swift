@@ -36,7 +36,7 @@ struct PanelTicket: Equatable {
 final class LookupPanelModel {
     var content: PanelContent?
     /// Per kind, so a panel of one kind does not inherit the minimum of another.
-    var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize
+    var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize(for: .standard)
 }
 
 /// The lookup panel: floats over the app being read — in its Space, even full screen — without
@@ -100,7 +100,10 @@ final class LookupPanelController: LookupPanelPresenting {
     private(set) var lastPointer = UpPoint(.zero)
     /// Where the scene should be placed, worked out before it opens. A scene cannot be handed a
     /// frame, so `defaultWindowPlacement` reads this back.
-    private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize)
+    private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize(for: .standard))
+    /// The reader's text size, asked at each showing: the window opens as wide as the card is at
+    /// that size. Set by the app once its appearance model exists; a test leaves it standard.
+    var textSize: @MainActor () -> TextSize = { .standard }
 
     /// How the panel's window is opened and dismissed.
     ///
@@ -177,11 +180,12 @@ final class LookupPanelController: LookupPanelPresenting {
         lastPointer = pointer
         let kind = content.kind
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
-        let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize))
+        let size = textSize()
+        let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize(for: size)))
         placement = PanelPlacement.frame(
-            for: kind.defaultSize, near: pointer, within: visible)
+            for: kind.defaultSize(for: size), near: pointer, within: visible)
 
-        model.minimumSize = kind.minimumSize
+        model.minimumSize = kind.minimumSize(for: size)
         model.content = content
         shownKind = kind
         // The environment's real action, captured from the menu-bar label. An `EnvironmentValues()`

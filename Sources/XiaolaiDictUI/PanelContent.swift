@@ -146,17 +146,23 @@ public enum PanelContent {
         /// A starting size, not a fixed one — the lookup window hugs its content, so this is what
         /// it opens at before the card has laid itself out.
         ///
+        /// **At the reader's text size.** The card's own widths are `Scale`'s and grow with the
+        /// text; a window that opened at the standard size's width cut a Huge card off on both
+        /// sides (E2E Mac, 2026-10-02). A message is never narrower than its token and never
+        /// narrower than a card at that size, since its words grow as the card's do.
+        ///
         /// Exhaustive, so a new kind of content cannot quietly get another kind's size.
-        public var defaultSize: NSSize {
+        public func defaultSize(for size: TextSize) -> NSSize {
+            let space = Scale(size).space
             switch self {
-            case .lookup: NSSize(width: Token.Panel.cardOpeningWidth, height: Token.Panel.cardOpeningHeight)
-            case .message: NSSize(width: Token.Panel.messageWidth, height: Token.Panel.messageHeight)
+            case .lookup: return NSSize(width: space.cardWidth, height: Token.Panel.cardOpeningHeight)
+            case .message: return NSSize(width: max(Token.Panel.messageWidth, space.cardWidth), height: Token.Panel.messageHeight)
             }
         }
 
-        public var minimumSize: NSSize {
+        public func minimumSize(for size: TextSize) -> NSSize {
             switch self {
-            case .lookup: NSSize(width: Scale.standard.space.cardMinWidth, height: Token.Panel.messageMinHeight)
+            case .lookup: NSSize(width: Scale(size).space.cardMinWidth, height: Token.Panel.messageMinHeight)
             case .message: NSSize(width: Token.Panel.messageMinWidth, height: Token.Panel.messageMinHeight)
             }
         }

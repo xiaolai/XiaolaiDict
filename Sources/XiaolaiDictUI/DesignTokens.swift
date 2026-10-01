@@ -113,13 +113,6 @@ public enum Token {
     }
 
     enum Panel {
-        /// What the lookup window **opens** at, before the card has laid itself out — the scene
-        /// is `.contentSize`, so the card's own width and its content decide the rest.
-        ///
-        /// The widths live in `Scale`, not here, because they grow with the reader's text: a fixed
-        /// 400 pt is the right measure at one size and too narrow at every larger one. This is
-        /// `Scale.standard`'s, which is what a reader who has never changed the setting gets.
-        static let cardOpeningWidth = Scale.standard.space.cardWidth
         /// A two-line answer with its sentence, roughly — **the size the window opens at, before its
         /// content has any say.** Wrong for a long answer and wrong for a short one, which is why
         /// `fitsItsContent(upTo:)` then moves the window to the height the card actually wants.
