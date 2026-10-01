@@ -91,6 +91,26 @@
         }
       }
     },
+    "%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "%@ — %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ — %2$@"
+          }
+        }
+      }
+    },
     "%@ — and %@ could not be put back, so no shortcut is registered" : {
       "comment" : "Both the new shortcut and the old one were refused",
       "localizations" : {
@@ -889,9 +909,6 @@
     },
     "Review today · %lld" : {
 
-    },
-    "Review…" : {
-      "comment" : "Menu bar item"
     },
     "Save the answer" : {
 

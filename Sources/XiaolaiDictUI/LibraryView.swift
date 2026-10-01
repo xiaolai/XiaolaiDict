@@ -13,6 +13,7 @@ import XiaolaiDictCore
 /// answer is behind the same deliberate reveal the review surface uses, per card, never persisted.
 public struct LibraryView: View {
     @Environment(\.scale) private var scale
+    @Environment(\.colorScheme) private var scheme
     private let showsSidebar: Bool
     public let state: LibraryPresentation
     public let act: @MainActor (LibraryAction) -> Void
@@ -54,49 +55,32 @@ public struct LibraryView: View {
     }
 
     private var detail: some View {
-        VStack(spacing: 0) {
-            // **Above every branch, because a failure is not a state of the list.** `problem` was
-            // drawn only by the empty view, so a database error under the Suggested filter — or
-            // one that arrived while rows were on screen — read as "Nothing to suggest yet", or
-            // as nothing at all.
-            if let problem = state.problem {
-                Text(verbatim: problem)
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, scale.space.padAcross)
-                    .padding(.vertical, scale.space.tight)
-                Button("Retry") { act(.retry) }
-            }
-            HStack(alignment: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    if state.filter == .suggested { suggestions }
-                    else if state.rows.isEmpty { empty }
-                    else {
-                        list
-                        if state.hasMore {
-                            Button("Show more") { act(.showMore) }.padding(.bottom, scale.space.line)
-                        }
-                    }
-                }
-                if let inspector = state.inspector {
-                    Divider()
-                    ScrollView { self.inspector(inspector) }
-                        .frame(width: scale.space.libraryInspectorWidth)
-                }
-            }
-            Divider()
-            footer
+        Group {
+            if state.filter == .suggested { suggestions }
+            else if state.rows.isEmpty { empty }
+            else { list }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Shown while one card is selected; closing it lets go of the selection.
+        .inspector(isPresented: Binding(get: { state.inspector != nil },
+                                        set: { if !$0 { act(.select([])) } })) {
+            if let inspector = state.inspector { self.inspector(inspector) }
+        }
+        .modifier(LibraryPaneChrome(notice: { notice }, footer: { footer }))
         // **The system's chrome, not a row of our own.** The title, the search field and the two
         // filters were drawn as content with a `Divider` under them — the pre-Big Sur shape, and
         // the reason this window read as old beside Notes or Finder. A real toolbar is also what
         // insets the sidebar: on macOS 26 and later `NavigationSplitView` gives its sidebar
         // floating Liquid Glass, and the detail's safe area is what it floats against.
-        .navigationTitle("Library")
+        .navigationSubtitle(tally)
         .modifier(LibrarySearch(text: Binding(get: { state.search }, set: { act(.search($0)) }), layout: layout, chooseLayout: chooseLayout))
         .toolbar {
+            // **In the toolbar, because it acts on the collection and not on a selection.** In the
+            // footer it stood beside the selection's own buttons and read as one of them.
+            ToolbarItem {
+                Button { act(.export) } label: { Label("Export…", systemImage: "square.and.arrow.up") }
+                    .help("Export…")
+            }
             // **Absent until there is something to pick.** A tag menu over no tags is a control
             // that cannot do anything, which reads as one that is broken. Hidden under Suggested,
             // which has no tags: a control that appears to narrow what is on screen and silently
@@ -127,10 +111,12 @@ public struct LibraryView: View {
     /// publisher's words with their own is the point, not a hidden capability.
     @ViewBuilder
     private func inspector(_ inspector: LibraryPresentation.Inspector) -> some View {
-        VStack(alignment: .leading, spacing: scale.space.tight) {
+        let accent = ReadingPalette.accent(for: inspector.word).color(in: scheme)
+        LibraryInspector(accent: accent) {
             HStack(spacing: scale.space.inline) {
                 Text(verbatim: inspector.word)
-                    .font(.system(size: scale.text.body, weight: .medium))
+                    .font(.system(size: scale.text.strong, weight: .semibold))
+                    .foregroundStyle(accent)
                 // **Whose words these are**, because replacing the publisher's for the first time
                 // and editing your own read identically without it.
                 Text(inspector.isReaders ? "Your own answer" : "From the dictionary")
@@ -144,7 +130,7 @@ public struct LibraryView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: scale.text.small))
                 HStack(spacing: scale.space.inline) {
-                    Button("Save the answer") { act(.setAnswer(noteID: inspector.id, text: draft)) }
+                    IconButton(title: "Save the answer", symbol: "square.and.arrow.down") { act(.setAnswer(noteID: inspector.id, text: draft)) }
                         .disabled(!canSave(inspector))
                     // **Said, not merely disabled.** A button that refuses a click without a reason
                     // is a broken switch, and "blank" is not guessable from a greyed-out control.
@@ -158,17 +144,13 @@ public struct LibraryView: View {
             } else {
                 switch inspector.closedAnswer {
                 case .reveal:
-                    Button("Show the meaning") { interaction.revealed.insert(inspector.id) }
-                        .buttonStyle(.link)
-                        .font(.system(size: scale.text.micro))
+                    IconButton(title: "Show the meaning", symbol: "eye") { interaction.revealed.insert(inspector.id) }
                 case .write:
                     // **A remedy beside the diagnosis.** The editor was reachable only through the
                     // reveal, so the one answer that most needed writing could never be written.
                     // There is nothing here to give away, so opening the editor teaches nothing early.
                     Text("No meaning is available for this saved target.").foregroundStyle(.secondary)
-                    Button("Write an answer") { interaction.revealed.insert(inspector.id) }
-                        .buttonStyle(.link)
-                        .font(.system(size: scale.text.micro))
+                    IconButton(title: "Write an answer", symbol: "square.and.pencil") { interaction.revealed.insert(inspector.id) }
                 }
             }
             if !inspector.tags.isEmpty {
@@ -195,7 +177,6 @@ public struct LibraryView: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: Token.Library.inspectorHistoryHeight)
         }
-        .padding(scale.space.padAcross)
         // **Reset when the row changes, never carried.** A draft left over from the previous
         // selection would be saved onto this word the moment the reader pressed the button.
         //
@@ -324,8 +305,8 @@ public struct LibraryView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
-                    Button("Study") { act(.study(lemma: suggestion.lemma)) }
-                    Button("Already know") {
+                    IconButton(title: "Study", symbol: "plus.circle") { act(.study(lemma: suggestion.lemma)) }
+                    IconButton(title: "Already know", symbol: "checkmark.circle") {
                         act(.ignore(lemma: suggestion.lemma, language: suggestion.language))
                     }
                 }
@@ -359,7 +340,7 @@ public struct LibraryView: View {
                                      ? lemma.lemma : "\(lemma.lemma) · \(lemma.language)")
                                     .font(.system(size: scale.text.small))
                                 Spacer(minLength: 0)
-                                Button("Offer it again") {
+                                IconButton(title: "Offer it again", symbol: "arrow.uturn.backward") {
                                     act(.unignore(lemma: lemma.lemma, language: lemma.language))
                                 }
                                 .buttonStyle(.link)
@@ -395,13 +376,13 @@ public struct LibraryView: View {
                 // search is a recovery button that changes nothing, which is the same broken
                 // switch as one that refuses its click.
                 if !state.search.isEmpty {
-                    Button("Clear the search") { act(.search("")) }
+                    IconButton(title: "Clear the search", symbol: "xmark.circle") { act(.search("")) }
                 }
                 if state.tag != nil {
-                    Button("Show every tag") { act(.filterTag(nil)) }
+                    IconButton(title: "Show every tag", symbol: "tag.slash") { act(.filterTag(nil)) }
                 }
                 if state.filter != .all {
-                    Button("Show everything saved") { act(.filter(.all)) }
+                    IconButton(title: "Show everything saved", symbol: "tray.full") { act(.filter(.all)) }
                 }
             }
         }
@@ -412,75 +393,86 @@ public struct LibraryView: View {
 
     /// **Three things, each its own view**: what the reader is looking at, what they can do to
     /// the selection, and where the last export went.
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: scale.space.inline) {
-                tally
-                Spacer(minLength: 0)
-                if !state.selection.isEmpty { selectionActions }
-                // **Outside the selection block**, because putting a bulk action back is not an
-                // operation on whatever happens to be selected now.
-                if let undoable = state.undoable {
-                    Button(undoable.name) { act(.undo) }
-                }
-                Button("Export…") { act(.export) }
-            }
-            .padding(scale.space.padAcross)
-            if let exported = state.exported {
-                // The path, because an export the reader cannot find did not happen for them.
-                Text(verbatim: exported)
-                    .font(.system(size: scale.text.micro))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, scale.space.padAcross)
-                    .padding(.bottom, scale.space.line)
+    /// **Above every branch, because a failure is not a state of the list.** `problem` was drawn
+    /// only by the empty view, so a database error under the Suggested filter — or one that arrived
+    /// while rows were on screen — read as "Nothing to suggest yet", or as nothing at all.
+    @ViewBuilder private var notice: some View {
+        if let problem = state.problem {
+            LibraryNotice {
+                Text(verbatim: problem).foregroundStyle(.orange).textSelection(.enabled)
+                IconButton(title: "Retry", symbol: "arrow.clockwise") { act(.retry) }
             }
         }
     }
 
-    /// What the reader is looking at, and how well they are remembering it.
-    @ViewBuilder private var tally: some View {
-        // **The scope is on the button**, because a bulk action the reader misjudged is the one
-        // they cannot see the extent of until it has happened.
-        Text(state.selection.isEmpty
-             ? "\(state.total) cards"
-             : "\(state.selection.count) selected")
-            .font(.system(size: scale.text.small))
-            .foregroundStyle(.secondary)
+    /// Absent with nothing pending: a selection, an undo, more to show, or an export just written.
+    @ViewBuilder private var footer: some View {
+        let showsMore = state.hasMore && state.filter != .suggested && !state.rows.isEmpty
+        let hasFooter = !state.selection.isEmpty || state.undoable != nil || showsMore || state.exported != nil
+        if hasFooter {
+            LibraryFooter {
+                if !state.selection.isEmpty {
+                    // **The scope is on the button**, because a bulk action the reader misjudged is
+                    // the one they cannot see the extent of until it has happened.
+                    Text("\(state.selection.count) selected")
+                        .font(.system(size: scale.text.small))
+                        .foregroundStyle(.secondary)
+                }
+                if let exported = state.exported {
+                    // The path, because an export the reader cannot find did not happen for them.
+                    Text(verbatim: exported)
+                        .font(.system(size: scale.text.micro))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if !state.selection.isEmpty { selectionActions }
+                // **Outside the selection block**, because putting a bulk action back is not an
+                // operation on whatever happens to be selected now.
+                if let undoable = state.undoable {
+                    IconButton(title: undoable.name, symbol: "arrow.uturn.backward") { act(.undo) }
+                }
+                if showsMore { IconButton(title: "Show more", symbol: "arrow.down.circle") { act(.showMore) } }
+            }
+        }
+    }
+
+    /// What the reader is looking at, and how well they are remembering it — the window's subtitle.
+    private var tally: Text {
+        let cards = Text("\(state.total) cards")
         // **The denominator, always beside the rate** (U03). A percentage on its own is the
         // one figure here nobody can check afterwards, and absent is what it is when there
         // has been nothing eligible to measure.
-        if let retention = state.retention {
-            Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
-                .font(.system(size: scale.text.micro))
-                .foregroundStyle(.secondary)
-        }
+        guard let retention = state.retention else { return cards }
+        let recalled = Text("\(retention.rate, format: .percent.precision(.fractionLength(0))) recalled, over \(retention.attempts) reviews")
+        return Text("\(cards) · \(recalled)")
     }
 
     /// What can be done to the selection, each control named for what it will do to *this* one.
     @ViewBuilder private var selectionActions: some View {
         if state.canConfirm {
-            Button("Confirm \(state.selection.count)") { act(.confirm) }
+            IconButton(title: "Confirm \(state.selection.count)", symbol: "checkmark.seal") { act(.confirm) }
         }
         // **Named for what it will do to this selection.** A Pause button over rows that
         // are all resting is a control whose label is wrong before it is pressed.
         if state.selectionIsPaused {
-            Button("Resume \(state.selection.count)") { act(.resume) }
+            IconButton(title: "Resume \(state.selection.count)", symbol: "play") { act(.resume) }
         } else {
-            Button("Pause \(state.selection.count)") { act(.pause) }
+            IconButton(title: "Pause \(state.selection.count)", symbol: "pause") { act(.pause) }
         }
         if state.selectionIsArchived {
-            Button("Unarchive \(state.selection.count)") { act(.unarchive) }
+            IconButton(title: "Unarchive \(state.selection.count)", symbol: "arrow.up.bin") { act(.unarchive) }
         } else {
-            Button("Archive \(state.selection.count)") { act(.archive) }
+            IconButton(title: "Archive \(state.selection.count)", symbol: "archivebox") { act(.archive) }
         }
         // **Two different deletions, named apart.** Removing from study keeps the reading;
         // deleting the reading keeps the card. A single "Delete" would mean whichever the
         // reader assumed.
-        Button("Remove \(state.selection.count) from study", role: .destructive) {
+        IconButton(title: "Remove \(state.selection.count) from study", symbol: "minus.circle", role: .destructive) {
             act(.removeFromStudy)
         }
-        Button("Delete the reading behind \(state.selection.count)", role: .destructive) {
+        IconButton(title: "Delete the reading behind \(state.selection.count)", symbol: "trash", role: .destructive) {
             act(.deleteReading)
         }
         .help(Text("Keeps the cards and removes the sentences they were saved from"))
@@ -518,8 +510,9 @@ struct LibraryRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.tight) {
             HStack(spacing: scale.space.inline) {
+                // The same face as a History or Review card's word: one reading, one look.
                 Text(verbatim: row.word)
-                    .font(.system(size: scale.text.body, weight: .medium))
+                    .font(.system(size: scale.text.strong, weight: .semibold))
                     .foregroundStyle(ReadingPalette.accent(for: row.word).color(in: scheme))
                 if let status = row.status {
                     Text(status.name)

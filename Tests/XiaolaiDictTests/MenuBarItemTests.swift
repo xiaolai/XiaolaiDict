@@ -196,6 +196,19 @@ struct MenuBarItemTests {
                 "the stage reads a combination out of a tooltip that names none: \(said)")
     }
 
+    // MARK: - One door to the one window
+
+    /// **Review is a pane of the Library, so the menu offers the window once.** "Review…" and
+    /// "Library…" were two items for one window — and the window reopens on the pane the reader
+    /// last used, so a second item bought nothing but a line to read past.
+    @Test func theMenuOffersTheLibraryOnce() throws {
+        let item = try String(
+            contentsOf: Self.repository.appending(path: "Sources/XiaolaiDict/MenuBarItem.swift"),
+            encoding: .utf8)
+        #expect(!item.contains("\"Review…\""), "the menu still has a second door into the Library")
+        #expect(item.components(separatedBy: "\"Library…\"").count - 1 == 1)
+    }
+
     // MARK: - That it is kept current
 
     /// **Written on every change, not once at launch.** Standing the hot key down for the settings

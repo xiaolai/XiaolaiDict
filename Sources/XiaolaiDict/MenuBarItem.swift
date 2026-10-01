@@ -140,10 +140,10 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
         menu.addItem(pauseItem())
 
         menu.addItem(.separator())
-        // The two windows. **Reading history is not here**: a left click on the icon opens it, and
+        // The one window. **Reading history is not here**: a left click on the icon opens it, and
         // an item that repeats the click that opened the menu is a line the reader reads past.
-        menu.addItem(item(String(localized: "Review…", comment: "Menu bar item"),
-                          action: #selector(showReview)))
+        // **Nor is Review**: it is a pane of the Library, which reopens on the pane last used, so a
+        // second item was a second door into the same room.
         menu.addItem(item(String(localized: "Library…", comment: "Menu bar item"),
                           action: #selector(showLibrary)))
 
@@ -204,7 +204,6 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
 
     // MARK: - What the items do
 
-    @objc private func showReview() { app.showReview() }
     @objc private func showLibrary() { app.showLibrary() }
     @objc private func showSettings() { app.showSettings() }
     @objc private func quit() { NSApp.terminate(nil) }
