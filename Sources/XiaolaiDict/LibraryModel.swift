@@ -897,6 +897,7 @@ struct LibrarySceneView: View {
             LibraryReviewPane(due: model.reviewCount, dictionary: model.reviewDictionary,
                               problem: model.reviewProblem, heldBack: model.reviewHeldBack,
                               unconfirmed: model.reviewUnconfirmed,
+                              sittingOffersFind: review.presentation.offersFindUnconfirmed,
                               canUndo: review.canUndo, undo: { review.act(.undo) },
                               findUnconfirmed: { model.findUnconfirmed() }) {
                 ReviewSceneView(model: review, findUnconfirmed: { model.findUnconfirmed() })
