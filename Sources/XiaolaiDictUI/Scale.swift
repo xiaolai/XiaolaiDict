@@ -189,6 +189,8 @@ struct Scale: Equatable, Sendable {
         /// It is a default and not a ceiling: the reader can drag the panel taller and
         /// `rememberChosenSize` keeps that size for the next lookup of the same kind.
         let cardMaxHeight: CGFloat
+        /// A bounded detail column beside a Library collection.
+        let libraryInspectorWidth: CGFloat
 
         /// How a pile of cards is offset behind its front card. Smaller than `stack`: these are
         /// the same cards shown stacked rather than listed, so the gap has to read as depth
@@ -215,6 +217,7 @@ struct Scale: Equatable, Sendable {
             cardMinWidth = em * 26
             cardMaxWidth = em * 46
             cardMaxHeight = em * 32
+            libraryInspectorWidth = em * 26
             peek = em * 0.625
             // **Narrower than `peek`, and that ordering is the whole effect.** At `em * 0.80` the
             // side step was larger than the vertical one, so the second plate gave up 19.2 pt of

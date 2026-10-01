@@ -31,7 +31,7 @@ func isAbsent(_ error: AXError) -> Bool { error == .noValue || error == .attribu
 /// what that will click must be the same question — a stage reads one and acts through the other.
 let actionable: Set<String> = [
     kAXButtonRole, kAXRadioButtonRole, kAXCheckBoxRole, kAXPopUpButtonRole, kAXMenuButtonRole,
-    kAXDisclosureTriangleRole, "AXLink", "AXTab",
+    kAXDisclosureTriangleRole, "AXLink", "AXTab", kAXTextFieldRole, kAXTextAreaRole, kAXMenuItemRole,
 ]
 
 /// A frame, or nil where the element has none — `click-element` refuses a control without one,
@@ -50,7 +50,7 @@ func frame(_ element: AXUIElement) -> CGRect? {
 /// matches on: a control named only through its value could be clicked and was absent from this
 /// report, so the two helpers disagreed about what was on screen.
 func names(_ element: AXUIElement) -> [String] {
-    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXHelpAttribute]
+    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXHelpAttribute, kAXIdentifierAttribute]
         .compactMap { attribute(element, $0) as? String }
         .filter { !$0.isEmpty }
 }
@@ -73,38 +73,60 @@ func isEnabledControl(_ element: AXUIElement) -> Bool {
 /// walk is bounded by a node count *and* a deadline — thousands of synchronous Accessibility
 /// reads can outrun any patience the calling stage has — and it says when either bound stopped
 /// it, because a truncated report that looks complete is how absent content gets asserted.
-func inspect(_ window: AXUIElement, until deadline: Date) -> (texts: [String], controls: [String], complete: Bool) {
+func inspect(_ window: AXUIElement, until deadline: Date) -> (texts: [String], controls: [String], nodes: [[String: Any]], complete: Bool) {
     var queue: [AXUIElement] = [window], head = 0
     var texts: [String] = []
     var controls = Set<String>()
+    var nodes: [[String: Any]] = []
     var complete = true
     while head < queue.count {
         if head >= 4_000 || Date() >= deadline { complete = false; break }
         let node = queue[head]; head += 1
+        var item: [String: Any] = ["role": attribute(node, kAXRoleAttribute) as? String ?? ""]
+        if let identifier = attribute(node, kAXIdentifierAttribute) as? String { item["identifier"] = identifier }
+        item["names"] = names(node)
+        for (key, name) in [("selected", kAXSelectedAttribute), ("focused", kAXFocusedAttribute),
+                            ("enabled", kAXEnabledAttribute)] {
+            let seen = read(node, name)
+            if let flag = seen.value as? Bool { item[key] = flag }
+            if seen.error != .success && !isAbsent(seen.error) { complete = false }
+        }
+        if let rect = frame(node) {
+            item["frame"] = ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+        }
+        if let value = attribute(node, kAXValueAttribute) as? NSNumber { item["value"] = value }
+        nodes.append(item)
         for name in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
-            guard let text = attribute(node, name) as? String, !text.isEmpty else { continue }
+            let seen = read(node, name)
+            if seen.error != .success && !isAbsent(seen.error) { complete = false }
+            guard let text = seen.value as? String, !text.isEmpty else { continue }
             texts.append(text)
         }
         if isEnabledControl(node), frame(node) != nil { controls.formUnion(names(node)) }
-        queue += attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        let descendants = read(node, kAXChildrenAttribute)
+        if descendants.error != .success && !isAbsent(descendants.error) { complete = false }
+        queue += descendants.value as? [AXUIElement] ?? []
     }
-    return (texts, controls.sorted(), complete)
+    return (texts, controls.sorted(), nodes, complete)
 }
 
 var windows: [[String: Any]] = []
-var complete = true
+var complete = AXIsProcessTrusted()
 if let app = NSRunningApplication.runningApplications(withBundleIdentifier: CommandLine.arguments[1]).first {
     let element = AXUIElementCreateApplication(app.processIdentifier)
     // A synchronous Accessibility call to a busy app otherwise waits as long as the system
     // default, which is longer than any stage's patience.
     AXUIElementSetMessagingTimeout(element, 2)
     let deadline = Date().addingTimeInterval(10)
-    for window in attribute(element, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
+    let windowRead = read(element, kAXWindowsAttribute)
+    if windowRead.error != .success { complete = false }
+    for window in windowRead.value as? [AXUIElement] ?? [] {
         let seen = inspect(window, until: deadline)
         if !seen.complete { complete = false }
-        windows.append(["texts": seen.texts, "controls": seen.controls])
+        windows.append(["texts": seen.texts, "controls": seen.controls, "nodes": seen.nodes,
+                        "title": attribute(window, kAXTitleAttribute) as? String ?? ""])
     }
-}
+} else { complete = false }
 let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
 // **Said, so a truncated report cannot be read as a complete one.** A walk stopped by its node
 // cap or its deadline returns what it found, and a caller asserting something is absent needs to

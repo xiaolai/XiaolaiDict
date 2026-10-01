@@ -151,7 +151,15 @@ struct SetupWiringTests {
         let at = try #require(lines.firstIndex { $0.contains(view) }, "nothing constructs \(view)")
         let indent = { (line: Substring) in line.prefix { $0 == " " }.count }
         var chain: [Substring] = []
-        for line in lines[(at + 1)...] {
+        var start = at + 1
+        if lines[at].trimmingCharacters(in: .whitespaces).hasSuffix("{") {
+            var depth = 1
+            while start < lines.count, depth > 0 {
+                depth += lines[start].filter { $0 == "{" }.count - lines[start].filter { $0 == "}" }.count
+                start += 1
+            }
+        }
+        for line in lines[start...] {
             if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
             guard indent(line) > indent(lines[at]) else { break }
             chain.append(line)
@@ -240,7 +248,7 @@ struct SetupWiringTests {
         // And the panel puts both into the environment the card reads — **on the view that shows
         // the card**, not merely somewhere in the file.
         let chain = try modifiers(
-            try code("Sources/XiaolaiDict/LookupPanel.swift"), on: "PanelView(content: content)")
+            try code("Sources/XiaolaiDict/LookupPanel.swift"), on: "VStack(spacing: 0)")
         #expect(chain.contains("environment(\\.translation, translation())"),
                 "the translator is not put into the environment on the view that draws the card")
         #expect(chain.contains("environment(\\.explainer, explainer())"),

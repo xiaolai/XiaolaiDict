@@ -1,3 +1,4 @@
+import Foundation
 import XiaolaiDictCore
 import Observation
 
@@ -33,11 +34,38 @@ public final class HistoryDrawerModel {
     /// that only care about what the drawer shows.
     public var delete: ((ReadingEntry) -> Void)?
 
+    public var discard: (@MainActor (ReadingEntry) async throws -> DispositionResult)?
+    public var undoDiscard: (@MainActor (UUID) async throws -> DispositionResult)?
+    public var keepForLearning: (@MainActor (ReadingEntry) -> Void)?
+    public var showInLibrary: (@MainActor (ReadingEntry) -> Void)?
+    public private(set) var discardedReceipt: DispositionResult?
+    public func undoLastDiscard() {
+        guard let receipt = discardedReceipt, let undoDiscard else { return }
+        Task {
+            do {
+                let result = try await undoDiscard(receipt.operation)
+                if result.skipped > 0 { problem = String(localized: "Some readings changed since Discard and were left unchanged.") }
+                // **Only this undo's receipt.** A discard made while the ledger was answering has
+                // installed its own, and clearing that one leaves its readings with no way back.
+                if discardedReceipt?.operation == receipt.operation { discardedReceipt = nil }
+            } catch { problem = error.localizedDescription }
+        }
+    }
     private var pending: [Int: Task<Void, Never>] = [:]
 
     public init() {}
 
+    private var discarding: Set<Int> = []
     public func remove(_ entry: ReadingEntry) {
+        if let discard {
+            guard discarding.insert(entry.id).inserted else { return }
+            Task {
+                defer { discarding.remove(entry.id) }
+                do { let receipt = try await discard(entry); if receipt.affected > 0 { discardedReceipt = receipt } }
+                catch { problem = error.localizedDescription }
+            }
+            return
+        }
         guard !removing.contains(entry.id) else { return }
         removing.insert(entry.id)
         pending[entry.id] = Task { [weak self] in

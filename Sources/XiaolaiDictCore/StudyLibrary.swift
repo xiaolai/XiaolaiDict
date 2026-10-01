@@ -84,6 +84,10 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
     /// Their own sentence, for recognising the row. **Not the answer** — the library lists what the
     /// reader saved, and a list that prints the meanings is a list that teaches nothing.
     public let excerpt: String
+    /// Where the looked-up word sits in `excerpt`: `Lemmatizer.parts` over the reading's own captured
+    /// range, the same answer the drawer's `markedRanges` gives. A search for the word's spelling
+    /// marked `he` inside `the` and never found the second half of a phrasal verb read apart.
+    public let excerptMarks: [NSRange]
     public let readAt: Date?
     /// The script the word is written in, so a row outside the reader's study scripts can be
     /// annotated rather than hidden.
@@ -92,12 +96,14 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
 
     public var id: UUID { note.id }
 
-    public init(note: StudyNote, card: StudyCard?, word: String, excerpt: String, readAt: Date?,
+    public init(note: StudyNote, card: StudyCard?, word: String, excerpt: String,
+                excerptMarks: [NSRange], readAt: Date?,
                 script: ProbeScript?, readiness: StudyReadiness) {
         self.note = note
         self.card = card
         self.word = word
         self.excerpt = excerpt
+        self.excerptMarks = excerptMarks
         self.readAt = readAt
         self.script = script
         self.readiness = readiness
@@ -123,7 +129,7 @@ extension Ledger {
 
         // **Decoded first, then given their cards in one query.** Asking for a card inside the
         // row callback ran a statement per row while the page's own statement was still open.
-        var pending: [(note: StudyNote, word: String, excerpt: String,
+        var pending: [(note: StudyNote, word: String, excerpt: String, excerptMarks: [NSRange],
                        readAt: Date?, script: ProbeScript?, readiness: StudyReadiness)] = []
         try run("""
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
@@ -139,7 +145,9 @@ extension Ledger {
                    -- Readiness's facts, not its verdict: the rule is decided once, in Swift.
                    EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id),
                    EXISTS (SELECT 1 FROM study_answers a WHERE a.note_id = n.id AND a.is_usable = 1),
-                   (SELECT a.origin FROM study_answers a WHERE a.note_id = n.id)
+                   (SELECT a.origin FROM study_answers a WHERE a.note_id = n.id),
+                   -- What marks the word in its sentence: the lemma and the captured range.
+                   newest.lemma, newest.context_range_location, newest.context_range_length
             FROM study_notes n
             LEFT JOIN lookups newest ON newest.id = (
                 SELECT l.id FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
@@ -158,13 +166,19 @@ extension Ledger {
                 // The library cannot ask a dictionary anything, so it never claims a sense moved.
                 senseMoved: false,
                 needsReading: { if case .custom = note.target { return false } else { return true } }())
+            let excerpt = row.optionalText(13) ?? ""
+            let range: NSRange? = row.isNull(20)
+                ? nil : NSRange(location: row.integer(20), length: row.integer(21))
             pending.append((
                 note: note,
                 // **The reading's word, or the target's own.** A custom card needs no lookup
                 // (C07), so this was empty for every one of them — a blank row in the library
                 // and a blank label in the inspector, for a card the reader had written.
                 word: row.optionalText(12) ?? note.target.ownText ?? "",
-                excerpt: row.optionalText(13) ?? "",
+                excerpt: excerpt,
+                excerptMarks: row.optionalText(12).map {
+                    Lemmatizer.parts(of: row.optionalText(19) ?? $0, surface: $0, in: excerpt, at: range)
+                } ?? [],
                 readAt: row.isNull(14) ? nil : Date(timeIntervalSince1970: row.real(14)),
                 script: row.optionalText(15).flatMap(ProbeScript.init(rawValue:)),
                 readiness: StudyReadiness.of(facts)))
@@ -172,7 +186,7 @@ extension Ledger {
         let cards = try cards(ofNotes: pending.map(\.note.id), prompt: Self.libraryPrompt)
         return pending.map {
             LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, excerpt: $0.excerpt,
-                       readAt: $0.readAt, script: $0.script, readiness: $0.readiness)
+                       excerptMarks: $0.excerptMarks, readAt: $0.readAt, script: $0.script, readiness: $0.readiness)
         }
     }
 
@@ -452,7 +466,7 @@ extension Ledger {
     /// keystroke of the search field decoded the entire matching library and ran one card query
     /// per note to produce a number.
     static func libraryFilter(_ query: LibraryQuery) throws -> (whereClause: String, bind: [SQLiteValue]) {
-        var conditions: [String] = []
+        var conditions: [String] = [Ledger.collectedNotePredicate]
         var bind: [SQLiteValue] = []
 
         if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -551,7 +565,8 @@ extension Ledger {
             bind.append(.real(after.createdAt.timeIntervalSince1970))
             bind.append(.text(after.noteID.uuidString))
         }
-        var whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: "\n AND ")
+        // Never empty: the collected-note predicate is always the first condition.
+        var whereClause = "WHERE " + conditions.joined(separator: "\n AND ")
         // **Bound last, and only when a clause asked for it.** The state clauses above spell the
         // prompt `?0P` because they cannot know their own position; numbering it first shifted
         // every other placeholder by one — the search clause spells `?1` — and binding it when

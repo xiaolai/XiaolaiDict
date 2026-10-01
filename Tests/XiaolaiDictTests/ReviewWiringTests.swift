@@ -562,4 +562,62 @@ struct ReviewWiringTests {
     private func settle(_ condition: @MainActor () -> Bool) async throws {
         try await Wiring.settle("the model never reached the expected state", condition)
     }
+    @Test func concurrentResumeAndPaneReturnPreserveRevealedQuestion() async throws {
+        let (path, clean) = scratch(); defer { clean() }
+        try ready(path, count:2)
+        let model = model(path)
+        async let first: Void = model.resume()
+        async let second: Void = model.resume()
+        _ = await (first, second)
+        let original = try #require(question(model))
+        model.act(.reveal)
+        try await settle { self.question(model)?.answer != nil }
+        await model.resume()
+        #expect(question(model)?.word == original.word)
+        #expect(question(model)?.answer != nil)
+    }
+
+
+    /// **A held sitting belongs to the dictionary it was drawn from.** Returning to the pane keeps it
+    /// (ADR-0044); switching the primary starts study over, so the sitting goes with it rather than
+    /// asking the old dictionary's cards under the new one's name.
+    /// What the reader changes while a test holds the model.
+    @MainActor private final class Chosen {
+        var key = "noad"
+        var finished = 0
+    }
+
+    @Test func resumeStartsOverWhenThePrimaryChanged() async throws {
+        let (path, clean) = scratch(); defer { clean() }
+        try ready(path)
+        let chosen = Chosen()
+        let model = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: chosen.key) },
+                                clock: { self.now })
+        await model.resume()
+        #expect(question(model) != nil, "positive control: the noad sitting was drawn")
+        await model.resume()
+        #expect(question(model) != nil, "an unchanged primary keeps the sitting")
+        chosen.key = "another"
+        await model.resume()
+        #expect(question(model) == nil, "the old dictionary's card survived the switch")
+        #expect(model.presentation.stage == .empty(.nothingEnrolled))
+    }
+
+    /// **Done ends the sitting and closes what holds it.** The Review window it used to dismiss is
+    /// gone — Review is a pane of the Library — so the action was dismissing a window that no longer
+    /// exists, and the finished summary stayed on screen with nothing closed.
+    @Test func doneEndsTheSittingAndClosesTheLibrary() async throws {
+        let (path, clean) = scratch(); defer { clean() }
+        try ready(path)
+        let closed = Chosen()
+        let model = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
+                                clock: { self.now }, finish: { closed.finished += 1 })
+        await model.resume()
+        model.act(.grade(.good))
+        try await settle { if case .finished = model.presentation.stage { return true }; return false }
+        model.act(.done)
+        #expect(closed.finished == 1)
+        await model.resume()
+        if case .finished = model.presentation.stage { Issue.record("Done left the finished sitting to be resumed") }
+    }
 }

@@ -190,6 +190,8 @@ public struct ReviewView: View {
         case .nothingDue:
             Text("Nothing is due right now.")
                 .font(.system(size: scale.text.body))
+        case .needsConfirmation(let count):
+            ContentUnavailableView("\(count) meanings need attention", systemImage: "questionmark.circle", description: Text("Choose or confirm their meanings in Saved before reviewing."))
         case .nothingEnrolled:
             Text("You have not saved any meanings to study yet.")
                 .font(.system(size: scale.text.body))
@@ -305,6 +307,7 @@ public struct ReviewPresentation: Sendable, Equatable {
         case nothingDue
         /// The reader has not saved anything yet. A different sentence, because "nothing is due" to
         /// someone with no cards reads as a broken feature.
+        case needsConfirmation(Int)
         case nothingEnrolled
         /// Nothing is askable, but new words are waiting on today's allowance. **A third sentence**,
         /// because a reader who saved thirty words this afternoon and is told "nothing is due" has
@@ -321,7 +324,7 @@ public struct ReviewPresentation: Sendable, Equatable {
         var explainsItself: Bool {
             switch self {
             case .heldBackUntilTomorrow, .couldNotBeRead: true
-            case .nothingDue, .nothingEnrolled: false
+            case .nothingDue, .nothingEnrolled, .needsConfirmation: false
             }
         }
     }

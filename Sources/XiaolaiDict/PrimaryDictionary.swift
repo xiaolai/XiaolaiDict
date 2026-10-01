@@ -77,6 +77,9 @@ struct LookupRecording {
     /// from the primary dictionary and no reader tap and no selector, which one the reader was
     /// reading is unknown, and unknown is not written down as a guess.
     let encounter: SenseEncounter?
+    var lookupID: Int? = nil
+    var keepPolicy: LookupKeepPolicy = .manual
+    var primaryDictionary: String? = nil
 }
 
 extension PrimaryDictionary {
@@ -88,7 +91,12 @@ extension PrimaryDictionary {
     /// - one entry, several senses → the entry, with no sense key and no `chosenBy`: null means
     ///   "this entry, sense unresolved".
     /// - several entries → nothing. *fine* is four entries in NOAD and picking one would be a guess.
-    func encounter(among entries: [DictionaryEntry], at when: Date) -> SenseEncounter? {
+    ///
+    /// `phraseEntries` are the entries of a phrase the reader was standing inside. **One of this
+    /// dictionary's withdraws `.onlySense`**, exactly as it stops rung 0 in `SenseResolver.resolve`:
+    /// the word's one sense and the phrase's are two readings, and recording the first as the only one
+    /// there was let automatic keeping confirm it while the selector was still choosing.
+    func encounter(among entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [], at when: Date) -> SenseEncounter? {
         let mine = self.entries(among: entries)
         guard mine.count == 1, let entry = mine.first, let entryKey = entry.entryKey else { return nil }
         // One sense, and it can be keyed → the shared builder, the same call the resolver and the
@@ -96,7 +104,8 @@ extension PrimaryDictionary {
         // unkeyable sense used to come back `.onlySense` here, the most confirmed provenance there
         // is, for a sense nothing can point at again: the mark was guarded and the encounter was
         // not. Two guards that agree today is the arrangement that produced that, so there is one.
-        if entry.senses.count == 1, let key = entry.senses.first?.key,
+        let phraseCompetes = phraseEntries.contains { $0.dictionary.key == entry.dictionary.key }
+        if !phraseCompetes, entry.senses.count == 1, let key = entry.senses.first?.key,
            let only = SenseEncounter.of(entry, senseKey: key, chosenBy: .onlySense, at: when) {
             return only
         }
@@ -228,7 +237,7 @@ struct SenseResolver: Sendable {
                   let encounter = SenseEncounter.of(entry, senseKey: key, chosenBy: .model, at: when)
             else {
                 // The chosen key belongs to no entry XiaolaiDict can key — nothing is claimed.
-                return SenseResolution(mark: nil, encounter: primary.encounter(among: entries, at: when))
+                return SenseResolution(mark: nil, encounter: primary.encounter(among: entries, phrase: phraseEntries, at: when))
             }
             return SenseResolution(
                 mark: .chosen(key: key, by: .model), encounter: encounter,
@@ -240,7 +249,7 @@ struct SenseResolver: Sendable {
             // dictionary is not a statement about the thesaurus's entry beside it.
             return SenseResolution(
                 mark: .couldNot(why, nearest: nearest),
-                encounter: primary.encounter(among: entries, at: when),
+                encounter: primary.encounter(among: entries, phrase: phraseEntries, at: when),
                 owner: mine.count == 1 ? mine.first.map { PanelSelection.identity(of: $0) } : nil)
         }
     }

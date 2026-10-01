@@ -20,14 +20,14 @@ struct LibraryWiringTests {
         try Wiring.save(ledger, word, script: script, at: now)
     }
 
-    private func model(_ path: String, scripts: Set<ProbeScript> = [.latin]) -> LibraryModel {
+    private func model(_ path: String) -> LibraryModel {
         // **Somewhere disposable, always.** Nothing in this suite exports, but a default that
         // reached the reader's Downloads folder is how the other suite's export test came to
         // delete what it found there.
         let exports = FileManager.default.temporaryDirectory
             .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
         return LibraryModel(store: Wiring.store(path),
-                            studyScripts: { scripts }, clock: { self.now },
+                            clock: { self.now },
                             exportDirectory: { exports })
     }
 
@@ -61,24 +61,18 @@ struct LibraryWiringTests {
         #expect(model.presentation.total == 1, "the count is of what matched, not of the page")
     }
 
-    /// **M10, at the wire.** The script filter is off until the reader asks for it.
-    @Test func thescriptFilterIsOffUntilAsked() async throws {
+    /// Library never hides saved cards according to their writing system.
+    @Test func theLibraryIncludesEverySavedScript() async throws {
         let (path, clean) = scratch()
         defer { clean() }
         let ledger = try Ledger(path: path)
         try save(ledger, "fine", script: .latin)
         try save(ledger, "水", script: .han)
-
-        let model = model(path, scripts: [.latin])
+        let model = model(path)
         await model.reload()
-        #expect(model.presentation.rows.count == 2, "a card outside the reader's scripts is not hidden")
-        model.act(.filterScripts(true))
-        try await settle { model.presentation.rows.count == 1 }
-        #expect(model.presentation.scriptFiltered)
-        // **Which row survived**, not how many. A filter inverted to keep 水 and drop fine leaves
-        // exactly one row too, and satisfied every assertion here.
-        #expect(model.presentation.rows.first?.word == "fine",
-                "the script filter kept the wrong row: \(model.presentation.rows.map(\.word))")
+        #expect(Set(model.presentation.rows.map(\.word)) == ["fine", "水"])
+        #expect(model.presentation.total == 2)
+        #expect(model.presentation.isUnfiltered)
     }
 
     /// A bulk action lands on exactly the selection and clears it afterwards.
@@ -239,7 +233,7 @@ struct LibraryWiringTests {
 
         var asked: [String] = []
         let model = LibraryModel(store: Wiring.store(path),
-                                 studyScripts: { [.latin] }, clock: { self.now },
+                                 clock: { self.now },
                                  lookUp: { asked.append($0) })
         model.act(.filter(.suggested))
         try await settle { model.presentation.suggestions.count == 1 }
@@ -401,8 +395,7 @@ struct LibraryWiringTests {
 
         // **Reopened per access**, because the permissions below take effect at `open` and a
         // connection opened before them writes on through its own descriptor.
-        let model = LibraryModel(store: Wiring.reopeningStore(path), studyScripts: { [.latin] },
-                                 clock: { now },
+        let model = LibraryModel(store: Wiring.reopeningStore(path), clock: { now },
                                  exportDirectory: {
                                      FileManager.default.temporaryDirectory
                                          .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)",
@@ -910,7 +903,7 @@ struct LibraryOrganisationWiringTests {
             .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
         let clock = when ?? now
         return LibraryModel(store: Wiring.store(path),
-                            studyScripts: { [.latin] }, clock: { clock },
+                            clock: { clock },
                             exportDirectory: { exports })
     }
 
@@ -1060,7 +1053,7 @@ struct LibraryReversibleRaceTests {
             let wait = armed
             armed = false
             return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
-        }, studyScripts: { [] }, clock: { now })
+        }, clock: { now })
 
         await model.reload()
         model.act(.select([first.id]))
@@ -1099,7 +1092,7 @@ struct LibraryReversibleRaceTests {
             let wait = armed
             armed = false
             return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
-        }, studyScripts: { [] }, clock: { now })
+        }, clock: { now })
 
         await model.reload()
         model.act(.select([word.id]))
@@ -1156,7 +1149,7 @@ struct LibraryReversibleRaceTests {
         let ledger = try Ledger(path: path)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let first = try Wiring.save(ledger, "first", at: now)
-        let model = LibraryModel(store: Wiring.store(path), studyScripts: { [] }, clock: { now })
+        let model = LibraryModel(store: Wiring.store(path), clock: { now })
         await model.reload()
         #expect(model.presentation.rows.count == 1)
 
@@ -1188,7 +1181,7 @@ struct LibraryReversibleRaceTests {
             try Wiring.save(ledger, "word\(String(format: "%04d", index))",
                             at: now.addingTimeInterval(Double(-index)))
         }
-        let model = LibraryModel(store: Wiring.store(path), studyScripts: { [] }, clock: { now })
+        let model = LibraryModel(store: Wiring.store(path), clock: { now })
         await model.reload()
         #expect(model.presentation.rows.count == LibraryModel.pageSize)
 

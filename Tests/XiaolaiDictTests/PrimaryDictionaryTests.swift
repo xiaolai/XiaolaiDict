@@ -108,6 +108,24 @@ struct PrimaryDictionaryTests {
         #expect(PrimaryDictionary().encounter(among: [anonymous], at: when) == nil)
     }
 
+    /// **A phrase in the sentence is a second reading**, so a word with one sense is no longer the
+    /// only thing the reader can have met. The resolver withdraws `.onlySense` for that case, and the
+    /// encounter recorded before it answers — or when it abstains — must withdraw it too, or the
+    /// most confirmed provenance there is lands in the ledger for a question still open.
+    @Test func aPhraseOfThePrimaryWithdrawsTheOnlySenseClaim() throws {
+        let phrase = Self.entry(
+            "New Oxford American Dictionary", identifier: "com.apple.dictionary.NOAD", entryID: "p1",
+            senses: [Self.sense(1, "p1.001")])
+        let encounter = try #require(PrimaryDictionary().encounter(among: [Self.noad], phrase: [phrase], at: when))
+        #expect(encounter.entryID == "m1")
+        #expect(encounter.senseKey == nil, "the word's only sense was claimed beside a competing phrase")
+        #expect(encounter.chosenBy == nil)
+        // An auxiliary dictionary's phrase is not a candidate (D8), so it withdraws nothing.
+        let elsewhere = Self.entry("牛津英汉汉英词典", identifier: "com.apple.dictionary.zh_CN-en.OCD",
+                                   entryID: "p2", senses: [Self.sense(1, "p2.001")])
+        #expect(PrimaryDictionary().encounter(among: [Self.noad], phrase: [elsewhere], at: when)?.chosenBy == .onlySense)
+    }
+
     @Test func theChoiceSurvivesALaunch() {
         let defaults = TemporaryDefaults.suite()
         let store = PrimaryDictionaryStore(defaults: defaults)
@@ -287,6 +305,22 @@ struct SenseResolverTests {
         #expect(encounter.entryID == "e1")
         #expect(encounter.senseKey == nil, "an abstention wrote down a sense anyway")
         #expect(encounter.chosenBy == nil, "a sense nobody chose was attributed to somebody")
+    }
+
+    /// **An abstention beside a phrase claims no sense.** One sense of the word and one of the phrase
+    /// is two candidates; the selector declining between them must not leave the word's sense
+    /// recorded as the only one there was.
+    @Test func anAbstentionBesideAPhraseClaimsNoSense() async throws {
+        let word = Self.entry("NOAD", identifier: "n", entryID: "w1", senses: [Self.sense(1, "w1.001")])
+        let phrase = Self.entry("NOAD", identifier: "n", entryID: "p1", senses: [Self.sense(1, "p1.001")])
+        let resolution = await SenseResolver(primary: PrimaryDictionary(), selector: Fixed(answer: .abstained(.tooClose)))
+            .resolve(entries: [word], phrase: [phrase], sentence: "He paid the fine.", context: .complete,
+                     partOfSpeech: "noun", at: when)
+        #expect(resolution.mark == .couldNot(.tooClose))
+        let encounter = try #require(resolution.encounter)
+        #expect(encounter.entryID == "w1")
+        #expect(encounter.senseKey == nil, "an abstention between word and phrase recorded the word's sense")
+        #expect(encounter.chosenBy == nil)
     }
 
     /// The case that makes *fine* work: the right sense is in the primary's **second** entry, and

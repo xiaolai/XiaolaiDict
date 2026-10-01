@@ -280,7 +280,7 @@ rm -rf .build/e2e && mkdir -p .build/e2e
 for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
-cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py .build/e2e/
+cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -312,7 +312,7 @@ WANTED=("${@:2}")
 # exited 0 — a green mark for a run that tested nothing, which is the one thing this file is written
 # to make impossible. This is the only list of the names; the header points at it rather than
 # naming them again, because two lists of one thing are one list nobody keeps.
-KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model)
+KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model learning)
 for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
     found=""
     for known in "${KNOWN_STAGES[@]}"; do [ "$wanted" = "$known" ] && { found=yes; break; }; done
@@ -582,6 +582,15 @@ ensure_one_lookup() {
     assert_default_shortcut || true
     "$helpers/keys" 2 control option
     row_after "$baseline" meeting com.apple.TextEdit >/dev/null
+    if [ "${1:-}" = answered ]; then
+        local fresh
+        fresh=$(row_id_of "$baseline" meeting com.apple.TextEdit)
+        for _ in $(seq 1 80); do
+            [ "$(sqlite3 "$ledger" "SELECT result FROM lookups WHERE id=$fresh;")" != pending ] && break
+            sleep 0.25
+        done
+        [ "$(sqlite3 "$ledger" "SELECT result FROM lookups WHERE id=$fresh;")" != pending ] || { echo "lookup remained pending after 20 seconds" >&2; return 1; }
+    fi
     "$helpers/keys" 53 2>/dev/null || true
     [ "$(row_id_of "$baseline" meeting com.apple.TextEdit)" -ne 0 ]
 }
@@ -818,6 +827,42 @@ if [ -z "$menu_ready" ]; then
     # pass, with nothing in it to say this had happened.
     flunk "setup: the menu-bar item never appeared — every menu-driven stage below is void"
 fi
+
+# stop_app: asks XiaolaiDict to quit and waits up to 10 s; fails unless it is gone. The process
+# that already exited between `ps` and `kill` is the reason `kill` alone is not the verdict — the
+# wait is.
+stop_app() {
+    find_pids "$exe"
+    [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 100); do is_running "$exe" || return 0; sleep 0.1; done
+    return 1
+}
+
+restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
+    local before pid fresh=""
+    find_pids "$exe"
+    before=" ${PIDS[*]+${PIDS[*]}} "
+    if ! stop_app; then
+        echo "restart_app: XiaolaiDict would not quit (pids$before), so nothing was restarted" >&2
+        return 1
+    fi
+    open "$app"
+    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
+    find_pids "$exe"
+    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
+        case $before in *" $pid "*) ;; *) fresh=$pid ;; esac
+    done
+    if [ -z "$fresh" ]; then
+        echo "restart_app: no new XiaolaiDict process appeared after open (before:$before)" >&2
+        return 1
+    fi
+    for _ in $(seq 1 100); do
+        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
+    return 1
+}
 
 if want launch; then
 # 1. LaunchServices starts it, and it stays up.
@@ -1263,6 +1308,11 @@ else
     else
         flunk "drawer: $why"
     fi
+    if why=$(expect "$drawer" reopenedDockedWhereAsked=True 2>&1); then
+        pass "drawer: reopening corrects a retained window's stale position"
+    else
+        flunk "drawer: reopening stayed off the display edge: $why"
+    fi
     # Earlier stages recorded lookups, so the drawer must have something to show. An empty drawer
     # here would mean the ledger read silently returned nothing.
     if why=$(expect "$drawer" problem=none 2>&1); then
@@ -1491,33 +1541,6 @@ if want setup; then
 # So the old process must be **gone**, and a **new** pid must be there afterwards. The new-pid check
 # is not redundant with the death check: it is what says `open` actually started something, rather
 # than the start loop having run out too.
-restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
-    local before pid fresh=""
-    find_pids "$exe"
-    before=" ${PIDS[*]+${PIDS[*]}} "
-    [ "${#PIDS[@]}" -eq 0 ] || kill -TERM "${PIDS[@]}"
-    for _ in $(seq 1 100); do is_running "$exe" || break; sleep 0.1; done
-    if is_running "$exe"; then
-        echo "restart_app: XiaolaiDict would not quit (pids$before), so nothing was restarted" >&2
-        return 1
-    fi
-    open "$app"
-    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
-    find_pids "$exe"
-    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
-        case $before in *" $pid "*) ;; *) fresh=$pid ;; esac
-    done
-    if [ -z "$fresh" ]; then
-        echo "restart_app: no new XiaolaiDict process appeared after open (before:$before)" >&2
-        return 1
-    fi
-    for _ in $(seq 1 100); do
-        "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
-        sleep 0.2
-    done
-    echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
-    return 1
-}
 # **Matched on "Setup", the settings window's own title while the board is its pane.**
 # The board had a window called "Set Up XiaolaiDict" until 2026-10-01; it is a pane now, and
 # Accessibility names the settings window after whichever pane is selected — which the scenes stage
@@ -1992,6 +2015,230 @@ fi
 # And the model store is put back here rather than at exit, because the model stage runs after this
 # one and would otherwise measure a Mac with no weights on it.
 unstash_models || flunk "setup: the model store was not put back"
+fi
+
+if want learning; then
+# Real native actions; the exact freshly created encounter is the durable witness.
+learning_evidence="$HOME/$1/learning-evidence"
+mkdir -p "$learning_evidence"
+chmod 700 "$learning_evidence"
+rm -f "$learning_evidence"/*.png "$learning_evidence"/*.json "$learning_evidence"/*capture.err
+if ! defaults export com.xiaolaidict "$learning_evidence/preferences.plist"; then
+    flunk "learning: the preferences could not be exported, so they could not be put back"; exit 1
+fi
+learning_dark_before=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2> "$learning_evidence/theme.err" || true)
+if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; exit 1; fi
+# **The reader's ledger is this stage's to give back, and nothing may be removed on trust.**
+#
+# The restore runs from `on_exit` as `"$cleanup" || …`, and a function called on the left of `||`
+# runs with `set -e` suspended: a `cp` that failed went on to `open "$app"`, which succeeded, so a
+# ledger already deleted was reported restored. Every step below is checked by hand, and the copy is
+# compared against the original by content — integrity, `user_version` and a SHA3 of every table and
+# the schema — before the files it replaces are touched, and again once it is in place.
+#
+# A name of this run's own, never `original.sqlite`: a backup that failed would have left the last
+# run's copy under that name, and restoring it would put back a ledger from another day. It is kept
+# when the restore fails — then it may be the only copy — and removed once the restore is proved.
+ledger_digest() {  # ledger_digest <path>: content fingerprint of a ledger that passes integrity_check
+    local out
+    out=$(sqlite3 -readonly "$1" 'PRAGMA integrity_check;' 'PRAGMA user_version;' '.sha3sum --schema' 2>&1) \
+        || { echo "ledger_digest: $1 could not be read: $out" >&2; return 1; }
+    [ "$(printf '%s\n' "$out" | head -1)" = ok ] || { echo "ledger_digest: $1 fails integrity_check: $out" >&2; return 1; }
+    printf '%s\n' "$out"
+}
+learning_backup="$learning_evidence/original-$(date +%Y%m%d-%H%M%S)-$$.sqlite"
+learning_had_ledger=no
+if [ -e "$ledger" ]; then
+    learning_had_ledger=yes
+    if ! learning_digest=$(ledger_digest "$ledger"); then
+        flunk "learning: the reader's ledger could not be fingerprinted, so it is left alone"; exit 1
+    fi
+    if ! sqlite3 -readonly "$ledger" ".backup '$learning_backup'" \
+        || [ "$(ledger_digest "$learning_backup")" != "$learning_digest" ]; then
+        flunk "learning: the ledger backup does not match the ledger, so it is left alone ($learning_backup)"; exit 1
+    fi
+fi
+restore_learning_fixture() {
+    local staged="$ledger.e2e-restore"
+    stop_app || { echo "restore: XiaolaiDict would not quit, so the ledger was not touched" >&2; return 1; }
+    if [ "$learning_had_ledger" = yes ]; then
+        # Staged beside the ledger, on the same volume, so the swap below is a rename.
+        rm -f "$staged" || return 1
+        cp "$learning_backup" "$staged" || { echo "restore: could not stage $learning_backup" >&2; return 1; }
+        [ "$(ledger_digest "$staged")" = "$learning_digest" ] \
+            || { echo "restore: the staged copy differs from the original; $learning_backup is kept" >&2; return 1; }
+        # Reading a WAL-mode file leaves an empty `-wal` and `-shm` beside it; a reader writes nothing
+        # to them, and they must not travel with a name that is about to change.
+        rm -f "$staged-wal" "$staged-shm" "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        mv "$staged" "$ledger" || { echo "restore: the staged copy is at $staged, $learning_backup is kept" >&2; return 1; }
+        [ "$(ledger_digest "$ledger")" = "$learning_digest" ] \
+            || { echo "restore: the restored ledger differs from the original; $learning_backup is kept" >&2; return 1; }
+        rm -f "$learning_backup" "$learning_backup-wal" "$learning_backup-shm" || return 1
+    else
+        # There was none: the run's own ledger is removed, so the machine is as it was found.
+        rm -f "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        [ ! -e "$ledger" ] || return 1
+    fi
+    # `defaults import` *merges* — measured: a key written after the export survives the import — so
+    # the keys this stage added (`libraryLayout`, `TextSize`, the keep policy) outlived it. The domain
+    # is emptied first, and only once the export is known to be a readable plist.
+    plutil -lint -s "$learning_evidence/preferences.plist" \
+        || { echo "restore: the exported preferences are unreadable, so the domain was not replaced" >&2; return 1; }
+    defaults delete com.xiaolaidict >/dev/null 2>&1 || true
+    defaults import com.xiaolaidict "$learning_evidence/preferences.plist" \
+        || { echo "restore: the preferences could not be imported; they are in $learning_evidence" >&2; return 1; }
+    case $learning_dark_before in
+        true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
+    esac
+    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+}
+at_exit restore_learning_fixture
+rm -f "$ledger" "$ledger-wal" "$ledger-shm"
+defaults write com.xiaolaidict lookupKeepPolicy automatic
+defaults write com.xiaolaidict libraryPane history
+open "$app"
+for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+sw_vers > "$learning_evidence/host.txt"
+codesign -dv "$app" 2> "$learning_evidence/build.txt"
+learning_before=$(newest_row_id)
+if ! ensure_one_lookup answered; then
+    flunk "learning: native lookup fixture could not be created (check Accessibility and shortcut)"
+else
+    learning_id=$(row_id_of "$learning_before" meeting com.apple.TextEdit)
+    targets=0
+    for _ in $(seq 1 40); do
+        targets=$(sqlite3 "$ledger" "SELECT COUNT(*) FROM study_note_lookups WHERE lookup_id=$learning_id;")
+        [ "$targets" -gt 0 ] && break
+        sleep 0.25
+    done
+    [ "$targets" -gt 0 ] && pass "learning: automatic collection attached a dictionary target" || flunk "learning: answered fixture did not create an automatic target"
+    sqlite3 "$ledger" "SELECT l.id,l.result,l.keep_policy,l.primary_dictionary,n.target_kind,n.confirmed_at FROM lookups l LEFT JOIN study_note_lookups k ON k.lookup_id=l.id LEFT JOIN study_notes n ON n.id=k.note_id WHERE l.id=$learning_id;" > "$learning_evidence/lookup-state.txt"
+    if ! why=$("$helpers/menu-click" com.xiaolaidict "Library…" 2>&1); then
+        flunk "learning: Library menu action failed: $why"
+    else
+        sleep 1
+        for pane in History Saved Review Discarded History; do
+            if "$helpers/click-element" com.xiaolaidict "$pane" >/dev/null 2>&1; then
+                sleep 0.5
+                pane_report=$("$helpers/panel" com.xiaolaidict)
+                printf '%s\n' "$pane_report" > "$learning_evidence/$pane.json"
+                if ! screencapture -x "$learning_evidence/$pane.png" 2> "$learning_evidence/$pane-capture.err"; then flunk "learning: native $pane screenshot capture denied"; fi
+                screen_report=$("$helpers/on-screen" com.xiaolaidict Library)
+                if python3 - "$pane_report" "$pane" "$screen_report" <<'PYLIBRARY'
+import json,sys
+r=json.loads(sys.argv[1]); pane=sys.argv[2]
+windows=r.get('windows',[])
+assert 'Review' not in json.loads(sys.argv[3]).get('titles',[]), 'separate Review window appeared'
+text=str(windows)
+assert any(w.get('drawn') for w in json.loads(sys.argv[3]).get('matches',[])), 'Library window is not composited'
+expected={'History':'reading encounters','Saved':'Saved filters','Review':'Review today','Discarded':'Discarded readings remain recoverable'}[pane]
+assert expected in text, f'{pane} detail absent: {expected}'
+PYLIBRARY
+                then pass "learning: native Library pane $pane detail is visible"
+                else flunk "learning: $pane click did not show its detail"; fi
+            else
+                flunk "learning: native Library pane $pane is unreachable"
+            fi
+        done
+        if "$helpers/click-element" com.xiaolaidict "discard-reading-$learning_id" >/dev/null 2>&1; then
+            sleep 1
+            disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
+            [ "$disposition" = discarded ] && pass "learning: Discard commits the exact encounter" || flunk "learning: Discard did not persist ($disposition)"
+            if "$helpers/click-element" com.xiaolaidict "Undo discarding 1 readings" >/dev/null 2>&1; then
+                sleep 1
+                disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
+                [ "$disposition" = kept ] && pass "learning: Undo restores the exact encounter" || flunk "learning: Undo did not persist ($disposition)"
+            else
+                flunk "learning: durable Undo control is unreachable"
+            fi
+        else
+            flunk "learning: Discard control is unreachable or ambiguous"
+        fi
+        if "$helpers/click-element" com.xiaolaidict "discard-reading-$learning_id" >/dev/null 2>&1 && restart_app; then
+            reopened=""
+            for _ in $(seq 1 40); do
+                if "$helpers/menu-click" com.xiaolaidict "Library…" >/dev/null 2>&1; then reopened=yes; break; fi
+                sleep 0.25
+            done
+            if [ -n "$reopened" ] && "$helpers/click-element" com.xiaolaidict Discarded >/dev/null 2>&1; then
+                sleep 1
+                "$helpers/panel" com.xiaolaidict > "$learning_evidence/Discarded-populated.json"
+                screencapture -x "$learning_evidence/Discarded-populated.png" || flunk "learning: populated Discarded capture failed"
+                disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
+                [ "$disposition" = discarded ] && pass "learning: Discard persists across relaunch" || flunk "learning: Discard was lost at relaunch"
+                if "$helpers/click-element" com.xiaolaidict "restore-reading-$learning_id" >/dev/null 2>&1; then
+                    sleep 1
+                    disposition=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
+                    [ "$disposition" = kept ] && pass "learning: Discarded Restore commits exact encounter after relaunch" || flunk "learning: Restore did not persist"
+                else flunk "learning: Discarded Restore control unreachable"; fi
+                "$helpers/click-element" com.xiaolaidict History >/dev/null 2>&1 || flunk "learning: History return failed"
+            else flunk "learning: Discarded recovery pane unreachable after relaunch"; fi
+        else flunk "learning: repeated discard/relaunch failed"; fi
+        for appearance in Light Dark; do
+            wanted_dark=false; [ "$appearance" != Dark ] || wanted_dark=true
+            if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
+                flunk "learning: cannot set actual system $appearance appearance"
+                continue
+            fi
+            defaults write com.xiaolaidict TextSize large
+            restarted=""
+            if why=$(restart_app 2>&1); then
+                for _ in $(seq 1 40); do
+                    if why=$("$helpers/menu-click" com.xiaolaidict "Library…" 2>&1); then restarted=yes; break; fi
+                    sleep 0.25
+                done
+            fi
+            if [ -n "$restarted" ]; then
+                sleep 1
+                "$helpers/panel" com.xiaolaidict > "$learning_evidence/large-$appearance.json"
+                if screencapture -x "$learning_evidence/large-$appearance.png" 2> "$learning_evidence/large-$appearance-capture.err"; then
+                    screen_report=$("$helpers/on-screen" com.xiaolaidict Library)
+                    if python3 - "$learning_evidence/large-$appearance-window.png" "$screen_report" "$appearance" <<'PYAPPEARANCE'
+# The window frame is in points and a screenshot is in pixels: a Retina display draws two of one
+# per point, so a point used as a pixel sampled a spot up and to the left of the one meant. The
+# window is captured by its own frame instead -- screencapture -R takes points -- and sampled by
+# fraction of the image, which no display scale can move.
+from PIL import Image
+import json,subprocess,sys
+windows=json.loads(sys.argv[2])['matches']
+w=next(w for w in windows if w.get('drawn'))
+region=','.join(str(round(w[k])) for k in ('x','y','width','height'))
+subprocess.run(['screencapture','-x','-R',region,sys.argv[1]],check=True,timeout=20)
+im=Image.open(sys.argv[1]).convert('RGB')
+scale=im.width/round(w['width'])
+assert scale >= 1 and abs(im.height-round(w['height'])*scale) <= scale, f'capture {im.size} is not the window {region}'
+x,y=int(im.width*.8),int(im.height*.8)
+pixels=list(im.crop((x-5,y-5,x+5,y+5)).getdata())
+brightness=sum(sum(p) for p in pixels)/(len(pixels)*3)
+assert (brightness < 120) if sys.argv[3]=='Dark' else (brightness > 150), f'appearance witness brightness {brightness}'
+print(f'{sys.argv[3]} rendered background brightness: {brightness:.1f}')
+PYAPPEARANCE
+                    then pass "learning: actual native large-text $appearance appearance is rendered"
+                    else flunk "learning: rendered $appearance screenshot disagrees with requested appearance"; fi
+                else flunk "learning: native large-text $appearance screenshot denied"; fi
+            else flunk "learning: large-text $appearance relaunch failed: $why"; fi
+        done
+        restored=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
+        [ "$restored" = kept ] && pass "learning: restored encounter remains kept after relaunch" || flunk "learning: restored encounter lost after relaunch"
+        # The expanded fixture is installed only after the original live encounter assertions.
+        # Its custom Saved note has no encounter; the long and absent answers have real note IDs.
+        # The learning EXIT cleanup above owns the ledger, defaults and theme restoration.
+        if ! stop_app; then
+            flunk "learning: cannot stop app for expanded isolated fixture"
+        elif python3 "$helpers/library-layout.py" seed "$ledger" "$learning_id" "$learning_evidence/layout-fixture.json"; then
+            defaults delete com.xiaolaidict libraryLayout >/dev/null 2>&1 || true
+            defaults write com.xiaolaidict TextSize standard
+            defaults write com.xiaolaidict libraryPane history
+            open "$app"
+            for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+            if "$helpers/menu-click" com.xiaolaidict "Library…" >/dev/null 2>&1; then
+                layout_verdicts=$(python3 "$helpers/library-layout.py" run "$helpers" "$ledger" "$learning_evidence" 2>&1 || true)
+                printf '%s\n' "$layout_verdicts" > "$learning_evidence/layout-run.txt"
+                consume_verdicts learning-layout "$layout_verdicts"
+            else flunk "learning: expanded Library fixture did not open"; fi
+        else flunk "learning: expanded isolated fixture failed its positive controls"; fi
+    fi
+fi
 fi
 
 if want scenes; then

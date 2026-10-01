@@ -30,6 +30,7 @@ struct SenseTapQueue {
         /// actions**: meeting a sense is something reading does, enrolling one is something the reader
         /// decides, and the ledger keeps them apart.
         let enrolling: Bool
+        var source: StudyKeepSource = .manual
     }
 
     /// How many taps may wait. A reader can only tap what is on screen, so this is generous; the cap
@@ -37,9 +38,9 @@ struct SenseTapQueue {
     static let mostHeld = 32
 
     /// The row to write this tap to, or nil where there is none yet and it has been kept.
-    mutating func tapped(_ encounter: SenseEncounter, request: Int, enrolling: Bool = false) -> Int? {
+    mutating func tapped(_ encounter: SenseEncounter, request: Int, enrolling: Bool = false, source: StudyKeepSource = .manual) -> Int? {
         if let lastLookup, lastLookup.request == request { return lastLookup.id }
-        waiting.append((request, SenseTap(encounter: encounter, enrolling: enrolling)))
+        waiting.append((request, SenseTap(encounter: encounter, enrolling: enrolling, source: source)))
         if waiting.count > Self.mostHeld { waiting.removeFirst() }
         return nil
     }
@@ -51,6 +52,11 @@ struct SenseTapQueue {
         let mine = waiting.filter { $0.request == request }
         waiting.removeAll { $0.request == request }
         return mine.map(\.tap)
+    }
+
+    mutating func forget(request: Int) {
+        waiting.removeAll { $0.request == request }
+        if lastLookup?.request == request { lastLookup = nil }
     }
 
     /// What is still waiting, for tests and for reasoning about the cap.

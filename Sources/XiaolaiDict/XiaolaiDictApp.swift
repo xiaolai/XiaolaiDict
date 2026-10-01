@@ -20,6 +20,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// the primary starts their study over.
     /// The dictionary the reader studies from and the list it was chosen out of — see
     /// `StudyDictionary`. Not built here: it needs the client, which means after `super.init()`.
+    // swiftlint:disable:next implicitly_unwrapped_optional
     @ObservationIgnored private(set) var dictionary: StudyDictionary!
     /// Whether the setup window has opened by itself before. **The app's own suite, not
     /// `.standard`** — a test that flipped it would change whether the reader's next launch opens
@@ -62,6 +63,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
+        preferences = defaults
+        keepPolicyStore = LookupKeepPolicyStore(defaults: defaults)
         hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
         // preferences while `init(defaults:)` existed for exactly this reason, so every test that
@@ -107,29 +110,40 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
                 return .unavailable("\(error)")
             }
         }
-        // Only reached once the reader's grace period has run out, so by the time this fires they
-        // have had their chance to take it back.
-        drawer.model.delete = { [weak self] entry in
-            guard let self, let opening = self.recorder.store else { return }
+        drawer.model.discard = { [weak self] entry in
+            guard let self, let opening = recorder.store else { throw LedgerError.corruptRow("ledger unavailable") }
+            let receipt = try await opening.value.changeDisposition(.discarded, lookups: entry.lookupIDs, operation: UUID())
+            LedgerChanges.shared.committed()
+            drawer.refresh()
+            return receipt
+        }
+        drawer.model.undoDiscard = { [weak self] operation in
+            guard let self, let opening = recorder.store else { throw LedgerError.corruptRow("ledger unavailable") }
+            let result = try await opening.value.undoDisposition(operation: operation)
+            LedgerChanges.shared.committed()
+            drawer.refresh()
+            return result
+        }
+        drawer.model.keepForLearning = { [weak self] entry in
+            guard let self, let opening = recorder.store else { return }
             Task {
-                // **Every row the card stands for, not the one it was drawn from.** A card is one
-                // reading and a reading can be several lookups; deleting only `id` left the rest
-                // in the ledger, and the card the reader had just removed came back on the next
-                // read of the drawer — with a different row behind it. ADR-0033: a destructive
-                // control reaches exactly what its label counts.
-                //
-                // Each row separately, and a failure on one does not abandon the others: a partial
-                // removal that stops halfway is the state that brings the card back.
-                for id in entry.lookupIDs {
-                    do { try await opening.value.delete(lookup: id) }
-                    // Logged, not surfaced: the card is already gone from a drawer the reader has
-                    // moved on from, and an alert about a history row is worse than the row.
-                    catch { self.log.error("could not remove lookup \(id): \(error)") }
-                }
+                do {
+                    if try await opening.value.keepHistory(entry.id) == nil { self.reopenReading(entry) }
+                    LedgerChanges.shared.committed()
+                    drawer.refresh()
+                } catch { drawer.model.problem = error.localizedDescription }
             }
+        }
+        drawer.model.showInLibrary = { [weak self] entry in
+            guard let self else { return }
+            libraryModel.show(.history, lookup: entry.id)
+            showLibrary()
         }
         return drawer
     }
+
+    let preferences: UserDefaults
+    let keepPolicyStore: LookupKeepPolicyStore
 
     private func makeRunner() -> LookupRunner {
         let store = dictionary.store
@@ -149,10 +163,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
                 return (try? await opening.value.priorEncounters(
                     of: lemma, before: before, language: language)) ?? PriorEncounters()
             },
-            prewarm: { await models.prewarm() })
+            prewarm: { await models.prewarm() },
+            keepPolicy: { [weak self] in self?.keepPolicyStore.load() ?? .automatic },
+            initialRecording: { [weak self] row, request in self?.recorder.begin(row, request: request) })
     }
     /// The lookup shortcut and everything about registering it — see `ShortcutRegistrar`, which
     /// holds the three-state machine this delegate used to carry as four adjacent properties.
+    // Set in `init` after `super.init()`, for the same reason as `dictionary`.
+    // swiftlint:disable:next implicitly_unwrapped_optional
     @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
     /// What reaches the reader's ledger, and what to tell them when nothing did — see
     /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
@@ -330,13 +348,22 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         lookup = Task { await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) }
     }
 
+    func reopenReading(_ row: ReadingEntry) {
+        let selection = Selection(text: row.surface, sentence: row.cue == .none ? nil : row.sentence,
+            rangeInSentence: row.sentenceRange,
+            quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place)
+        let ticket = panel.newRequest(); lookup?.cancel()
+        lookup = Task { await lookUp(selection, near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at,
+                                    ticket: ticket, existingLookupID: row.id) }
+    }
+
     // MARK: - Hover
 
     /// Every answered lookup is recorded — a miss too, marked as one: it is usually a typo or a
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
     /// answer arrived was never seen, and is not.
-    private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket) async {
-        guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) else { return }
+    private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil) async {
+        guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket, existingLookupID: existingLookupID) else { return }
         await recorder.record(row, request: ticket.number)
     }
 
@@ -384,7 +411,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     func showReview() {
         log.notice("review: opened on request (app active before: \(NSApp.isActive, privacy: .public))")
         NSApplication.shared.activate()
-        WindowActions.shared.openWindow(id: XiaolaiDictScene.reviewID)
+        libraryModel.show(.review)
+        WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
     }
 
     /// Opens the Library and brings it forward — a window the reader chose, and types into.
@@ -483,8 +511,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
 
     // MARK: - What the scenes read
 
+    var lookupRecorder: LookupRecorder { recorder }
     var panelController: LookupPanelController { panel }
     var panelModel: LookupPanelModel { panel.model }
+    func refreshHistory() { drawer.refresh() }
+    func attachHistoryWindow(_ window: NSWindow) { drawer.attach(window) }
     var drawerModel: HistoryDrawerModel { drawer.model }
 
     /// The Review window's model. **Built once and kept**, so a window closed mid-batch and reopened
@@ -493,12 +524,18 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// itself: tracking it here would invalidate every scene in the app's body whenever a review
     /// card changed — the defect this file already carries a note about, one window over.
     @ObservationIgnored lazy var reviewModel = ReviewModel(
-        store: { [weak self] in self?.recorder.store })
+        store: { [weak self] in self?.recorder.store },
+        primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() })
 
     /// The Library window's model, kept for the same reason.
     @ObservationIgnored lazy var libraryModel = LibraryModel(
         store: { [weak self] in self?.recorder.store },
-        lookUp: { [weak self] word in self?.lookUpWord(word) })
+        lookUp: { [weak self] word in self?.lookUpWord(word) },
+        reopen: { [weak self] row in self?.reopenReading(row) }, defaults: preferences,
+        primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() },
+        primaryName: { [weak self] key in self?.dictionary.enabled?.first { $0.identity.key == key }?.identity.name },
+        // The drawer's filter, read the same way: History is the reading history too.
+        studying: { [weak self] in self?.hover.policy.scripts ?? HoverPolicy.defaultScripts })
 
     /// The erase command's model, in the Reading settings pane.
     @ObservationIgnored lazy var eraseModel = EraseModel(

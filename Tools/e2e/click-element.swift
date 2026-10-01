@@ -25,7 +25,24 @@ func die(_ message: String) -> Never {
 }
 guard AXIsProcessTrusted() else { die("this process is not trusted for Accessibility, so it can see nothing") }
 let bundleID = arguments[0]
-let wanted = Array(arguments.dropFirst())
+var flags = CGEventFlags()
+var secondary = false
+var rowTarget = false
+var wanted: [String] = []
+for argument in arguments.dropFirst() {
+    switch argument {
+    case "--command": flags.insert(.maskCommand)
+    case "--shift": flags.insert(.maskShift)
+    case "--option": flags.insert(.maskAlternate)
+    case "--control": flags.insert(.maskControl)
+    case "--secondary": secondary = true
+    case "--row": rowTarget = true
+    default:
+        guard !argument.hasPrefix("--") else { die("unknown click option \(argument)") }
+        wanted.append(argument)
+    }
+}
+guard !wanted.isEmpty else { die("a click needs at least one target") }
 guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
     die("\(bundleID) is not running")
 }
@@ -64,7 +81,7 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
 /// title is the tab's name; a `Button` whose label is its shortcut carries that as its title; some
 /// controls carry only a description.
 func names(_ element: AXUIElement) -> [String] {
-    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXHelpAttribute]
+    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXHelpAttribute, kAXIdentifierAttribute]
         .compactMap { value(element, $0) as? String }
 }
 func frame(_ element: AXUIElement) -> CGRect? {
@@ -80,10 +97,13 @@ func frame(_ element: AXUIElement) -> CGRect? {
 /// name is not a control, and clicking it clicks whatever is underneath.
 let actionable: Set<String> = [
     kAXButtonRole, kAXRadioButtonRole, kAXCheckBoxRole, kAXPopUpButtonRole, kAXMenuButtonRole,
-    kAXDisclosureTriangleRole, "AXLink", "AXTab",
+    kAXDisclosureTriangleRole, "AXLink", "AXTab", kAXTextFieldRole, kAXTextAreaRole, kAXMenuItemRole,
 ]
 func isEnabledControl(_ element: AXUIElement) -> Bool {
-    guard let role = value(element, kAXRoleAttribute) as? String, actionable.contains(role) else { return false }
+    guard let role = value(element, kAXRoleAttribute) as? String else { return false }
+    let identifiedRow = rowTarget && [kAXRowRole, kAXGroupRole, kAXCellRole].contains(role)
+        && (value(element, kAXIdentifierAttribute) as? String)?.hasPrefix("library-") == true
+    guard actionable.contains(role) || identifiedRow else { return false }
     let enabled = read(element, kAXEnabledAttribute)
     if let flag = enabled.value as? Bool { return flag }
     // Offered and unreadable is not "enabled": a control whose state could not be established is
@@ -167,9 +187,15 @@ func cover(of element: AXUIElement, at point: CGPoint) -> String? {
 /// All three events, made before any is posted: an event that cannot be made must not leave a
 /// button pressed down with nothing to release it.
 func click(_ point: CGPoint, on element: AXUIElement, called title: String) {
-    let sequence: [(CGEventType, useconds_t)] = [(.mouseMoved, 120_000), (.leftMouseDown, 80_000), (.leftMouseUp, 0)]
+    let sequence: [(CGEventType, useconds_t)] = [(.mouseMoved, 120_000),
+        (secondary ? .rightMouseDown : .leftMouseDown, 80_000),
+        (secondary ? .rightMouseUp : .leftMouseUp, 0)]
     let events = sequence.compactMap { type, pause in
-        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left).map { ($0, pause) }
+        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point,
+                mouseButton: secondary ? .right : .left).map { event in
+            event.flags = flags
+            return (event, pause)
+        }
     }
     guard events.count == sequence.count else { die("could not create the mouse events for a click") }
     for (index, (event, pause)) in events.enumerated() {

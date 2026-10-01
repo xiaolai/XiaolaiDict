@@ -25,7 +25,6 @@ struct XiaolaiDictScene: App {
     static let drawerID = "reading-history"
     static let lookupID = "lookup"
     static let lookupTitle = "XiaolaiDict"
-    static let reviewID = "review"
     static let libraryID = "library"
 
     @NSApplicationDelegateAdaptor(XiaolaiDictApp.self) private var delegate
@@ -48,7 +47,7 @@ struct XiaolaiDictScene: App {
 
         Window(Self.lookupTitle, id: Self.lookupID) {
             LookupPanelSceneView(
-                controller: delegate.panelController, model: delegate.panelModel,
+                controller: delegate.panelController, recorder: delegate.lookupRecorder, model: delegate.panelModel,
                 translation: { [delegate] in delegate.models.translationActions },
                 explainer: { [delegate] in delegate.models.explanationActions })
                 .xiaolaiDictAppearance(delegate.appearance)
@@ -75,9 +74,9 @@ struct XiaolaiDictScene: App {
         // drawn nowhere and readable by nothing. A `Window` is composited, is listed by
         // Accessibility, and still does not activate the app.
         Window("Reading History", id: Self.drawerID) {
-            HistoryDrawerRootView(model: delegate.drawerModel)
+            HistoryDrawerSceneView(app: delegate)
                 .xiaolaiDictAppearance(delegate.appearance)
-                .xiaolaiDictPanelBehaviour()
+                .xiaolaiDictPanelBehaviour { delegate.attachHistoryWindow($0) }
         }
         .windowStyle(.plain)
         .defaultLaunchBehavior(.suppressed)
@@ -107,18 +106,8 @@ struct XiaolaiDictScene: App {
         // **A window the reader chose, so it comes forward and keeps focus.** Unlike the panel and
         // the drawer, which must never activate the app: this one is typed into. The reader asked
         // for it from the menu, it is theirs to manage, and it keeps its title bar for that reason.
-        Window("Review", id: Self.reviewID) {
-            ReviewSceneView(model: delegate.reviewModel)
-                .xiaolaiDictAppearance(delegate.appearance)
-        }
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        .defaultSize(width: Token.Review.width, height: Token.Review.height)
-
-        // Where the reader takes stock. Resizable, because a list is a surface they will want
-        // bigger; the Review window is not, because a card is as big as a card.
         Window("Library", id: Self.libraryID) {
-            LibrarySceneView(model: delegate.libraryModel)
+            LibrarySceneView(model: delegate.libraryModel, review: delegate.reviewModel)
                 .xiaolaiDictAppearance(delegate.appearance)
         }
         .defaultLaunchBehavior(.suppressed)
@@ -155,6 +144,7 @@ struct XiaolaiDictSettings: View {
         SettingsView(
             model: app.settings,
             appearance: app.appearance,
+            keepPolicy: Binding(get: { app.keepPolicyStore.load() }, set: { app.keepPolicyStore.save($0) }),
             hover: Binding(get: { app.hover.policy }, set: { app.hover.setPolicy($0) }),
             // The watcher, not the policy: whether hover runs at all. It lived only in the menu
             // bar menu until the menu was trimmed to what a reader reaches for often.
@@ -246,5 +236,13 @@ extension View {
             // otherwise.
             extra(window)
         })
+    }
+}
+
+struct HistoryDrawerSceneView: View {
+    let app: XiaolaiDictApp
+    var body: some View {
+        HistoryDrawerRootView(model: app.drawerModel)
+            .onChange(of: LedgerChanges.shared.revision) { _, _ in app.refreshHistory() }
     }
 }

@@ -19,6 +19,8 @@ import XiaolaiDictUI
 @MainActor
 final class LookupRunner {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
+    private let initialRecording: @MainActor (LookupRecording, Int) -> Void
+    private let keepPolicy: @MainActor () -> LookupKeepPolicy
     private let client: DictionaryClient
     private let panel: any LookupPanelPresenting
     private let primary: () -> PrimaryDictionary
@@ -36,8 +38,12 @@ final class LookupRunner {
         primary: @escaping () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
         selector: any SenseSelecting = LadderSenseSelector(),
         priorEncounters: @escaping @Sendable (String, Date, String?) async -> PriorEncounters = { _, _, _ in PriorEncounters() },
-        prewarm: @escaping @Sendable () async -> Void = {}
+        prewarm: @escaping @Sendable () async -> Void = {},
+        keepPolicy: @escaping @MainActor () -> LookupKeepPolicy = { .manual },
+        initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in }
     ) {
+        self.initialRecording = initialRecording
+        self.keepPolicy = keepPolicy
         self.client = client
         self.panel = panel
         self.primary = primary
@@ -51,8 +57,10 @@ final class LookupRunner {
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
     func run(
-        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil
     ) async -> LookupRecording? {
+        let chosenPrimary = primary()
+        let frozenKeepPolicy = existingLookupID == nil ? keepPolicy() : .manual
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         // The app, and then the most precise thing the app could say about where inside it — which
         // for 12 of the 17 apps measured is nothing at all.
@@ -71,6 +79,11 @@ final class LookupRunner {
         // never saw. The rule is "a lookup nobody saw is not recorded", and this is the only place
         // that can tell.
         guard panel.show(.lookup(presentation), near: pointer, for: ticket) else { return nil }
+        let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
+        initialRecording(LookupRecording(
+            record: Self.record(of: selection, lemma: lemma, language: language,
+                                outcome: .notFound(serviceFailure: nil), requestedAt: requestedAt, abstention: nil).pending(),
+            encounter: nil, lookupID: existingLookupID, keepPolicy: frozenKeepPolicy, primaryDictionary: chosenPrimary.chosen), ticket.number)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
         // another wants the model that was being loaded for the first. Detached for that reason —
@@ -80,7 +93,6 @@ final class LookupRunner {
         Task.detached(priority: .userInitiated) { [prewarm] in await prewarm() }
         // The ledger read starts here too, so what this word cost the reader before is being fetched
         // while the dictionaries are asked rather than after them.
-        let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
         let history = Task { [priorEncounters] in
             await priorEncounters(lemma.text, requestedAt, language)
         }
@@ -155,12 +167,20 @@ final class LookupRunner {
         }()
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
-        let chosenPrimary = primary()
         // **Which entry the card opens on.** Set here, from the same `PrimaryDictionary` the
         // resolver is built with, so the dictionary shown and the dictionary whose sense is
         // resolved and recorded cannot be different ones.
+        let effectivePrimary = chosenPrimary.chosen ?? chosenPrimary.identity(among: entries)?.key
         presentation.primaryEntry = chosenPrimary.entries(among: entries).first
             .map { PanelSelection.identity(of: $0) }
+        initialRecording(LookupRecording(
+            record: Self.record(of: selection, lemma: lemma, language: language, outcome: outcome,
+                                requestedAt: requestedAt, abstention: nil),
+            // **The phrase's entries go with it**, so this early row claims no more than the resolver
+            // will: a one-sense word inside a phrase is not yet resolved, and automatic keeping must
+            // not confirm it before the selector has weighed the two.
+            encounter: chosenPrimary.encounter(among: entries, phrase: phraseEntries, at: requestedAt),
+            lookupID: existingLookupID, keepPolicy: frozenKeepPolicy, primaryDictionary: effectivePrimary), ticket.number)
         let resolver = SenseResolver(primary: chosenPrimary, selector: selector)
         let partOfSpeech = Lemmatizer.partOfSpeech(
             of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
@@ -237,7 +257,8 @@ final class LookupRunner {
                                 // recorded, that is a false model status in the ledger for a
                                 // question that was never finished being asked.
                                 abstention: Task.isCancelled ? nil : resolution.abstention),
-            encounter: resolution.encounter)
+            encounter: resolution.encounter, lookupID: existingLookupID, keepPolicy: frozenKeepPolicy,
+            primaryDictionary: effectivePrimary)
     }
 
     /// The sense `key` names, among the phrase's entries. Nil where the winning sense was one of the

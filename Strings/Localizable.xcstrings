@@ -131,7 +131,13 @@
     "%lld lookups will be deleted." : {
 
     },
+    "%lld meanings need attention" : {
+
+    },
     "%lld more due" : {
+
+    },
+    "%lld new meanings are held until tomorrow." : {
 
     },
     "%lld new saved, waiting for tomorrow" : {
@@ -154,6 +160,9 @@
       "comment" : "Menu warning when more than one permission is missing"
     },
     "%lld put off until tomorrow" : {
+
+    },
+    "%lld reading encounters" : {
 
     },
     "%lld reviewed" : {
@@ -210,9 +219,6 @@
     "Add an app…" : {
 
     },
-    "Added to study" : {
-
-    },
     "All" : {
 
     },
@@ -258,6 +264,9 @@
     "Author" : {
 
     },
+    "Automatically" : {
+
+    },
     "Bold" : {
 
     },
@@ -282,6 +291,12 @@
     "Choose a dictionary that marks senses…" : {
 
     },
+    "Choose a meaning" : {
+
+    },
+    "Choose or confirm their meanings in Saved before reviewing." : {
+
+    },
     "Choose…" : {
 
     },
@@ -289,6 +304,9 @@
 
     },
     "Clear the search" : {
+
+    },
+    "Close search" : {
 
     },
     "Comfortable" : {
@@ -303,6 +321,12 @@
     "Confirm the meaning" : {
 
     },
+    "Confirm this meaning" : {
+
+    },
+    "Context may be cut" : {
+
+    },
     "Copies you made yourself — Time Machine, an exported file, anything you duplicated — are not affected and cannot be reached from here." : {
 
     },
@@ -310,6 +334,9 @@
 
     },
     "Copy this definition" : {
+
+    },
+    "Could not keep this lookup" : {
 
     },
     "Delete %lld lookups" : {
@@ -324,10 +351,34 @@
     "Deleting your reading history keeps the meanings you saved. They will need a new sentence before they can be reviewed again." : {
 
     },
+    "Deliberate lookups appear here. Saved meanings become reviewable after confirmation." : {
+
+    },
     "Device Control and Data Access" : {
       "comment" : "macOS 27's name for the Accessibility list — use the system's own wording"
     },
     "Dictionary" : {
+
+    },
+    "Dictionary answer unavailable" : {
+
+    },
+    "Discard" : {
+
+    },
+    "Discard %@" : {
+
+    },
+    "Discard %lld readings" : {
+
+    },
+    "Discard this reading" : {
+
+    },
+    "Discarded" : {
+
+    },
+    "Discarded readings remain recoverable until you permanently delete them." : {
 
     },
     "Done" : {
@@ -383,6 +434,9 @@
     "Fastest available" : {
 
     },
+    "Find meanings needing confirmation" : {
+
+    },
     "First that marks senses" : {
       "comment" : "Menu bar item"
     },
@@ -407,6 +461,9 @@
     "Glass" : {
 
     },
+    "Grid" : {
+
+    },
     "Hard" : {
 
     },
@@ -414,6 +471,12 @@
 
     },
     "Hide the meaning" : {
+
+    },
+    "History" : {
+
+    },
+    "History kept · Choose Keep for learning to study" : {
 
     },
     "Hover Lookup" : {
@@ -437,10 +500,28 @@
     "Japanese kana" : {
 
     },
+    "Keep for learning" : {
+
+    },
+    "Keep lookups for learning" : {
+
+    },
     "Keep this sense as a note" : {
 
     },
+    "Keeping…" : {
+
+    },
     "Keeps the cards and removes the sentences they were saved from" : {
+
+    },
+    "Kept for learning" : {
+
+    },
+    "Kept · Choose a meaning" : {
+
+    },
+    "Kept · Confirm this meaning in Library" : {
 
     },
     "Key" : {
@@ -455,6 +536,9 @@
     "Latin — English and most European languages" : {
 
     },
+    "Learning" : {
+
+    },
     "Library" : {
 
     },
@@ -465,6 +549,9 @@
 
     },
     "Licences" : {
+
+    },
+    "List" : {
 
     },
     "Local model" : {
@@ -498,6 +585,9 @@
     "Lookups are not being recorded: %@" : {
       "comment" : "Menu warning when the ledger could not be opened"
     },
+    "Lookups enter History in both modes. Automatic keeping prepares meanings from your study dictionary; uncertain meanings need your confirmation before Review." : {
+
+    },
     "Made by" : {
 
     },
@@ -528,14 +618,29 @@
     "New" : {
       "comment" : "A library row for a card that has never been reviewed"
     },
+    "No discarded readings" : {
+
+    },
     "No enabled dictionary explains English in your language. Enable one in Dictionary, under Settings, then choose Check again." : {
 
     },
     "No entry for “%@” in your dictionaries." : {
 
     },
+    "No meaning is available for this reading." : {
+
+    },
+    "No meaning is available for this saved target." : {
+
+    },
     "No model is available to explain this sentence." : {
       "comment" : "Shown in the sentence pane when nothing can explain the sentence"
+    },
+    "No reading history" : {
+
+    },
+    "No readings match this search." : {
+
     },
     "No sense in this entry clearly fits this sentence." : {
       "comment" : "Shown on the lookup card when no sense is close enough to claim"
@@ -549,6 +654,9 @@
     "No sentence was captured around the word, so its senses cannot be told apart." : {
       "comment" : "Shown on the lookup card when no sentence surrounded the word"
     },
+    "No sentence was captured." : {
+
+    },
     "No shortcut is registered, so a selection cannot be looked up until you choose one." : {
 
     },
@@ -559,6 +667,9 @@
 
     },
     "Not available" : {
+
+    },
+    "Not found" : {
 
     },
     "Not known" : {
@@ -626,7 +737,7 @@
     "Only a compact voice is installed. Better ones may be available in %@." : {
 
     },
-    "Only my study scripts" : {
+    "Only when I choose Keep" : {
 
     },
     "Open Dictionary…" : {
@@ -660,6 +771,15 @@
 
     },
     "Paused" : {
+
+    },
+    "Permanently delete %lld readings" : {
+
+    },
+    "Permanently delete %lld readings?" : {
+
+    },
+    "Permanently delete reading" : {
 
     },
     "Practice — nothing is scheduled" : {
@@ -707,6 +827,9 @@
     "Reading words by hover from apps that expose no text — a terminal, a canvas, an image." : {
       "comment" : "What stops working without the Screen Recording permission"
     },
+    "Readings you discard appear here and can be restored." : {
+
+    },
     "Ready" : {
 
     },
@@ -722,7 +845,7 @@
     "Remove %lld from study" : {
 
     },
-    "Remove from history" : {
+    "Remove from study %lld" : {
 
     },
     "Remove this tag" : {
@@ -734,10 +857,22 @@
     "Rest the pointer" : {
 
     },
+    "Restore" : {
+
+    },
+    "Restore %@" : {
+
+    },
+    "Restore %lld readings" : {
+
+    },
     "Resume" : {
 
     },
     "Resume %lld" : {
+
+    },
+    "Retry" : {
 
     },
     "Reveal meaning" : {
@@ -752,10 +887,19 @@
     "Review another batch" : {
 
     },
+    "Review today · %lld" : {
+
+    },
     "Review…" : {
       "comment" : "Menu bar item"
     },
     "Save the answer" : {
+
+    },
+    "Saved" : {
+
+    },
+    "Saved filters" : {
 
     },
     "Saved meanings come back here when they are due." : {
@@ -775,6 +919,9 @@
     },
     "Screen Recording is off — hover cannot read the screen" : {
       "comment" : "Menu warning when only Screen Recording is missing"
+    },
+    "Search" : {
+
     },
     "Select a word anywhere and press %@." : {
 
@@ -800,16 +947,19 @@
     "Show Less" : {
       "comment" : "Closes a day's pile of cards"
     },
-    "Show every script" : {
-
-    },
     "Show every tag" : {
 
     },
     "Show everything saved" : {
 
     },
+    "Show in Library" : {
+
+    },
     "Show more" : {
+
+    },
+    "Show more history" : {
 
     },
     "Show the answer" : {
@@ -836,6 +986,9 @@
     "Some of this could not be checked." : {
 
     },
+    "Some readings changed since Discard and were left unchanged." : {
+
+    },
     "Speaking" : {
 
     },
@@ -858,9 +1011,6 @@
 
     },
     "Study from" : {
-
-    },
-    "Study this meaning" : {
 
     },
     "Studying from %@ — %@." : {
@@ -983,6 +1133,9 @@
     "This board was opened without the model's state, so it cannot say what is here." : {
 
     },
+    "This cannot be undone. App-managed migration backups will also be removed. Copies you made remain outside this app. Saved targets remain, but may need a new reading cue." : {
+
+    },
     "This dictionary cannot name this entry, so it cannot be studied" : {
 
     },
@@ -1050,6 +1203,9 @@
     "Undo archiving %lld" : {
 
     },
+    "Undo discarding %lld readings" : {
+
+    },
     "Undo pausing %lld" : {
 
     },
@@ -1106,6 +1262,9 @@
     },
     "Words you look up appear here, grouped by the day you met them." : {
       "comment" : "Drawer notice when nothing has been looked up yet"
+    },
+    "Write an answer" : {
+
     },
     "XiaolaiDict" : {
       "comment" : "The menu bar icon, for VoiceOver"

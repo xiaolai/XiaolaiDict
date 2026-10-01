@@ -13,16 +13,23 @@ import XiaolaiDictCore
 /// answer is behind the same deliberate reveal the review surface uses, per card, never persisted.
 public struct LibraryView: View {
     @Environment(\.scale) private var scale
+    private let showsSidebar: Bool
     public let state: LibraryPresentation
     public let act: @MainActor (LibraryAction) -> Void
 
-    @State private var revealed: Set<UUID> = []
+    private let layout: LibraryLayout
+    private let chooseLayout: @MainActor (LibraryLayout) -> Void
+    @State private var interaction = LibraryCollectionInteraction<UUID>()
+    private var revealed: Set<UUID> { interaction.revealed }
     @State private var tag = ""
     /// The inspector's editor, held here rather than in the model: an in-progress edit is not
     /// state the ledger has any business knowing about until the reader saves it.
     @State private var draft = ""
 
-    public init(state: LibraryPresentation, act: @escaping @MainActor (LibraryAction) -> Void) {
+    public init(state: LibraryPresentation, showsSidebar: Bool = true, layout: LibraryLayout = .grid, chooseLayout: @escaping @MainActor (LibraryLayout) -> Void = { _ in }, act: @escaping @MainActor (LibraryAction) -> Void) {
+        self.layout = layout
+        self.chooseLayout = chooseLayout
+        self.showsSidebar = showsSidebar
         self.state = state
         self.act = act
     }
@@ -32,6 +39,7 @@ public struct LibraryView: View {
         // as one control". Seven of them had been folded into a segmented picker, which gives each
         // state a sliver and no room to name it. The floating treatment is the system's: the list
         // beneath extends under it rather than being clipped to a column beside it.
+        if !showsSidebar { detail } else {
         NavigationSplitView {
             List(LibraryPresentation.Filter.allCases, id: \.self, selection: Binding(
                 get: { state.filter },
@@ -41,6 +49,7 @@ public struct LibraryView: View {
             .navigationSplitViewColumnWidth(Token.Library.sidebarWidth)
         } detail: {
             detail.backgroundExtensionEffect()
+        }
         }
     }
 
@@ -58,21 +67,24 @@ public struct LibraryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, scale.space.padAcross)
                     .padding(.vertical, scale.space.tight)
+                Button("Retry") { act(.retry) }
             }
-            if state.filter == .suggested {
-                suggestions
-            } else if state.rows.isEmpty {
-                empty
-            } else {
-                list
-                if state.hasMore {
-                    Button("Show more") { act(.showMore) }
-                        .padding(.bottom, scale.space.line)
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    if state.filter == .suggested { suggestions }
+                    else if state.rows.isEmpty { empty }
+                    else {
+                        list
+                        if state.hasMore {
+                            Button("Show more") { act(.showMore) }.padding(.bottom, scale.space.line)
+                        }
+                    }
                 }
-            }
-            if let inspector = state.inspector {
-                Divider()
-                self.inspector(inspector)
+                if let inspector = state.inspector {
+                    Divider()
+                    ScrollView { self.inspector(inspector) }
+                        .frame(width: scale.space.libraryInspectorWidth)
+                }
             }
             Divider()
             footer
@@ -83,7 +95,7 @@ public struct LibraryView: View {
         // insets the sidebar: on macOS 26 and later `NavigationSplitView` gives its sidebar
         // floating Liquid Glass, and the detail's safe area is what it floats against.
         .navigationTitle("Library")
-        .searchable(text: Binding(get: { state.search }, set: { act(.search($0)) }))
+        .modifier(LibrarySearch(text: Binding(get: { state.search }, set: { act(.search($0)) }), layout: layout, chooseLayout: chooseLayout))
         .toolbar {
             // **Absent until there is something to pick.** A tag menu over no tags is a control
             // that cannot do anything, which reads as one that is broken. Hidden under Suggested,
@@ -101,14 +113,7 @@ public struct LibraryView: View {
                     }
                 }
             }
-            // **Offered, off by default.** The reader's study-scripts setting filters their
-            // reading; applying it here unasked would hide scheduled work, and a filtered library
-            // and an empty one look exactly alike.
-            ToolbarItem {
-                Toggle("Only my study scripts", isOn: Binding(
-                    get: { state.scriptFiltered },
-                    set: { act(.filterScripts($0)) }))
-            }
+
         }
     }
 
@@ -116,7 +121,7 @@ public struct LibraryView: View {
 
     /// **The answer, and the reader's right to replace it.**
     ///
-    /// Behind the same reveal the rows use: a reader tidying their collection is not reviewing it,
+    /// Behind the same reveal the review surface uses: a reader tidying their collection is not reviewing it,
     /// and a pane that prints the meaning of whatever they click would teach them the answer on the
     /// way past. Once they have asked, it is an editor rather than a label — replacing the
     /// publisher's words with their own is the point, not a hidden capability.
@@ -151,9 +156,20 @@ public struct LibraryView: View {
                     Spacer(minLength: 0)
                 }
             } else {
-                Button("Show the meaning") { revealed.insert(inspector.id) }
-                    .buttonStyle(.link)
-                    .font(.system(size: scale.text.micro))
+                switch inspector.closedAnswer {
+                case .reveal:
+                    Button("Show the meaning") { interaction.revealed.insert(inspector.id) }
+                        .buttonStyle(.link)
+                        .font(.system(size: scale.text.micro))
+                case .write:
+                    // **A remedy beside the diagnosis.** The editor was reachable only through the
+                    // reveal, so the one answer that most needed writing could never be written.
+                    // There is nothing here to give away, so opening the editor teaches nothing early.
+                    Text("No meaning is available for this saved target.").foregroundStyle(.secondary)
+                    Button("Write an answer") { interaction.revealed.insert(inspector.id) }
+                        .buttonStyle(.link)
+                        .font(.system(size: scale.text.micro))
+                }
             }
             if !inspector.tags.isEmpty {
                 HStack(spacing: scale.space.inline) {
@@ -267,14 +283,17 @@ public struct LibraryView: View {
     // MARK: - Finding
 
     private var list: some View {
-        List(state.rows, selection: Binding(
-            get: { state.selection },
-            set: { act(.select($0)) })) { row in
-            LibraryRowView(row: row, isRevealed: revealed.contains(row.id),
-                           reveal: { revealed.insert(row.id) })
-                .tag(row.id)
+        LibraryCollection(rows: state.rows, layout: layout, identifier: "library-saved-row",
+                          selection: Binding(get: { state.selection }, set: { act(.select($0)) }),
+                          interaction: $interaction) { row in
+            LibraryRowView(row: row)
+        } menu: { row in
+            let ids = state.selection.contains(row.id) ? state.selection : [row.id]
+            Button("Pause \(ids.count)") { act(.select(ids)); act(.pause) }
+            Button("Resume \(ids.count)") { act(.select(ids)); act(.resume) }
+            Button("Archive \(ids.count)") { act(.select(ids)); act(.archive) }
+            Button("Remove from study \(ids.count)", role: .destructive) { act(.select(ids)); act(.removeFromStudy) }
         }
-        .listStyle(.inset)
     }
 
     /// **Offered, never enrolled.** An unopened suggestion costs the reader nothing, and neither
@@ -380,9 +399,6 @@ public struct LibraryView: View {
                 }
                 if state.tag != nil {
                     Button("Show every tag") { act(.filterTag(nil)) }
-                }
-                if state.scriptFiltered {
-                    Button("Show every script") { act(.filterScripts(false)) }
                 }
                 if state.filter != .all {
                     Button("Show everything saved") { act(.filter(.all)) }
@@ -498,8 +514,6 @@ struct LibraryRowView: View {
     @Environment(\.scale) private var scale
     @Environment(\.colorScheme) private var scheme
     let row: LibraryPresentation.Row
-    let isRevealed: Bool
-    let reveal: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: scale.space.tight) {
@@ -520,27 +534,22 @@ struct LibraryRowView: View {
                 }
             }
             if !row.excerpt.isEmpty {
-                Text(verbatim: row.excerpt)
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(Token.Limit.excerptLines)
+                ReadingSentence(sentence: row.excerpt, ranges: row.marks,
+                                accent: ReadingPalette.accent(for: row.word).color(in: scheme))
             }
-            // Behind a deliberate reveal, like every other surface that could answer the question.
-            if isRevealed {
-                Text(verbatim: row.answer)
-                    .font(.system(size: scale.text.small))
-                    .textSelection(.enabled)
-            } else {
-                Button("Show the meaning", action: reveal)
-                    .buttonStyle(.link)
-                    .font(.system(size: scale.text.micro))
+            HStack(spacing: scale.space.inline) {
+                ReadingPronunciation(word: row.word, sentence: row.excerpt)
+                Spacer(minLength: 0)
             }
+
         }
-        .padding(.vertical, scale.space.tight)
+        .padding(scale.space.pad)
+        .modifier(ReadingCardChrome(accent: ReadingPalette.accent(for: row.word).color(in: scheme).opacity(Token.Opacity.accentBorder)))
     }
 }
 
 public enum LibraryAction: Sendable, Equatable {
+    case retry
     case search(String)
     /// One more page. **Grown, not offset**: a card enrolled while the reader is reading must not
     /// shift a boundary underneath them.
@@ -549,7 +558,6 @@ public enum LibraryAction: Sendable, Equatable {
     /// as a status with no way to act on it — a diagnosis with no remedy.
     case confirm
     case filter(LibraryPresentation.Filter)
-    case filterScripts(Bool)
     case select(Set<UUID>)
     case pause
     /// **The way back.** `setPaused(false, …)` existed with nothing able to reach it, so pausing
@@ -612,7 +620,6 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let total: Int
     public let search: String
     public let filter: Filter
-    public let scriptFiltered: Bool
     public let selection: Set<UUID>
     /// Whether anything matched beyond what is listed.
     public let hasMore: Bool
@@ -622,7 +629,7 @@ public struct LibraryPresentation: Sendable, Equatable {
     /// Whether anything is narrowing the list. **Every narrowing**, so an empty result can only
     /// claim "you have saved nothing" when nothing is hiding rows.
     public var isUnfiltered: Bool {
-        search.isEmpty && filter == .all && tag == nil && !scriptFiltered
+        search.isEmpty && filter == .all && tag == nil
     }
     /// What the reader keeps looking up and has not saved. Only read under the `suggested` filter.
     public let suggestions: [Suggestion]
@@ -656,7 +663,7 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let problem: String?
 
     public init(rows: [Row], total: Int, search: String = "", filter: Filter = .all,
-                scriptFiltered: Bool = false, selection: Set<UUID> = [],
+                selection: Set<UUID> = [],
                 hasMore: Bool = false, canConfirm: Bool = false,
                 suggestions: [Suggestion] = [], exported: String? = nil,
                 selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
@@ -668,7 +675,6 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.total = total
         self.search = search
         self.filter = filter
-        self.scriptFiltered = scriptFiltered
         self.selection = selection
         self.hasMore = hasMore
         self.canConfirm = canConfirm
@@ -786,6 +792,20 @@ public struct LibraryPresentation: Sendable, Equatable {
             self.readings = readings
             self.reviews = reviews
         }
+
+        /// What the answer area offers before the reader has opened it.
+        public enum ClosedAnswer: Sendable, Equatable {
+            /// There is an answer, and it stays unseen until asked for.
+            case reveal
+            /// There is none to hide, so the control is the editor's door.
+            case write
+        }
+
+        /// Blank by the Save button's own rule, `.whitespacesAndNewlines`, so a stored answer of
+        /// only an ideographic space is offered for writing rather than revealed as nothing.
+        public var closedAnswer: ClosedAnswer {
+            answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .write : .reveal
+        }
     }
 
     /// The sidebar's states, as one control. **Archived and paused are here**, because the library is
@@ -864,6 +884,8 @@ public struct LibraryPresentation: Sendable, Equatable {
         public let id: UUID
         public let word: String
         public let excerpt: String
+        /// Where the word sits in `excerpt` — `LibraryRow.excerptMarks`, decided below the view.
+        public let marks: [NSRange]
         /// The answer, which the row shows only when the reader asks.
         public let answer: String
         /// Why it is not being asked, where it is not. Nil when it is simply due or waiting.
@@ -874,11 +896,12 @@ public struct LibraryPresentation: Sendable, Equatable {
         /// When it comes back, in the reader's words.
         public let due: String?
 
-        public init(id: UUID, word: String, excerpt: String, answer: String,
+        public init(id: UUID, word: String, excerpt: String, marks: [NSRange], answer: String,
                     status: Status?, due: String?) {
             self.id = id
             self.word = word
             self.excerpt = excerpt
+            self.marks = marks
             self.answer = answer
             self.status = status
             self.due = due

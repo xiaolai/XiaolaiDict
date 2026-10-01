@@ -151,6 +151,7 @@ extension Ledger {
     /// That is why eligibility is rechecked at presentation, with a live hash, before a card is drawn.
     static let askableNotePredicate = """
         n.enrollment = 'active'
+        AND \(Ledger.collectedNotePredicate)
         AND n.confirmed_at IS NOT NULL
         -- A reading is required of a dictionary target and not of one the reader wrote: their own
         -- words are the cue, and demanding a lookup for it would make C07 unusable.

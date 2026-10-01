@@ -63,6 +63,37 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     /// filters by script, and two languages can share one; counting or grouping by lemma alone
     /// makes those one word.
     public let language: String?
+    public let disposition: LookupDisposition
+    public let studyNoteID: UUID?
+    public let studyStatus: StudyReadiness?
+    /// What the kept note reveals — **its** answer, off the same association as `studyNoteID`.
+    ///
+    /// Not `sense?.gloss`: that is the newest encounter, which an auxiliary tap can be, and the note
+    /// is the one the reading is kept under. Confirming a note after showing the encounter's gloss
+    /// agreed to one meaning and confirmed another. Hidden by the same deliberate reveal as `sense`.
+    public let studyAnswer: String?
+
+    /// The encounter of the kept note's own target in this reading — its dictionary, sense and
+    /// standing — never a newer encounter of something else. Nil where the reading met no encounter
+    /// of that target, which draws no label rather than a borrowed one.
+    public let studySense: SenseNote?
+
+    /// The meaning a reveal shows: the kept note's own answer where the reading is kept under one, so
+    /// "Confirm this meaning" confirms exactly what was shown; the encounter's gloss where it is not.
+    public var meaning: String? { studyNoteID != nil ? studyAnswer : sense?.gloss }
+
+    /// **What a surface beside "Confirm this meaning" draws: one value describing one note.** Where the
+    /// reading is kept, its sense is the note's own encounter carrying the note's own answer, so the
+    /// dictionary name, the sense badge and the revealed meaning all describe what confirming reaches.
+    /// Where it is not kept, the reading as recorded.
+    public var shown: ReadingEntry {
+        guard studyNoteID != nil else { return self }
+        let sense = studySense.map {
+            SenseNote(dictionary: $0.dictionary, block: $0.block, ordinal: $0.ordinal, outOf: $0.outOf,
+                      gloss: studyAnswer, chosenBy: $0.chosenBy)
+        }
+        return copy(sense: sense, repeats: repeats)
+    }
 
     /// How many times this reading was looked up. One card, so at least one.
     public var times: Int { repeats.count + 1 }
@@ -77,7 +108,9 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         id: Int, lemma: String, surface: String, sentence: String, sentenceRange: NSRange?,
         place: ReadingPlace, at: Date, result: LookupResult, quality: CaptureQuality?,
         partOfSpeech: String? = nil, sense: SenseNote? = nil, senseAbstention: Abstention? = nil,
-        language: String? = nil, repeats: [Int] = []
+        language: String? = nil, repeats: [Int] = [], disposition: LookupDisposition = .kept,
+        studyNoteID: UUID? = nil, studyStatus: StudyReadiness? = nil, studyAnswer: String? = nil,
+        studySense: SenseNote? = nil
     ) {
         self.id = id
         self.lemma = lemma
@@ -93,14 +126,23 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.senseAbstention = senseAbstention
         self.repeats = repeats
         self.language = language
+        self.disposition = disposition
+        self.studyNoteID = studyNoteID
+        self.studyStatus = studyStatus
+        self.studyAnswer = studyAnswer
+        self.studySense = studySense
     }
 
     /// The same reading, answerable for the lookups it stands for.
-    func standing(for repeats: [Int]) -> ReadingEntry {
+    func standing(for repeats: [Int]) -> ReadingEntry { copy(sense: sense, repeats: repeats) }
+
+    private func copy(sense: SenseNote?, repeats: [Int]) -> ReadingEntry {
         ReadingEntry(
             id: id, lemma: lemma, surface: surface, sentence: sentence, sentenceRange: sentenceRange,
             place: place, at: at, result: result, quality: quality, partOfSpeech: partOfSpeech,
-            sense: sense, senseAbstention: senseAbstention, language: language, repeats: repeats)
+            sense: sense, senseAbstention: senseAbstention, language: language, repeats: repeats,
+            disposition: disposition, studyNoteID: studyNoteID, studyStatus: studyStatus,
+            studyAnswer: studyAnswer, studySense: studySense)
     }
 
     /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a

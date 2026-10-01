@@ -352,6 +352,7 @@ final class LookupPanelController: LookupPanelPresenting {
 /// The lookup panel's scene content.
 struct LookupPanelSceneView: View {
     let controller: LookupPanelController
+    let recorder: LookupRecorder?
     @Bindable var model: LookupPanelModel
     /// Read inside this body, never the scene's: the model's download progress is observable, and
     /// reading it in an `App`'s body would re-evaluate every scene on each update.
@@ -363,7 +364,22 @@ struct LookupPanelSceneView: View {
     var body: some View {
         Group {
             if let content = model.content {
-                PanelView(content: content)
+                VStack(spacing: 0) {
+                    PanelView(content: content)
+                    LookupKeepStatusViewBridge()
+                }
+                    .onChange(of: LedgerChanges.shared.revision) { _, _ in
+                        if let request = content.request { Task { await recorder?.refreshStatus(request: request) } }
+                    }
+                    .environment(\.lookupKeepStatus, content.request.flatMap { recorder?.states[$0] })
+                    .environment(\.lookupKeepAction) { action in
+                        guard let request = content.request else { return }
+                        switch action {
+                        case .retry: recorder?.retry(request: request)
+                        case .discard: recorder?.discard(request: request)
+                        case .undo: recorder?.undoDiscard(request: request)
+                        }
+                    }
                     .environment(\.pinNote) { [controller] note in
                         controller.notes.pin(note, near: controller.lastPointer)
                     }

@@ -112,16 +112,18 @@ extension Ledger {
     /// **Copies the reader made themselves are outside this.** A Time Machine snapshot, a file they
     /// duplicated, an export they sent somewhere — none of it is ours to reach, and the reader-facing
     /// text says so rather than implying a completeness nothing can deliver.
-    public func eraseReadingData(at path: String) throws -> ErasureReport {
+    public func eraseReadingData(at path: String, lookups ids: [Int]? = nil) throws -> ErasureReport {
         var count = 0
-        try run("SELECT COUNT(*) FROM lookups", bind: []) { count = $0.integer(0) }
+        let scope = ids == nil ? "" : " WHERE id IN (SELECT value FROM json_each(?))"
+        let values: [SQLiteValue] = ids.map { [.text(Self.jsonArray(of: $0.map(String.init)))] } ?? []
+        try run("SELECT COUNT(*) FROM lookups" + scope, bind: values) { count = $0.integer(0) }
         // **`DELETE` frees the pages and leaves their bytes.** macOS's SQLite runs `secure_delete`
         // in FAST mode, which only scrubs pages it is already rewriting, so thousands of characters
         // of the reader's sentences stayed legible in the file after an erase that reported success.
         // Measured on this Mac before this line existed.
         try execute("PRAGMA secure_delete = ON")
         try inOneTransaction("eraseReading") {
-            try execute("DELETE FROM lookups")
+            try run("DELETE FROM lookups" + scope, bind: values) { _ in }
         }
         // **After the rows, not before.** A backup removed first, on a delete that then fails, is a
         // reader with neither their history nor the copy they could have restored it from.
