@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import XiaolaiDictUI
 
 /// Every pane of the Library is built on one skeleton, so they look like one window.
 ///
@@ -195,6 +196,48 @@ struct LibraryPaneChromeTests {
         // keyboard.
         #expect(collection.contains("SelectionAppearance.ring(appearsActive: appearsActive && hasFocus)"))
         #expect(!collection.contains("strokeBorder(Color.accentColor"))
+    }
+
+    private func section(of source: String, from start: String, to end: String) throws -> Substring {
+        let from = try #require(source.range(of: start))
+        let to = try #require(source.range(of: end, range: from.upperBound..<source.endIndex))
+        return source[from.lowerBound..<to.lowerBound]
+    }
+
+    /// **The same sentence met again the same day is one line with a count.** The inspector
+    /// listed every lookup, so a word looked up fifteen times in one sentence drew that sentence
+    /// fifteen times and pushed the reviews below it out of sight (E2E Mac, 2026-10-02). A card
+    /// says "×15" for the same thing; this says it the same way.
+    @Test func readingsOfOneSentenceOnOneDayAreOneLine() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        func mark(_ id: Int, _ sentence: String, _ source: String?, hours: Double) -> LibraryPresentation.ReadingMark {
+            .init(id: id, at: day.addingTimeInterval(hours * 3_600), sentence: sentence, source: source)
+        }
+        let lines = LibraryPresentation.ReadingLine.lines(of: [
+            mark(5, "One sentence.", "TextEdit", hours: 3), mark(4, "One sentence.", "TextEdit", hours: 2),
+            mark(3, "Another.", "TextEdit", hours: 1.5), mark(2, "One sentence.", "Safari", hours: 1),
+            mark(1, "One sentence.", "TextEdit", hours: -30),
+        ], calendar: calendar)
+        #expect(lines.map(\.times) == [2, 1, 1, 1])
+        #expect(lines.map(\.mark.id) == [5, 3, 2, 1], "a line is headed by its newest reading, in the order given")
+        #expect(lines.reduce(0) { $0 + $1.times } == 5, "a reading was dropped rather than counted")
+        #expect(LibraryPresentation.ReadingLine.lines(of: [], calendar: calendar).isEmpty)
+    }
+
+    /// **A tag can be added without the inspector already being open.** The field lives in the
+    /// inspector, where there is room to type — and the inspector can be closed, which left
+    /// tagging with no route at all: not in the toolbar, not in the right-click menu. The action
+    /// is with the other selection actions, opens the inspector and puts the caret in the field.
+    @Test func taggingHasARouteThatDoesNotNeedTheInspectorOpen() throws {
+        let view = try source("LibraryView.swift")
+        let actions = try section(of: view, from: "private func selectionActions", to: "struct PendingRemoval")
+        #expect(actions.contains("IconButton(.addTag, title: \"Tag ^[\\(count) Meaning](inflect: true)…\""))
+        #expect(actions.contains("beginTagging(target.ids)"))
+        let begin = try section(of: view, from: "private func beginTagging", to: "private func perform")
+        #expect(begin.contains("act(.select(ids))"), "the tag would go to the old selection, not what was clicked")
+        #expect(begin.contains("inspectorShown = true"))
+        #expect(view.contains(".focused($tagFocused)"))
     }
 
     /// A card is a control: VoiceOver can select it, and the keys beyond the arrows are handled.

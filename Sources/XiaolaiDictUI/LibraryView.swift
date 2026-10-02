@@ -28,6 +28,8 @@ public struct LibraryView: View {
     @State private var interaction = LibraryCollectionInteraction<UUID>()
     private var revealed: Set<UUID> { interaction.revealed }
     @State private var tag = ""
+    /// The caret in the tag field.
+    @FocusState private var tagFocused: Bool
     /// What is typed in the search field. See `LibrarySearch` for why it is not the model's copy.
     @State private var searchText = ""
     /// A removal that cannot be taken back, waiting for the reader to say they mean it.
@@ -143,6 +145,7 @@ public struct LibraryView: View {
         TextField("Add a tag", text: $tag)
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: Token.Library.tagWidth)
+            .focused($tagFocused)
             .onSubmit {
                 act(.tag(tag))
                 tag = ""
@@ -250,7 +253,8 @@ public struct LibraryView: View {
                         .font(.system(size: scale.text.micro))
                         .foregroundStyle(.secondary)
                 }
-                ForEach(inspector.readings) { reading in
+                ForEach(LibraryPresentation.ReadingLine.lines(of: inspector.readings)) { line in
+                    let reading = line.mark
                     VStack(alignment: .leading, spacing: 0) {
                         Text(verbatim: reading.sentence)
                             .font(.system(size: scale.text.small))
@@ -260,6 +264,11 @@ public struct LibraryView: View {
                         HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
                             Text(reading.at, format: .dateTime.year().month().day())
                             if let source = reading.source { Text(verbatim: source) }
+                            // The card's own way of saying it was met more than once.
+                            if line.times > 1 {
+                                Text(verbatim: "×\(line.times)")
+                                    .accessibilityLabel(Text("^[\(line.times) reading](inflect: true)"))
+                            }
                         }
                         .font(.system(size: scale.text.micro))
                         .foregroundStyle(.secondary)
@@ -498,6 +507,29 @@ public struct LibraryView: View {
     /// the selection acts on that card**, as it does in Finder, and the model acts on its own
     /// selection — so the selection is moved first, and the count on the menu row is the count the
     /// action reaches.
+    /// **Tagging, from where the other selection actions are.** The field is in the inspector and
+    /// the inspector can be closed, which left a tag with no route to it at all. This selects what
+    /// was clicked — the field labels the selection — opens the inspector and hands it the caret.
+    private func beginTagging(_ ids: Set<UUID>) {
+        if ids != state.selection { act(.select(ids)) }
+        inspectorShown = true
+        takeTagFocus(attemptsLeft: Token.Library.tagFocusAttempts)
+    }
+
+    /// **Asked until it takes, a bounded number of times.** A field in a column that is still
+    /// sliding in refuses the caret, and `FocusState` reads back false when it does: set once in
+    /// `onAppear`, and once more a turn later, the collection kept the keyboard both times and
+    /// the Return meant for the tag closed the inspector instead (E2E Mac, 2026-10-02). Nor can
+    /// it wait for the field's `onAppear`: a closed inspector's content has already appeared, so
+    /// opening it again fires nothing. Asked from the action itself, whichever way it started.
+    private func takeTagFocus(attemptsLeft: Int) {
+        tagFocused = true
+        guard attemptsLeft > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Token.Library.tagFocusInterval) {
+            if !tagFocused { takeTagFocus(attemptsLeft: attemptsLeft - 1) }
+        }
+    }
+
     private func perform(_ action: LibraryAction, on ids: Set<UUID>) {
         if ids != state.selection { act(.select(ids)) }
         act(action)
@@ -528,6 +560,8 @@ public struct LibraryView: View {
             IconButton(.archive, title: "Archive ^[\(count) Meaning](inflect: true)",
                        hint: inToolbar ? "or press Delete" : nil, size: size) { perform(.archive, on: target.ids) }
         }
+        // An ellipsis: it needs the tag typed before anything happens.
+        IconButton(.addTag, title: "Tag ^[\(count) Meaning](inflect: true)…", size: size) { beginTagging(target.ids) }
         // **Two different deletions, named apart.** Removing from Saved keeps the reading;
         // deleting the readings keeps the meaning. A single "Delete" would mean whichever the
         // reader assumed. Each ends in an ellipsis because each asks before it acts.
@@ -870,6 +904,35 @@ public struct LibraryPresentation: Sendable, Equatable {
     }
 
     /// One reading, as the audit trail shows it.
+    /// One line of "Where You Met It": a reading, and how many times that same sentence was met
+    /// in the same place on the same day.
+    ///
+    /// **Collapsed here, counted never dropped.** The ledger keeps every lookup and so does the
+    /// inspector's data; what is drawn is one line per sentence-place-day, the way a card draws
+    /// "×N", because fifteen identical lines say nothing the first did not.
+    public struct ReadingLine: Sendable, Equatable, Identifiable {
+        /// The reading the line is headed by: the first of its kind in the order given.
+        public let mark: ReadingMark
+        public let times: Int
+        public var id: Int { mark.id }
+
+        public static func lines(of marks: [ReadingMark], calendar: Calendar = .current) -> [ReadingLine] {
+            var lines: [ReadingLine] = []
+            var place: [String: Int] = [:]
+            for mark in marks {
+                let day = calendar.startOfDay(for: mark.at).timeIntervalSinceReferenceDate
+                let key = "\(day)\u{1F}\(mark.source ?? "")\u{1F}\(mark.sentence)"
+                if let index = place[key] {
+                    lines[index] = ReadingLine(mark: lines[index].mark, times: lines[index].times + 1)
+                } else {
+                    place[key] = lines.count
+                    lines.append(ReadingLine(mark: mark, times: 1))
+                }
+            }
+            return lines
+        }
+    }
+
     public struct ReadingMark: Sendable, Equatable, Identifiable {
         public let id: Int
         public let at: Date

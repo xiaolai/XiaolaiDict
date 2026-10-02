@@ -249,6 +249,9 @@
     "Accessibility is off — your selection cannot be read" : {
       "comment" : "Menu warning when only Accessibility is missing"
     },
+    "Add a Tag…" : {
+
+    },
     "Add a tag" : {
 
     },
@@ -929,10 +932,10 @@
     "Readings Are Not Being Recorded" : {
       "comment" : "Menu bar warning row"
     },
-    "Readings you discard appear here and can be restored." : {
+    "Readings are not being recorded: %@" : {
 
     },
-    "Readings are not being recorded: %@" : {
+    "Readings you discard appear here and can be restored." : {
 
     },
     "Ready" : {
@@ -1208,10 +1211,10 @@
     "Struggling" : {
 
     },
-    "Study Dictionary" : {
+    "Study" : {
 
     },
-    "Study" : {
+    "Study Dictionary" : {
 
     },
     "Study From" : {
@@ -1248,6 +1251,9 @@
       "comment" : "Where a permission is granted; the placeholder is the list's own name"
     },
     "Tag" : {
+
+    },
+    "Tag ^[%lld Meaning](inflect: true)…" : {
 
     },
     "Text" : {
