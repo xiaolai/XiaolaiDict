@@ -88,8 +88,8 @@ public final class HistoryDrawerModel {
     /// How many **lookups** the cards stand for — always at least `totalEntries`, and more wherever
     /// a reading was met again. Three numbers describe this drawer and they are all different:
     /// cards, the lookups behind them, and the words. Reported by `--history-report` so a stage can
-    /// compare them. On screen the header and each day count cards — readings — so the day counts
-    /// add up to the header's, and a card's own "×N" is the lookups behind that one card.
+    /// compare them. On screen the header and each day count **this** — readings — so a day's
+    /// cards add up to its count by their "×N", and the days to the header.
     public var totalLookups: Int {
         days.reduce(0) { $0 + $1.entries.reduce(0) { $0 + $1.times } }
     }
@@ -100,7 +100,7 @@ public final class HistoryDrawerModel {
     /// ledger 2026-09-30, 102 cards over 8 days carried 74 words, and 19 of those cards repeated a
     /// word already shown that day in the same sentence. The header said "102 words" — it was
     /// reading `totalEntries`, whose own name says what it counts. Since 2026-10-02 the header
-    /// says readings and counts `totalEntries`, the unit the day counts beside it are in; this is
+    /// says readings and counts `totalLookups`, the unit the day counts beside it are in; this is
     /// reported by `--history-report` and shown nowhere.
     ///
     /// Counted over `days` rather than over the ledger, so a filtered drawer's header describes the
