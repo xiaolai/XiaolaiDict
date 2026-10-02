@@ -62,10 +62,11 @@ struct ReviewWiringTests {
         return ledger
     }
 
-    private func model(_ path: String, clock: Date? = nil) -> ReviewModel {
+    private func model(_ path: String, clock: Date? = nil, named: Bool = true) -> ReviewModel {
         let when = clock ?? now
         return ReviewModel(store: Wiring.store(path),
                            primary: { PrimaryDictionary(chosen: "noad") },
+                           dictionaryName: { key in named && key == "noad" ? "New Oxford American Dictionary" : nil },
                            clock: { when })
     }
 
@@ -95,7 +96,24 @@ struct ReviewWiringTests {
         try await settle { self.question(model)?.answer != nil }
         let back = try #require(question(model))
         #expect(back.answer?.text == "a penalty, sense 0")
-        #expect(back.answer?.dictionary == "noad", "a card attributes its answer")
+        // **By the dictionary's name, never its key.** The key is a bundle identifier: a revealed
+        // answer was signed "com.apple.dictionary.zh_CN-en.OCD" (E2E Mac, 2026-10-02).
+        #expect(back.answer?.dictionary == "New Oxford American Dictionary", "a card attributes its answer")
+    }
+
+    /// **A dictionary whose name cannot be found signs nothing.** It may have been switched off
+    /// since the meaning was saved; its key is an identifier and never a fallback for its name.
+    @Test func anAnswerFromADictionaryWithNoNameIsNotSignedWithItsKey() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        _ = try ready(path)
+        let model = model(path, named: false)
+        await model.start()
+        model.act(.reveal)
+        try await settle { self.question(model)?.answer != nil }
+        let back = try #require(question(model))
+        #expect(back.answer?.text == "a penalty, sense 0")
+        #expect(back.answer?.dictionary == nil)
     }
 
     /// A capture that produced no real sentence shows none. The ledger stores the selection itself

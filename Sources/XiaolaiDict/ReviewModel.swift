@@ -42,6 +42,10 @@ final class ReviewModel {
 
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     private let primary: @MainActor () -> PrimaryDictionary
+    /// A dictionary's name, from its key. **What an answer is signed with**: the key is a bundle
+    /// identifier, and a revealed answer was attributed to "com.apple.dictionary.zh_CN-en.OCD".
+    /// Nil where the dictionary is no longer one the reader has on — then the answer is unsigned.
+    private let dictionaryName: @MainActor (String) -> String?
     private let clock: @MainActor () -> Date
     /// What Done closes. Review is a pane of the Library window, so by default that window.
     private let finish: @MainActor () -> Void
@@ -52,6 +56,7 @@ final class ReviewModel {
 
     init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
          primary: @escaping @MainActor () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
+         dictionaryName: @escaping @MainActor (String) -> String? = { _ in nil },
          clock: @escaping @MainActor () -> Date = { .now },
          finish: @escaping @MainActor () -> Void = {
              WindowActions.shared.dismissWindow(id: XiaolaiDictScene.libraryID)
@@ -59,6 +64,7 @@ final class ReviewModel {
         self.finish = finish
         self.store = store
         self.primary = primary
+        self.dictionaryName = dictionaryName
         self.clock = clock
     }
 
@@ -373,7 +379,7 @@ final class ReviewModel {
             position: session.cursor + 1, batchSize: session.presentations.count,
             isPractice: isPractice,
             answer: current.isRevealed ? answer.map {
-                ReviewPresentation.Answer(text: $0.text, dictionary: $0.dictionary)
+                ReviewPresentation.Answer(text: $0.text, dictionary: $0.dictionary.flatMap(dictionaryName))
             } : nil,
             isCommitting: committing, problem: problem)))
     }
