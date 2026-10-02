@@ -100,6 +100,19 @@ struct IconButtonTests {
         #expect(review.contains("shortcut: KeyboardShortcut(\"s\", modifiers: [])"))
         #expect(review.contains("shortcut: KeyboardShortcut(\"t\", modifiers: [])"))
         #expect(review.contains("IconButton(.showMeaning, shortcut: KeyboardShortcut(.space, modifiers: [])"))
+        // **The answers are the size of the question.** They are what the surface is for, and
+        // were drawn at the size of a card's incidental actions — four small grey glyphs in a
+        // corner (E2E Mac, 2026-10-02). Still icons, as the reader asked: larger, and the two
+        // verdicts on memory set apart from the two that only move the card.
+        for answer in ["showMeaning", "forgot", "remembered"] {
+            let call = try #require(review.range(of: "IconButton(.\(answer),"))
+            let line = review[call.lowerBound...].prefix(260)
+            #expect(line.contains("size: scale.text.strong"), "\(answer) is drawn at an incidental action's size")
+        }
+        let grades = try #require(review.range(of: "IconButton(.remembered,"))
+        let deferrals = try #require(review.range(of: "IconButton(.skip,"))
+        #expect(review[grades.upperBound..<deferrals.lowerBound].contains("Divider()"),
+                "nothing separates a verdict on memory from putting the card off")
         #expect(!review.contains(".keyboardShortcut("), "a key is bound outside the button that names it")
     }
 
