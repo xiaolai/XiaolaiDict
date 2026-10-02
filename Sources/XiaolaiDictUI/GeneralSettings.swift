@@ -142,7 +142,7 @@ struct GeneralPane: View {
                         Text("Only when I choose Save").tag(LookupKeepPolicy.manual)
                     }
                 } header: {
-                    Text("Learning")
+                    Text("Study")
                 } footer: {
                     Text("""
                          Every reading is kept in Reading History either way. Meanings saved \

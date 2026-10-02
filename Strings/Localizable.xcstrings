@@ -602,9 +602,6 @@
     "Layout" : {
 
     },
-    "Learning" : {
-
-    },
     "Library" : {
       "comment" : "Menu bar item"
     },
@@ -659,9 +656,6 @@
     },
     "Lookup shortcut" : {
 
-    },
-    "Lookups are not being recorded: %@" : {
-      "comment" : "Menu warning when the ledger could not be opened"
     },
     "Made by" : {
 
@@ -932,10 +926,13 @@
     "Reading History" : {
       "comment" : "Menu bar item"
     },
-    "Readings Are Not Being Saved" : {
+    "Readings Are Not Being Recorded" : {
       "comment" : "Menu bar warning row"
     },
     "Readings you discard appear here and can be restored." : {
+
+    },
+    "Readings are not being recorded: %@" : {
 
     },
     "Ready" : {
@@ -1214,6 +1211,9 @@
     "Study Dictionary" : {
 
     },
+    "Study" : {
+
+    },
     "Study From" : {
 
     },
@@ -1290,8 +1290,8 @@
     "The frontmost app could not be identified, so its selection cannot be read." : {
       "comment" : "Lookup panel, when no app is frontmost"
     },
-    "The last lookup was not recorded: %@" : {
-      "comment" : "Menu warning when a lookup could not be written to the ledger"
+    "The last reading was not recorded: %@" : {
+
     },
     "The license could not be opened. It is published under %@, at %@." : {
       "localizations" : {
@@ -1360,7 +1360,7 @@
     "This dictionary does not mark separate meanings, so none can be pointed at here." : {
       "comment" : "Shown where a dictionary's entries carry no sense structure at all"
     },
-    "This reading could not be saved" : {
+    "This reading could not be recorded" : {
 
     },
     "This sentence could not be compared against the meanings." : {

@@ -41,7 +41,7 @@ final class LookupRecorder {
         let task = Task { try await open() }; opening = task
         Task { [weak self] in
             do { _ = try await task.value }
-            catch { guard let self, newest == 0 else { return }; problem = String(localized: "Lookups are not being recorded: \(String(describing: error))") }
+            catch { guard let self, newest == 0 else { return }; problem = String(localized: "Readings are not being recorded: \(String(describing: error))") }
         }
     }
     /// Scheduling is synchronous; the lookup display never waits for SQLite.
@@ -128,7 +128,7 @@ final class LookupRecorder {
             log.error("request \(request) persistence failed")
             failedIntents[request] = senseIntents[request].map(RetryIntent.sense) ?? .recording(recording)
             states[request] = .failed
-            if request >= newest { problem = String(localized: "The last lookup was not recorded: \(String(describing: error))") }
+            if request >= newest { problem = String(localized: "The last reading was not recorded: \(String(describing: error))") }
         }
     }
     private func prune() {

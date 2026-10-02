@@ -5,6 +5,8 @@ public enum LookupKeepStatus: Equatable, Sendable, CaseIterable {
 
     /// What the row says, **as a status and never as an instruction** — and in the words every
     /// other surface uses: a meaning is *saved*, a reading is *discarded*.
+    /// A reading the ledger could not write is *not recorded* — never "not saved", which is the
+    /// word for a meaning and sat one row away from "Saved" meaning exactly that.
     ///
     /// It read "Kept · Confirm this meaning in Library" and "History kept · Choose Keep for
     /// learning to study" (2026-10-01): a state and an errand in one line, the second naming a
@@ -18,7 +20,7 @@ public enum LookupKeepStatus: Equatable, Sendable, CaseIterable {
         case .needsMeaning: "Saved, with no meaning chosen yet"
         case .needsConfirmation: "Saved, not confirmed yet"
         case .manual: "In your reading history, not saved"
-        case .failed: "This reading could not be saved"
+        case .failed: "This reading could not be recorded"
         case .discarded, .discardedExternally: "Discarded"
         }
     }
