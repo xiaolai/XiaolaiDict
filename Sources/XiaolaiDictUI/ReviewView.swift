@@ -166,14 +166,24 @@ public struct ReviewView: View {
             // The word aloud is not its meaning, so the voice is on the front like any other card's.
             ReadingPronunciation(word: question.word, sentence: question.sentence?.text ?? "")
             if question.answer == nil {
-                IconButton(.showMeaning, shortcut: KeyboardShortcut(.space, modifiers: []), isEnabled: ready) { act(.reveal) }
+                IconButton(.showMeaning, shortcut: KeyboardShortcut(.space, modifiers: []), size: scale.text.strong,
+                           isEnabled: ready) { act(.reveal) }
             }
             Spacer(minLength: 0)
             // **Forgot first, always.** The order is the same on every card, so a reader answering
             // quickly is answering the question and not hunting for the button.
-            IconButton(.forgot, shortcut: KeyboardShortcut("1", modifiers: []), isEnabled: ready) { act(.grade(.again)) }
+            //
+            // **The size of the word, because they are its answer.** Still icons — the reader asked
+            // for every button to be one — but these three are what the surface is for, and at a
+            // card's incidental size they were four grey glyphs in a corner.
+            IconButton(.forgot, shortcut: KeyboardShortcut("1", modifiers: []), size: scale.text.strong,
+                       isEnabled: ready) { act(.grade(.again)) }
             IconButton(.remembered, hint: "you recalled it before showing the meaning",
-                       shortcut: KeyboardShortcut("2", modifiers: []), isEnabled: ready) { act(.grade(.good)) }
+                       shortcut: KeyboardShortcut("2", modifiers: []), size: scale.text.strong,
+                       isEnabled: ready) { act(.grade(.good)) }
+            // A verdict on memory on one side, putting the card off on the other: different kinds
+            // of answer, and only the first is recorded about the reader.
+            Divider().frame(height: scale.text.strong)
             IconButton(.skip, hint: "still due today; the next batch can have it",
                        shortcut: KeyboardShortcut("s", modifiers: []), isEnabled: ready) { act(.skip) }
             // **"Not Today" is not "Skip".** A skipped card comes back in this evening's next
