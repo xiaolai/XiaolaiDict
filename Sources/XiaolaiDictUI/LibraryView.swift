@@ -513,7 +513,7 @@ public struct LibraryView: View {
     private func beginTagging(_ ids: Set<UUID>) {
         if ids != state.selection { act(.select(ids)) }
         inspectorShown = true
-        takeTagFocus(attemptsLeft: Token.Library.tagFocusAttempts)
+        takeTagFocus(attemptsLeft: Token.Library.focusAttempts)
     }
 
     /// **Asked until it takes, a bounded number of times.** A field in a column that is still
@@ -525,7 +525,7 @@ public struct LibraryView: View {
     private func takeTagFocus(attemptsLeft: Int) {
         tagFocused = true
         guard attemptsLeft > 0 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Token.Library.tagFocusInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Token.Library.focusInterval) {
             if !tagFocused { takeTagFocus(attemptsLeft: attemptsLeft - 1) }
         }
     }

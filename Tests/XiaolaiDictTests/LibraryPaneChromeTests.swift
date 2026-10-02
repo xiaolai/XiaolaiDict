@@ -312,13 +312,25 @@ struct LibraryPaneChromeTests {
         #expect(view.contains(".accessibilityIdentifier(\"library-pane-\\(item.rawValue)\")"))
     }
 
-    /// **Search is the system's field, named for its pane, and nothing wipes it.** It was a
-    /// magnifier that swapped itself for a `TextField` whose close button cleared the query.
-    @Test func searchIsTheSystemsFieldAndIsNeverWiped() throws {
+    /// **Search is a magnifier until the reader asks for it**, the way a macOS 27 toolbar keeps
+    /// it: one glyph, which opens into a field on a click or Command-F and folds away again when
+    /// it is left empty. The owner built it that way; an audit pass swapped it for `.searchable`,
+    /// which on macOS is a field that is always open — `SearchToolbarBehavior.minimize` is marked
+    /// unavailable on macOS in the SDK, so the system's field cannot be made to fold. Seen and
+    /// reported 2026-10-02: "why is the search always expanded?"
+    ///
+    /// What the audit was right about is kept: the field names its pane, and the one control that
+    /// clears a search is named Clear Search — nothing wipes it under another name.
+    @Test func searchIsAMagnifierUntilAskedFor() throws {
         let search = try source("LibrarySearch.swift")
-        #expect(search.contains(".searchable(text: $text, placement: .toolbar, prompt: prompt)"))
-        #expect(!search.contains("TextField("))
-        #expect(!search.contains("text = \"\""), "something clears the reader's search for them")
+        #expect(!search.contains(".searchable("), "the always-open system field is back")
+        #expect(search.contains("IconButton(.search, shortcut: KeyboardShortcut(\"f\", modifiers: .command)"))
+        #expect(search.contains("if expanded || !text.isEmpty {"), "the field is drawn without being asked for")
+        #expect(search.contains("TextField(prompt, text: $text)"))
+        #expect(search.contains("IconButton(.clearSearch"))
+        #expect(search.contains(".accessibilityIdentifier(\"library-search\")"))
+        // Left empty, it folds away; left with a search in it, it stays to say so.
+        #expect(search.contains("if !isFocused, text.isEmpty { expanded = false }"))
         #expect(try source("LearningLibraryView.swift").contains("\"Search Discarded\" : \"Search History\""))
         #expect(try source("LibraryView.swift").contains("prompt: \"Search Saved\""))
         #expect(!(try source("LibraryReviewPane.swift")).contains("LibrarySearch"), "Review has nothing to search")
