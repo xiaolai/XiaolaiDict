@@ -639,7 +639,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             // Setup, because it is the pane that answers "is any of this working"; no pane mends
             // a ledger that will not open, and the recorder's own sentence carries the raw error.
             found.append(MenuProblem(
-                title: String(localized: "Readings Are Not Being Saved", comment: "Menu bar warning row"),
+                title: String(localized: "Readings Are Not Being Recorded", comment: "Menu bar warning row"),
                 detail: nil, pane: .setup))
         }
         return found
