@@ -32,7 +32,7 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     case allFilter, dueFilter, needsAttentionFilter, strugglingFilter, pausedFilter, archivedFilter
     case suggestedFilter, archive, unarchive, pause, resume, findUnconfirmed
     case saveSuggestion, alreadyKnow, offerAgain
-    case clearSearch, showEveryTag, showEverything, showMore, export
+    case clearSearch, showEveryTag, showEverything, showMore, export, addTag
     // Review.
     case forgot, remembered, skip, notToday, anotherBatch, practise, done
     // Anywhere.
@@ -115,6 +115,7 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .writeAnswer: "square.and.pencil"
         case .clearSearch: "xmark.circle"
         case .showEveryTag: "tag.slash"
+        case .addTag: "tag"
         case .showMore: "arrow.down.circle"
         case .warning: "exclamationmark.triangle"
         case .failure: "exclamationmark.octagon"
@@ -163,6 +164,7 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .offerAgain: "Offer Again"
         case .clearSearch: "Clear Search"
         case .showEveryTag: "Show Every Tag"
+        case .addTag: "Add a Tag…"
         case .showEverything: "Show Everything"
         case .showMore: "Show More"
         case .export: "Export…"

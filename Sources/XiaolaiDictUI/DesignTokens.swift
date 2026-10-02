@@ -66,6 +66,12 @@ public enum Token {
         static let searchWidth: CGFloat = 240
         /// The tag field. Narrow: a tag is a word, and a field the width of a sentence invites one.
         static let tagWidth: CGFloat = 120
+        /// How many times the tag field is asked to take the caret after the inspector is opened
+        /// for it, and how long between askings. The column slides in over about a third of a
+        /// second and the field refuses focus until it has; ten askings a tenth apart cover that
+        /// three times over and then stop, so a field that never appears is not asked for ever.
+        static let tagFocusAttempts = 10
+        static let tagFocusInterval = 0.1
         /// How tall the inspector's two histories may grow before they scroll. A window's worth
         /// of reading, not a screen's: past this the pane would push its own controls off.
         static let inspectorHistoryHeight: CGFloat = 220
