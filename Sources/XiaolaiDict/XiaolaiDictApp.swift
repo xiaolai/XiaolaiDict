@@ -565,7 +565,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// card changed — the defect this file already carries a note about, one window over.
     @ObservationIgnored lazy var reviewModel = ReviewModel(
         store: { [weak self] in self?.recorder.store },
-        primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() })
+        primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() },
+        dictionaryName: { [weak self] key in self?.dictionary.enabled?.first { $0.identity.key == key }?.identity.name })
 
     /// The Library window's model, kept for the same reason.
     @ObservationIgnored lazy var libraryModel = LibraryModel(
