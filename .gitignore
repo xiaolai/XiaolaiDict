@@ -91,3 +91,6 @@ CLAUDE.md
 
 # Machine-local Make settings — one developer's network, not this project's.
 /local.mk
+
+# archify workflow runs — one machine's working files, with absolute home paths in them. Slash-free, as above.
+/.archify
