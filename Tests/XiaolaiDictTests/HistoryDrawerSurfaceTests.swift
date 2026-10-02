@@ -135,11 +135,17 @@ struct HistoryDrawerSurfaceTests {
         #expect(!(try section(of: source, from: "private var header", to: "private var contents")).contains(".overlay("))
     }
 
-    /// The header, each day and its tooltip count one unit — readings.
+    /// **The header, each day and its tooltip count one unit — readings, and a reading is one
+    /// lookup.** The drawer counted cards and called them readings while the Library's subtitle
+    /// counted lookups under the same word: "10 readings" here over "72 readings" there, one
+    /// history (E2E Mac, 2026-10-02). A card's own "×N" is in lookups, so the cards on screen
+    /// now add up to their day and the days to the header.
     @Test func theHeaderAndTheDaysCountTheSameThing() throws {
         let source = try views
-        #expect(source.contains("^[\\(model.totalEntries) reading](inflect: true) · ^[\\(model.days.count) day](inflect: true)"))
+        #expect(source.contains("^[\\(model.totalLookups) reading](inflect: true) · ^[\\(model.days.count) day](inflect: true)"))
         #expect(source.contains(".help(Text(\"^[\\(count) reading](inflect: true)\"))"))
+        #expect(source.contains("private var count: Int { day.lookups }"), "a day counts cards while the header counts lookups")
+        #expect(!source.contains("model.totalEntries) reading"), "the header counts cards again")
         #expect(!source.contains("distinctWords"))
         #expect(!source.contains(" word]"), "something on the panel still counts words")
     }

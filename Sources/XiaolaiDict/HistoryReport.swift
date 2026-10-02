@@ -111,8 +111,11 @@ enum HistoryReport {
             // `entries`, and a card became one *reading* rather than one lookup — so the stage went
             // on printing "shows 6 lookup(s)" for a number that had stopped counting lookups. That
             // is the `totalEntries`-drawn-as-"words" defect a second time, in the instrument.
-            "readings": app.drawerModel.totalEntries,
-            "lookups": app.drawerModel.totalLookups,
+            //
+            // **Named for what each counts, again** (2026-10-02): the header now says readings and
+            // counts lookups, so `readings` is that number and the cards have their own name.
+            "cards": app.drawerModel.totalEntries,
+            "readings": app.drawerModel.totalLookups,
             "words": app.drawerModel.distinctWords,
             "problem": app.drawerModel.problem ?? "none",
             // Whether the drawer lets what is behind it through — the one property "glass" names,

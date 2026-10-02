@@ -566,6 +566,9 @@ struct HistoryDrawerModelTests {
         #expect(model.distinctWords == 3, "words")
         #expect(model.totalLookups >= model.totalEntries)
         #expect(model.distinctWords <= model.totalEntries)
+        // What the day's badge draws, and the days add up to what the header draws.
+        #expect(model.days[0].lookups == 4)
+        #expect(model.days.reduce(0) { $0 + $1.lookups } == model.totalLookups)
     }
 
     /// One lemma in two languages is two words — the pair a study note is keyed by.

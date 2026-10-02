@@ -1387,7 +1387,7 @@ else
         counts=$(python3 - "$drawer" <<'COUNTS' 2>/dev/null || true
 import json, sys
 d = json.loads(sys.argv[1])
-got = {k: d.get(k) for k in ("days", "readings", "lookups", "words")}
+got = {k: d.get(k) for k in ("days", "cards", "readings", "words")}
 # `bool` is an `int` in Python, so it is excluded by name: `True` would otherwise read as 1 and
 # pass the type test, and only trip the ordering below by coincidence.
 missing = [k for k, v in got.items() if not isinstance(v, int) or isinstance(v, bool)]
@@ -1396,17 +1396,17 @@ if missing:
 # A card stands for at least its own lookup and holds exactly one word, so the order is fixed.
 # Anything else means the collapse invented a card — the one way the grouping can be wrong that
 # a reader would never see, because the cards themselves would look right.
-if not (1 <= got["words"] <= got["readings"] <= got["lookups"]):
+if not (1 <= got["words"] <= got["cards"] <= got["readings"]):
     sys.exit("counts cannot all be true: "
-             + " ".join(f"{k}={got[k]}" for k in ("words", "readings", "lookups")))
-print(" ".join(str(got[k]) for k in ("days", "readings", "lookups", "words")))
+             + " ".join(f"{k}={got[k]}" for k in ("words", "cards", "readings")))
+print(" ".join(str(got[k]) for k in ("days", "cards", "readings", "words")))
 COUNTS
 )
         if [ -z "$counts" ]; then
             flunk "drawer: the counts did not read as whole numbers in the right order ($(printf '%s' "$drawer" | head -c 160))"
         else
-            read -r days readings lookups words <<<"$counts"
-            pass "drawer: shows $readings reading(s) — $lookups lookup(s), $words word(s) — across $days day(s)"
+            read -r days cards readings words <<<"$counts"
+            pass "drawer: shows $readings reading(s) on $cards card(s), $words word(s) — across $days day(s)"
         fi
     else
         flunk "drawer: $why"

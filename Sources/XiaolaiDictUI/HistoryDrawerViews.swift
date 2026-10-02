@@ -149,11 +149,13 @@ struct HistoryDrawerSurface: View {
                 if model.isLoading {
                     ProgressView().controlSize(.small)
                 } else if model.totalEntries > 0 {
-                    // **Readings, the unit every day's count beside it is in.** It said words —
-                    // "4 words · 3 days" over days counting 3, 5 and 1 — so the header and the
-                    // numbers under it could not be added up. A card is a reading; a card's own
-                    // "×N" is how many times that one was met.
-                    Text("^[\(model.totalEntries) reading](inflect: true) · ^[\(model.days.count) day](inflect: true)")
+                    // **Readings, the unit every day's count beside it is in — and a reading is
+                    // one lookup**, as the Library's subtitle and a card's own "×N" already count.
+                    // It said words once ("4 words · 3 days" over days counting 3, 5 and 1), then
+                    // cards under the name readings, which put "10 readings" here over the
+                    // Library's "72 readings" for one history. Now the cards add up to their day
+                    // and the days to this.
+                    Text("^[\(model.totalLookups) reading](inflect: true) · ^[\(model.days.count) day](inflect: true)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -360,7 +362,7 @@ private struct DayHeader: View {
     /// Nil for a day that is listed rather than piled.
     var disclosure: Disclosure?
 
-    private var count: Int { day.entries.count }
+    private var count: Int { day.lookups }
     private var isToday: Bool { day.label == .today }
 
     var body: some View {

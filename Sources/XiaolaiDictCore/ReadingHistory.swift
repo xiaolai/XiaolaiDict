@@ -274,6 +274,10 @@ public struct ReadingDay: Identifiable, Equatable, Sendable {
     /// Today is never piled — it is the part the reader came to read.
     public var isPiled: Bool { label != .today }
 
+    /// How many lookups this day's cards stand for: each card once, and once more for every time
+    /// that reading was met again. What the day's count draws, so it adds up with each card's "×N".
+    public var lookups: Int { entries.reduce(0) { $0 + $1.times } }
+
     public init(id: String, date: Date, label: DayLabel, entries: [ReadingEntry]) {
         self.id = id
         self.date = date
