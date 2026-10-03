@@ -2,6 +2,7 @@ import Foundation
 @testable import XiaolaiDict
 import ModelKit
 import XiaolaiDictCore
+import XiaolaiDictTestSupport
 
 /// The model coordinator a test is given: a store in a directory of its own, and a client that can
 /// reach no service.
@@ -16,8 +17,7 @@ extension LocalModelCoordinator {
     static func temporary(defaults: UserDefaults) -> LocalModelCoordinator {
         LocalModelCoordinator(
             defaults: defaults,
-            store: ModelStore(root: FileManager.default.temporaryDirectory
-                .appending(path: "xiaolaidict-app-\(UUID().uuidString)", directoryHint: .isDirectory)),
+            store: ModelStore(root: ScratchFile.unmade("app", file: "models")),
             client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }))
     }
 }

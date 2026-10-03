@@ -13,16 +13,8 @@ struct StudyRecoveryTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func scratch() -> (String, () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-recovery-\(UUID().uuidString).sqlite").path
-        return (path, {
-            let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
-            let name = URL(fileURLWithPath: path).lastPathComponent
-            for file in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-            where file.hasPrefix(name) {
-                try? FileManager.default.removeItem(at: directory.appending(path: file))
-            }
-        })
+        let path = ScratchFile.path("recovery")
+        return (path, { ScratchFile.remove(path) })
     }
 
     @discardableResult

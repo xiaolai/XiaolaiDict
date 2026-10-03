@@ -18,9 +18,8 @@ struct StudyEnrollmentWiringTests {
         name: "New Oxford American Dictionary", identifier: "com.apple.dictionary.NOAD", version: "2.6")
 
     private func scratch() -> (String, () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-enrol-\(UUID().uuidString).sqlite").path
-        return (path, { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } })
+        let path = ScratchFile.path("enrol")
+        return (path, { ScratchFile.remove(path) })
     }
 
     private func recording(_ lemma: String = "fine") -> LookupRecording {

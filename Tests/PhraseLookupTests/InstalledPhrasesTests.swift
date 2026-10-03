@@ -3,6 +3,7 @@ import DictionaryModel
 import Foundation
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 @testable import PhraseLookup
 
@@ -111,14 +112,3 @@ import Testing
     }
 }
 
-/// A directory of the test's own. `XiaolaiDictTestSupport` is not linked by this target, and linking it for
-/// one class would widen the target to narrow a duplication.
-final class TemporaryDirectory {
-    let url: URL
-    init() {
-        url = FileManager.default.temporaryDirectory
-            .appending(path: "phrase-lookup-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    }
-    deinit { try? FileManager.default.removeItem(at: url) }
-}

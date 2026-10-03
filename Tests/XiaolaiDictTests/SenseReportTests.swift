@@ -50,7 +50,7 @@ struct SenseReportTests {
     private static func noModel() -> LocalModelAccess {
         LocalModelAccess(
             client: ModelClient(connect: { _ in throw NoService() }),
-            store: ModelStore(root: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)))
+            store: ModelStore(root: ScratchFile.unmade("sense-report", file: "models")))
     }
 
     private struct NoService: Error {}

@@ -4,6 +4,7 @@ import Testing
 import XiaolaiDictCore
 import XiaolaiDictUI
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **The Library window against a real ledger.** WI-005's wire.
 ///
@@ -24,8 +25,7 @@ struct LibraryWiringTests {
         // **Somewhere disposable, always.** Nothing in this suite exports, but a default that
         // reached the reader's Downloads folder is how the other suite's export test came to
         // delete what it found there.
-        let exports = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
+        let exports = ScratchFile.unmade("export", file: "exports")
         return LibraryModel(store: Wiring.store(path),
                             clock: { self.now },
                             exportDirectory: { exports })
@@ -425,11 +425,7 @@ struct LibraryWiringTests {
         // **Reopened per access**, because the permissions below take effect at `open` and a
         // connection opened before them writes on through its own descriptor.
         let model = LibraryModel(store: Wiring.reopeningStore(path), clock: { now },
-                                 exportDirectory: {
-                                     FileManager.default.temporaryDirectory
-                                         .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)",
-                                                                 isDirectory: true)
-                                 })
+                                 exportDirectory: { ScratchFile.unmade("export", file: "exports") })
         await model.reload()
         model.act(.select([note.id]))
         try await settle { model.presentation.selection == [note.id] }
@@ -928,8 +924,7 @@ struct LibraryOrganisationWiringTests {
                        at when: Date? = nil) -> LibraryModel {
         // **Always somewhere disposable**, even when a test does not care: a default that reached
         // the real Downloads folder is exactly how this went wrong the first time.
-        let exports = directory ?? FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
+        let exports = directory ?? ScratchFile.unmade("export", file: "exports")
         let clock = when ?? now
         return LibraryModel(store: Wiring.store(path),
                             clock: { clock },

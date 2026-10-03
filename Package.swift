@@ -119,7 +119,7 @@ let package = Package(
                     dependencies: ["AppleDictionaryFormat", "DictionaryIndex", "XiaolaiDictTestSupport"]),
         .testTarget(
             name: "PhraseLookupTests",
-            dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup"]),
+            dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.

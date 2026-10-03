@@ -4,6 +4,7 @@ import Testing
 import XiaolaiDictCore
 import XiaolaiDictUI
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **The Review window against a real ledger.** WI-004's wire.
 ///
@@ -515,10 +516,8 @@ struct ReviewWiringTests {
     /// stage had nowhere to carry it.
     @Test func aledgerThatCannotBeOpenedSaysSoRatherThanNothingDue() async throws {
         // A path that cannot be a database: a directory where the file should be.
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-unopenable-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let scratch = TemporaryDirectory(named: "xiaolaidict-unopenable")
+        let directory = scratch.url
 
         let model = ReviewModel(store: { Task { try LedgerStore(path: directory.path) } },
                                 primary: { PrimaryDictionary(chosen: "noad") },

@@ -2,20 +2,18 @@ import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 import Testing
+import XiaolaiDictTestSupport
 
 /// What the history drawer reads: recent lookups, newest first, as `ReadingEntry` values that
 /// deliberately cannot carry a definition.
 struct LedgerHistoryTests {
     private let noon = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func temporaryPath() -> String {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-history-\(UUID().uuidString).sqlite").path
-    }
+    /// In a directory of its own, removed whole: a migration writes `.schemaN.backup` beside the
+    /// ledger, and a list of suffixes left every one of those behind.
+    private func temporaryPath() -> String { ScratchFile.path("history") }
 
-    private func removeDatabase(at path: String) {
-        for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) }
-    }
+    private func removeDatabase(at path: String) { ScratchFile.remove(path) }
 
     private func record(
         _ lemma: String, at when: Date, result: LookupResult = .found,
