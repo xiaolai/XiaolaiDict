@@ -51,13 +51,14 @@ if command -v flock >/dev/null 2>&1; then
 else
     # macOS has no flock(1); shlock's pid file is the portable equivalent and is what this uses.
     #
-    # **No `trap` here.** This file has exactly one `EXIT` trap — `on_exit`, which runs every
-    # registered cleanup — and a second one silently replaces it. Installed here, the later
-    # `trap on_exit EXIT` overwrote it and the lock leaked; installed later it would have
-    # overwritten the cleanups, which is far worse. Measured: the file survived a completed run.
+    # **No `trap` of its own here.** This half of the script sets its `EXIT` trap three times, each
+    # replacing the last — `$release_lock` is part of every one of them, so whichever is in force when
+    # the run ends releases the lock. (`on_exit`, further down, is the *remote* script's trap; it runs
+    # on the test Mac, where this lock does not exist — a release registered there died on
+    # `RUN_LOCK: unbound variable` and failed a run whose stages had all passed, 2026-10-03.)
     #
-    # Nothing needs to remove it: `shlock` refuses only when the pid it holds is still alive, so
-    # a file left by a finished run is taken over by the next one.
+    # `shlock` refuses only while the pid it holds is alive, so a lock left by a run killed before its
+    # first trap is still taken over by the next run; the traps are so nothing is left by one that ends.
     if ! /usr/bin/shlock -f "$RUN_LOCK.pid" -p $$; then
         fail "another e2e run is already using $host (lock: $RUN_LOCK.pid)"
     fi
@@ -72,9 +73,11 @@ ssh_e2e() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$host" "$@"; }
 # the far machine does — after the bundle has been built and copied. An apostrophe inside a `sed`
 # bracket expression closed its quote and ended a run that way, at stage 11 of 11, with nothing
 # measured. Parsing costs milliseconds; not parsing cost the run.
+# The lock's own two files, removed by every local `EXIT` trap below.
+release_lock='rm -f "$RUN_LOCK" "$RUN_LOCK.pid"'
 heredocs=$(mktemp -d)
 # Removed however this section ends — `fail` exits, and would leave the directory behind.
-trap 'rm -rf "$heredocs"' EXIT
+trap 'rm -rf "$heredocs"; '"$release_lock" EXIT
 awk -v dir="$heredocs" '
     /<<'"'"'SH'"'"'/ { inside = 1; n++; file = dir "/remote-" n ".sh"; next }
     inside && /^SH$/ { inside = 0; close(file); next }
@@ -215,7 +218,7 @@ trap - EXIT
 remote_scripts=$(mktemp -d)
 # Removed however this script ends. The later `trap … EXIT` for the run log *replaces* this one
 # rather than adding to it, so that line removes this directory as well.
-trap 'rm -rf "$remote_scripts"' EXIT
+trap 'rm -rf "$remote_scripts"; '"$release_lock" EXIT
 cat >"$remote_scripts/common.sh" <<'SH'
 # Sets PIDS to the processes started from exactly the executable path $1 — by the executable `ps`
 # reports, so arguments LaunchServices adds cannot hide one; by string equality, never a pattern;
@@ -295,7 +298,7 @@ echo "build $remote_version installed and verified"
 stage "run${STAGES:+: $STAGES}"
 RUN_LOG=$(mktemp)
 # This *replaces* the trap that removes the shared shell, so it removes that too.
-trap 'rm -f "$RUN_LOG"; rm -rf "$remote_scripts"' EXIT
+trap 'rm -f "$RUN_LOG"; rm -rf "$remote_scripts"; '"$release_lock" EXIT
 # Assembled into a file rather than piped into ssh, so `${PIPESTATUS[0]}` below is still the ssh —
 # with a `cat … |` in front of it, it would be the cat, and every run would read as having passed.
 cat "$remote_scripts/common.sh" - >"$remote_scripts/run.sh" <<'SH'
