@@ -339,7 +339,7 @@ struct ModelServiceTests {
     }
 
     @Test func nothingInstalledIsNotInstalled() async throws {
-        let empty = ModelStore(root: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        let empty = ModelStore(root: ScratchFile.unmade("model-service", file: "models"))
         let built = Recorder(0)
         let reply = try await service(ScriptedModel(.answer("{}")), store: empty, built: built)
             .reply(to: .pickSense(Self.question))

@@ -9,8 +9,8 @@ import XiaolaiDictTestSupport
 /// ledger in Application Support.
 struct LedgerStoreTests {
     @Test func aLookupIsRecordedThroughTheStore() async throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("xiaolaidict-store-\(UUID().uuidString).sqlite").path
-        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) } }
+        let path = ScratchFile.path("store")
+        defer { ScratchFile.remove(path) }
         let store = try LedgerStore(path: path)
         let record = LookupRecord(
             surface: "saw", lemma: "see", context: "I saw it.", lemmaBasis: .inferred, language: "en",

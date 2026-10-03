@@ -45,34 +45,30 @@ struct TemporaryDirectoryTests {
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" && !$0.standardizedFileURL.path.hasPrefix(support) }
         try #require(files.count > 20, "found only \(files.count) test files — the scan is not looking where the tests are")
-        // Built from parts so this file does not match its own search, and matched without regard
-        // to case because the leak has two spellings: `FileManager.temporaryDirectory` and
-        // Foundation's older `NSTemporaryDirectory()`. Searching for the first alone left the
-        // second making UUID-named directories under a rule written to stop exactly that.
-        let making = "temporary" + "directory"
-        let bare = "ns" + making + "()"
+        // Built from parts so this file does not match its own search. **Two spellings**, because the
+        // leak has two: `FileManager.default.temporaryDirectory` and Foundation's older
+        // `NSTemporaryDirectory()`. Case-sensitive, so `TemporaryDirectory(named:)` — the fix — is not
+        // mistaken for the defect.
+        //
+        // **Any use at all, not a use that makes a directory.** This used to let a *file* through,
+        // on the theory that the ledger fixtures' `defer` removed it — but a ledger is never one file:
+        // a migration writes `.schemaN.backup` beside it, and no fixture listed that suffix. 175
+        // backups were sitting in the temporary directory on 2026-10-03 under a green scan. It also
+        // matched one line at a time, so `temporaryDirectory` on one line and `createDirectory` on the
+        // next — three fixtures had exactly that — passed. A rule with no exceptions has neither hole:
+        // a file goes through `ScratchFile`, a directory through `TemporaryDirectory`.
+        let spellings = ["." + "temporary" + "Directory", "NS" + "Temporary" + "Directory("]
         var offenders: [String] = []
         for file in files {
             for (index, line) in try String(contentsOf: file, encoding: .utf8)
                 .components(separatedBy: .newlines).enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
-                guard !code.hasPrefix("//"), code.lowercased().contains(making) else { continue }
-                // A *file* under it is cleaned up by the `defer` the ledger fixtures already have;
-                // what leaks is a directory, which is what `appending(path:` with a directory hint
-                // or `createDirectory` makes.
-                //
-                // **And the bare call, on any line.** Requiring one of those two on the *same* line
-                // missed the two-line form — `URL(fileURLWithPath: NSTemporaryDirectory())` and then
-                // `createDirectory(at: directory,` underneath, which names no temporary anything. Two
-                // of those sat in `IndexStoreTests` under a rule written to stop exactly them, and the
-                // scan stayed green. There is no legitimate use of the bare call in a test, so it needs
-                // no second condition.
-                guard code.contains("directoryHint") || code.contains("createDirectory")
-                        || code.lowercased().contains(bare) else { continue }
+                guard !code.hasPrefix("//"), !code.hasPrefix("///"), spellings.contains(where: code.contains)
+                else { continue }
                 offenders.append("\(file.lastPathComponent):\(index + 1)")
             }
         }
         #expect(offenders.isEmpty,
-                "these make a directory the system will keep for ever; use TemporaryDirectory: \(offenders.joined(separator: ", "))")
+                "these reach the system's temporary directory themselves; use TemporaryDirectory or ScratchFile: \(offenders.joined(separator: ", "))")
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import XiaolaiDictCore
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **What the window tests share**, in one place.
 ///
@@ -11,24 +12,19 @@ import XiaolaiDictCore
 /// in one suite and not in another, and nobody had decided which. A fixture with two spellings is
 /// two fixtures.
 enum Wiring {
-    /// A scratch ledger path, and the cleanup that removes it **with its write-ahead log**. A
-    /// ledger separated from its sidecars is the shape this project already has a rule about.
+    /// A scratch ledger path, and the cleanup that removes it **with everything beside it** — its
+    /// write-ahead log, and the backups a migration takes. A ledger separated from its sidecars is the
+    /// shape this project already has a rule about.
     static func scratch(_ label: String) -> (path: String, clean: () -> Void) {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-\(label)-\(UUID().uuidString).sqlite").path
-        return (path, {
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(atPath: path + suffix)
-            }
-        })
+        let path = ScratchFile.path(label)
+        return (path, { ScratchFile.remove(path) })
     }
 
     /// Somewhere disposable for an export. **Never the reader's Downloads folder**, which a test
     /// once wrote into and then deleted from.
     static func exportScratch() -> (directory: URL, clean: () -> Void) {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-export-\(UUID().uuidString)", isDirectory: true)
-        return (directory, { try? FileManager.default.removeItem(at: directory) })
+        let directory = ScratchFile.unmade("export", file: "exports")
+        return (directory, { ScratchFile.remove(directory.path) })
     }
 
     /// How long a model is given to reach a state. One number, because two suites disagreeing

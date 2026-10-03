@@ -221,7 +221,7 @@ struct ModelClientTests {
     /// Nothing is asked of a service that has no model to answer with.
     @Test func withNoModelInstalledTheServiceIsNeverAsked() async {
         let service = Service()
-        let empty = ModelStore(root: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        let empty = ModelStore(root: ScratchFile.unmade("model-client", file: "models"))
         let access = LocalModelAccess(client: ModelClient(connect: { service.connect($0) }), store: empty)
         #expect(await access.ask(Self.question) == .failure(.notInstalled))
         await access.prewarm()

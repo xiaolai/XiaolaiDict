@@ -3,6 +3,7 @@ import Foundation
 import XiaolaiDictCore
 import SQLite3
 import Testing
+import XiaolaiDictTestSupport
 
 /// Schema 4: the fields `study-unit.md` §5.1 and `where-a-word-was-read.md` §3 say are captured
 /// today and thrown away at the ledger boundary, plus the sense-encounter table of §5.2.
@@ -13,13 +14,11 @@ import Testing
 struct LedgerSchema4Tests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func temporaryPath() -> String {
-        FileManager.default.temporaryDirectory.appendingPathComponent("xiaolaidict-schema4-\(UUID().uuidString).sqlite").path
-    }
+    /// In a directory of its own, removed whole: a migration writes `.schemaN.backup` beside the
+    /// ledger, and a list of suffixes left every one of those behind.
+    private func temporaryPath() -> String { ScratchFile.path("schema4") }
 
-    private func removeDatabase(at path: String) {
-        for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) }
-    }
+    private func removeDatabase(at path: String) { ScratchFile.remove(path) }
 
     private func record(
         surface: String = "fine", lemma: String = "fine", context: String = "He paid the fine.",

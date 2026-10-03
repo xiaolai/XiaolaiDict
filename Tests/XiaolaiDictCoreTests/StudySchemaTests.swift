@@ -3,6 +3,7 @@ import Foundation
 import SQLite3
 import Testing
 @testable import XiaolaiDictCore
+import XiaolaiDictTestSupport
 
 /// **Schema 8: the study system's durable entities, and nothing that grades anything yet.**
 ///
@@ -278,16 +279,11 @@ struct StudySchemaTests {
 struct StudyMigrationTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func path() -> String {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("xiaolaidict-study-\(UUID().uuidString).sqlite").path
-    }
+    /// In a directory of its own, removed whole. The suffix list here named `.schema7.backup` and not
+    /// `.schema8.backup`, nor the backup of a backup a test makes by opening the copy — so those stayed.
+    private func path() -> String { ScratchFile.path("study") }
 
-    private func remove(_ path: String) {
-        for suffix in ["", "-wal", "-shm", ".schema7.backup"] {
-            try? FileManager.default.removeItem(atPath: path + suffix)
-        }
-    }
+    private func remove(_ path: String) { ScratchFile.remove(path) }
 
     private func lookup(_ lemma: String) -> LookupRecord {
         LookupRecord(
@@ -405,7 +401,6 @@ struct StudyMigrationTests {
         // the reader's lookups. Opening it migrates *it* to 8, which is exactly what restoring would do.
         let restored = try Ledger(path: backup)
         #expect(try restored.studyList(limit: 10).map(\.lemma).sorted() == ["fine", "hold"])
-        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: backup + suffix) }
     }
 
     /// A ledger already at this version is not copied: the backup marks a change of shape, and taking one

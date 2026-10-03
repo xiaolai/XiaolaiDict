@@ -2,6 +2,7 @@ import Foundation
 @testable import XiaolaiDictCore
 import SQLite3
 import Testing
+import XiaolaiDictTestSupport
 
 /// The ledger's value is the frequency count per lemma — how often the reader failed to know a
 /// word — not the word list (design note §9).
@@ -20,13 +21,11 @@ struct LedgerTests {
             lookedUpAt: now.addingTimeInterval(offset), result: result, answeredBy: answeredBy, quality: quality)
     }
 
-    private func temporaryPath() -> String {
-        FileManager.default.temporaryDirectory.appendingPathComponent("xiaolaidict-ledger-\(UUID().uuidString).sqlite").path
-    }
+    /// In a directory of its own, removed whole: a migration writes `.schemaN.backup` beside the
+    /// ledger, and a list of suffixes left every one of those behind.
+    private func temporaryPath() -> String { ScratchFile.path("ledger") }
 
-    private func removeDatabase(at path: String) {
-        for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + suffix) }
-    }
+    private func removeDatabase(at path: String) { ScratchFile.remove(path) }
 
     @Test func aRecordReadsBackExactly() throws {
         let ledger = try Ledger(path: ":memory:")
