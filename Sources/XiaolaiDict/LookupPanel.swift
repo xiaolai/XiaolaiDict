@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -12,7 +11,13 @@ import os
 /// test and cannot be seen from outside.
 @MainActor
 protocol LookupPanelPresenting: AnyObject {
+    /// Begins and claims at once — for a request made at the panel, where nothing can overtake it.
     func newRequest() -> PanelTicket
+    /// A number for a request that will claim the panel later — a hover, between the gesture and
+    /// the word. Supersedes nothing. See `RequestSequence`.
+    func begin() -> Int
+    /// The panel for `request`, or nil when a later request has claimed it or it was closed since.
+    func claim(_ request: Int) -> PanelTicket?
     func isCurrent(_ ticket: PanelTicket) -> Bool
     /// Shows the panel; answers whether it is on screen. `LookupRunner` stops on `false`, so a
     /// panel that could not be drawn never becomes a ledger row.
@@ -21,6 +26,9 @@ protocol LookupPanelPresenting: AnyObject {
     /// Replaces a shown panel's content without moving or resizing it. A panel the reader has
     /// dragged somewhere must not jump when its entry arrives.
     func update(_ content: PanelContent, for ticket: PanelTicket)
+    /// Whether the compositor lists the panel as on screen for `ticket`, waiting a bounded moment
+    /// for it to be drawn. **The only evidence the reader saw it** — `show` answers for the request.
+    func seenOnScreen(_ ticket: PanelTicket) async -> Bool
 }
 
 /// A request for the panel. A newer request supersedes every older one, and closing the panel
@@ -37,6 +45,22 @@ final class LookupPanelModel {
     var content: PanelContent?
     /// Per kind, so a panel of one kind does not inherit the minimum of another.
     var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize(for: .standard)
+
+    /// Moved by every `show`, so the scene can say which showing it has drawn.
+    private(set) var generation = 0
+    /// The newest generation the window has **drawn** — written by `RenderAcknowledger` from AppKit's
+    /// display pass, never by the controller. A reused window is listed by the compositor
+    /// before SwiftUI has drawn the next card on it, so "the window is on screen" alone took the last
+    /// card's drawing as this one's (audit round 3, #17).
+    private(set) var rendered = 0
+
+    func present(_ content: PanelContent) -> Int {
+        self.content = content
+        generation += 1
+        return generation
+    }
+
+    func acknowledgeRendered(_ generation: Int) { rendered = max(rendered, generation) }
 }
 
 /// The lookup panel: floats over the app being read — in its Space, even full screen — without
@@ -69,7 +93,8 @@ final class LookupPanelModel {
 @MainActor
 final class LookupPanelController: LookupPanelPresenting {
     let model = LookupPanelModel()
-    private var current = 0
+    /// Which request the panel belongs to — see `RequestSequence`, which holds the rule.
+    private var requests = RequestSequence()
     private var shownKind: PanelContent.Kind?
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
     private let escape: EscapeKey
@@ -114,12 +139,14 @@ final class LookupPanelController: LookupPanelPresenting {
     struct Windows: Sendable {
         var open: @MainActor (String) -> Bool
         var dismiss: @MainActor (String) -> Bool
+        /// Whether the compositor lists the window as on screen — the only evidence it is drawn.
+        var drawn: @MainActor (NSWindow?) -> Bool = { Instrument.isOnScreen($0) }
 
         static let shared = Windows(
             open: { WindowActions.shared.openWindow(id: $0) },
             dismiss: { WindowActions.shared.dismissWindow(id: $0) })
         /// For a test that is about the panel rather than about whether a window exists.
-        static let alwaysOpen = Windows(open: { _ in true }, dismiss: { _ in true })
+        static let alwaysOpen = Windows(open: { _ in true }, dismiss: { _ in true }, drawn: { _ in true })
     }
 
     private let windows: Windows
@@ -161,12 +188,47 @@ final class LookupPanelController: LookupPanelPresenting {
         XiaolaiDictScene.window(of: XiaolaiDictScene.lookupID)
     }
 
-    func newRequest() -> PanelTicket {
-        current += 1
-        return PanelTicket(number: current)
+    func newRequest() -> PanelTicket { PanelTicket(number: requests.next()) }
+
+    func begin() -> Int { requests.begin() }
+
+    func claim(_ request: Int) -> PanelTicket? {
+        requests.claim(request) ? PanelTicket(number: request) : nil
     }
 
-    func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
+    func isCurrent(_ ticket: PanelTicket) -> Bool { requests.isCurrent(ticket.number) }
+
+    /// How long a shown panel is given to reach the compositor. A frame or two in practice; the
+    /// bound is what stops a window that never draws from holding a lookup's record for ever.
+    static let drawnWithin: Duration = .seconds(1)
+
+    /// **Gives up at once on a ticket that is no longer current, or a caller that left** — a
+    /// superseded or dismissed lookup has nothing to wait for, and polled out the full second.
+    func seenOnScreen(_ ticket: PanelTicket) async -> Bool {
+        switch await Poll.until(within: Self.drawnWithin, abandonIf: { !isCurrent(ticket) }, { isDrawn(ticket) }) {
+        case .met: return true
+        case .abandoned: return false
+        case .timedOut: break
+        }
+        // **Out of time and still ours: put it away.** The lookup stops on `false`, and a panel left
+        // armed behind it kept its content, its click monitors and the Escape claim — a window that
+        // arrived late drew an abandoned loading card. Only this ticket's panel: a superseded check
+        // returned above and must not close the lookup that replaced it.
+        log.error("panel \(ticket.number, privacy: .public) never reached the compositor; closed")
+        close()
+        return false
+    }
+
+    /// Which request the panel was last shown for, and the generation that showing stamped.
+    private var showing: (request: Int, generation: Int)?
+
+    /// **Both halves of "the reader can see this card"**: the scene has rendered this showing's
+    /// content, and the compositor lists the window. Either alone was taken for both — the compositor
+    /// alone credited a reused window with a card it had not drawn yet.
+    private func isDrawn(_ ticket: PanelTicket) -> Bool {
+        guard let showing, showing.request == ticket.number, model.rendered >= showing.generation else { return false }
+        return windows.drawn(window)
+    }
 
     /// Shows the panel, and **says whether it is actually on screen**.
     ///
@@ -186,7 +248,7 @@ final class LookupPanelController: LookupPanelPresenting {
             for: kind.defaultSize(for: size), near: pointer, within: visible)
 
         model.minimumSize = kind.minimumSize(for: size)
-        model.content = content
+        showing = (ticket.number, model.present(content))
         shownKind = kind
         // The environment's real action, captured from the menu-bar label. An `EnvironmentValues()`
         // built on the spot is wired to nothing and silently opens no window at all.
@@ -195,6 +257,7 @@ final class LookupPanelController: LookupPanelPresenting {
             // content for a panel that does not exist, and `closed()` would then be the only thing
             // able to clear it — from a close nothing will ask for.
             shownKind = nil
+            showing = nil
             model.content = nil
             return false
         }
@@ -265,12 +328,12 @@ final class LookupPanelController: LookupPanelPresenting {
     /// into the panel before delivery used to have the click ignored — the position was read from
     /// `NSEvent.mouseLocation` at handling time rather than from the event. For a monitor event
     /// there is no window to be relative to and `locationInWindow` is already in screen
-    /// coordinates; where there is one, the window converts it. The live pointer stays as the last
-    /// resort, which is what this used to be first.
+    /// coordinates; where there is one, the window converts it. **`.zero` is a place, not a
+    /// missing value** — the bottom-left corner of the primary display — so it is never replaced
+    /// by the live pointer, which would bring back the dependence on where the pointer went next.
     private func closeIfClickWasAway(_ event: NSEvent) {
         guard let window, window.isVisible else { return }
-        let point = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) }
-            ?? (event.locationInWindow == .zero ? NSEvent.mouseLocation : event.locationInWindow)
+        let point = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? event.locationInWindow
         guard !window.frame.contains(point) else { return }
         close()
     }
@@ -287,8 +350,9 @@ final class LookupPanelController: LookupPanelPresenting {
     func closed() {
         guard shownKind != nil else { return }
         shownKind = nil
+        showing = nil
         model.content = nil
-        current += 1
+        requests.close()
         escape.release()
         stopWatchingForClicksAway()
         // The window this watched has gone with the panel. Left registered, the observer holds the
@@ -403,44 +467,14 @@ struct LookupPanelSceneView: View {
                 // it now, inside its own surface; what it needs still arrives through the
                 // environment below.
                 PanelView(content: content)
-                    .onChange(of: LedgerChanges.shared.revision) { _, _ in
-                        if let request = content.request { Task { await recorder?.refreshStatus(request: request) } }
+                    .modifier(LookupCardWiring(
+                        request: content.request, recorder: recorder, controller: controller,
+                        translation: translation(), explainer: explainer()))
+                    // **What this window has drawn, said by AppKit's display pass** — see
+                    // `RenderAcknowledger`; the controller's "seen" needs it and the compositor's listing.
+                    .background(alignment: .topLeading) {
+                        RenderAcknowledger(generation: model.generation) { model.acknowledgeRendered($0) }
                     }
-                    .environment(\.lookupKeepStatus, content.request.flatMap { recorder?.states[$0] })
-                    .environment(\.lookupKeepAction) { action in
-                        guard let request = content.request else { return }
-                        switch action {
-                        case .retry: recorder?.retry(request: request)
-                        case .discard: recorder?.discard(request: request)
-                        case .undo: recorder?.undoDiscard(request: request)
-                        }
-                    }
-                    .environment(\.pinNote) { [controller] note in
-                        controller.notes.pin(note, near: controller.lastPointer)
-                    }
-                    // **The request this card is**, not the one the panel is on. `newRequest()`
-                    // moves the counter when the next lookup begins — before its selection has
-                    // been read, let alone drawn — so a tap on the card still in front of the
-                    // reader was being filed under a lookup that had not happened.
-                    .environment(\.studySense) { [controller] encounter in
-                        guard let request = content.request else { return }
-                        controller.onStudySense?(encounter, request)
-                    }
-                    // The same request discipline, for the same reason: an enrollment filed under
-                    // the lookup that happened to be recorded last is a card about another word.
-                    .environment(\.enrolSense) { [controller] encounter in
-                        guard let request = content.request else { return }
-                        controller.onEnrolSense?(encounter, request)
-                    }
-                    // The one window the panel may bring forward: a window the reader chose. The
-                    // app's own action, so the dictionary discovery that pane depends on is started
-                    // by the same code path every other route uses.
-                    .environment(\.openDictionarySettings) { [controller] in controller.onOpenDictionarySettings?() }
-                    .environment(\.reportPanelFit) { [controller] wanted, given in
-                        controller.recordFit(wanted: wanted, given: given)
-                    }
-                    .environment(\.translation, translation())
-                    .environment(\.explainer, explainer())
             }
         }
         .frame(minWidth: model.minimumSize.width)
@@ -466,14 +500,63 @@ struct LookupPanelSceneView: View {
         .onDisappear { controller.closed() }
     }
 }
+/// **What the card needs from the app, kept out of the scene's body**: the reading's status and its
+/// actions, pinning, studying and enrolling — each filed under **the request this card is**, not the
+/// one the panel is on. `newRequest()` moves the counter when the next lookup begins, before its
+/// selection has been read, so a tap on the card still in front of the reader was being filed under
+/// a lookup that had not happened.
+private struct LookupCardWiring: ViewModifier {
+    let request: Int?
+    let recorder: LookupRecorder?
+    let controller: LookupPanelController
+    let translation: TranslationActions
+    let explainer: ExplanationActions
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: LedgerChanges.shared.revision) { _, _ in
+                if let request { Task { await recorder?.refreshStatus(request: request) } }
+            }
+            .environment(\.lookupKeepStatus, request.flatMap { recorder?.states[$0] })
+            .environment(\.lookupKeepAction) { action in
+                guard let request else { return }
+                switch action {
+                case .retry: recorder?.retry(request: request)
+                case .discard: recorder?.discard(request: request)
+                case .undo: recorder?.undoDiscard(request: request)
+                }
+            }
+            .environment(\.pinNote) { [controller] note in
+                controller.notes.pin(note, near: controller.lastPointer)
+            }
+            .environment(\.studySense) { [controller] encounter in
+                guard let request else { return }
+                controller.onStudySense?(encounter, request)
+            }
+            // The same request discipline, for the same reason: an enrollment filed under the lookup
+            // that happened to be recorded last is a card about another word.
+            .environment(\.enrolSense) { [controller] encounter in
+                guard let request else { return }
+                controller.onEnrolSense?(encounter, request)
+            }
+            // The one window the panel may bring forward: a window the reader chose. The app's own
+            // action, so the dictionary discovery that pane depends on is started by the same code
+            // path every other route uses.
+            .environment(\.openDictionarySettings) { [controller] in controller.onOpenDictionarySettings?() }
+            .environment(\.reportPanelFit) { [controller] wanted, given in
+                controller.recordFit(wanted: wanted, given: given)
+            }
+            .environment(\.translation, translation)
+            .environment(\.explainer, explainer)
+    }
+}
+
 /// One surface's claim on Escape, held only while that surface shows.
 ///
 /// A hot key rather than a key monitor: a global monitor cannot consume the press — the app being
 /// read gets it too — and without Accessibility it never hears it.
 @MainActor
 final class EscapeKey {
-    static let shortcut = EscapeStack.shortcut
-
     /// Kept, though only the stack is used: the stack refers to its centre without owning it, so
     /// something has to keep the centre alive for as long as this claim can be made.
     private let hotkeys: HotkeyCenter
@@ -540,9 +623,9 @@ enum PanelPlacement {
     /// content has since resized.
     ///
     /// `frame(for:near:within:)` runs once, at `show()`, against a size chosen before the content
-    /// existed. The scene is `.windowResizability(.contentSize)`, so the window then grows when the
-    /// entry fills in and again when the reader opens the other senses, and nothing put it back on
-    /// the screen: a lookup near the bottom of the display drew its sense list past the edge.
+    /// existed. `fitsItsContent(upTo:)` then grows the window when the entry fills in and again when
+    /// the reader opens the other senses — not SwiftUI, see `watchForResize` — and nothing put it
+    /// back on the screen: a lookup near the bottom of the display drew its sense list past the edge.
     ///
     /// **All four edges, not just the one that was reported.** Height growth runs off the bottom and,
     /// once pushed up, can run off the top; width growth runs off the right and, once pushed back,

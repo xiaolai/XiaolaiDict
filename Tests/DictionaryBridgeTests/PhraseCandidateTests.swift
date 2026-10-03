@@ -168,7 +168,7 @@ extension PhraseCandidateTests {
 /// has or on two of them disagreeing about one phrase today. The words are nonsense so the bridge's lookup
 /// of the phrase's own words finds nothing and cannot accidentally supply the parent.
 struct PhrasePartitionTests {
-    private static func entry(_ id: String, headword: String) -> DictionaryEntry {
+    private static func entry(_ id: String, headword: String, in dictionary: String = "test") -> DictionaryEntry {
         let markup = """
             <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="\(id)" \
             d:title="\(headword)"><span class="hg x_xh0"><span class="hw">\(headword)</span></span>\
@@ -176,7 +176,7 @@ struct PhrasePartitionTests {
             <span d:def="1" class="df">a meaning</span></span></span></d:entry>
             """
         return DictionaryEntry(
-            dictionary: DictionaryIdentity(name: "Test", identifier: "test", version: "1"),
+            dictionary: DictionaryIdentity(name: "Test", identifier: dictionary, version: "1"),
             headword: headword, lookedUp: headword, html: markup,
             document: EntryDocument.parse(markup))
     }
@@ -198,6 +198,19 @@ struct PhrasePartitionTests {
         #expect(meaning.ownEntries.map(\.entryID) == ["own1"],
                 "the parent is not a candidate and the own entry must not go with it")
         #expect(meaning.filings.count == 1, "and the filing is carried beside it, not instead of it")
+    }
+
+    /// **An entry id is a dictionary's, not the world's.** Two dictionaries can use the same `d:entry`
+    /// id for different entries; the parent found in one must not make the other's own entry a
+    /// sub-entry. Red if the partition compares raw ids — `AGENTS.md`: never key by the raw id.
+    @Test func aCollidingIDInAnotherDictionaryIsNotAParent() {
+        let parentHere = Self.entry("e1", headword: "wwvv", in: "test")
+        let ownThere = Self.entry("e1", headword: "zzqq wwvv", in: "other")
+        let span = PhraseSpan(phrase: "zzqq wwvv", location: 0, length: 9, separation: .none,
+                              filings: [Self.filing(parent: "e1", "what the filing says")])
+        let meaning = DictionaryBridge.meaning(of: span, answered: [parentHere, ownThere], term: [parentHere])
+        #expect(meaning.ownEntries.map(\.dictionary.identifier) == ["other"],
+                "another dictionary's own entry was taken for a sub-entry because its id collided")
     }
 
     /// With no own entry among them, nothing reaches the ladder — the parent's senses are that word's.

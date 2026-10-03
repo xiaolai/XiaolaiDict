@@ -8,7 +8,7 @@ import os
 /// The menu-bar app: a shortcut on a selection opens the lookup panel and records the lookup.
 @Observable
 @MainActor
-final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
+final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup")
     /// **Built with the hot-key centre the app was given**, like the drawer below — they share its
     /// one Escape claim (`EscapeStack`), and a test's fake centre must reach both: built on their
@@ -69,14 +69,17 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     init(
         defaults: UserDefaults, hotkeys: HotkeyCenter = .shared,
         models: LocalModelCoordinator,
-        shell: ShellActivationController.System = .inert
+        shell: ShellActivationController.System = .inert,
+        panelWindows: LookupPanelController.Windows = .shared
     ) {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
         preferences = defaults
         self.hotkeys = hotkeys
-        panel = LookupPanelController(hotkeys: hotkeys)
+        // `panelWindows` is a seam for a test about what the panel is asked to show, the way
+        // `LookupPanelController` already takes one; the app itself passes nothing and gets `.shared`.
+        panel = LookupPanelController(hotkeys: hotkeys, windows: panelWindows)
         keepPolicyStore = LookupKeepPolicyStore(defaults: defaults)
         hover = HoverControl(defaults: defaults)
         // **The suite the app was given, not `.standard`.** Built inline against the real
@@ -198,7 +201,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             },
             prewarm: { await models.prewarm() },
             keepPolicy: { [weak self] in self?.keepPolicyStore.load() ?? .automatic },
-            initialRecording: { [weak self] row, request in self?.recorder.begin(row, request: request) })
+            initialRecording: { [weak self] row, request in self?.recorder.begin(row, request: request) },
+            mark: { [weak self] stage, request, at in self?.timings.mark(stage, request: request, at: at) })
     }
     /// The lookup shortcut and everything about registering it — see `ShortcutRegistrar`, which
     /// holds the three-state machine this delegate used to carry as four adjacent properties.
@@ -209,7 +213,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
     let recorder = LookupRecorder()
     /// The lookup in flight. A new shortcut press cancels it: one lookup at a time.
-    private var lookup: Task<Void, Never>?
+    private(set) var lookup: Task<Void, Never>?
     private var termination: (any DispatchSourceSignal)?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -248,7 +252,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
         panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
         recorder.start()
         Task { [weak self] in self?.permissions = await .probe() }
-        hover.watcher.onWord = { [weak self] selection, at in self?.lookUpHovered(selection, at: at) }
+        hover.watcher.delivery = self
         // Watching the pointer is something the reader must be able to stop, so it is a setting
         // and not a fact of running XiaolaiDict — on by default, because it is Milestone 2's whole point.
         // **Not in an instrument run.** `--history-report` captures the screen, and a hover that
@@ -344,6 +348,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     func lookUpSelection() {
         let pointer = UpPoint(NSEvent.mouseLocation)
         let requestedAt = Date.now
+        let askedAt = ContinuousClock.now
         let ticket = panel.newRequest()
         lookup?.cancel()
         // Asked, not assumed: without Accessibility there is no selection to read, and saying so
@@ -364,9 +369,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
             case .nothing(let reason):
                 panel.show(.nothingToLookUp(reason), near: pointer, for: ticket)
             case .selected(let selection):
-                await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket)
+                await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket)
             }
-
         }
     }
 
@@ -390,19 +394,67 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// different card from the one the reader gets — the footer's controls exist only where a
     /// dictionary answered. So the instrument goes in by the same door hover does.
     func lookUpHovered(_ selection: Selection, at pointer: UpPoint) {
-        let requestedAt = Date.now
-        let ticket = panel.newRequest()
+        launch(selection, near: pointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest())
+    }
+
+    /// The one place a lookup is started on a ticket already in hand — each caller keeps its own way
+    /// of getting the ticket, which is where they differ.
+    private func launch(
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
+        ticket: PanelTicket, existingLookupID: Int? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
         lookup?.cancel()
-        lookup = Task { await lookUp(selection, near: pointer, requestedAt: requestedAt, ticket: ticket) }
+        lookup = Task {
+            await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt,
+                         ticket: ticket, existingLookupID: existingLookupID, seen: seen)
+        }
+    }
+
+    /// A word a hover read, for the request it was given when the gesture was accepted.
+    ///
+    /// **Claims the panel rather than taking it.** The hover's number was handed out before the
+    /// screen was read; if the reader pressed the shortcut, opened a reading or tapped again since,
+    /// that request claimed the panel after it, the claim here is refused, and the late word is
+    /// dropped instead of replacing what the reader asked for — and its lookup is not cancelled.
+    func deliver(_ selection: Selection, at pointer: UpPoint, request: Int, requestedAt: Date,
+                 askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
+        guard let ticket = panel.claim(request) else { return false }
+        launch(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket, seen: seen)
+        return true
+    }
+
+    func beginRequest() -> Int { panel.begin() }
+
+    /// **Told once per launch, and only told.** After the first, a hover that needs the pixels is a
+    /// log line: a notice on every rest over a terminal would be the noise the gesture exists to
+    /// prevent. Asking the system is the setup board's button, never a hover's.
+    ///
+    /// **Under the hover's own number**, so a newer lookup is not replaced and a dismissed panel is
+    /// not reopened: a refused claim shows nothing, and the launch's one notice is not spent on it.
+    ///
+    /// **Spent only once the compositor has it on screen** — `show` answers for the request, not the
+    /// drawing — and the lookup the claim superseded is cancelled, as any newer request cancels it.
+    @discardableResult
+    func screenRecordingNeeded(at pointer: UpPoint, request: Int) -> Bool {
+        guard hover.screenRecordingNotice == .unsaid, let ticket = panel.claim(request) else { return false }
+        lookup?.cancel()
+        guard panel.show(.screenRecordingIsOff, near: pointer, for: ticket) else { return false }
+        hover.screenRecordingNotice = .showing
+        Task { [weak self] in
+            guard let self else { return }
+            hover.screenRecordingNotice = await panel.seenOnScreen(ticket) ? .said : .unsaid
+        }
+        return true
     }
 
     func reopenReading(_ row: ReadingEntry) {
         let selection = Selection(text: row.surface, sentence: row.cue == .none ? nil : row.sentence,
             rangeInSentence: row.sentenceRange,
             quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place)
-        let ticket = panel.newRequest(); lookup?.cancel()
-        lookup = Task { await lookUp(selection, near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at,
-                                    ticket: ticket, existingLookupID: row.id) }
+        // Dated for the timings from now: `row.at` is when it was first read, and the figures would
+        // otherwise carry the reading's whole age.
+        launch(selection, near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at, askedAt: .now,
+               ticket: panel.newRequest(), existingLookupID: row.id)
     }
 
     // MARK: - Hover
@@ -410,10 +462,36 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     /// Every answered lookup is recorded — a miss too, marked as one: it is usually a typo or a
     /// stray selection, which later triage can tell from a real gap. A lookup superseded before its
     /// answer arrived was never seen, and is not.
-    private func lookUp(_ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil) async {
-        guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket, existingLookupID: existingLookupID) else { return }
+    /// `askedAt` is the reader's ask — the gesture, the key press — on the monotonic clock, so the
+    /// time spent reading the word is in the figures, as `captured`.
+    private func lookUp(
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
+        ticket: PanelTicket, existingLookupID: Int? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) async {
+        timings.begin(request: ticket.number, at: askedAt, source: selection.quality.source.rawValue)
+        timings.mark(.captured, request: ticket.number)
+        // Whether the compositor ever drew this panel, heard on the way to whoever delivered the word.
+        var drawn = false
+        guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket,
+                                         existingLookupID: existingLookupID,
+                                         seen: { shown in drawn = shown; seen(shown) }) else {
+            // **Ended with no row to finish, and still said.** A lookup dropped after its pending row
+            // was written has that row in the ledger, so the write is waited for and counted; one
+            // dropped before it is `dropped` — never silence, which is where waits went unmeasured.
+            await recorder.settled(request: ticket.number)
+            timings.finish(request: ticket.number,
+                           ending: recorder.ending(request: ticket.number) ?? (drawn ? .superseded : .notShown))
+            return
+        }
         await recorder.record(row, request: ticket.number)
+        // **Recorded only if the row is in the ledger** — not inferred from a status a failed sense
+        // choice can share.
+        timings.finish(request: ticket.number, ending: recorder.ending(request: ticket.number) ?? .notRecorded)
     }
+
+    /// Each lookup's stages, one log line when it is recorded — see `LookupTimeline`.
+    /// Each lookup's stage timings — see `LookupTimings`.
+    let timings = LookupTimings()
 
     // MARK: - Shortcut
 
@@ -628,8 +706,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate {
     var problems: [MenuProblem] {
         var found: [MenuProblem] = []
         if let detail = permissions.menuWarning {
-            found.append(MenuProblem(
-                title: Self.title(forMissing: permissions.missing.map(\.permission)), detail: detail, pane: .setup))
+            let title = permissions.missing.isEmpty
+                ? String(localized: "Permissions Not Checked", comment: "Menu bar warning row, when a permission probe failed")
+                : Self.title(forMissing: permissions.missing.map(\.permission))
+            found.append(MenuProblem(title: title, detail: detail, pane: .setup))
         }
         if let detail = shortcuts.problem {
             found.append(MenuProblem(

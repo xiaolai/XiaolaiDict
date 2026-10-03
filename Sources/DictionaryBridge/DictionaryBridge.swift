@@ -77,11 +77,14 @@ public enum DictionaryBridge {
     /// subject is a private API whose failure mode is a segfault, and reading a dictionary's `KeyText.data` is
     /// a different job with a different failure mode. Nil — the default — answers `.notAsked`, which is what a
     /// caller that has no detector should say and is exactly true.
+    /// `timed` is handed how long the word's entries took and how long the phrase took after them —
+    /// two stages of one reply, so the cost of the phrase can be read apart from the word's.
     public static func reply(to request: ServiceRequest,
-                             phrases: (any PhraseFinding)? = nil) -> ServiceReply {
+                             phrases: (any PhraseFinding)? = nil,
+                             timed: (_ word: Duration, _ phrase: Duration) -> Void = { _, _ in }) -> ServiceReply {
         switch request {
         case .lookup(let lookup):
-            answer(to: lookup, phrases: phrases)
+            answer(to: lookup, phrases: phrases, timed: timed)
         case .dictionaries(let reprobing): .dictionaries(capabilities(reprobing: reprobing))
         }
     }
@@ -89,12 +92,19 @@ public enum DictionaryBridge {
     /// **One reply, and the word's entries are read once.** The phrase needs them to tell its own entry from
     /// the entry it is filed inside, and asking the framework for the term twice would be a second walk of
     /// every dictionary for an answer already in hand.
-    private static func answer(to request: LookupRequest, phrases: (any PhraseFinding)?) -> ServiceReply {
+    private static func answer(
+        to request: LookupRequest, phrases: (any PhraseFinding)?, timed: (Duration, Duration) -> Void
+    ) -> ServiceReply {
+        let clock = ContinuousClock()
+        let started = clock.now
         let word = reply(to: request)
         let entries: [DictionaryEntry]
-        if case .entries(let found, _) = word { entries = Array(found) } else { entries = [] }
-        return .lookup(LookupAnswer(
-            word: word, phrase: phrase(for: request, using: phrases, word: entries)))
+        let unreadable: [String]
+        if case .entries(let found, let missing) = word { (entries, unreadable) = (Array(found), missing) } else { (entries, unreadable) = ([], []) }
+        let wordDone = clock.now
+        let phrase = phrase(for: request, using: phrases, word: entries, wordUnreadable: unreadable)
+        timed(wordDone - started, clock.now - wordDone)
+        return .lookup(LookupAnswer(word: word, phrase: phrase))
     }
 
     /// The phrase around the term, and its own entries.
@@ -106,8 +116,10 @@ public enum DictionaryBridge {
     /// A sentence longer than `LookupRequest.maximumSentenceLength` is `.notAsked`: it arrives from another
     /// process and is a passage rather than a reading context. Truncating it instead would be worse — the cut
     /// could fall inside the phrase.
+    /// `lookingUp` is the framework's lookup, a seam so the ways it ends can be tested without it.
     static func phrase(for request: LookupRequest, using finder: (any PhraseFinding)?,
-                       word: [DictionaryEntry] = []) -> PhraseAnswer {
+                       word: [DictionaryEntry] = [], wordUnreadable: [String] = [],
+                       lookingUp: @escaping (String) throws -> DictionaryLookup = { try entries(for: $0) }) -> PhraseAnswer {
         guard let finder else { return .notAsked }
         guard let sentence = request.sentence, let term = request.termRange,
               sentence.utf16.count <= LookupRequest.maximumSentenceLength else { return .notAsked }
@@ -117,13 +129,37 @@ public enum DictionaryBridge {
         guard finder.isReady else { return .notReady }
         let spans = finder.phrases(in: sentence, at: term)
         guard !spans.isEmpty else { return .none }
+        // **One walk per string per request.** Overlapping phrases share words, and the hovered word's
+        // entries are already in hand; each lookup is a walk of every active dictionary.
+        // Seeded with the hovered word only where its lookup answered — an empty answer from a failed
+        // lookup would otherwise be remembered and never retried.
+        var walked: [String: [DictionaryEntry]] = word.isEmpty ? [:] : [request.term: word]
+        // **A failed lookup is not remembered** — the next phrase asks again — and it answers empty,
+        // which keeps every answered entry a candidate: nothing on the lookup path may delete one on
+        // a failure.
+        // **How each string's lookup ended**, kept beside the entries so a phrase's own can travel with
+        // it. Discarded, a failure and a clean empty answer were the same thing on the card.
+        // The term's is the word's own, seeded with its entries: a phrase spelled as the term reuses both.
+        var retrieved: [String: PhraseRetrieval] = word.isEmpty ? [:]
+            : [request.term: wordUnreadable.isEmpty ? .complete : .partial(unreadable: wordUnreadable)]
+        let lookUp = { (text: String) -> [DictionaryEntry] in
+            if let known = walked[text] { return known }
+            guard let found = try? lookingUp(text) else {
+                retrieved[text] = .failed
+                return []
+            }
+            retrieved[text] = found.unreadable.isEmpty ? .complete : .partial(unreadable: found.unreadable)
+            walked[text] = found.entries
+            return found.entries
+        }
         // Each phrase's own entries, through the same door the word went through. Empty is a real answer: the
         // span is in the dictionary's keys and the framework still found nothing readable for it.
         let hits = spans.map { span in
-            let answered = (try? entries(for: span.phrase))?.entries ?? []
+            let answered = lookUp(span.phrase)
             return PhraseHit(phrase: span.phrase, location: span.location, length: span.length,
                              separation: span.separation,
-                             meaning: meaning(of: span, answered: answered, term: word))
+                             meaning: meaning(of: span, answered: answered, term: word, lookUp: lookUp),
+                             retrieval: retrieved[span.phrase] ?? .complete)
         }
         return .found(hits)
     }
@@ -141,11 +177,25 @@ public enum DictionaryBridge {
     /// phrase under a parent and another gives it an entry of its own, the second dictionary's senses —
     /// the ones the ladder would have chosen among — were deleted from the answer. Nothing on the lookup
     /// path may delete a candidate.
-    static func meaning(of span: PhraseSpan, answered: [DictionaryEntry],
-                        term: [DictionaryEntry]) -> PhraseMeaning {
-        let answeredIDs = Set(answered.compactMap(\.entryID))
+    /// **An id is a dictionary's own**, so every comparison here is of the dictionary and the id
+    /// together. Raw ids compared across dictionaries let a parent found in one make another
+    /// dictionary's own entry with a colliding id a sub-entry — deleting a candidate.
+    private struct EntryRef: Hashable {
+        let dictionary: String
+        let id: String
+    }
+
+    private static func refs(_ entries: [DictionaryEntry]) -> Set<EntryRef> {
+        Set(entries.compactMap { entry in entry.entryID.map { EntryRef(dictionary: entry.dictionary.key, id: $0) } })
+    }
+
+    /// `lookUp` answers a word's entries — the request's own memo in the service, a plain lookup for a
+    /// caller with none.
+    static func meaning(of span: PhraseSpan, answered: [DictionaryEntry], term: [DictionaryEntry],
+                        lookUp: (String) -> [DictionaryEntry] = { (try? entries(for: $0))?.entries ?? [] }) -> PhraseMeaning {
+        let answeredIDs = refs(answered)
         // The term the reader looked up first: cheapest, and the commonest way a sub-entry is caught.
-        var parents = Set(term.compactMap(\.entryID)).intersection(answeredIDs)
+        var parents = refs(term).intersection(answeredIDs)
         // Then the phrase's own words. A reader hovering *take* has *take*'s entries in `term`, which do
         // not overlap; the parent is `account`, and only asking for it finds that out.
         //
@@ -153,9 +203,9 @@ public enum DictionaryBridge {
         // the term alone — the partition needs the whole set only while some entry might still be the
         // phrase's own, and each of these is a lookup across every active dictionary.
         if parents.count < answeredIDs.count {
-            for word in span.phrase.split(separator: " ").map(String.init) where word.count > 1 {
-                guard let entries = try? entries(for: word).entries else { continue }
-                parents.formUnion(Set(entries.compactMap(\.entryID)).intersection(answeredIDs))
+            // Every word, one letter too: *a* and *I* can be the entry a phrase is filed under.
+            for word in span.phrase.split(separator: " ").map(String.init) {
+                parents.formUnion(refs(lookUp(word)).intersection(answeredIDs))
                 if parents.count == answeredIDs.count { break }
             }
         }
@@ -163,15 +213,17 @@ public enum DictionaryBridge {
         // refused candidates only on evidence.
         let own = answered.filter { entry in
             guard let id = entry.entryID else { return true }
-            return !parents.contains(id)
+            return !parents.contains(EntryRef(dictionary: entry.dictionary.key, id: id))
         }
         // **The filing whose parent actually answered goes first.** `blow a fuse` is filed under *blow*
         // and under *fuse* with different meanings, and until the locators were kept there was no way to
         // prefer either — the walk's order decided, which is the body's order and nobody's intent.
         // A partition rather than `sorted`, which is not stable: two filings the reader's dictionaries
         // agree about must not swap places between two identical lookups.
-        let filings = span.filings.filter { parents.contains($0.parentEntryID) }
-            + span.filings.filter { !parents.contains($0.parentEntryID) }
+        let answeredBy = { (filing: PhraseFiling) in
+            parents.contains(EntryRef(dictionary: filing.dictionary.key, id: filing.parentEntryID))
+        }
+        let filings = span.filings.filter(answeredBy) + span.filings.filter { !answeredBy($0) }
         return PhraseMeaning(ownEntries: own, filings: filings)
     }
 
@@ -421,12 +473,99 @@ public enum DictionaryBridge {
     /// elements lose the namespace their stylesheets select on — a root outside the XHTML namespace
     /// is not HTML: `style` shows as text and nothing is laid out. A root that already declares a
     /// default namespace, and text with no `html` root, are returned as they are.
+    ///
+    /// **The root tag's attributes are read, not searched**: a value that mentions `xmlns=`, or holds a
+    /// `>`, is a value. A search over the tag's text took the first for a declaration and the second
+    /// for the tag's end.
     static func renderable(_ document: String) -> String {
-        guard let open = document.range(of: #"<html(?=[\s>/])"#, options: .regularExpression),
-              let close = document[open.upperBound...].firstIndex(of: ">"),
-              document[open.upperBound..<close].range(of: #"\sxmlns\s*="#, options: .regularExpression) == nil
+        guard let open = rootTag(in: document),
+              let names = attributeNames(after: open.upperBound, in: document),
+              !names.contains("xmlns")
         else { return document }
         return document.replacingCharacters(in: open, with: "<html xmlns=\"\(xhtmlNamespace)\"")
+    }
+
+    /// The `<html` that opens the root — **not one inside a comment**, which a search took for the
+    /// root and repaired, leaving the real one without its namespace.
+    static func rootTag(in document: String) -> Range<String.Index>? {
+        // **Every kind of markup that is not an element is stepped over whole** — a comment, a CDATA
+        // section, a processing instruction, a declaration — since `<html` inside any of them is text.
+        // A declaration's internal subset is bracketed and may hold `>`; it ends at `]` then `>`.
+        var from = document.startIndex
+        while let found = document.range(
+            of: #"<!--|<!\[CDATA\[|<\?|<!|<html(?=[\s>/])"#, options: .regularExpression, range: from..<document.endIndex
+        ) {
+            let opener = document[found]
+            let rest = found.upperBound..<document.endIndex
+            let close: Range<String.Index>?
+            switch opener {
+            case "<!--": close = document.range(of: "-->", range: rest)
+            case "<![CDATA[": close = document.range(of: "]]>", range: rest)
+            case "<?": close = document.range(of: "?>", range: rest)
+            case "<!": close = declarationEnd(in: document, from: found.upperBound)
+            default: return found
+            }
+            guard let close else { return nil }
+            from = close.upperBound
+        }
+        return nil
+    }
+
+    /// Where a declaration that began just before `start` ends — its closing `>`, outside every quoted
+    /// literal, bracketed internal subset, comment and processing instruction. **Scanned, not searched for**: a quoted `>` or
+    /// `]>` is text inside the declaration, and searching for the terminator ended it there.
+    static func declarationEnd(in text: String, from start: String.Index) -> Range<String.Index>? {
+        var index = start
+        var depth = 0
+        while index < text.endIndex {
+            // A comment or a processing instruction inside the subset is text up to its own terminator,
+            // whatever quotes, brackets or `>` it holds.
+            if let (opener, closer) = [("<!--", "-->"), ("<?", "?>")].first(where: { text[index...].hasPrefix($0.0) }) {
+                guard let close = text.range(of: closer, range: text.index(index, offsetBy: opener.count)..<text.endIndex)
+                else { return nil }
+                index = close.upperBound
+                continue
+            }
+            let character = text[index]
+            switch character {
+            case "\"", "'":
+                guard let end = text[text.index(after: index)...].firstIndex(of: character) else { return nil }
+                index = text.index(after: end)
+                continue
+            case "[": depth += 1
+            case "]": depth = max(0, depth - 1)
+            case ">" where depth == 0: return index..<text.index(after: index)
+            default: break
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    /// The attribute names of the start tag whose name ends at `start`, up to its closing `>` — or nil
+    /// where the tag never closes. Quoted values are skipped whole, whatever they contain.
+    static func attributeNames(after start: String.Index, in text: String) -> [String]? {
+        var names: [String] = []
+        var index = start
+        while index < text.endIndex {
+            let character = text[index]
+            if character == ">" { return names }
+            if character == "\"" || character == "'" {
+                guard let end = text[text.index(after: index)...].firstIndex(of: character) else { return nil }
+                index = text.index(after: end)
+                continue
+            }
+            if character.isWhitespace || character == "/" || character == "=" {
+                index = text.index(after: index)
+                continue
+            }
+            // A name: up to whitespace, `=`, `/` or `>`.
+            var end = index
+            while end < text.endIndex, !text[end].isWhitespace, !"=/>".contains(text[end]) { end = text.index(after: end) }
+            names.append(String(text[index..<end]))
+            index = end
+        }
+        return nil
     }
 
     /// Whether `document` is what the styled form promises: a well-formed XHTML document — the

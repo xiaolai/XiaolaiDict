@@ -37,22 +37,22 @@ struct HoverWatcherTests {
     /// A pointer resting on a word twitches by a point or two. Treating that as movement restarts
     /// the dwell every time and the popup never fires at all.
     @Test func aPointerThatTwitchesIsStillAtRest() {
-        #expect(!HoverWatcher.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 101, y: 99)))
+        #expect(!HoverSession.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 101, y: 99)))
     }
 
     @Test func aPointerThatCrossesTheToleranceHasMoved() {
-        #expect(HoverWatcher.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 140, y: 100)))
-        #expect(HoverWatcher.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 100, y: 140)))
+        #expect(HoverSession.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 140, y: 100)))
+        #expect(HoverSession.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 100, y: 140)))
     }
 
     @Test func aPointerThatHasNotMovedAtAllIsAtRest() {
-        #expect(!HoverWatcher.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 100, y: 100)))
+        #expect(!HoverSession.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 100, y: 100)))
     }
 
     /// Diagonal drift must count as movement too — measuring one axis at a time would let a
     /// pointer slide along a diagonal without ever being seen to move.
     @Test func diagonalDriftCountsAsMovement() {
-        #expect(HoverWatcher.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 103, y: 103)))
+        #expect(HoverSession.hasMoved(from: UpPoint(x: 100, y: 100), to: UpPoint(x: 103, y: 103)))
     }
 
     // MARK: - Which display CGEvent measures from
@@ -99,7 +99,8 @@ struct HoverWatcherTests {
         paused.pause(for: .seconds(600), from: .now)
         let watcher = HoverWatcher(pause: { paused })
         let outcome = await watcher.reader.read(
-            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], tappedTwice: false, pointerStillFor: .seconds(10))
+            at: .zero, modifiersHeld: [HoverPolicy.shipped.modifier], tappedTwice: false, pointerStillFor: .seconds(10),
+            begin: { 0 })
         guard case .quiet(.paused) = outcome else {
             Issue.record("a paused XiaolaiDict answered \(outcome) — the pause never reached the reader")
             return

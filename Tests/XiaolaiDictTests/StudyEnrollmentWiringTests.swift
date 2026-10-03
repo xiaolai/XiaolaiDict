@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import Synchronization
 import Testing
 import XiaolaiDictCore
 import XiaolaiDictTestSupport
@@ -95,6 +96,40 @@ struct StudyEnrollmentWiringTests {
         #expect(try ledger.lookupIDs(evidencing: note.id).count == 1)
     }
 
+    /// **A held enrolment keeps the language it was made under** (audit round 3, #21). The row's
+    /// drain wrote it under the lookup's language instead — and a note's language is part of its
+    /// identity, so the card the reader made was not the card that was written.
+    @Test func aHeldEnrolmentIsWrittenUnderItsOwnLanguage() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let recorder = await LookupRecorder()
+        await recorder.start { try LedgerStore(path: path) }
+        _ = try await #require(recorder.store).value
+        await recorder.enrol(encounter(), request: 7, language: "zh-Hans")
+        await recorder.record(recording("fine"), request: 7)
+        let ledger = try await Self.waiting(at: path) { try $0.notes().count == 1 }
+        #expect(try ledger.notes().first?.language == "zh-Hans", "the held enrolment took the lookup's language")
+    }
+
+    /// **How a lookup ended, three ways** (audit round 3, #39): its row is in the ledger, its row was
+    /// handed over and failed, or nothing was ever handed over. The second used to read as the third.
+    @Test func aLookupsEndingIsRecordedNotRecordedOrDropped() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let attempts = Mutex(0)
+        let recorder = await LookupRecorder()
+        await recorder.start {
+            if attempts.withLock({ $0 += 1; return $0 }) == 1 { throw CocoaError(.fileLocking) }
+            return try LedgerStore(path: path)
+        }
+        #expect(await recorder.ending(request: 9) == nil, "a lookup never handed over was given a ledger ending")
+        await recorder.record(recording(), request: 3)
+        #expect(await recorder.ending(request: 3) == .notRecorded, "a failed write read as never attempted")
+        await recorder.retry(request: 3)
+        await recorder.settled(request: 3)
+        #expect(await recorder.ending(request: 3) == .recorded)
+    }
+
     /// Enrolling writes the encounter **as well as** the note: the reader met the sense and asked to
     /// study it, and the ledger keeps those apart rather than inferring one from the other.
     @Test func enrollingAlsoRecordsThatTheSenseWasMet() async throws {
@@ -105,8 +140,32 @@ struct StudyEnrollmentWiringTests {
         _ = try await #require(recorder.store).value
         await recorder.record(recording(), request: 1)
         await recorder.enrol(encounter(), request: 1, language: "en")
-        let ledger = try await Self.waiting(at: path) { try $0.notes().count == 1 }
+        // The enrolment's write, awaited — not the ledger polled against a clock.
+        await recorder.settled(request: 1)
+        let ledger = try Ledger(path: path)
+        #expect(try ledger.notes().count == 1, "the enrolment was not written")
         #expect(try ledger.encounters(ofLookup: 1).count == 1, "the meeting is evidence in its own right")
+    }
+
+    /// **Retry writes a held tap whose row was never written.** The reader enrolled before the row
+    /// existed; the ledger then failed to open. Retry used to re-hold the tap and stop, and neither
+    /// the row nor the note was ever written. Red if Retry only re-enqueues the tap.
+    @Test func retryWritesAHeldTapWhoseRowWasNeverWritten() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let attempts = Mutex(0)
+        let recorder = await LookupRecorder()
+        await recorder.start {
+            if attempts.withLock({ $0 += 1; return $0 }) == 1 { throw CocoaError(.fileLocking) }
+            return try LedgerStore(path: path)
+        }
+        await recorder.enrol(encounter(), request: 3, language: "en")
+        await recorder.record(recording(), request: 3)
+        #expect(await recorder.states[3] == .failed, "the failed opening was not reported")
+        await recorder.retry(request: 3)
+        await recorder.settled(request: 3)
+        let ledger = try Ledger(path: path)
+        #expect(try ledger.notes().count == 1, "Retry did not write the enrolment held for the row")
     }
 
     /// **Waits for the row, never for a duration.** The recorder starts its write in a task of its

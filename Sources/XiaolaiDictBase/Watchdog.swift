@@ -17,12 +17,8 @@ public struct Watchdog: Sendable {
 
     public func run<T>(_ work: () throws -> T) rethrows -> T {
         let alarm = DispatchWorkItem(block: onExpiry)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + limit.timeInterval, execute: alarm)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + limit.seconds, execute: alarm)
         defer { alarm.cancel() }
         return try work()
     }
-}
-
-private extension Duration {
-    var timeInterval: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }

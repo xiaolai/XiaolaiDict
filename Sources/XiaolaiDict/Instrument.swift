@@ -7,14 +7,9 @@ import CoreGraphics
 /// verbatim copy in each.
 @MainActor
 enum Instrument {
-    /// Waits for `condition`, checking every 20 ms, and reports whether it came true.
+    /// Waits for `condition` and reports whether it came true — `Poll`, which the panel shares.
     static func settle(until deadline: Duration, _ condition: @MainActor () -> Bool) async -> Bool {
-        let started = ContinuousClock.now
-        while ContinuousClock.now - started < deadline {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return condition()
+        await Poll.until(within: deadline, condition) == .met
     }
 
     /// Whether the compositor lists `window` as on screen. **Nothing else is evidence**: a
@@ -57,21 +52,4 @@ enum Instrument {
         }
         return write(String(decoding: data, as: UTF8.self))
     }
-}
-
-/// How long something took, for a report that prints milliseconds.
-///
-/// **One conversion, for every instrument that reports one.** There were four, all decomposing
-/// `components` by hand and none agreeing on the rounding: `--lookup` kept a `Double` and rounded
-/// at the call site, `--sense-report` and `--translation-report` built theirs out of integer
-/// arithmetic — which truncates, so a measurement of 1.9 ms was reported as 1 — and `--model-report`
-/// went the other way to seconds at two decimal places. They differed by up to a millisecond on the
-/// same duration, which is the kind of drift that is invisible until two reports are compared.
-///
-/// Exact here, rounded by whoever prints it: a report that wants whole milliseconds asks for them,
-/// and one that wants seconds divides. `XiaolaiDictCore`'s `Watchdog` keeps a private `timeInterval`
-/// of its own — a different module, and it converts to seconds for a dispatch deadline rather than
-/// for a report.
-extension Duration {
-    var milliseconds: Double { Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15 }
 }

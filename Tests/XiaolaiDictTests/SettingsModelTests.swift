@@ -311,11 +311,16 @@ struct SettingsChromeTests {
         #expect(!SettingsSources.literals(in: panes).contains { $0.contains("Frosted") })
     }
 
-    /// The site list did nothing; it is not offered.
-    @Test func thereIsNoSiteExclusionControl() throws {
+    /// **The site list is offered because it is enforced.** It was removed on 2026-10-02 when it
+    /// did nothing; the hover path now refuses an excluded site before reading it
+    /// (`HoverSiteTests`), so the control is back — and must never again carry a disclaimer that
+    /// takes its header back.
+    @Test func theSiteListIsOfferedWithoutADisclaimer() throws {
         let panes = try SettingsSources.code("SettingsPanes.swift")
-        #expect(!panes.contains("excludedHosts"), "the Lookup pane edits a list nothing enforces")
-        #expect(!SettingsSources.literals(in: panes).contains { $0.contains("these sites") })
+        #expect(panes.contains("policy.excludedHosts"), "the Lookup pane does not offer the site list")
+        let literals = SettingsSources.literals(in: panes)
+        #expect(literals.contains { $0.contains("These Sites") })
+        #expect(!literals.contains { $0.localizedCaseInsensitiveContains("not yet enforced") })
     }
 
     /// **The setup pane has no mover of its own.** It kept `.fitsItsContent(width:)` from when

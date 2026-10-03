@@ -34,7 +34,8 @@ enum LookupCommand {
         lookup: @Sendable (String) async throws(CancellationError) -> LookupOutcome,
         now: @Sendable () -> ContinuousClock.Instant = { .now },
         sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        write: @Sendable (String) -> Void = { _ = writeLine($0) },
+        // **A sink that says whether the line left**, so a report nobody received is not a success.
+        write: @Sendable (String) -> Bool = writeLine,
         writeError: @Sendable (String) -> Void = writeError
     ) async -> CommandStatus {
         let start = now()
@@ -45,12 +46,12 @@ enum LookupCommand {
                 let began = now()
                 let outcome = try await lookup(term)
                 let report = LookupReport(term: term, outcome: outcome, startedAt: began - start, took: now() - began)
-                write(try jsonLine(report))
+                if let failed = emit(report, through: write, writeError: writeError) { return failed }
                 if case .entries = outcome {} else { status = .failure }
             } catch is CancellationError {
                 return .interrupted
             } catch {
-                writeError("could not encode the report: \(error)")
+                writeError("the pause between lookups failed: \(error)")
                 return .internalError
             }
         }
@@ -93,28 +94,27 @@ enum LookupCommand {
         // A generous deadline on purpose: this is the instrument, not the product. The shipped 5 s
         // protects a reader from a wedged capture; here it only hid how long the path actually
         // takes, reporting "deadline exceeded" for a read that was seconds from finishing.
-        let reader = HoverReader(policy: { .shipped }, captureDeadline: .seconds(30))
+        let reader = HoverReader(policy: { .shipped }, captureDeadline: .seconds(30), accessibilityBudget: .seconds(30))
         let outcome = await reader.read(
             at: CGPoint(x: x, y: y), modifiersHeld: [HoverPolicy.shipped.modifier],
             // The instrument measures the *hold* path, which is what `--read-point` has always
             // driven and what the shipped default is. A tap is the reader's gesture, not a
             // measurement's: pretending one happened would report a path nobody asked about.
-            tappedTwice: false, pointerStillFor: .seconds(1))
+            tappedTwice: false, pointerStillFor: .seconds(1),
+            // No panel: the instrument prints what it read and claims nothing.
+            begin: { 0 })
         let took = (ContinuousClock.now - started).milliseconds
         switch outcome {
-        case .selection(let selection):
-            do {
-                writeLine(try jsonLine(PointReport(selection, milliseconds: took.rounded())))
-                return .success
-            } catch {
-                writeError("could not encode the report: \(error)")
-                return .internalError
-            }
+        case .selection(let selection, _, _):
+            return emit(PointReport(selection, milliseconds: took.rounded()), through: writeLine) ?? .success
         case .quiet(let refusal):
             writeError("nothing read: \(refusal.reason)")
             return .failure
         case .nothing(let why):
             writeError("nothing read: \(why)")
+            return .failure
+        case .needsScreenRecording:
+            writeError("nothing read: \(RecognitionError.screenRecordingDenied.localizedDescription)")
             return .failure
         }
 #endif
@@ -127,7 +127,7 @@ enum LookupCommand {
     /// **Compiled out of a release for the same reason as `readPoint`** — it reports another app's
     /// *selected text* on demand, and the measurement that established the deputy read a sentinel
     /// out of TextEdit through this same Accessibility path.
-    static func readSelection(bundleID: String, write: (String) -> Void = { _ = writeLine($0) }) async -> CommandStatus {
+    static func readSelection(bundleID: String, write: (String) -> Bool = writeLine) async -> CommandStatus {
 #if !XIAOLAIDICT_CAPTURE_INSTRUMENTS
         writeError("--read-selection is a development instrument and is not built into a release")
         return .usage
@@ -147,13 +147,7 @@ enum LookupCommand {
             report = ["error": "\(bundleID) is not running, or has no window to find its process by"]
             status = .failure
         }
-        do {
-            write(try jsonLine(report))
-            return status
-        } catch {
-            writeError("could not encode the report: \(error)")
-            return .internalError
-        }
+        return emit(report, through: write) ?? status
 #endif
     }
 
@@ -162,12 +156,36 @@ enum LookupCommand {
     /// which an instrument must not go on to report as a success.
     @discardableResult
     static func writeLine(_ line: String) -> Bool {
-        print(line)
-        return fflush(stdout) == 0
+        // **The stream's own error flag, too**: `print` reports nothing, and a flush can succeed
+        // after a write into a closed pipe already failed.
+        // A closed pipe must come back as `false`, not end the process: SIGPIPE's default action is to
+        // terminate, before `fputs` could report anything.
+        signal(SIGPIPE, SIG_IGN)
+        clearerr(stdout)
+        let wrote = fputs(line + "\n", stdout) != EOF
+        return wrote && fflush(stdout) == 0 && ferror(stdout) == 0
     }
 
     static func writeError(_ line: String) {
         FileHandle.standardError.write(Data("error: \(line)\n".utf8))
+    }
+
+    /// Encodes `report` and writes it through `write` — **one spelling for the three commands** —
+    /// answering nil when it went out and `.internalError`, said on standard error, when it did not.
+    static func emit(
+        _ report: any Encodable, through write: (String) -> Bool,
+        writeError: (String) -> Void = writeError
+    ) -> CommandStatus? {
+        let line: String
+        do { line = try jsonLine(report) } catch {
+            writeError("could not encode the report: \(error)")
+            return .internalError
+        }
+        guard write(line) else {
+            writeError("could not write the report")
+            return .internalError
+        }
+        return nil
     }
 
     /// One line: no pretty-printing, so a repeat run is valid JSON Lines.

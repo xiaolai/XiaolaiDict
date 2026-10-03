@@ -4,7 +4,6 @@ import DictionaryModel
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
-import Synchronization
 import os
 
 /// The app a selection is read from, captured on the main actor before the Accessibility work
@@ -95,10 +94,10 @@ enum SelectionReader {
     /// body wherever the call was made from. Off the main actor its first `@MainActor` call traps —
     /// the second instance of the class the compositor check in `ScreenWordReader.target(at:)` closes,
     /// whose first instance is crash report 2026-09-25. There is no hung app to be stalled by here and
-    /// nothing to serialise against, so the two reasons `oneAtATime` exists do not apply.
+    /// nothing to serialise against, so the two reasons `AccessibilityLane` exists do not apply.
     static func read(from app: FrontApp) async -> Outcome {
         guard app.pid != getpid() else { return await MainActor.run { readNow(app) } }
-        return await oneAtATime {
+        return await AccessibilityLane.system.run(timeout: AccessibilitySession.messagingTimeout) {
             readNow(app)
         } cancelled: {
             .nothing(message(for: .cancelled, app: app.name))
@@ -108,36 +107,15 @@ enum SelectionReader {
     /// One read of `app`, wherever the caller has decided it may happen.
     private static func readNow(_ app: FrontApp) -> Outcome {
         let application = AXUIElementCreateApplication(app.pid)
-        // Chromium and Electron build their tree only when asked; every other app ignores this.
-        AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         return read(application: application, of: app, with: AccessibilitySession(budget: budget))
-    }
-
-    private static let lastRead = Mutex<Task<Outcome, Never>?>(nil)
-
-    /// Runs `work` detached, after every earlier read has finished. A read replaced by a newer one
-    /// is cancelled — a detached task does not inherit that, so it is passed on — but cancellation
-    /// takes effect only between Accessibility requests, never inside one. So a superseded read may
-    /// still be finishing a request; the next waits for it rather than running beside it, and
-    /// however fast the shortcut is pressed, one read at a time reaches into the other app.
-    static func oneAtATime(
-        _ work: @escaping @Sendable () -> Outcome, cancelled: @escaping @Sendable () -> Outcome
-    ) async -> Outcome {
-        let task = lastRead.withLock { last -> Task<Outcome, Never> in
-            let previous = last
-            let next = Task.detached(priority: .userInitiated) { () -> Outcome in
-                _ = await previous?.value
-                return Task.isCancelled ? cancelled() : work()
-            }
-            last = next
-            return next
-        }
-        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
     /// The whole read, against any Accessibility client — the real one, or a test's.
     static func read(application: AXUIElement, of app: FrontApp, with ax: some AccessibilityReading) -> Outcome {
         do {
+            // Chromium and Electron build their tree only when asked — inside the budget, and an
+            // app that does not answer is told as one, not asked everything else.
+            try ax.wake(application)
             switch try find(in: application, ax) {
             case .found(let capture):
                 // Where it came from is worth having, not worth the selection: if reading it fails,
@@ -146,12 +124,13 @@ enum SelectionReader {
                     bundleID: app.bundleID, name: app.name)
                 return selection(from: capture, app: app, place: place)
             case .nothing:
-                return .nothing("Nothing is selected in \(app.name), or it does not expose its selection to Accessibility.")
+                return .nothing(String(localized: "Nothing is selected in \(app.name), or it does not expose its selection to Accessibility.",
+                                       comment: "Lookup panel; the placeholder is the app's name"))
             case .searchLimitReached:
-                return .nothing("""
+                return .nothing(String(localized: """
                     Nothing is selected in \(app.name)'s focused element, and its window is too large to search \
                     for a page within \(webAreaSearchLimit) elements.
-                    """)
+                    """, comment: "Lookup panel; the placeholders are the app's name and a count of elements"))
             }
         } catch {
             return .nothing(message(for: error, app: app.name))
@@ -203,7 +182,13 @@ enum SelectionReader {
     private static func capture(from element: AXUIElement, _ ax: some AccessibilityReading) throws(CaptureError) -> Capture? {
         let byRange = try rangeCapture(element, ax)
         if let byRange, byRange.context != nil { return byRange }
-        let byMarkers = try markerCapture(element, ax)
+        // **A selection already in hand survives the second dialect failing** — a spent budget
+        // throws at its first request, and the range dialect's text went with it.
+        let byMarkers: Capture?
+        do throws(CaptureError) { byMarkers = try markerCapture(element, ax) } catch {
+            guard let byRange, error != .cancelled else { throw error }
+            return byRange
+        }
         if let byMarkers, byMarkers.context != nil { return byMarkers }
         return byRange ?? byMarkers
     }
@@ -214,7 +199,7 @@ enum SelectionReader {
         guard let selected = try ax.string(element, kAXSelectedTextAttribute),
               !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        let context = try sentenceAroundSelectedRange(element, selected: selected, ax)
+        let context = try contextOrNone { () throws(CaptureError) in try sentenceAroundSelectedRange(element, selected: selected, ax) }
         return Capture(text: selected, context: context, source: .accessibilityTextRange, host: element)
     }
 
@@ -254,8 +239,18 @@ enum SelectionReader {
               let text = try ax.string(host, "AXStringForTextMarkerRange", selection),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        let context = try sentenceCovering(selection, selected: text, in: host, ax)
+        let context = try contextOrNone { () throws(CaptureError) in try sentenceCovering(selection, selected: text, in: host, ax) }
         return Capture(text: text, context: context, source: .accessibilityTextMarkers, host: host)
+    }
+
+    /// The sentence around a selection already read — **or none, if reading it failed**. The
+    /// selection is what the reader asked about; a slow app or a spent budget while reading the
+    /// context used to throw the selection away with it. Only the reader moving on ends the read.
+    private static func contextOrNone(_ read: () throws(CaptureError) -> SentenceContext?) throws(CaptureError) -> SentenceContext? {
+        do throws(CaptureError) { return try read() } catch {
+            if error == .cancelled { throw error }
+            return nil
+        }
     }
 
     /// The sentences covering the whole selection: from the one holding its first character to the
@@ -277,8 +272,11 @@ enum SelectionReader {
         // Where the selection starts in the sentence, from the markers' indices when the app gives
         // them; checked against the text either way.
         var offset: Int?
+        // Indices from another process: checked, never trusted — `-` on them traps on overflow.
         if let selectionIndex = try ax.integer(host, "AXIndexForTextMarker", start),
-           let sentenceIndex = try ax.integer(host, "AXIndexForTextMarker", sentenceStart) {
+           let sentenceIndex = try ax.integer(host, "AXIndexForTextMarker", sentenceStart),
+           selectionIndex >= 0, sentenceIndex >= 0 {
+            // Both non-negative, so the difference cannot overflow — the check above is the guard.
             offset = selectionIndex - sentenceIndex
         }
         return MarkerSentence.context(raw: raw, selected: selected, reportedOffset: offset)
@@ -334,10 +332,12 @@ enum SelectionReader {
 
     static func selection(from capture: Capture, app: FrontApp, place: ReadingPlace) -> Outcome {
         guard let term = SelectedTerm(from: capture.text) else {
-            return .nothing("The selection in \(app.name) has no word in it.")
+            return .nothing(String(localized: "The selection in \(app.name) has no word in it.",
+                                   comment: "Lookup panel; the placeholder is the app's name"))
         }
         guard term.text.count <= maximumLength else {
-            return .nothing("The selection in \(app.name) is \(term.text.count) characters — too long to look up.")
+            return .nothing(String(localized: "The selection in \(app.name) is \(term.text.count) characters — too long to look up.",
+                                   comment: "Lookup panel; the placeholders are the app's name and a character count"))
         }
         let context = capture.context
         let rangeInSentence = context?.selection.map {
@@ -355,14 +355,24 @@ enum SelectionReader {
 
     static func message(for error: CaptureError, app: String) -> String {
         switch error {
-        case .notResponding: "\(app) did not answer Accessibility in time — it may be busy. Try again in a moment."
+        // **Localized where written** (ADR-0025): these reach the panel as its detail line.
+        case .notResponding:
+            String(localized: "\(app) did not answer Accessibility in time — it may be busy. Try again in a moment.",
+                   comment: "Lookup panel; the placeholder is the app's name")
         case .deadlineExceeded:
-            "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so it was stopped."
+            String(localized: "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so it was stopped.",
+                   comment: "Lookup panel; the placeholders are the app's name and a number of seconds")
         case .accessibilityDisabled:
-            "Accessibility access for XiaolaiDict is off. Allow it in \(PrivacySettings.accessibilityLocation)."
-        case .appUnavailable: "\(app) quit, or stopped answering Accessibility requests."
-        case .accessibilityRefused: "\(app) refused Accessibility requests — is the screen locked?"
-        case .cancelled: "A newer lookup replaced this one."
+            String(localized: "Accessibility access for XiaolaiDict is off. Allow it in \(PrivacySettings.accessibilityLocation).",
+                   comment: "Lookup panel; the placeholder is the System Settings list to grant it in")
+        case .appUnavailable:
+            String(localized: "\(app) quit, or stopped answering Accessibility requests.",
+                   comment: "Lookup panel; the placeholder is the app's name")
+        case .accessibilityRefused:
+            String(localized: "\(app) refused Accessibility requests — is the screen locked?",
+                   comment: "Lookup panel; the placeholder is the app's name")
+        case .cancelled:
+            String(localized: "A newer lookup replaced this one.", comment: "Lookup panel, when a lookup was superseded")
         }
     }
 

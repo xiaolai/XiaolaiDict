@@ -616,3 +616,101 @@ struct RepeatedRecordPremiseTests {
 extension Array {
     var oneAndOnly: Element? { count == 1 ? first : nil }
 }
+
+/// The reply reports its two stages, so the phrase's cost is read apart from the word's (WI-6).
+struct ReplyTimingTests {
+    /// One report per lookup, with the word and the phrase as separate figures. Red if the callback
+    /// is dropped, or called per stage.
+    @Test func aLookupReportsItsTwoStagesOnce() {
+        var reports: [(word: Duration, phrase: Duration)] = []
+        _ = DictionaryBridge.reply(to: .lookup(LookupRequest(term: "ephemeral"))) { reports.append(($0, $1)) }
+        #expect(reports.count == 1)
+        #expect(reports.allSatisfy { $0.word >= .zero && $0.phrase >= .zero })
+    }
+}
+
+/// **The root tag is read as a tag, not scanned** (audit round 2): an attribute's *value* is not a
+/// declaration, and a `>` inside a quoted value does not end the tag.
+struct RenderableRootTests {
+    private static let xhtml = "http://www.w3.org/1999/xhtml"
+
+    @Test func aValueThatMentionsXmlnsIsNotADeclaration() {
+        let out = DictionaryBridge.renderable(#"<html data-note=" xmlns=example"><body/></html>"#)
+        #expect(out.hasPrefix(#"<html xmlns="\#(Self.xhtml)""#), "a quoted value was read as a namespace declaration")
+    }
+
+    @Test func aRealDeclarationIsLeftAlone() {
+        let document = #"<html xmlns="urn:other" data-x="a>b"><body/></html>"#
+        #expect(DictionaryBridge.renderable(document) == document)
+    }
+
+    @Test func aGreaterThanInsideAValueDoesNotEndTheTag() {
+        let out = DictionaryBridge.renderable(#"<html data-x="a>b" xmlns="urn:mine"><body/></html>"#)
+        #expect(out == #"<html data-x="a>b" xmlns="urn:mine"><body/></html>"#, "the tag was cut at a > inside a value")
+    }
+}
+
+extension RenderableRootTests {
+    /// **A commented-out root is not the root.** Red if the search takes the first `<html` it finds.
+    @Test func aRootInACommentIsSkipped() {
+        let out = DictionaryBridge.renderable(#"<!-- <html> --><html><body/></html>"#)
+        #expect(out == #"<!-- <html> --><html xmlns="http://www.w3.org/1999/xhtml"><body/></html>"#)
+    }
+
+    /// **Nor one inside a processing instruction, a declaration or a CDATA section** (audit round 3,
+    /// #3). Comments were the only markup skipped, so `<html` in any of the others was taken as the root.
+    @Test func aRootInsideOtherNonElementMarkupIsSkipped() {
+        let xmlns = #" xmlns="http://www.w3.org/1999/xhtml""#
+        for prolog in [#"<?note <html> ?>"#, #"<!DOCTYPE html [ <!ENTITY e "<html>"> ]>"#, "<![CDATA[ <html> ]]>",
+                       // A quoted `>` or `]>` is text inside the declaration, not its end.
+                       #"<!DOCTYPE html SYSTEM "a>b"><!-- --><!ENTITY x "]> <html>">"#,
+                       #"<!DOCTYPE html [ <!ENTITY e "]> <html>"> ]>"#,
+                       // A processing instruction inside the subset is text up to its own `?>`.
+                       #"<!DOCTYPE html [<?note ]> <html> ?>]>"#] {
+            let out = DictionaryBridge.renderable(prolog + "<html><body/></html>")
+            #expect(out == prolog + "<html\(xmlns)><body/></html>", "the root was found inside \(prolog)")
+        }
+    }
+}
+
+/// **A phrase whose lookup failed says so** (audit round 3, #2). Its errors and unreadable records were
+/// discarded, so a phrase the framework could not read arrived exactly like one it had read and found
+/// nothing for — a failure rendering as confidently as a success.
+struct PhraseRetrievalTests {
+    private struct OnePhrase: PhraseFinding {
+        var isReady: Bool { true }
+        var isUnavailable: Bool { false }
+        func phrases(in sentence: String, at term: NSRange) -> [PhraseSpan] {
+            [PhraseSpan(phrase: "give up", location: 5, length: 7, separation: .none)]
+        }
+    }
+
+    private static let request = LookupRequest(term: "give", sentence: "They give up.", termLocation: 5, termLength: 4)
+
+    private static func retrieval(_ lookUp: @escaping (String) throws -> DictionaryLookup) -> PhraseRetrieval? {
+        guard case .found(let hits) = DictionaryBridge.phrase(for: request, using: OnePhrase(), lookingUp: lookUp)
+        else { return nil }
+        return hits.first?.retrieval
+    }
+
+    @Test func eachWayAPhraseLookupEndsIsCarried() {
+        #expect(Self.retrieval { _ in DictionaryLookup(entries: [], unreadable: []) } == .complete)
+        #expect(Self.retrieval { _ in DictionaryLookup(entries: [], unreadable: ["NOAD"]) } == .partial(unreadable: ["NOAD"]))
+        #expect(Self.retrieval { _ in throw DictionaryBridgeError.unavailable("gone") } == .failed)
+    }
+
+    /// **A phrase spelled as the term reuses the word's answer, status and all.** The reader selected
+    /// `give up` itself: its entries were the word's, seeded so they are not fetched twice, and the
+    /// word's unreadable dictionaries were dropped on the way — the phrase then read as complete.
+    @Test func aPhraseThatIsTheTermKeepsTheWordsStatus() {
+        let entry = DictionaryEntry(
+            dictionary: DictionaryIdentity(name: "Test", identifier: "t", version: "1"),
+            headword: "give up", lookedUp: "give up", html: "<p/>", document: EntryDocument.parse("<p/>"))
+        let request = LookupRequest(term: "give up", sentence: "They give up.", termLocation: 5, termLength: 7)
+        let answer = DictionaryBridge.phrase(
+            for: request, using: OnePhrase(), word: [entry], wordUnreadable: ["NOAD"],
+            lookingUp: { _ in Issue.record("the term was fetched again"); return DictionaryLookup(entries: [], unreadable: []) })
+        guard case .found(let hits) = answer else { Issue.record("no phrase: \(answer)"); return }
+        #expect(hits.first?.retrieval == .partial(unreadable: ["NOAD"]))
+    }
+}

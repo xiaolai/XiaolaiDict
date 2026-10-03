@@ -339,7 +339,9 @@ struct PanelRequestIdentityTests {
             .appending(path: "Sources/XiaolaiDict/LookupPanel.swift")
         let text = try String(contentsOf: panel, encoding: .utf8)
         #expect(!text.isEmpty)
-        #expect(text.contains("guard let request = content.request else { return }"))
+        // The card's own request reaches the wiring, and every action guards on it.
+        #expect(text.contains("request: content.request"))
+        #expect(text.contains("guard let request else { return }"))
         // **Every spelling of the counter, not one that was deleted.** This forbade
         // `controller.currentRequest`, a symbol removed in b3aac6d, so the only source text it
         // could match was text nobody can compile. Matching `controller.current` covers that name
@@ -536,5 +538,80 @@ struct PanelTestIsolationTests {
         #expect(
             !code.contains(bare),
             "a bare controller defaults to HotkeyCenter.shared and claims the reader's own Escape")
+    }
+}
+
+/// **A panel that never drew is put away** (audit round 3, #18). The visibility check gave up and the
+/// lookup stopped, but the content, the click monitors and the Escape claim stayed armed — so a
+/// window that arrived late drew an abandoned loading card, and Escape stayed taken from every app.
+@MainActor
+struct UndrawnPanelTests {
+    final class Dismissals { var count = 0 }
+
+    @Test func aPanelThatNeverDrewIsClosedWhenItsCheckGivesUp() async {
+        let dismissals = Dismissals()
+        let panel = LookupPanelController(
+            hotkeys: HotkeyCenter(backend: FakeBackend()),
+            windows: LookupPanelController.Windows(
+                open: { _ in true }, dismiss: { _ in dismissals.count += 1; return true }, drawn: { _ in false }))
+        let ticket = panel.newRequest()
+        #expect(panel.show(.nothingToLookUp("x"), near: UpPoint(CGPoint(x: 100, y: 500)), for: ticket))
+        #expect(await panel.seenOnScreen(ticket) == false)
+        #expect(panel.model.content == nil, "an abandoned card was left for a late window to draw")
+        #expect(!panel.isCurrent(ticket), "the abandoned request still holds the panel")
+        #expect(dismissals.count == 1)
+    }
+
+    /// **Only its own panel.** A check that gives up for a superseded ticket must not close the
+    /// lookup that replaced it.
+    @Test func aSupersededCheckLeavesTheNewerPanelAlone() async {
+        let dismissals = Dismissals()
+        let panel = LookupPanelController(
+            hotkeys: HotkeyCenter(backend: FakeBackend()),
+            windows: LookupPanelController.Windows(
+                open: { _ in true }, dismiss: { _ in dismissals.count += 1; return true }, drawn: { _ in false }))
+        let older = panel.newRequest()
+        panel.show(.nothingToLookUp("x"), near: UpPoint(CGPoint(x: 100, y: 500)), for: older)
+        let newer = panel.newRequest()
+        panel.show(.nothingToLookUp("y"), near: UpPoint(CGPoint(x: 100, y: 500)), for: newer)
+        #expect(await panel.seenOnScreen(older) == false)
+        #expect(panel.isCurrent(newer))
+        #expect(panel.model.content != nil)
+        #expect(dismissals.count == 0)
+    }
+}
+
+/// **The compositor listing the window is not the card being drawn** (audit round 3, #17). A reused
+/// panel is already on screen when the next lookup's content is set, so "the window is listed" was
+/// true before SwiftUI had drawn the new card — and a lookup could be recorded for a card the reader
+/// never saw. The scene now acknowledges each content it renders, and "seen" needs both.
+@MainActor
+struct RenderAcknowledgementTests {
+    private func panel() -> LookupPanelController {
+        LookupPanelController(
+            hotkeys: HotkeyCenter(backend: FakeBackend()),
+            windows: LookupPanelController.Windows(open: { _ in true }, dismiss: { _ in true }, drawn: { _ in true }))
+    }
+
+    @Test func aListedWindowIsNotSeenUntilItsContentIsRendered() async {
+        let panel = panel()
+        let ticket = panel.newRequest()
+        #expect(panel.show(.nothingToLookUp("x"), near: UpPoint(CGPoint(x: 100, y: 500)), for: ticket))
+        let seen = Task { await panel.seenOnScreen(ticket) }
+        await Task.yield()
+        panel.model.acknowledgeRendered(panel.model.generation)
+        #expect(await seen.value, "a rendered, listed panel was not seen")
+    }
+
+    /// The defect itself: the window is up from the last lookup, and the new card has not rendered.
+    @Test func aReusedWindowShowingTheLastCardIsNotThisLookupSeen() async {
+        let panel = panel()
+        let first = panel.newRequest()
+        panel.show(.nothingToLookUp("x"), near: UpPoint(CGPoint(x: 100, y: 500)), for: first)
+        panel.model.acknowledgeRendered(panel.model.generation)
+        let second = panel.newRequest()
+        panel.show(.nothingToLookUp("y"), near: UpPoint(CGPoint(x: 100, y: 500)), for: second)
+        #expect(await panel.seenOnScreen(second) == false,
+                "the last card's rendering was taken as this lookup's")
     }
 }

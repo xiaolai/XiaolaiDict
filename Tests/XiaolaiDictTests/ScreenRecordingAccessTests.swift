@@ -1,88 +1,141 @@
 import Foundation
 import Synchronization
 import Testing
+import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
-/// Asking for Screen Recording, which XiaolaiDict never did.
+/// **Hover never asks for Screen Recording; it only finds out.**
 ///
-/// Accessibility is asked for with a prompt; Screen Recording was assumed. ScreenCaptureKit does
-/// not prompt on its own — it fails with "the user declined TCCs" — so a reader who has not granted
-/// it gets nothing from the recogniser and is never told why. Measured on the E2E machine, where
-/// every Accessibility stage passed and the one capture path could not run.
+/// This type had an `ensure()` that raised the system prompt on a declined probe, and the
+/// recogniser called it — so a hover, a gesture made mid-sentence in another app, could put a
+/// permission dialog on the reader's screen, stopped only by a cancellation check that fired once
+/// the 5 s capture deadline had passed. There is nothing here to prompt with now: the type is a
+/// probe, and these check that the recogniser answers each of the three values without a prompt.
 struct ScreenRecordingAccessTests {
-    private func access(
-        _ found: PermissionProbe, grantedByAsking: Bool = false
-    ) -> (ScreenRecordingAccess, Counter) {
-        let counter = Counter()
-        return (ScreenRecordingAccess(
-            probe: { found },
-            request: { counter.bump(); return grantedByAsking }), counter)
-    }
-
-    /// Checked `Sendable`, with a lock. It is read from the test and written from an `@Sendable`
-    /// closure, and `@unchecked` asserted a safety nothing provided — harmless while every test
-    /// awaits one call, and an unsafe contract for the next one that does not.
+    /// Counts probes. Checked `Sendable`, with a lock: read from the test, written from an
+    /// `@Sendable` closure.
     final class Counter: Sendable {
         private let count = Mutex(0)
-        var asks: Int { count.withLock { $0 } }
+        var probes: Int { count.withLock { $0 } }
         func bump() { count.withLock { $0 += 1 } }
     }
 
-    @Test func alreadyGrantedIsAllowedWithoutAsking() async {
-        let (permission, counter) = access(.granted)
-        #expect(await permission.ensure() == .granted)
-        #expect(counter.asks == 0, "a granted permission must not raise a prompt")
+    private func recogniser(_ found: PermissionProbe) -> (ScreenTextRecogniser, Counter) {
+        let counter = Counter()
+        return (ScreenTextRecogniser(access: ScreenRecordingAccess(probe: { counter.bump(); return found })), counter)
     }
 
-    @Test func aDeclinedPermissionAsksAndIsAllowedWhenTheReaderAgrees() async {
-        let (permission, counter) = access(.declined, grantedByAsking: true)
-        #expect(await permission.ensure() == .granted)
-        #expect(counter.asks == 1)
+    private static let window = ListedWindow(pid: 1, bounds: CGRect(x: 0, y: 0, width: 10, height: 10), windowID: 1)
+
+    /// A declined grant is reported as declined — the refusal that names where to go — and asked
+    /// once. **The type has no request to make**, so no path through it can raise a dialog.
+    @Test func aDeclinedGrantIsReportedNotRequested() async {
+        let (recogniser, counter) = recogniser(.declined)
+        await #expect(throws: RecognitionError.screenRecordingDenied) {
+            try await recogniser.read(at: .zero, window: Self.window, policy: .shipped)
+        }
+        #expect(counter.probes == 1)
     }
 
-    /// A refusal that stays refused. The prompt appears once; afterwards macOS shows nothing and
-    /// the reader has to be sent to Settings, which is why the refusal carries a location.
-    @Test func aRefusalIsReportedRatherThanRetriedForever() async {
-        let (permission, counter) = access(.declined, grantedByAsking: false)
-        #expect(await permission.ensure() == .declined)
-        #expect(counter.asks == 1)
+    /// A probe that could not tell is not a refusal, and must not be reported as one: it sends a
+    /// reader whose grant has stood for days to a list where the switch is already on.
+    @Test func anUnreadableGrantIsNeitherARefusalNorAGrant() async {
+        let (recogniser, _) = recogniser(.couldNotTell)
+        await #expect(throws: RecognitionError.screenRecordingUnreadable) {
+            try await recogniser.read(at: .zero, window: Self.window, policy: .shipped)
+        }
     }
 
-    /// **The regression.** A probe that could not tell is not a refusal, and asking the system about
-    /// it raises a dialog that grants nothing — measured 2026-09-25 against a Mac whose grant had
-    /// stood for three days and whose TCC rows the dialog left untouched.
-    ///
-    /// The assertion is the *count*, not the answer: returning `couldNotTell` while still prompting
-    /// would satisfy a test that only read the result, and the prompt is the thing the reader saw.
-    @Test func anUnreadableGrantNeverRaisesAPrompt() async {
-        let (permission, counter) = access(.couldNotTell, grantedByAsking: true)
-        #expect(await permission.ensure() == .couldNotTell)
-        #expect(counter.asks == 0, "a probe that could not tell must not raise a system dialog")
+    /// **The hover path turns a refusal into the notice, not into a prompt.** The reader reads
+    /// `.needsScreenRecording`, which the watcher hands to the app to say once.
+    @MainActor
+    @Test func aRefusedCaptureAsksTheReaderNotTheSystem() async {
+        let screen = ScriptedScreenWords()
+        screen.windows = [Self.window]
+        screen.recognition = .failure(RecognitionError.screenRecordingDenied)
+        let reader = HoverReader(policy: { .shipped }, captureDeadline: HoverFixtures.patient, source: screen)
+        let outcome = await reader.read(
+            at: CGPoint(x: 5, y: 5), modifiersHeld: [.option], tappedTwice: false,
+            pointerStillFor: .seconds(1), begin: { 1 })
+        guard case .needsScreenRecording(request: 1) = outcome else {
+            Issue.record("a refused capture answered \(outcome)")
+            return
+        }
     }
 
-    /// **A hover the reader walked away from must not raise a dialog.** The prompt is a system
-    /// window that appears attached to nothing they asked for, and — measured on 2026-09-25 — it
-    /// can grant nothing, because the permission was already granted.
-    ///
-    /// The count is the assertion. Returning `.declined` while still prompting satisfies any test
-    /// that reads only the result, and the prompt is the whole of what the reader sees.
-    @Test func acancelledLookupNeverRaisesAPrompt() async {
-        let (permission, counter) = access(.declined, grantedByAsking: true)
-        let task = Task { await permission.ensure() }
-        task.cancel()
-        _ = await task.value
-        #expect(counter.asks == 0, "an abandoned hover put a permission dialog on the screen")
+    /// An app whose panel opens, with no real hot key behind it.
+    @MainActor
+    private func app() -> XiaolaiDictApp {
+        let suite = TemporaryDefaults.suite()
+        return XiaolaiDictApp(defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
+                              models: .temporary(defaults: suite), panelWindows: .alwaysOpen)
     }
 
-    /// And it must not be laundered into a grant either — the capture would then fail with a
-    /// message about capture rather than about consent, which is the older defect this file opens
-    /// by describing.
-    @Test func anUnreadableGrantIsNotTreatedAsPermission() async {
-        let (permission, _) = access(.couldNotTell)
-        #expect(await permission.ensure() != .granted)
+    /// **Told once per launch.** The second hover that needs the pixels is a log line.
+    @MainActor
+    @Test func theNoticeIsShownOncePerLaunch() {
+        let app = app()
+        #expect(app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()))
+        #expect(!app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()),
+                "the notice was shown twice")
+    }
+
+    /// **A notice under a superseded number shows nothing, and is not spent.** The hover asked
+    /// before the reader pressed the shortcut; its notice must not replace that lookup's panel.
+    /// Red if the notice takes a fresh number instead of claiming its own.
+    @MainActor
+    @Test func aNoticeForASupersededHoverReplacesNothing() {
+        let app = app()
+        let hover = app.beginRequest()
+        app.lookUpWord("tide")
+        #expect(!app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: hover))
+        #expect(app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()),
+                "a refused claim spent the launch's one notice")
+    }
+
+    /// **A notice the compositor never drew is not spent.** `show` answers for the request; only
+    /// the compositor is evidence the reader saw it. Red if the notice is spent on `show` alone.
+    @MainActor
+    @Test func aNoticeNeverDrawnIsNotSpent() async {
+        let suite = TemporaryDefaults.suite()
+        let app = XiaolaiDictApp(defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
+                                 models: .temporary(defaults: suite),
+                                 panelWindows: LookupPanelController.Windows(open: { _ in true }, dismiss: { _ in true }, drawn: { _ in false }))
+        #expect(app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()))
+        await HoverFixtures.settle { app.hover.screenRecordingNotice == .unsaid }
+        #expect(app.hover.screenRecordingNotice == .unsaid, "a notice nobody saw was spent")
+    }
+
+    /// **A lookup that drew nothing still ends its timeline** (audit round 3, #39) — as not shown,
+    /// never as recorded or superseded. Red if the runner's nil skips `finish`.
+    @MainActor
+    @Test func aLookupNeverDrawnEndsItsTimingsAsNotShown() async throws {
+        let suite = TemporaryDefaults.suite()
+        let app = XiaolaiDictApp(defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
+                                 models: .temporary(defaults: suite),
+                                 panelWindows: LookupPanelController.Windows(open: { _ in true }, dismiss: { _ in true }, drawn: { _ in false }))
+        app.lookUpWord("tide")
+        let lookup = try #require(app.lookup)
+        await lookup.value
+        let line = try #require(app.timings.lastLine)
+        #expect(line.hasSuffix(" ms") && line.contains("not shown"), "the line was \(line)")
+    }
+
+    /// **A notice the panel could not show is not spent.** Red if the flag is set before showing.
+    @MainActor
+    @Test func aNoticeThatCouldNotBeShownIsNotSpent() {
+        let suite = TemporaryDefaults.suite()
+        let opens = Mutex(0)
+        let app = XiaolaiDictApp(defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()),
+                                 models: .temporary(defaults: suite),
+                                 panelWindows: LookupPanelController.Windows(
+                                    open: { _ in opens.withLock { $0 += 1; return $0 > 1 } }, dismiss: { _ in true }))
+        #expect(!app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()), "the panel did not open")
+        #expect(app.screenRecordingNeeded(at: UpPoint(x: 1, y: 1), request: app.beginRequest()),
+                "a notice that was never shown spent the launch's one")
     }
 }
 

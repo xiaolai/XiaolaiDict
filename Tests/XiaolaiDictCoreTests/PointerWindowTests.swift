@@ -10,45 +10,35 @@ struct PointerWindowTests {
         ListedWindow(pid: pid, bounds: rect)
     }
 
-    @Test func theFrontmostWindowContainingThePointOwnsIt() {
-        let point = CGPoint(x: 500, y: 400)
-        let windows = [
-            window(11, CGRect(x: 400, y: 300, width: 300, height: 300)),
-            window(22, CGRect(x: 0, y: 0, width: 1_400, height: 900)),
-        ]
-        #expect(PointerWindow.owner(at: point, in: windows) == 11)
-    }
-
-    /// The order is the answer: the same two windows the other way round give the other owner.
-    /// Without this the test above would pass on a rule that simply searched the whole list.
-    @Test func aWindowBehindAnotherDoesNotOwnThePoint() {
+    /// **Any window of ours at the point, at any depth, refuses the hover** — the rule `owner`'s
+    /// topmost-window answer was replaced by, because the topmost window is not proof of where
+    /// Accessibility's hit test lands.
+    @Test func ourWindowAnywhereUnderThePointCounts() {
         let point = CGPoint(x: 500, y: 400)
         let windows = [
             window(22, CGRect(x: 0, y: 0, width: 1_400, height: 900)),
-            window(11, CGRect(x: 400, y: 300, width: 300, height: 300)),
+            window(99, CGRect(x: 400, y: 300, width: 300, height: 300)),
         ]
-        #expect(PointerWindow.owner(at: point, in: windows) == 22)
+        #expect(PointerWindow.ours(at: point, in: windows, ours: 99))
     }
 
-    @Test func aWindowThatDoesNotHoldThePointIsSkipped() {
-        let point = CGPoint(x: 50, y: 50)
+    /// Ours elsewhere on the screen does not count: the control for the test above.
+    @Test func ourWindowElsewhereDoesNotCount() {
         let windows = [
-            window(11, CGRect(x: 400, y: 300, width: 300, height: 300)),
+            window(99, CGRect(x: 400, y: 300, width: 300, height: 300)),
             window(22, CGRect(x: 0, y: 0, width: 100, height: 100)),
         ]
-        #expect(PointerWindow.owner(at: point, in: windows) == 22)
+        #expect(!PointerWindow.ours(at: CGPoint(x: 50, y: 50), in: windows, ours: 99))
     }
 
-    /// Nil, not a pid: the pointer over the desktop is owned by nobody, and answering with the first
-    /// window in the list would make every such hover look like it was over that app.
-    @Test func noWindowUnderThePointIsNobodysWindow() {
-        #expect(PointerWindow.owner(at: CGPoint(x: -9_000, y: -9_000), in: [
-            window(11, CGRect(x: 0, y: 0, width: 100, height: 100)),
-        ]) == nil)
+    /// Our own window counts even while invisible — one fading in is still serviced in-process.
+    @Test func ourInvisibleWindowStillCounts() {
+        let fading = ListedWindow(pid: 99, bounds: CGRect(x: 0, y: 0, width: 100, height: 100), alpha: 0)
+        #expect(PointerWindow.ours(at: CGPoint(x: 10, y: 10), in: [fading], ours: 99))
     }
 
-    @Test func anEmptyListOwnsNothing() {
-        #expect(PointerWindow.owner(at: .zero, in: []) == nil)
+    @Test func anEmptyListHasNothingOfOurs() {
+        #expect(!PointerWindow.ours(at: .zero, in: [], ours: 99))
     }
 
     /// **The panel is at `.floating`, so a level filter would miss exactly the window this is for.**
@@ -70,8 +60,8 @@ struct PointerWindowTests {
             ],
         ])
         #expect(listed == [
-            ListedWindow(pid: 11, bounds: CGRect(x: 10, y: 20, width: 30, height: 40)),
-            ListedWindow(pid: 22, bounds: CGRect(x: 0, y: 0, width: 800, height: 600)),
+            ListedWindow(pid: 11, bounds: CGRect(x: 10, y: 20, width: 30, height: 40), layer: 3),
+            ListedWindow(pid: 22, bounds: CGRect(x: 0, y: 0, width: 800, height: 600), layer: 0),
         ])
     }
 

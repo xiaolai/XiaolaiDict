@@ -54,10 +54,25 @@ final class HoverControl {
     /// `self` is read at decision time, not captured by value — a copy taken here would be the
     /// never-changing pause this type exists to replace.
     private func makeWatcher() -> HoverWatcher {
-        HoverWatcher(
+        let watcher = HoverWatcher(
             policy: { [weak self] in self?.policy ?? .shipped },
             pause: { [weak self] in self?.pauseSwitch ?? HoverPause() })
+        watcher.onCaptureHealth = { [weak self] in self?.captureHealth = $0 }
+        return watcher
     }
+
+    /// Whether reading the screen is answering — **observed**, so Settings can say when it is not.
+    /// A capture that never finishes holds the one-capture guard for good, and hover over a
+    /// terminal stops working; this is the reader's way to find out why.
+    private(set) var captureHealth = CaptureHealth.answering
+
+    /// Whether this launch has told the reader hover needs Screen Recording. **Hover's state**, so it
+    /// lives with hover rather than on the app delegate (ADR-0011).
+    enum Notice: Equatable { case unsaid, showing, said }
+    @ObservationIgnored var screenRecordingNotice = Notice.unsaid
+
+    /// Whether the screen capture has stopped answering, as Settings shows it.
+    var isCaptureStuck: Bool { captureHealth != .answering }
 
     /// Whether the reader has hover on. Defaults to on for a reader who has never chosen, and
     /// remembers one who has. **Through the injected suite**, never `.standard`.
@@ -105,6 +120,4 @@ final class HoverControl {
         if on { watcher.start() } else { watcher.stop() }
         isWatching = watcher.isWatching
     }
-
-    func toggle() { setEnabled(!isEnabled) }
 }

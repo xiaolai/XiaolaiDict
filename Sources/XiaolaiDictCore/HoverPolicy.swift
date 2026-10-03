@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import XiaolaiDictBase
 
 /// **How the reader asks** — the gesture, which is a separate question from which key it uses.
 ///
@@ -176,6 +177,9 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
     /// so what is refused is *accepting its answer*, which is the part that would otherwise deliver
     /// a panel and remember a word for a hover nobody was waiting for.
     case cancelled
+    /// A newer request replaced this one before its word could be shown — another tap, or a lookup
+    /// the reader asked for at the panel while this one was still being read.
+    case superseded
 
     public var reason: String {
         switch self {
@@ -189,6 +193,7 @@ public enum HoverRefusal: String, Sendable, Equatable, CaseIterable {
         case .captureInFlight: "A capture is already running."
         case .scriptNotStudied: "This word is not in a script you study. Change that under Hover in Settings."
         case .cancelled: "The pointer moved on before the word could be read."
+        case .superseded: "A newer request replaced this one."
         }
     }
 }
@@ -198,20 +203,34 @@ public enum HoverDecision: Sendable, Equatable {
     case stayQuiet(HoverRefusal)
 }
 
+/// What could be said about the site under the pointer — **three-valued, because two of the
+/// answers are not the same "no host".** Text that is not a web page has no site to exclude; a page
+/// whose address could not be read might be any site at all, and an exclusion is a promise about
+/// every one of them.
+public enum HostReading: Sendable, Equatable {
+    /// The page's host.
+    case known(String)
+    /// Not web content: no page, so no site.
+    case notWebContent
+    /// It may be a page, and its address could not be read.
+    case unreadable
+}
+
 /// Where the pointer is, in terms a decision can be made about.
 public struct HoverSite: Sendable, Equatable {
     public let bundleID: String?
-    /// The page's host, when the app is a browser and could say.
-    public let host: String?
+    /// The site under the pointer, where it has been asked.
+    public let host: HostReading
     /// Which word the pointer is over, if the capture already knows — used only to tell "the same
     /// word again" from "a new word".
     public let wordKey: String?
 
-    public init(bundleID: String?, host: String? = nil, wordKey: String? = nil) {
+    public init(bundleID: String?, reading host: HostReading = .notWebContent, wordKey: String? = nil) {
         self.bundleID = bundleID
         self.host = host
         self.wordKey = wordKey
     }
+
 }
 
 /// Whether a hover may fire. All three gates are P0 in the feature ledger, and all three have to
@@ -353,8 +372,8 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
             guard tappedTwice else { return .stayQuiet(.notTapped) }
         }
         if let pausedUntil, now < pausedUntil { return .stayQuiet(.paused) }
-        if let bundleID = site.bundleID, excludedApps.contains(bundleID) { return .stayQuiet(.excludedApp) }
-        if let host = site.host, Self.isExcluded(host, by: excludedHosts) { return .stayQuiet(.excludedSite) }
+        if let bundleID = site.bundleID, excludes(app: bundleID) { return .stayQuiet(.excludedApp) }
+        if refuses(site.host) { return .stayQuiet(.excludedSite) }
         if captureInFlight { return .stayQuiet(.captureInFlight) }
         guard pointerStillFor >= .milliseconds(settleMilliseconds) else { return .stayQuiet(.stillMoving) }
         if let wordKey = site.wordKey, wordKey == lastLookedUp { return .stayQuiet(.samePlace) }
@@ -377,12 +396,60 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
         return scripts.contains(script)
     }
 
+    /// Whether `bundleID` is an app hover never reads — the one predicate the gate and
+    /// `CaptureAuthorization` both ask.
+    public func excludes(app bundleID: String) -> Bool { excludedApps.contains(bundleID) }
+
+    /// Whether the site under the pointer is excluded. **An unreadable address is refused while the
+    /// list has anything in it** — the reader asked for those sites to be left alone, and a page
+    /// that cannot be named might be one of them. With an empty list nothing is refused, so a
+    /// reader who excluded nothing pays nothing for this.
+    public func refuses(_ host: HostReading) -> Bool {
+        switch host {
+        case .known(let name): Self.isExcluded(name, by: excludedHosts)
+        case .notWebContent: false
+        case .unreadable: !excludedHosts.isEmpty
+        }
+    }
+
+    /// The host a reader means by what they typed — **a name, or a pasted address reduced to its
+    /// host** — or nil where neither can be read. A pasted `https://docs.example.com/page` used to be
+    /// stored whole and could never match a page's host, so the exclusion silently covered nothing.
+    public static func siteHost(fromTyped typed: String) -> String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Read as an address either way, so a pasted URL and a typed `example.com:443` both give the
+        // host alone — a page reports no port. An IPv6 literal is not a bare address, and is kept.
+        let asAddress = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        let candidate = URL(string: asAddress)?.host(percentEncoded: false) ?? trimmed
+        let host = normalisedHost(candidate.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+        // An address of either family — names (after IDNA, so ASCII), or an IPv6 literal.
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-:")
+        guard !host.isEmpty, host.unicodeScalars.allSatisfy(allowed.contains), !host.hasPrefix("."),
+              !host.contains(".."), host.split(separator: ".").allSatisfy({ !$0.hasPrefix("-") && !$0.hasSuffix("-") })
+        else { return nil }
+        // **A colon left in the host is an IPv6 literal, or the input was malformed** — a port was
+        // already taken off above. Stored as typed, `example.com:abc` was an exclusion no page's host
+        // could ever equal, so the system's own parser decides.
+        if host.contains(":") {
+            var address = in6_addr()
+            guard inet_pton(AF_INET6, host, &address) == 1 else { return nil }
+        }
+        return host
+    }
+
     /// Host names are case-insensitive and may carry a trailing root dot, so `EXAMPLE.COM.` and
     /// `example.com` are the same site. Compared without normalising, an exclusion the reader set
     /// is bypassed by the capitalisation of a link they clicked — which is not an exclusion.
+    ///
+    /// **In its IDNA form**: `bücher.de` typed by the reader is `xn--bcher-kva.de` in every address a
+    /// page reports, and compared as typed it would never match.
     public static func normalisedHost(_ host: String) -> String {
         var normalised = host.trimmingCharacters(in: .whitespaces).lowercased()
         while normalised.hasSuffix(".") { normalised.removeLast() }
+        if !normalised.contains(":"), normalised.unicodeScalars.contains(where: { !$0.isASCII }),
+           let ascii = URL(string: "https://\(normalised)")?.host(percentEncoded: false) {
+            normalised = ascii.lowercased()
+        }
         return normalised
     }
 
@@ -391,8 +458,10 @@ public struct HoverPolicy: Sendable, Equatable, Codable {
     static func isExcluded(_ host: String, by excluded: Set<String>) -> Bool {
         let host = normalisedHost(host)
         guard !host.isEmpty else { return false }
-        return excluded.contains { name in
-            let name = normalisedHost(name)
+        return excluded.contains { stored in
+            // **What was stored is read as an address too**: lists saved before `siteHost` existed
+            // can hold whole URLs, and compared as text they matched nothing.
+            let name = siteHost(fromTyped: stored) ?? normalisedHost(stored)
             guard !name.isEmpty else { return false }
             return host == name || host.hasSuffix(".\(name)")
         }
@@ -433,9 +502,7 @@ public struct HoverPause: Sendable, Equatable {
     /// anything under a second expired the moment it was set. Every duration the menu offers today
     /// is a whole number of seconds, which is what kept it invisible.
     public mutating func pause(for duration: Duration, from now: Date) {
-        let parts = duration.components
-        until = now.addingTimeInterval(
-            TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18)
+        until = now.addingTimeInterval(duration.seconds)
     }
 
     public mutating func resume() {
