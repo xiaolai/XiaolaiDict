@@ -54,7 +54,16 @@ def identity(kind, index):
 
 
 def seed(ledger, lookup_id, output):
+    # Closed on every path: a connection left to the collector leaked one per seeding, which the
+    # Python suite reported as a ResourceWarning on each run.
     db = sqlite3.connect(ledger)
+    try:
+        seed_into(db, lookup_id, output)
+    finally:
+        db.close()
+
+
+def seed_into(db, lookup_id, output):
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     original = dict(db.execute("SELECT * FROM lookups WHERE id=?", (lookup_id,)).fetchone())
