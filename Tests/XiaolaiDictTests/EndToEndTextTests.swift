@@ -47,7 +47,9 @@ struct EndToEndTextTests {
     /// A fourth would be invisible here, which is why `everyGrepInTheScriptIsOneThisTestCanRead`
     /// accounts for every `grep` in the file rather than trusting this list.
     private static let matchers = [
-        #"grep\s+(?:-[A-Za-z0-9]+\s+)*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')"#,
+        // **`grep`, not `pgrep`.** Unanchored, this matched inside `pgrep -xq "Google Chrome"`, which
+        // names a process and asserts nothing the app says.
+        #"(?<![A-Za-z])grep\s+(?:-[A-Za-z0-9]+\s+)*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')"#,
         #"\*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')\*"#,
         #"(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')\s+in\s"#,
     ]
@@ -291,6 +293,15 @@ struct EndToEndTextTests {
     ]
 
     // MARK: - The checks
+
+    /// A process name is not reader wording: `pgrep` is matched as nothing, `grep` as before.
+    @Test func aProcessLookupIsNotAPhrase() throws {
+        let found = try Self.phrases(in: """
+            pgrep -xq "Google Chrome" && running=yes
+            grep -q "Looking up the word" "$log"
+            """)
+        #expect(found == ["Looking up the word"])
+    }
 
     @Test func everyPhraseTheHarnessLooksForIsStillSomethingTheAppSays() throws {
         let text = try Self.readerText()
