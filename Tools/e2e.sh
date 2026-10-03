@@ -1295,10 +1295,10 @@ print(f"{r['text']!r} via {r['captureSource']} in {r['milliseconds']:.0f} ms")
 HOVERPY
 }
 
-hover_at() {  # hover_at <label> <bundle-id> <expected capture source>
-    local label=$1 app_id=$2 want=$3
+hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-point flag]
+    local label=$1 app_id=$2 want=$3 flag=${4:-}
     local point reading summary
-    if ! point=$("$helpers/word-point" "$app_id" 2>&1); then
+    if ! point=$("$helpers/word-point" "$app_id" $flag 2>&1); then
         flunk "$label: could not find a word to point at ($point)"; return
     fi
     if ! reading=$("$exe" --read-point $point 2>&1); then
@@ -1315,6 +1315,27 @@ open -a TextEdit "$helpers/notes.txt"; sleep 2
 hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
 open -a Safari "$helpers/page.html"; sleep 3
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers
+# **Chrome.** It builds no page tree for `AXManualAccessibility` — measured 2026-10-03, refused as
+# unsupported — only once told an assistive client is reading (`AXEnhancedUserInterface`), which the
+# reader asks after a hover that found nothing (`ChromiumEscalationTests` hold that). Told here first,
+# the hover reads Chrome's own text **through the bounds scan** — measured: Chrome lists the text-marker
+# attributes and answers them empty at the pointer, so the read falls through to the third dialect,
+# which is the one this check exists to cover. A Chrome the run had to start is quit again; one the
+# machine was already running is left.
+if [ -d "/Applications/Google Chrome.app" ]; then
+    chrome_was_running=no
+    pgrep -xq "Google Chrome" && chrome_was_running=yes
+    quit_chrome() {
+        [ "$chrome_was_running" = yes ] && return 0
+        osascript -e 'quit app id "com.google.Chrome"' >/dev/null 2>&1
+    }
+    at_exit quit_chrome
+    open -a "Google Chrome" "$helpers/page.html"; sleep 4
+    hover_at "hover: Chrome, told an assistive client is reading, answers the bounds-scan dialect" \
+        com.google.Chrome accessibilityBoundsScan --assistive
+else
+    flunk "hover: Google Chrome is not installed on this machine, so the Chromium dialect is untested"
+fi
 fi
 
 if want drawer; then

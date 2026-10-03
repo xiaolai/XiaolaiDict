@@ -1,4 +1,4 @@
-// word-point <bundle-id>: the screen point of a word in that app's text, as "X Y".
+// word-point <bundle-id> [--assistive]: the screen point of a word in that app's text, as "X Y".
 //
 // Finds a text-bearing element through Accessibility and returns a point inside its first line.
 // It reads *position and size* attributes; `XiaolaiDict --read-point` then reads the word through the
@@ -6,9 +6,13 @@
 import AppKit
 import ApplicationServices
 
-guard CommandLine.arguments.count == 2 else {
-    FileHandle.standardError.write(Data("usage: word-point <bundle-id>\n".utf8)); exit(64)
+guard (2...3).contains(CommandLine.arguments.count) else {
+    FileHandle.standardError.write(Data("usage: word-point <bundle-id> [--assistive]\n".utf8)); exit(64)
 }
+/// Tell the app an assistive client is reading it — what Chrome needs before it builds a page tree, and
+/// what XiaolaiDict's reader does after a hover that found nothing. **Only when asked**: it makes an app
+/// build its whole tree for the rest of its run, and the stages after this one share the machine.
+let assistive = CommandLine.arguments.dropFirst(2).first == "--assistive"
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
@@ -64,12 +68,22 @@ func webAreas(from roots: [AXUIElement], limit: Int = 600) -> [AXUIElement] {
     return found
 }
 
-// Breadth-first for the first element that both has text and knows where it is.
-var queue: [AXUIElement] = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
-let pages = webAreas(from: queue)
-if let box = firstTextElement(from: pages.isEmpty ? queue : pages) {
-    print("\(Int(box.minX + 24)) \(Int(box.minY + 10))")
-    exit(0)
+// **Woken first, and given time to fill in.** A Chromium tree exposes no page until a client sets
+// `AXManualAccessibility` — the write XiaolaiDict's own reader makes — and then builds it
+// asynchronously, so the first walks after waking find only the window chrome. Harmless for an app
+// that has no such attribute: the write is refused and nothing else changes.
+AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+if assistive { AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) }
+var queue: [AXUIElement] = []
+for _ in 0..<30 {
+    queue = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
+    let pages = webAreas(from: queue)
+    // Breadth-first for the first element that both has text and knows where it is.
+    if let box = firstTextElement(from: pages.isEmpty ? queue : pages) {
+        print("\(Int(box.minX + 24)) \(Int(box.minY + 10))")
+        exit(0)
+    }
+    Thread.sleep(forTimeInterval: 0.1)
 }
 var head = 0
 while head < queue.count, head < 600 {
