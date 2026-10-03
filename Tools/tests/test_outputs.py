@@ -15,6 +15,8 @@ from fixtures import (
     GOLDEN,
     MINIMUM_MACOS,
     OUTPUTS,
+    REPO,
+    TOOLS,
     TRAY,
     Workspace,
     artwork,
@@ -219,7 +221,9 @@ class Outputs(unittest.TestCase):
         compiled = ws.resources.parent / "compiled"
         compiled.mkdir()
         proc = subprocess.run(
-            ["xcrun", "actool", "--compile", str(compiled), "--app-icon", "XiaolaiDict",
+            # Through the wrapper the build uses, which takes back the render actool's helper leaves
+            # in the per-user temporary directory — this test leaked one on every run.
+            [str(TOOLS / "actool.sh"), "--compile", str(compiled), "--app-icon", "XiaolaiDict",
              "--output-partial-info-plist", str(compiled / "partial.plist"), "--platform", "macosx",
              "--minimum-deployment-target", MINIMUM_MACOS, "--target-device", "mac", "--errors", "--warnings",
              "--output-format", "human-readable-text", str(ws.resources / "XiaolaiDict.icon")],
@@ -230,6 +234,26 @@ class Outputs(unittest.TestCase):
         info = subprocess.run(["xcrun", "assetutil", "--info", str(compiled / "Assets.car")],
                               capture_output=True, text=True, timeout=300)
         self.assertIn("IconImageStack", info.stdout)
+
+    def test_every_actool_call_goes_through_the_wrapper(self) -> None:
+        # actool's helper leaves an icon render in the per-user temporary directory on every compile,
+        # and `Tools/actool.sh` is the one place that takes it back. A caller that runs actool itself
+        # leaks again, quietly — the bundle build and this suite both did. The word is built from
+        # parts so this file does not match its own search.
+        word = "act" + "ool"
+        callers = []
+        for path in [REPO / "Makefile", *TOOLS.rglob("*.sh"), *TOOLS.rglob("*.py")]:
+            if path.name == "actool.sh" or "__pycache__" in path.parts:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                code = line.strip()
+                if code.startswith("#"):
+                    continue
+                # `xcrun actool` in a script, `"xcrun", "actool"` in an argument list — but not
+                # `xcrun --find actool`, which asks whether it exists and runs nothing.
+                if re.search(rf"xcrun[\"',\s]+{word}\b", code):
+                    callers.append(f"{path.relative_to(REPO)}:{number}")
+        self.assertEqual(callers, [], "these run actool themselves; use Tools/actool.sh")
 
 
 if __name__ == "__main__":

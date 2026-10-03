@@ -760,7 +760,10 @@ compile_icon() {
     local report=$STAGE_ROOT/actool.log
     # Its report is kept, not discarded: actool prints warnings and still exits 0, so a warning sent
     # to /dev/null is one nobody ever sees. Any warning or error stops the build.
-    xcrun actool --compile "$PWD/$contents/Resources" --app-icon "$APP_NAME" \
+    #
+    # Through `Tools/actool.sh`, which takes back the icon render actool's helper leaves in the
+    # per-user temporary directory on every compile, and fails if it cannot.
+    Tools/actool.sh --compile "$PWD/$contents/Resources" --app-icon "$APP_NAME" \
         --output-partial-info-plist "$PWD/$partial" \
         --platform macosx --minimum-deployment-target "$MINIMUM_MACOS" --target-device mac \
         --errors --warnings --output-format human-readable-text "$PWD/$RESOURCES/XiaolaiDict.icon" \
