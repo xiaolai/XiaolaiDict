@@ -186,6 +186,8 @@ struct XiaolaiDictSettings: View {
             // The watcher, not the policy: whether hover runs at all. It lived only in the menu
             // bar menu until the menu was trimmed to what a reader reaches for often.
             hoverEnabled: Binding(get: { app.hover.isWatching }, set: { app.hover.setEnabled($0) }),
+            // Observed: a wedged capture is said here, the place a reader goes when hover stops.
+            captureStuck: app.hover.isCaptureStuck,
             dictionary: app.dictionary.choice,
             shortcut: app.shortcuts.choice,
             modelLicence: app.models.licenceURL,

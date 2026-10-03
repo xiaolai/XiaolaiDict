@@ -59,8 +59,8 @@ struct AccessibilityAccessTests {
 
     /// **Hover never prompts, however the probe answers.** `granted()` is what
     /// `ScreenWordReader.target` reads on every pointer rest; a prompt there is a dialog attached to
-    /// nothing the reader asked for, which is the rule `ScreenRecordingAccess.ensure()` already
-    /// keeps for the other permission.
+    /// nothing the reader asked for. `ScreenRecordingAccess` keeps the same rule by having no
+    /// prompt at all.
     @Test func theHoverGateNeverPrompts() {
         for found: PermissionProbe in [.granted, .declined, .couldNotTell] {
             let (permission, counter) = access(found, grantedByAsking: true)

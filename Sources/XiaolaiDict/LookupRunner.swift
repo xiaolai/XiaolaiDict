@@ -32,6 +32,8 @@ final class LookupRunner {
     /// Loads the local model while the dictionaries are asked, so the sense question that follows
     /// does not pay for the load: the first answer measured 1.6–2.5 s cold, 0.24–0.44 s warm.
     private let prewarm: @Sendable () async -> Void
+    /// Notes each stage this lookup reaches, under its request — `LookupTimeline`.
+    private let mark: @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void
 
     init(
         client: DictionaryClient, panel: any LookupPanelPresenting,
@@ -40,8 +42,10 @@ final class LookupRunner {
         priorEncounters: @escaping @Sendable (String, Date, String?) async -> PriorEncounters = { _, _, _ in PriorEncounters() },
         prewarm: @escaping @Sendable () async -> Void = {},
         keepPolicy: @escaping @MainActor () -> LookupKeepPolicy = { .manual },
-        initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in }
+        initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in },
+        mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in }
     ) {
+        self.mark = mark
         self.initialRecording = initialRecording
         self.keepPolicy = keepPolicy
         self.client = client
@@ -57,33 +61,35 @@ final class LookupRunner {
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
     func run(
-        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil,
+        seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
         let chosenPrimary = primary()
         let frozenKeepPolicy = existingLookupID == nil ? keepPolicy() : .manual
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
-        // The app, and then the most precise thing the app could say about where inside it — which
-        // for 12 of the 17 apps measured is nothing at all.
-        let source = [selection.place.name, selection.place.label]
-            .compactMap { $0 }.filter { !$0.isEmpty }.removingAdjacentDuplicates().joined(separator: " · ")
-        var presentation = LookupPresentation(
-            request: ticket.number, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
-            sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
-        // Kept beside the sentence it indexes: without it the card has to search, and a search
-        // finds the wrong occurrence of a word that appears twice.
-        presentation.sentenceRange =
-            selection.quality.context == .complete ? selection.rangeInSentence : nil
+        var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
         // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
         // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
         // never saw. The rule is "a lookup nobody saw is not recorded", and this is the only place
         // that can tell.
-        guard panel.show(.lookup(presentation), near: pointer, for: ticket) else { return nil }
+        guard panel.show(.lookup(presentation), near: pointer, for: ticket) else {
+            reportSeen(false)
+            return nil
+        }
+        // **And the compositor's word that it is.** `show` answering true says the window was asked
+        // for, not that it is drawn — and only the compositor is evidence of that. Asked beside the
+        // lookup rather than before it, so the reader's answer is not held up by the check.
+        // **Dated when the compositor listed it**, so "panel" times what the reader saw, and a panel
+        // that never drew is never timed as shown.
+        let seen = Task { () -> ContinuousClock.Instant? in await panel.seenOnScreen(ticket) ? .now : nil }
         let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
-        initialRecording(LookupRecording(
-            record: Self.record(of: selection, lemma: lemma, language: language,
-                                outcome: .notFound(serviceFailure: nil), requestedAt: requestedAt, abstention: nil).pending(),
-            encounter: nil, lookupID: existingLookupID, keepPolicy: frozenKeepPolicy, primaryDictionary: chosenPrimary.chosen), ticket.number)
+        // **What every recording of this lookup shares, worked out once** — the pending row, the
+        // answered one and the final one differ only in what they add to it (audit round 3, #29).
+        let basis = RecordingBasis(
+            selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
+            lookupID: existingLookupID, keepPolicy: frozenKeepPolicy)
+        let pending = basis.pending(primaryDictionary: chosenPrimary.chosen)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
         // another wants the model that was being loaded for the first. Detached for that reason —
@@ -105,29 +111,31 @@ final class LookupRunner {
             term: selection.text, sentence: selection.sentence,
             termLocation: selection.rangeInSentence?.location,
             termLength: selection.rangeInSentence?.length)
-        guard let resolved = try? await client.lookup(request), panel.isCurrent(ticket) else {
+        // **Dated when it arrives**, not when the visibility check below lets it be read.
+        async let answer: (LookupResolution?, ContinuousClock.Instant) = { (try? await client.lookup(request), .now) }()
+        // A lookup nobody saw is not recorded — not even as the pending row it starts with. A
+        // superseded lookup stops waiting for the compositor at once.
+        guard let shownAt = await value(of: seen, orOnCancel: { nil }) else {
+            reportSeen(false)
             history.cancel()
             return nil
         }
+        reportSeen(true)
+        mark(.panelShown, ticket.number, shownAt)
+        initialRecording(pending, ticket.number)
+        let (answered, answeredAt) = await answer
+        guard let resolved = answered, panel.isCurrent(ticket) else {
+            history.cancel()
+            return nil
+        }
+        mark(.dictionaryAnswered, ticket.number, answeredAt)
         let outcome = resolved.word
         // **Built against the sentence the card holds, not the one that was sent.** The request sends the
         // sentence whatever the capture's quality, while the presentation drops it for an incomplete one —
         // so a span measured against the first and drawn on the second would bracket whatever sits at that
         // offset. `PhrasePresentation.init(_:sentence:)` checks the pairing rather than trusting it.
         presentation.phrase = PhrasePresentation(resolved.phrase, sentence: presentation.sentence)
-        switch resolved.phrase {
-        case .found(let hits):
-            let leading = hits[0]
-            log.notice("phrase: \(leading.phrase, privacy: .public), gap \(leading.separation.gap, privacy: .public), \(hits.count, privacy: .public) covering, \(hits.reduce(0) { $0 + $1.entries.count }, privacy: .public) entries")
-        case .notReady:
-            log.notice("phrase: the inventory was still being read")
-        case .unavailable:
-            // **A fault, not a notice.** This says no dictionary's phrases could be read at all, which will
-            // not fix itself on the next lookup — unlike `.notReady`, which resolves in seconds.
-            log.fault("phrase: no dictionary's phrases could be read")
-        case .none, .notAsked:
-            break
-        }
+        logPhrase(resolved.phrase)
         presentation.outcome = outcome
         panel.update(.lookup(presentation), for: ticket)
 
@@ -156,32 +164,28 @@ final class LookupRunner {
         // senses under `take something into account` — noise in the candidate set, and a hypothesis the
         // selector could confidently pick. `PhraseHit.entries` is already empty for that case; this says so
         // rather than relying on it.
-        let phraseEntries: [DictionaryEntry] = {
-            guard case .found(let hits) = resolved.phrase else { return [] }
-            // **Every phrase's senses, not only the leading one's.** The card draws one, and the selector
-            // chooses among all of them — which is the whole point of the wire carrying more than one.
-            // A hit's own entries, which is empty for a phrase filed inside another word's. **Per entry
-            // now, not per hit**: a phrase with its own entry in one dictionary and a filing in another
-            // used to contribute nothing at all.
-            return hits.flatMap(\.entries)
-        }()
+        let phraseEntries = Self.candidateEntries(of: resolved.phrase)
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
         // **Which entry the card opens on.** Set here, from the same `PrimaryDictionary` the
         // resolver is built with, so the dictionary shown and the dictionary whose sense is
         // resolved and recorded cannot be different ones.
-        let effectivePrimary = chosenPrimary.chosen ?? chosenPrimary.identity(among: entries)?.key
-        presentation.primaryEntry = chosenPrimary.entries(among: entries).first
+        // `pinned` is that one primary: the card, the first recording and the resolver all ask it, so
+        // none of them can settle on a dictionary from a list the others did not see.
+        let pinned = chosenPrimary.pinned(word: entries, phrase: phraseEntries)
+        // The *reader's* choice is still what is recorded where they made one: automatic keeping
+        // compares against it, and a fallback is not a choice.
+        let effectivePrimary = chosenPrimary.chosen ?? pinned.chosen
+        presentation.primaryEntry = pinned.entries(among: entries).first
             .map { PanelSelection.identity(of: $0) }
-        initialRecording(LookupRecording(
-            record: Self.record(of: selection, lemma: lemma, language: language, outcome: outcome,
-                                requestedAt: requestedAt, abstention: nil),
+        initialRecording(basis.recording(
+            outcome: outcome, abstention: nil,
             // **The phrase's entries go with it**, so this early row claims no more than the resolver
             // will: a one-sense word inside a phrase is not yet resolved, and automatic keeping must
             // not confirm it before the selector has weighed the two.
-            encounter: chosenPrimary.encounter(among: entries, phrase: phraseEntries, at: requestedAt),
-            lookupID: existingLookupID, keepPolicy: frozenKeepPolicy, primaryDictionary: effectivePrimary), ticket.number)
-        let resolver = SenseResolver(primary: chosenPrimary, selector: selector)
+            encounter: pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt),
+            primaryDictionary: effectivePrimary), ticket.number)
+        let resolver = SenseResolver(primary: pinned, selector: selector)
         let partOfSpeech = Lemmatizer.partOfSpeech(
             of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
 
@@ -204,7 +208,9 @@ final class LookupRunner {
         }
         var resolution = SenseResolution(mark: nil, encounter: nil)
         await withTaskGroup(of: Arrival.self) { group in
-            group.addTask { .memory(await history.value) }
+            // **Cancelled with the group.** `history` is a task of its own, which cancelling this
+            // child would not reach — a superseded lookup went on waiting for its ledger read.
+            group.addTask { .memory(await value(of: history, orOnCancel: { PriorEncounters() })) }
             // **A child of the group, never a `Task` of its own.** An unstructured task does not
             // inherit cancellation, so superseding a lookup left the sense resolver running — and
             // on the model's rung that is the GPU still answering a question nobody is waiting for.
@@ -225,20 +231,9 @@ final class LookupRunner {
                     panel.update(.lookup(presentation), for: ticket)
                 case .sense(let answered):
                     resolution = answered
-                    guard let mark = answered.mark, panel.isCurrent(ticket) else { continue }
-                    presentation.sense = mark
-                    presentation.senseOwner = answered.owner
-                    // **Where the winning sense is one of the phrase's, the phrase says so.** The card's
-                    // entries are the word's, so `senseOwner` matches none of them and no mark is drawn
-                    // there — correctly, the reader was not reading that word. The notice is the only
-                    // surface that can show it, and showing the phrase's *first* definition instead would
-                    // put the wrong meaning under the right phrase.
-                    if let key = mark.key,
-                       let sense = Self.sense(key, in: phraseEntries) {
-                        presentation.phrase?.met = PhrasePresentation.SenseMet(
-                            definition: sense.definition ?? sense.text,
-                            isHypothesis: mark.isHypothesis)
-                    }
+                    mark(.senseResolved, ticket.number, .now)
+                    guard answered.mark != nil, panel.isCurrent(ticket) else { continue }
+                    Self.apply(answered, to: &presentation, phrase: resolved.phrase)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -248,22 +243,98 @@ final class LookupRunner {
         // not recorded", and only the check before the entry was shown can say nobody saw it. What a
         // superseded lookup never showed is the *mark* — and a model's mark is recorded as the
         // hypothesis it is (`chosen_by: model`), not as something the reader confirmed.
-        return LookupRecording(
-            record: Self.record(of: selection, lemma: lemma, language: language, outcome: outcome,
-                                requestedAt: requestedAt,
-                                // **A lookup the reader walked away from did not get declined and
-                                // did not find no model.** Superseding it cancels this task, and the
-                                // ladder reports a cancelled run as an abstention like any other —
-                                // recorded, that is a false model status in the ledger for a
-                                // question that was never finished being asked.
-                                abstention: Task.isCancelled ? nil : resolution.abstention),
-            encounter: resolution.encounter, lookupID: existingLookupID, keepPolicy: frozenKeepPolicy,
-            primaryDictionary: effectivePrimary)
+        return basis.recording(
+            outcome: outcome,
+            // **A lookup the reader walked away from did not get declined and did not find no model.**
+            // Superseding it cancels this task, and the ladder reports a cancelled run as an abstention
+            // like any other — recorded, that is a false model status in the ledger for a question that
+            // was never finished being asked.
+            abstention: Task.isCancelled ? nil : resolution.abstention,
+            encounter: resolution.encounter, primaryDictionary: effectivePrimary)
     }
 
-    /// The sense `key` names, among the phrase's entries. Nil where the winning sense was one of the
-    /// word's, which is the ordinary case and the answer "you are reading the word".
-    private static func sense(_ key: String, in entries: [DictionaryEntry]) -> DictionarySense? {
+    /// The card a lookup opens with, before anything has answered.
+    private static func presentation(of selection: Selection, lemma: Lemma, request: Int) -> LookupPresentation {
+        // The app, and then the most precise thing the app could say about where inside it — which
+        // for 12 of the 17 apps measured is nothing at all.
+        let source = [selection.place.name, selection.place.label]
+            .compactMap { $0 }.filter { !$0.isEmpty }.removingAdjacentDuplicates().joined(separator: " · ")
+        var presentation = LookupPresentation(
+            request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
+            sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
+        // Kept beside the sentence it indexes: without it the card has to search, and a search
+        // finds the wrong occurrence of a word that appears twice.
+        presentation.sentenceRange =
+            selection.quality.context == .complete ? selection.rangeInSentence : nil
+        return presentation
+    }
+
+    /// One line about the phrase the reader was standing in, or why there is none.
+    private func logPhrase(_ phrase: PhraseAnswer) {
+        switch phrase {
+        case .found(let hits):
+            // The wire does not promise a non-empty list; nothing here traps on one.
+            guard let leading = hits.first else { return }
+            log.notice("phrase: \(leading.phrase, privacy: .public), gap \(leading.separation.gap, privacy: .public), \(hits.count, privacy: .public) covering, \(hits.reduce(0) { $0 + $1.entries.count }, privacy: .public) entries")
+        case .notReady:
+            log.notice("phrase: the inventory was still being read")
+        case .unavailable:
+            // **A fault, not a notice.** This says no dictionary's phrases could be read at all, which will
+            // not fix itself on the next lookup — unlike `.notReady`, which resolves in seconds.
+            log.fault("phrase: no dictionary's phrases could be read")
+        case .none, .notAsked:
+            break
+        }
+    }
+
+    /// **Every phrase's senses, not only the leading one's.** The card draws one, and the selector chooses
+    /// among all of them — which is the whole point of the wire carrying more than one. A hit's own
+    /// entries, which is empty for a phrase filed inside another word's. **Per entry now, not per hit**:
+    /// a phrase with its own entry in one dictionary and a filing in another used to contribute nothing.
+    private static func candidateEntries(of phrase: PhraseAnswer) -> [DictionaryEntry] {
+        guard case .found(let hits) = phrase else { return [] }
+        return hits.flatMap(\.entries)
+    }
+
+    /// A decided sense, drawn on the card.
+    ///
+    /// **Where the winning sense is one of the phrase's, the phrase says so.** The card's entries are the
+    /// word's, so `senseOwner` matches none of them and no mark is drawn there — correctly, the reader
+    /// was not reading that word. The notice is the only surface that can show it, and showing the
+    /// phrase's *first* definition instead would put the wrong meaning under the right phrase.
+    ///
+    /// **The sense's own entry, and that entry's own phrase.** A key alone is positional in some
+    /// dictionaries — `1.1` is in many entries — so it is looked up only in the entry the mark is about;
+    /// and where that entry is a phrase other than the leading one, the notice is rebuilt for it rather
+    /// than put under the wrong phrase.
+    private static func apply(_ answered: SenseResolution, to presentation: inout LookupPresentation, phrase: PhraseAnswer) {
+        guard let mark = answered.mark else { return }
+        presentation.sense = mark
+        presentation.senseOwner = answered.owner
+        if let key = mark.key, let owner = answered.owner, case .found(let hits) = phrase,
+           let (index, sense) = phraseSense(key: key, owner: owner, in: hits) {
+            if index != hits.startIndex {
+                presentation.phrase = PhrasePresentation(.found([hits[index]]), sentence: presentation.sentence)
+            }
+            presentation.phrase?.met = PhrasePresentation.SenseMet(
+                definition: sense.definition ?? sense.text,
+                isHypothesis: mark.isHypothesis)
+        }
+    }
+
+    /// The phrase whose own entry the winning sense is in, and the sense — **by the entry the mark is
+    /// about, then the key within it**. Nil where the sense is one of the word's, which is the ordinary
+    /// case and the answer "you are reading the word". Not `private`: the attribution is tested here.
+    nonisolated static func phraseSense(key: String, owner: String, in hits: [PhraseHit]) -> (Int, DictionarySense)? {
+        for (index, hit) in hits.enumerated() {
+            let owned = hit.entries.filter { PanelSelection.identity(of: $0) == owner }
+            if let sense = sense(key, in: owned) { return (index, sense) }
+        }
+        return nil
+    }
+
+    /// The sense `key` names, among `entries`.
+    nonisolated private static func sense(_ key: String, in entries: [DictionaryEntry]) -> DictionarySense? {
         for entry in entries {
             for block in entry.blocks {
                 if let found = block.senses.first(where: { $0.key == key }) { return found }
@@ -272,12 +343,52 @@ final class LookupRunner {
         return nil
     }
 
-    /// The ledger row for a lookup — what was read, where, how it was captured, what answered, and
-    /// why no sense was marked where none was.
-    private static func record(
-        of selection: Selection, lemma: Lemma, language: String?, outcome: LookupOutcome,
-        requestedAt: Date, abstention: Abstention?
-    ) -> LookupRecord {
+}
+
+/// What every recording of one lookup shares — the selection, its lemma and language, when it was asked,
+/// its script, which row it reopens and the keep policy frozen at the start. **Worked out once**: the
+/// pending row, the answered row and the final row were three constructions that each re-derived it,
+/// script classification included (audit round 3, #29).
+private struct RecordingBasis {
+    let selection: Selection
+    let lemma: Lemma
+    let language: String?
+    let requestedAt: Date
+    let lookupID: Int?
+    let keepPolicy: LookupKeepPolicy
+    /// **The surface, not the sentence.** The filter is about the word the reader looked up; a Chinese
+    /// word quoted inside an English sentence is still a Chinese word, and classifying the sentence would
+    /// file it under Latin and show it to a reader who asked not to see it. Nil where nothing classifies
+    /// — a number, punctuation — which the drawer draws rather than hides.
+    let script: ProbeScript?
+
+    init(selection: Selection, lemma: Lemma, language: String?, requestedAt: Date,
+         lookupID: Int?, keepPolicy: LookupKeepPolicy) {
+        self.selection = selection
+        self.lemma = lemma
+        self.language = language
+        self.requestedAt = requestedAt
+        self.lookupID = lookupID
+        self.keepPolicy = keepPolicy
+        script = ProbeScript.dominant(in: selection.text)
+    }
+
+    /// The row a lookup starts with, before the dictionaries answer.
+    func pending(primaryDictionary: String?) -> LookupRecording {
+        LookupRecording(record: record(outcome: .notFound(serviceFailure: nil), abstention: nil).pending(),
+                        encounter: nil, lookupID: lookupID, keepPolicy: keepPolicy,
+                        primaryDictionary: primaryDictionary)
+    }
+
+    func recording(outcome: LookupOutcome, abstention: Abstention?, encounter: SenseEncounter?,
+                   primaryDictionary: String?) -> LookupRecording {
+        LookupRecording(record: record(outcome: outcome, abstention: abstention), encounter: encounter,
+                        lookupID: lookupID, keepPolicy: keepPolicy, primaryDictionary: primaryDictionary)
+    }
+
+    /// The ledger row — what was read, where, how it was captured, what answered, and why no sense was
+    /// marked where none was.
+    private func record(outcome: LookupOutcome, abstention: Abstention?) -> LookupRecord {
         LookupRecord(
             surface: selection.text, lemma: lemma.text, context: selection.sentence ?? selection.text,
             // All four were computed at every lookup and thrown away at the ledger before schema 4.
@@ -291,13 +402,7 @@ final class LookupRunner {
             quality: selection.quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
-            senseAbstention: abstention,
-            // **The surface, not the sentence.** The filter is about the word the reader looked
-            // up; a Chinese word quoted inside an English sentence is still a Chinese word, and
-            // classifying the sentence would file it under Latin and show it to a reader who
-            // asked not to see it. Nil where nothing classifies — a number, punctuation — which
-            // the drawer draws rather than hides.
-            script: ProbeScript.dominant(in: selection.text))
+            senseAbstention: abstention, script: script)
     }
 }
 

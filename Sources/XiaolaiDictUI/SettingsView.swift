@@ -70,6 +70,11 @@ public final class SettingsModel {
     /// Not observed: it changes on every frame of a resize, and nothing should redraw for that.
     @ObservationIgnored public internal(set) var given: CGFloat = 0
 
+    /// Which fit is the latest. **Only the latest applies**: a fit queued before a newer one ran would
+    /// read the same viewport and move the window by the same delta twice. Dropping the newer fit
+    /// instead lost a pane change's resize — an audit's regression finding, 2026-10-03.
+    @ObservationIgnored var fitGeneration = 0
+
     /// Whether the showing pane's scroll view currently has any height. Observed, unlike `given`,
     /// because it is what lets a fit happen: a pane measures itself before its window has a size,
     /// and a fit taken then is a fit against zero. **Tracked both ways**: it only ever went from
@@ -116,6 +121,8 @@ public struct SettingsView: View {
     private var appearance: Appearance?
     private var hover: Binding<HoverPolicy>?
     private var hoverEnabled: Binding<Bool>?
+    /// Reading the screen has stopped answering. See `LookupPane.captureStuck`.
+    private var captureStuck: Bool
     private var dictionary: DictionaryChoice?
     private var shortcut: ShortcutChoice?
     /// The local model's licence, downloaded with its weights — nil until there is a model.
@@ -145,6 +152,7 @@ public struct SettingsView: View {
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
         keepPolicy: Binding<LookupKeepPolicy>? = nil,
         hover: Binding<HoverPolicy>? = nil, hoverEnabled: Binding<Bool>? = nil,
+        captureStuck: Bool = false,
         dictionary: DictionaryChoice? = nil,
         shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
         erase: ErasePresentation? = nil,
@@ -158,6 +166,7 @@ public struct SettingsView: View {
         self.appearance = appearance
         self.hover = hover
         self.hoverEnabled = hoverEnabled
+        self.captureStuck = captureStuck
         self.dictionary = dictionary
         self.shortcut = shortcut
         self.modelLicence = modelLicence
@@ -199,6 +208,10 @@ public struct SettingsView: View {
         .frame(width: Token.Panel.settingsWidth)
         .frame(maxHeight: .infinity)
         .background(WindowReader { found in
+            // **A new window, or none, invalidates every queued fit at once** — not when SwiftUI next
+            // runs `onChange`, by which time a fit queued for the old window may already have moved
+            // it, or moved the new one by the old one's arithmetic.
+            if found !== window { model.fitGeneration += 1 }
             window = found
             // Sized by the pane, never by the reader's drag: a settings window whose edge could be
             // pulled would be a second, disagreeing answer to "how tall is this pane".
@@ -213,23 +226,32 @@ public struct SettingsView: View {
             of: Fit(pane: model.pane, height: target, window: window.map(ObjectIdentifier.init), laidOut: model.isLaidOut),
             initial: true
         ) { _, fit in
-            guard let height = fit.height, fit.laidOut, let window else { return }
+            // **Every change moves the generation**, a fit that cannot apply too: a fit queued for
+            // the window that has since gone must not apply to it after.
+            model.fitGeneration += 1
+            let generation = model.fitGeneration
+            guard fit.height != nil, fit.laidOut, let fitWindow = window else { return }
             // The first fit is not animated: that is where the window opens, not a movement the
             // reader asked for.
-            let animated = window.isVisible
+            let animated = fitWindow.isVisible
             // **Outside the layout pass.** This runs during one, and resizing a window from inside
             // layout re-enters it — measured to abort the process once it had re-entered more
             // times than the window has views. What the pane was given is read there too, after
             // layout, rather than here in the middle of it.
             DispatchQueue.main.async {
+                // A newer fit has been seen since this one: it applies, against the newer window too.
+                guard generation == model.fitGeneration, window === fitWindow else { return }
+                // **Read now, not when the change was seen**: the height the pane wants and the
+                // viewport it was given are both the latest, so a fit that waited behind layout
+                // does not apply a height the pane has since moved past.
                 // The pane this fit was worked out for is still the pane showing: `given` is the
                 // viewport of whichever pane is on screen now, and pairing one pane's wanted height
                 // with another's viewport would move the window by the difference between panes.
-                guard model.pane == fit.pane else { return }
+                guard model.pane == fit.pane, let height = Self.fitted(model.heights[fit.pane]) else { return }
                 guard let delta = SettingsWindowFit.shortfall(wanted: height, given: model.given) else { return }
                 SettingsWindowFit.move(
-                    window, by: delta, width: Token.Panel.settingsWidth,
-                    lowestBottom: window.screen?.visibleFrame.minY, animated: animated)
+                    fitWindow, by: delta, width: Token.Panel.settingsWidth,
+                    lowestBottom: fitWindow.screen?.visibleFrame.minY, animated: animated)
             }
         }
     }
@@ -246,10 +268,11 @@ public struct SettingsView: View {
     /// The height the selected pane wants, floored so a two-row pane is still a window and not a
     /// strip, and capped so a long one scrolls inside the window rather than taking the window off
     /// the bottom of the screen. Nil until that pane has measured itself.
-    private var target: CGFloat? {
-        model.heights[model.pane].map {
-            min(max($0, Token.Panel.settingsMinHeight), Token.Panel.settingsMaxHeight)
-        }
+    private var target: CGFloat? { Self.fitted(model.heights[model.pane]) }
+
+    /// A pane's wanted height, floored and capped — one spelling for the fit seen and the fit applied.
+    private static func fitted(_ wanted: CGFloat?) -> CGFloat? {
+        wanted.map { min(max($0, Token.Panel.settingsMinHeight), Token.Panel.settingsMaxHeight) }
     }
 
     /// The panes' width and the tallest a pane is drawn, for `--settings-report` to hold the
@@ -286,7 +309,7 @@ public struct SettingsView: View {
         case .reading: ReadingPane(appearance: appearance)
         case .lookup:
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
-                       shortcut: shortcut, capture: model.shortcutCapture)
+                       captureStuck: captureStuck, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
@@ -410,7 +433,10 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
 /// The dictionary pane with the dictionaries still being read, which is a state a reader can
 /// open the pane in.
 #Preview("Dictionary, still asking") {
-    SettingsView(dictionary: DictionaryChoice(available: nil, chosen: nil, choose: { _ in }))
+    // On the Dictionary pane: the default model opens on Setup, which this preview is not about.
+    let model = SettingsModel()
+    model.pane = .dictionary
+    return SettingsView(model: model, dictionary: DictionaryChoice(available: nil, chosen: nil, choose: { _ in }))
 }
 
 /// About, with a release handed in rather than read: `Bundle.main` in a preview is Xcode's own

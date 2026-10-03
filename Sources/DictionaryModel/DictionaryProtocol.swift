@@ -90,17 +90,32 @@ public struct PhraseHit: Codable, Sendable, Equatable {
     /// What the dictionaries could say about the phrase, which is **not** always its meaning.
     public let meaning: PhraseMeaning
 
+    /// Whether the dictionaries could all be read for the phrase. **Without it a phrase the framework
+    /// could not read arrived exactly like one it read and found nothing for** — a failure rendering as
+    /// confidently as a success.
+    public let retrieval: PhraseRetrieval
+
     /// The phrase's own entries, where it has any. **Never merged with the word's.**
     public var entries: [DictionaryEntry] { meaning.ownEntries }
 
     public init(phrase: String, location: Int, length: Int,
-                separation: PhraseSeparation, meaning: PhraseMeaning) {
+                separation: PhraseSeparation, meaning: PhraseMeaning, retrieval: PhraseRetrieval = .complete) {
         self.phrase = phrase
         self.location = location
         self.length = length
         self.separation = separation
         self.meaning = meaning
+        self.retrieval = retrieval
     }
+}
+
+/// How the lookup of a phrase's own string ended. **Three ways**: every dictionary read; some had the
+/// phrase and could not be read, named; or the lookup itself failed, which says nothing about whether
+/// any dictionary has it.
+public enum PhraseRetrieval: Codable, Sendable, Equatable {
+    case complete
+    case partial(unreadable: [String])
+    case failed
 }
 
 /// What the dictionaries hold for a phrase: entries of its own, filings inside other words' entries, or

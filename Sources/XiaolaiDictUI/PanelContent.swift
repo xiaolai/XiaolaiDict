@@ -124,6 +124,16 @@ public enum PanelContent {
                            comment: "The placeholder is the System Settings list to grant it in"))
     }
 
+    /// A hover needed to read the screen and Screen Recording is off. Hover never asks the system for
+    /// it — this says where the reader grants it.
+    public static var screenRecordingIsOff: PanelContent {
+        .message(
+            title: String(localized: "XiaolaiDict needs Screen Recording",
+                          comment: "Lookup panel, when a hover needed to read the screen and Screen Recording is off"),
+            detail: String(localized: "Where an app does not expose its text, hover reads the word off the screen. Allow XiaolaiDict in \(PrivacySettings.screenRecordingLocation), or open Setup in Settings to ask for it.",
+                           comment: "The placeholder is the System Settings list to grant it in"))
+    }
+
     /// There is no frontmost app to read a selection out of.
     public static var frontmostAppUnknown: PanelContent {
         nothingToLookUp(String(localized: "The frontmost app could not be identified, so its selection cannot be read.",

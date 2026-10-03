@@ -142,15 +142,34 @@ struct SelectionReaderTests {
             running.withLock { $0.now -= 1 }
             return .nothing("read")
         }
+        let lane = AccessibilityLane { _ in }
         let superseded = (0..<3).map { _ in
-            Task { await SelectionReader.oneAtATime(slowRead, cancelled: { .nothing("cancelled") }) }
+            Task { await lane.run(timeout: 1, slowRead, cancelled: { .nothing("cancelled") }) }
         }
         superseded.forEach { $0.cancel() }
-        let last = await SelectionReader.oneAtATime(slowRead, cancelled: { .nothing("cancelled") })
+        let last = await lane.run(timeout: 1, slowRead, cancelled: { .nothing("cancelled") })
         for task in superseded { _ = await task.value }
         #expect(last == .nothing("read"))
         #expect(running.withLock { $0.most } == 1, "reads ran side by side")
         #expect(started.withLock { $0 } < 4, "every superseded read ran in full")
+    }
+
+    /// **A selection is kept when reading its sentence fails** — the reader asked about the
+    /// selection, and a spent budget while reading the context used to throw it away with it. Red if
+    /// a context failure fails the whole read.
+    @Test func aSelectionSurvivesAFailedContextRead() throws {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
+        tree.fail(field, kAXSelectedTextRangeAttribute, with: .deadlineExceeded)
+        guard case .selected(let selection) = read(tree) else {
+            Issue.record("a failed context read lost the selection")
+            return
+        }
+        #expect(selection.text == "ephemeral")
+        #expect(selection.sentence == nil)
+        #expect(selection.quality.context == .missing)
     }
 
     private func rangeValue(_ location: Int, _ length: Int) -> AXValue {

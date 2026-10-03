@@ -139,10 +139,46 @@ struct UnknownPermissionStateTests {
         }
     }
 
-    /// And it still counts as missing, so the setup board keeps asking the reader to look —
-    /// harmless there, unlike asserting "Off" in Settings.
-    @Test func anUnknownGrantStillCountsAsMissing() async {
+    /// **And the reader is still asked to look** — the board reads `isGranted`, which an unknown is
+    /// not, and the menu says the permissions could not be checked. What changed (audit finding 63)
+    /// is that it is no longer *missing*: the menu said "off" for a permission that may well be on.
+    @Test func anUnknownGrantIsUncheckedAndStillAsksTheReaderToLook() async {
         let report = await PermissionsReport.probe { _ in .couldNotTell }
-        #expect(report.missing.count == Permission.allCases.count)
+        #expect(report.unchecked.count == Permission.allCases.count)
+        #expect(report.missing.isEmpty)
+        #expect(!report.allGranted, "an unknown counted as everything granted")
+        #expect(report.menuWarning != nil, "the reader was told nothing")
+    }
+}
+
+/// **A probe that could not tell is not "off"** (audit finding 63).
+struct PermissionsReportUncertaintyTests {
+    @Test func anUncheckedPermissionIsNotReportedMissing() {
+        let report = PermissionsReport(states: [
+            PermissionState(permission: .accessibility, found: .granted),
+            PermissionState(permission: .screenRecording, found: .couldNotTell),
+        ])
+        #expect(report.missing.isEmpty, "a failed probe was reported as a refusal")
+        #expect(report.unchecked.map(\.permission) == [.screenRecording])
+        #expect(!report.allGranted)
+        #expect(report.menuWarning?.contains("could not be checked") == true)
+    }
+}
+
+/// **The setup board says "not checked", not "needed"**, for a probe that failed (audit round 2).
+struct SetupBoardUncheckedTests {
+    @MainActor
+    @Test func anUncheckedPermissionIsNotNeeded() {
+        let board = SetupBoard(
+            permissions: PermissionsReport(states: [
+                PermissionState(permission: .accessibility, found: .granted),
+                PermissionState(permission: .screenRecording, found: .couldNotTell),
+            ]),
+            available: nil, chosen: nil, language: "en", shortcut: nil,
+            model: nil, modelDeclined: false, engine: .onDevice)
+        #expect(board.isUnchecked(.screenRecording))
+        #expect(!board.isUnchecked(.accessibility))
+        #expect(SetupBoard.Step.screenRecording.permission == .screenRecording)
+        #expect(SetupBoard.Step.dictionary.permission == nil)
     }
 }

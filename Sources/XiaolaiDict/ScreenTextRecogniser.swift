@@ -19,17 +19,16 @@ struct Recognition: Sendable {
     let bundleID: String?
 }
 
-enum RecognitionError: LocalizedError {
-    case noDisplay(CGPoint)
-    /// The display exists but ScreenCaptureKit does not offer it — seen while the screen is locked.
-    case displayNotCapturable(CGDirectDisplayID)
+enum RecognitionError: LocalizedError, Equatable {
+    /// The window chosen to read is no longer offered for capture — it closed, or the screen locked.
+    case windowNotCapturable
     case nothingUnderPointer
     /// The window under the pointer belongs to an app XiaolaiDict does not read.
     case excludedApp(String)
     /// No window under the pointer, so the capture could not be attributed to any app — and an
     /// unattributable region cannot be checked against the exclusion list.
     case unattributable
-    /// Screen Recording is off for XiaolaiDict, and asking produced no grant.
+    /// Screen Recording is off for XiaolaiDict. Hover does not ask for it; the reader is told where.
     case screenRecordingDenied
     /// The grant could not be read — which is **not** the same as its being absent, and must not be
     /// reported as one. A cold `SCShareableContent` call fails this way, and the next hover will
@@ -38,15 +37,9 @@ enum RecognitionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        // Formatted as a Double, not an Int: `Int(1e100)` traps, and the point reaches here
-        // straight from a caller — `--read-point 1e100 0` passes a finite-number check.
-        case .noDisplay(let point):
-            "no display contains (\(String(format: "%.0f", point.x)), \(String(format: "%.0f", point.y)))"
-        // **Says what was established, which is absence and not a reason.** It read "the screen is
-        // locked" — a lock is one way a display leaves `SCShareableContent`, and this branch only
-        // ever knew that it was not in the list. Naming the likeliest cause as the cause is how an
-        // instrument comes to report something it never checked.
-        case .displayNotCapturable: "that display is not available for capture"
+        // **Says what was established, which is absence and not a reason.** A lock is one way a
+        // window leaves `SCShareableContent`; this only knows that it is not in the list.
+        case .windowNotCapturable: "that window is not available for capture"
         case .nothingUnderPointer: "no word under the pointer"
         case .excludedApp(let name): "words are not looked up in \(name)"
         case .unattributable: "no window under the pointer"
@@ -76,9 +69,6 @@ final class ScreenTextRecogniser: Sendable {
 
     private let cache = ShareableContentCache()
 
-    /// `excluding` is checked against the window's owner **before any pixel is captured**. The
-    /// Accessibility path cannot vet an app that exposes no element, and that is exactly the case
-    /// this path serves — so the exclusion has to be enforced here too, not only afterwards.
     /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system`
     /// asks through `Permission.screenRecording`, which probes with `SCShareableContent` — the API
     /// this file captures through. **Not CoreGraphics**, which is what this said and what the rule
@@ -89,25 +79,15 @@ final class ScreenTextRecogniser: Sendable {
         self.access = access
     }
 
-    func read(at point: CGPoint, excluding: Set<String> = []) async throws -> Recognition {
-        // Asked before anything is attempted. `SCShareableContent` needs this permission too, so
-        // without it every call below fails with a message about capture rather than about consent
-        // — which is exactly how a machine with Accessibility granted and Screen Recording not
-        // reported "no word under the pointer" and hid the real answer.
-        switch await access.ensure() {
-        case .granted: break
-        case .declined: throw RecognitionError.screenRecordingDenied
-        case .couldNotTell: throw RecognitionError.screenRecordingUnreadable
-        }
-        let target = try await target(at: point)
-        // An owner XiaolaiDict cannot name cannot be checked against the exclusion list, and a region it
-        // cannot attribute is a region it must not read: a display-scoped capture could contain a
-        // password manager's window and no check would ever see it. Refusing is the only honest
-        // option — the case it gives up is the desktop, where there is nothing to look up anyway.
-        guard let bundleID = target.bundleID else { throw RecognitionError.unattributable }
-        if excluding.contains(bundleID) {
-            throw RecognitionError.excludedApp(target.appName ?? bundleID)
-        }
+    /// Reads `window` — **the one the caller chose, never one of this type's own choosing** — in
+    /// a band around `point`. The window's owner is checked against `policy` **before any pixel is
+    /// captured**: the Accessibility path cannot vet an app that exposes no element, and that is
+    /// exactly the case this path serves.
+    func read(at point: CGPoint, window: ListedWindow, policy: HoverPolicy) async throws -> Recognition {
+        // **Orchestration only, and every cancellation check lives here** (audit round 3, #31): each
+        // stage below is one effect, and nothing new is started for a reader who has moved on.
+        try Task.checkCancellation()
+        let target = try await authorisedTarget(at: point, window: window, policy: policy)
         // **Nothing new is started for a reader who has moved on.** Resolving the target awaits
         // shareable content, and a hover superseded during that wait would otherwise go on to take
         // a screenshot and run Vision for an answer nobody is waiting for — holding the one-capture
@@ -115,6 +95,37 @@ final class ScreenTextRecogniser: Sendable {
         // captures deadlock, which is why that guard exists and why occupying it needlessly costs
         // the next lookup rather than only this one.
         try Task.checkCancellation()
+        let image = try await capture(target, of: window)
+        // Recognition is synchronous and the slowest step after the capture; a cancellation that
+        // arrived during the capture should not pay for it.
+        try Task.checkCancellation()
+        return try Self.hit(in: try recognise(image), at: point, target: target)
+    }
+
+    /// Consent, then the window's capture target, then its owner against `policy` — all before a pixel.
+    private func authorisedTarget(at point: CGPoint, window: ListedWindow, policy: HoverPolicy) async throws -> Target {
+        // Asked before anything is attempted, and **only asked**. `SCShareableContent` needs this
+        // permission too, so without it every call below fails with a message about capture rather
+        // than about consent — which is how a machine with Accessibility granted and Screen
+        // Recording not reported "no word under the pointer" and hid the real answer.
+        switch await access.probe() {
+        case .granted: break
+        case .declined: throw RecognitionError.screenRecordingDenied
+        case .couldNotTell: throw RecognitionError.screenRecordingUnreadable
+        }
+        try Task.checkCancellation()
+        let target = try await target(at: point, window: window)
+        // An owner XiaolaiDict cannot name cannot be checked against the exclusion list, and a region it
+        // cannot attribute is a region it must not read. Refusing is the only honest option.
+        guard let bundleID = target.bundleID else { throw RecognitionError.unattributable }
+        if CaptureAuthorization.refusal(bundleID: bundleID, policy: policy) != nil {
+            throw RecognitionError.excludedApp(target.appName ?? bundleID)
+        }
+        return target
+    }
+
+    /// The band around the pointer, captured — and refused if the window moved while it was taken.
+    private func capture(_ target: Target, of window: ListedWindow) async throws -> CGImage {
         let config = SCStreamConfiguration()
         config.sourceRect = target.sourceRect
         config.width = Int(target.region.width * CGFloat(target.filter.pointPixelScale))
@@ -123,11 +134,16 @@ final class ScreenTextRecogniser: Sendable {
         config.captureResolution = .best
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: target.filter, configuration: config)
-        // Recognition is synchronous and the slowest step after the capture; a cancellation that
-        // arrived during the capture should not pay for it.
-        try Task.checkCancellation()
-        let lines = try recognise(image)
+        // **And still there after it.** A window moved or resized while the capture ran was captured
+        // where it used to be, and the pointer would be mapped onto whatever text is now under it.
+        guard let after = Self.liveBounds(of: window.windowID), Self.sameGeometry(after, target.frame) else {
+            throw RecognitionError.windowNotCapturable
+        }
+        return image
+    }
 
+    /// The recognised word under `point`, or `.nothingUnderPointer`.
+    private static func hit(in lines: [RecognisedLine], at point: CGPoint, target: Target) throws -> Recognition {
         let cursor = CaptureGeometry.normalized(point, in: target.region)
         // The shared tolerance, expressed in the capture's normalised units.
         let slack = CGSize(
@@ -137,7 +153,7 @@ final class ScreenTextRecogniser: Sendable {
             at: cursor, in: lines, slack: slack, region: target.region.size) else {
             throw RecognitionError.nothingUnderPointer
         }
-        guard let read = Self.reading(
+        guard let read = reading(
             lines, pick: pick, at: cursor, region: target.region.size,
             appName: target.appName, bundleID: target.bundleID)
         else { throw RecognitionError.nothingUnderPointer }
@@ -269,74 +285,56 @@ final class ScreenTextRecogniser: Sendable {
         let sourceRect: CGRect
         let appName: String?
         let bundleID: String?
+        /// The window's frame when the capture was set up, in global screen points.
+        let frame: CGRect
     }
 
-    private func target(at point: CGPoint) async throws -> Target {
-        if let window = try await windowUnderPointer(point) {
-            let frame = window.frame
-            let region = CaptureGeometry.rect(
-                around: point, size: CGSize(width: frame.width, height: Self.bandHeight), within: frame)
-            // `sourceRect` is window-local and starts at (0, 0), even though `filter.contentRect`
-            // reports the window's frame in *global* screen coordinates. Adding that origin puts
-            // the rect outside the window and the capture fails with "invalid parameter" — and
-            // nothing in the API says which convention is which.
-            return Target(
-                filter: SCContentFilter(desktopIndependentWindow: window), region: region,
-                sourceRect: CGRect(
-                    origin: CGPoint(x: region.minX - frame.minX, y: region.minY - frame.minY),
-                    size: region.size),
-                appName: window.owningApplication?.applicationName,
-                bundleID: window.owningApplication?.bundleIdentifier)
+    /// The capture for `window`, found by its compositor number in ScreenCaptureKit's list.
+    ///
+    /// The window's *geometry* comes from the cached `SCWindow`, which is up to three seconds old.
+    /// Move or resize a window inside that time and the capture crops the place it used to be — a
+    /// miss, or worse, the wrong word read confidently — so the cached frame is checked against the
+    /// live one the caller listed, and refreshed when they disagree.
+    ///
+    /// **Against the window as it is now**, not as it was listed when the hover began: the
+    /// Accessibility read in between can take most of a second, and a window moved meanwhile would be
+    /// cropped where it used to be. Its live bounds are read again here, and a point it no longer
+    /// covers reads nothing.
+    private func target(at point: CGPoint, window listed: ListedWindow) async throws -> Target {
+        guard let live = Self.liveBounds(of: listed.windowID) else { throw RecognitionError.windowNotCapturable }
+        guard live.contains(point) else { throw RecognitionError.nothingUnderPointer }
+        var found = try await shareableContent().windows.first { $0.windowID == listed.windowID }
+        if found.map({ !Self.sameGeometry($0.frame, live) }) ?? true {
+            try Task.checkCancellation()
+            found = try await shareableContent(refresh: true).windows.first { $0.windowID == listed.windowID }
         }
-
-        var displayID = CGDirectDisplayID()
-        var matches: UInt32 = 0
-        guard CGGetDisplaysWithPoint(point, 1, &displayID, &matches) == .success, matches == 1 else {
-            throw RecognitionError.noDisplay(point)
-        }
-        var content = try await shareableContent()
-        if !content.displays.contains(where: { $0.displayID == displayID }) {
-            content = try await shareableContent(refresh: true)  // cached while locked, or a display appeared
-        }
-        guard content.displays.contains(where: { $0.displayID == displayID }) else {
-            throw RecognitionError.displayNotCapturable(displayID)
-        }
-        // **And there it stops.** A display-scoped capture has no owning window, so it can be
-        // attributed to no app — and `read` refuses an unattributable region one line after asking
-        // for this one, because a region XiaolaiDict cannot name is a region it cannot check against
-        // the exclusion list. So the filter this used to build could never be captured through: it
-        // was assembled, returned, and thrown away by its only caller. The display is still looked
-        // for, because *which* of the two refusals applies is what the reader is told — a display
-        // that is not there, a screen that is locked, or simply no window under the pointer.
-        throw RecognitionError.unattributable
+        guard let window = found, Self.sameGeometry(window.frame, live) else { throw RecognitionError.windowNotCapturable }
+        let frame = window.frame
+        let region = CaptureGeometry.rect(
+            around: point, size: CGSize(width: frame.width, height: Self.bandHeight), within: frame)
+        // `sourceRect` is window-local and starts at (0, 0), even though `filter.contentRect`
+        // reports the window's frame in *global* screen coordinates. Adding that origin puts
+        // the rect outside the window and the capture fails with "invalid parameter" — and
+        // nothing in the API says which convention is which.
+        return Target(
+            filter: SCContentFilter(desktopIndependentWindow: window), region: region,
+            sourceRect: CGRect(
+                origin: CGPoint(x: region.minX - frame.minX, y: region.minY - frame.minY),
+                size: region.size),
+            appName: window.owningApplication?.applicationName,
+            bundleID: window.owningApplication?.bundleIdentifier, frame: frame)
     }
 
-    /// The frontmost ordinary window under the pointer, XiaolaiDict's own excluded. `CGWindowList` is
-    /// ordered front to back, which `SCShareableContent` does not promise.
-    private func windowUnderPointer(_ point: CGPoint) async throws -> SCWindow? {
-        guard let listed = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    /// The window's bounds as the compositor has them now, or nil where it is no longer on screen.
+    private static func liveBounds(of windowID: CGWindowID) -> CGRect? {
+        guard let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+              let first = info.first,
+              // **On screen**, which listing the window by number does not establish: a window moved
+              // off screen keeps its bounds and would pass through on the cached path.
+              first[kCGWindowIsOnscreen as String] as? Bool == true,
+              let bounds = first[kCGWindowBounds as String] as? NSDictionary
         else { return nil }
-        for info in listed {
-            guard info[kCGWindowLayer as String] as? Int == 0,
-                  info[kCGWindowOwnerPID as String] as? pid_t != getpid(),
-                  let id = info[kCGWindowNumber as String] as? CGWindowID,
-                  let frame = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({
-                      CGRect(dictionaryRepresentation: $0 as CFDictionary)
-                  }),
-                  frame.contains(point)
-            else { continue }
-            // The window is *found* from live bounds but its geometry comes from the cached
-            // `SCWindow`, which is up to three seconds old. Move or resize a window inside that
-            // window and the capture crops the place it used to be — a miss, or worse, the wrong
-            // word read confidently. So the cached frame is checked against the live one.
-            if let window = try await shareableContent().windows.first(where: { $0.windowID == id }),
-               Self.sameGeometry(window.frame, frame) {
-                return window
-            }
-            return try await shareableContent(refresh: true).windows.first { $0.windowID == id }
-        }
-        return nil
+        return CGRect(dictionaryRepresentation: bounds as CFDictionary)
     }
 
     /// Frames are compared with a tolerance: the two APIs round independently, and a sub-point

@@ -243,6 +243,10 @@ struct LookupPane: View {
     /// Whether hover is running at all — the *watcher*, not a field of the policy, which is why it
     /// arrives separately. Nil where the pane is drawn without the app behind it.
     var hoverEnabled: Binding<Bool>?
+    /// Reading the screen has stopped answering. **Said here because nothing else says it**: the
+    /// one capture allowed at a time is held by a capture that never finished, so hover over a
+    /// terminal does nothing, and a refusal on the hover path is otherwise silent.
+    var captureStuck = false
     var shortcut: ShortcutChoice?
     /// The shortcut field's recorder. Held by the settings model, because ending it belongs to
     /// whoever knows the reader has left this pane — which this pane cannot see.
@@ -254,6 +258,7 @@ struct LookupPane: View {
             hoverSection
             scriptsSection
             appsSection
+            sitesSection
         }
         .formStyle(.grouped)
     }
@@ -314,6 +319,17 @@ struct LookupPane: View {
                 ForEach(HoverPolicy.settleChoices) { Text(HoverLabels.name(of: $0)).tag($0.milliseconds) }
             }
             .pickerStyle(.segmented)
+
+            if captureStuck {
+                // **Only the hovers that need the screen**: Accessibility is still asked while a
+                // capture is held, and only the capture path waits for the one guard.
+                Text("""
+                     Reading the screen has stopped answering, so words in apps that do not \
+                     expose their text cannot be looked up. Quitting and reopening the app clears it.
+                     """)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } header: {
             Text("Hover")
         } footer: {
@@ -403,16 +419,54 @@ struct LookupPane: View {
         }
     }
 
-    // **There is no "Never look up on these sites" section, and its absence is deliberate.**
-    // There was one: a text field, Add and Remove, under a header that read as a privacy promise
-    // and a footer that took it back — "Not yet enforced". The list is never consulted: the one
-    // `HoverSite` built in the hover path carries no host, so `excludedHosts` cannot refuse
-    // anything, and a reader who trusted the header had their sentences saved on those sites.
-    // Enforcing it means resolving the page's host *before* the capture, which the hover rules
-    // deliberately do not do today because the cheapest refusal must not touch Accessibility —
-    // a decision, not a patch. Until it is made the control is gone, 2026-10-02. What a reader
-    // already added stays in `HoverPolicy.excludedHosts`, stored and untouched, so the section
-    // can come back with their list in it.
+    /// Sites XiaolaiDict never looks up on — **enforced**. It was removed on 2026-10-02 because the
+    /// hover path never named a site, so the list refused nothing under a header that promised it
+    /// would. Hover now resolves the page's host after the cheap gate and before any text or pixel
+    /// is read, and only while this list has something in it. What a reader added before is here.
+    private var sitesSection: some View {
+        Section {
+            ForEach(policy.excludedHosts.sorted(), id: \.self) { site in
+                HStack {
+                    Text(verbatim: site)
+                    Spacer(minLength: scale.space.inline)
+                    Button("Remove") { policy.excludedHosts.remove(site) }
+                        .buttonStyle(.link)
+                }
+            }
+            HStack {
+                TextField("example.com", text: $host)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addHost)
+                Button("Add", action: addHost)
+                    .disabled(HoverPolicy.siteHost(fromTyped: host) == nil)
+            }
+        } header: {
+            Text("Never Look Up on These Sites")
+        } footer: {
+            // **The cost is said where the promise is made.** A page whose address cannot be read
+            // might be one of these sites, so it is refused — and an app that exposes no text has
+            // no page to read at all, which is every terminal.
+            // **Hover's, and said so**: a selection the reader looked up with the shortcut is looked
+            // up wherever it is, as the scripts setting already says for scripts.
+            Text("""
+                 Hover does not look up words on these sites; looking up a selection works anywhere. \
+                 Subdomains are covered too, so example.com also excludes docs.example.com. \
+                 While this list has a site in it, hover reads an app only where it can tell whether \
+                 it is a web page — so not apps that do not expose their text, such as terminals.
+                 """)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @State private var host = ""
+
+    /// A pasted address is reduced to its host — stored whole, it could never match a page.
+    private func addHost() {
+        guard let site = HoverPolicy.siteHost(fromTyped: host) else { return }
+        policy.excludedHosts.insert(site)
+        host = ""
+    }
 
     /// The apps the reader added, which are the only ones they can take away again.
     private var readersOwn: [String] {

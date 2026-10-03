@@ -31,6 +31,9 @@ struct SenseTapQueue {
         /// decides, and the ledger keeps them apart.
         let enrolling: Bool
         var source: StudyKeepSource = .manual
+        /// The reader language it was made under — part of a note's identity, so it travels with the
+        /// tap rather than being taken from whatever the lookup's row says when it lands.
+        var language: String? = nil
     }
 
     /// How many taps may wait. A reader can only tap what is on screen, so this is generous; the cap
@@ -38,9 +41,12 @@ struct SenseTapQueue {
     static let mostHeld = 32
 
     /// The row to write this tap to, or nil where there is none yet and it has been kept.
-    mutating func tapped(_ encounter: SenseEncounter, request: Int, enrolling: Bool = false, source: StudyKeepSource = .manual) -> Int? {
+    mutating func tapped(
+        _ encounter: SenseEncounter, request: Int, enrolling: Bool = false, source: StudyKeepSource = .manual,
+        language: String? = nil
+    ) -> Int? {
         if let lastLookup, lastLookup.request == request { return lastLookup.id }
-        waiting.append((request, SenseTap(encounter: encounter, enrolling: enrolling, source: source)))
+        waiting.append((request, SenseTap(encounter: encounter, enrolling: enrolling, source: source, language: language)))
         if waiting.count > Self.mostHeld { waiting.removeFirst() }
         return nil
     }

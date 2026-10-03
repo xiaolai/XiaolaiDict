@@ -13,7 +13,7 @@ import XiaolaiDictTestSupport
 /// governs the *content* is three seconds.
 @MainActor
 struct LookupRunnerTests {
-    private static let selection = Selection(
+    static let selection = Selection(
         text: "fine", sentence: "He paid the fine.", rangeInSentence: NSRange(location: 12, length: 4),
         quality: .accessibility(.accessibilityTextRange, context: .complete),
         place: ReadingPlace(
@@ -46,8 +46,7 @@ struct LookupRunnerTests {
             panel: panel)
         let ticket = panel.newRequest()
 
-        let lookup = Task { await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket) }
-        try await panel.waitForShow()
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket)
 
         // **Counted, not timed.** This used to also assert the elapsed time was under the content
         // deadline, and it failed under a full parallel run — an upper bound on wall clock measures
@@ -61,10 +60,9 @@ struct LookupRunnerTests {
         // was taken from the constant it was checking, so it could not see that constant move.
         #expect(panel.contents.count == 1)
         #expect(panel.contents[0].isWaitingLookup, "the first thing shown already had an outcome")
-        // Still waiting: the content cannot have arrived, because the service never answers.
-        #expect(panel.updates.isEmpty)
-
-        _ = await lookup.value
+        // Shown before anything arrived — recorded at the show, not observed against the deadline,
+        // which a busy run let pass before the old assertion was reached.
+        #expect(panel.updatesWhenFirstShown == 0, "the panel waited for the dictionaries")
         #expect(panel.updates.count == 1, "the panel was never filled in")
         #expect(panel.updates[0].isAnsweredLookup)
     }
@@ -73,10 +71,13 @@ struct LookupRunnerTests {
     /// does not pay for the load — and the lookup never waits on it.
     @Test func theModelIsPrewarmedBesideTheLookup() async throws {
         let prewarmed = Recorder(0)
+        let panel = RecordingPanel()
         let runner = LookupRunner(
             client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
-            panel: RecordingPanel(), prewarm: { prewarmed.withLock { $0 += 1 } })
-        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: PanelTicket(number: 0))
+            panel: panel, prewarm: { prewarmed.withLock { $0 += 1 } })
+        // A ticket the panel handed out. `PanelTicket(number: 0)` stood here and was current only
+        // because the stand-in's counter happened to start at 0 — a request nobody made.
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         for _ in 0..<200 where prewarmed.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
         #expect(prewarmed.withLock { $0 } == 1)
     }
@@ -299,22 +300,26 @@ private final class SupersedingSelector: SenseSelecting, @unchecked Sendable {
 final class RecordingPanel: LookupPanelPresenting {
     private(set) var contents: [PanelContent] = []
     private(set) var updates: [PanelContent] = []
-    private var current = 0
+    /// The controller's own rule, so this stand-in cannot drift from it.
+    private var requests = RequestSequence()
 
-    func newRequest() -> PanelTicket {
-        current += 1
-        return PanelTicket(number: current)
-    }
-
-    func isCurrent(_ ticket: PanelTicket) -> Bool { ticket.number == current }
+    func newRequest() -> PanelTicket { PanelTicket(number: requests.next()) }
+    func begin() -> Int { requests.begin() }
+    func claim(_ request: Int) -> PanelTicket? { requests.claim(request) ? PanelTicket(number: request) : nil }
+    func isCurrent(_ ticket: PanelTicket) -> Bool { requests.isCurrent(ticket.number) }
 
     /// Whether the panel can be drawn at all. The real controller answers `false` when the window
     /// actions have not been captured; a test sets this to drive that branch.
     var canShow = true
 
+    /// How many updates had arrived when the panel was first shown — **the order, recorded where it
+    /// happens**, so a test need not race a deadline to see it.
+    private(set) var updatesWhenFirstShown: Int?
+
     @discardableResult
     func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
         guard isCurrent(ticket), canShow else { return false }
+        if updatesWhenFirstShown == nil { updatesWhenFirstShown = updates.count }
         contents.append(content)
         return true
     }
@@ -323,6 +328,10 @@ final class RecordingPanel: LookupPanelPresenting {
         guard isCurrent(ticket) else { return }
         updates.append(content)
     }
+
+    /// Whether the compositor would list it: shown is drawn, unless a test says the window never was.
+    var drawn = true
+    func seenOnScreen(_ ticket: PanelTicket) async -> Bool { canShow && drawn }
 
     /// Waits for the panel to be presented, rather than assuming it already has been.
     func waitForShow() async throws {
@@ -352,16 +361,17 @@ struct AutomaticKeepWiringTests {
     @Test func displayedWaitingLookupStartsRecordingBeforeDictionaryReply() async throws {
         let panel = RecordingPanel()
         var received: [LookupRecording] = []
+        var answeredWhenRecorded: [Int] = []
         let runner = LookupRunner(client: DictionaryClient(deadline: .milliseconds(30),
             connect: { _ in NeverReplies() }, fallback: { _ in nil }), panel: panel,
-            initialRecording: { row, _ in received.append(row) })
+            initialRecording: { row, _ in received.append(row); answeredWhenRecorded.append(panel.updates.count) })
         let selection = Selection(text: "fine", sentence: "A fine day.", rangeInSentence: nil,
             quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())
-        let pending = Task { await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest()) }
-        try await panel.waitForShow()
-        #expect(received.count == 1)
+        _ = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        // The pending row comes first, before the dictionaries' answer was drawn — once the
+        // compositor has said the panel is on screen, which is the only evidence the reader saw it.
         #expect(received.first?.encounter == nil)
-        _ = await pending.value
+        #expect(answeredWhenRecorded.first == 0, "the first row waited for the dictionaries")
     }
     @Test(arguments: [nil, "unavailable", "noad"] as [String?])
     func effectivePrimaryUsesFrozenChoiceAndOnlyFallsBackWhenUnset(_ chosen: String?) async throws {
@@ -411,4 +421,112 @@ struct AutomaticKeepWiringTests {
         #expect(result?.encounter?.chosenBy == nil)
     }
 
+}
+
+/// The runner notes each stage a lookup reaches, under its request (WI-6).
+@MainActor
+struct LookupRunnerTimingTests {
+    /// Panel, dictionary, sense — in that order, each once, under the lookup's own request. Red if a
+    /// stage stops being marked, or is marked under another request.
+    @Test func eachStageIsMarkedUnderItsRequest() async {
+        let panel = RecordingPanel()
+        var marks: [(LookupTimeline.Stage, Int)] = []
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain" }),
+            panel: panel, mark: { stage, request, _ in marks.append((stage, request)) })
+        let ticket = panel.newRequest()
+        _ = await runner.run(LookupRunnerTests.selection, near: .zero, requestedAt: .now, ticket: ticket)
+        #expect(marks.map(\.0) == [.panelShown, .dictionaryAnswered, .senseResolved])
+        #expect(marks.allSatisfy { $0.1 == ticket.number })
+    }
+}
+
+/// Which phrase the winning sense belongs to.
+struct PhraseSenseAttributionTests {
+    /// `sense` is the sense's own id — **the same in two entries** where a test needs a key that
+    /// does not tell them apart, as a positional key does not.
+    private static func entry(_ id: String, headword: String, definition: String, sense: String = "s") -> DictionaryEntry {
+        let markup = """
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="\(id)" \
+            d:title="\(headword)"><span class="hg x_xh0"><span class="hw">\(headword)</span></span>\
+            <span id="\(sense).001" class="se1 x_xd0"><span id="\(sense).002" class="se2 x_xd1 hasSn">\
+            <span d:def="1" class="df">\(definition)</span></span></span></d:entry>
+            """
+        return DictionaryEntry(
+            dictionary: DictionaryIdentity(name: "Test", identifier: "test", version: "1"),
+            headword: headword, lookedUp: headword, html: markup, document: EntryDocument.parse(markup))
+    }
+
+    private static func hit(_ phrase: String, _ entries: [DictionaryEntry]) -> PhraseHit {
+        PhraseHit(phrase: phrase, location: 0, length: phrase.utf16.count, separation: .none,
+                  meaning: PhraseMeaning(ownEntries: entries, filings: []))
+    }
+
+    /// **The sense is found in the entry the mark is about, in the phrase that owns it.** Two
+    /// phrases' entries share a positional key; the mark is about the second phrase's entry. Red if
+    /// the key is matched across every phrase entry, which answered with the first.
+    @Test func theSenseIsTheOwnersAndSoIsThePhrase() throws {
+        let first = Self.entry("p1", headword: "red herring", definition: "a fish")
+        let second = Self.entry("p2", headword: "herring bone", definition: "a pattern")
+        let key = try #require(second.blocks.first?.senses.first?.key)
+        #expect(first.blocks.first?.senses.first?.key == key, "the fixture must share the key")
+        let found = try #require(LookupRunner.phraseSense(
+            key: key, owner: PanelSelection.identity(of: second),
+            in: [Self.hit("red herring", [first]), Self.hit("herring bone", [second])]))
+        #expect(found.0 == 1, "the sense was attributed to the leading phrase")
+        #expect((found.1.definition ?? found.1.text).contains("pattern"))
+    }
+
+    /// A mark about none of the phrases' entries is the word's: nothing is attributed.
+    @Test func aWordsSenseIsNoPhrases() throws {
+        let entry = Self.entry("p1", headword: "red herring", definition: "a fish")
+        let key = try #require(entry.blocks.first?.senses.first?.key)
+        #expect(LookupRunner.phraseSense(key: key, owner: "someone-else", in: [Self.hit("red herring", [entry])]) == nil)
+    }
+}
+
+
+/// **A panel that was asked for and never drawn records nothing** — the compositor is the evidence.
+@MainActor
+struct LookupRunnerSeenTests {
+    @Test func aPanelNeverDrawnRecordsNothing() async {
+        let panel = RecordingPanel()
+        panel.drawn = false
+        var recorded = 0
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain" }),
+            panel: panel, initialRecording: { _, _ in recorded += 1 })
+        let row = await runner.run(LookupRunnerTests.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        #expect(row == nil, "a lookup nobody saw was returned for recording")
+        #expect(recorded == 0, "a lookup nobody saw wrote a pending row")
+    }
+
+    /// **"Panel" is timed by the compositor, not by the request** (audit round 3, #28). Marked when
+    /// the window was asked for, it under-stated the latency a reader sees and timed panels that
+    /// never drew at all.
+    @Test func aPanelNeverDrawnIsNeverMarkedShown() async {
+        let panel = RecordingPanel()
+        panel.drawn = false
+        var marks: [LookupTimeline.Stage] = []
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain" }),
+            panel: panel, mark: { stage, _, _ in marks.append(stage) })
+        _ = await runner.run(LookupRunnerTests.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        #expect(!marks.contains(.panelShown), "a panel the compositor never listed was timed as shown")
+    }
+
+    /// **The compositor's verdict reaches whoever delivered the word** (#38), once, either way.
+    @Test func theCompositorsVerdictIsReported() async {
+        for drawn in [true, false] {
+            let panel = RecordingPanel()
+            panel.drawn = drawn
+            var verdicts: [Bool] = []
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain" }),
+                panel: panel)
+            _ = await runner.run(LookupRunnerTests.selection, near: .zero, requestedAt: .now,
+                                 ticket: panel.newRequest(), seen: { verdicts.append($0) })
+            #expect(verdicts == [drawn])
+        }
+    }
 }

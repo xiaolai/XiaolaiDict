@@ -14,15 +14,37 @@ import XiaolaiDictCore
 /// touching this window — `SettingsModel` already polls for exactly that, because macOS posts
 /// nothing when a permission changes.
 public struct SetupBoard: Equatable, Sendable {
-    public enum Step: String, CaseIterable, Sendable, Identifiable {
-        case accessibility
-        case screenRecording
+    public enum Step: Hashable, CaseIterable, Sendable, Identifiable {
+        /// **The permission is the step's payload, not a second mapping beside it.** Two cases and a
+        /// `permission` property mapping them meant every view switching on a step mapped them again,
+        /// and the only alternative was an unreachable branch (audit round 3, #57).
+        case permission(Permission)
         case dictionary
         case shortcut
         /// The local model: one row for translation and sense picking, because one download does both.
         case localModel
 
-        public var id: String { rawValue }
+        public static let accessibility = Step.permission(.accessibility)
+        public static let screenRecording = Step.permission(.screenRecording)
+
+        /// Board order: the permissions in their own order, then the rest.
+        public static var allCases: [Step] { Permission.allCases.map(Step.permission) + [.dictionary, .shortcut, .localModel] }
+
+        /// The same identifiers the two permission cases had as raw values.
+        public var id: String {
+            switch self {
+            case .permission(let permission): permission.rawValue
+            case .dictionary: "dictionary"
+            case .shortcut: "shortcut"
+            case .localModel: "localModel"
+            }
+        }
+
+        /// The permission this step asks for, where it asks for one.
+        public var permission: Permission? {
+            guard case .permission(let permission) = self else { return nil }
+            return permission
+        }
 
         /// Whether an unsettled step is something the reader still has to do.
         ///
@@ -142,8 +164,7 @@ public struct SetupBoard: Equatable, Sendable {
 
     public func isSettled(_ step: Step) -> Bool {
         switch step {
-        case .accessibility: isGranted(.accessibility)
-        case .screenRecording: isGranted(.screenRecording)
+        case .permission(let permission): isGranted(permission)
         // Settled by the reader having chosen, never by a proposal being available. A proposal is
         // an offer; until it is taken the seat is empty, and the unchosen primary is whatever comes
         // first in Dictionary.app's order — which on the development Mac is a dictionary that
@@ -181,9 +202,24 @@ public struct SetupBoard: Equatable, Sendable {
         permissions.states.first { $0.permission == permission }?.isGranted ?? false
     }
 
+    /// Whether `permission` could not be checked — **said as that, never as "needed"**: a probe that
+    /// failed says nothing about consent, and the board offered to request a grant that may stand.
+    public func isUnchecked(_ permission: Permission) -> Bool {
+        // **Not probed yet is not checked either**: the board starts with an empty report, and drew
+        // "Needed" and offered a request before the first probe had answered.
+        guard let state = permissions.states.first(where: { $0.permission == permission }) else { return true }
+        return state.found == .couldNotTell
+    }
+
     /// The steps still waiting on the reader, in board order. A step this Mac cannot have is not
     /// one of them: there is nothing for the reader to do about it.
-    public var outstanding: [Step] { steps.filter { $0.needsReader && !isSettled($0) && isAvailable($0) } }
+    /// **Not a permission that could not be checked**: its row says "Not checked", and counting it
+    /// here made the summary say something was needed that may well be granted.
+    public var outstanding: [Step] {
+        steps.filter { step in
+            step.needsReader && !isSettled(step) && isAvailable(step) && !(step.permission.map(isUnchecked) ?? false)
+        }
+    }
 
     /// Whether the reader has nothing left to do. Not whether every row shows a tick.
     ///
@@ -195,7 +231,14 @@ public struct SetupBoard: Equatable, Sendable {
     /// about the model does not *know* that row is settled, and `isAvailable` leaves an unknown row
     /// out of `outstanding` — so without this, "nothing left to do" was reported over a row nobody
     /// had answered, which is the onboarding invariant read backwards.
-    public var isComplete: Bool { outstanding.isEmpty && available != nil && model != nil }
+    /// **And not while a permission could not be checked** — not outstanding, since it may well be
+    /// granted, but not known to be in place either.
+    public var isComplete: Bool { outstanding.isEmpty && unchecked.isEmpty && available != nil && model != nil }
+
+    /// The permission steps whose probe could not tell — neither needed nor in place.
+    public var unchecked: [Step] {
+        steps.filter { step in step.permission.map(isUnchecked) ?? false }
+    }
 
     /// Whether the board is still waiting to be able to say anything about the dictionary.
     public var isAsking: Bool { available == nil }

@@ -57,6 +57,27 @@ struct PrimaryDictionaryTests {
         #expect(primary.identity(among: [Self.collins, Self.noad])?.name == "New Oxford American Dictionary")
     }
 
+    /// **The card and the resolver ask about one primary** (audit round 3, #27). Unchosen, the card
+    /// took the first word dictionary and the resolver the first keyable one among word *and*
+    /// phrase entries — Collins on screen, a NOAD sense marked.
+    @Test func oneLookupPinsOnePrimaryForEveryConsumer() {
+        let pinned = PrimaryDictionary().pinned(word: [Self.collins], phrase: [Self.noad])
+        #expect(pinned.identity(among: [Self.collins])?.name == "Collins COBUILD")
+        #expect(pinned.identity(among: [Self.collins, Self.noad])?.name == "Collins COBUILD",
+                "the resolver's list chose a different primary from the card's")
+    }
+
+    /// A choice that answered only for the phrase still stands, and one that did not answer at all
+    /// falls back to the word's dictionaries.
+    @Test func pinningKeepsAChoiceThatAnsweredAnywhere() {
+        let chosen = PrimaryDictionary(chosen: "com.apple.dictionary.NOAD")
+        #expect(chosen.pinned(word: [Self.collins], phrase: [Self.noad]) == chosen)
+        let gone = PrimaryDictionary(chosen: "com.apple.dictionary.gone")
+        #expect(gone.pinned(word: [Self.collins, Self.oxford], phrase: [Self.noad]).chosen
+            == "com.apple.dictionary.zh_CN-en.OCD")
+        #expect(PrimaryDictionary().pinned(word: [], phrase: [Self.noad]).chosen == "com.apple.dictionary.NOAD")
+    }
+
     // MARK: - What a lookup may record
 
     private let when = Date(timeIntervalSince1970: 1_800_000_000)

@@ -9,7 +9,7 @@ import Testing
 struct HoverPolicyTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let policy = HoverPolicy.shipped
-    private let reading = HoverSite(bundleID: "com.apple.Preview", host: nil, wordKey: "hold@1")
+    private let reading = HoverSite(bundleID: "com.apple.Preview", reading: .notWebContent, wordKey: "hold@1")
 
     private func decide(
         _ site: HoverSite? = nil, held: Set<HoverModifier> = [.option],
@@ -80,9 +80,9 @@ struct HoverPolicyTests {
     @Test func aSiteCanBeExcluded() {
         var strict = policy
         strict.excludedHosts = ["bank.example.com"]
-        #expect(decide(HoverSite(bundleID: "com.apple.Safari", host: "bank.example.com"), policy: strict)
+        #expect(decide(HoverSite(bundleID: "com.apple.Safari", reading: .known("bank.example.com")), policy: strict)
             == .stayQuiet(.excludedSite))
-        #expect(decide(HoverSite(bundleID: "com.apple.Safari", host: "news.example.com"), policy: strict) == .look)
+        #expect(decide(HoverSite(bundleID: "com.apple.Safari", reading: .known("news.example.com")), policy: strict) == .look)
     }
 
     /// Excluding a host excludes its subdomains: a reader who excluded `example.com` did not mean
@@ -90,10 +90,10 @@ struct HoverPolicyTests {
     @Test func excludingAHostExcludesItsSubdomains() {
         var strict = policy
         strict.excludedHosts = ["example.com"]
-        #expect(decide(HoverSite(bundleID: "com.apple.Safari", host: "secure.example.com"), policy: strict)
+        #expect(decide(HoverSite(bundleID: "com.apple.Safari", reading: .known("secure.example.com")), policy: strict)
             == .stayQuiet(.excludedSite))
         // …but not a different registrable name that merely ends the same way.
-        #expect(decide(HoverSite(bundleID: "com.apple.Safari", host: "notexample.com"), policy: strict) == .look)
+        #expect(decide(HoverSite(bundleID: "com.apple.Safari", reading: .known("notexample.com")), policy: strict) == .look)
     }
 
     // MARK: - A5, pause
@@ -169,7 +169,7 @@ struct HoverHostMatchingTests {
         var policy = HoverPolicy.shipped
         policy.excludedHosts = names
         return policy.decide(
-            at: HoverSite(bundleID: "com.apple.Safari", host: host), modifiersHeld: [.option], tappedTwice: false,
+            at: HoverSite(bundleID: "com.apple.Safari", reading: .known(host)), modifiersHeld: [.option], tappedTwice: false,
             pointerStillFor: .seconds(1), pausedUntil: nil, lastLookedUp: nil,
             captureInFlight: false, now: now) == .stayQuiet(.excludedSite)
     }

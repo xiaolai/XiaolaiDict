@@ -88,6 +88,8 @@ public struct SetupView: View {
     /// be a guess, and a guess stored is how the window stops opening here on a fresh install.
     var isUnfinished: Bool? {
         guard model.hasAsked, !board.isAsking else { return nil }
+        // A permission that could not be checked leaves the answer unknown, not "nothing to do".
+        if board.outstanding.isEmpty, !board.unchecked.isEmpty { return nil }
         return !board.outstanding.isEmpty
     }
 
@@ -176,6 +178,10 @@ public struct SetupView: View {
             // **Not known is not "this Mac cannot".** A board that was never told about the model
             // reads as unavailable to `isAvailable`, and the sentence below would say this Mac had
             // everything it can have while the row itself says it does not know.
+            // **Not checked is not in place.** Nothing is waiting on the reader, but "everything
+            // needed" would be said over a row reading "Not checked".
+            case 0 where !board.unchecked.isEmpty:
+                Text("Nothing is waiting on you, but a permission could not be checked.")
             case 0 where board.model == nil:
                 Text("Nothing is waiting on you. What this Mac can do about the local model is not known yet.")
             case 0 where board.steps.contains(where: { !board.isAvailable($0) }):
@@ -222,8 +228,8 @@ public struct SetupView: View {
 
     @ViewBuilder private func title(_ step: SetupBoard.Step) -> some View {
         switch step {
-        case .accessibility: Text("Accessibility")
-        case .screenRecording: Text("Screen Recording")
+        case .permission(.accessibility): Text("Accessibility")
+        case .permission(.screenRecording): Text("Screen Recording")
         case .dictionary: Text("Study Dictionary")
         case .shortcut: Text("Lookup Shortcut")
         case .localModel: Text("Translation and Meanings")
@@ -235,6 +241,8 @@ public struct SetupView: View {
             modelState
         } else if board.isSettled(step), board.isAvailable(step) {
             Text("Ready")
+        } else if let permission = step.permission, board.isUnchecked(permission) {
+            Text("Not checked")
         } else if step.needsReader {
             Text("Needed")
         } else {
@@ -244,13 +252,21 @@ public struct SetupView: View {
 
     @ViewBuilder private func detail(_ step: SetupBoard.Step) -> some View {
         switch step {
-        case .accessibility:
-            Text(Permission.accessibility.explanation(isGranted: board.isGranted(.accessibility)))
-        case .screenRecording:
-            Text(Permission.screenRecording.explanation(isGranted: board.isGranted(.screenRecording)))
+        case .permission(let permission): permissionDetail(permission)
         case .dictionary: dictionaryDetail
         case .shortcut: shortcutDetail
         case .localModel: modelDetail
+        }
+    }
+
+    @ViewBuilder private func permissionDetail(_ permission: Permission) -> some View {
+        if board.isUnchecked(permission) {
+            Text("""
+                 Whether this is allowed could not be checked just now. It may well be allowed \
+                 already; the list it is granted in is below.
+                 """)
+        } else {
+            Text(permission.explanation(isGranted: board.isGranted(permission)))
         }
     }
 
@@ -504,26 +520,7 @@ public struct SetupView: View {
 
     @ViewBuilder private func actions(_ step: SetupBoard.Step) -> some View {
         switch step {
-        case .accessibility, .screenRecording:
-            let permission: Permission = step == .accessibility ? .accessibility : .screenRecording
-            if !board.isGranted(permission) {
-                // Secondary, not tertiary: this is the path the reader is being sent to find.
-                Text(permission.location)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                HStack(spacing: scale.space.stack) {
-                    // macOS prompts only the first time ever, which is why the second button
-                    // exists and why the list is named above it.
-                    Button("Request Access…") { permission.request() }
-                        .stepAction(prominent: isNext(step))
-                    // *System* Settings: this button is inside the app's own Settings window,
-                    // where "Open Settings…" named the window the reader was already in.
-                    Button("Open System Settings…") { NSWorkspace.shared.open(permission.settingsURL) }
-                        .stepAction()
-                }
-                .controlSize(.small)
-            }
+        case .permission(let permission): permissionActions(permission, step: step)
         case .dictionary:
             dictionaryActions
         case .localModel:
@@ -534,6 +531,31 @@ public struct SetupView: View {
                     .stepAction()
                     .controlSize(.small)
             }
+        }
+    }
+
+    @ViewBuilder private func permissionActions(_ permission: Permission, step: SetupBoard.Step) -> some View {
+        if !board.isGranted(permission) {
+            // Secondary, not tertiary: this is the path the reader is being sent to find.
+            Text(permission.location)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            HStack(spacing: scale.space.stack) {
+                // macOS prompts only the first time ever, which is why the second button
+                // exists and why the list is named above it. **Not offered for a permission
+                // that could not be checked**: asking for a grant that may stand raises a dialog
+                // that grants nothing.
+                if !board.isUnchecked(permission) {
+                    Button("Request Access…") { permission.request() }
+                        .stepAction(prominent: isNext(step))
+                }
+                // *System* Settings: this button is inside the app's own Settings window,
+                // where "Open Settings…" named the window the reader was already in.
+                Button("Open System Settings…") { NSWorkspace.shared.open(permission.settingsURL) }
+                    .stepAction()
+            }
+            .controlSize(.small)
         }
     }
 

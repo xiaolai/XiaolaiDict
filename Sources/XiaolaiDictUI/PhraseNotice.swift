@@ -31,6 +31,10 @@ public struct PhrasePresentation: Equatable, Sendable {
     /// something the reader might have missed, without claiming to be what they read.
     public var met: SenseMet?
 
+    /// Whether every dictionary could be read for the phrase. Anything less is said on the card: a
+    /// phrase with no meaning shown because its lookup failed is not a phrase nobody explains.
+    public let retrieval: PhraseRetrieval
+
     /// Which meaning of the phrase fits the reader's own sentence.
     public struct SenseMet: Equatable, Sendable {
         public let definition: String?
@@ -53,11 +57,13 @@ public struct PhrasePresentation: Equatable, Sendable {
         return false
     }
 
-    public init(phrase: String, range: NSRange, separation: PhraseSeparation, definition: String?) {
+    public init(phrase: String, range: NSRange, separation: PhraseSeparation, definition: String?,
+                retrieval: PhraseRetrieval = .complete) {
         self.phrase = phrase
         self.range = range
         self.separation = separation
         self.definition = definition
+        self.retrieval = retrieval
     }
 
     /// The card's reading of one lookup's phrase answer, or nil where there is nothing to draw.
@@ -84,7 +90,8 @@ public struct PhrasePresentation: Equatable, Sendable {
         // card prefers the entry, whose senses the selector can also reach.
         let definition = Self.definition(in: hit.meaning.ownEntries)
             ?? hit.meaning.filings.lazy.compactMap(\.definition).first { !$0.isEmpty }
-        self.init(phrase: hit.phrase, range: range, separation: hit.separation, definition: definition)
+        self.init(phrase: hit.phrase, range: range, separation: hit.separation, definition: definition,
+                  retrieval: hit.retrieval)
     }
 
     /// The first definition any of the phrase's entries marks, in the order the dictionaries answered.
@@ -137,6 +144,9 @@ struct PhraseNoticeView: View {
             // the light card.
             if let met = phrase.met, met.isHypothesis {
                 StatusLabel(.unconfirmed, "The meaning here is a guess, not confirmed")
+            }
+            if phrase.retrieval != .complete {
+                StatusLabel(.caution, "Not every dictionary could be read for this phrase")
             }
             if phrase.isGuess {
                 // Said in the same voice the card uses for a proposed sense, because it is the same kind

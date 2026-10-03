@@ -59,6 +59,9 @@
     "%@ could not be set up, so it will not look anything up. Choose another combination." : {
 
     },
+    "%@ did not answer Accessibility in time — it may be busy. Try again in a moment." : {
+      "comment" : "Lookup panel; the placeholder is the app's name"
+    },
     "%@ frees %@ on this Mac. Using it again means downloading it again." : {
       "localizations" : {
         "en" : {
@@ -102,6 +105,9 @@
     "%@ needs ⌘, ⌃ or ⌥ — try another." : {
 
     },
+    "%@ quit, or stopped answering Accessibility requests." : {
+      "comment" : "Lookup panel; the placeholder is the app's name"
+    },
     "%@ recalled, over ^[%lld review](inflect: true)" : {
       "localizations" : {
         "en" : {
@@ -111,6 +117,9 @@
           }
         }
       }
+    },
+    "%@ refused Accessibility requests — is the screen locked?" : {
+      "comment" : "Lookup panel; the placeholder is the app's name"
     },
     "%@ translates your sentences and chooses the meaning you met, on this Mac — a %@ download." : {
       "localizations" : {
@@ -207,6 +216,9 @@
         }
       }
     },
+    "%lld permissions are off or could not be checked — open Setup" : {
+      "comment" : "Menu warning when some permissions are off and others could not be checked"
+    },
     "%lld permissions are off — selections and the screen cannot be read" : {
       "comment" : "Menu warning when more than one permission is missing"
     },
@@ -231,6 +243,12 @@
     "A menu-bar dictionary for macOS." : {
 
     },
+    "A newer lookup replaced this one." : {
+      "comment" : "Lookup panel, when a lookup was superseded"
+    },
+    "A permission could not be checked — open Setup to check again" : {
+      "comment" : "Menu warning when a permission probe failed, which is not a refusal"
+    },
     "A word is looked up when you use the key and the pointer has stopped over it." : {
 
     },
@@ -246,8 +264,14 @@
     "Accessibility Is Off" : {
       "comment" : "Menu bar warning row"
     },
+    "Accessibility access for XiaolaiDict is off. Allow it in %@." : {
+      "comment" : "Lookup panel; the placeholder is the System Settings list to grant it in"
+    },
     "Accessibility is off — your selection cannot be read" : {
       "comment" : "Menu warning when only Accessibility is missing"
+    },
+    "Add" : {
+
     },
     "Add a Tag…" : {
 
@@ -557,6 +581,9 @@
     "Hover" : {
 
     },
+    "Hover does not look up words on these sites; looking up a selection works anywhere. Subdomains are covered too, so example.com also excludes docs.example.com. While this list has a site in it, hover reads an app only where it can tell whether it is a web page — so not apps that do not expose their text, such as terminals." : {
+
+    },
     "Hover is turned off in Settings" : {
       "comment" : "Why Pause Hover is unavailable in the menu bar menu"
     },
@@ -696,6 +723,9 @@
     "Never Look Up in These Apps" : {
 
     },
+    "Never Look Up on These Sites" : {
+
+    },
     "New" : {
       "comment" : "A library row for a card that has never been reviewed"
     },
@@ -768,6 +798,9 @@
     "Not available" : {
 
     },
+    "Not checked" : {
+
+    },
     "Not checked yet" : {
       "comment" : "Under a dictionary's name: what it can do for study is not known yet"
     },
@@ -775,6 +808,9 @@
 
     },
     "Not downloaded" : {
+
+    },
+    "Not every dictionary could be read for this phrase" : {
 
     },
     "Not found" : {
@@ -796,6 +832,23 @@
 
     },
     "Nothing Saved Yet" : {
+
+    },
+    "Nothing is selected in %@'s focused element, and its window is too large to search for a page within %lld elements." : {
+      "comment" : "Lookup panel; the placeholders are the app's name and a count of elements",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing is selected in %1$@'s focused element, and its window is too large to search for a page within %2$lld elements."
+          }
+        }
+      }
+    },
+    "Nothing is selected in %@, or it does not expose its selection to Accessibility." : {
+      "comment" : "Lookup panel; the placeholder is the app's name"
+    },
+    "Nothing is waiting on you, but a permission could not be checked." : {
 
     },
     "Nothing is waiting on you. The local model is still one click away, in the last row." : {
@@ -890,6 +943,9 @@
     "Permissions Are Off" : {
       "comment" : "Menu bar warning row"
     },
+    "Permissions Not Checked" : {
+      "comment" : "Menu bar warning row, when a permission probe failed"
+    },
     "Pin as a Note" : {
 
     },
@@ -928,6 +984,20 @@
     },
     "Reading History" : {
       "comment" : "Menu bar item"
+    },
+    "Reading the screen has stopped answering, so words in apps that do not expose their text cannot be looked up. Quitting and reopening the app clears it." : {
+
+    },
+    "Reading the selection from %@ took longer than %lld seconds, so it was stopped." : {
+      "comment" : "Lookup panel; the placeholders are the app's name and a number of seconds",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reading the selection from %1$@ took longer than %2$lld seconds, so it was stopped."
+          }
+        }
+      }
     },
     "Readings Are Not Being Recorded" : {
       "comment" : "Menu bar warning row"
@@ -1333,6 +1403,20 @@
     "The readings stay in History, but review progress is lost. This cannot be undone." : {
 
     },
+    "The selection in %@ has no word in it." : {
+      "comment" : "Lookup panel; the placeholder is the app's name"
+    },
+    "The selection in %@ is %lld characters — too long to look up." : {
+      "comment" : "Lookup panel; the placeholders are the app's name and a character count",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The selection in %1$@ is %2$lld characters — too long to look up."
+          }
+        }
+      }
+    },
     "The sentence may be cut short" : {
 
     },
@@ -1484,6 +1568,12 @@
     "Where You Met It" : {
 
     },
+    "Where an app does not expose its text, hover reads the word off the screen. Allow XiaolaiDict in %@, or open Setup in Settings to ask for it." : {
+      "comment" : "The placeholder is the System Settings list to grant it in"
+    },
+    "Whether this is allowed could not be checked just now. It may well be allowed already; the list it is granted in is below." : {
+
+    },
     "Whole entries only" : {
       "comment" : "Under a dictionary's name: it cannot mark a single meaning"
     },
@@ -1525,6 +1615,9 @@
     },
     "XiaolaiDict needs Accessibility to read the text you select and the word under the pointer. Without it, neither the lookup shortcut nor hover can read anything." : {
       "comment" : "Setup row for the Accessibility permission, while it is not granted"
+    },
+    "XiaolaiDict needs Screen Recording" : {
+      "comment" : "Lookup panel, when a hover needed to read the screen and Screen Recording is off"
     },
     "XiaolaiDict needs Screen Recording to read the word under the pointer in apps that expose no text, such as a terminal, a canvas or an image. Without it, hover finds nothing there." : {
       "comment" : "Setup row for the Screen Recording permission, while it is not granted"
@@ -1649,6 +1742,9 @@
     },
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
+    },
+    "example.com" : {
+
     },
     "hidden until tomorrow; nothing about your memory is recorded" : {
 

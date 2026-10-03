@@ -36,8 +36,11 @@ struct TestInventoryTests {
     /// without reading, and a floor that lags by a handful still catches what it is for — the
     /// incident it was written for was 47 to 4.
     static let floors = [
-        "XiaolaiDictTests": 631,
-        "XiaolaiDictCoreTests": 548,
+        // Raised 2026-10-03 to the counts after the hover request lifecycle (ADR-0045, ADR-0046): six
+        // source-grep checks of the watcher became behavioural tests, and the new lifecycle, lane,
+        // budget, window-choice and site rules brought theirs.
+        "XiaolaiDictTests": 1_092,
+        "XiaolaiDictCoreTests": 865,
         "DictionaryBridgeTests": 54,
         "LocalModelTests": 48,
         // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each

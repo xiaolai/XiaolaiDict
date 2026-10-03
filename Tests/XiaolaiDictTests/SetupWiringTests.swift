@@ -247,12 +247,16 @@ struct SetupWiringTests {
 
         // And the panel puts both into the environment the card reads — **on the view that shows
         // the card**, not merely somewhere in the file.
-        let chain = try modifiers(
-            try code("Sources/XiaolaiDict/LookupPanel.swift"), on: "PanelView(content: content)")
-        #expect(chain.contains("environment(\\.translation, translation())"),
-                "the translator is not put into the environment on the view that draws the card")
-        #expect(chain.contains("environment(\\.explainer, explainer())"),
-                "the explainer is not put into the environment on the view that draws the card")
+        // The card's wiring is one modifier now, `LookupCardWiring`: the chain hands it both, and it
+        // puts both into the environment of what it modifies.
+        let panel = try code("Sources/XiaolaiDict/LookupPanel.swift")
+        let chain = try modifiers(panel, on: "PanelView(content: content)")
+        #expect(chain.contains("translation: translation(), explainer: explainer()"),
+                "the card's wiring is not handed the translator and the explainer")
+        #expect(panel.contains("environment(\\.translation, translation)"),
+                "the translator is not put into the environment of the card")
+        #expect(panel.contains("environment(\\.explainer, explainer)"),
+                "the explainer is not put into the environment of the card")
     }
 
     /// **And the card's content reads them from there.** The only check on this was a negative one

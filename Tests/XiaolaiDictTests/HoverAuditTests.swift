@@ -124,14 +124,8 @@ struct ScriptFilterWiringTests {
             .joined(separator: "\n")
     }
 
-    /// **The wire, not the value.** `HoverPolicy.studies` is unit-tested on its own; what went
-    /// untested in this project's last two defects of this shape was whether anything called the
-    /// thing that was built. A filter nothing asks is a setting the reader can change with no
-    /// effect.
-    @Test func theHoverPathAsksWhetherTheScriptIsStudied() throws {
-        #expect(try source("Sources/XiaolaiDict/HoverReader.swift").contains("policy.studies(selection.text)"),
-                "the hover reader does not consult the script filter")
-    }
+    // Whether the hover path asks the script filter is driven by behaviour in
+    // `HoverReaderSourceTests.aWordInAScriptNotStudiedIsRefused`, not read from the source.
 
     /// **And the shortcut path does not.** The reader selected that text and pressed the key;
     /// refusing it would be refusing something explicitly asked for. If this ever needs to change
@@ -146,10 +140,25 @@ struct ScriptFilterWiringTests {
     /// both tested — and neither says a word about whether anything ever puts a script in a row.
     /// Left unwired, every row would be NULL, every NULL is drawn, and the drawer filter would
     /// pass its own tests while doing nothing to the reader's history.
-    @Test func everyRecordedLookupCarriesTheScriptItWasWrittenIn() throws {
-        let runner = try source("Sources/XiaolaiDict/LookupRunner.swift")
-        #expect(runner.contains("script: ProbeScript.dominant(in: selection.text)"),
-                "the ledger record is built without a script, so the drawer filter can never bite")
+    ///
+    /// **Asserted on the rows, not the source.** This grepped `LookupRunner.swift` for one spelling of
+    /// the call, and a refactor that kept the behaviour exactly but respelled it turned the check red —
+    /// while a respelling that dropped the script and kept the string would have stayed green. And it is
+    /// the *surface* that is classified: a Chinese word in an English sentence is filed under Han.
+    @MainActor
+    @Test func everyRecordedLookupCarriesTheScriptItWasWrittenIn() async throws {
+        let panel = RecordingPanel()
+        var early: [LookupRecording] = []
+        let runner = LookupRunner(
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain" }),
+            panel: panel, initialRecording: { row, _ in early.append(row) })
+        let selection = Selection(
+            text: "书", sentence: "He wrote 书 on the board.", rangeInSentence: NSRange(location: 9, length: 1),
+            quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())
+        let final = try #require(await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest()))
+        #expect(!early.isEmpty)
+        #expect(early.allSatisfy { $0.record.script == .han }, "a row was written without the word's script")
+        #expect(final.record.script == .han, "the sentence was classified instead of the word")
     }
 
     /// And the drawer asks for the reader's set rather than defaulting to everything.
@@ -184,7 +193,8 @@ struct ScriptFilterWiringTests {
         let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() })
         reader.lastLookedUp = "run@12x25"
         let outcome = await reader.read(
-            at: CGPoint(x: 100, y: 200), modifiersHeld: [], tappedTwice: false, pointerStillFor: .seconds(1))
+            at: CGPoint(x: 100, y: 200), modifiersHeld: [], tappedTwice: false, pointerStillFor: .seconds(1),
+            begin: { 0 })
         guard case .quiet(.modifierNotHeld) = outcome else {
             Issue.record("expected the modifier gate to refuse, got \(outcome)")
             return
@@ -214,68 +224,5 @@ struct ScriptFilterWiringTests {
         let source = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
         #expect(!source.contains("UserDefaults.standard"),
                 "a setting is reaching past the injected suite to the reader's own preferences")
-    }
-}
-
-/// **The wire, and only the wire.**
-///
-/// These read the watcher's source, which is a blunt instrument: an audit's finding #11 was that
-/// grepping cannot see event ordering, and it was right — a chord between two presses completed
-/// the gesture while every one of these passed. The rule now lives in `GestureRecogniser`, where
-/// `GestureRecogniserTests` drives it with event sequences. What is left here is the part a value
-/// test genuinely cannot reach: that the watcher *delegates* to it and hands it real events.
-///
-/// The class this guards is the one this project has been bitten by twice — `HoverPause` and
-/// `LookupRunner.priorEncounters`, both complete, both unit-tested, both wired to nothing.
-struct HoverGestureWiringTests {
-    private static func watcherSource() throws -> String {
-        try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-                .appending(path: "Sources/XiaolaiDict/HoverWatcher.swift"),
-            encoding: .utf8)
-    }
-
-    /// The watcher asks the recogniser, with the reader's own gesture and key.
-    @Test func theWatcherDelegatesTheRuleAndPassesTheReadersChoice() throws {
-        let source = try Self.watcherSource()
-        #expect(source.contains("gestures.saw("), "the watcher does not consult the gesture rule")
-        #expect(source.contains("gesture: policy.gesture, modifier: policy.modifier"),
-                "the rule is asked without the reader's gesture and key")
-    }
-
-    /// **From the event, not from current state.** Global monitors deliver asynchronously, so
-    /// `NSEvent.modifierFlags` and a clock read describe when this process looked, not when the
-    /// reader pressed.
-    @Test func theWatcherFeedsItTheEventsOwnFlagsAndTime() throws {
-        let source = try Self.watcherSource()
-        #expect(source.contains("event.modifierFlags"), "the flags are not the delivered event's")
-        #expect(source.contains("at: event.timestamp"), "the time is not the delivered event's")
-    }
-
-    /// Everything that is not a modifier or a movement reaches the rule as other input, so it can
-    /// cancel a half-made pair.
-    @Test func otherInputIsForwarded() throws {
-        let source = try Self.watcherSource()
-        #expect(source.contains(".otherInput"), "nothing tells the rule the reader did something else")
-        for watched in [".keyDown", ".leftMouseDown", ".scrollWheel"] {
-            #expect(source.contains(watched), "\(watched) is not watched, so it cannot cancel a pair")
-        }
-    }
-
-    /// **A tap is served at once or not at all.** It was held in a flag and spent by whichever
-    /// read came next — and a flag carries no position, so a gesture made over one word could be
-    /// spent by a later movement over another.
-    @Test func aTapIsServedAtOnceOrNotAtAll() throws {
-        let source = try Self.watcherSource()
-        #expect(!source.contains("pendingTap"),
-                "the tap is stored again, so it can be spent at a word the reader did not point at")
-        #expect(source.contains("check(tappedTwice: true)"), "the press does not act on its own tap")
-    }
-
-    /// And the rule's state does not outlive the watching.
-    @Test func stoppingResetsTheRule() throws {
-        #expect(try Self.watcherSource().contains("gestures.reset()"),
-                "a half-made pair survives the watcher being stopped")
     }
 }

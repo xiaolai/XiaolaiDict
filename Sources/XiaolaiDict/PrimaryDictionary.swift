@@ -38,6 +38,19 @@ struct PrimaryDictionary: Equatable, Sendable {
         return entries.first?.dictionary
     }
 
+    /// **One primary for the whole lookup**, decided once and handed to every consumer — the card,
+    /// the first recording and the resolver. Each used to ask `identity(among:)` of a different list:
+    /// unchosen, an unkeyable word dictionary beside a keyable phrase dictionary made the card open on
+    /// one and the resolver mark a sense in the other.
+    ///
+    /// A choice that answered anywhere — word or phrase — stands. Otherwise the word's own entries
+    /// decide, because the card opens on them; a phrase's decide only where the word had none.
+    func pinned(word entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry]) -> PrimaryDictionary {
+        if let chosen, (entries + phraseEntries).contains(where: { $0.dictionary.key == chosen }) { return self }
+        guard let identity = identity(among: entries) ?? identity(among: phraseEntries) else { return self }
+        return PrimaryDictionary(chosen: identity.key)
+    }
+
     /// The primary's own entries, in order.
     func entries(among entries: [DictionaryEntry]) -> [DictionaryEntry] {
         guard let identity = identity(among: entries) else { return [] }

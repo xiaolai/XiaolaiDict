@@ -218,6 +218,24 @@ struct SetupBoardTests {
         #expect(!unknown.isComplete, "the board claimed completeness while it knew nothing about the model")
     }
 
+    /// **Nor over a permission nobody could check** (audit round 3, #54). An unchecked permission is
+    /// rightly not *outstanding* — it may be granted — but completeness is the stronger claim, and the
+    /// summary said "everything needed is in place" over a row reading "Not checked".
+    @Test func completenessIsNotClaimedOverAnUncheckedPermission() {
+        let settled = board()
+        let unchecked = SetupBoard(
+            permissions: PermissionsReport(states: [
+                PermissionState(permission: .accessibility, found: .granted),
+                PermissionState(permission: .screenRecording, found: .couldNotTell),
+            ]),
+            available: settled.available, chosen: settled.chosen, language: settled.language,
+            shortcut: settled.shortcut, model: settled.model, modelDeclined: false, engine: settled.engine)
+        #expect(unchecked.outstanding.isEmpty, "an unchecked permission is not a request")
+        #expect(unchecked.unchecked == [.screenRecording])
+        #expect(!unchecked.isComplete, "completeness was claimed over a permission nobody could check")
+        #expect(settled.unchecked.isEmpty)
+    }
+
     /// **"None declares it" is not "you have none."** Three of the seven dictionaries enabled on
     /// the development Mac declare no language, so the rule cannot classify them — but telling a
     /// reader with Longman enabled that they have no English dictionary would be false. This is
@@ -314,7 +332,7 @@ struct SetupBoardTests {
     /// Apple's model is no longer a row; it is what the model row names as the fallback, so it is
     /// still read — and still read from the one place that asks.
     @Test func appleIntelligenceIsTheFallbackNotARow() {
-        #expect(!SetupBoard.Step.allCases.map(\.rawValue).contains("senseEngine"))
+        #expect(!SetupBoard.Step.allCases.map(\.id).contains("senseEngine"))
         #expect(board(engine: .unavailable(.modelNotReady)).engine.reason == .modelNotReady)
         #expect(board(engine: .onDevice).engine.isOnDevice)
     }
@@ -339,5 +357,15 @@ struct SetupBoardTests {
                 !code.contains("hasOpenedBefore") && !code.contains("SetupPresentationStore"),
                 "\(file) reads the presentation flag; it must never decide what the board shows")
         }
+    }
+}
+
+/// **The step carries its permission** (audit round 3, #57), and the board's order and identifiers are
+/// what the two separate cases gave — so nothing that reads them moved.
+struct SetupStepShapeTests {
+    @Test func theOrderAndIdentifiersAreUnchanged() {
+        #expect(SetupBoard.Step.allCases.map(\.id) == ["accessibility", "screenRecording", "dictionary", "shortcut", "localModel"])
+        #expect(SetupBoard.Step.allCases.compactMap(\.permission) == Permission.allCases)
+        #expect(SetupBoard.Step.screenRecording.permission == .screenRecording)
     }
 }

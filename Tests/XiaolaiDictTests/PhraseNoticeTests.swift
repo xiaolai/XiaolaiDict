@@ -223,3 +223,17 @@ struct PhraseNoticeTests {
         #expect(withoutEntry.phrase == phrase)
     }
 }
+
+/// **The card hears that a phrase could not be read** (audit round 3, #2), rather than drawing it as
+/// though every dictionary had answered.
+struct PhraseRetrievalPresentationTests {
+    @Test func aFailedPhraseLookupReachesTheCard() throws {
+        let hit = PhraseHit(phrase: "give up", location: 5, length: 7, separation: .none,
+                            meaning: PhraseMeaning(ownEntries: []), retrieval: .failed)
+        let shown = try #require(PhrasePresentation(.found([hit]), sentence: "They give up."))
+        #expect(shown.retrieval == .failed)
+        let clean = PhraseHit(phrase: "give up", location: 5, length: 7, separation: .none,
+                              meaning: PhraseMeaning(ownEntries: []))
+        #expect(try #require(PhrasePresentation(.found([clean]), sentence: "They give up.")).retrieval == .complete)
+    }
+}

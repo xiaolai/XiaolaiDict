@@ -61,7 +61,14 @@ let listener = try XPCListener(
     requirement: .isFromSameTeam(andMatchesSigningIdentifier: XiaolaiDictIdentity.app)
 ) { request in
     request.accept { (message: ServiceRequest) -> (any Encodable)? in
-        watchdog.run { DictionaryBridge.reply(to: message, phrases: phrases) }
+        watchdog.run {
+            DictionaryBridge.reply(to: message, phrases: phrases) { word, phrase in
+                // **Two stages, logged apart**, so whether the phrase delays the word is a number read
+                // from real lookups rather than a guess — the measurement the split decision waits on.
+                // `notice`, not `info`: info is not kept by default, and these are read back later.
+                log.notice("timing: word \(Int(word.milliseconds), privacy: .public) ms · phrase \(Int(phrase.milliseconds), privacy: .public) ms")
+            }
+        }
     }
 }
 withExtendedLifetime(listener) { dispatchMain() }

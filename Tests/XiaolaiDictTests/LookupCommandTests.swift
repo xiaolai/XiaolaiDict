@@ -15,7 +15,7 @@ struct LookupCommandTests {
 
     private final class Output: Sendable {
         private let lines = Mutex<[String]>([])
-        func write(_ line: String) { lines.withLock { $0.append(line) } }
+        func write(_ line: String) -> Bool { lines.withLock { $0.append(line) }; return true }
         var all: [String] { lines.withLock { $0 } }
     }
 
@@ -137,5 +137,16 @@ struct LookupCommandTests {
         #expect(await LookupCommand.readSelection(bundleID: "com.apple.Finder") == .usage,
                 "a release must refuse --read-selection rather than read another app's selection")
 #endif
+    }
+}
+
+/// **A report nobody received is not a success** (audit finding 16).
+struct LookupCommandWriteFailureTests {
+    @Test func aReportThatCouldNotBeWrittenFailsTheRun() async {
+        let status = await LookupCommand.run(
+            term: "hold", repeats: 1, interval: .zero,
+            lookup: { _ in .notFound(serviceFailure: nil) },
+            sleep: { _ in }, write: { _ in false }, writeError: { _ in })
+        #expect(status == .internalError, "a run whose report never left was reported as \(status)")
     }
 }

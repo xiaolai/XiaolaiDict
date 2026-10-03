@@ -1,7 +1,6 @@
 import ApplicationServices
 import OSLog
 import XiaolaiDictBase
-import XiaolaiDictCore
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
@@ -132,27 +131,23 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     /// rather than hoping.
     ///
     /// The cost is the recogniser's own: ~70 ms for on-screen windows only.
-    public var isGranted: Bool {
-        get async {
-            let answer: PermissionProbe = await probe
-            return answer == .granted
-        }
-    }
-
-    /// The same question, three-valued — **and the third value is the point.**
     ///
-    /// `isGranted` above collapses this, which is safe for a checklist (an unknown draws as *not
-    /// ready*, and the reader is told where to look) and is **not** safe for deciding whether to
+    /// The question is three-valued — **and the third value is the point.**
+    ///
+    /// Collapsing it to a Bool is safe for a checklist (an unknown draws as *not ready*, and the
+    /// reader is told where to look) and is **not** safe for deciding whether to
     /// prompt. `try?` used to do the collapsing here, so any failure of the probe — not just a
-    /// refusal — reached `ScreenRecordingAccess.ensure()` as "no grant" and raised a system dialog.
+    /// refusal — reached the recogniser's prompt as "no grant" and raised a system dialog. (Hover no
+    /// longer requests the permission; the three values still decide what the reader is told.)
     ///
     /// Measured 2026-09-25 on a Mac whose grant had stood since 2026-09-22: the first hover after a
     /// fresh launch raised the Screen Recording dialog, and **nothing in the system TCC database
     /// changed** — not `auth_value`, not `last_modified`, not `last_reminded`, not `reminder_count`.
-    /// A dialog that grants nothing is a dialog that should never have been raised. The first
-    /// `SCShareableContent` call in a cold process is where that non-refusal failure lives; this
-    /// project already measured the capture subsystem at 14.8 s for a first read against ~0.5 s
-    /// after.
+    /// A dialog that grants nothing is a dialog that should never have been raised. **The dialog was
+    /// the request, not this probe**: the first `SCShareableContent` call in a cold process failed in a
+    /// way that is not a refusal, the failure was collapsed to "no grant", and the hover path then
+    /// *requested* — which it no longer can (ADR-0017, corrected 2026-10-03). This project measured the
+    /// capture subsystem at 14.8 s for a first read against ~0.5 s after.
     ///
     /// So a refusal is `SCStreamErrorUserDeclined` and nothing else. Anything else is
     /// `couldNotTell`, which is not an answer about the reader's consent and must not be reported
@@ -215,6 +210,10 @@ public enum Permission: String, CaseIterable, Sendable, Identifiable {
     /// Asks macOS to prompt. It does so **only once per permission, ever** — after a refusal there
     /// is no second prompt and the reader has to use Settings, which is why every refusal here
     /// carries a location.
+    ///
+    /// Screen Recording is requested through `CGRequestScreenCaptureAccess()`, Apple's documented
+    /// request; the rule against Core Graphics here is about *probing* with `CGPreflight`, whose answer
+    /// goes stale, and not about this (ADR-0017).
     @discardableResult
     public func request() -> Bool {
         switch self {
@@ -279,8 +278,12 @@ public struct PermissionsReport: Equatable, Sendable {
         self.states = states
     }
 
-    public var allGranted: Bool { missing.isEmpty }
-    public var missing: [PermissionState] { states.filter { !$0.isGranted } }
+    public var allGranted: Bool { states.allSatisfy(\.isGranted) }
+    /// What the reader declined. **Not what could not be checked**: a probe that failed says nothing
+    /// about consent, and counting it here told the menu a permission was off that may well be on.
+    public var missing: [PermissionState] { states.filter { $0.found == .declined } }
+    /// What could not be checked — said as that, never as "off".
+    public var unchecked: [PermissionState] { states.filter { $0.found == .couldNotTell } }
 
     /// One line for the menu, or nil when there is nothing to say. Two green ticks are not news.
     ///
@@ -288,7 +291,15 @@ public struct PermissionsReport: Equatable, Sendable {
     /// the reader to a window to discover what a sentence could have told them is the failure this
     /// whole probe exists to avoid.
     public var menuWarning: String? {
-        switch missing.count {
+        // Both kinds at once: a refusal and a failed check are said together, neither hidden.
+        if !missing.isEmpty, !unchecked.isEmpty {
+            return String(localized: "\(missing.count + unchecked.count) permissions are off or could not be checked — open Setup",
+                          comment: "Menu warning when some permissions are off and others could not be checked")
+        }
+        return switch missing.count {
+        case 0 where !unchecked.isEmpty:
+            String(localized: "A permission could not be checked — open Setup to check again",
+                   comment: "Menu warning when a permission probe failed, which is not a refusal")
         case 0: nil
         case 1:
             switch missing[0].permission {
