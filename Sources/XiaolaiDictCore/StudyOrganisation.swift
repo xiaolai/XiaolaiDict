@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 
 /// **WI-007: what the reader organises, and what the numbers are allowed to claim.**
 ///
@@ -90,6 +91,9 @@ extension Ledger {
               AND NOT EXISTS (
                   SELECT 1 FROM study_note_lookups nl
                   JOIN lookups other ON other.id = nl.lookup_id
+                  -- **The word's own note, never a phrase saved from its reading** (ADR-0049): the
+                  -- reader who saved *take something into account* took up the phrase, not *take*.
+                  JOIN study_notes taken ON taken.id = nl.note_id AND taken.target_kind <> 'phrase'
                   -- **Lemma and language, the same key the ignored check below uses.** Matching
                   -- the lemma alone meant saving English *pain* silently suppressed French
                   -- *pain* — a word the reader has never taken up, never offered again, with
@@ -198,7 +202,12 @@ extension Ledger {
             \(scope)
             ORDER BY c.id
             """, bind: bind) { row in
-            if let id = UUID(uuidString: try row.text(0)) { found.append(id) }
+            // Refused, as `card(from:)` refuses it: a struggling card dropped here is one the end of a
+            // sitting and the Struggling filter disagree about.
+            guard let id = UUID(uuidString: try row.text(0)) else {
+                throw LedgerError.corruptRow("study_cards \(try row.text(0))")
+            }
+            found.append(id)
         }
         return found
     }
@@ -264,9 +273,26 @@ extension Ledger {
             scope = "AND n.dictionary = ?2"
             bind.append(.text(dictionary))
         }
-        // The most recent attempt on each card, *of any kind*, as the rows are walked. Requires
-        // the query to be in time order, which it now asks for.
+        // The most recent *live* attempt on each card, of any kind, as the rows are walked. Requires
+        // the query to be in time order, which it now asks for. **A voided one is not an attempt**
+        // (audit-fix round 2): it did not happen, and measuring from it made the regrade after an
+        // undo a short-term repeat of a review that was taken back.
         var lastAttempt: [String: Double] = [:]
+        // **Seeded from before the window.** The walk below starts at `since`, so a practice just
+        // before it was never seen and the grade just after it counted as delayed recall (audit-fix
+        // round 1). Each card's last live attempt before the window is where its first one is measured from.
+        if since != nil {
+            try run("""
+                SELECT e.card_id, MAX(e.reviewed_at)
+                FROM review_events e
+                JOIN study_cards c ON c.id = e.card_id
+                JOIN study_notes n ON n.id = c.note_id
+                WHERE e.reviewed_at < ?1 AND e.voided_at IS NULL \(scope)
+                GROUP BY e.card_id
+                """, bind: bind) { row in
+                lastAttempt[try row.text(0)] = row.real(1)
+            }
+        }
         try run("""
             SELECT e.kind, e.voided_at, e.before_last_review, e.reviewed_at, e.grade, e.card_id
             FROM review_events e
@@ -284,16 +310,24 @@ extension Ledger {
             // looking like a day's gap — and a recall the reader had just rehearsed counted as
             // delayed. Practice is excluded from the numerator already; it must also be allowed
             // to disqualify the attempt that follows it.
-            let scheduledPrevious = row.isNull(2) ? 0 : row.real(2)
-            let previous = max(scheduledPrevious, lastAttempt[cardID] ?? 0)
+            if voided {
+                // Counted where it belongs and nowhere else: practice taken back is practice.
+                if kind == ReviewEvent.Kind.practice.rawValue { report.practice += 1 } else { report.voided += 1 }
+                return
+            }
+            let previous = max(row.isNull(2) ? 0 : row.real(2), lastAttempt[cardID] ?? 0)
             lastAttempt[cardID] = max(lastAttempt[cardID] ?? 0, reviewedAt)
             if kind == ReviewEvent.Kind.practice.rawValue { report.practice += 1; return }
-            if voided { report.voided += 1; return }
-            guard previous > 0 else { report.introductions += 1; return }
+            // **An introduction is the card's first scheduled review**, which the event itself records:
+            // nothing before it, `before_last_review` NULL. Not "no attempt seen", which a voided grade
+            // or one before the window could fake in either direction.
+            guard !row.isNull(2) else { report.introductions += 1; return }
             guard reviewedAt - previous >= 86_400 else { report.shortTerm += 1; return }
             report.attempts += 1
             if row.integer(4) >= Grade.hard.rawValue { report.successes += 1 }
-            if let id = UUID(uuidString: try row.text(5)) { report.cardIDs.insert(id) }
+            // Refused: a card left out of the count is a denominator stated for fewer cards than it has.
+            guard let id = UUID(uuidString: cardID) else { throw LedgerError.corruptRow("study_cards \(cardID)") }
+            report.cardIDs.insert(id)
         }
         return report
     }

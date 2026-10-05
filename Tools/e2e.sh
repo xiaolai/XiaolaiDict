@@ -44,7 +44,8 @@ fail() { echo "e2e: FAIL: $*" >&2; exit 1; }
 # mid-assertion, restores a preference the other is still using, and `stash_models` refuses
 # because a stash it did not make is already there. The second run is refused rather than allowed
 # to corrupt the first: an `flock` on a per-host file, released when this process exits.
-readonly RUN_LOCK="${TMPDIR:-/tmp}/xiaolaidict-e2e-$(printf '%s' "$host" | tr -c 'A-Za-z0-9' '_').lock"
+RUN_LOCK="${TMPDIR:-/tmp}/xiaolaidict-e2e-$(printf '%s' "$host" | tr -c 'A-Za-z0-9' '_').lock"
+readonly RUN_LOCK
 exec 9>"$RUN_LOCK" || fail "could not open the run lock at $RUN_LOCK"
 if command -v flock >/dev/null 2>&1; then
     flock -n 9 || fail "another e2e run is already using $host (lock: $RUN_LOCK)"
@@ -283,7 +284,7 @@ rm -rf .build/e2e && mkdir -p .build/e2e
 for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
     swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
 done
-cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py .build/e2e/
+cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -315,7 +316,7 @@ WANTED=("${@:2}")
 # exited 0 — a green mark for a run that tested nothing, which is the one thing this file is written
 # to make impossible. This is the only list of the names; the header points at it rather than
 # naming them again, because two lists of one thing are one list nobody keeps.
-KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model learning)
+KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model learning review reminder)
 for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
     found=""
     for known in "${KNOWN_STAGES[@]}"; do [ "$wanted" = "$known" ] && { found=yes; break; }; done
@@ -715,13 +716,13 @@ run_bounded() {
     if kill -0 "$pid" 2>/dev/null; then
         kill -9 "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
-        flunk "model: $flag did not finish within $((budget / 60)) minutes"
+        flunk "$STAGE: $flag did not finish within $((budget / 60)) minutes"
         return 1
     fi
     local status=0
     wait "$pid" || status=$?
     if [ "$status" -ne 0 ]; then
-        flunk "model: $flag exited $status"
+        flunk "$STAGE: $flag exited $status"
     fi
     return "$status"
 }
@@ -749,7 +750,8 @@ run_bounded() {
 escaped_pattern() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|\\]/\\&/g'; }
 
 end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument to end, then insist
-    local pattern="^$(escaped_pattern "$exe $1")"
+    local pattern
+    pattern="^$(escaped_pattern "$exe $1")"
     for _ in $(seq 1 40); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
     pkill -f "$pattern" 2>/dev/null || true
     for _ in $(seq 1 20); do pgrep -f "$pattern" >/dev/null || return 0; sleep 0.25; done
@@ -762,7 +764,7 @@ end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument t
     return 1
 }
 
-consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/FAIL lines, then DONE
+consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTRUN/FAIL lines, then DONE
     # A here-string, never a pipe: `flunk` increments a counter, and a pipe would run it in a
     # subshell where the increment is thrown away — a stage that reported its failures and then
     # passed.
@@ -771,6 +773,9 @@ consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/FAIL
         case "$verdict" in
             PASS) pass "$text" ;;
             NOTE) echo "NOTE  $text" ;;
+            # A claim that could not be exercised here, with the reason: neither a pass nor a failure,
+            # and never silent.
+            NOTRUN) echo "NOT RUN  $text" ;;
             FAIL) flunk "$text" ;;
         esac
     done <<<"$verdicts"
@@ -941,6 +946,114 @@ restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its m
     return 1
 }
 
+# **The content fingerprint and the backup of a ledger, for the stages that set the reader's ledger
+# aside.** Used by `learning`, `review` and `reminder`, so they are defined before every stage: inside
+# the first that needed them, a run of another alone would have died on `ledger_digest: command not
+# found` with the ledger moved. `Tools/tests/test_ledger_set_aside.py` runs them as they are written here.
+ledger_source() {  # ledger_source <path>: the name sqlite3 opens a ledger by to read it, and nothing else
+    # **A WAL-mode file with nothing in its -wal is complete by itself, and is read as immutable.** The
+    # ledger is WAL, so its backup, the staged copy and the restored ledger all carry WAL in their header
+    # with no -shm beside them — and /usr/bin/sqlite3 3.54 refuses a read-only open of exactly that:
+    # CANTOPEN (14), because a read-only connection cannot create the -shm. Measured on the E2E Mac.
+    # The live ledger, while the app writes it, has its newest commits in a non-empty -wal that
+    # `immutable` would skip, so it alone is opened plainly — the writer keeps its -shm there.
+    local db="$1"
+    if [ ! -s "$1-wal" ]; then
+        db=${1//\%/%25}; db=${db// /%20}; db=${db//\?/%3f}; db=${db//\#/%23}
+        db="file:$db?immutable=1"
+    fi
+    printf '%s' "$db"
+}
+ledger_digest() {  # ledger_digest <path>: content fingerprint of a ledger that passes integrity_check
+    local out
+    out=$(sqlite3 -readonly "$(ledger_source "$1")" 'PRAGMA integrity_check;' 'PRAGMA user_version;' '.sha3sum --schema' 2>&1) \
+        || { echo "ledger_digest: $1 could not be read: $out" >&2; return 1; }
+    [ "$(printf '%s\n' "$out" | head -1)" = ok ] || { echo "ledger_digest: $1 fails integrity_check: $out" >&2; return 1; }
+    printf '%s\n' "$out"
+}
+# **A backup reads the ledger the way its fingerprint does**, or the two disagree about which ledgers
+# can be read at all. It opened the ledger plainly, which is CANTOPEN for the reader's own ledger exactly
+# when the app has not opened it since it was put back — no -wal, no -shm: the `reminder` stage, run
+# straight after `review` had restored it and started the app, got a 0-byte backup and stopped on
+# "the ledger backup does not match the ledger" (E2E Mac, 2026-10-05). Every stage that sets the
+# ledger aside goes through here.
+ledger_backup() {  # ledger_backup <ledger> <copy>: SQLite's own backup of the ledger into <copy>
+    sqlite3 -readonly "$(ledger_source "$1")" ".backup '$2'"
+}
+
+# **The reader's review reminders, around a stage that launches the app on a ledger that is not theirs.**
+#
+# The app re-plans its reminders at every launch, from the ledger it opens and the settings and log in
+# its domain, and the notification center it adds to and removes from is the app's, not the ledger's.
+# `learning`, `review` and `reminder` launched their fixture ledgers with the reader's settings on and
+# their log in place, so the app planned from the fixture — an empty one plans nothing — and removed the
+# reader's pending requests; the reader's log, imported back at the restore, still said `added`, which
+# the app reads as `gone` once a request is not pending, and those days were silenced (audit-fix round 2,
+# #20). So each of the three reads what the reader has pending before any launch, takes the two keys out
+# of the domain before its first fixture launch — off, with no log, the app touches nothing (WI-7) — and
+# its restore fails unless every one of those requests is pending again at its own instant.
+#
+# **Cost**: one `--reminder-report` run per stage before it starts, a few seconds and bounded at 60, and a
+# second at its restore only where the reader had something pending — never on a Mac nobody gave the
+# notification grant, the E2E Mac among them.
+reminder_pending() {  # reminder_pending <report>: how many review requests it lists as pending, or -1
+    python3 - "$1" 2>/dev/null <<'PYPENDING' || echo -1
+import json, sys
+report = json.load(open(sys.argv[1]))
+print(sum(1 for found in report.get("pending", []) if str(found.get("id", "")).startswith("review.")))
+PYPENDING
+}
+# reader_reminders <evidence>: what the reader has pending, read into <evidence>/reader.json with their own
+# ledger and settings and the app stopped. Non-zero when it cannot be read: a stage that could not see
+# them could not say it left them alone.
+reader_reminders() {
+    printf '%s' "$(run_report --reminder-report 60 || true)" > "$1/reader.json"
+    [ "$(reminder_pending "$1/reader.json")" != -1 ]
+}
+# domain_cleared: the app's whole domain deleted, and proved empty before a restorer imports into it.
+# `defaults import` *merges*, so an import over a domain the delete did not clear keeps every key the
+# stage wrote and reports success. `defaults delete` exits 1 for a domain that is not there, so its
+# status says nothing either way — and `defaults read` of a deleted domain exits 0 and prints `{}`
+# (measured 2026-10-05), so a read's status says nothing either. What the domain *holds* is counted
+# from its export, and anything but zero keys — or an export that cannot be read — fails the restore
+# (audit-fix round 3, #12).
+domain_cleared() {
+    local left
+    defaults delete com.xiaolaidict >/dev/null 2>&1 || true
+    left=$(defaults export com.xiaolaidict - 2>/dev/null \
+        | python3 -c 'import plistlib, sys; print(len(plistlib.loads(sys.stdin.buffer.read())))' 2>/dev/null) \
+        || left=unreadable
+    if [ "$left" != 0 ]; then
+        echo "restore: com.xiaolaidict still holds ${left:-unreadable} key(s) after being deleted, so the preferences were not imported over it" >&2
+        return 1
+    fi
+}
+reminders_set_aside() {  # reminders_set_aside: the reminder settings and log out of the app's domain
+    local key
+    for key in reviewReminderSettings reviewReminderLog; do
+        defaults delete com.xiaolaidict "$key" >/dev/null 2>&1 || true
+        # `defaults delete` exits 1 for a key that was never there, so its status says nothing: the key
+        # is read back, and one that still reads is a fixture about to launch with the reader's on.
+        if defaults read com.xiaolaidict "$key" >/dev/null 2>&1; then
+            echo "reminders_set_aside: $key is still in the domain" >&2
+            return 1
+        fi
+    done
+}
+# reader_reminders_back <evidence>: every review request <evidence>/reader.json lists, its time still
+# ahead, pending again at its own instant — read with the app stopped and the reader's settings back, so
+# what is pending is what the stage left and not what the app has since planned. Fails loudly otherwise:
+# nothing outside the app can add a request, so nothing here puts one back.
+reader_reminders_back() {
+    local evidence=$1 report left
+    [ "$(reminder_pending "$evidence/reader.json")" = 0 ] && return 0
+    report=$(run_report --reminder-report 60) || true
+    printf '%s' "$report" > "$evidence/restored.json"
+    left=$(python3 "$helpers/reminder.py" missing "$evidence/reader.json" "$evidence/restored.json") \
+        || { echo "restore: what is pending could not be compared with what the reader had pending" >&2; return 1; }
+    [ -z "$left" ] || { echo "restore: the reader's own reminder(s) $left are no longer pending" >&2; return 1; }
+}
+
 if want launch; then
 # 1. LaunchServices starts it, and it stays up.
 open "$app"
@@ -1074,9 +1187,12 @@ else
     # a poll measuring nothing. And both copies still named `could not be asked`, wording the app
     # does not have — the same stale string already corrected in the grep at the deadline stage.
     card_failure_markers='Looking up|No entry for|could not all be asked|needs Accessibility'
+    # **The `Lookup` window alone, for the poll and the assertion both** (audit-fix round 3, #11). An
+    # open Library carries the same word and the same sentence on its cards, and with every window read
+    # a Library card passed this stage with no lookup panel on screen at all.
     view=""
     for _ in $(seq 1 150); do
-        view=$("$helpers/panel" com.xiaolaidict)
+        view=$("$helpers/panel" com.xiaolaidict | lookup_windows) || view='{"frontmost": "", "windows": []}'
         printf '%s' "$view" | python3 -c '
 import json, sys
 failed = sys.argv[1].split("|")
@@ -1086,7 +1202,7 @@ sys.exit(0 if panels else 1)
 ' "$card_failure_markers" && break
         sleep 0.1
     done
-    view=$("$helpers/panel" com.xiaolaidict)
+    view=$("$helpers/panel" com.xiaolaidict | lookup_windows) || view=unreadable
     if why=$(python3 - "$view" "$card_failure_markers" 2>&1 <<'PY'
 import json, sys
 view = json.loads(sys.argv[1])
@@ -2081,6 +2197,9 @@ if ! defaults export com.xiaolaidict "$learning_evidence/preferences.plist"; the
 fi
 learning_dark_before=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2> "$learning_evidence/theme.err" || true)
 if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; exit 1; fi
+if ! reader_reminders "$learning_evidence"; then
+    flunk "learning: the reader's own pending reminders could not be read, so nothing was set aside"; exit 1
+fi
 # **The reader's ledger is this stage's to give back, and nothing may be removed on trust.**
 #
 # The restore runs from `on_exit` as `"$cleanup" || …`, and a function called on the left of `||`
@@ -2091,24 +2210,9 @@ if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; e
 #
 # A name of this run's own, never `original.sqlite`: a backup that failed would have left the last
 # run's copy under that name, and restoring it would put back a ledger from another day. It is kept
-# when the restore fails — then it may be the only copy — and removed once the restore is proved.
-ledger_digest() {  # ledger_digest <path>: content fingerprint of a ledger that passes integrity_check
-    # **A WAL-mode file with nothing in its -wal is complete by itself, and is read as immutable.** The
-    # ledger is WAL, so its backup, the staged copy and the restored ledger all carry WAL in their header
-    # with no -shm beside them — and /usr/bin/sqlite3 3.54 refuses a read-only open of exactly that:
-    # CANTOPEN (14), because a read-only connection cannot create the -shm. Measured on the E2E Mac.
-    # The live ledger, while the app writes it, has its newest commits in a non-empty -wal that
-    # `immutable` would skip, so it alone is opened plainly — the writer keeps its -shm there.
-    local out db="$1"
-    if [ ! -s "$1-wal" ]; then
-        db=${1//\%/%25}; db=${db// /%20}; db=${db//\?/%3f}; db=${db//\#/%23}
-        db="file:$db?immutable=1"
-    fi
-    out=$(sqlite3 -readonly "$db" 'PRAGMA integrity_check;' 'PRAGMA user_version;' '.sha3sum --schema' 2>&1) \
-        || { echo "ledger_digest: $1 could not be read: $out" >&2; return 1; }
-    [ "$(printf '%s\n' "$out" | head -1)" = ok ] || { echo "ledger_digest: $1 fails integrity_check: $out" >&2; return 1; }
-    printf '%s\n' "$out"
-}
+# when the restore fails — then it may be the only copy — and removed once the *whole* restore is
+# proved: removed as soon as the ledger was back, a later step that failed left the retry from
+# `on_exit` failing at `cp` on the file the first attempt had deleted (audit-fix round 2, #21).
 learning_backup="$learning_evidence/original-$(date +%Y%m%d-%H%M%S)-$$.sqlite"
 learning_had_ledger=no
 if [ -e "$ledger" ]; then
@@ -2116,7 +2220,7 @@ if [ -e "$ledger" ]; then
     if ! learning_digest=$(ledger_digest "$ledger"); then
         flunk "learning: the reader's ledger could not be fingerprinted, so it is left alone"; exit 1
     fi
-    if ! sqlite3 -readonly "$ledger" ".backup '$learning_backup'" \
+    if ! ledger_backup "$ledger" "$learning_backup" \
         || [ "$(ledger_digest "$learning_backup")" != "$learning_digest" ]; then
         flunk "learning: the ledger backup does not match the ledger, so it is left alone ($learning_backup)"; exit 1
     fi
@@ -2140,7 +2244,6 @@ restore_learning_fixture() {
         mv "$staged" "$ledger" || { echo "restore: the staged copy is at $staged, $learning_backup is kept" >&2; return 1; }
         [ "$(ledger_digest "$ledger")" = "$learning_digest" ] \
             || { echo "restore: the restored ledger differs from the original; $learning_backup is kept" >&2; return 1; }
-        rm -f "$learning_backup" "$learning_backup-wal" "$learning_backup-shm" || return 1
     else
         # There was none: the run's own ledger is removed, so the machine is as it was found.
         rm -f "$ledger" "$ledger-wal" "$ledger-shm" || return 1
@@ -2151,16 +2254,24 @@ restore_learning_fixture() {
     # is emptied first, and only once the export is known to be a readable plist.
     plutil -lint -s "$learning_evidence/preferences.plist" \
         || { echo "restore: the exported preferences are unreadable, so the domain was not replaced" >&2; return 1; }
-    defaults delete com.xiaolaidict >/dev/null 2>&1 || true
+    domain_cleared || return 1
     defaults import com.xiaolaidict "$learning_evidence/preferences.plist" \
         || { echo "restore: the preferences could not be imported; they are in $learning_evidence" >&2; return 1; }
     case $learning_dark_before in
         true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
     esac
+    reader_reminders_back "$learning_evidence" || return 1
     open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
+    if [ "$learning_had_ledger" = yes ]; then
+        rm -f "$learning_backup" "$learning_backup-wal" "$learning_backup-shm" || return 1
+    fi
     learning_restored=yes
 }
 at_exit restore_learning_fixture
+if ! reminders_set_aside; then
+    flunk "learning: the reader's reminder settings could not be set aside, so no fixture was launched"; exit 1
+fi
 rm -f "$ledger" "$ledger-wal" "$ledger-shm"
 defaults write com.xiaolaidict lookupKeepPolicy automatic
 defaults write com.xiaolaidict libraryPane history
@@ -2334,6 +2445,492 @@ if restore_learning_fixture; then
     pass "learning: the reader's ledger and settings are back before the next stage"
 else
     flunk "learning: the reader's ledger could not be put back; the run stops so no stage writes over it"
+    exit 1
+fi
+fi
+
+if want review; then
+# 15. **Review, driven the way a reader drives it** — ADR-0032's surface in a signed bundle, which no
+#     unit test reaches: keys posted as the keyboard posts them, the accessibility tree read as VoiceOver
+#     reads it, Dictionary opening, and the ledger row each key writes. Owed since ADR-0032; WI-0 of the
+#     review module plan. The claims, in the order a reader meets them, are `Tools/e2e/review.py`'s.
+#
+#     **On a ledger of its own, by the learning stage's mechanism.** The reader's preferences are
+#     exported and their ledger backed up and proved equal by content before anything is removed; at
+#     the end both are put back and the ledger proved equal again, before the next stage. Every step is
+#     checked by hand: the restore also runs from `on_exit`, on the left of `||`, where `set -e` does
+#     nothing. Into the empty ledger the app creates go eight cards the reader wrote, overdue, whose
+#     answers are secrets no surface could produce by itself — so "no answer in the tree" is a search
+#     for a string that cannot be there by accident.
+review_evidence="$HOME/$1/review-evidence"
+mkdir -p "$review_evidence"
+chmod 700 "$review_evidence"
+rm -f "$review_evidence"/*.json "$review_evidence"/*.png "$review_evidence"/*.txt
+if ! defaults export com.xiaolaidict "$review_evidence/preferences.plist"; then
+    flunk "review: the preferences could not be exported, so they could not be put back"; exit 1
+fi
+if ! stop_app; then flunk "review: XiaolaiDict would not stop, so the ledger was not set aside"; exit 1; fi
+if ! reader_reminders "$review_evidence"; then
+    flunk "review: the reader's own pending reminders could not be read, so nothing was set aside"; exit 1
+fi
+# A name of this run's own, kept if the restore fails — then it may be the only copy — and removed only
+# once the whole restore has succeeded, so a retry from `on_exit` can still copy it back (#21).
+review_backup="$review_evidence/original-$(date +%Y%m%d-%H%M%S)-$$.sqlite"
+review_had_ledger=no
+review_digest=""
+if [ -e "$ledger" ]; then
+    review_had_ledger=yes
+    if ! review_digest=$(ledger_digest "$ledger"); then
+        flunk "review: the reader's ledger could not be fingerprinted, so it is left alone"; exit 1
+    fi
+    if ! ledger_backup "$ledger" "$review_backup" \
+        || [ "$(ledger_digest "$review_backup")" != "$review_digest" ]; then
+        flunk "review: the ledger backup does not match the ledger, so it is left alone ($review_backup)"; exit 1
+    fi
+fi
+review_restored=no
+restore_review_fixture() {
+    local staged="$ledger.e2e-restore"
+    # Run at the end of the stage, and again from `on_exit` in case the stage died first; the second
+    # call finds nothing to do.
+    [ "$review_restored" = yes ] && return 0
+    stop_app || { echo "restore: XiaolaiDict would not quit, so the ledger was not touched" >&2; return 1; }
+    if [ "$review_had_ledger" = yes ]; then
+        # Staged beside the ledger, on the same volume, so the swap below is a rename.
+        rm -f "$staged" || return 1
+        cp "$review_backup" "$staged" || { echo "restore: could not stage $review_backup" >&2; return 1; }
+        [ "$(ledger_digest "$staged")" = "$review_digest" ] \
+            || { echo "restore: the staged copy differs from the original; $review_backup is kept" >&2; return 1; }
+        rm -f "$staged-wal" "$staged-shm" "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        mv "$staged" "$ledger" || { echo "restore: the staged copy is at $staged, $review_backup is kept" >&2; return 1; }
+        [ "$(ledger_digest "$ledger")" = "$review_digest" ] \
+            || { echo "restore: the restored ledger differs from the original; $review_backup is kept" >&2; return 1; }
+    else
+        # There was none: the run's own ledger is removed, so the machine is as it was found.
+        rm -f "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        [ ! -e "$ledger" ] || return 1
+    fi
+    # `defaults import` merges, so the domain is emptied first — and only once the export is known to
+    # be a readable plist.
+    plutil -lint -s "$review_evidence/preferences.plist" \
+        || { echo "restore: the exported preferences are unreadable, so the domain was not replaced" >&2; return 1; }
+    domain_cleared || return 1
+    defaults import com.xiaolaidict "$review_evidence/preferences.plist" \
+        || { echo "restore: the preferences could not be imported; they are in $review_evidence" >&2; return 1; }
+    reader_reminders_back "$review_evidence" || return 1
+    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
+    if [ "$review_had_ledger" = yes ]; then
+        rm -f "$review_backup" "$review_backup-wal" "$review_backup-shm" || return 1
+    fi
+    review_restored=yes
+}
+at_exit restore_review_fixture
+# **Dictionary is left as it was found.** `E` opens it; a copy this stage started is quit again, by the
+# executable it runs from rather than by name, and one that was already running is left alone.
+review_dictionary=/System/Applications/Dictionary.app/Contents/MacOS/Dictionary
+review_dictionary_was_running=no
+if is_running "$review_dictionary"; then review_dictionary_was_running=yes; fi
+quit_review_dictionary() {
+    [ "$review_dictionary_was_running" = yes ] && return 0
+    find_pids "$review_dictionary"
+    [ "${#PIDS[@]}" -eq 0 ] && return 0
+    kill -TERM "${PIDS[@]}" 2>/dev/null || true
+    for _ in $(seq 1 40); do is_running "$review_dictionary" || return 0; sleep 0.25; done
+    echo "quit_review_dictionary: Dictionary would not quit" >&2
+    return 1
+}
+at_exit quit_review_dictionary
+
+# The schema is the app's own: an empty ledger, created by the bundle under test and waited for by the
+# tables the fixture writes, rather than restated here. The Library opens on Review, as it does for a
+# reader who last used it. **With reminders off and no log**, so no launch here touches the reader's.
+if ! reminders_set_aside; then
+    flunk "review: the reader's reminder settings could not be set aside, so no fixture was launched"; exit 1
+fi
+rm -f "$ledger" "$ledger-wal" "$ledger-shm"
+defaults write com.xiaolaidict libraryPane review
+open "$app"
+for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+review_tables=""
+for _ in $(seq 1 50); do
+    review_tables=$(sqlite3 -readonly "$ledger" "select count(*) from sqlite_master where type = 'table' and name in ('study_cards', 'study_keep_metadata', 'review_events')" 2>/dev/null || true)
+    [ "$review_tables" = 3 ] && break
+    sleep 0.2
+done
+review_seeded=no
+if [ "$review_tables" != 3 ]; then
+    flunk "review: the app never created the study tables in its new ledger (found ${review_tables:-none} of 3)"
+elif ! stop_app; then
+    flunk "review: XiaolaiDict would not stop, so the fixture was not written"
+else
+    # Namespaced by the reader's study dictionary, which is what the sitting is scoped to; with none
+    # chosen the sitting reads every namespace, and any name will do.
+    review_primary=$(defaults read com.xiaolaidict PrimaryDictionary 2>/dev/null || true)
+    if why=$(python3 "$helpers/review.py" seed "$ledger" "${review_primary:-e2e.review.fixture}" \
+            "$review_evidence/fixture.json" 2>&1); then
+        review_seeded=yes
+    else
+        flunk "review: the fixture could not be seeded: $(printf '%s' "$why" | tail -3)"
+    fi
+fi
+
+if [ "$review_seeded" = yes ]; then
+    # **The app's own word first, from inside the bundle.** Whether the queue asks the seeded cards at
+    # all, and what the model's presentation holds on each side of the reveal — neither of which the
+    # window, read from outside, can tell apart from a harness that seeded the wrong thing. Run with
+    # the app stopped, so one process has the ledger; it writes nothing either way.
+    review_report="$reports/review-report.json"
+    run_bounded --review-report "$review_report" 60 review-report || true
+    cp "$review_report" "$review_evidence/review-report.json" 2>/dev/null || true
+    verdicts=$(python3 - "$review_report" "$review_evidence/fixture.json" 2>&1 <<'PYREVIEW' || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+try:
+    r = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as error:
+    say(False, "", f"review: --review-report wrote no report ({error})")
+    print("DONE")
+    sys.exit(0)
+answers = {card["word"]: card["answer"] for card in json.load(open(sys.argv[2]))["cards"]}
+front, back = r.get("front") or {}, r.get("back") or {}
+say(r.get("due") == len(answers) and r.get("heldBack") == 0,
+    f"review: the queue of the app offers all {len(answers)} seeded cards, none held back",
+    f"review: the queue of the app offers {r.get('due')} of {len(answers)} seeded cards, "
+    f"{r.get('heldBack')} held back ({r.get('problem')})")
+word = front.get("word")
+say(front.get("stage") == "asking" and word in answers and front.get("answerShown") is False
+    and "answer" not in front,
+    f"review: the model asks {word} with no answer in its presentation",
+    f"review: the first card is not an unanswered question: {front}")
+say(back.get("word") == word and back.get("answerShown") is True and back.get("answer") == answers.get(word),
+    f"review: after the reveal the presentation holds the answer of {word} and no other",
+    f"review: after the reveal the presentation holds {back.get('answer')!r} for {back.get('word')}, "
+    f"wanted {answers.get(word)!r}")
+print("DONE")
+PYREVIEW
+)
+    consume_verdicts review-report "$verdicts"
+
+    # **Then the window, from outside, as a reader.** `review.py` prints a verdict per claim and DONE.
+    open "$app"
+    for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+    review_verdicts=$(python3 "$helpers/review.py" run "$helpers" "$ledger" "$review_evidence/fixture.json" \
+        "$review_evidence" 2>&1 || true)
+    printf '%s\n' "$review_verdicts" > "$review_evidence/run.txt"
+    consume_verdicts review "$review_verdicts"
+fi
+# **Put back before the next stage, not when the script ends**, as the learning stage learned to: a
+# stage after this one would otherwise measure the fixture ledger and read as a product fault.
+quit_review_dictionary || flunk "review: the Dictionary this stage opened would not quit"
+if restore_review_fixture; then
+    pass "review: the reader's ledger and settings are back before the next stage"
+else
+    flunk "review: the reader's ledger could not be put back; the run stops so no stage writes over it"
+    exit 1
+fi
+fi
+
+if want reminder; then
+# 16. **The review reminder (WI-7), as far as a Mac with nobody at it can take it** — review module plan
+#     §5.4. The app plans from a ledger of its own, `--reminder-report` reads the notification center
+#     from inside the bundle (it answers per app, so nothing outside can), and three settings are
+#     written in turn with the app stopped: off, on at an hour two or three hours ahead, and off again.
+#
+#     **Nothing here can raise the system prompt.** The app asks only from its Settings switch, which
+#     this stage never touches, so what needs the grant runs only on a Mac where a person has given it
+#     and is printed NOT RUN, with the reason, where they have not. Requests this stage made are taken
+#     back by the app itself — turned off with this run's log in place — before anything is restored,
+#     whenever the stage turned reminders on, whether or not it got as far as reporting.
+#
+#     **The reader's own pending requests are read first, never touched, and proved still there last.**
+#     Every fixture launch here is off with no log (`reminders_set_aside`), which touches nothing. Turning
+#     reminders on and off cannot be done beside them — the app's requests share one namespace, so the
+#     `on` phase replaces the reader's and the `disabled` phase removes them — and nothing outside the app
+#     can put one back: only its process adds a request, and it adds what it plans now, so a request the
+#     reader had, planned in another zone, came back at another instant (audit-fix round 1, #28). So
+#     with any of the reader's own pending, only the `off` phase runs, and the other two are NOT RUN with
+#     the reason; the restore fails unless every one is pending again at its own instant.
+#
+#     The ledger and the preferences are set aside and put back by the review stage's mechanism, each
+#     step checked by hand.
+reminder_evidence="$HOME/$1/reminder-evidence"
+mkdir -p "$reminder_evidence"
+chmod 700 "$reminder_evidence"
+rm -f "$reminder_evidence"/*.json "$reminder_evidence"/*.txt
+if ! defaults export com.xiaolaidict "$reminder_evidence/preferences.plist"; then
+    flunk "reminder: the preferences could not be exported, so they could not be put back"; exit 1
+fi
+if ! stop_app; then flunk "reminder: XiaolaiDict would not stop, so the ledger was not set aside"; exit 1; fi
+reminder_backup="$reminder_evidence/original-$(date +%Y%m%d-%H%M%S)-$$.sqlite"
+reminder_had_ledger=no
+reminder_digest=""
+if [ -e "$ledger" ]; then
+    reminder_had_ledger=yes
+    if ! reminder_digest=$(ledger_digest "$ledger"); then
+        flunk "reminder: the reader's ledger could not be fingerprinted, so it is left alone"; exit 1
+    fi
+    if ! ledger_backup "$ledger" "$reminder_backup" \
+        || [ "$(ledger_digest "$reminder_backup")" != "$reminder_digest" ]; then
+        flunk "reminder: the ledger backup does not match the ledger, so it is left alone ($reminder_backup)"; exit 1
+    fi
+fi
+# **What the reader has pending, before any launch here can remove it** — read with the reader's own
+# ledger and settings, the app stopped. Unreadable, the stage does not run: it could not say it left
+# alone what it could not see.
+if ! reader_reminders "$reminder_evidence"; then
+    flunk "reminder: the reader's own pending reminders could not be read, so nothing was set aside"; exit 1
+fi
+# reminder_phases <reader-report>: the phases this stage may run, in order. **`off` alone while the reader
+# has any review request pending**: `on` would replace theirs with the stage's own and `disabled` would
+# remove them, and neither can be undone from outside the app (#28).
+reminder_phases() {
+    if [ "$(reminder_pending "$1")" = 0 ]; then echo "off on disabled"; else echo off; fi
+}
+reminder_run=$(reminder_phases "$reminder_evidence/reader.json")
+# The hour this run plans for, and the first reminder it expects — computed here, not by the app.
+reminder_hour=$(python3 "$helpers/reminder.py" hour)
+python3 "$helpers/reminder.py" expect "$reminder_hour" > "$reminder_evidence/expect.json"
+reminder_first=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$reminder_evidence/expect.json")
+reminder_settings() {  # reminder_settings <on|off>: the reader's reminder settings, written for this run
+    defaults write com.xiaolaidict reviewReminderSettings -data \
+        "$(python3 "$helpers/reminder.py" settings "$1" "$reminder_hour")"
+}
+# The Settings switch writes an empty log before it turns reminders on, so the app can read "on, and
+# no log" as a log that was lost, which spends the day (WI-8). Turning them on here does the same.
+reminder_log_empty() {
+    defaults write com.xiaolaidict reviewReminderLog -data "$(python3 "$helpers/reminder.py" log)"
+}
+reminder_restored=no
+# Set before the `on` phase writes its settings: from then on this stage may have requests pending,
+# whatever it managed to report.
+reminder_activated=no
+restore_reminder_fixture() {
+    local staged="$ledger.e2e-restore" left report
+    [ "$reminder_restored" = yes ] && return 0
+    stop_app || { echo "restore: XiaolaiDict would not quit, so the ledger was not touched" >&2; return 1; }
+    # **What this run added is taken back by the app**, with this run's log still in place so it knows
+    # what it made: turned off, it withdraws every open day and removes every request. Decided by what
+    # is pending now, asked afresh, whenever the stage turned reminders on — never by the `on` phase's
+    # report, which a stage interrupted after its launch and before its report never wrote. A report
+    # that cannot be read is no evidence that nothing is pending, so it is withdrawn the same way.
+    if [ "$reminder_activated" = yes ]; then
+        report=$(run_report --reminder-report 60) || true
+        printf '%s' "$report" > "$reminder_evidence/restore-before.json"
+        if [ "$(reminder_pending "$reminder_evidence/restore-before.json")" != 0 ]; then
+            reminder_settings off || return 1
+            open "$app" || return 1
+            python3 "$helpers/reminder.py" wait "$reminder_first" withdrawn 30 >/dev/null || true
+            stop_app || return 1
+            report=$(run_report --reminder-report 60) || true
+            printf '%s' "$report" > "$reminder_evidence/restore.json"
+            left=$(reminder_pending "$reminder_evidence/restore.json")
+            [ "$left" = 0 ] || { echo "restore: $left review request(s) are still pending on this Mac" >&2; return 1; }
+        fi
+    fi
+    if [ "$reminder_had_ledger" = yes ]; then
+        rm -f "$staged" || return 1
+        cp "$reminder_backup" "$staged" || { echo "restore: could not stage $reminder_backup" >&2; return 1; }
+        [ "$(ledger_digest "$staged")" = "$reminder_digest" ] \
+            || { echo "restore: the staged copy differs from the original; $reminder_backup is kept" >&2; return 1; }
+        rm -f "$staged-wal" "$staged-shm" "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        mv "$staged" "$ledger" || { echo "restore: the staged copy is at $staged, $reminder_backup is kept" >&2; return 1; }
+        [ "$(ledger_digest "$ledger")" = "$reminder_digest" ] \
+            || { echo "restore: the restored ledger differs from the original; $reminder_backup is kept" >&2; return 1; }
+    else
+        rm -f "$ledger" "$ledger-wal" "$ledger-shm" || return 1
+        [ ! -e "$ledger" ] || return 1
+    fi
+    # `defaults import` merges, so the domain is emptied first — and only once the export is known to
+    # be a readable plist. This is what takes the reminder settings and log back to the reader's.
+    plutil -lint -s "$reminder_evidence/preferences.plist" \
+        || { echo "restore: the exported preferences are unreadable, so the domain was not replaced" >&2; return 1; }
+    domain_cleared || return 1
+    defaults import com.xiaolaidict "$reminder_evidence/preferences.plist" \
+        || { echo "restore: the preferences could not be imported; they are in $reminder_evidence" >&2; return 1; }
+    # **The reader's own pending requests, proved still there — never regenerated.** The stage left them
+    # alone (its launches were off with no log, and with any of theirs pending it turned nothing on), so
+    # each must be pending at the instant it had; one that is not fails the restore rather than being
+    # planned again by the app at whatever instant it would choose now (#28).
+    reader_reminders_back "$reminder_evidence" || return 1
+    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
+    if [ "$reminder_had_ledger" = yes ]; then
+        rm -f "$reminder_backup" "$reminder_backup-wal" "$reminder_backup-shm" || return 1
+    fi
+    reminder_restored=yes
+}
+at_exit restore_reminder_fixture
+
+# An empty ledger the app creates, and the review stage's eight overdue cards in it: a sitting of eight
+# at every fire time ahead. **Launched with reminders off and no log**, so it touches nothing of the
+# reader's; each phase below writes its own settings.
+if ! reminders_set_aside; then
+    flunk "reminder: the reader's reminder settings could not be set aside, so no fixture was launched"; exit 1
+fi
+rm -f "$ledger" "$ledger-wal" "$ledger-shm"
+open "$app"
+for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+reminder_tables=""
+for _ in $(seq 1 50); do
+    reminder_tables=$(sqlite3 -readonly "$ledger" "select count(*) from sqlite_master where type = 'table' and name in ('study_cards', 'study_keep_metadata', 'review_events')" 2>/dev/null || true)
+    [ "$reminder_tables" = 3 ] && break
+    sleep 0.2
+done
+reminder_seeded=no
+if [ "$reminder_tables" != 3 ]; then
+    flunk "reminder: the app never created the study tables in its new ledger (found ${reminder_tables:-none} of 3)"
+elif ! stop_app; then
+    flunk "reminder: XiaolaiDict would not stop, so the fixture was not written"
+else
+    reminder_primary=$(defaults read com.xiaolaidict PrimaryDictionary 2>/dev/null || true)
+    if why=$(python3 "$helpers/review.py" seed "$ledger" "${reminder_primary:-e2e.review.fixture}" \
+            "$reminder_evidence/fixture.json" 2>&1); then
+        reminder_seeded=yes
+    else
+        flunk "reminder: the fixture could not be seeded: $(printf '%s' "$why" | tail -3)"
+    fi
+fi
+
+reminder_grant=""
+if [ "$reminder_seeded" = yes ]; then
+    reminder_cards=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["cards"]))' "$reminder_evidence/fixture.json")
+    # Each phase: the settings written with the app stopped, the app run so its launch re-plans, then
+    # stopped, and the report read — the notification center keeps its pending list with the app quit.
+    for reminder_phase in $reminder_run; do
+        case $reminder_phase in
+            on) reminder_activated=yes; reminder_log_empty && reminder_settings on ;;
+            *) reminder_settings off ;;
+        esac
+        # Off at the start is off with no log at all, as a reader who never turned reminders on has.
+        [ "$reminder_phase" = off ] && { defaults delete com.xiaolaidict reviewReminderLog >/dev/null 2>&1 || true; }
+        if [ "$reminder_phase" != off ]; then
+            open "$app"
+            for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+            if [ "$reminder_grant" = granted ]; then
+                # The log is written before the system is asked, so its state is the handshake.
+                case $reminder_phase in on) reminder_state=added ;; *) reminder_state=withdrawn ;; esac
+                python3 "$helpers/reminder.py" wait "$reminder_first" "$reminder_state" 30 \
+                    > "$reminder_evidence/$reminder_phase-wait.txt" 2>&1 || true
+            else
+                # Nothing to wait for without the grant: the launch's pass adds nothing. Time for it
+                # to add what it must not.
+                sleep 5
+            fi
+            stop_app || flunk "reminder: XiaolaiDict would not stop after the $reminder_phase phase"
+        fi
+        reminder_json=$(run_report --reminder-report 60) || true
+        printf '%s' "$reminder_json" > "$reminder_evidence/$reminder_phase.json"
+        [ "$reminder_phase" = off ] && reminder_grant=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("grant", ""))' "$reminder_evidence/off.json" 2>/dev/null || true)
+        verdicts=$(python3 - "$reminder_phase" "$reminder_evidence/$reminder_phase.json" "$reminder_evidence/expect.json" "$reminder_cards" "$reminder_evidence/reader.json" 2>&1 <<'PYREMINDER' || true
+import json, sys, time
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def notrun(what, why): print("NOTRUN\t" + what + " — " + why)
+phase, path, expect_path, seeded, reader_path = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
+try:
+    r = json.load(open(path))
+except (OSError, ValueError) as error:
+    say(False, "", f"reminder: --reminder-report wrote no report in the {phase} phase ({error})")
+    print("DONE")
+    sys.exit(0)
+expect = json.load(open(expect_path))
+grant = r.get("grant")
+granted = grant == "granted"
+planned = r.get("planned") or []
+pending = [p for p in (r.get("pending") or []) if str(p.get("id", "")).startswith("review.")]
+log = {entry.get("id"): entry for entry in (r.get("log") or [])}
+first = log.get(expect["id"]) or {}
+if phase == "off":
+    say(grant in ("granted", "notAsked", "declined"),
+        f"reminder: the bundle reads its notification grant ({grant})",
+        f"reminder: the bundle could not read its notification grant ({grant}; {r.get('problem')})")
+    say(r.get("enabled") is False and planned == [],
+        "reminder: off, the settings plan nothing",
+        f"reminder: off, the settings plan {planned}")
+    # **Nothing but the reader's own**, which the stage left alone: none on a Mac nobody gave the grant.
+    # One of theirs whose time passed since it was read may have fired; every one still ahead is there.
+    own = {str(p.get("id")): p.get("fireAt") for p in (json.load(open(reader_path)).get("pending") or [])
+           if str(p.get("id", "")).startswith("review.")}
+    held = {str(p.get("id")): p.get("fireAt") for p in pending}
+    say(all(own.get(i) == at for i, at in held.items())
+        and all(held.get(i) == at for i, at in own.items() if at is not None and at > time.time()),
+        "reminder: off, nothing of this app's is pending" + (f" but the reader's own {len(own)}" if own else ""),
+        f"reminder: off, requests were pending before anything was planned: {pending} (the reader's own: {own})")
+elif phase == "on":
+    say(r.get("logRead") == "log",
+        "reminder: on, the log the switch writes first is kept and reads",
+        f"reminder: on, the log read as {r.get('logRead')}, so today is planned as spent")
+    head = planned[0] if planned else {}
+    say(r.get("enabled") is True and head.get("id") == expect["id"] and head.get("fireAt") == expect["fireAt"],
+        f"reminder: on, the first reminder is {expect['id']} at the hour chosen, in this Mac's zone ({r.get('zone')})",
+        f"reminder: on, the first reminder planned is {head}, wanted {expect}")
+    # **The whole plan against `reminder.py`'s own**: each of the horizon's study days whose fire time is
+    # still ahead. A count of one a day held only while today's had not passed, and failed a right plan
+    # of six at 01:08, when the hour chosen was 04:00 (E2E Mac, 2026-10-05).
+    days = [(d["id"], d["fireAt"]) for d in expect["days"]]
+    say(r.get("horizon") == expect["horizon"] and [(p.get("id"), p.get("fireAt")) for p in planned] == days
+        and all(p.get("count") == seeded for p in planned),
+        f"reminder: one reminder for each of the {r.get('horizon')} study days whose time is ahead ({len(days)}), "
+        f"each counting the {seeded} seeded cards",
+        f"reminder: planned {[(p.get('id'), p.get('fireAt'), p.get('count')) for p in planned]} over a horizon of "
+        f"{r.get('horizon')}, wanted {days} over {expect['horizon']}, each counting {seeded}")
+    if granted:
+        held = {p.get("id"): p.get("fireAt") for p in pending}
+        say(held == {p.get("id"): p.get("fireAt") for p in planned},
+            "reminder: what is pending in the notification center is the plan, identifier and fire date",
+            f"reminder: pending {held} is not the plan {[(p.get('id'), p.get('fireAt')) for p in planned]}")
+        say(first.get("state") == "added",
+            f"reminder: the log records {expect['id']} as added",
+            f"reminder: the log holds {first} for {expect['id']}")
+    else:
+        notrun("reminder: the pending request and its fire date",
+               f"notifications are not allowed for XiaolaiDict on this Mac (grant: {grant}); a person turns "
+               "the reminder on once in Settings › General and clicks Allow")
+        say(pending == [],
+            "reminder: without the grant nothing is pending",
+            f"reminder: requests are pending without the grant: {pending}")
+        say(not [e for e in log.values() if e.get("state") in ("intent", "added")],
+            "reminder: without the grant the log records no add",
+            f"reminder: the log records adds without the grant: {list(log.values())}")
+else:
+    say(r.get("enabled") is False and planned == [],
+        "reminder: turned off, the settings plan nothing",
+        f"reminder: turned off, the settings still plan {planned}")
+    say(pending == [],
+        "reminder: turned off, nothing of this app's is pending",
+        f"reminder: turned off, requests are still pending: {pending}")
+    if granted:
+        say(first.get("state") == "withdrawn" and first.get("reason") == "disabled",
+            f"reminder: the log records {expect['id']} withdrawn, because reminders were turned off",
+            f"reminder: the log holds {first} for {expect['id']} after turning off")
+    else:
+        notrun("reminder: turning off removes the pending request",
+               f"nothing could be pending without the grant ({grant}), so there was nothing to remove")
+print("DONE")
+PYREMINDER
+)
+        consume_verdicts reminder "$verdicts"
+    done
+fi
+# **What only a person at this Mac can do**, said rather than skipped in silence (review module plan
+# §10: "Only the second Mac can verify").
+echo "NOT RUN  reminder: the first Allow prompt — only a person can answer a system prompt, and nothing in this stage raises one"
+echo "NOT RUN  reminder: a banner click bringing the Library forward on Review as a regular app — needs a delivered banner and a real click"
+echo "NOT RUN  reminder: Later with the app quit — needs a delivered banner, a person choosing Later, and the app not running"
+echo "NOT RUN  reminder: how macOS shows a .passive banner — needs a delivered banner and a person watching (reminders are sent .active)"
+echo "NOT RUN  reminder: a fire time crossed while asleep — needs this Mac asleep across a fire time"
+# **Said, not skipped**: with the reader's own reminders pending, the phases that would replace and remove
+# them did not run (#28). Not a product failure — this Mac cannot run them without costing the reader.
+if [ "$reminder_run" = off ]; then
+    reminder_reader_count=$(reminder_pending "$reminder_evidence/reader.json")
+    reminder_why="the reader's own $reminder_reader_count reminder(s) are pending on this Mac; turning reminders on and off here would replace them, and no request can be put back at its own instant from outside the app"
+    echo "NOT RUN  reminder: the on phase (the plan, what is pending, the log) — $reminder_why"
+    echo "NOT RUN  reminder: the disabled phase (turning off withdraws and removes) — $reminder_why"
+fi
+if restore_reminder_fixture; then
+    pass "reminder: the reader's ledger and settings are back, and nothing this stage added is pending"
+else
+    flunk "reminder: the reader's ledger or settings could not be put back; the run stops so no stage writes over it"
     exit 1
 fi
 fi

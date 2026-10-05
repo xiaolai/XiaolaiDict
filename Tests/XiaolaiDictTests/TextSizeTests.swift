@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import Testing
 
+@testable import XiaolaiDict
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 import XiaolaiDictTestSupport
@@ -117,6 +118,21 @@ struct TextSizeTests {
         let defaults = TemporaryDefaults.suite()
         defaults.set("enormous", forKey: AppearanceStore.defaultsKey)
         #expect(AppearanceStore(defaults: defaults).loadTextSize() == .standard)
+    }
+
+    /// **The app's appearance is read from the suite the app was given** (audit-fix round 1). It was
+    /// built as `Appearance()`, whose store defaulted to `.standard`, so a test's app read — and its
+    /// size control wrote — the test runner's own domain, and "the app reads only the defaults suite it
+    /// was given" held for every preference but this one. Read-only here: the size the suite holds is
+    /// one `.standard` does not, so the old wiring cannot pass by coincidence.
+    @MainActor
+    @Test func theAppsAppearanceIsTheSuiteItWasGiven() throws {
+        let suite = TemporaryDefaults.suite()
+        let elsewhere = AppearanceStore(defaults: .standard).loadTextSize()
+        let chosen = try #require(TextSize.allCases.first { $0 != elsewhere })
+        AppearanceStore(defaults: suite).save(chosen)
+        let app = XiaolaiDictApp(defaults: suite, models: .temporary(defaults: suite))
+        #expect(app.appearance.textSize == chosen, "the app read its appearance from another domain")
     }
 
     @MainActor

@@ -40,7 +40,8 @@ struct LedgerConnectionTests {
         #expect(!code.contains("sqlite3_close(db)"), "the ledger closes the handle it does not own")
         // Three closes, each legitimate and each of a shape this file has argued for:
         //   1. `Connection.deinit`, the one owner of a handle in use.
-        //   2. the handle `sqlite3_open_v2` returns alongside a failed open of the ledger itself,
+        //   2. the handle `sqlite3_open_v2` returns alongside a failed open of the ledger itself — one
+        //      helper, `connection(to:flags:)`, which the read-only door shares (audit-fix rounds 1 and 2),
         //   3. and the same shape again for the backup's destination, which is never wrapped because
         //      there is nothing yet to own it.
         // A successfully opened backup destination is wrapped in `Connection` like any other, so it is

@@ -120,12 +120,14 @@ struct ShellActivationWiringTests {
         #expect(policies.set == [.regular, .accessory], "nothing ever goes back to accessory")
     }
 
-    /// **The drawer and a lookup never touch the policy.**
+    /// **The drawer and a lookup never touch the policy.** Shown as the menu bar shows it, and put away
+    /// by `toggleHistory` — a path the app has; the `hideHistory` wrapper this used had no other caller
+    /// and went (audit-fix round 3, #6).
     @Test func theDrawerDoesNotMoveTheAppIntoTheDock() {
         let policies = Policies()
         let app = app(policies)
         app.showHistory()
-        app.hideHistory()
+        app.toggleHistory()
         #expect(policies.set.isEmpty, "showing the drawer changed the activation policy: \(policies.set)")
         #expect(policies.activations == 0, "the drawer activated the app")
     }

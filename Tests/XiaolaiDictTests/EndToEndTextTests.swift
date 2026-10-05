@@ -294,6 +294,27 @@ struct EndToEndTextTests {
 
     // MARK: - The checks
 
+    /// **Every stage block is a registered name, and every registered name is a stage block.**
+    ///
+    /// `KNOWN_STAGES` is what `make e2e STAGES="…"` is checked against, and `want <name>` is what opens
+    /// a stage. A block whose name is not registered cannot be run on its own — the one way anyone
+    /// debugs a stage — and a registered name with no block runs nothing, which `e2e.sh` itself says
+    /// once printed "all stages passed" for a run that tested nothing. Both halves, read from the file.
+    @Test func everyStageBlockIsARegisteredNameAndEveryNameIsABlock() throws {
+        let script = try Self.script()
+        let registered = try #require(script.firstMatch(of: /KNOWN_STAGES=\(([a-z ]+)\)/), "KNOWN_STAGES has moved")
+        let names = Set(registered.1.split(separator: " ").map(String.init))
+        let blocks = Set(script.matches(of: /(?m)^if want ([a-z]+); then$/).map { String($0.1) })
+        // A scan that found nothing proves nothing: fifteen of each before the review stage.
+        #expect(blocks.count >= 15, "only \(blocks.count) stage blocks found — has the spelling changed?")
+        #expect(blocks.subtracting(names).isEmpty,
+                "stage blocks no name can select: \(blocks.subtracting(names).sorted())")
+        #expect(names.subtracting(blocks).isEmpty,
+                "names that run no stage: \(names.subtracting(blocks).sorted())")
+        #expect(blocks.contains("review"), "the review stage (ADR-0032, WI-0) is not in Tools/e2e.sh")
+        #expect(blocks.contains("reminder"), "the reminder stage (review-module-plan §5.4, WI-7) is not in Tools/e2e.sh")
+    }
+
     /// A process name is not reader wording: `pgrep` is matched as nothing, `grep` as before.
     @Test func aProcessLookupIsNotAPhrase() throws {
         let found = try Self.phrases(in: """
@@ -569,6 +590,9 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/SenseReport.swift",
         "Sources/XiaolaiDict/SpeechReport.swift",
         "Sources/XiaolaiDict/TranslationReport.swift",
+        "Sources/XiaolaiDict/ReviewReport.swift",
+        // The reminder's grant, pending requests, plan and log (WI-7).
+        "Sources/XiaolaiDict/ReminderReport.swift",
         // The lookup instruments answer through `Codable` types rather than dictionaries.
         "Sources/XiaolaiDict/LookupCommand.swift",
         // The helpers that answer the harness directly.

@@ -141,7 +141,10 @@ public struct PhraseInventory: Sendable, Equatable {
     /// `phrases/6`: a phrase now carries every filing and every definition in each, with the parent and
     /// block ids the walk had been throwing away. Every stored `phrases/5` file holds one arbitrary
     /// definition per phrase and must be rebuilt, which is what this bump is for.
-    static let formatVersion = "phrases/6"
+    ///
+    /// **Public** because a saved phrase records it beside each locator (ADR-0049): which walk read the
+    /// block is part of the evidence, and `PhraseReader` stamps it on every filing it hands the wire.
+    public static let formatVersion = "phrases/6"
 
     public func encoded() -> String {
         // **A phrase carrying a tab or a newline is skipped, not escaped.** It would split into two fields

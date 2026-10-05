@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 
 /// **Recovery and erasure.** WI-006, the gate P0 closes on.
 ///
@@ -22,12 +21,16 @@ extension Ledger {
     /// name a reader might plausibly choose for a copy — while the comment claimed an exact match,
     /// which is how a file that is not ours would have been deleted by a command promising to delete
     /// ours. The digits are checked, so anything between the version and `.backup` disqualifies it.
-    public static func appManagedBackups(besides path: String) -> [String] {
+    ///
+    /// **A folder that cannot be listed throws.** Its error became an empty list, so the impact
+    /// counted no copies and a permanent erase called itself complete beside the migration's copy
+    /// of the reader's whole history (audit-fix round 1). "None found" and "could not look" are
+    /// different answers.
+    public static func appManagedBackups(besides path: String) throws -> [String] {
         let url = URL(fileURLWithPath: path)
         let directory = url.deletingLastPathComponent()
         let prefix = url.lastPathComponent + ".schema"
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return contents
+        return try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { name in
                 guard name.hasPrefix(prefix), name.hasSuffix(".backup") else { return false }
                 let middle = name.dropFirst(prefix.count).dropLast(".backup".count)
@@ -72,6 +75,10 @@ extension Ledger {
             """, bind: []) { row in
             if row.integer(0) > 0 { problems.append("orphaned review events: \(row.integer(0))") }
         }
+        // **Every card's history accounts for it** (WI-9b): each live grade re-run at the instants
+        // its stored value stands for, the chain unbroken, the card where it ends. A file can pass
+        // every check above and still hold a schedule no history produced.
+        problems += try replayProblems()
         return problems
     }
 
@@ -79,12 +86,27 @@ extension Ledger {
     public struct ErasureReport: Sendable, Equatable {
         public let lookupsRemoved: Int
         public let backupsRemoved: [String]
-        /// A copy the app made and could not delete, with the reason. **Reported, never swallowed**:
-        /// a reader told their reading is gone while a copy of it sits beside the ledger has been
-        /// told something false.
+        /// A copy the app made and could not delete, with the system's reason. **Reported, never
+        /// swallowed**: a reader told their reading is gone while a copy of it sits beside the ledger
+        /// has been told something false.
         public let backupsLeft: [String: String]
+        /// What else the erase was to reach and could not, **by kind, never as a sentence** — this
+        /// target holds no display text; the surface says it (AGENTS.md, ADR-0025).
+        public let unreached: [Unreached]
 
-        public var isComplete: Bool { backupsLeft.isEmpty }
+        public var isComplete: Bool { backupsLeft.isEmpty && unreached.isEmpty }
+
+        public enum Unreached: Sendable, Equatable {
+            /// The folder the copies live in could not be listed, so whether any are left is not
+            /// known; the system's reason.
+            case backupsNotListed(reason: String)
+            /// `wal_checkpoint` was busy — another connection holds a read snapshot — so the
+            /// write-ahead log still holds the erased rows.
+            case writeAheadLogBusy
+            /// After the rows had gone, the file could not be rewritten without the pages they freed
+            /// (`VACUUM`), or its log could not be checkpointed at all; the system's reason.
+            case notRewritten(reason: String)
+        }
     }
 
     /// What a full erase would take. **Counted, not estimated** — the reader is about to make a
@@ -100,7 +122,7 @@ extension Ledger {
             SELECT COUNT(*) FROM study_notes n
             WHERE EXISTS (SELECT 1 FROM study_note_lookups nl WHERE nl.note_id = n.id)
             """, bind: []) { orphaned = $0.integer(0) }
-        return (lookups, orphaned, Self.appManagedBackups(besides: path).count)
+        return (lookups, orphaned, try Self.appManagedBackups(besides: path).count)
     }
 
     /// Erases the reader's reading history, and the copies this app made of it.
@@ -129,7 +151,17 @@ extension Ledger {
         // reader with neither their history nor the copy they could have restored it from.
         var removed: [String] = []
         var left: [String: String] = [:]
-        for backup in Self.appManagedBackups(besides: path) {
+        var unreached: [ErasureReport.Unreached] = []
+        // **The rows are gone by now**, so a folder that cannot be listed is not a command that could
+        // not run: it is an erase that could not reach the copies, and says so.
+        let backups: [String]
+        do {
+            backups = try Self.appManagedBackups(besides: path)
+        } catch {
+            backups = []
+            unreached.append(.backupsNotListed(reason: error.localizedDescription))
+        }
+        for backup in backups {
             do {
                 try FileManager.default.removeItem(atPath: backup)
                 removed.append(backup)
@@ -144,16 +176,25 @@ extension Ledger {
         // another connection holding a read snapshot can prevent the truncation — and running it
         // through `execute`, whose `sqlite3_exec` callback is nil, threw that answer away. The
         // erase then reported itself complete over a log still holding the reader's history.
-        var checkpointBusy = false
-        try run("PRAGMA wal_checkpoint(TRUNCATE)", bind: []) { checkpointBusy = $0.integer(0) != 0 }
-        if checkpointBusy {
-            left[path + "-wal"] = String(
-                localized: "The write-ahead log could not be truncated: another connection is reading it.",
-                comment: "Reported when an erase cannot clear the database's sidecar log")
+        //
+        // **And neither it nor the rewrite below throws past the report** (audit-fix round 2). The rows
+        // are gone by now, so a step that fails here is an erase that could not reach everything, said
+        // by kind — not a command that did not run, which is what a throw tells the surface.
+        do {
+            var checkpointBusy = false
+            try run("PRAGMA wal_checkpoint(TRUNCATE)", bind: []) { checkpointBusy = $0.integer(0) != 0 }
+            if checkpointBusy { unreached.append(.writeAheadLogBusy) }
+        } catch {
+            unreached.append(.notRewritten(reason: String(describing: error)))
         }
         // Rewrites the database without the freed pages, so nothing of what was deleted survives in
         // the file. Outside the transaction, because `VACUUM` cannot run inside one.
-        try execute("VACUUM")
-        return ErasureReport(lookupsRemoved: count, backupsRemoved: removed, backupsLeft: left)
+        do {
+            try execute("VACUUM")
+        } catch {
+            unreached.append(.notRewritten(reason: String(describing: error)))
+        }
+        return ErasureReport(lookupsRemoved: count, backupsRemoved: removed, backupsLeft: left,
+                             unreached: unreached)
     }
 }

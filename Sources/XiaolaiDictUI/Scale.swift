@@ -380,7 +380,9 @@ public final class Appearance {
 
     private let store: AppearanceStore
 
-    public init(store: AppearanceStore = AppearanceStore()) {
+    /// **No default store**: one defaulted to `.standard`, and the app's own appearance was built
+    /// with it, past the suite the app was given (audit-fix round 1). Naming it is the check.
+    public init(store: AppearanceStore) {
         self.store = store
         textSize = store.loadTextSize()
         showsTime = store.loadShowsTime()
@@ -407,7 +409,7 @@ public struct AppearanceStore {
 
     private let defaults: UserDefaults
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 

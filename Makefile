@@ -4,6 +4,8 @@
 #   make          swift test, then bring .build/XiaolaiDict.app up to date
 #   make run      the same, then quit the running copy, open the new one and check it answers
 #   make test     lint, swift test, and the icon generator's tests
+#   make portability  typecheck Sources/ReviewKit alone for iOS, watchOS, tvOS and macOS; every
+#                 target that runs swift test runs it first
 #   make lint     SwiftLint's correctness rules over Sources, warnings failing (.swiftlint.yml)
 #   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST).
@@ -26,7 +28,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-status release clean metal-guard
+.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-status release clean metal-guard portability
 
 # Machine-local settings, untracked: the name of your end-to-end machine and anything else that
 # belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
@@ -79,9 +81,30 @@ test: lint test-swift test-tools
 metal-guard:
 	@Tools/metal-cache-guard.sh
 
-test-swift: metal-guard
+# **ReviewKit typechecks for iOS, watchOS, tvOS and macOS 27 on every build that tests** — ADR-0047.
+# Compiled alone, so no module in .build can satisfy it, and with -DSWIFT_PACKAGE, the condition every
+# real build compiles under; the compiler lists what it imports on each, which must be exactly
+# `--imports`, and the Swift parser is asked whether it holds a directive. A prerequisite of
+# `test-swift` rather than of each target that tests, so `all`, `run`, `test` and `release` all have it
+# and a new path that tests inherits it; `ModuleBoundaryTests.portabilityRunsOnEveryTestedBuild` reads
+# this file to keep it so, and holds `--imports` to its own table. It needs the iOS, watchOS and tvOS
+# platform SDKs on every Mac that builds, and says which one is missing.
+portability:
+	@Tools/portability.sh --imports Foundation Sources/ReviewKit -DSWIFT_PACKAGE
+
+test-swift: metal-guard portability
 	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; \
 	Tools/clean-test-scratch.sh || status=1; exit $$status
+
+# Correctness rules only — `.swiftlint.yml` says which and why. `--strict` because a warning nobody
+# fails on is a warning nobody reads. The version is pinned: a new SwiftLint can add findings to a rule,
+# and a gate that moves by itself is not a gate.
+SWIFTLINT_VERSION := 0.65.1
+lint:
+	@command -v swiftlint >/dev/null || { echo "swiftlint not found: brew install swiftlint" >&2; exit 1; }
+	@test "$$(swiftlint version)" = "$(SWIFTLINT_VERSION)" || \
+	  { echo "swiftlint $$(swiftlint version), this gate is pinned to $(SWIFTLINT_VERSION)" >&2; exit 1; }
+	swiftlint lint --strict --quiet
 
 # The Python suite: the icon generator, and the ladder gate `e2e.sh` decides a release with.
 # Named for the directory rather than for the icon, because it stopped being only the icon's.
@@ -93,16 +116,6 @@ test-swift: metal-guard
 # **Tracked, unlike the specification it belongs to.** It first went in under `dev-docs/`, which is
 # gitignored — so this line made `make test` pass here and fail on any fresh clone, discovery of a
 # missing directory being an `ImportError`. A gate that depends on an untracked file is not a gate.
-# Correctness rules only — `.swiftlint.yml` says which and why. `--strict` because a warning nobody
-# fails on is a warning nobody reads. The version is pinned: a new SwiftLint can add findings to a rule,
-# and a gate that moves by itself is not a gate.
-SWIFTLINT_VERSION := 0.65.1
-lint:
-	@command -v swiftlint >/dev/null || { echo "swiftlint not found: brew install swiftlint" >&2; exit 1; }
-	@test "$$(swiftlint version)" = "$(SWIFTLINT_VERSION)" || \
-	  { echo "swiftlint $$(swiftlint version), this gate is pinned to $(SWIFTLINT_VERSION)" >&2; exit 1; }
-	swiftlint lint --strict --quiet
-
 test-tools:
 	python3 -m unittest discover -s Tools/tests
 	python3 -m unittest discover -s Tools/fsrs

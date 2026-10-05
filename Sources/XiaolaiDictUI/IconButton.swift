@@ -72,6 +72,15 @@ struct IconButton: View {
     var role: ButtonRole?
     var isEnabled = true
     let action: () -> Void
+    /// **What a press runs: the action of this button's latest render**, however it is pressed. SwiftUI
+    /// keeps a keyboard shortcut's action from when it registered the shortcut, and registers it again
+    /// only when the button itself changes — its label, its enabled state — never for a new closure.
+    /// Measured on macOS 27, 2026-10-05: a button whose closure alone changed ran its *first* closure
+    /// for every key after it. A review card drawn over the last, its buttons enabled throughout, so
+    /// answered the last card's question, which the model refused: on the E2E Mac a held `2` graded
+    /// nothing. Review Selected over a new selection of the same size is the same button. So the button
+    /// SwiftUI keeps calls through this, and every render puts its own action in it — ADR-0048.
+    @State private var latest = LatestAction()
 
     init(
         title: LocalizedStringKey, symbol: String, help: Text? = nil, hint: LocalizedStringKey? = nil,
@@ -111,16 +120,26 @@ struct IconButton: View {
     }
 
     var body: some View {
+        latest.action = action
+        return content
+    }
+
+    @ViewBuilder private var content: some View {
         if showsTitle {
             // **A menu row, which is read.** The actions a footer offers as icons are offered by the
             // right-click menu too, from one builder, and a menu of bare glyphs is not a menu. The
             // menu draws the role and the key equivalent itself.
-            Button(role: role, action: action) { label }
+            Button(role: role, action: press) { label }
                 .keyboardShortcut(shortcut)
                 .disabled(!isEnabled)
         } else {
             icon
         }
+    }
+
+    /// The closure SwiftUI keeps, which holds nothing of any one render: it reads `latest`.
+    private var press: () -> Void {
+        { [latest] in latest.action() }
     }
 
     private var label: some View {
@@ -152,7 +171,7 @@ struct IconButton: View {
     }
 
     private var icon: some View {
-        Button(role: role, action: action) {
+        Button(role: role, action: press) {
             label
                 .labelStyle(.iconOnly)
                 .font(.system(size: size ?? scale.text.body))
@@ -171,6 +190,13 @@ struct IconButton: View {
         .help(tooltip)
         .accessibilityHint(spokenHint)
     }
+}
+
+/// The action an `IconButton` last rendered with. A reference, so the closure SwiftUI keeps for the
+/// button reads the latest action instead of holding the one it was made with.
+@MainActor
+private final class LatestAction {
+    var action: () -> Void = {}
 }
 
 /// A colour where there is one, and **no modifier at all** where there is not — so a button with

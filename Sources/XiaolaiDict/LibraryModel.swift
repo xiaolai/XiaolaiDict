@@ -1,6 +1,7 @@
 import DictionaryModel
 import Foundation
 import Observation
+import ReviewKit
 import SwiftUI
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -40,7 +41,8 @@ final class LibraryModel {
     private(set) var reviewProblem: String?
     private(set) var reviewCount = 0
     private(set) var reviewHeldBack = 0
-    /// How many saved meanings are waiting for the reader to choose or confirm them. What decides
+    /// How many saved meanings confirming would make askable — **not** every one needing attention,
+    /// which counted 22 answerless notes on the measured ledger as meanings to confirm. What decides
     /// whether Review offers the way to them at all.
     private(set) var reviewUnconfirmed = 0
     private(set) var reviewDictionary: String?
@@ -83,6 +85,13 @@ final class LibraryModel {
     /// ordering is not a guarantee Swift makes, so the assumption is made explicit rather than
     /// relied on; it is not a fix for a demonstrated defect.
     private var generation = 0
+    /// The read generation that has finished, succeeded or failed — **so a selection can tell a read in
+    /// flight**, and leave the publishing to it rather than republish the rows it is replacing.
+    private var settledGeneration = 0
+    /// Which selection is the latest, **counted apart from the reads** (audit-fix round 2): one counter
+    /// for both let a selection made while a search's read was suspended overtake that read, which then
+    /// stopped — and the selection republished the old rows under the new search, for good.
+    private var selectionGeneration = 0
 
     /// What a bulk action changed, and enough to change it back.
     ///
@@ -100,24 +109,19 @@ final class LibraryModel {
             }
         }
     }
-    /// The word the reader asked to study from a suggestion. **Read and cleared** by whoever acts
-    /// on it, so a redraw cannot take the same suggestion up twice.
-    private(set) var suggestionTaken: String?
-
-    func takeSuggestion() -> String? {
-        defer { suggestionTaken = nil }
-        return suggestionTaken
-    }
-
     /// Looks a word up, as the reader pressing **Study** on a suggestion asks for.
     ///
-    /// **Nothing read this before.** `suggestionTaken` was set and `takeSuggestion` was called by
-    /// the tests alone, so the button did nothing at all — a control that refuses its own click,
-    /// silently, which is worse than one that is disabled. C06 says a suggestion is *offered*,
-    /// never enrolled: this hands the word to the lookup path and the reader decides from the
-    /// card, exactly as if they had met it while reading.
+    /// **Nothing read the old hand-off.** A `suggestionTaken` was set and a `takeSuggestion` was
+    /// called by the tests alone, so the button did nothing at all — a control that refuses its own
+    /// click, silently, which is worse than one that is disabled; the pair outlived the fix as state
+    /// only a test read, and went (audit-fix round 1). C06 says a suggestion is *offered*, never
+    /// enrolled: this hands the word to the lookup path and the reader decides from the card,
+    /// exactly as if they had met it while reading.
     private let reopen: @MainActor (ReadingEntry) -> Void
     private let lookUp: @MainActor (String) -> Void
+    /// Starts a Selected sitting in Review over these notes, as listed. **The app's `ReviewModel`**,
+    /// which holds the sitting: this model only hands it the reader's choice and shows the pane.
+    private let reviewSelected: @MainActor ([UUID], SittingOrder) -> Void
 
     /// How many rows one page holds. The library is paged rather than capped: a reader looking for
     /// something from March must be able to reach March.
@@ -140,11 +144,16 @@ final class LibraryModel {
          },
          lookUp: @escaping @MainActor (String) -> Void = { _ in },
          reopen: @escaping @MainActor (ReadingEntry) -> Void = { _ in },
-         defaults: UserDefaults = .standard,
+         reviewSelected: @escaping @MainActor ([UUID], SittingOrder) -> Void = { _, _ in },
+         // **No default.** It was `.standard`, so every test that omitted it read and wrote the
+         // runner's own domain — the layout, the pane, and now the cooldown experiment's switch —
+         // and one run's pane was the next run's starting state. The app passes its suite.
+         defaults: UserDefaults,
          primary: @escaping @MainActor () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
          primaryName: @escaping @MainActor (String?) -> String? = { _ in nil },
          studying: @escaping @MainActor () -> Set<ProbeScript>? = { nil }) {
         self.reopen = reopen
+        self.reviewSelected = reviewSelected
         self.defaults = defaults
         layout = defaults.string(forKey: "libraryLayout").flatMap(LibraryLayout.init(rawValue:)) ?? .grid
         inspectorShown = defaults.object(forKey: "libraryInspector") as? Bool ?? true
@@ -191,6 +200,24 @@ final class LibraryModel {
         act(.filter(.needsAttention))
     }
 
+    /// Whether the next reload opens the first row that needs an answer. Set by `findUnanswered`,
+    /// taken by the reload that commits, and dropped by a reload that fails.
+    private var opensFirstNeedingAnAnswer = false
+
+    /// **The route to an answer of the reader's own**: Saved, narrowed to Needs Attention, with the
+    /// first meaning that needs an answer selected and the inspector open — whose editor is the remedy.
+    ///
+    /// An answerless note becomes askable only once the reader writes an answer and it is confirmed;
+    /// confirming first writes `confirmed_at` and changes nothing else. Narrowing the entry to one of
+    /// its senses in place is not offered: whether that is the same note is an ADR-0029 identity
+    /// question, the owner's (R1b).
+    func findUnanswered() {
+        opensFirstNeedingAnAnswer = true
+        setInspector(true)
+        show(.saved)
+        act(.filter(.needsAttention))
+    }
+
     func refreshPane() async {
         if pane == .saved { await reload() }
         else if pane != .review { await reloadArchive() }
@@ -201,12 +228,16 @@ final class LibraryModel {
         do {
             let ledger = try await opening.value
             let scope = primary().chosen; let now = clock()
+            // **Today's allowance as the sitting rations it**: the base and any one-day increase the
+            // reader asked for (WI-5), from the same suite — or the badge and the sitting disagree.
+            let increase = OneDayIncreaseStore(defaults: defaults).extra(in: .standard, at: now)
             let counts = try await ledger.queueCounts(at: now, dictionary: scope,
-                newAllowance: ReviewModel.newCardsPerDay, dayStart: StudyDay.standard.start(containing: now))
-            let unconfirmed = try await ledger.attentionCount(dictionary: scope)
+                newAllowance: SittingPlanner.allowance(newCardsPerDay: ReviewModel.newCardsPerDay, increaseToday: increase),
+                dayStart: StudyDay.standard.start(containing: now))
+            let waiting = try await ledger.attentionCounts(dictionary: scope)
             reviewProblem = nil
             reviewCount = counts.due; reviewHeldBack = counts.heldBack; reviewDictionary = primaryName(scope)
-            reviewUnconfirmed = unconfirmed
+            reviewUnconfirmed = waiting.toConfirm
         } catch { reviewProblem = error.localizedDescription; publishArchiveProblem(error.localizedDescription) }
     }
     func importLegacy() async {
@@ -319,11 +350,29 @@ final class LibraryModel {
         guard let opening = store() else { return }
         Task {
             do {
-                guard try await mutateArchive(action, in: try await opening.value) else { return }
-                failedArchiveAction = nil
+                let outcome = try await mutateArchive(action, in: try await opening.value)
+                guard outcome != .nothingWritten else { return }
                 LedgerChanges.shared.committed()
                 await reloadArchive()
                 await refreshReviewCount()
+                // **Said after the reload, not instead of it** (audit-fix round 1's verification): a
+                // permanent delete that could not reach a copy has still deleted the reading, and an
+                // error thrown in place of the reload left the deleted row on the pane. Retry erases
+                // again, which reaches whatever copies it can then.
+                switch outcome {
+                case .shortOf(let shortfall):
+                    failedArchiveAction = action
+                    publishArchiveProblem(String(localized: "Deleted, but not everything was reached.\n\(shortfall)"))
+                case .leftAlone(let changed):
+                    // **Nothing to retry**: what the undo left had changed after the discard, and a
+                    // second undo would leave it again. Said, so the reader knows to look for it.
+                    failedArchiveAction = nil
+                    publishArchiveProblem(String(
+                        localized: "Not everything was put back. Readings changed since they were discarded: \(changed)",
+                        comment: "Shown when undoing a discard left the readings that had changed since, as they are"))
+                case .nothingWritten, .written:
+                    failedArchiveAction = nil
+                }
             } catch {
                 failedArchiveAction = action
                 publishArchiveProblem(error.localizedDescription)
@@ -331,11 +380,27 @@ final class LibraryModel {
         }
     }
 
-    /// The ledger write an archive action asks for. **False where nothing was written** — a reading
-    /// with no evidence to keep, which is handed back to the reader to clarify instead.
-    private func mutateArchive(_ action: ArchiveAction, in ledger: LedgerStore) async throws -> Bool {
+    /// What an archive write did: nothing (a reading with no evidence to keep, handed back to the
+    /// reader to clarify instead), all of it, or — for a permanent delete — the rows, short of copies
+    /// or a rewrite it could not reach, in the surface's own sentences.
+    private enum ArchiveOutcome: Equatable {
+        case nothingWritten, written
+        case shortOf(String)
+        /// An undo that put back what nothing had changed since and left this many readings that a later
+        /// change reached first — the ledger declining to reverse that change, not a damaged row.
+        case leftAlone(Int)
+    }
+
+    /// The ledger write an archive action asks for.
+    private func mutateArchive(_ action: ArchiveAction, in ledger: LedgerStore) async throws -> ArchiveOutcome {
         switch action {
-        case .confirm(let id): try await ledger.confirm(noteID: id, at: clock())
+        case .confirm(let id):
+            // **A confirmation that showed the answer**: History's inspector draws Confirm beside the
+            // revealed meaning and nowhere else, so this is the surface the cooldown experiment is
+            // about. Off — the default — `cooldownUntil` is nil and the card is untouched.
+            let when = clock()
+            try await ledger.confirm(noteID: id, at: when,
+                                     hidingCardsUntil: cooldownUntil(id, confirmedAt: when, exposure: .answerShown))
         case .discard(let ids):
             let receipt = try await ledger.changeDisposition(.discarded, lookups: ids, operation: UUID())
             if receipt.affected > 0 { archiveUndo = receipt }
@@ -344,18 +409,23 @@ final class LibraryModel {
             guard let receipt = archiveUndo else { break }
             let result = try await ledger.undoDisposition(operation: receipt.operation)
             archiveUndo = nil
-            if result.skipped > 0 { throw LedgerError.corruptRow("undo skipped newer dispositions: \(result.skipped)") }
+            // **Committed, so announced and read again like any write** (audit-fix round 3, #2). Thrown as
+            // a corrupt row, the restored readings stayed off the pane, nothing was told of the change,
+            // and Retry found the receipt already spent.
+            if result.skipped > 0 { return .leftAlone(result.skipped) }
         case .keep(let id):
             guard try await ledger.keepHistory(id) != nil else {
                 if let row = archive.rows.first(where: { $0.id == id }) { reopen(row) }
-                return false
+                return .nothingWritten
             }
         case .erase(let ids):
             let report = try await ledger.eraseReadings(ids)
-            if !report.isComplete { throw LedgerError.corruptRow("incomplete erasure: \(report.backupsLeft)") }
+            if let shortfall = ErasePresentation.shortfall(of: ErasePresentation.Report(report)) {
+                return .shortOf(shortfall)
+            }
         case .retry, .search, .select, .more, .clarify: break
         }
-        return true
+        return .written
     }
 
     func act(_ action: LibraryAction) {
@@ -371,8 +441,10 @@ final class LibraryModel {
         // does not narrow the list — it replaces it. Every other narrowing is handled by pruning
         // the selection to the rows that survive (ADR-0035), which keeps the footer's count
         // honest while letting the reader keep a selection through a search. Under Suggested the
-        // library query still matches every row, so pruning keeps them all selected while none is
-        // on screen: the footer counted, and Remove was armed over, rows nobody could see.
+        // library query still matches every row, so pruning against the read kept them all selected
+        // while none was on screen: the footer counted, and Remove was armed over, rows nobody could
+        // see. The publish now prunes against what the pane lists (`listsRows`), which under
+        // Suggested is nothing; this clears it at the switch rather than at the publish.
         case .filter(let value):
             if value == .suggested || filter == .suggested { selection = [] }
             filter = value
@@ -381,8 +453,14 @@ final class LibraryModel {
         // **The one action that reads nothing.** Selecting writes nothing, so the rows, the
         // count, the answers, the retention scan and the tag vocabulary are all still true;
         // only the open row's history has to be fetched.
+        //
+        // **Only what is listed can be selected** (audit-fix round 3, C1): every action reads
+        // `selection`, so an id the reader cannot see in it is a row a destructive control reaches
+        // unseen (ADR-0035). What a read publishes later is pruned again when it publishes. The
+        // presentation's rows are what the pane lists — none under Suggested — so a click there
+        // reaches nothing (closing pass after round 3).
         case .select(let ids):
-            selection = ids
+            selection = ids.intersection(presentation.rows.map(\.id))
             Task { await reselect() }
             return
         // **One page, after the last row on screen** — never the whole prefix again. Growing
@@ -402,10 +480,24 @@ final class LibraryModel {
         // writes leaves an arbitrary subset changed when one fails part-way, and the reader has
         // no way to see which — the same all-or-nothing the pause and archive helpers already
         // give, which these two were the only bulk actions not to have.
+        //
+        // **Only what confirming changes** (ADR-0035: prune in the model). It reached every selected
+        // row, so an answerless note had `confirmed_at` written and stayed exactly as unreviewable.
+        // Saved shows no answer beside this control, so it never starts the cooldown experiment
+        // (`ConfirmationCooldown.Exposure.answerNotShown`).
         case .confirm:
-            let ids = Array(selection)
+            let ids = Array(confirmable(in: selection))
             let when = clock()
             return apply { try await $0.confirm(noteIDs: ids, at: when) }
+        // **The whole selection, as the reader sees it listed** — not only what can be asked: the
+        // sitting leaves the rest out by reason and says so at its end. Refused, as the control is
+        // disabled, when nothing in it can be asked; then nothing is started and the pane stays.
+        case .reviewSelected(let order):
+            guard !Self.asked(by: selectedPlan(of: selection)).isEmpty else { return }
+            let listed = (reading?.rows ?? []).map(\.id).filter(selection.contains)
+            reviewSelected(listed, order)
+            show(.review)
+            return
         case .tag(let text):
             let ids = Array(selection), trimmed = text
             return apply(keepingSelection: true) { try await $0.tag(noteIDs: ids, trimmed) }
@@ -427,7 +519,6 @@ final class LibraryModel {
             // **Taken up by hand, not enrolled from here.** Enrolling needs the sense the reader
             // met, which comes from a lookup and not from a list — so this hands the word to the
             // app and they decide, which is what C06 says a suggestion is.
-            suggestionTaken = lemma
             lookUp(lemma)
             return
         case .ignore(let lemma, let language):
@@ -484,6 +575,13 @@ final class LibraryModel {
         var retention: Ledger.RetentionReport
         var vocabulary: [LibraryPresentation.TagUse]
         var at: Date
+        /// New meanings introduced in the study day of `at`, under the study dictionary: what today's
+        /// allowance has spent, which Review Selected is counted against (WI-8).
+        var introducedToday: Int
+        /// **The study dictionary those introductions were counted under** (audit-fix round 2), which a
+        /// selection is planned for — never the one chosen since, whose allowance this read did not
+        /// count. A selection after a switch reads again.
+        var dictionary: String?
     }
 
     /// The last complete read, or nil before the first one.
@@ -493,6 +591,7 @@ final class LibraryModel {
         guard let opening = store() else { return }
         generation += 1
         let mine = generation
+        let scope = primary().chosen
         do {
             let ledger = try await opening.value
             let query = self.query()
@@ -508,19 +607,29 @@ final class LibraryModel {
             // not prune a selection the reader has made since, nor replace newer rows with its
             // own — it simply stops, and the reload that overtook it commits instead.
             guard mine == generation else { return }
-            selection.formIntersection(Set(rows.map(\.id)))
+            if opensFirstNeedingAnAnswer {
+                opensFirstNeedingAnAnswer = false
+                if let first = rows.first(where: { $0.obstacle == .answer }) { selection = [first.id] }
+            }
+            // Against what the pane will list (`listsRows`), as the publish prunes — so the open row the
+            // inspector reads a history for is never one Suggested hides.
+            selection.formIntersection(listsRows ? Set(rows.map(\.id)) : [])
             // One query for the page's answers, not one per row: the list is redrawn on every
             // keystroke of the search field, and two hundred round trips through an actor per
             // keystroke is a search field that stutters.
             let answers = try await ledger.answers(of: rows.map(\.id))
             // Only under the suggested filter: a list nobody is looking at is a query nobody
             // should pay for on every keystroke.
-            // Search also narrows suggestions, before the visible limit.
+            // Search also narrows suggestions, **before** the visible limit: reading twenty and
+            // narrowing those hid a match that ranked twenty-first however exactly it was typed
+            // (audit-fix round 1). With a search, every candidate is read and narrowed here, by
+            // Swift's case folding — SQLite's `lower` and `LIKE` fold ASCII alone, and SQL may not
+            // judge what Swift defines.
             var suggested: [Ledger.Suggestion] = []
             if filter == .suggested {
                 let narrowing = search.trimmingCharacters(in: .whitespaces).lowercased()
                 let all = try await ledger.suggestions(
-                    limit: Self.suggestionCount * 4, language: nil,
+                    limit: narrowing.isEmpty ? Self.suggestionCount : .max, language: nil,
                     studying: [])
                 suggested = Array(all.lazy
                     .filter { narrowing.isEmpty || $0.lemma.lowercased().contains(narrowing) }
@@ -533,6 +642,8 @@ final class LibraryModel {
             let measured = try await ledger.retention(dictionary: nil)
             let vocabulary = try await ledger.allTags()
                 .map { LibraryPresentation.TagUse(tag: $0.tag, count: $0.count) }
+            let introducedToday = try await ledger.introductions(since: StudyDay.standard.start(containing: now),
+                                                                 dictionary: scope)
             // **A filter cannot outlive the thing it filters by.** Removing the last use of the
             // active tag emptied the vocabulary, which hid the picker — and left `tag` set, so
             // the library stayed empty with no control on screen to clear it.
@@ -545,18 +656,25 @@ final class LibraryModel {
             guard mine == generation else { return }
             reading = Reading(rows: rows, total: total, answers: answers, suggested: suggested,
                               setAside: setAside, retention: measured, vocabulary: vocabulary,
-                              at: now)
+                              at: now, introducedToday: introducedToday, dictionary: scope)
+            settledGeneration = mine
             await inspect(ledger, generation: mine)
         } catch {
             // **Said, not swallowed.** An empty list and a list that could not be read are the same
             // screen otherwise, and the reader is owed the difference. Still only for the current
             // reload: an overtaken one's failure is not this screen's.
             guard mine == generation else { return }
+            settledGeneration = mine
+            opensFirstNeedingAnAnswer = false
             problem = String(describing: error)
             if reading != nil { republish() }
             else {
+                // Nothing is listed, so nothing may stay selected (C1).
+                selection = []
+                // **The export's own outcome too**, or a failed export followed by a failed read
+                // published nothing about the export at all (audit-fix round 1).
                 presentation = LibraryPresentation(rows: [], total: 0, search: search, filter: filter,
-                                                   problem: problem)
+                                                   exported: exported, problem: problem)
             }
         }
     }
@@ -578,13 +696,16 @@ final class LibraryModel {
             next.limit = Self.pageSize
             let rows = try await ledger.library(next)
             let answers = try await ledger.answers(of: rows.map(\.id))
-            guard mine == generation, var grown = self.reading else { return }
+            guard mine == generation else { return }
+            settledGeneration = mine
+            guard var grown = self.reading else { return }
             grown.rows += rows
             grown.answers.merge(answers) { _, new in new }
             self.reading = grown
             await inspect(ledger, generation: mine)
         } catch {
             guard mine == generation else { return }
+            settledGeneration = mine
             problem = String(describing: error)
             republish()
         }
@@ -596,14 +717,23 @@ final class LibraryModel {
     ///
     /// Falls back to a full reload when there is no reading to republish, which is the first
     /// selection after a failure.
+    ///
+    /// **And a read already in flight is left to publish** (audit-fix round 2): it reads the selection
+    /// when it lands, and this would draw the rows it is about to replace. A study dictionary switched
+    /// since the last read reads again, because the allowance a selection is planned against is that
+    /// dictionary's own.
     private func reselect() async {
-        guard reading != nil, let opening = store() else { return await reload() }
-        generation += 1
+        guard let reading, reading.dictionary == primary().chosen, let opening = store() else {
+            return await reload()
+        }
+        guard settledGeneration == generation else { return }
         let mine = generation
+        selectionGeneration += 1
+        let pick = selectionGeneration
         do {
             await inspect(try await opening.value, generation: mine)
         } catch {
-            guard mine == generation else { return }
+            guard mine == generation, pick == selectionGeneration else { return }
             problem = String(describing: error)
             republish()
         }
@@ -611,8 +741,12 @@ final class LibraryModel {
 
     /// Reads the open row's history — **one row, or none**, so a history is read for the row the
     /// reader opened and not for two hundred of them — and publishes.
+    /// **Published only while both are current**: the read it belongs to, and the selection it read the
+    /// history of. A newer selection publishes its own; a newer read inspects again when it lands.
     private func inspect(_ ledger: LedgerStore, generation mine: Int) async {
         guard let reading else { return }
+        let pick = selectionGeneration
+        let current = { mine == self.generation && pick == self.selectionGeneration }
         let open = selection.count == 1 ? selection.first : nil
         var timeline: NoteTimeline?
         var tags: [String] = []
@@ -621,25 +755,50 @@ final class LibraryModel {
                 timeline = try await ledger.timeline(of: open)
                 tags = try await ledger.tags(of: open)
             } catch {
-                guard mine == generation else { return }
+                guard current() else { return }
                 problem = String(describing: error)
             }
         }
-        guard mine == generation else { return }
+        guard current() else { return }
         publish(reading, tags: tags, timeline: timeline)
     }
 
+    /// **Whether this pane lists the library's rows at all — the one rule for what a selection may hold.**
+    /// Suggested draws suggestions in the list's place, and its query still matches every row; so it lists
+    /// none, and nothing in it can be selected or reached (closing pass after round 3, C1). The publish
+    /// pruned against the rows the read *returned*: Alpha and Beta, clicked on the list still drawn while
+    /// the switch to Suggested was being read, were published selected under a pane that showed neither,
+    /// and Remove from Study, Discard and the deletions reached them. Read at the publish, from the same
+    /// `filter` the presentation carries, so the rows it lists and the filter it draws by cannot disagree.
+    private var listsRows: Bool { filter != .suggested }
+
     private func publish(_ reading: Reading, tags: [String], timeline: NoteTimeline?) {
-        let rows = reading.rows
+        let rows = listsRows ? reading.rows : []
+        // **Pruned to what this publish lists, at the moment it lists it** (audit-fix round 3, C1). The
+        // read prunes when its rows arrive and then suspends four more times; a row clicked in that
+        // window, still drawn from the last read, stayed selected after this one published without it
+        // — and Remove from Study, which reads `selection`, deleted a note nobody could see. Here
+        // nothing suspends between the prune and the presentation the actions are read against, and
+        // `rows` is what the pane lists, which `.select` then admits from (`presentation.rows`).
+        selection.formIntersection(rows.map(\.id))
+        let plan = planner(for: reading)
+        let selected = plan(rows.filter { selection.contains($0.id) })
         presentation = LibraryPresentation(
-            rows: rows.map { Self.row($0, answer: reading.answers[$0.id]?.text ?? "", at: reading.at) },
+            rows: rows.map {
+                Self.row($0, answer: reading.answers[$0.id]?.text ?? "", at: reading.at, review: Self.review(in: plan([$0])))
+            },
             total: reading.total, search: search, filter: filter, selection: selection,
             // **Offered only when there is more.** The count is of everything that matched, so
-            // a library of exactly one page must not show a button that does nothing.
-            hasMore: reading.total > rows.count,
-            // Whether any of the selection can be confirmed, so the control is present only
-            // when it would do something.
-            canConfirm: rows.contains { selection.contains($0.id) && $0.readiness == .needsConfirmation },
+            // a library of exactly one page must not show a button that does nothing — and a pane
+            // that lists no rows has no more of them to show.
+            hasMore: listsRows && reading.total > rows.count,
+            // **What of the selection confirming would change**, so the control is present only when
+            // it would do something and counts exactly what it reaches.
+            confirmable: confirmable(in: selection),
+            // **What of the selection a Selected sitting could ask now**, so Review Selected counts it
+            // and is disabled, with its reason, when it is empty — the sitting's planner, allowance and
+            // all, so the control is never offered over a sitting that would ask nothing.
+            reviewable: Self.asked(by: selected), reviewHeldBack: selected.heldBack,
             suggestions: reading.suggested.map {
                 LibraryPresentation.Suggestion(lemma: $0.lemma, language: $0.language,
                                                days: $0.distinctDays,
@@ -740,7 +899,8 @@ final class LibraryModel {
         presentation = LibraryPresentation(
             rows: presentation.rows, total: presentation.total, search: presentation.search,
             filter: presentation.filter, selection: presentation.selection, hasMore: presentation.hasMore,
-            canConfirm: presentation.canConfirm, suggestions: presentation.suggestions,
+            confirmable: presentation.confirmable, reviewable: presentation.reviewable,
+            reviewHeldBack: presentation.reviewHeldBack, suggestions: presentation.suggestions,
             exported: presentation.exported,
             selectionIsPaused: presentation.selectionIsPaused,
             selectionIsArchived: presentation.selectionIsArchived,
@@ -760,29 +920,60 @@ final class LibraryModel {
     /// said. The name carries the instant it was taken, which is also what a reader looking at two
     /// of them needs to tell them apart.
     private func export() async {
-        guard let opening = store(), let ledger = try? await opening.value else { return }
+        guard let opening = store() else { return }
         let directory = exportDirectory()
         do {
+            // **Inside the `do`**: a `try?` here dropped the opening's error, and the button did
+            // nothing with no reason given (audit-fix round 1).
+            let ledger = try await opening.value
             let written = try await ledger.export(dictionary: nil)
-            let url = directory.appending(path: "XiaolaiDict-cards-\(Self.stamp(clock())).txt")
             // **Formatted and written off this actor.** Joining a few thousand rows into one
             // string and putting it on disk are both unbounded work, and doing them here stopped
             // the menu bar, the panel and every hot key until the file was closed.
-            try await Self.write(written, to: url, in: directory)
-            exported = url.path
+            exported = try await Self.write(written, labels: Self.exportLabels,
+                                            named: "XiaolaiDict-cards-\(Self.stamp(clock()))",
+                                            in: directory).path
         } catch {
             exported = error.localizedDescription
         }
         await reload()
     }
 
-    nonisolated private static func write(_ cards: StudyExport,
-                                          to url: URL, in directory: URL) async throws {
+    /// Writes the export to a name nothing holds, and answers where. **Never over a file**: the name
+    /// carries the instant to the second, so two exports inside one second shared it and the second
+    /// replaced the first (audit-fix round 1). Each attempt is created exclusively — the system
+    /// refuses a name that exists, so even a file put there between two attempts is never replaced —
+    /// and a taken name moves on to `-2`, `-3`.
+    nonisolated private static func write(_ cards: StudyExport, labels: StudyExport.Labels, named stem: String,
+                                          in directory: URL) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try cards.tabSeparated().write(to: url, atomically: true, encoding: .utf8)
+            let data = Data(cards.tabSeparated(labels: labels).utf8)
+            for attempt in 1...Self.exportAttempts {
+                let url = directory.appending(path: attempt == 1 ? "\(stem).txt" : "\(stem)-\(attempt).txt")
+                do {
+                    try data.write(to: url, options: .withoutOverwriting)
+                    return url
+                } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                    continue
+                }
+            }
+            throw CocoaError(.fileWriteFileExists)
         }.value
     }
+
+    /// **What an exported row says where something could not travel, in the reader's language** (audit-fix
+    /// round 3, #8). Core writes no display text, so the words are supplied from here, through the catalog.
+    static var exportLabels: StudyExport.Labels {
+        StudyExport.Labels(
+            incomplete: String(localized: "(no meaning of your own yet — add one in XiaolaiDict)",
+                               comment: "Written into an exported card whose meaning is still the dictionary's, which cannot be exported"),
+            withoutAWord: String(localized: "(word not kept — its reading was deleted)",
+                                 comment: "Written into an exported card in place of its word, once the reading the word came from was deleted"))
+    }
+
+    /// How many names one export tries before it gives up: a second's worth of exports, and more.
+    nonisolated static let exportAttempts = 100
 
     /// `2026-09-30-051351`: sortable, filename-safe, and second-resolution so two exports in one
     /// sitting are two files. Fixed to a neutral locale and timezone — a filename is not prose,
@@ -818,11 +1009,75 @@ final class LibraryModel {
             limit: pages * Self.pageSize)
     }
 
-    static func row(_ row: LibraryRow, answer: String,
-                    at now: Date) -> LibraryPresentation.Row {
+    static func row(_ row: LibraryRow, answer: String, at now: Date,
+                    review: LibraryPresentation.Row.Review) -> LibraryPresentation.Row {
         LibraryPresentation.Row(
             id: row.id, word: row.word, accentKey: row.lemma, excerpt: row.excerpt, marks: row.excerptMarks, answer: answer,
-            status: status(of: row), due: due(of: row, at: now))
+            status: status(of: row), due: due(of: row, at: now), isConfirmable: row.obstacle == .confirmation,
+            review: review)
+    }
+
+    /// **The Selected sitting `listed` would be, planned by the sitting's own planner** from what the
+    /// page read (WI-8): askable is enrolled and ready — `thequeueAndReadinessAgree` holds `readiness`
+    /// to the ledger's predicate — under the study dictionary; the planner then asks what the sitting
+    /// asks of each card at the read's instant: paused, put off, one per meaning, and new meanings
+    /// within today's allowance, spent by `introducedToday` and raised by any one-day increase. A
+    /// second rule here, blind to introductions, enabled Review Selected over a sitting that then asked
+    /// nothing.
+    static func selectedPlan(of listed: [LibraryRow], at now: Date, scope: String?, introducedToday: Int,
+                             increaseToday: Int) -> SelectedSittingPlan {
+        let inScope = { (row: LibraryRow) in scope.map { $0 == row.note.target.dictionary } ?? true }
+        let askable = listed.filter { inScope($0) && $0.note.enrollment == .active && $0.readiness == .ready }
+        let planner = ReviewModel.planner(.standard, now, increaseToday: increaseToday)
+        return planner.selectedSitting(
+            from: SelectedCandidates(
+                selection: listed.map(\.id),
+                queue: SittingCandidates(cards: askable.compactMap(\.card), introducedToday: introducedToday),
+                elsewhere: Set(listed.filter { !inScope($0) }.map(\.id))),
+            order: .asListed)
+    }
+
+    /// What a sitting of one row alone would do with it.
+    static func review(in plan: SelectedSittingPlan) -> LibraryPresentation.Row.Review {
+        if !plan.batch.isEmpty { return .askable }
+        return plan.heldBack > 0 ? .heldBack : .notAskable
+    }
+
+    /// The notes a plan asks — what Review Selected counts.
+    static func asked(by plan: SelectedSittingPlan?) -> Set<UUID> {
+        Set(plan?.batch.map(\.card.noteID) ?? [])
+    }
+
+    /// A Selected sitting over loaded rows, as they are listed, planned against the last read's
+    /// instant, its introductions and today's one-day increase.
+    private func planner(for reading: Reading) -> ([LibraryRow]) -> SelectedSittingPlan {
+        let scope = reading.dictionary
+        let increase = OneDayIncreaseStore(defaults: defaults).extra(in: .standard, at: reading.at)
+        return { listed in
+            Self.selectedPlan(of: listed, at: reading.at, scope: scope, introducedToday: reading.introducedToday,
+                              increaseToday: increase)
+        }
+    }
+
+    /// The Selected sitting the loaded rows of `ids` would be — nil before a read.
+    private func selectedPlan(of ids: Set<UUID>) -> SelectedSittingPlan? {
+        guard let reading else { return nil }
+        return planner(for: reading)(reading.rows.filter { ids.contains($0.id) })
+    }
+
+    /// **The rows of `ids` that confirming would change**: loaded, and with nothing but the reader's
+    /// agreement in the way. A row whose readiness is unknown because it is not on a loaded page is
+    /// not one, and neither is a confirmed note or one that needs an answer first.
+    private func confirmable(in ids: Set<UUID>) -> Set<UUID> {
+        Set((reading?.rows ?? []).lazy.filter { ids.contains($0.id) && $0.obstacle == .confirmation }.map(\.id))
+    }
+
+    /// When a confirmation of `noteID` hides its card, or nil — always nil while the experiment is
+    /// off, which is the default. Asked of the reader's own defaults suite at each confirmation.
+    private func cooldownUntil(_ noteID: UUID, confirmedAt when: Date,
+                               exposure: ConfirmationCooldown.Exposure) -> Date? {
+        ConfirmationCooldownSetting(defaults: defaults).cooldown?
+            .hiddenUntil(noteID: noteID, confirmedAt: when, exposure: exposure)
     }
 
     /// The open row, when exactly one is selected and it is on this page.
@@ -859,10 +1114,13 @@ final class LibraryModel {
         case .candidate, .active: break
         }
         if row.card?.isPaused == true { return .paused }
-        switch row.readiness {
-        case .needsConfirmation: return .needsConfirmation
-        case .needsRepair: return .needsRepair
-        case .ready: return nil
+        // **By the remedy, not the verdict**, so "Confirm the meaning" is said only where confirming
+        // is what it needs: an entry rung carrying the dictionary's text is `.needsConfirmation` and
+        // needs the reader's own answer instead (ADR-0030).
+        switch row.obstacle {
+        case .confirmation: return .needsConfirmation
+        case .answer, .readingDeleted, .senseMoved: return .needsRepair
+        case nil: return nil
         }
     }
 
@@ -900,7 +1158,8 @@ struct LibrarySceneView: View {
                               sittingOffersFind: review.presentation.offersFindUnconfirmed,
                               canUndo: review.canUndo, undo: { review.act(.undo) },
                               findUnconfirmed: { model.findUnconfirmed() }) {
-                ReviewSceneView(model: review, findUnconfirmed: { model.findUnconfirmed() })
+                ReviewSceneView(model: review, findUnconfirmed: { model.findUnconfirmed() },
+                                findUnanswered: { model.findUnanswered() })
             }
         }
         .task { await model.refreshPane(); await model.importLegacy() }

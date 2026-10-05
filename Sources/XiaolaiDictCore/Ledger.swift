@@ -123,8 +123,14 @@ public enum LedgerError: Error, Equatable {
     /// The file was written by a newer XiaolaiDict. Reading it could misinterpret its schema; writing to
     /// it could corrupt it. Refused either way.
     case newerSchema(found: Int, supported: Int)
+    /// Opened for reading, the file is at a schema this build does not read: an older one only a
+    /// migration — a write — would make readable, or a newer one (`Ledger(readingAt:)`).
+    case anotherSchema(found: Int, supported: Int)
     /// A row holds a value this schema does not allow — the file was edited or damaged.
     case corruptRow(String)
+    /// The lookup a `LookupIdentity` named is not at its id any more: deleted, and the id perhaps given
+    /// to another reading. Nothing was read or written.
+    case lookupGone(Int)
     /// A query asked for a column its `SELECT` does not project: a mistake in the query, and **never
     /// the reader's data**. Refused rather than answered from the NULL SQLite would hand back — see
     /// `Ledger.ProjectionFault`.
@@ -132,6 +138,9 @@ public enum LedgerError: Error, Equatable {
     /// A card asks a question this build has no presentation for. Nothing creates one — every
     /// caller passes `.meaning` — so it means a ledger from a later XiaolaiDict, or one edited.
     case unaskablePrompt(String)
+    /// A phrase to save is not spelled as the phrase inventory spells what it files — lowercased, one space
+    /// between words, more than one word. Keyed by it, one phrase would become two notes (ADR-0049).
+    case notAnInventorySpelling(String)
     case sqlite(code: Int32, message: String)
 }
 
@@ -196,13 +205,7 @@ public final class Ledger {
         guard Self.sqliteReady == SQLITE_OK else {
             throw LedgerError.sqlite(code: Self.sqliteReady, message: "SQLite failed to start")
         }
-        var handle: OpaquePointer?
-        let status = sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
-        guard status == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
-            sqlite3_close(handle)
-            throw LedgerError.sqlite(code: status, message: message)
-        }
+        let opened = try Self.connection(to: path, flags: SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
         // **Nothing is closed on a throw below, and there is no `catch` to say so.** Once
         // `connection` is assigned the ledger is fully initialised, and Swift runs `deinit` for a
         // fully initialised instance even when its initialiser then throws — so a `catch` that
@@ -210,26 +213,91 @@ public final class Ledger {
         // first failed open under Guard Malloc, and closing once survives 200. `Connection` owns
         // the handle and releases it exactly once; a `catch` here that only rethrows is scaffolding
         // left from the version that did close, and reads as though cleanup were happening.
-        connection = Connection(handle)
+        connection = opened
         guard sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds) == SQLITE_OK else { throw error() }
-        // Off by default in SQLite, which would make `sense_encounters`' reference to `lookups`
-        // decorative: a sense could be hung off a lookup that does not exist and nothing would
-        // say so. Fail loudly instead.
-        //
-        // **And read back, because declaring it does not make it so.** The pragma is per connection and
-        // SQLite says nothing when it is refused — the same one line away from decoration that
-        // `IndexStore` measured, where 10 of 12 constraint assertions passed with foreign keys quietly
-        // off. Every `ON DELETE CASCADE` in this schema rests on it.
+        // Readers no longer block the writer, nor it them. A no-op for ":memory:".
+        try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
+        try backUpBeforeMigrating(from: path)
+        // **Off while the shape changes, then on and read back** (audit-fix round 2). A migration
+        // rebuilds the tables whose `CREATE` changed, and dropping a parent table with foreign keys on
+        // is a `DELETE` that cascades through its children — the reader's answers, schedules and
+        // histories. `migrate()` proves every reference whole with `foreign_key_check` before it
+        // commits. Off is SQLite's default; said here, not assumed.
+        try run("PRAGMA foreign_keys = OFF", bind: []) { _ in }
+        try migrate()
+        try enforceForeignKeys()
+    }
+
+    /// **A ledger opened for reading, and for nothing else** (audit-fix round 2) — for an instrument
+    /// that must change nothing, `--reminder-report` among them.
+    ///
+    /// One read-only connection, and the version read on it: a file that is not there is not made, one
+    /// at another schema is refused rather than upgraded, and SQLite itself refuses every write — the
+    /// journal mode, a migration's `BEGIN IMMEDIATE`, an `INSERT` — where the writable door checked the
+    /// version and then opened again, so whatever was at the path by the second open was created or
+    /// migrated.
+    ///
+    /// **A write-ahead-log ledger with no log beside it is opened immutable.** macOS's SQLite answers
+    /// the first read of one read-only with `SQLITE_CANTOPEN` — measured; the `sqlite3` command line, a
+    /// different build, opens it — and that is the shape a ledger has after a restore copies it back
+    /// without its sidecars. With no log there is nothing outside the main file to read, so it is read
+    /// as it stands: no lock taken, no sidecar made. The cost, said: a writer that opened the file
+    /// after the log was found absent could be read mid-checkpoint. The instruments that use this run
+    /// with the app stopped.
+    public init(readingAt path: String) throws {
+        guard Self.sqliteReady == SQLITE_OK else {
+            throw LedgerError.sqlite(code: Self.sqliteReady, message: "SQLite failed to start")
+        }
+        let (opened, found) = try Self.readOnlyConnection(to: path)
+        // The same single owner as the writable door: nothing below closes the handle on a throw.
+        connection = opened
+        guard found == Self.schemaVersion else {
+            throw LedgerError.anotherSchema(found: found, supported: Self.schemaVersion)
+        }
+    }
+
+    /// A read-only connection to `path` that has answered a read, and the schema version it answered.
+    private static func readOnlyConnection(to path: String) throws -> (Connection, Int) {
+        let plain = try connection(to: path, flags: SQLITE_OPEN_READONLY)
+        do {
+            return (plain, try userVersion(of: plain))
+        } catch LedgerError.sqlite(let code, _) where code == SQLITE_CANTOPEN
+                    && !FileManager.default.fileExists(atPath: path + "-wal") {
+            let uri = URL(fileURLWithPath: path).absoluteString + "?immutable=1"
+            let immutable = try connection(to: uri, flags: SQLITE_OPEN_READONLY | SQLITE_OPEN_URI)
+            return (immutable, try userVersion(of: immutable))
+        }
+    }
+
+    /// `PRAGMA user_version` on `opened`, with SQLite's reason where it fails.
+    private static func userVersion(of opened: Connection) throws -> Int {
+        func failure() -> LedgerError {
+            .sqlite(code: sqlite3_errcode(opened.handle), message: String(cString: sqlite3_errmsg(opened.handle)))
+        }
+        guard sqlite3_busy_timeout(opened.handle, busyTimeoutMilliseconds) == SQLITE_OK else { throw failure() }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(opened.handle, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK else {
+            sqlite3_finalize(statement)
+            throw failure()
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw failure() }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// Foreign keys on, and **read back, because declaring them does not make it so.** Off by default
+    /// in SQLite, which would make `sense_encounters`' reference to `lookups` decorative: a sense could be
+    /// hung off a lookup that does not exist and nothing would say so. The pragma is per connection and
+    /// SQLite says nothing when it is refused — the same one line away from decoration that `IndexStore`
+    /// measured, where 10 of 12 constraint assertions passed with foreign keys quietly off. Every
+    /// `ON DELETE CASCADE` in this schema rests on it.
+    private func enforceForeignKeys() throws {
         try run("PRAGMA foreign_keys = ON", bind: []) { _ in }
         var foreignKeysOn = false
         try run("PRAGMA foreign_keys", bind: []) { foreignKeysOn = $0.integer(0) == 1 }
         guard foreignKeysOn else {
             throw LedgerError.sqlite(code: SQLITE_MISUSE, message: "foreign keys could not be enabled")
         }
-        // Readers no longer block the writer, nor it them. A no-op for ":memory:".
-        try run("PRAGMA journal_mode = WAL", bind: []) { _ in }
-        try backUpBeforeMigrating(from: path)
-        try migrate()
     }
 
     /// Returns the row's id, so a sense encounter can be hung off the lookup that produced it.
@@ -556,7 +624,7 @@ public final class Ledger {
                 lookedUpAt: Date(timeIntervalSince1970: row.real(5)),
                 result: try row.result(6), answeredBy: try row.answerSource(7), quality: try row.quality(8),
                 legacySourceURL: row.optionalText(4), senseAbstention: try row.abstention(21),
-                script: row.optionalText(22).flatMap(ProbeScript.init(rawValue:))))
+                script: try row.optional(ProbeScript.self, 22, "lookups.script")))
         }
         return records
     }
@@ -625,9 +693,17 @@ public final class Ledger {
                 SELECT id FROM sense_encounters WHERE lookup_id = l.id ORDER BY id DESC LIMIT 1
             )
             \(withStudy ? """
+                -- **The word's own note.** A phrase saved from this reading is linked to it as its cue,
+                -- and is not what the reading is kept under (ADR-0049): taken as the newest link, it
+                -- became what the history card revealed under the word and what the lookup card's
+                -- status read — the phrase's meaning shown as the word's, and "Saved" for a word that
+                -- was not. **Excluded by name**, so a kind this build cannot read still reaches the decoder
+                -- below and is refused, rather than filtered out of sight here.
                 LEFT JOIN study_notes kn ON kn.id = (
-                    SELECT note_id FROM study_note_lookups WHERE lookup_id = l.id
-                    ORDER BY recorded_at DESC, note_id DESC LIMIT 1)
+                    SELECT nl.note_id FROM study_note_lookups nl
+                    JOIN study_notes word ON word.id = nl.note_id AND word.target_kind <> 'phrase'
+                    WHERE nl.lookup_id = l.id
+                    ORDER BY nl.recorded_at DESC, nl.note_id DESC LIMIT 1)
                 LEFT JOIN study_answers ka ON ka.note_id = kn.id
                 -- The newest encounter in this reading that is the note's own target: its
                 -- dictionary and entry, and its sense key where the note is a sense — an entry
@@ -762,17 +838,20 @@ public final class Ledger {
             result: try row.result(5), quality: try row.quality(14),
             partOfSpeech: partOfSpeech, sense: try row.senseNote(18),
             senseAbstention: try row.abstention(24), language: row.optionalText(25),
-            disposition: row.optionalText(26).flatMap(LookupDisposition.init(rawValue:)) ?? .kept,
-            studyNoteID: row.optionalText(27).flatMap(UUID.init(uuidString:)),
-            studyStatus: row.isNull(27) ? nil : StudyReadiness.of(readinessFacts(from: row)),
-            studyAnswer: row.optionalText(31), studySense: try row.senseNote(33))
+            // NOT NULL with a default, so only a value this build cannot name reaches the `??`, and that
+            // is refused above it rather than read as kept.
+            disposition: try row.optional(LookupDisposition.self, 26, "lookups.disposition") ?? .kept,
+            studyNoteID: try row.optionalUUID(27, "study_notes.id"),
+            studyStatus: row.isNull(27) ? nil : StudyReadiness.of(try readinessFacts(from: row)),
+            studyAnswer: row.optionalText(31), studySense: try row.senseNote(33),
+            studyObstacle: row.isNull(27) ? nil : StudyReadiness.obstacle(try readinessFacts(from: row)))
     }
 
     /// Readiness's facts about the note a reading is kept under — **facts, not a verdict**: the rule is
     /// `StudyReadiness.of`, and a second spelling of it here disagreed with the library about every
     /// entry rung the reader had answered in their own words.
-    private static func readinessFacts(from row: Row) -> StudyReadiness.Facts {
-        let kind = row.optionalText(29).flatMap(StudyTarget.Kind.init(rawValue:))
+    private static func readinessFacts(from row: Row) throws -> StudyReadiness.Facts {
+        let kind = try row.optional(StudyTarget.Kind.self, 29, "study_notes.target_kind")
         return StudyReadiness.Facts(
             isConfirmed: !row.isNull(28),
             hasUsableAnswer: !row.isNull(30) && row.integer(30) == 1,
@@ -847,6 +926,20 @@ public final class Ledger {
         try run("PRAGMA user_version", bind: []) { found = $0.integer(0) }
         guard found > 0, found < Self.schemaVersion else { return }
         try backUp(to: "\(path).schema\(found).backup")
+    }
+
+    /// **Opens `path`, or throws with SQLite's reason**, closing the handle `sqlite3_open_v2` returns
+    /// alongside a failure — which nothing else will close. One copy, for the writable door and the
+    /// reading one, so the failed-open close stays one shape in this file (`LedgerConnectionTests`).
+    private static func connection(to path: String, flags: Int32) throws -> Connection {
+        var handle: OpaquePointer?
+        let status = sqlite3_open_v2(path, &handle, flags, nil)
+        guard status == SQLITE_OK, let handle else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
+            sqlite3_close(handle)
+            throw LedgerError.sqlite(code: status, message: message)
+        }
+        return Connection(handle)
     }
 
     /// Writes a consistent copy of this ledger to `path`, replacing whatever was there.
@@ -1009,35 +1102,26 @@ public final class Ledger {
             // Every step that alters a study table asks whether it is there: one whose study tables are
             // gone still upgrades for lookup, because a broken study system still looks words up
             // (ADR-0034). The steps that *create* study tables need no guard.
-            if found == 8, try hasTable("study_notes") {
-                // **Schema 8 shipped `readiness` as a column and it should not have been one.** Every
-                // fact it rests on — an answer, a confirmation, whether any reading still evidences the
-                // note — changes somewhere else, so a stored value goes on claiming `ready` with nothing
-                // having touched the row. Derived by `readiness(of:)` from schema 9 on. Dropped rather
-                // than left in place: a column nothing reads is one somebody will read.
-                //
-                // `found == 8` exactly, because a database created at 9 or later never had it. A fresh
-                // one is built from `studySchema`, which no longer declares it.
-                try execute("""
-                    ALTER TABLE study_notes DROP COLUMN readiness;
-                    ALTER TABLE study_notes ADD COLUMN confirmed_at REAL;
-                    """)
+            // **A table whose `CREATE` changed is rebuilt from today's statement, its rows kept**
+            // (audit-fix round 2). `ALTER` cannot change a `CHECK`, and `DROP COLUMN` cannot take a
+            // column a `CHECK` names — so altering, as these steps once did, failed every real schema-8
+            // ledger outright (`readiness` sits under one), left 8 to 11 refusing a card the reader wrote
+            // (no `custom` before 12), and took a schema-9 ledger to 13 without `is_usable`, breaking
+            // every answer write and every query that reads the verdict. A test winding a ledger back to
+            // today's shape minus a column could not see any of it; the ones that wind back to the
+            // historic statements, and real ledgers built from each version's own SQL, did.
+            if (8...11).contains(found), try hasTable("study_notes") {
+                // 8 stored `readiness`, which every fact it rests on changes elsewhere, so it is dropped;
+                // `confirmed_at` arrived with 9, so an 8's notes are unconfirmed — unknown, never guessed.
+                try rebuild("study_notes", from: Self.studyNotesSchema)
             }
             if found < 9 {
                 try execute(Self.studyAnswerSchema)
-            }
-            if found < 10 {
-                // The scheduled card and its review history. Additive, and no card is created for a
-                // note that already exists: a schedule invented for a target the reader enrolled
-                // before there was one would be a first review they never sat.
-                try execute(Self.studyCardSchema)
-            }
-            if found == 10, try hasTable("study_answers") {
-                // Schema 10's `study_answers` had SQL judging whether an answer was blank, with
-                // `trim()`, which removes ordinary spaces and nothing else. Swift's judgement is
-                // stored from 11 on, and the existing rows are re-judged by it here rather than by
-                // a SQL approximation of it — there are at most as many as the reader has cards.
-                try execute("ALTER TABLE study_answers ADD COLUMN is_usable INTEGER NOT NULL DEFAULT 1;")
+            } else if found < 11, try hasTable("study_answers") {
+                // 9 and 10 had SQL judge whether an answer was blank, with `trim()`, which removes
+                // ordinary spaces and nothing else. Swift's judgement is stored from 11 on, and the rows
+                // are re-judged by it here rather than by a SQL approximation of it.
+                try rebuild("study_answers", from: Self.studyAnswerSchema, filling: ["is_usable": "1"])
                 var rows: [(String, String)] = []
                 try run("SELECT note_id, text FROM study_answers", bind: []) { row in
                     rows.append((try row.text(0), try row.text(1)))
@@ -1048,12 +1132,15 @@ public final class Ledger {
                             bind: [.integer(usable ? 1 : 0), .text(id)]) { _ in }
                 }
             }
-            if found >= 10, found < 12, try hasTable("review_events") {
-                // **Only for a database that already has the table**, because a fresh one builds it
-                // from `studyCardSchema`, which declares `kind` — and adding it again is a
-                // duplicate-column error on every first launch. The same shape as the `found == 8`
-                // case above, and the same mistake, made twice now.
-                try execute("ALTER TABLE review_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'graded';")
+            if found < 10 {
+                // The scheduled card and its review history. Additive, and no card is created for a
+                // note that already exists: a schedule invented for a target the reader enrolled
+                // before there was one would be a first review they never sat.
+                try execute(Self.studyCardSchema)
+            } else if found < 12, try hasTable("review_events") {
+                // 10 and 11 had no `kind`: every event they wrote was a graded one, which the column's
+                // default says.
+                try rebuild("review_events", from: Self.reviewEventsSchema)
             }
             if found < 12 {
                 // WI-007's tags: the reader's own labels, belonging to no dictionary.
@@ -1070,6 +1157,38 @@ public final class Ledger {
             _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
             throw error
         }
+    }
+
+    /// **One table brought to today's statement, every row kept**: copied aside, dropped, created from
+    /// `schema`, and copied back by the columns the two shapes share — `filling` names a value for a
+    /// column today's adds without a default. Only inside `migrate()`, whose transaction makes it all or
+    /// nothing, and only with foreign keys off: dropping a parent table with them on is a `DELETE` that
+    /// cascades through every child. `checkForeignKeysAfterMigrating` then proves the children still
+    /// point at something.
+    private func rebuild(_ table: String, from schema: String, filling: [String: String] = [:]) throws {
+        try execute("""
+            DROP TABLE IF EXISTS temp.migrating;
+            CREATE TEMP TABLE migrating AS SELECT * FROM main.\(table);
+            DROP TABLE main.\(table);
+            """)
+        try execute(schema)
+        func columns(of name: String, in database: String) throws -> [String] {
+            var names: [String] = []
+            try run("SELECT name FROM pragma_table_info(?, ?)", bind: [.text(name), .text(database)]) {
+                names.append(try $0.text(0))
+            }
+            return names
+        }
+        let before = try columns(of: "migrating", in: "temp")
+        let after = try columns(of: table, in: "main")
+        let shared = after.filter(before.contains)
+        let filled = after.filter { !before.contains($0) && filling[$0] != nil }
+        let into = (shared + filled).joined(separator: ", ")
+        let values = (shared + filled.compactMap { filling[$0] }).joined(separator: ", ")
+        try execute("""
+            INSERT INTO main.\(table) (\(into)) SELECT \(values) FROM temp.migrating;
+            DROP TABLE temp.migrating;
+            """)
     }
 
     /// Schema 1 stored lemmas as given; `LookupRecord` now writes them in canonical form, and older
@@ -1226,6 +1345,26 @@ public final class Ledger {
         /// turns into "this row has no capture quality" instead of into an error.
         func isNull(_ column: Int32) -> Bool {
             sqlite3_column_type(statement, inRange(column)) == SQLITE_NULL
+        }
+
+        /// A stored identifier, or nil where the column is NULL. **Text that is not one is a damaged row,
+        /// never an absent one** (audit-fix round 3, #7): read as nil, a reading linked to a note whose id
+        /// did not parse came back with no note and a study status beside it — a saved meaning drawn as
+        /// unsaved. `name` is the table and column, which is what the refusal says.
+        func optionalUUID(_ column: Int32, _ name: String) throws -> UUID? {
+            guard let raw = optionalText(column) else { return nil }
+            guard let id = UUID(uuidString: raw) else { throw LedgerError.corruptRow("\(name) '\(raw)'") }
+            return id
+        }
+
+        /// A stored enumeration, or nil where the column is NULL — **and a value it does not name is a
+        /// damaged row**, for the reason `optionalUUID` gives: a disposition read as kept, a target kind as
+        /// none or a script as none is a guess about a row nobody can read, presented as its content.
+        func optional<Value: RawRepresentable>(_: Value.Type, _ column: Int32, _ name: String) throws -> Value?
+        where Value.RawValue == String {
+            guard let raw = optionalText(column) else { return nil }
+            guard let value = Value(rawValue: raw) else { throw LedgerError.corruptRow("\(name) '\(raw)'") }
+            return value
         }
 
         func result(_ column: Int32) throws -> LookupResult {

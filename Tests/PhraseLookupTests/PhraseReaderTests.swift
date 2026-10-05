@@ -150,11 +150,36 @@ import Testing
             == ["to seem reasonable or consistent", "to find the total of several numbers"])
     }
 
+    /// **Every filing says which build of its dictionary and which extraction read it** (ADR-0049). A
+    /// phrase the reader saves records where its meaning was found as a `StudyLocator`, and a block id is
+    /// only true of the bytes and the walk it came from — so both travel with the filing, from the
+    /// inventory that has them, rather than being guessed at the far end of the wire.
+    @Test func everyFilingSaysWhichBuildAndWhichExtractionReadIt() {
+        func bundle(_ identifier: String) -> DictionaryBundle {
+            DictionaryBundle(url: URL(fileURLWithPath: "/nonexistent/\(identifier).dictionary"),
+                             identifier: identifier, displayName: identifier)
+        }
+        let reader = PhraseReader(
+            bundles: [bundle("test.a"), bundle("test.b")],
+            phrases: { bundle in
+                PhraseInventory(
+                    contentVersion: "\(bundle.identifier):build", phrases: ["add up"],
+                    explanations: ["add up": [PhraseExplanation(
+                        parentEntryID: "p", blockID: "p.01", definitions: ["total"])]])
+            })
+        reader.read()
+        let filings = reader.filings(of: "add up")
+        #expect(filings.map(\.contentVersion) == ["test.a:build", "test.b:build"])
+        #expect(filings.allSatisfy { $0.formatVersion == PhraseInventory.formatVersion })
+        #expect(PhraseInventory.formatVersion.hasPrefix("phrases/"), "premise: the inventory's own version")
+    }
+
     /// And the span the reader is standing in carries them, so the reply can attribute its own answer.
     @Test func aspanCarriesEveryFilingOfItsPhrase() {
         let filing = { (name: String, definition: String) in
             PhraseFiling(dictionary: DictionaryIdentity(name: name, identifier: "test.\(name)"),
-                         parentEntryID: "p", blockID: "p.01", definitions: [definition])
+                         parentEntryID: "p", blockID: "p.01", definitions: [definition],
+                         contentVersion: "v1", formatVersion: "phrases/6")
         }
         let reader = PhraseReader(phrases: ["give up"], filings: [
             "give up": [filing("A", "stop trying"), filing("B", "surrender")]])

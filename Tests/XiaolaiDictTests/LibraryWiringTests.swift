@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -28,7 +29,7 @@ struct LibraryWiringTests {
         let exports = ScratchFile.unmade("export", file: "exports")
         return LibraryModel(store: Wiring.store(path),
                             clock: { self.now },
-                            exportDirectory: { exports })
+                            exportDirectory: { exports }, defaults: TemporaryDefaults.suite())
     }
 
     @Test func thelibraryListsWhatTheReaderSaved() async throws {
@@ -214,7 +215,7 @@ struct LibraryWiringTests {
         #expect(model.presentation.tagVocabulary.isEmpty, "and the empty tag stops being offered")
     }
 
-    /// **Study actually looks the word up.** `suggestionTaken` was set and `takeSuggestion` was
+    /// **Study actually looks the word up.** A `suggestionTaken` was set and a `takeSuggestion` was
     /// called by these tests alone — nothing in the app read either, so pressing Study did
     /// nothing at all. A control that silently refuses its own click is worse than a disabled
     /// one: there is not even a reason to read.
@@ -234,7 +235,7 @@ struct LibraryWiringTests {
         var asked: [String] = []
         let model = LibraryModel(store: Wiring.store(path),
                                  clock: { self.now },
-                                 lookUp: { asked.append($0) })
+                                 lookUp: { asked.append($0) }, defaults: TemporaryDefaults.suite())
         model.act(.filter(.suggested))
         try await settle { model.presentation.suggestions.count == 1 }
 
@@ -270,6 +271,37 @@ struct LibraryWiringTests {
         try await settle { model.presentation.suggestions.count == 1 }
         #expect(model.presentation.suggestions.first?.lemma == "lapidary",
                 "the search box did nothing to the list it is shown above")
+    }
+
+    /// **The search reaches past the visible five** (audit-fix round 1). The list read twenty
+    /// suggestions and then narrowed them, so a word that matched and ranked twenty-first was never
+    /// found however exactly the reader typed it. Twenty words read on three days outrank one read on
+    /// two; the search names the one.
+    @Test func theSearchFindsASuggestionBeyondTheFirstPage() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let ledger = try Ledger(path: path)
+        let day: TimeInterval = 86_400
+        let common = (0..<20).map { "common\($0)" }
+        for (lemma, days) in common.map({ ($0, 3) }) + [("zygomatic", 2)] {
+            for offset in 0..<days {
+                _ = try ledger.record(LookupRecord(
+                    surface: lemma, lemma: lemma, context: "A \(lemma) remark.",
+                    lemmaBasis: .tagger, language: "en", contextRange: nil,
+                    place: ReadingPlace(bundleID: nil, name: nil),
+                    lookedUpAt: now.addingTimeInterval(Double(offset) * day), result: .found,
+                    answeredBy: .dictionaryService, quality: nil, script: .latin))
+            }
+        }
+        let model = model(path)
+        model.act(.filter(.suggested))
+        try await settle { model.presentation.suggestions.count == 5 }
+        #expect(!model.presentation.suggestions.contains { $0.lemma == "zygomatic" }, "a control: it ranks last")
+
+        model.act(.search("ZYGO"))
+        try await settle { model.presentation.suggestions.count != 5 }
+        #expect(model.presentation.suggestions.map(\.lemma) == ["zygomatic"],
+                "the search narrowed the first page only: \(model.presentation.suggestions.map(\.lemma))")
     }
 
     /// **"Already know" is reversible** (C05). `unignoreSuggestion` existed and nothing reached
@@ -425,7 +457,8 @@ struct LibraryWiringTests {
         // **Reopened per access**, because the permissions below take effect at `open` and a
         // connection opened before them writes on through its own descriptor.
         let model = LibraryModel(store: Wiring.reopeningStore(path), clock: { now },
-                                 exportDirectory: { ScratchFile.unmade("export", file: "exports") })
+                                 exportDirectory: { ScratchFile.unmade("export", file: "exports") },
+                                 defaults: TemporaryDefaults.suite())
         await model.reload()
         model.act(.select([note.id]))
         try await settle { model.presentation.selection == [note.id] }
@@ -928,7 +961,7 @@ struct LibraryOrganisationWiringTests {
         let clock = when ?? now
         return LibraryModel(store: Wiring.store(path),
                             clock: { clock },
-                            exportDirectory: { exports })
+                            exportDirectory: { exports }, defaults: TemporaryDefaults.suite())
     }
 
     @Test func taggingTheSelectionReachesTheLedger() async throws {
@@ -978,6 +1011,109 @@ struct LibraryOrganisationWiringTests {
                 "a dictionary answer travelled with the export")
     }
 
+    /// **What an export says where a meaning could not travel is in the reader's language** (audit-fix
+    /// round 3, #8). It was an English constant in Core, written into every export past the string
+    /// catalog, so no translator was ever given it. The label the file carries must be a catalogued
+    /// string — which only text written at a localizing call site in the presentation layer can be.
+    ///
+    /// **And the app's own, not merely catalogued** (closing pass after round 3). Membership alone still
+    /// passed with the English literal put back in Core and handed over from there, because that literal
+    /// *is* in the catalog. So each label the file carries — an incomplete card's, and a card's whose
+    /// reading was deleted — must be written at a localizing call site in the app, and be held as text by
+    /// no target below the view layer: the list `StringCatalogTests` checks against `Package.swift`.
+    @Test func anIncompleteCardIsLabelledWithACataloguedString() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let (exports, cleanExports) = exportScratch()
+        defer { cleanExports() }
+        let ledger = try Ledger(path: path)
+        let cited = try save(ledger, "hold")
+        try ledger.setAnswer(StudyAnswer(origin: .dictionary, text: "the publisher's own words"),
+                             of: cited.id, at: now)
+        let unread = try save(ledger, "fine")
+        try ledger.deleteReading(lookups: try ledger.lookupIDs(evidencing: unread.id))
+        let model = model(path, exportTo: exports)
+        await model.reload()
+        model.act(.export)
+        try await settle { model.presentation.exported != nil }
+        let text = try String(contentsOfFile: try #require(model.presentation.exported), encoding: .utf8)
+        func field(_ index: Int, of note: StudyNote) throws -> String {
+            let row = try #require(text.split(separator: "\n").first { $0.hasPrefix(note.id.uuidString) })
+            return String(row.split(separator: "\t", omittingEmptySubsequences: false)[index])
+        }
+        let labels = [try field(3, of: cited), try field(1, of: unread)]
+        try #require(labels.allSatisfy { !$0.isEmpty }, "a card went out with a blank field where its label belongs")
+
+        let strings = try #require(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: Self.repository.appending(path: "Strings/Localizable.xcstrings")))
+            as? [String: Any])["strings"] as? [String: Any]
+        for label in labels {
+            #expect(strings?[label] != nil, "the export labels a card with text no translator has: \(label)")
+            var held: [String] = []
+            for root in StringCatalogTests.targetsBelowTheViewLayer {
+                held += try Self.files(under: Self.repository.appending(path: root)) { Self.holdsText(label, in: $0) }
+            }
+            #expect(held.isEmpty, "a target below the view layer holds the export's label as text: \(held), \(label)")
+            var sites: [String] = []
+            for root in ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI"] {
+                sites += try Self.files(under: Self.repository.appending(path: root)) { try Self.localizes(label, in: $0) }
+            }
+            #expect(!sites.isEmpty, "the export's label is written at no localizing call site in the app: \(label)")
+        }
+    }
+
+    /// **The two predicates the check above stands on, made to fail** — planted into a directory of
+    /// their own, never into `Sources/`, for the reason `theDisplayTextScanCatchesAPlantedLiteral` gives.
+    /// A literal is found however its dash is spelled, and a call broken across a line is still a call.
+    @Test func theExportLabelScanSeesAPlantedLiteralAndALocalizingCall() throws {
+        let label = "(no meaning of your own yet \u{2014} add one in XiaolaiDict)"
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-export-label")
+        try "let innocent = \"a compartment\"\n".write(to: scratch.appending("Innocent.swift"), atomically: true, encoding: .utf8)
+        #expect(try Self.files(under: scratch.url) { Self.holdsText(label, in: $0) }.isEmpty,
+                "the scan found the label in a file that does not hold it")
+
+        // As Core held it, and as it could be written again with the dash escaped.
+        try "let incomplete = \"\(label)\"\n".write(to: scratch.appending("Verbatim.swift"), atomically: true, encoding: .utf8)
+        try "let incomplete = \"(no meaning of your own yet \\u{2014} add one in XiaolaiDict)\"\n"
+            .write(to: scratch.appending("Escaped.swift"), atomically: true, encoding: .utf8)
+        #expect(try Self.files(under: scratch.url) { Self.holdsText(label, in: $0) }.sorted()
+                == ["Escaped.swift", "Verbatim.swift"], "the scan missed a planted spelling of the label")
+
+        // Neither is a localizing call; one written across a line is.
+        #expect(try Self.files(under: scratch.url) { try Self.localizes(label, in: $0) }.isEmpty,
+                "a bare literal was taken for a localizing call site")
+        let call = "String" + "("
+        try "let incomplete = \(call)\n    localized: \"\(label)\",\n    comment: \"c\")\n"
+            .write(to: scratch.appending("Localized.swift"), atomically: true, encoding: .utf8)
+        #expect(try Self.files(under: scratch.url) { try Self.localizes(label, in: $0) } == ["Localized.swift"],
+                "a localizing call site was not seen")
+    }
+
+    private static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+
+    /// The files under `root` whose code — full-line comments removed — satisfies `predicate`.
+    private static func files(under root: URL, where predicate: (String) throws -> Bool) throws -> [String] {
+        try SourceScan.code(under: root).filter { try predicate($0.code) }.map(\.file.lastPathComponent)
+    }
+
+    /// **Whether code holds the label as text, spelled any way it could be.** Verbatim, and as each of its
+    /// runs of three or more plain words — so a dash written `\u{2014}`, or the sentence split with `+`,
+    /// is still the same text. A scan is only as wide as the spelling it searches for.
+    private static func holdsText(_ label: String, in code: String) -> Bool {
+        let runs = label.split { !($0.isASCII && ($0.isLetter || $0 == " ")) }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.split(separator: " ").count >= 3 }
+        return ([label] + runs).contains { code.contains($0) }
+    }
+
+    /// Whether code writes the label at a localizing call — whitespace, a line break included, wherever
+    /// Swift allows it.
+    private static func localizes(_ label: String, in code: String) throws -> Bool {
+        let call = #"\b(?:Attributed)?String\s*\(\s*localized\s*:\s*""#
+        return code.contains(try Regex(call + NSRegularExpression.escapedPattern(for: label) + "\""))
+    }
+
     /// **No export replaces another.** One fixed filename meant a second export silently
     /// destroyed the first, and an atomic write is still a replacement.
     @Test func asecondExportDoesNotReplaceTheFirst() async throws {
@@ -1006,6 +1142,47 @@ struct LibraryOrganisationWiringTests {
         #expect(FileManager.default.fileExists(atPath: two))
     }
 
+    /// **Two exports in one second are two files** (audit-fix round 1). The name carries the instant
+    /// to the second, so a second export inside it went to the same name and replaced the first —
+    /// an atomic write is still a replacement. The control above moves the clock a minute; this
+    /// one does not move it at all, and a file put there by anyone else is not replaced either.
+    @Test func twoExportsInOneSecondAreTwoFiles() async throws {
+        let (path, clean) = scratch()
+        defer { clean() }
+        let (exports, cleanExports) = exportScratch()
+        defer { cleanExports() }
+        let ledger = try Ledger(path: path)
+        try save(ledger, "fine")
+
+        var written: [String] = []
+        for _ in 0..<3 {
+            let model = model(path, exportTo: exports)
+            await model.reload()
+            model.act(.export)
+            try await settle { model.presentation.exported != nil }
+            written.append(try #require(model.presentation.exported))
+        }
+        #expect(Set(written).count == 3, "exports in one second shared a file: \(written)")
+        for file in written {
+            #expect(try String(contentsOfFile: file, encoding: .utf8).contains("what fine means"),
+                    "\(file) is not an export")
+        }
+    }
+
+    /// **An export that cannot open the ledger says so** (audit-fix round 1). The opening's error
+    /// was dropped by a `try?`, and the button did nothing at all, with no reason given.
+    @Test func anExportThatCannotOpenTheLedgerSaysSo() async throws {
+        struct Unopenable: Error {}
+        let (exports, cleanExports) = exportScratch()
+        defer { cleanExports() }
+        let model = LibraryModel(store: { Task { throw Unopenable() } }, clock: { self.now },
+                                 exportDirectory: { exports }, defaults: TemporaryDefaults.suite())
+        model.act(.export)
+        try await settle { model.presentation.exported != nil }
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: exports.path))?.isEmpty ?? true,
+                "a file was written from a ledger that never opened")
+    }
+
     /// Suggestions appear under their own filter and are **offered, never enrolled**.
     @Test func suggestionsAreOfferedAndTakingOneEnrolsNothing() async throws {
         let (path, clean) = scratch()
@@ -1027,9 +1204,8 @@ struct LibraryOrganisationWiringTests {
         #expect(model.presentation.suggestions.first?.lemma == "recondite")
         #expect(model.presentation.suggestions.first?.days == 2)
 
+        // That the word reaches the lookup path is `pressingStudyOnAsuggestionAsksForAlookup`'s.
         model.act(.study(lemma: "recondite"))
-        #expect(model.takeSuggestion() == "recondite", "the app is handed the word to look up")
-        #expect(model.takeSuggestion() == nil, "and it cannot be taken up twice by a redraw")
         #expect(try Ledger(path: path).notes().isEmpty, "a suggestion enrolled something")
 
         model.act(.ignore(lemma: "recondite", language: "en"))
@@ -1077,7 +1253,7 @@ struct LibraryReversibleRaceTests {
             let wait = armed
             armed = false
             return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
-        }, clock: { now })
+        }, clock: { now }, defaults: TemporaryDefaults.suite())
 
         await model.reload()
         model.act(.select([first.id]))
@@ -1116,7 +1292,7 @@ struct LibraryReversibleRaceTests {
             let wait = armed
             armed = false
             return Task { if wait { await gate.wait() }; return try LedgerStore(path: path) }
-        }, clock: { now })
+        }, clock: { now }, defaults: TemporaryDefaults.suite())
 
         await model.reload()
         model.act(.select([word.id]))
@@ -1173,7 +1349,7 @@ struct LibraryReversibleRaceTests {
         let ledger = try Ledger(path: path)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let first = try Wiring.save(ledger, "first", at: now)
-        let model = LibraryModel(store: Wiring.store(path), clock: { now })
+        let model = LibraryModel(store: Wiring.store(path), clock: { now }, defaults: TemporaryDefaults.suite())
         await model.reload()
         #expect(model.presentation.rows.count == 1)
 
@@ -1205,7 +1381,7 @@ struct LibraryReversibleRaceTests {
             try Wiring.save(ledger, "word\(String(format: "%04d", index))",
                             at: now.addingTimeInterval(Double(-index)))
         }
-        let model = LibraryModel(store: Wiring.store(path), clock: { now })
+        let model = LibraryModel(store: Wiring.store(path), clock: { now }, defaults: TemporaryDefaults.suite())
         await model.reload()
         #expect(model.presentation.rows.count == LibraryModel.pageSize)
 

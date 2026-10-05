@@ -387,7 +387,11 @@ public struct LearningLibraryView<Review: View>: View {
                     if row.studyNoteID == nil {
                         IconButton(.saveMeaning) { archiveAction(.keep(row.id)) }
                     }
-                    if row.studyStatus == .needsConfirmation, revealed, let note = row.studyNoteID {
+                    // **Only where confirming changes something**, and only beside the revealed
+                    // meaning — which is why a confirmation from here is one that showed the answer
+                    // (`LibraryModel`'s cooldown hook). An entry rung carrying the dictionary's text is
+                    // `.needsConfirmation` too, and Confirm over it wrote nothing (ADR-0030).
+                    if row.studyObstacle == .confirmation, revealed, let note = row.studyNoteID {
                         IconButton(.confirmMeaning) { archiveAction(.confirm(note)) }
                     }
                     IconButton(.chooseMeaning) { archiveAction(.clarify(row.id)) }

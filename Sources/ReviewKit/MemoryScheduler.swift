@@ -18,10 +18,26 @@ import Foundation
 /// - stability is computed from the **old** difficulty, and difficulty updated after;
 /// - the post-lapse **ceiling** on stability, which the overview wiki omits.
 public struct MemoryScheduler: Sendable {
-    /// Persisted beside every review event. A change to rounding, time semantics, steps or fuzz is a
-    /// change to the scheduling contract and must change this string, or a replay will silently use
-    /// today's rules on yesterday's history.
+    /// **The default configuration's identity** — the pinned kernel with `defaultWeights` and
+    /// `defaultMaximumDays` — which is what a replay in this build rebuilds. A change to rounding, time
+    /// semantics, steps or fuzz is a change to the scheduling contract and must change this string, or a
+    /// replay will silently use today's rules on yesterday's history.
     public static let version = "fsrs6-py9446cb0-one10m-no-fuzz-v1"
+
+    /// The interval cap the default configuration schedules with, in days.
+    public static let defaultMaximumDays = 36_500
+
+    /// **What an event this scheduler grades records as its `scheduler_version`**: every parameter that
+    /// changes a transition, except retention, which an event keeps in a column of its own and a
+    /// replay reads back from there.
+    ///
+    /// `version` for the default configuration, whatever its retention; for any other, `version` with
+    /// the cap and the weights after it, written exactly (`Double`'s description round-trips). A replay
+    /// in this build rebuilds the default alone, so a grade by another configuration is
+    /// `unreplayable(.unknownSchedulerVersion)` — never `inconsistent` because the default's cap or
+    /// weights scheduled it differently (WI-8: a cap of one day moved a first Good from 1,800,172,800
+    /// to 1,800,086,400, and the version said nothing of it).
+    public let identity: String
 
     /// The population-derived starting model — **not** a calibrated profile of this reader.
     public static let defaultWeights: [Double] = [
@@ -52,7 +68,7 @@ public struct MemoryScheduler: Sendable {
     private let decay: Double
     private let factor: Double
 
-    public init(retention: Double = 0.9, maximumDays: Int = 36_500,
+    public init(retention: Double = 0.9, maximumDays: Int = MemoryScheduler.defaultMaximumDays,
                 weights: [Double] = MemoryScheduler.defaultWeights) throws {
         guard retention.isFinite, retention > 0, retention < 1 else {
             throw SchedulerError.retentionOutOfRange(retention)
@@ -69,6 +85,9 @@ public struct MemoryScheduler: Sendable {
         self.maximumDays = maximumDays
         self.decay = -weights[20]
         self.factor = pow(0.9, 1 / decay) - 1
+        self.identity = weights == Self.defaultWeights && maximumDays == Self.defaultMaximumDays
+            ? Self.version
+            : "\(Self.version)+maximumDays=\(maximumDays)+weights=\(weights.map { String($0) }.joined(separator: ","))"
     }
 
     /// The forgetting curve: the probability of recall after `elapsedDays`.
@@ -95,9 +114,18 @@ public struct MemoryScheduler: Sendable {
 
     /// Whole days, bounded, **ties to even** — `round()`'s behaviour in the reference, and the one
     /// rounding rule that is not what most people assume.
+    ///
+    /// **Capped before it becomes an `Int`.** Every retention in (0, 1) is accepted, and a low one makes
+    /// the interval larger than `Int.max` days (0.001: about 6.7e19 for a first Good) or infinite, so
+    /// converting first would trap. A whole number below 2^63 converts exactly, which is every value
+    /// this gave before; anything at or past it is past every cap.
     public func scheduledDays(stability: Double) throws -> Int {
         let raw = try interval(stability: stability)
-        return min(maximumDays, max(1, Int(raw.rounded(.toNearestOrEven))))
+        guard !raw.isNaN else { throw SchedulerError.nonfiniteResult }
+        let whole = raw.rounded(.toNearestOrEven)
+        guard whole < 0x1p63 else { return maximumDays }
+        guard whole >= 1 else { return 1 }  // `maximumDays` is at least 1, so the floor wins
+        return min(maximumDays, Int(whole))
     }
 
     /// The raw initial-difficulty curve. **Unclamped on purpose**: it is the mean-reversion anchor as
@@ -133,7 +161,12 @@ public struct MemoryScheduler: Sendable {
             let s = state.stability, d = state.difficulty
             // Whole elapsed days, floored — **not calendar days**. 23:55 → 00:05 is the short-term
             // branch, and a daylight-saving boundary decides nothing here.
-            let days = Int(floor(now.timeIntervalSince(previous) / Self.secondsPerDay))
+            let elapsed = floor(now.timeIntervalSince(previous) / Self.secondsPerDay)
+            // A span no whole-day count holds is damage, not a clock — a last review at -1e30 s. It is
+            // refused, never converted: converting traps, and the grade path and a replay both reach
+            // this with stored data (audit-fix round 1).
+            guard elapsed < 0x1p63 else { throw SchedulerError.invalidElapsedTime(elapsed) }
+            let days = Int(elapsed)
             if days == 0 {
                 let gain = exp(weights[17] * (Double(grade.rawValue) - 3 + weights[18]))
                     * pow(s, -weights[19])

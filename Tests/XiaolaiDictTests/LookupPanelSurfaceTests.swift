@@ -158,11 +158,9 @@ struct LookupPanelSurfaceTests {
     /// **A discarded reading still says so on the card**, with its way back beside it.
     @Test func everyStatusDrawsARow() throws {
         let plain = try draw(PanelView(content: .lookup(lookup())))
-        let statuses: [LookupKeepStatus] = [
-            .keeping, .kept, .needsMeaning, .needsConfirmation, .manual, .failed, .discarded,
-            .discardedExternally,
-        ]
-        for status in statuses {
+        // **Every case**, so a status added later is drawn or this fails: the list written out here had
+        // already missed `.deleted`, and the three word-only-card statuses (R1b) would have been missed too.
+        for status in LookupKeepStatus.allCases {
             let drawn = try draw(
                 PanelView(content: .lookup(lookup())).environment(\.lookupKeepStatus, status))
             #expect(drawn.size.height > plain.size.height, "\(status) draws no row on the card")

@@ -61,11 +61,11 @@ final class LookupRunner {
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
     func run(
-        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookupID: Int? = nil,
+        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
         seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
         let chosenPrimary = primary()
-        let frozenKeepPolicy = existingLookupID == nil ? keepPolicy() : .manual
+        let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
@@ -88,7 +88,7 @@ final class LookupRunner {
         // answered one and the final one differ only in what they add to it (audit round 3, #29).
         let basis = RecordingBasis(
             selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
-            lookupID: existingLookupID, keepPolicy: frozenKeepPolicy)
+            lookup: existingLookup, keepPolicy: frozenKeepPolicy)
         let pending = basis.pending(primaryDictionary: chosenPrimary.chosen)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
@@ -130,15 +130,6 @@ final class LookupRunner {
         }
         mark(.dictionaryAnswered, ticket.number, answeredAt)
         let outcome = resolved.word
-        // **Built against the sentence the card holds, not the one that was sent.** The request sends the
-        // sentence whatever the capture's quality, while the presentation drops it for an incomplete one —
-        // so a span measured against the first and drawn on the second would bracket whatever sits at that
-        // offset. `PhrasePresentation.init(_:sentence:)` checks the pairing rather than trusting it.
-        presentation.phrase = PhrasePresentation(resolved.phrase, sentence: presentation.sentence)
-        logPhrase(resolved.phrase)
-        presentation.outcome = outcome
-        panel.update(.lookup(presentation), for: ticket)
-
         // Which entry, and where it is a fact rather than a guess, which sense.
         //
         // The entry is already on screen with every one of its senses; only the *mark* waits on the
@@ -175,16 +166,28 @@ final class LookupRunner {
         let pinned = chosenPrimary.pinned(word: entries, phrase: phraseEntries)
         // The *reader's* choice is still what is recorded where they made one: automatic keeping
         // compares against it, and a fallback is not a choice.
+        // **And it is the study dictionary a phrase is saved in** (ADR-0049): the namespace Review asks, so
+        // a phrase card made here is one the reader's sittings can reach.
         let effectivePrimary = chosenPrimary.chosen ?? pinned.chosen
+        // **Built against the sentence the card holds, not the one that was sent.** The request sends the
+        // sentence whatever the capture's quality, while the presentation drops it for an incomplete one —
+        // so a span measured against the first and drawn on the second would bracket whatever sits at that
+        // offset. `PhrasePresentation.init(_:sentence:)` checks the pairing rather than trusting it.
+        presentation.phrase = PhrasePresentation(
+            resolved.phrase, sentence: presentation.sentence, studyDictionary: effectivePrimary)
+        logPhrase(resolved.phrase)
+        presentation.outcome = outcome
+        panel.update(.lookup(presentation), for: ticket)
+
         presentation.primaryEntry = pinned.entries(among: entries).first
             .map { PanelSelection.identity(of: $0) }
+        // **The phrase's entries go with it**, so this early row claims no more than the resolver
+        // will: a one-sense word inside a phrase is not yet resolved, and automatic keeping must
+        // not confirm it before the selector has weighed the two.
+        let early = pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt)
         initialRecording(basis.recording(
-            outcome: outcome, abstention: nil,
-            // **The phrase's entries go with it**, so this early row claims no more than the resolver
-            // will: a one-sense word inside a phrase is not yet resolved, and automatic keeping must
-            // not confirm it before the selector has weighed the two.
-            encounter: pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt),
-            primaryDictionary: effectivePrimary), ticket.number)
+            outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
+            phraseOfEncounter: Self.phrase(owning: early, in: resolved.phrase)), ticket.number)
         let resolver = SenseResolver(primary: pinned, selector: selector)
         let partOfSpeech = Lemmatizer.partOfSpeech(
             of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
@@ -233,7 +236,8 @@ final class LookupRunner {
                     resolution = answered
                     mark(.senseResolved, ticket.number, .now)
                     guard answered.mark != nil, panel.isCurrent(ticket) else { continue }
-                    Self.apply(answered, to: &presentation, phrase: resolved.phrase)
+                    Self.apply(answered, to: &presentation, phrase: resolved.phrase,
+                               studyDictionary: effectivePrimary)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -250,7 +254,18 @@ final class LookupRunner {
             // like any other — recorded, that is a false model status in the ledger for a question that
             // was never finished being asked.
             abstention: Task.isCancelled ? nil : resolution.abstention,
-            encounter: resolution.encounter, primaryDictionary: effectivePrimary)
+            encounter: resolution.encounter, primaryDictionary: effectivePrimary,
+            phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: resolved.phrase))
+    }
+
+    /// **The phrase whose own entry `encounter` is in**, by the inventory's spelling — the hit's, as *Save
+    /// This Phrase* keys it — or nil where the encounter is the word's. The reply says which entries are a
+    /// phrase's own (ADR-0028), so this is read off it, never inferred.
+    nonisolated static func phrase(owning encounter: SenseEncounter?, in phrase: PhraseAnswer) -> String? {
+        guard let encounter, case .found(let hits) = phrase else { return nil }
+        return hits.first { hit in
+            hit.entries.contains { $0.dictionary.key == encounter.dictionary.key && $0.entryKey == encounter.entryID }
+        }?.phrase
     }
 
     /// The card a lookup opens with, before anything has answered.
@@ -307,18 +322,24 @@ final class LookupRunner {
     /// dictionaries — `1.1` is in many entries — so it is looked up only in the entry the mark is about;
     /// and where that entry is a phrase other than the leading one, the notice is rebuilt for it rather
     /// than put under the wrong phrase.
-    private static func apply(_ answered: SenseResolution, to presentation: inout LookupPresentation, phrase: PhraseAnswer) {
+    ///
+    /// **The sense says whose it is**, so a phrase saved from the card takes it as its answer only where it
+    /// is the study dictionary's (ADR-0049) — the resolver's dictionary is not always that one.
+    private static func apply(_ answered: SenseResolution, to presentation: inout LookupPresentation,
+                              phrase: PhraseAnswer, studyDictionary: String?) {
         guard let mark = answered.mark else { return }
         presentation.sense = mark
         presentation.senseOwner = answered.owner
         if let key = mark.key, let owner = answered.owner, case .found(let hits) = phrase,
            let (index, sense) = phraseSense(key: key, owner: owner, in: hits) {
             if index != hits.startIndex {
-                presentation.phrase = PhrasePresentation(.found([hits[index]]), sentence: presentation.sentence)
+                presentation.phrase = PhrasePresentation(
+                    .found([hits[index]]), sentence: presentation.sentence, studyDictionary: studyDictionary)
             }
             presentation.phrase?.met = PhrasePresentation.SenseMet(
                 definition: sense.definition ?? sense.text,
-                isHypothesis: mark.isHypothesis)
+                isHypothesis: mark.isHypothesis,
+                dictionary: hits[index].entries.first { PanelSelection.identity(of: $0) == owner }?.dictionary.key)
         }
     }
 
@@ -354,7 +375,7 @@ private struct RecordingBasis {
     let lemma: Lemma
     let language: String?
     let requestedAt: Date
-    let lookupID: Int?
+    let lookup: LookupIdentity?
     let keepPolicy: LookupKeepPolicy
     /// **The surface, not the sentence.** The filter is about the word the reader looked up; a Chinese
     /// word quoted inside an English sentence is still a Chinese word, and classifying the sentence would
@@ -363,12 +384,12 @@ private struct RecordingBasis {
     let script: ProbeScript?
 
     init(selection: Selection, lemma: Lemma, language: String?, requestedAt: Date,
-         lookupID: Int?, keepPolicy: LookupKeepPolicy) {
+         lookup: LookupIdentity?, keepPolicy: LookupKeepPolicy) {
         self.selection = selection
         self.lemma = lemma
         self.language = language
         self.requestedAt = requestedAt
-        self.lookupID = lookupID
+        self.lookup = lookup
         self.keepPolicy = keepPolicy
         script = ProbeScript.dominant(in: selection.text)
     }
@@ -376,14 +397,15 @@ private struct RecordingBasis {
     /// The row a lookup starts with, before the dictionaries answer.
     func pending(primaryDictionary: String?) -> LookupRecording {
         LookupRecording(record: record(outcome: .notFound(serviceFailure: nil), abstention: nil).pending(),
-                        encounter: nil, lookupID: lookupID, keepPolicy: keepPolicy,
+                        encounter: nil, lookup: lookup, keepPolicy: keepPolicy,
                         primaryDictionary: primaryDictionary)
     }
 
     func recording(outcome: LookupOutcome, abstention: Abstention?, encounter: SenseEncounter?,
-                   primaryDictionary: String?) -> LookupRecording {
+                   primaryDictionary: String?, phraseOfEncounter: String?) -> LookupRecording {
         LookupRecording(record: record(outcome: outcome, abstention: abstention), encounter: encounter,
-                        lookupID: lookupID, keepPolicy: keepPolicy, primaryDictionary: primaryDictionary)
+                        lookup: lookup, keepPolicy: keepPolicy, primaryDictionary: primaryDictionary,
+                        phraseOfEncounter: phraseOfEncounter)
     }
 
     /// The ledger row — what was read, where, how it was captured, what answered, and why no sense was

@@ -21,23 +21,58 @@ struct StudySurfaceTests {
         "Sources/XiaolaiDictCore/StudyReviewLedger.swift",
         "Sources/XiaolaiDictCore/StudyExport.swift",
         "Sources/XiaolaiDictCore/StudyRecovery.swift",
-        "Sources/XiaolaiDictCore/StudyDay.swift",
+        // The allowance's denominator, which stayed with the ledger when the `StudyDay` struct moved.
+        "Sources/XiaolaiDictCore/StudyIntroductions.swift",
         // The ledger proper: reading history, recovery and erasure are study capabilities too,
         // and `history`, `encounters` and `integrity` are exactly the shape this looks for.
         "Sources/XiaolaiDictCore/Ledger.swift",
-        "Sources/XiaolaiDictCore/StudyCards.swift",
-        "Sources/XiaolaiDictCore/ReviewSession.swift",
-        "Sources/XiaolaiDictCore/MemoryScheduler.swift",
+        // The review logic, a target of its own since 2026-10-04 (ADR-0047).
+        "Sources/ReviewKit/StudyDay.swift",
+        "Sources/ReviewKit/StudyCards.swift",
+        "Sources/ReviewKit/ReviewSession.swift",
+        "Sources/ReviewKit/MemoryScheduler.swift",
+        // The post-confirmation cooldown experiment's rule (review-module-plan §8.3c).
+        "Sources/ReviewKit/ConfirmationCooldown.swift",
+        // What a Review sitting asks, in what order, and the predicted count (WI-2).
+        "Sources/ReviewKit/SittingPlanner.swift",
+        // The end of a sitting: the week ahead, and today's one-day increase of the allowance (WI-5).
+        "Sources/ReviewKit/Forecast.swift",
+        "Sources/ReviewKit/OneDayIncrease.swift",
+        // A card's history re-run, and the ledger's read that feeds it (WI-9b).
+        "Sources/ReviewKit/Replay.swift",
+        "Sources/XiaolaiDictCore/StudyReplay.swift",
+        // The reminder: what to plan, the log of what was asked for, and the reconciler (WI-6), wired by
+        // the app's `ReminderCoordinator` (WI-7).
+        "Sources/ReviewKit/ReminderSettings.swift",
+        "Sources/ReviewKit/ReminderPlanner.swift",
+        "Sources/ReviewKit/ReminderLog.swift",
+        "Sources/ReviewKit/ReminderReconciler.swift",
+        // Keeping, the collection's own predicate, and what is in the way of a kept meaning — Review's
+        // count by reason sits beside the count it replaced.
+        "Sources/XiaolaiDictCore/LookupKeeping.swift",
+        // R1b: a reading's word-only cards replaced by the meaning chosen on it, a reader option.
+        "Sources/XiaolaiDictCore/WordCardReplacement.swift",
+        // A phrase the reader saved as a card from the lookup panel (ADR-0049).
+        "Sources/XiaolaiDictCore/PhraseCollection.swift",
     ]
 
-    /// Where a caller would be. The app, the view layer and the instruments — **not**
-    /// `XiaolaiDictCore` itself, since a method called only by its own module is what this looks
-    /// for, and not the tests, since a test is not a surface.
+    /// Where a caller would be — **minus the declaring file's own module**, since a method called
+    /// only by its own module is what this looks for, and never the tests, since a test is not a
+    /// surface. So a Core capability is wired by the app, the view layer, the dictionary service or
+    /// the instruments; a ReviewKit one by any of those or by Core, which became a legitimate
+    /// outside caller the day the review logic left it. `ReviewKit` is not a calling root: it
+    /// depends on nothing, so it cannot call anything declared here but its own.
     private static let calling = [
-        "Sources/XiaolaiDict", "Sources/XiaolaiDictUI", "Sources/XiaolaiDictService", "Tools",
+        "Sources/XiaolaiDictCore", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
+        "Sources/XiaolaiDictService", "Tools",
     ]
 
-    /// Called only from inside `XiaolaiDictCore`, on purpose. **Each row is a reason**: a bare
+    /// The calling roots for one declaring file: every root but the module it lives in.
+    static func callers(of declaringFile: String) -> [String] {
+        calling.filter { !declaringFile.hasPrefix("\($0)/") }
+    }
+
+    /// Called only from inside its own module, on purpose. **Each row is a reason**: a bare
     /// allow-list is how a rule like this dies, and `everyExemptionIsRealAndEveryUnwiredMethodIsListed`
     /// fails in both directions so a name cannot rot here after it gains a caller.
     private static let exempt: [String: String] = [
@@ -47,15 +82,29 @@ struct StudySurfaceTests {
             """,
         "isDue(at:": "A predicate on a value, used wherever a card is judged.",
         "readiness(of:": "One note's facts, gathered for the library's own query.",
-        "introductions(since:": "The allowance's denominator, counted by dueCards.",
+        // WI-2: the window plans its sitting through `SittingPlanner` over `sittingCandidates`.
+        "dueCards(at:": """
+            The SQL spelling of the queue, kept as the reference the planner is held to             (thePlannerReproducesTheSqlQueueOrder) and as the filter-before-LIMIT witness. The             window draws from sittingCandidates.
+            """,
         "scheduledDays(stability:": "The scheduler's own arithmetic.",
+        // WI-8: the coordinator asked it about *now* after a grade, which is not a reminder's question.
+        "askableCount(at:": """
+            The predicted count at a fire instant, asked inside ReviewKit by ReminderPlanner.plan, \
+            which the app's ReminderCoordinator calls on every pass.
+            """,
         "link(noteID:": "Joins a note to a lookup inside enrol, which is the only correct caller.",
+        // Visible once LookupKeeping.swift joined the scan (WI-4): the same shape as `link`.
+        "explicitlyKeep(noteID:": "Marks a note as one the reader asked for, inside enrol, the only correct caller.",
         "locators(of:": "Evidence carried with a phrase note; read by the note's own equality.",
         "existingCard(of:": "Reads without creating; the timeline and the queue use it.",
-        "repeatedlyLapsed(": """
-            R09's programmatic form. Its surface is the library's Struggling filter, which shares             lapseDaysExpression rather than the function — a page narrowed in Swift after the             LIMIT is a short page (ADR-0033).
-            """,
         "backUp(to:": "Taken before a migration changes the ledger's shape; not a reader's command.",
+        // WI-5: `OneDayIncrease` keeps its day as seconds since 1970, as the ledger does, so it spells
+        // its own encoding rather than let `JSONEncoder` choose one for a `Date`.
+        "encode(to:": """
+            Encodable's requirement, called by JSONEncoder and never by name: inside \
+            OneDayIncreaseStore.raise, and for the reminder log, its days and its content inside \
+            ReminderLogStore's save.
+            """,
         "history(of:": "A lemma's lookups, read by the drawer's own projection.",
         "reviews(ofCard:": "One card's events, gathered by `timeline`.",
         "answer(of:": "One note's answer, read by `enroll`, `export` and `revealed`.",
@@ -64,6 +113,13 @@ struct StudySurfaceTests {
         "lookupIDs(fromSource:": "One source's lookups, counted by the erasure impact.",
         "remove(noteID:": "One note, removed by `removeFromStudy`.",
         "note(for:": "Looks a target up during `enroll`, to decide new against existing.",
+        // **Exposed by audit-fix round 1**: each was vouched for by an app wrapper nothing called — dead
+        // code that made a Core method read as wired. The wrappers went; the in-Core callers were there all
+        // along.
+        "enroll(": "Every enrolment goes through `keep`, which calls it inside the ledger.",
+        "delete(lookup:": "One lookup, removed by `deleteReading` for each reading the reader erases.",
+        // **Exposed by audit-fix round 2**, the same way: `LedgerStore.tag(noteID:)` had no caller.
+        "tag(noteID:": "One note, tagged by `tag(noteIDs:)` for each note in the selection.",
         "interval(stability:": "The scheduler's own arithmetic.",
         "recall(elapsedDays:": "The forgetting curve; the scheduler's own arithmetic.",
         // Newly visible once `public static func` stopped being skipped: the erasure path's own
@@ -73,6 +129,10 @@ struct StudySurfaceTests {
         // is what stops the next audit rediscovering them as new — ADR-0038.
         "card(of:": "Creates the card for a note; enrol is the only correct caller.",
         "integrity(": "GAP — D01 has no recovery surface.",
+        "replayVerdicts(": """
+            GAP — read by integrity, which reports the histories that do not account for their \
+            cards; the legacy grades it names reach nobody until D01 has a recovery surface.
+            """,
         "readingImpact(ofSource:": "GAP — erasing one source's reading is not offered.",
         "newlyMetSenses(limit:": "GAP — no surface designed.",
         "studyList(limit:": "GAP — no surface designed.",
@@ -141,17 +201,18 @@ struct StudySurfaceTests {
 
     /// Which public study methods no surface calls.
     static func unwired() throws -> Set<String> {
-        var declared: Set<String> = []
+        var declaredIn: [String: [String]] = [:]
         for path in declaring {
             let code = try String(contentsOf: root.appending(path: path), encoding: .utf8)
-            declared.formUnion(publicFunctions(in: code))
+            declaredIn[path] = publicFunctions(in: code)
         }
         // Thrown, never defaulted: a scanner that finds nothing to scan guards nothing.
-        guard !declared.isEmpty else {
+        guard declaredIn.values.contains(where: { !$0.isEmpty }) else {
             throw CocoaError(.fileNoSuchFile)
         }
-        var callers = ""
+        var callersIn: [String: String] = [:]
         for root in calling {
+            var text = ""
             let directory = Self.root.appending(path: root)
             let walk = FileManager.default.enumerator(
                 at: directory, includingPropertiesForKeys: nil,
@@ -173,22 +234,27 @@ struct StudySurfaceTests {
                 // **Thrown, never defaulted to "".** A file that could not be read contributes no
                 // callers and looks exactly like a file with none, so an unreadable tree reports
                 // every method as unwired — or, worse, leaves an exemption looking current.
-                callers += try String(contentsOf: file, encoding: .utf8)
+                text += try String(contentsOf: file, encoding: .utf8)
                 seen += 1
             }
             guard seen > 0 else {
                 throw CocoaError(.fileReadNoSuchFile)
             }
+            // **Comments and string literals are not callers.** Raw substring matching counted a
+            // commented-out call as wiring, so removing the last caller by commenting it out left
+            // this check satisfied — the exact move the table is meant to catch.
+            callersIn[root] = Self.stripped(text)
         }
         // **A member call with its first label** — `.card(of:`, not `card(`. Two earlier
         // spellings were each too wide: a bare `name(` matched `symlink(` for `link` and a
         // drawer's own `hide()` for the ledger's, and `.name(` still let one overload vouch for
         // another. A scan is only as wide as the spelling it searches for.
-        // **Comments and string literals are not callers.** Raw substring matching counted a
-        // commented-out call as wiring, so removing the last caller by commenting it out left
-        // this check satisfied — the exact move the table is meant to catch.
-        let live = Self.stripped(callers)
-        return declared.filter { !live.contains(".\($0)") }
+        var unwired: Set<String> = []
+        for (path, declared) in declaredIn {
+            let live = callers(of: path).compactMap { callersIn[$0] }.joined(separator: "\n")
+            unwired.formUnion(declared.filter { !live.contains(".\($0)") })
+        }
+        return unwired
     }
 
     /// Source with `//` comments and string literals removed, so neither can vouch for a method.
@@ -206,7 +272,10 @@ struct StudySurfaceTests {
             }
             out += kept + "\n"
         }
-        return out
+        // **A call may break its line after the parenthesis**, and `.name(\n    label:` is the same
+        // call as `.name(label:`. Matching only the second reported `reviewSitting(from:` as unwired
+        // while the Review window called it (WI-2): a scan is only as wide as its spelling.
+        return out.replacing(/\(\s+/, with: "(")
     }
 
     /// **Both directions.** An unwired method must be exempt with a reason, and an exemption whose
@@ -218,7 +287,7 @@ struct StudySurfaceTests {
 
         let unexplained = unwired.subtracting(listed).sorted()
         #expect(unexplained.isEmpty, """
-            these ledger methods have no caller outside XiaolaiDictCore: \(unexplained). \
+            these ledger methods have no caller outside their own module: \(unexplained). \
             Either give the capability a surface, delete it, or add a row to `exempt` saying why \
             it is called only from inside.
             """)
@@ -233,9 +302,14 @@ struct StudySurfaceTests {
     /// The scan can fail. A name that is not declared anywhere must not be quietly absorbed.
     @Test func thescanSeesWhatItClaimsTo() throws {
         let declared = try Self.publicFunctions(in: String(
-            contentsOf: Self.root.appending(path: "Sources/XiaolaiDictCore/StudyDay.swift"),
+            contentsOf: Self.root.appending(path: "Sources/XiaolaiDictCore/StudyIntroductions.swift"),
             encoding: .utf8))
         #expect(declared.contains("introductions(since:"), "the scan read the file it thinks it did")
+        #expect(Self.callers(of: "Sources/XiaolaiDictCore/Ledger.swift")
+                == ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI", "Sources/XiaolaiDictService", "Tools"],
+                "a Core method is not wired by Core itself")
+        #expect(Self.callers(of: "Sources/ReviewKit/StudyCards.swift") == Self.calling,
+                "a ReviewKit method is wired by Core too")
         #expect(Self.publicFunctions(in: "public func abc(") == ["abc("])
         #expect(Self.publicFunctions(in: "public func abc(of x: Int)") == ["abc(of:"])
         #expect(Self.publicFunctions(in: "public func abc(_ x: Int)") == ["abc("],
@@ -252,6 +326,8 @@ struct StudySurfaceTests {
         #expect(Self.stripped("a.b()  // c.d()").contains(".d(") == false, "a comment is not a caller")
         #expect(Self.stripped("let s = \".x(\"").contains(".x(") == false, "a string is not a caller")
         #expect(Self.stripped("a.b()").contains(".b("), "and real calls survive stripping")
+        #expect(Self.stripped("a.b(\n        of: x)").contains(".b(of:"),
+                "a call that breaks its line after the parenthesis is still a call")
         #expect(Self.publicFunctions(in: "    private func abc(").isEmpty)
     }
 }

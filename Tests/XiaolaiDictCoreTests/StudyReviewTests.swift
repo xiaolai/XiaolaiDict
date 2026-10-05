@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 @testable import XiaolaiDictCore
 
@@ -34,6 +35,52 @@ struct StudyReviewTests {
     }
 
     private func scheduler() throws -> MemoryScheduler { try MemoryScheduler() }
+
+    // MARK: - Why a card can no longer be asked (the final closing pass, finding 2)
+
+    /// **The reason is the grade's own refusal, named**: nil exactly where `grade` takes the grade, and
+    /// every state it refuses named by its remedy — out of study before paused, paused before put off. A
+    /// sitting lets a card go on this answer, so a reason the commit would not refuse would drop a card the
+    /// reader can still answer, and one it would refuse with no reason would hold a card for good.
+    @Test func adepartureIsNamedExactlyWhereAGradeIsRefused() throws {
+        let hour = now.addingTimeInterval(3_600)
+        let states: [(name: String, apply: (Ledger, StudyCard) throws -> Void, expected: Departure?)] = [
+            ("askable", { _, _ in }, nil),
+            ("archived", { ledger, card in try ledger.setEnrollment(.archived, of: card.noteID) }, .noLongerInStudy),
+            ("ignored", { ledger, card in try ledger.setEnrollment(.ignored, of: card.noteID) }, .noLongerInStudy),
+            ("removed", { ledger, card in try ledger.remove(noteID: card.noteID) }, .noLongerInStudy),
+            ("paused", { ledger, card in try ledger.setPaused(true, ofCard: card.id) }, .paused),
+            ("archived and paused", { ledger, card in
+                try ledger.setPaused(true, ofCard: card.id)
+                try ledger.setEnrollment(.archived, of: card.noteID)
+            }, .noLongerInStudy),
+            ("put off", { ledger, card in try ledger.postpone(cardID: card.id, until: hour) }, .putOff),
+            ("put off until now", { ledger, card in try ledger.postpone(cardID: card.id, until: self.now) }, nil),
+            ("paused and put off", { ledger, card in
+                try ledger.postpone(cardID: card.id, until: hour)
+                try ledger.setPaused(true, ofCard: card.id)
+            }, .paused),
+            ("reading deleted", { ledger, card in
+                for lookup in try ledger.lookupIDs(evidencing: card.noteID) { try ledger.delete(lookup: lookup) }
+            }, .notReady),
+            ("answer blank", { ledger, card in try ledger.setReaderAnswer("  ", of: card.noteID, at: self.now) }, .notReady),
+        ]
+        for state in states {
+            let ledger = try Ledger(path: ":memory:")
+            let card = try ready(ledger)
+            try state.apply(ledger, card)
+            let departure = try ledger.departure(ofCard: card.id, at: now)
+            #expect(departure == state.expected, "\(state.name)")
+            let revision = try ledger.card(id: card.id)?.revision ?? card.revision
+            do {
+                _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision, at: now,
+                                     using: try scheduler())
+                #expect(departure == nil, "\(state.name): the grade was taken, and the card was named gone")
+            } catch ReviewError.notEligible, ReviewError.noSuchCard {
+                #expect(departure != nil, "\(state.name): the grade was refused, and no reason was named")
+            }
+        }
+    }
 
     // MARK: - Practice leaves the schedule alone, on the way back out too
 
@@ -138,6 +185,30 @@ struct StudyReviewTests {
         }
         #expect(try ledger.reviews(ofCard: card.id).isEmpty)
         #expect(try #require(try ledger.card(id: card.id)).revision == 0, "and nothing moved")
+    }
+
+    /// **A card drawn while hidden is refused at the commit.** Postponing moves the revision, so a
+    /// card hidden *after* the draw is already refused as stale; this is the other order — a draw
+    /// that skipped the queue's filter, as a hand-picked sitting does, holding the revision the
+    /// card has now. Only the commit's own check stands between it and a grade.
+    @Test func aCardDrawnWhileHiddenRefusesAGrade() throws {
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger)
+        try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
+        let drawn = try #require(try ledger.card(id: card.id))
+        #expect(drawn.revision == 1, "postponing moves the revision, so the draw is current")
+
+        #expect(throws: ReviewError.notEligible(card.id)) {
+            try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: drawn.revision,
+                             at: self.now.addingTimeInterval(3_600), using: try self.scheduler())
+        }
+        #expect(try ledger.reviews(ofCard: card.id).isEmpty)
+        #expect(try #require(try ledger.card(id: card.id)) == drawn, "and nothing moved")
+        // **The control**: once the time it was put off until has come, the same draw grades.
+        let graded = try ledger.grade(cardID: card.id, .good, eventID: UUID(),
+                                      expectedRevision: drawn.revision,
+                                      at: now.addingTimeInterval(86_400), using: try scheduler())
+        #expect(graded.cardRevision == drawn.revision)
     }
 
     /// **Half a review is worse than none**, because one of the halves is invisible. A failure inside
@@ -334,6 +405,51 @@ struct StudyReviewTests {
                 "…or the due date")
     }
 
+    /// **The two spellings of "hidden" agree, at the boundary and either side of it.**
+    ///
+    /// `StudyCard.isHidden(at:)` is what the commit asks; `(hidden_until IS NULL OR hidden_until <=
+    /// ?)` is what the queue and its counts ask. Two copies of one rule drift, and the place they
+    /// drift is the boundary: equal is *not* hidden in both. Compared at the **stored** instant,
+    /// because the queue binds the encoding and the commit canonicalises before it asks — an
+    /// in-memory instant an ulp from a stored one is a third value neither copy ever sees.
+    @Test func theHiddenPredicateAgreesWithTheQueueSql() throws {
+        for raw in [now, dayBoundaryInMemory] {
+            let asked = ReviewInstant.stored(raw)
+            let at = ReviewInstant.encoded(asked)
+            let hiddenUntil: [(String, Date?)] = [
+                ("never", nil),
+                ("a day before", asked.addingTimeInterval(-day)),
+                ("one stored ulp before", ReviewInstant.decoded(at.nextDown)),
+                ("exactly then", asked),
+                ("one stored ulp after", ReviewInstant.decoded(at.nextUp)),
+                ("a day after", asked.addingTimeInterval(day)),
+            ]
+            let ledger = try Ledger(path: ":memory:")
+            var labels: [UUID: String] = [:]
+            for (index, (label, until)) in hiddenUntil.enumerated() {
+                let card = try ready(ledger, "word\(index)", key: "k\(index)")
+                try ledger.postpone(cardID: card.id, until: until)
+                labels[card.id] = label
+            }
+            var bySwift = Set<UUID>()
+            for id in labels.keys where !(try #require(try ledger.card(id: id))).isHidden(at: asked) {
+                bySwift.insert(id)
+            }
+            let byQueue = Set(try ledger.dueCards(at: asked, limit: 10, dictionary: nil,
+                                                  newAllowance: .max, dayStart: .distantPast).map(\.id))
+            #expect(byQueue == bySwift, """
+                at \(at): the queue offers \(byQueue.compactMap { labels[$0] }.sorted()) and \
+                `isHidden` clears \(bySwift.compactMap { labels[$0] }.sorted())
+                """)
+            let counts = try ledger.queueCounts(at: asked, dictionary: nil, newAllowance: .max,
+                                                dayStart: .distantPast)
+            #expect(counts.due == bySwift.count, "the count disagrees with `isHidden` at \(at)")
+            // **What both must say**, so agreeing on the wrong answer is not a pass.
+            #expect(Set(bySwift.compactMap { labels[$0] })
+                    == ["never", "a day before", "one stored ulp before", "exactly then"])
+        }
+    }
+
     /// Study state belongs to one dictionary, so a session's queue must not mix two namespaces.
     @Test func thequeueIsScopedToOneDictionary() throws {
         let ledger = try Ledger(path: ":memory:")
@@ -442,8 +558,12 @@ struct StudyReviewTests {
         #expect(try ledger.askableNoteIDs().isEmpty, "the queue admitted a card with a blank answer")
         #expect(try ledger.dueCards(at: now, limit: 10, dictionary: nil,
                                         newAllowance: .max, dayStart: .distantPast).isEmpty)
+        // **Drawn as a window would draw it now**, at the revision the answer's write left: writing an
+        // answer moves its cards' revisions (audit-fix round 3, #10), so revision 0 would be refused as
+        // stale before eligibility was asked — and eligibility is what this is about.
+        let drawn = try #require(try ledger.card(id: card.id)).revision
         #expect(throws: ReviewError.notEligible(card.id)) {
-            try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+            try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: drawn,
                              at: self.now, using: try self.scheduler())
         }
     }
@@ -478,5 +598,175 @@ struct StudyReviewTests {
 
         #expect(try #require(try ledger.card(id: card.id)).scheduled == scheduled)
         #expect(try ledger.reviews(ofCard: card.id).count == 1, "and nothing invented a second review")
+    }
+
+    // MARK: - The instant that is stored is the instant that was scheduled (WI-9a)
+
+    /// A last review the ledger can hold: `Date(timeIntervalSince1970:)` of its own encoding gives
+    /// it back unchanged. Measured with the real scheduler, plan §12.
+    private let previous = Date(timeIntervalSinceReferenceDate: 800_879_356.388_499_7)
+    /// **One ulp short of a whole day after `previous` in memory, and exactly a day once stored.**
+    /// `Date` keeps seconds since 2001; the column keeps seconds since 1970, and adding the
+    /// 978,307,200 between them drops a fractional bit for 2018–2035 dates.
+    private let dayBoundaryInMemory = Date(timeIntervalSinceReferenceDate: 800_965_756.388_499_6)
+    private let day: TimeInterval = 86_400
+
+    /// What the ledger reads back for an instant it was handed: its own encoding, decoded.
+    private func readBack(_ instant: Date) -> Date {
+        Date(timeIntervalSince1970: instant.timeIntervalSince1970)
+    }
+
+    /// A card mid-schedule — S 10.96 unless said otherwise, D 6.0, in review — last reviewed at
+    /// `lastReview`, written the way the ledger writes one.
+    private func placeMidSchedule(_ ledger: Ledger, _ card: StudyCard, lastReview: Date,
+                                  stability: Double = 10.96) throws {
+        try ledger.run("""
+            UPDATE study_cards SET phase = 'review', stability = ?, difficulty = 6.0,
+                                   last_review = ?, due = ?
+            WHERE id = ?
+            """, bind: [.real(stability), .real(lastReview.timeIntervalSince1970),
+                        .real(lastReview.addingTimeInterval(11 * day).timeIntervalSince1970),
+                        .text(card.id.uuidString)]) { _ in }
+    }
+
+    /// **A stored grade replays to the stored state.** The grade was scheduled with the in-memory
+    /// instant — a day short, so the short-term branch, S 10.96 — and stored as an instant a whole
+    /// day later, from which the same scheduler computes S 13.47. A replay of the ledger's own
+    /// history then disagrees with the ledger, which is the one thing a replay must never find in
+    /// a history nothing has tampered with.
+    @Test func aGradeAtADayBoundaryReplaysToTheStoredState() throws {
+        try #require(readBack(previous) == previous, "the fixture's last review is not a storable instant")
+        try #require(dayBoundaryInMemory.timeIntervalSince(previous) < day,
+                     "the fixture's grade is not short of a day in memory")
+        try #require(readBack(dayBoundaryInMemory).timeIntervalSince(previous) == day,
+                     "the fixture's grade does not land on the day once stored")
+
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger, at: previous)
+        try placeMidSchedule(ledger, card, lastReview: previous)
+        let scheduler = try scheduler()
+        let event = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                                     at: dayBoundaryInMemory, using: scheduler)
+
+        let stored = try #require(try ledger.reviews(ofCard: card.id).first { $0.id == event.id })
+        let replayed = try scheduler.review(stored.before, grade: stored.grade, now: stored.reviewedAt)
+        let written = try #require(try ledger.card(id: card.id)).scheduled
+        #expect(replayed == written, """
+            the stored grade replays to S \(replayed.state?.stability ?? .nan) and the card holds \
+            S \(written.state?.stability ?? .nan)
+            """)
+        #expect(replayed == stored.after, "and the event disagrees with its own replay")
+    }
+
+    /// **Elapsed days are whole days of the stored instants**, on both sides of the boundary.
+    ///
+    /// Exactly `k` days counts `k`; one *stored* ulp short counts `k − 1`; and an instant one ulp
+    /// short only in memory counts what its stored instant says, because that is the instant every
+    /// later reader — a replay, another device, this ledger tomorrow — will see.
+    @Test func aGradeExactlyOnTheBoundaryCountsWholeDays() throws {
+        let scheduler = try scheduler()
+        let before = ScheduledCard(state: MemoryState(stability: 10.96, difficulty: 6.0), phase: .review,
+                                   lastReview: previous, due: previous.addingTimeInterval(11 * day))
+        for days in [1, 3] {
+            let boundary = previous.addingTimeInterval(Double(days) * day)
+            try #require(readBack(boundary) == boundary, "the boundary itself is not storable")
+            let storedShort = Date(timeIntervalSince1970: boundary.timeIntervalSince1970.nextDown)
+            try #require(readBack(storedShort) == storedShort)
+            let memoryShort = Date(timeIntervalSinceReferenceDate:
+                                    boundary.timeIntervalSinceReferenceDate.nextDown)
+            let memoryShortCounts = Int(floor(readBack(memoryShort).timeIntervalSince(previous) / day))
+
+            let whole = try scheduler.review(before, grade: .good,
+                                             now: previous.addingTimeInterval(Double(days) * day))
+            let lessOne = try scheduler.review(before, grade: .good,
+                                               now: previous.addingTimeInterval(Double(days - 1) * day))
+            // **A control**: the two counts must schedule differently, or nothing below can fail.
+            try #require(whole.state != lessOne.state, "\(days) days and \(days - 1) schedule alike")
+
+            let cases: [(String, Date, Int)] = [
+                ("exactly \(days) days", boundary, days),
+                ("one stored ulp short", storedShort, days - 1),
+                ("one ulp short in memory", memoryShort, memoryShortCounts),
+            ]
+            for (label, instant, counted) in cases {
+                let ledger = try Ledger(path: ":memory:")
+                let card = try ready(ledger, at: previous)
+                try placeMidSchedule(ledger, card, lastReview: previous)
+                let event = try ledger.grade(cardID: card.id, .good, eventID: UUID(),
+                                             expectedRevision: 0, at: instant, using: scheduler)
+                let expected = counted == days ? whole : lessOne
+                #expect(event.after.state == expected.state,
+                        "\(label): counted other than \(counted) whole days")
+                let written = try #require(try ledger.card(id: card.id)).scheduled
+                #expect(try scheduler.review(event.before, grade: .good, now: event.reviewedAt) == written,
+                        "\(label): the stored grade does not replay")
+            }
+        }
+    }
+
+    /// **A retried grade returns an event equal to the first one**, not merely the same id. The
+    /// first call answered with the in-memory instant and the retry with the stored one, so about
+    /// half of present-day grades answered a retry with a different value, an ulp apart.
+    @Test func aRetriedGradeReturnsAnEqualEvent() throws {
+        try #require(readBack(dayBoundaryInMemory) != dayBoundaryInMemory,
+                     "the fixture's instant survives storage, so it cannot show the difference")
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger, at: previous)
+        let eventID = UUID()
+        let first = try ledger.grade(cardID: card.id, .good, eventID: eventID, expectedRevision: 0,
+                                     at: dayBoundaryInMemory, using: try scheduler())
+        let retried = try ledger.grade(cardID: card.id, .good, eventID: eventID, expectedRevision: 0,
+                                       at: dayBoundaryInMemory, using: try scheduler())
+        #expect(retried == first, "a retry answered differently from the grade it repeats")
+        let stored = try #require(try ledger.reviews(ofCard: card.id).first { $0.id == eventID })
+        #expect(stored == first, "the grade returned something other than what it stored")
+    }
+
+    /// **Every instant a grade returns is a stored one, the due included.** The due is the graded
+    /// instant plus whole days, so canonicalising the graded instant makes it storable — until it
+    /// passes 2038-01-19, 2^31 seconds since 1970, where the column's resolution halves again and a
+    /// due computed exactly reads back an ulp away. An interval that long needs S in the thousands
+    /// of days, which years of easy answers reach.
+    @Test func aRetriedGradeDueAfter2038ReturnsAnEqualEvent() throws {
+        let scheduler = try scheduler()
+        // Storable, and an odd multiple of the column's present resolution: the one in two that a
+        // due past 2038 cannot keep.
+        let graded = Date(timeIntervalSince1970: readBack(dayBoundaryInMemory).timeIntervalSince1970.nextUp)
+        try #require(readBack(graded) == graded, "the graded instant is not storable")
+
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger, at: previous)
+        try placeMidSchedule(ledger, card, lastReview: previous, stability: 6_000)
+        let computed = try scheduler.review(try #require(try ledger.card(id: card.id)).scheduled,
+                                            grade: .good, now: graded)
+        let due = try #require(computed.due)
+        // **A control**: a due that survives storage cannot show the difference.
+        try #require(due.timeIntervalSince1970 > 2_147_483_648, "the fixture's due is not past 2038")
+        try #require(readBack(due) != due, "the fixture's due survives storage")
+
+        let eventID = UUID()
+        let first = try ledger.grade(cardID: card.id, .good, eventID: eventID, expectedRevision: 0,
+                                     at: graded, using: scheduler)
+        let retried = try ledger.grade(cardID: card.id, .good, eventID: eventID, expectedRevision: 0,
+                                       at: graded, using: scheduler)
+        #expect(retried == first, "a retry answered with a different due from the grade it repeats")
+        #expect(try #require(try ledger.card(id: card.id)).scheduled == first.after,
+                "the card holds a different due from the one the grade returned")
+    }
+
+    /// The same for practice, whose idempotency path also answers with the stored event.
+    @Test func aRetriedPractiseReturnsAnEqualEvent() throws {
+        try #require(readBack(dayBoundaryInMemory) != dayBoundaryInMemory,
+                     "the fixture's instant survives storage, so it cannot show the difference")
+        let ledger = try Ledger(path: ":memory:")
+        let card = try ready(ledger, at: previous)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: previous, using: try scheduler())
+        let eventID = UUID()
+        let first = try ledger.practise(cardID: card.id, .again, eventID: eventID, at: dayBoundaryInMemory)
+        let retried = try ledger.practise(cardID: card.id, .again, eventID: eventID, at: dayBoundaryInMemory)
+        #expect(retried == first, "a retried practice attempt answered differently")
+        let stored = try #require(try ledger.reviews(ofCard: card.id).first { $0.id == eventID })
+        #expect(stored == first, "practice returned something other than what it stored")
     }
 }

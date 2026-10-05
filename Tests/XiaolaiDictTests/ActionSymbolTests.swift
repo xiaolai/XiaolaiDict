@@ -30,9 +30,11 @@ struct ActionSymbolTests {
     /// The cases that share a symbol **on purpose**, each for a reason. Anything else sharing one
     /// is two controls that look like the same action — which is the defect this enum exists for.
     private static let deliberatelyShared: [Set<ActionSymbol>] = [
-        // A pane, and the action that puts something in it.
-        [.savedPane, .saveMeaning],
+        // A pane, and the actions that put something in it: a meaning, and a phrase (ADR-0049). Saving
+        // either is one act with one destination, so it is one glyph; the name says which.
+        [.savedPane, .saveMeaning, .savePhrase],
         [.discardedPane, .discardReading],
+        [.reviewPane, .reviewSelected],
         // A filter, and the action that puts something under it.
         [.archive, .archivedFilter],
         // The filter, and the button that takes the reader to the same list.
@@ -90,6 +92,9 @@ struct ActionSymbolTests {
         }
         // The vocabulary: saved, discarded, and one irreversible verb.
         #expect(String(localized: ActionSymbol.saveMeaning.title) == "Save This Meaning")
+        // **Save, not "collect"**: the owner asked to collect a phrase as a card, and the card lands in
+        // Saved. A second verb for the one act is how a reader pressed Keep and looked under Saved.
+        #expect(String(localized: ActionSymbol.savePhrase.title) == "Save This Phrase")
         #expect(String(localized: ActionSymbol.discardReading.title) == "Discard")
         #expect(String(localized: ActionSymbol.deletePermanently.title) == "Delete Permanently")
         #expect(String(localized: ActionSymbol.removeFromSaved.title) == "Remove from Saved")

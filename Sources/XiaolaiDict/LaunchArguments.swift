@@ -46,6 +46,17 @@ enum LaunchMode: Equatable {
     /// drawer's report asserts non-activation for the *drawer*, and the panel is the surface the
     /// reader clicks.
     case panelReport
+
+    /// `--review-report`: what Review will ask, and what its model holds before and after the reveal,
+    /// read through the window's own `ReviewModel` against the reader's ledger. **Writes nothing**: it
+    /// draws a sitting and reveals one card, both reads, so the `review` stage can ask the app whether
+    /// the ledger it seeded is one the queue will ask at all.
+    case reviewReport
+
+    /// `--reminder-report`: the notification grant, this app's pending requests and their fire dates,
+    /// what the reader's settings plan, and the reminder log — never a banner's words. **Writes
+    /// nothing**, and is compiled out of a release.
+    case reminderReport
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -68,6 +79,8 @@ enum LaunchArguments {
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
                XiaolaiDict --panel-report
+               XiaolaiDict --review-report
+               XiaolaiDict --reminder-report
         """
 
     static let repeatRange = 1...1_000
@@ -90,6 +103,8 @@ enum LaunchArguments {
         case "--model-report": alone(arguments, is: .modelReport)
         case "--sense-report": alone(arguments, is: .senseReport)
         case "--panel-report": alone(arguments, is: .panelReport)
+        case "--review-report": alone(arguments, is: .reviewReport)
+        case "--reminder-report": alone(arguments, is: .reminderReport)
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }

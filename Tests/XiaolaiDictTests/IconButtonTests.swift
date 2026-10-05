@@ -1,5 +1,7 @@
 import Foundation
+import SwiftUI
 import Testing
+@testable import XiaolaiDictUI
 
 /// Every button in the Library is its icon, and says what it does when pointed at.
 ///
@@ -32,6 +34,34 @@ struct IconButtonTests {
         #expect(button.contains("Text(\"\\(name) (\\(Text(verbatim: ShortcutLabel.text(for: shortcut))))\")"))
         #expect(button.components(separatedBy: ".keyboardShortcut(shortcut)").count - 1 == 2,
                 "bound as an icon and as a menu row")
+    }
+
+    @MainActor private final class Pressed { var values: [Int] = [] }
+
+    /// **A shortcut runs the action of the button's latest render**, as an icon and as a menu row (WI-8
+    /// follow-up, ADR-0048). SwiftUI keeps a shortcut's action from when it registered the shortcut, and
+    /// registers it again only when the button changes — its label, its enabled state — never for a new
+    /// closure: measured on macOS 27, a button whose closure alone changed ran its *first* closure for
+    /// every key after. A review card drawn over the last one is exactly that button, and the Library's
+    /// Review Selected over a new selection of the same size another. Pressed through the window, because
+    /// calling the closure from here would ask the question this answers wrongly.
+    @MainActor @Test(arguments: [false, true])
+    func aShortcutRunsTheActionOfTheLatestRender(asMenuRow: Bool) throws {
+        let pressed = Pressed()
+        func button(_ value: Int) -> AnyView {
+            AnyView(IconButton(.remembered, shortcut: KeyboardShortcut("2", modifiers: [])) { pressed.values.append(value) }
+                .environment(\.iconButtonShowsTitle, asMenuRow))
+        }
+        let keys = KeyboardHarness { _ in button(1) }
+        defer { keys.close() }
+        try keys.press(.two)
+        // **The positive control**: the key reaches the button at all.
+        #expect(pressed.values == [1], "the key pressed nothing: \(pressed.values)")
+        for value in 2...3 {
+            keys.show { _ in button(value) }
+            try keys.press(.two)
+        }
+        #expect(pressed.values == [1, 2, 3], "a re-rendered button ran an action from an earlier render: \(pressed.values)")
     }
 
     /// **VoiceOver hears the name once.** `.help` is also the element's `AXHelp`, read after the

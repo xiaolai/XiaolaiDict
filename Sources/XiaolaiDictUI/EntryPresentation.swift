@@ -58,6 +58,21 @@ public extension SenseNote {
         }
     }
 
+    /// How a card names the sense. `4/12` where the entry has one block, `2·4/12` where the
+    /// ordinal restarts and the bare number would be ambiguous between blocks.
+    ///
+    /// **Here, not in Core**, which holds no display text: "12 senses" was an English sentence there,
+    /// outside the catalog, on every history card whose entry had no sense settled (audit-fix
+    /// round 1). The numbers alone are not prose; the count of senses is.
+    var label: String {
+        guard let ordinal else {
+            return String(localized: "\(outOf) senses",
+                          comment: "A history card's badge where no sense was settled: how many senses the entry has")
+        }
+        guard let block, block > 1 else { return "\(ordinal)/\(outOf)" }
+        return "\(block)·\(ordinal)/\(outOf)"
+    }
+
     /// Which dictionary and which sense — never what it says (C2) — with `?` on the selector's
     /// proposal and on nothing else.
     var badge: String {
@@ -199,11 +214,6 @@ public struct MemoryStrip: Equatable {
         earlier = prior.occasions
     }
 
-    /// "3rd lookup".
-    public var headline: String {
-        "\(occasion)\(Self.ordinalSuffix(occasion)) lookup"
-    }
-
     /// Where and when the earlier ones were — the most recent first, and never more than this many,
     /// because a strip that grows without bound stops being a strip.
     public static let shown = 3
@@ -222,14 +232,4 @@ public struct MemoryStrip: Equatable {
 
     /// How many earlier encounters are not listed, so the count is never silently truncated.
     public var more: Int { max(0, earlier.count - Self.shown) }
-
-    private static func ordinalSuffix(_ number: Int) -> String {
-        switch (number % 100, number % 10) {
-        case (11...13, _): "th"
-        case (_, 1): "st"
-        case (_, 2): "nd"
-        case (_, 3): "rd"
-        default: "th"
-        }
-    }
 }

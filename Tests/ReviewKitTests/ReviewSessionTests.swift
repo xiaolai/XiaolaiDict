@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import XiaolaiDictCore
+import ReviewKit
 
 /// **The rules of a sitting**, without a window or a ledger.
 ///
@@ -122,6 +122,30 @@ struct ReviewSessionTests {
         #expect(session.summary() == ReviewSession.Summary(graded: 1, skipped: 1, stillDue: 18))
     }
 
+    /// **A card that left the sitting is counted by reason, is not answered, and Undo passes over it** (the
+    /// final closing pass, finding 2): the reader did not do it, and taking it back would only have it leave
+    /// again. The card restored is the reader's last answer, and the ones after it come round in order.
+    @Test func aCardThatLeftIsCountedByReasonAndNotTakenBack() {
+        var session = session(4, beyond: 2)
+        session.record(.graded(.good))
+        session.record(.left(.noLongerInStudy))
+        session.record(.left(.paused))
+        session.record(.left(.noLongerInStudy))
+        #expect(session.isFinished)
+        #expect(session.summary() == ReviewSession.Summary(
+            graded: 1, skipped: 0, stillDue: 2, left: [.noLongerInStudy: 2, .paused: 1]))
+        #expect(session.presentations.map(\.isAnswered) == [true, false, false, false])
+
+        let undone = session.undoLast()
+        #expect(undone?.cardID == session.presentations[0].cardID, "Undo took back what the sitting did")
+        #expect(session.cursor == 0)
+        session.record(.graded(.hard))
+        #expect(session.current?.cardID == session.presentations[1].cardID,
+                "the card after the one restored did not come round again")
+        #expect(session.undoLast() != nil, "the reader's grade is still theirs to take back")
+        #expect(session.undoLast() == nil, "nothing the reader did is left, so Undo has nothing")
+    }
+
     /// The presentation carries the revision it was drawn at, so the grade can be committed against
     /// that and refused if anything wrote in between.
     @Test func apresentationRemembersTheRevisionItWasDrawnAt() {
@@ -131,12 +155,93 @@ struct ReviewSessionTests {
         #expect(session.current?.revision == 7)
     }
 
+    /// **A card shown again at the revision it is at now is a new attempt at it** (closing pass after
+    /// audit-fix round 3, #100). The app reads a card's revision with what it shows, and renews a card
+    /// that moved since it was drawn: the same card at the revision read, its mode and its reveal kept,
+    /// and a new identity — so a press made on the display before names the old one and is refused
+    /// (WI-8). Nothing else in the sitting moves, and only the card in front of the reader is renewed.
+    @Test func renewingTheCardInFrontKeepsItsPlaceAndTakesANewIdentity() {
+        var session = ReviewSession(startedAt: now, drawn: [(id: UUID(), revision: 3, mode: .practice),
+                                                             (id: UUID(), revision: 0, mode: .graded)])
+        session.reveal()
+        guard let drawn = session.current else {
+            Issue.record("a sitting of two has nothing in front of the reader")
+            return
+        }
+        let renewed = session.renew(drawn.id, revision: 4)
+        #expect(renewed != nil, "the card in front of the reader was not renewed")
+        #expect(renewed?.id != drawn.id, "a renewed card kept its identity, so a press on the old display still names it")
+        #expect(session.current?.id == renewed?.id)
+        #expect(session.current?.cardID == drawn.cardID, "a different card was put in front of the reader")
+        #expect(session.current?.revision == 4)
+        #expect(session.current?.mode == .practice, "the mode is the card's, as drawn")
+        #expect(session.current?.isRevealed == true, "the answer the reader asked for was un-seen")
+        #expect(session.current?.outcome == nil)
+        #expect(session.cursor == 0)
+        #expect(session.presentations.count == 2)
+        #expect(session.presentations[1].revision == 0, "a card not in front was renewed")
+
+        // **Only for the attempt in front of the reader**: the identity it had, or none at all.
+        let late = session.renew(drawn.id, revision: 5)
+        #expect(late == nil, "a renewal named an attempt that is no longer in front of the reader")
+        #expect(session.current?.revision == 4)
+        session.record(.graded(.good))
+        session.record(.skipped)
+        let after = session.renew(session.presentations[1].id, revision: 9)
+        #expect(after == nil, "a finished sitting renewed a card")
+        #expect(session.presentations[1].revision == 0)
+    }
+
     /// Every presentation has its own identity, so two showings of one card are two attempts and a
     /// retry of one showing is the same attempt.
     @Test func everyPresentationHasItsOwnIdentity() {
         let card = UUID()
         let session = ReviewSession(startedAt: now, cards: [(id: card, revision: 0), (id: card, revision: 0)])
         #expect(session.presentations[0].id != session.presentations[1].id)
+    }
+
+    /// **"Forgot k" is said with its denominator, and practice is counted apart** (ADR-0036,
+    /// review-module-plan §8.4). Of three scheduled answers two were Forgot: "forgot 2 of 3". The
+    /// practice answers moved nothing, so a Forgot among them is counted on its own and never enters
+    /// the scheduled figure — a practice Forgot folded into it would be a failure the schedule never
+    /// heard about.
+    @Test func theSummaryCountsForgottenAnswersWithTheirDenominator() {
+        let cards = (0..<5).map { _ in UUID() }
+        var session = ReviewSession(startedAt: now, drawn: [
+            (id: cards[0], revision: 0, mode: .graded), (id: cards[1], revision: 0, mode: .graded),
+            (id: cards[2], revision: 0, mode: .practice), (id: cards[3], revision: 0, mode: .graded),
+            (id: cards[4], revision: 0, mode: .practice),
+        ])
+        session.record(.graded(.again))
+        session.record(.graded(.good))
+        session.record(.graded(.again))
+        session.record(.graded(.again))
+        session.record(.graded(.good))
+        let summary = session.summary()
+        #expect(summary.forgot == 2)
+        #expect(summary.scheduled == 3, "the denominator is the scheduled answers, not every answer")
+        #expect(summary.forgotInPractice == 1)
+        #expect(summary.practised == 2)
+        #expect(session.forgottenCards == [cards[0], cards[3]], "practice is not a scheduled Forgot")
+    }
+
+    /// **An answer taken back is not counted.** Undo voids the event and renews the presentation, so a
+    /// Forgot the reader took back and answered again as Remembered is one Remembered.
+    @Test func aForgetTakenBackIsNotCounted() {
+        var session = session(1)
+        session.record(.graded(.again))
+        #expect(session.summary().forgot == 1)
+        session.undoLast()
+        #expect(session.summary().forgot == 0)
+        #expect(session.forgottenCards.isEmpty)
+        session.record(.graded(.good))
+        #expect(session.summary().forgot == 0)
+        #expect(session.summary().scheduled == 1)
+        // Skipped and put-off cards were not answered at all: neither forgot nor reviewed.
+        var put = self.session(2)
+        put.record(.skipped)
+        put.record(.postponed)
+        #expect(put.summary().forgot == 0 && put.summary().scheduled == 0)
     }
 
     /// An empty batch is finished before it starts, and says so rather than drawing a card that is

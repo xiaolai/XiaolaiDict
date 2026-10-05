@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 @testable import XiaolaiDictCore
 
@@ -164,6 +165,82 @@ struct StudyOrganisationTests {
                 "both prompts of one note in a batch")
     }
 
+    /// A reviewed card of a new note, graded at `when`.
+    private func reviewed(_ ledger: Ledger, _ word: String, at when: Date,
+                          prompt: StudyCard.Prompt = .meaning) throws -> StudyCard {
+        let note = try save(ledger, word)
+        return try graded(ledger, try ledger.card(of: note.id, prompt: prompt, at: when), at: when)
+    }
+
+    private func graded(_ ledger: Ledger, _ card: StudyCard, at when: Date) throws -> StudyCard {
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: card.revision,
+                             at: when, using: try MemoryScheduler())
+        return try #require(try ledger.card(id: card.id))
+    }
+
+    /// **The second batch is not the first one again.** Practice ordered by `last_review`, which
+    /// practice never writes — by design, it is inert — so practising a batch left every card in
+    /// it exactly as old as before, and the next batch was the same cards in the same order. More
+    /// cards than the limit, so there is something else to offer.
+    @Test func asecondPracticeBatchIsNotTheFirstOneAgain() throws {
+        let ledger = try ledger()
+        let first = try reviewed(ledger, "first", at: now)
+        let second = try reviewed(ledger, "second", at: now.addingTimeInterval(60))
+        let third = try reviewed(ledger, "third", at: now.addingTimeInterval(120))
+
+        let batch = try ledger.practisableCards(limit: 2, dictionary: nil)
+        #expect(batch.map(\.id) == [first.id, second.id], "the least recently attempted come first")
+        for (offset, card) in batch.enumerated() {
+            _ = try ledger.practise(cardID: card.id, .good, eventID: UUID(),
+                                    at: now.addingTimeInterval(3_600 + Double(offset) * 60))
+        }
+        let next = try ledger.practisableCards(limit: 2, dictionary: nil)
+        #expect(next.map(\.id) == [third.id, first.id],
+                "the second batch repeated cards practised a moment ago over one never practised")
+    }
+
+    /// **Practice reads attempts, not the schedule**: the latest *unvoided* event of either kind.
+    /// A card graded long ago and practised just now was attempted just now. An attempt taken back
+    /// was not attempted. And the choice between one note's two cards follows the same rule — the
+    /// per-note pick is a second copy of the ordering, and it has to change with the first.
+    @Test func practiceOrderReadsAttemptsNotTheSchedule() throws {
+        let ledger = try ledger()
+        let early = try reviewed(ledger, "early", at: now)
+        let later = try reviewed(ledger, "later", at: now.addingTimeInterval(86_400))
+        _ = try ledger.practise(cardID: early.id, .good, eventID: UUID(),
+                                at: now.addingTimeInterval(2 * 86_400))
+        #expect(try ledger.practisableCards(limit: 10, dictionary: nil).map(\.id) == [later.id, early.id],
+                "the card practised most recently was offered first")
+
+        try ledger.undoLatestReview(ofCard: early.id, at: now.addingTimeInterval(3 * 86_400))
+        #expect(try ledger.practisableCards(limit: 10, dictionary: nil).map(\.id) == [early.id, later.id],
+                "an attempt the reader took back still counted as one")
+
+        // **No live attempt at all sorts first** — a memory state with no event behind it, as a
+        // ledger older than its events has. Its `last_review` is the latest here, so the schedule's
+        // order would put it last.
+        let unattempted = try ledger.card(of: try save(ledger, "unattempted").id, at: now)
+        try ledger.run("""
+            UPDATE study_cards SET phase = 'review', stability = 3, difficulty = 5, last_review = ?, due = ?
+            WHERE id = ?
+            """, bind: [.real(now.addingTimeInterval(5 * 86_400).timeIntervalSince1970),
+                        .real(now.addingTimeInterval(8 * 86_400).timeIntervalSince1970),
+                        .text(unattempted.id.uuidString)]) { _ in }
+        #expect(try ledger.practisableCards(limit: 10, dictionary: nil).first?.id == unattempted.id,
+                "a card with no attempt behind it was not offered first")
+
+        // One note, two cards: the one graded first was practised since, so its sibling is the one
+        // least recently attempted, and the only one of the two a batch may hold.
+        let pair = try Ledger(path: ":memory:")
+        let meaning = try reviewed(pair, "both", at: now)
+        let production = try graded(pair, try pair.card(of: meaning.noteID, prompt: .production, at: now),
+                                    at: now.addingTimeInterval(86_400))
+        _ = try pair.practise(cardID: meaning.id, .good, eventID: UUID(),
+                              at: now.addingTimeInterval(2 * 86_400))
+        #expect(try pair.practisableCards(limit: 10, dictionary: nil).map(\.id) == [production.id],
+                "the per-note pick still read the schedule")
+    }
+
     /// **An eligibility change moves the revision**, because the revision is the compare-and-swap
     /// that stops a grade computed against one state landing on another — and pausing or putting
     /// a card off changes whether it may be asked at all. Without it a presentation drawn before
@@ -209,6 +286,53 @@ struct StudyOrganisationTests {
         #expect(report.practice == 1, "counted as excluded")
         #expect(report.attempts == 0, "the graded review was this card's first, so nothing is measurable")
         #expect(report.rate == nil, "and a rate over no attempts is a number nobody has")
+    }
+
+    /// **Hidden is rechecked at the commit, as paused is.** A card put off while the practice
+    /// sitting had it on screen is a card the reader just said not to ask now, and an attempt
+    /// recorded against it is a record of a question nothing should have been asking.
+    @Test func aCardHiddenAfterItWasDrawnRefusesAPractiseAttempt() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
+                             using: try MemoryScheduler())
+        let drawn = try #require(try ledger.practisableCards(limit: 10, dictionary: nil).first,
+                                 "the fixture's card was never offered for practice")
+        #expect(drawn.id == card.id)
+
+        try ledger.postpone(cardID: card.id, until: now.addingTimeInterval(86_400))
+        #expect(throws: ReviewError.notEligible(card.id)) {
+            try ledger.practise(cardID: card.id, .good, eventID: UUID(),
+                                at: self.now.addingTimeInterval(3_600))
+        }
+        #expect(try ledger.reviews(ofCard: card.id).count == 1, "the refused attempt was recorded")
+    }
+
+    /// **A retry returns its event even after the card stopped being eligible** — idempotency
+    /// before eligibility, as `grade` has it. The attempt committed; refusing its retry tells a
+    /// surface that the reader's answer was lost when it was not, and the surface then asks again.
+    @Test func aRetriedPractiseReturnsItsEventAfterTheCardBecameIneligible() throws {
+        let changes: [(String, (Ledger, StudyCard) throws -> Void)] = [
+            ("paused", { try $0.setPaused(true, ofCard: $1.id) }),
+            ("postponed", { try $0.postpone(cardID: $1.id, until: self.now.addingTimeInterval(86_400)) }),
+            ("archived", { try $0.setEnrollment(.archived, of: $1.noteID) }),
+        ]
+        for (label, change) in changes {
+            let ledger = try ledger()
+            let note = try save(ledger, "fine-\(label)")
+            let card = try ledger.card(of: note.id, at: now)
+            _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
+                                 using: try MemoryScheduler())
+            let eventID = UUID()
+            let attempted = now.addingTimeInterval(60)
+            let first = try ledger.practise(cardID: card.id, .again, eventID: eventID, at: attempted)
+
+            try change(ledger, card)
+            let retried = try ledger.practise(cardID: card.id, .again, eventID: eventID, at: attempted)
+            #expect(retried == first, "\(label): the retry of a committed attempt was answered differently")
+            #expect(try ledger.reviews(ofCard: card.id).count == 2, "\(label): and nothing was recorded twice")
+        }
     }
 
     /// A card that has never been reviewed cannot be practised: its first attempt **is** its first
@@ -317,6 +441,31 @@ struct StudyOrganisationTests {
         #expect(report.practice == 1)
     }
 
+    /// **The same rule across the window's start** (audit-fix round 1). With `since`, the attempts were
+    /// filtered before they were tracked, so a practice ten seconds before the window was never seen
+    /// and the grade ten seconds into it counted as delayed recall — the exact case above, moved by
+    /// twenty seconds. Each card's last attempt before the window is where its first one is measured from.
+    @Test func apracticeJustBeforeTheWindowStillDisqualifiesTheRecallInIt() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0,
+                             at: now, using: scheduler)
+        let fortnight = now.addingTimeInterval(14 * 86_400)
+        _ = try ledger.practise(cardID: card.id, .good, eventID: UUID(), at: fortnight)
+        let revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision,
+                             at: fortnight.addingTimeInterval(10), using: scheduler)
+
+        let window = try ledger.retention(since: fortnight.addingTimeInterval(5), dictionary: nil)
+        #expect(window.attempts == 0, "a grade ten seconds after practice counted as delayed recall")
+        #expect(window.shortTerm == 1)
+        #expect(window.practice == 0, "the practice is outside the window and is not counted in it")
+        // **The control**: a window opening before the practice says the same of the grade.
+        #expect(try ledger.retention(since: fortnight.addingTimeInterval(-5), dictionary: nil).shortTerm == 1)
+    }
+
     /// A review the reader took back did not happen, and does not enter the denominator.
     @Test func avoidedReviewIsExcludedAndCounted() throws {
         let ledger = try ledger()
@@ -336,6 +485,32 @@ struct StudyOrganisationTests {
         let report = try ledger.retention(dictionary: nil)
         #expect(report.attempts == 0, "a review the reader took back is still in the denominator")
         #expect(report.voided == 1)
+    }
+
+    /// **A review taken back is not an attempt the next one is measured from** (audit-fix round 2).
+    /// Grade, undo, grade again five seconds later: the second is the card's introduction — the undo put
+    /// it back to new — and the voided one had set the "last attempt" it was measured against, so it was
+    /// counted a short-term repeat. The same before a window's start, which the seed reads.
+    @Test func aRegradeAfterAnUndoIsTheIntroductionAndNoRepeat() throws {
+        let ledger = try ledger()
+        let scheduler = try MemoryScheduler()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: 0, at: now,
+                             using: scheduler)
+        try ledger.undoLatestReview(ofCard: card.id, at: now.addingTimeInterval(2))
+        let revision = try #require(try ledger.card(id: card.id)).revision
+        _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: revision,
+                             at: now.addingTimeInterval(5), using: scheduler)
+
+        let report = try ledger.retention(dictionary: nil)
+        #expect(report.introductions == 1, "the card's first live review was not counted as its introduction")
+        #expect(report.shortTerm == 0, "a review measured from one the reader took back")
+        #expect(report.voided == 1)
+        // Across a window's start: the voided grade is before it, the regrade inside it.
+        let window = try ledger.retention(since: now.addingTimeInterval(3), dictionary: nil)
+        #expect(window.introductions == 1 && window.shortTerm == 0,
+                "the seed read the voided grade as the attempt before the window")
     }
 
     // MARK: - Suggestions (C06)
@@ -501,6 +676,53 @@ struct StudyOrganisationTests {
                                  at: now.addingTimeInterval(Double(day) * 86_400), using: scheduler)
         }
         #expect(try ledger.repeatedlyLapsed(atLeast: 4, dictionary: nil) == [card.id])
+    }
+
+    /// **A day of failure is a live, scheduled Forgot.** Review's "Keeps slipping" names a card by this
+    /// rule (WI-5), so what it refuses to count matters as much as what it counts: a Forgot the reader
+    /// took back did not happen, and a Forgot in practice moved nothing and enters no figure
+    /// (ADR-0036). Three real days, then one undone and one practised: still three. The control is a
+    /// fourth real day.
+    @Test func aForgetTakenBackOrPractisedIsNotADayOfFailure() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        let scheduler = try MemoryScheduler()
+        func forget(daysLater days: Int) throws {
+            let revision = try #require(try ledger.card(id: card.id)).revision
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(), expectedRevision: revision,
+                                 at: now.addingTimeInterval(Double(days) * 86_400), using: scheduler)
+        }
+        for day in 0..<3 { try forget(daysLater: day) }
+        try forget(daysLater: 3)
+        _ = try ledger.undoLatestReview(ofCard: card.id, at: now.addingTimeInterval(3 * 86_400 + 60))
+        _ = try ledger.practise(cardID: card.id, .again, eventID: UUID(), at: now.addingTimeInterval(4 * 86_400))
+        #expect(try ledger.repeatedlyLapsed(atLeast: 4, dictionary: nil).isEmpty,
+                "an undone or practised Forgot was counted as a day of failure")
+        #expect(try ledger.repeatedlyLapsed(atLeast: 3, dictionary: nil) == [card.id], "the three real days")
+
+        try forget(daysLater: 5)
+        #expect(try ledger.repeatedlyLapsed(atLeast: 4, dictionary: nil) == [card.id])
+    }
+
+    /// **Naming a card that keeps slipping writes nothing.** It is a list — never a pause, a put-off,
+    /// a reschedule or a suspension (review-module-plan §3: leeches named, never auto-suspended).
+    @Test func askingWhatKeepsSlippingChangesNothing() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, "fine")
+        let card = try ledger.card(of: note.id, at: now)
+        let scheduler = try MemoryScheduler()
+        for day in 0..<Ledger.repeatedLapseDays {
+            let revision = try #require(try ledger.card(id: card.id)).revision
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(), expectedRevision: revision,
+                                 at: now.addingTimeInterval(Double(day) * 86_400), using: scheduler)
+        }
+        let before = (try ledger.card(id: card.id), try ledger.reviews(ofCard: card.id), try ledger.notes())
+        #expect(try ledger.repeatedlyLapsed(dictionary: "noad") == [card.id])
+        let after = (try ledger.card(id: card.id), try ledger.reviews(ofCard: card.id), try ledger.notes())
+        #expect(after.0 == before.0, "the card changed")
+        #expect(after.1 == before.1, "its history changed")
+        #expect(after.2 == before.2, "a note changed")
     }
 
     // MARK: - Tags (M03)

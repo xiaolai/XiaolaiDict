@@ -14,33 +14,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
-import re
 import sqlite3
 import tempfile
 import unittest
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-CORE = REPO / "Sources" / "XiaolaiDictCore"
+from ledger_schema import CORE, REPO, lookups_schema, swift_literal
+
 SCRIPT = REPO / "Tools" / "e2e" / "library-layout.py"
 _spec = importlib.util.spec_from_file_location("library_layout", SCRIPT)
 layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(layout)
-
-
-def swift_literal(source: str, name: str) -> str:
-    match = re.search(rf'static let {name} = """\n(.*?)\n\s*"""', source, re.S)
-    assert match, f"{name} is no longer a multi-line literal; this test reads the schema from it"
-    return match.group(1)
-
-
-def lookups_schema() -> list[str]:
-    """`lookups` as the migrations leave it: the table they create and every column they add."""
-    sources = "\n".join(path.read_text() for path in sorted(CORE.glob("*.swift")))
-    create = re.search(r"CREATE TABLE lookups \(.*?\);", sources, re.S)
-    assert create, "the lookups table is no longer created where this test looks"
-    added = re.findall(r"ALTER TABLE lookups ADD COLUMN [^;]*;", sources, re.S)
-    assert len(added) >= 20, f"found only {len(added)} lookups columns added; the scan has gone blind"
-    return [create.group(0), *added]
 
 
 def ledger(path: pathlib.Path, kind: str) -> int:

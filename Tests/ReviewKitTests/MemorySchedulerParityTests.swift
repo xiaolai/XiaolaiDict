@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import XiaolaiDictCore
+import ReviewKit
 
 /// **The Swift scheduler against the kernel it was ported from, transition by transition.**
 ///
@@ -161,6 +161,46 @@ struct MemorySchedulerParityTests {
         var wrong = MemoryScheduler.defaultWeights
         wrong[4] = 999
         #expect(throws: SchedulerError.self) { try MemoryScheduler(weights: wrong) }
+    }
+
+    /// **The cap holds for an interval no `Int` can hold.** Every retention in (0, 1) is accepted, and
+    /// 0.001 makes a first Good's interval about 6.7e19 days — past `Int.max`. Converting before
+    /// capping trapped; the cap is the answer, at the default cap and at the largest one there is.
+    /// An interval of infinity (a retention of 1e-300) is the same case.
+    @Test func anIntervalPastWhatAnIntHoldsIsTheCap() throws {
+        let now = Date(timeIntervalSince1970: 1_790_640_000)
+        for retention in [0.001, 1e-300] {
+            let scheduler = try MemoryScheduler(retention: retention)
+            try #require(try scheduler.interval(stability: 2.3065) >= 0x1p63,
+                         "the fixture no longer reaches past Int.max")
+            let first = try scheduler.review(ScheduledCard(), grade: .good, now: now)
+            #expect(first.due == now.addingTimeInterval(Double(MemoryScheduler.defaultMaximumDays) * 86_400))
+            #expect(try scheduler.scheduledDays(stability: 2.3065) == MemoryScheduler.defaultMaximumDays)
+            let widest = try MemoryScheduler(retention: retention, maximumDays: .max)
+            #expect(try widest.scheduledDays(stability: 2.3065) == .max)
+        }
+        // **A control**: inside the range the conversion is the old one, ties to even and floor of 1.
+        let plain = try MemoryScheduler()
+        #expect(try plain.scheduledDays(stability: 2.5) == 2)
+        #expect(try plain.scheduledDays(stability: 3.5) == 4)
+        #expect(try plain.scheduledDays(stability: 0.01) == 1)
+        #expect(try MemoryScheduler(maximumDays: 3).scheduledDays(stability: 3.6) == 3)
+    }
+
+    /// **A span no whole-day count can hold is refused, never trapped on.** A last review at -1e30 s is
+    /// damage, not a clock; grading over it is 1.2e25 elapsed days, past `Int.max`. The grade path and
+    /// a replay both reach this with stored data, so it must be an error a caller can handle.
+    @Test func anElapsedSpanPastWhatAnIntHoldsIsRefused() throws {
+        let scheduler = try MemoryScheduler()
+        let ancient = Date(timeIntervalSince1970: -1e30)
+        let now = Date(timeIntervalSince1970: 1_790_640_000)
+        let card = ScheduledCard(state: MemoryState(stability: 5, difficulty: 5), phase: .review,
+                                 lastReview: ancient, due: ancient)
+        #expect(throws: SchedulerError.self) { try scheduler.review(card, grade: .good, now: now) }
+        // **A control**: a span the count holds — a century — is scheduled.
+        let century = ScheduledCard(state: MemoryState(stability: 5, difficulty: 5), phase: .review,
+                                    lastReview: now.addingTimeInterval(-36_500 * 86_400), due: now)
+        #expect(try scheduler.review(century, grade: .good, now: now).phase == .review)
     }
 
     /// **A failure never deletes the card's history.** It lowers the estimate and reschedules; it does

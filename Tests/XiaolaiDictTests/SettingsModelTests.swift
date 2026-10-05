@@ -372,7 +372,11 @@ struct SettingsChromeTests {
         // interpolation and is not a word the reader sees.
         #expect(!literals.contains { $0.contains(" lookups") }, "a count is not inflected: \(literals.filter { $0.contains(" lookups") })")
         #expect(erase.contains("^[\\(impact.lookups) Reading](inflect: true)"))
-        #expect(erase.contains(".disabled(impact.lookups == 0)"))
+        // **Live while anything is left to delete, copies included, and never twice** (audit-fix round
+        // 2): zero readings with a copy left is a retry the reader is owed, and a second click while
+        // the first erase runs replaced its report.
+        #expect(erase.contains(".disabled(!impact.hasAnythingToDelete || state.isErasing)"))
+        #expect(!erase.contains(".disabled(impact.lookups == 0)"), "copies left behind cannot be deleted again")
         #expect(erase.contains("\"There is no reading history to delete.\""))
         #expect(erase.contains(".keyboardShortcut(.cancelAction)"))
         let cancel = try #require(erase.range(of: "Button(\"Cancel\", role: .cancel)"))

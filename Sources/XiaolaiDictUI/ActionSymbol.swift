@@ -25,6 +25,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     case historyPane, savedPane, reviewPane, discardedPane
     // A meaning in study.
     case saveMeaning, savedState, removeFromSaved, confirmMeaning, chooseMeaning
+    // A phrase on the lookup card, saved as a card of its own (ADR-0049).
+    case savePhrase
     case showMeaning, hideMeaning, saveAnswer, writeAnswer
     // A reading in history.
     case discardReading, restoreReading, deletePermanently
@@ -35,6 +37,13 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     case search, clearSearch, showEveryTag, showEverything, showMore, export, addTag
     // Review.
     case forgot, remembered, skip, notToday, anotherBatch, practise, done
+    // The end of a sitting: today's new-meaning allowance, raised for today only.
+    case introduceMoreToday
+    // A sitting over what is selected in Saved: as listed, or in a random order.
+    case reviewSelected, reviewShuffled
+    // A delivered review reminder's own actions: once more, two hours on; and nothing more today.
+    // **Skip Today, never "Not Today"**, which already puts one card off until tomorrow (ADR-0038).
+    case remindLater, skipToday
     // Anywhere.
     case undo, retry
     // The Library window's own chrome: how the collection is arranged, and the detail column.
@@ -50,9 +59,12 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     public var symbol: String {
         switch self {
         case .historyPane: "clock"
-        case .savedPane, .saveMeaning: "bookmark"
+        // The pane, and both acts that put something in it: one act, one destination, one glyph.
+        case .savedPane, .saveMeaning, .savePhrase: "bookmark"
         case .savedState: "bookmark.fill"
-        case .reviewPane: "rectangle.on.rectangle"
+        // The pane, and the action that fills it with what is selected.
+        case .reviewPane, .reviewSelected: "rectangle.on.rectangle"
+        case .reviewShuffled: "shuffle"
         // `xmark.bin`, not `archivebox`: a discarded reading is put out, and can be brought
         // back. `archivebox` is Apple's Archive and is kept for that alone.
         case .discardedPane, .discardReading: "xmark.bin"
@@ -89,6 +101,10 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .notToday: "moon.zzz"
         case .anotherBatch: "rectangle.stack.badge.plus"
         case .practise: "repeat"
+        // Today's allowance, with more added to it: a day, and a plus.
+        case .introduceMoreToday: "calendar.badge.plus"
+        case .remindLater: "clock.arrow.circlepath"
+        case .skipToday: "calendar.badge.minus"
         // One checkmark for both: each ends something the reader was in the middle of, and they
         // are never on screen together — one is in Review, the other in the inspector's editor.
         case .done, .saveAnswer: "checkmark"
@@ -138,6 +154,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .reviewPane: "Review"
         case .discardedPane: "Discarded"
         case .saveMeaning: "Save This Meaning"
+        // **Save, not "collect"**: the card lands in Saved, and one verb per act is the vocabulary.
+        case .savePhrase: "Save This Phrase"
         case .removeFromSaved: "Remove from Saved"
         case .confirmMeaning: "Confirm This Meaning"
         case .chooseMeaning: "Choose a Meaning"
@@ -176,6 +194,11 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .notToday: "Not Today"
         case .anotherBatch: "Review Another Batch"
         case .practise: "Practise"
+        case .introduceMoreToday: "Introduce More Today"
+        case .reviewSelected: "Review Selected"
+        case .reviewShuffled: "Review Selected in Random Order"
+        case .remindLater: "Later"
+        case .skipToday: "Skip Today"
         case .done: "Done"
         case .undo: "Undo"
         case .retry: "Retry"

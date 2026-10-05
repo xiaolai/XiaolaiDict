@@ -1,4 +1,5 @@
 import Foundation
+import ReviewKit
 import SwiftUI
 import XiaolaiDictCore
 
@@ -544,8 +545,42 @@ public struct LibraryView: View {
     @ViewBuilder private func selectionActions(_ target: LibrarySelectionTarget, inToolbar: Bool) -> some View {
         let size: CGFloat? = inToolbar ? Token.Library.toolbarGlyph : nil
         let count = target.ids.count
-        if target.canConfirm {
-            IconButton(.confirmMeaning, title: "Confirm ^[\(count) Meaning](inflect: true)", size: size) { perform(.confirm, on: target.ids) }
+        // **Counted by what it changes**, not by the selection: the model confirms only these.
+        let confirming = target.confirmable.count
+        if confirming > 0 {
+            IconButton(.confirmMeaning, title: "Confirm ^[\(confirming) Meaning](inflect: true)", size: size) { perform(.confirm, on: target.ids) }
+        }
+        // **A sitting over the selection, in Review** (review-module-plan §8.2) — counted by what it
+        // can ask, as listed or in a random order. The rest of the selection goes too, and the end of
+        // the sitting says why each was left out. **Disabled, with the reason as its name, when
+        // nothing selected can be asked**: a menu row has no tooltip, so the name has to say it.
+        let reviewing = target.reviewable.count
+        if reviewing > 0 {
+            IconButton(.reviewSelected, title: "Review ^[\(reviewing) Meaning](inflect: true)",
+                       hint: "as they are listed; due ones are scheduled, the rest are practice",
+                       shortcut: KeyboardShortcut("r", modifiers: .command), size: size) {
+                perform(.reviewSelected(.asListed), on: target.ids)
+            }
+            IconButton(.reviewShuffled, title: "Review ^[\(reviewing) Meaning](inflect: true) in Random Order",
+                       shortcut: KeyboardShortcut("r", modifiers: [.command, .shift]), size: size) {
+                perform(.reviewSelected(.shuffled), on: target.ids)
+            }
+        } else if target.heldBack > 0 {
+            // **Waiting, not wrong** (WI-8): today's allowance of new meanings is spent, and a sitting
+            // over these would ask nothing. Said as the sitting's end says it, so the two agree.
+            IconButton(.reviewSelected, title: "New Meanings Wait Until Tomorrow",
+                       help: Text("""
+                                  Today's new meanings have all been introduced. \
+                                  ^[\(target.heldBack) new meaning](inflect: true) will be introduced tomorrow.
+                                  """),
+                       size: size, isEnabled: false) {}
+        } else {
+            IconButton(.reviewSelected, title: "Nothing Selected Can Be Reviewed Now",
+                       help: Text("""
+                                  Each selected meaning is paused, put off, archived, waiting for you in \
+                                  Needs Attention, or saved under another study dictionary.
+                                  """),
+                       size: size, isEnabled: false) {}
         }
         // **Named for what it will do to this selection.** A Pause button over rows that
         // are all resting is a control whose label is wrong before it is pressed.
@@ -607,15 +642,20 @@ struct LibrarySelectionTarget: Equatable {
     let isPaused: Bool
     /// Every one is archived, so the control says Unarchive.
     let isArchived: Bool
-    /// At least one is waiting for the reader to confirm its meaning.
-    let canConfirm: Bool
+    /// The ones confirming would change — what Confirm counts and reaches.
+    let confirmable: Set<UUID>
+    /// The ones a Selected sitting could ask now — what Review Selected counts.
+    var reviewable: Set<UUID> = []
+    /// The new meanings among them today's allowance would hold back — what a disabled Review Selected
+    /// names as its reason.
+    var heldBack = 0
 }
 
 extension LibraryPresentation {
     /// The selection, as the toolbar acts on it.
     var selectionTarget: LibrarySelectionTarget {
         LibrarySelectionTarget(ids: selection, isPaused: selectionIsPaused, isArchived: selectionIsArchived,
-                               canConfirm: canConfirm)
+                               confirmable: confirmable, reviewable: reviewable, heldBack: reviewHeldBack)
     }
 
     /// What a right-click on `row` acts on: the selection when the row is part of it, and the row
@@ -625,7 +665,9 @@ extension LibraryPresentation {
         guard !selection.contains(row.id) else { return selectionTarget }
         return LibrarySelectionTarget(ids: [row.id], isPaused: row.status == .paused,
                                       isArchived: row.status == .archived,
-                                      canConfirm: row.status == .needsConfirmation)
+                                      confirmable: row.isConfirmable ? [row.id] : [],
+                                      reviewable: row.isReviewable ? [row.id] : [],
+                                      heldBack: row.review == .heldBack ? 1 : 0)
     }
 }
 
@@ -711,6 +753,9 @@ public enum LibraryAction: Sendable, Equatable {
     /// The reader agrees these are the meanings they met. The library showed "Confirm the meaning"
     /// as a status with no way to act on it — a diagnosis with no remedy.
     case confirm
+    /// **A sitting over exactly what is selected**, in Review (review-module-plan §8.2). The model hands
+    /// the whole selection over, as listed, and the sitting says what it left out and why.
+    case reviewSelected(SittingOrder)
     case filter(LibraryPresentation.Filter)
     case select(Set<UUID>)
     case pause
@@ -777,8 +822,20 @@ public struct LibraryPresentation: Sendable, Equatable {
     public let selection: Set<UUID>
     /// Whether anything matched beyond what is listed.
     public let hasMore: Bool
+    /// **The selected rows a confirmation would change**, decided by the model (ADR-0035: prune in the
+    /// model, not on the way to the view). Not the whole selection: Confirm counted and reached every
+    /// selected row, so an answerless note had `confirmed_at` written and stayed as unreviewable as it
+    /// was, and a confirmed one was counted as one more to confirm.
+    public let confirmable: Set<UUID>
     /// Whether the selection holds anything a confirmation would change.
-    public let canConfirm: Bool
+    public var canConfirm: Bool { !confirmable.isEmpty }
+    /// **The selected rows a Selected sitting could ask now**, decided by the model through the
+    /// sitting's own planner — what Review Selected counts, and what it is disabled over when there are
+    /// none.
+    public let reviewable: Set<UUID>
+    /// **The selected new meanings today's allowance would hold back** — the planner's count, so a
+    /// control disabled over them can say they wait for tomorrow rather than that something is wrong.
+    public let reviewHeldBack: Int
 
     /// Whether anything is narrowing the list. **Every narrowing**, so an empty result can only
     /// claim "you have saved nothing" when nothing is hiding rows.
@@ -818,8 +875,8 @@ public struct LibraryPresentation: Sendable, Equatable {
 
     public init(rows: [Row], total: Int, search: String = "", filter: Filter = .all,
                 selection: Set<UUID> = [],
-                hasMore: Bool = false, canConfirm: Bool = false,
-                suggestions: [Suggestion] = [], exported: String? = nil,
+                hasMore: Bool = false, confirmable: Set<UUID> = [], reviewable: Set<UUID> = [],
+                reviewHeldBack: Int = 0, suggestions: [Suggestion] = [], exported: String? = nil,
                 selectionIsPaused: Bool = false, selectionIsArchived: Bool = false,
                 undoable: Undoable? = nil, setAside: [IgnoredLemma] = [],
                 tagVocabulary: [TagUse] = [], tag: String? = nil,
@@ -831,7 +888,9 @@ public struct LibraryPresentation: Sendable, Equatable {
         self.filter = filter
         self.selection = selection
         self.hasMore = hasMore
-        self.canConfirm = canConfirm
+        self.confirmable = confirmable
+        self.reviewable = reviewable
+        self.reviewHeldBack = reviewHeldBack
         self.suggestions = suggestions
         self.exported = exported
         self.selectionIsPaused = selectionIsPaused
@@ -1081,9 +1140,31 @@ public struct LibraryPresentation: Sendable, Equatable {
         public let status: Status?
         /// When it comes back, in the reader's words.
         public let due: String?
+        /// Whether confirming would change it. **Not read off `status`**, which a pause or an archive
+        /// overrides: a paused proposal is still one Confirm fixes.
+        public let isConfirmable: Bool
+        /// What a Selected sitting of this row alone would do with it — the sitting's own planner, run by
+        /// the model.
+        public let review: Review
+        /// Whether a Selected sitting could ask it now.
+        public var isReviewable: Bool { review == .askable }
+
+        /// **Three answers, not a flag**: a new meaning today's allowance holds back is neither askable
+        /// nor blocked by anything the reader can fix, and the control says which (WI-8).
+        public enum Review: Sendable, Equatable {
+            /// Enrolled, nothing in the way, neither paused nor put off, the study dictionary's — and, if
+            /// never reviewed, within today's allowance of new meanings.
+            case askable
+            /// A new meaning today's allowance holds back until tomorrow.
+            case heldBack
+            /// Anything else in the way: paused, put off, archived, waiting in Needs Attention, or saved
+            /// under another study dictionary.
+            case notAskable
+        }
 
         public init(id: UUID, word: String, accentKey: String? = nil, excerpt: String, marks: [NSRange],
-                    answer: String, status: Status?, due: String?) {
+                    answer: String, status: Status?, due: String?, isConfirmable: Bool = false,
+                    review: Review = .notAskable) {
             self.id = id
             self.word = word
             // The word itself where no lemma was recorded — a card the reader wrote, which was
@@ -1094,6 +1175,8 @@ public struct LibraryPresentation: Sendable, Equatable {
             self.answer = answer
             self.status = status
             self.due = due
+            self.isConfirmable = isConfirmable
+            self.review = review
         }
     }
 }

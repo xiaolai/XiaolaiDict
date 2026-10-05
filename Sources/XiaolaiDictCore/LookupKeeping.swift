@@ -42,6 +42,56 @@ public struct ReadingArchiveQuery: Sendable {
     }
 }
 
+/// **Which lookup a row id named when it was read**: the id, and the instant stored with the row.
+///
+/// Lookup ids are SQLite rowids, and a rowid is given again once the largest is deleted — so an id
+/// alone, held across a deletion, names whichever reading SQLite recorded next (audit-fix round 2). The
+/// instant is the lookup's own and is never rewritten; two readings that share both were recorded at
+/// one instant under one id, which no deletion and no reuse can produce. Built only from a row — by
+/// `Ledger.identity(ofLookup:)` or `ReadingEntry.identity` — through the one conversion every reading
+/// uses, so an identity read twice from one row compares equal, bit for bit.
+public struct LookupIdentity: Hashable, Sendable {
+    public let id: Int
+    public let lookedUpAt: Date
+
+    /// `lookedUpAt` must be `Date(timeIntervalSince1970:)` of the stored column, as every reading builds it.
+    init(id: Int, lookedUpAt: Date) {
+        self.id = id
+        self.lookedUpAt = lookedUpAt
+    }
+}
+
+extension ReadingEntry {
+    /// This reading's row, as it was read: `at` is the stored instant through the same conversion.
+    public var identity: LookupIdentity { LookupIdentity(id: id, lookedUpAt: at) }
+}
+
+extension Ledger {
+    /// The lookup `id` names now, or nil where no row has that id.
+    public func identity(ofLookup id: Int) throws -> LookupIdentity? {
+        var found: LookupIdentity?
+        try run("SELECT looked_up_at FROM lookups WHERE id = ?", bind: [.integer(id)]) {
+            found = LookupIdentity(id: id, lookedUpAt: Date(timeIntervalSince1970: $0.real(0)))
+        }
+        return found
+    }
+
+    /// Runs `body` **only while `identity` still names its row, in one transaction with the check** —
+    /// so neither a read nor a write can land on a reading recorded under a reused id. A row that is
+    /// gone, or is someone else's now, is `LedgerError.lookupGone`, and `body` does not run.
+    public func holding<T>(_ identity: LookupIdentity, _ body: () throws -> T) throws -> T {
+        var result: T?
+        try inOneTransaction("holdingLookup") {
+            guard try self.identity(ofLookup: identity.id) == identity else {
+                throw LedgerError.lookupGone(identity.id)
+            }
+            result = try body()
+        }
+        guard let result else { throw LedgerError.lookupGone(identity.id) }
+        return result
+    }
+}
+
 extension Ledger {
     static let keepingSchema = """
         ALTER TABLE lookups ADD COLUMN disposition TEXT NOT NULL DEFAULT 'kept'
@@ -298,6 +348,53 @@ extension Ledger {
         let attention = needingAttention ? " AND NOT (\(Self.askableNotePredicate)) AND n.enrollment = 'active'" : ""
         try run("SELECT COUNT(*) FROM study_notes n WHERE \(Self.collectedNotePredicate)\(scope)\(attention)",bind:dictionary.map { [.text($0)] } ?? []) { total = $0.integer(0) }
         return total
+    }
+
+    /// The meanings that need the reader before they can be asked — `collectedCount(needingAttention:)`'s
+    /// notes — **counted by what is in the way**, in one pass.
+    ///
+    /// One number used to say all of them "cannot be reviewed until you choose or confirm", and Confirm
+    /// is not the remedy for most: on the measured ledger 22 of 65 had no answer at all. Each note is
+    /// counted once, under `StudyReadiness.obstacle`'s order — no reading, then no answer that can be
+    /// graded, then only the confirmation — and `theAttentionCountsAgreeWithEachRowsObstacle` holds this
+    /// spelling to that one. The sense-hash check needs a dictionary and is not here, as it is not in
+    /// the queue's predicate.
+    public func attentionCounts(dictionary: String?) throws -> StudyAttention {
+        var counts = StudyAttention(toConfirm: 0, toAnswer: 0, readingDeleted: 0)
+        let scope = dictionary == nil ? "" : " AND n.dictionary = ?"
+        try run("""
+            SELECT
+                COALESCE(SUM(CASE WHEN NOT (\(Self.evidencedNotePredicate)) THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN (\(Self.evidencedNotePredicate)) AND NOT (\(Self.gradableAnswerPredicate))
+                                  THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN (\(Self.evidencedNotePredicate)) AND (\(Self.gradableAnswerPredicate))
+                                       AND n.confirmed_at IS NULL THEN 1 ELSE 0 END), 0)
+            FROM study_notes n
+            WHERE \(Self.collectedNotePredicate)\(scope)
+              AND n.enrollment = 'active' AND NOT (\(Self.askableNotePredicate))
+            """, bind: dictionary.map { [.text($0)] } ?? []) { row in
+            counts = StudyAttention(toConfirm: row.integer(2), toAnswer: row.integer(1), readingDeleted: row.integer(0))
+        }
+        return counts
+    }
+}
+
+/// **What Review's empty state says is in the way, by reason** — one count per remedy, so a sentence
+/// that names a remedy counts only what that remedy fixes.
+public struct StudyAttention: Sendable, Equatable {
+    /// Only the reader's agreement is missing; Confirm is the remedy.
+    public let toConfirm: Int
+    /// No answer that can be graded. Writing one is the remedy; **confirming is not**.
+    public let toAnswer: Int
+    /// The reading it was saved from is gone, so there is no sentence to ask it in.
+    public let readingDeleted: Int
+
+    public var total: Int { toConfirm + toAnswer + readingDeleted }
+
+    public init(toConfirm: Int, toAnswer: Int, readingDeleted: Int) {
+        self.toConfirm = toConfirm
+        self.toAnswer = toAnswer
+        self.readingDeleted = readingDeleted
     }
 }
 

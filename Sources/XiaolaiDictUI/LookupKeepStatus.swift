@@ -2,6 +2,13 @@ import SwiftUI
 
 public enum LookupKeepStatus: Equatable, Sendable, CaseIterable {
     case keeping, kept, needsMeaning, needsConfirmation, manual, failed, discarded, discardedExternally
+    /// The reading was deleted while its card was open — from the Library, or by an erase. Nothing is
+    /// left to save to, restore or discard, so the row offers no control.
+    case deleted
+    /// **What choosing a meaning did to the word saved without one** — with the reader's option on
+    /// (R1b): replaced and archived, or kept beside the meaning and why. Said on the card where the
+    /// reader chose, because the word-only card's fate is otherwise discovered later in Saved.
+    case replacedWordCard, keptReviewedWordCard, keptAnsweredWordCard
 
     /// What the row says, **as a status and never as an instruction** — and in the words every
     /// other surface uses: a meaning is *saved*, a reading is *discarded*.
@@ -22,6 +29,10 @@ public enum LookupKeepStatus: Equatable, Sendable, CaseIterable {
         case .manual: "In your reading history, not saved"
         case .failed: "This reading could not be recorded"
         case .discarded, .discardedExternally: "Discarded"
+        case .deleted: "Deleted"
+        case .replacedWordCard: "Saved in place of the word-only card, which is now archived"
+        case .keptReviewedWordCard: "Saved; the word-only card stays too, because you have reviewed it"
+        case .keptAnsweredWordCard: "Saved; the word-only card stays too, because its answer differs from this one"
         }
     }
 
@@ -107,7 +118,7 @@ struct LookupKeepStatusRow: View {
             }
             if status.isDiscarded {
                 IconButton(.restoreReading, size: scale.text.small) { action(.undo) }
-            } else {
+            } else if status != .deleted {
                 IconButton(.discardReading, size: scale.text.small) { action(.discard) }
             }
         }

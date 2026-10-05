@@ -183,7 +183,8 @@ struct PhrasePartitionTests {
 
     private static func filing(parent: String, _ definition: String) -> PhraseFiling {
         PhraseFiling(dictionary: DictionaryIdentity(name: "Test", identifier: "test"),
-                     parentEntryID: parent, blockID: "\(parent).01", definitions: [definition])
+                     parentEntryID: parent, blockID: "\(parent).01", definitions: [definition],
+                     contentVersion: "v1", formatVersion: "phrases/6")
     }
 
     /// The defect this replaced: one matching parent id made the **whole** answer a sub-entry, so the

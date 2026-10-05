@@ -104,6 +104,301 @@ struct LearningLibraryWiringTests {
         #expect(model.archive.total == 1)
     }
 
+    /// **A permanent delete that could not reach a copy still deleted the reading, and the pane says
+    /// both** (audit-fix round 1's verification, #33). The incomplete report was thrown after the rows
+    /// had gone, past the reload and the announcement, so Discarded went on listing a reading that no
+    /// longer existed under an error about a "row" the schema did not allow. A folder that can be
+    /// written and not listed is the shape: the erase cannot know which copies are left.
+    @Test func anIncompletePermanentDeleteDropsTheReadingAndSaysWhatItMissed() async throws {
+        let (path, clean) = Wiring.scratch("archive-erase-incomplete"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let gone = try record(ledger, "fine")
+        let kept = try record(ledger, "hold")
+        _ = try ledger.changeDisposition(.discarded, lookups: [gone, kept], operation: UUID())
+        try ledger.backUp(to: path + ".schema7.backup")
+        let model = LibraryModel(store: Wiring.store(path), defaults: TemporaryDefaults.suite())
+        model.show(.discarded)
+        await model.reloadArchive()
+        try #require(Set(model.archive.rows.map(\.id)) == [gone, kept])
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        let mode = try #require(try FileManager.default.attributesOfItem(atPath: directory)[.posixPermissions] as? Int)
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: directory)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: directory) }
+        try #require((try? FileManager.default.contentsOfDirectory(atPath: directory)) == nil,
+                     "the folder can still be listed, so this cannot show anything")
+
+        model.actArchive(.erase([gone]))
+        try await Wiring.settle("the deleted reading stayed listed, or the pane said nothing of what it missed") {
+            model.archive.rows.map(\.id) == [kept] && model.archive.problem != nil
+        }
+        let problem = try #require(model.archive.problem)
+        #expect(problem.contains("could not be read"), "the pane did not say what the erase missed: \(problem)")
+        #expect(!problem.contains("LedgerError"), "an incomplete erase was reported as a damaged row: \(problem)")
+    }
+
+    /// **Selecting a row does not cancel the read a search started** (audit-fix round 2). One generation
+    /// counted both, so a selection made while the search's read was suspended overtook it: the read
+    /// stopped, and the selection republished the rows from before the search under the new search's
+    /// name — and they stayed, because nothing was reading any more.
+    @Test func aSelectionDuringASuspendedReadKeepsThatRead() async throws {
+        let (path, clean) = Wiring.scratch("library-select-during-read"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try Wiring.save(ledger, "alpha", at: now)
+        let beta = try Wiring.save(ledger, "beta", at: now)
+        let opening = try #require(Wiring.store(path)())
+        let opened = try await opening.value
+        let gate = ArchiveReadGate()
+        let gated = Setting(false), requests = Setting(0)
+        let model = LibraryModel(store: {
+            requests.value += 1
+            let wait = gated.value
+            return Task { if wait { await gate.wait() }; return opened }
+        }, clock: { now }, defaults: TemporaryDefaults.suite(), primary: { PrimaryDictionary(chosen: "noad") })
+        model.show(.saved)
+        try await Wiring.settle("the Saved pane never drew") { model.presentation.rows.count == 2 }
+        gated.value = true
+        let asked = requests.value
+        model.act(.search("beta"))
+        try await Wiring.settle("the search never began its read") { requests.value > asked }
+        model.act(.select([beta.id]))
+        await gate.open()
+        try await Wiring.settle("the search's rows never arrived") { model.presentation.rows.map(\.id) == [beta.id] }
+        #expect(model.presentation.search == "beta")
+        #expect(model.presentation.selection == [beta.id], "the selection made during the read was lost")
+    }
+
+    /// **An undo that could put back only some readings still shows what it put back** (audit-fix round 3,
+    /// #2). Readings changed since they were discarded are left as they are, which is the ledger working:
+    /// the undo committed the rest and then threw "corrupt row" for the count it skipped — so nothing was
+    /// announced, the pane was not read again, the readings it had restored stayed missing from History,
+    /// and Retry, with the receipt already cleared, had nothing left to do. The commit is shown, and the
+    /// skip is said as what it is.
+    @Test func aPartialUndoShowsWhatItPutBackAndSaysWhatItLeft() async throws {
+        let (path, clean) = Wiring.scratch("archive-undo-partial"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let fine = try record(ledger, "fine"), hold = try record(ledger, "hold")
+        let model = LibraryModel(store: Wiring.store(path), defaults: TemporaryDefaults.suite())
+        await model.reloadArchive()
+        try #require(model.archive.rows.count == 2)
+        model.actArchive(.discard([fine, hold]))
+        try await Wiring.settle("the discard never landed") { model.archive.undoCount == 2 && model.archive.rows.isEmpty }
+        // Restored since, by another route: the undo must leave it to that later change.
+        _ = try ledger.changeDisposition(.kept, lookups: [fine], operation: UUID())
+
+        model.actArchive(.undo)
+        // **Both, because the sentence is written an await after the rows** (the review count is read
+        // between them): waiting for the rows alone and then reading the sentence raced it under load.
+        try await Wiring.settle("the pane never showed the readings the undo put back, and said what it left") {
+            Set(model.archive.rows.flatMap(\.lookupIDs)) == [fine, hold] && model.archive.problem != nil
+        }
+        #expect(try ledger.disposition(ofLookup: hold) == .kept, "the undo did not put back what it could")
+        let said = try #require(model.archive.problem, "the reading the undo left alone was not mentioned")
+        #expect(!said.contains("LedgerError") && !said.contains("corrupt"), "a skip was reported as damage: \(said)")
+        #expect(said.contains("1"), "the count left alone is not said: \(said)")
+        #expect(model.archive.undoCount == 0, "the spent undo is still offered")
+    }
+
+    /// **A selection made after a read has pruned cannot reach a row that read does not list** (audit-fix
+    /// round 3, C1). The read prunes the selection to its rows and then suspends four more times before it
+    /// publishes; a click on a row still drawn from the last read, landing in one of those, was left
+    /// standing — the read published its rows with the clicked row selected but no longer listed, and
+    /// Remove from Study deleted a note the reader could not see. ADR-0035: a destructive control reaches
+    /// exactly what its label counts.
+    ///
+    /// The clock is the read's own: asked once to build the query, and again after the rows are counted
+    /// and straight before the prune, with no suspension between that call and the prune. A task made at
+    /// the second runs at the read's next suspension — after the prune and before the publish, where a
+    /// reader's click lands while the answers are being read.
+    @Test func aSelectionMadeAfterTheReadPrunedCannotReachARowItDropped() async throws {
+        let (path, clean) = Wiring.scratch("library-select-after-prune"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let alpha = try Wiring.save(ledger, "alpha", at: now)
+        let beta = try Wiring.save(ledger, "beta", at: now)
+        let click = Setting<(@MainActor () -> Void)?>(nil), asked = Setting(0)
+        let model = LibraryModel(store: Wiring.store(path), clock: {
+            asked.value += 1
+            if asked.value == 2, let pending = click.value {
+                click.value = nil
+                Task { @MainActor in pending() }
+            }
+            return now
+        }, defaults: TemporaryDefaults.suite(), primary: { PrimaryDictionary(chosen: "noad") })
+        // **The read alone**, not `show`: showing a pane also counts the review queue, which asks the clock
+        // too, and a click fired by that would land before the search and prove nothing.
+        await model.reload()
+        try #require(model.presentation.rows.count == 2)
+
+        click.value = { model.act(.select([beta.id])) }
+        asked.value = 0
+        model.act(.search("alpha"))
+        try await Wiring.settle("the search's rows never arrived") { model.presentation.rows.map(\.id) == [alpha.id] }
+        try #require(click.value == nil, "the click was never made during the read, so this shows nothing")
+        #expect(model.presentation.selection.isSubset(of: [alpha.id]),
+                "a row the read no longer lists is still selected: \(model.presentation.selection)")
+
+        // **What the control reaches, not only what is drawn.** Removing again with the listed row selected
+        // is the positive control, and the point at which both writes have landed.
+        model.act(.removeFromStudy)
+        model.act(.select([alpha.id]))
+        model.act(.removeFromStudy)
+        try await Wiring.settle("the listed row was never removed") {
+            (try? Ledger(path: path).notes().contains { $0.id == alpha.id }) == false
+        }
+        #expect(try Ledger(path: path).notes().contains { $0.id == beta.id },
+                "Remove from Study deleted a note the reader could not see")
+    }
+
+    /// **And a selection naming a row that is not listed selects nothing, before any read publishes**
+    /// (audit-fix round 3, C1). The prune at publish is too late for an action taken in the same turn as
+    /// the click: Remove from Study reads the selection as soon as it is pressed.
+    @Test func aSelectionOfARowNotListedReachesNothing() async throws {
+        let (path, clean) = Wiring.scratch("library-select-unlisted"); defer { clean() }
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let alpha = try Wiring.save(ledger, "alpha", at: now)
+        let beta = try Wiring.save(ledger, "beta", at: now)
+        let model = LibraryModel(store: Wiring.store(path), clock: { now }, defaults: TemporaryDefaults.suite(),
+                                 primary: { PrimaryDictionary(chosen: "noad") })
+        model.act(.search("alpha"))
+        try await Wiring.settle("the search's rows never arrived") { model.presentation.rows.map(\.id) == [alpha.id] }
+
+        model.act(.select([beta.id]))
+        model.act(.removeFromStudy)
+        // The positive control, and the point at which both writes have landed.
+        model.act(.select([alpha.id]))
+        model.act(.removeFromStudy)
+        try await Wiring.settle("the listed row was never removed") {
+            (try? Ledger(path: path).notes().contains { $0.id == alpha.id }) == false
+        }
+        #expect(try Ledger(path: path).notes().contains { $0.id == beta.id },
+                "Remove from Study deleted a note that was not listed")
+    }
+
+    // MARK: - What Suggested lists (closing pass after round 3, C1)
+
+    /// A Saved pane over three meanings whose reads wait at a gate the test opens, and the model.
+    private struct GatedLibrary {
+        let path: String, clean: () -> Void
+        let alpha: StudyNote, beta: StudyNote, gamma: StudyNote
+        let model: LibraryModel, gate: ArchiveReadGate, gated: Setting<Bool>, requests: Setting<Int>
+    }
+
+    private func gatedLibrary(_ label: String) async throws -> GatedLibrary {
+        let (path, clean) = Wiring.scratch(label)
+        let ledger = try Ledger(path: path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let alpha = try Wiring.save(ledger, "alpha", at: now)
+        let beta = try Wiring.save(ledger, "beta", at: now)
+        let gamma = try Wiring.save(ledger, "gamma", at: now)
+        let opening = try #require(Wiring.store(path)())
+        let opened = try await opening.value
+        let gate = ArchiveReadGate()
+        let gated = Setting(false), requests = Setting(0)
+        let model = LibraryModel(store: {
+            requests.value += 1
+            let wait = gated.value
+            return Task { if wait { await gate.wait() }; return opened }
+        }, clock: { now }, defaults: TemporaryDefaults.suite(), primary: { PrimaryDictionary(chosen: "noad") })
+        return GatedLibrary(path: path, clean: clean, alpha: alpha, beta: beta, gamma: gamma,
+                            model: model, gate: gate, gated: gated, requests: requests)
+    }
+
+    /// **What the control reached, read off the ledger.** Remove from Study is pressed over whatever the
+    /// model holds selected; then, back on the list, Gamma is removed as the positive control — the point
+    /// at which both writes have landed, since the store takes them in order. Alpha and Beta must survive.
+    private func removeReachesNothingUnlisted(_ library: GatedLibrary) async throws {
+        let model = library.model
+        model.act(.removeFromStudy)
+        model.act(.search(""))
+        model.act(.filter(.all))
+        try await Wiring.settle("the list never came back") {
+            model.presentation.filter == .all && model.presentation.search.isEmpty
+                && model.presentation.rows.contains { $0.id == library.gamma.id }
+        }
+        model.act(.select([library.gamma.id]))
+        model.act(.removeFromStudy)
+        try await Wiring.settle("the listed row was never removed") {
+            (try? Ledger(path: library.path).notes().contains { $0.id == library.gamma.id }) == false
+        }
+        let left = Set(try Ledger(path: library.path).notes().map(\.id))
+        #expect(left.isSuperset(of: [library.alpha.id, library.beta.id]),
+                "Remove from Study deleted a meaning Suggested does not list: \(left.count) of 2 left")
+    }
+
+    /// **A selection made while Suggested is being read is dropped when Suggested lists** (closing pass
+    /// after round 3, C1). Round 3 pruned at the publish against the rows the read *returned*, and under
+    /// Suggested those are every row — its query does not narrow — while the pane draws suggestions in
+    /// their place. Alpha and Beta, clicked on the list still drawn while the switch's read was out, were
+    /// published selected and unlisted, and Remove from Study, which reads the selection, removed both.
+    @Test func aSelectionMadeWhileSuggestedIsReadIsDroppedWhenItLists() async throws {
+        let library = try await gatedLibrary("library-select-during-suggested"); defer { library.clean() }
+        let model = library.model
+        await model.reload()
+        try #require(model.presentation.rows.count == 3)
+
+        library.gated.value = true
+        let asked = library.requests.value
+        model.act(.filter(.suggested))
+        try await Wiring.settle("the switch never began its read") { library.requests.value > asked }
+        // On the list still drawn — both are listed there, so the click takes.
+        model.act(.select([library.alpha.id, library.beta.id]))
+        library.gated.value = false
+        await library.gate.open()
+        try await Wiring.settle("Suggested never drew") { model.presentation.filter == .suggested }
+        #expect(model.presentation.selection.isEmpty,
+                "Suggested lists no meaning and still holds \(model.presentation.selection.count) selected")
+        #expect(model.presentation.rows.isEmpty, "Suggested listed rows it draws suggestions in place of")
+        try await removeReachesNothingUnlisted(library)
+    }
+
+    /// **The same through a pane switch** (C1). Leaving Saved and coming back while the switch to
+    /// Suggested is still being read draws the list from before it again, and starts a read of its own;
+    /// a click there was published into Suggested selected and unlisted, by whichever read landed last.
+    @Test func aPaneRoundTripDuringTheSuggestedReadKeepsNoSelection() async throws {
+        let library = try await gatedLibrary("library-pane-during-suggested"); defer { library.clean() }
+        let model = library.model
+        model.show(.saved)
+        try await Wiring.settle("the Saved pane never drew") { model.presentation.rows.count == 3 }
+
+        library.gated.value = true
+        let asked = library.requests.value
+        model.act(.filter(.suggested))
+        try await Wiring.settle("the switch never began its read") { library.requests.value > asked }
+        model.show(.history)
+        model.show(.saved)
+        // History's read, then Saved's own: the read that coming back starts is the one that publishes,
+        // the switch's having been overtaken by it.
+        try await Wiring.settle("coming back never began a read") { library.requests.value >= asked + 3 }
+        model.act(.select([library.alpha.id, library.beta.id]))
+        library.gated.value = false
+        await library.gate.open()
+        try await Wiring.settle("Suggested never drew") {
+            model.pane == .saved && model.presentation.filter == .suggested
+        }
+        #expect(model.presentation.selection.isEmpty,
+                "Suggested lists no meaning and still holds \(model.presentation.selection.count) selected")
+        try await removeReachesNothingUnlisted(library)
+    }
+
+    /// **And a search under Suggested lists nothing to click** (C1). The search's read narrowed the rows
+    /// Suggested does not draw, the presentation carried them, and `.select` admitted any of them — so a
+    /// click naming Alpha, with a Remove pressed in the same turn, removed a meaning nobody could see.
+    @Test func aSearchUnderSuggestedListsNoRowAClickCanReach() async throws {
+        let library = try await gatedLibrary("library-search-under-suggested"); defer { library.clean() }
+        let model = library.model
+        model.act(.filter(.suggested))
+        try await Wiring.settle("Suggested never drew") { model.presentation.filter == .suggested }
+        model.act(.search("alpha"))
+        try await Wiring.settle("the search never landed") { model.presentation.search == "alpha" }
+        #expect(model.presentation.rows.isEmpty, "Suggested listed \(model.presentation.rows.count) row(s) it does not draw")
+
+        // The click and the Remove in one turn: the prune at the next publish would be too late for it.
+        model.act(.select([library.alpha.id]))
+        try await removeReachesNothingUnlisted(library)
+    }
+
     private func record(_ ledger: Ledger, _ word: String, script: ProbeScript? = .latin, at: Date = .now) throws -> Int {
         try ledger.record(LookupRecord(surface: word, lemma: word, context: "A \(word) example.", language: "en",
             lookedUpAt: at, result: .found, answeredBy: .dictionaryService, quality: nil, script: script))

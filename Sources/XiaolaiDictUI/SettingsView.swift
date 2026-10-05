@@ -131,6 +131,11 @@ public struct SettingsView: View {
     /// without one rather than being given a half-wired destructive control.
     private var erase: ErasePresentation?
     private var eraseAction: (@MainActor (EraseAction) -> Void)?
+    /// The review reminder and what changes it — the app's, like the shortcut. Nil in a preview,
+    /// which draws General without the section rather than with a switch wired to nothing.
+    private var reminders: ReminderChoice?
+    /// The study options (R1b, R1c) and what changes them — the app's, for the same reason.
+    private var study: StudyChoice?
 
     /// Stands in for the app's policy in a preview, so the hover pane is live rather than inert
     /// wherever it is looked at. In the app the binding is passed in and this is never read.
@@ -157,6 +162,8 @@ public struct SettingsView: View {
         shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
         erase: ErasePresentation? = nil,
         eraseAction: (@MainActor (EraseAction) -> Void)? = nil,
+        reminders: ReminderChoice? = nil,
+        study: StudyChoice? = nil,
         setup: SetupModel? = nil, shortcutIsRegistered: Bool = false,
         localModel: LocalModelChoice? = nil,
         refreshDictionaries: (() async -> Void)? = nil
@@ -172,6 +179,8 @@ public struct SettingsView: View {
         self.modelLicence = modelLicence
         self.erase = erase
         self.eraseAction = eraseAction
+        self.reminders = reminders
+        self.study = study
         self.setup = setup
         self.shortcutIsRegistered = shortcutIsRegistered
         self.localModel = localModel
@@ -305,7 +314,8 @@ public struct SettingsView: View {
                 Form { Unavailable() }.formStyle(.grouped)
             }
         case .general:
-            GeneralPane(model: model, keepPolicy: keepPolicy, erase: erase, eraseAction: eraseAction)
+            GeneralPane(model: model, keepPolicy: keepPolicy, study: study, reminders: reminders, erase: erase,
+                        eraseAction: eraseAction)
         case .reading: ReadingPane(appearance: appearance)
         case .lookup:
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,

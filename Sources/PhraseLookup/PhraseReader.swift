@@ -114,9 +114,13 @@ public final class PhraseReader: PhraseFinding {
             let identity = DictionaryIdentity(name: bundle.displayName, identifier: bundle.identifier,
                                               version: bundle.declaredVersion)
             for (phrase, explanations) in inventory.explanations {
+                // **With the build and the walk that read it**, which a saved phrase records as evidence of
+                // where its meaning was found (ADR-0049) — only this side holds the inventory that knows.
                 filings[phrase, default: []].append(contentsOf: explanations.map {
                     PhraseFiling(dictionary: identity, parentEntryID: $0.parentEntryID,
-                                 blockID: $0.blockID, definitions: $0.definitions)
+                                 blockID: $0.blockID, definitions: $0.definitions,
+                                 contentVersion: inventory.contentVersion,
+                                 formatVersion: PhraseInventory.formatVersion)
                 })
             }
             read.append(bundle.displayName)

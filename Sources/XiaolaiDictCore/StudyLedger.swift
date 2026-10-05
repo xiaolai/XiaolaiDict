@@ -1,6 +1,5 @@
 import DictionaryModel
 import Foundation
-import SQLite3
 
 /// **Schema 8 — the study system's durable entities.** WI-001 of the card plan: what a target *is*, where
 /// its meaning was found, and which lookups evidence it. Nothing here schedules, grades or presents
@@ -21,11 +20,15 @@ import SQLite3
 ///   one target and inherit its schedule — the silent merge the project's own rule says orphans every
 ///   study item. Two issuers make two visible notes until an equivalence is measured (ADR-0028).
 extension Ledger {
-    /// The tables, exactly as schema 8 creates them.
+    /// Schema 8's tables as they are today: the note, and what evidences it.
     ///
-    /// Kept as one literal so the migration and any future rebuild cannot drift apart, and so the shape
-    /// can be read in one place rather than assembled from a diff.
-    static let studySchema = """
+    /// **The note's own table is a literal of its own** so the migration can rebuild it from the same
+    /// statement a fresh ledger runs (audit-fix round 2): its `CHECK`s changed at 9 and at 12, and a
+    /// `CHECK` cannot be altered — a ledger made at 8 to 11 kept the old ones. One statement, read in one
+    /// place, for both, so the two cannot drift apart.
+    static let studySchema = studyNotesSchema + "\n" + studyNoteEvidenceSchema
+
+    static let studyNotesSchema = """
         CREATE TABLE study_notes (
             id              TEXT PRIMARY KEY,
             -- 'sense' | 'entry' | 'phrase' | 'custom'. The last is the reader's own words and is a
@@ -69,7 +72,9 @@ extension Ledger {
             target_kind, issuer, language, dictionary, entry_id, sense_key, sense_key_kind, phrase_text
         );
         CREATE INDEX study_notes_by_dictionary ON study_notes (dictionary, enrollment);
+        """
 
+    static let studyNoteEvidenceSchema = """
         -- Where a meaning was found, in which build, read by which extraction. An occurrence, never a
         -- name: a note may have several, and none of them is a sense key.
         CREATE TABLE study_locators (
@@ -153,7 +158,11 @@ extension Ledger {
         );
         """
 
-    static let studyCardSchema = """
+    static let studyCardSchema = studyCardsSchema + "\n" + reviewEventsSchema
+
+    /// The card table alone. `review_events` is its own literal, rebuilt by the migration where a ledger
+    /// made at 10 or 11 lacks `kind` and its `CHECK`.
+    static let studyCardsSchema = """
         CREATE TABLE study_cards (
             id                 TEXT PRIMARY KEY,
             note_id            TEXT NOT NULL REFERENCES study_notes (id) ON DELETE CASCADE,
@@ -184,7 +193,9 @@ extension Ledger {
         );
         CREATE UNIQUE INDEX study_cards_question ON study_cards (note_id, prompt);
         CREATE INDEX study_cards_by_due ON study_cards (due);
+        """
 
+    static let reviewEventsSchema = """
         -- **Immutable.** A review is something that happened; undo marks it void and never deletes it,
         -- because a history with holes cannot be replayed and replay is how a parameter change is
         -- applied honestly.
@@ -280,7 +291,7 @@ extension Ledger {
             """,
             bind: values
         ) { row in
-            if let note = try Self.note(from: row) { found.append(note) }
+            found.append(try Self.note(from: row))
         }
         return found
     }
@@ -290,15 +301,23 @@ extension Ledger {
     /// **One builder**, so the library and `notes(where:)` cannot come to disagree about what a row
     /// means — the same reason the reading projection has one.
     ///
-    /// A row whose stored value this build does not know is **skipped, not guessed at**. It can only
-    /// come from a newer build writing a kind this one has never heard of, and inventing a target for
-    /// it would put a card in front of the reader that nothing here understands.
-    static func note(from row: Row) throws -> StudyNote? {
+    /// **A row this build cannot read is corruption, refused, never skipped** — as `card(from:)` and the
+    /// event, answer and locator readers already refuse one (ADR-0047). It was skipped as "only a newer
+    /// build" could write it, which does not hold: `target_kind`, `issuer` and `enrollment` are
+    /// CHECK-constrained and a newer schema is refused when the ledger opens, and every writer formats
+    /// the id as a UUID. Skipped, a damaged note vanished from the Library and its readiness read
+    /// `needsRepair` — stored study looking absent (audit-fix round 1). Inventing a target would put a
+    /// card in front of the reader that nothing here understands, so it is neither.
+    ///
+    /// **The lookup path does not go through this for a note it did not ask for**: a reading, its
+    /// history and the drawer read no note row, and keeping a word decodes only that word's own note
+    /// (`aNoteRowThisBuildCannotReadIsRefusedAndLookupsGoOn`).
+    static func note(from row: Row) throws -> StudyNote {
         guard let kind = StudyTarget.Kind(rawValue: try row.text(1)),
               let issuer = KeyIssuer(rawValue: try row.text(2)),
               let enrollment = StudyEnrollment(rawValue: try row.text(9)),
               let id = UUID(uuidString: try row.text(0))
-        else { return nil }
+        else { throw LedgerError.corruptRow("study_notes \(try row.text(0))") }
         let dictionary = try row.text(4), entryID = try row.text(5)
         let senseKey = try row.text(6), storedKind = try row.text(7), phraseText = try row.text(8)
         let target: StudyTarget? =
@@ -312,7 +331,7 @@ extension Ledger {
             case .phrase: .phrase(dictionary: dictionary, text: phraseText)
             case .custom: .custom(dictionary: dictionary, text: phraseText)
             }
-        guard let target else { return nil }
+        guard let target else { throw LedgerError.corruptRow("study_notes \(try row.text(0))") }
         return StudyNote(
             id: id, target: target, issuer: issuer, language: try row.text(3),
             enrollment: enrollment,
@@ -366,7 +385,9 @@ extension Ledger {
             bind: [.text(noteID.uuidString)]
         ) { row in
             guard let id = UUID(uuidString: try row.text(0)),
-                  let note = UUID(uuidString: try row.text(1)) else { return }
+                  let note = UUID(uuidString: try row.text(1)) else {
+                throw LedgerError.corruptRow("study_locators \(try row.text(0))")
+            }
             found.append(StudyLocator(
                 id: id, noteID: note, contentVersion: try row.text(2), formatVersion: try row.text(3),
                 parentEntryID: try row.text(4), blockID: try row.text(5),
@@ -486,6 +507,31 @@ extension Ledger {
                 bind: [.real(when.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }
     }
 
+    /// Confirms one note and, **where this is the confirmation**, hides its cards until `hidden` — the
+    /// cooldown experiment's write (`ConfirmationCooldown`, review-module-plan §8.3c). Nil is
+    /// `confirm(noteID:at:)` exactly, card untouched.
+    ///
+    /// **One transaction**: a confirmation that landed without its hide would hand the reader, at once,
+    /// the card whose answer they have just read — the case the experiment exists to measure.
+    /// Confirming a confirmed note is a no-op and hides nothing, since nothing was confirmed. **The
+    /// revision moves** because hiding changes whether the card may be asked (WI-10), and **an
+    /// existing hide is never shortened**: a card the reader put off until later stays put off.
+    public func confirm(noteID: UUID, at when: Date, hidingCardsUntil hidden: Date?) throws {
+        guard let hidden else { return try confirm(noteID: noteID, at: when) }
+        try inOneTransaction("confirmAndHide") {
+            var unconfirmed = false
+            try run("SELECT confirmed_at IS NULL FROM study_notes WHERE id = ?",
+                    bind: [.text(noteID.uuidString)]) { unconfirmed = $0.integer(0) == 1 }
+            guard unconfirmed else { return }
+            try confirm(noteID: noteID, at: when)
+            try run("""
+                UPDATE study_cards
+                SET hidden_until = MAX(COALESCE(hidden_until, ?1), ?1), revision = revision + 1
+                WHERE note_id = ?2
+                """, bind: [.real(hidden.timeIntervalSince1970), .text(noteID.uuidString)]) { _ in }
+        }
+    }
+
     /// Clears a note's confirmation. **For tests**: there is no reader-facing route to unconfirm,
     /// because a confirmation is something they said and taking it back for them is not.
     func unconfirmForTesting(noteID: UUID) throws {
@@ -502,20 +548,30 @@ extension Ledger {
 
     // MARK: - The answer
 
+    /// Writes the note's answer — **and moves the revision of every card of the note, in the same
+    /// transaction** (audit-fix round 3, #10). The card reveals this answer, so a review window that drew
+    /// the card, showed the old one and collected a grade would otherwise land that grade on a question
+    /// the reader has since rewritten: ADR-0031's compare-and-swap is there because anything that wrote
+    /// in between invalidates the answer, and this is the write that changes what the answer *is*. A
+    /// note with no card yet — the first answer of an enrolment, written before its card — moves nothing.
     public func setAnswer(_ answer: StudyAnswer, of noteID: UUID, at when: Date) throws {
-        try run(
-            """
-            INSERT INTO study_answers (note_id, origin, text, dictionary_version, sense_hash,
-                                       recorded_at, is_usable)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (note_id) DO UPDATE SET
-                origin = excluded.origin, text = excluded.text,
-                dictionary_version = excluded.dictionary_version, sense_hash = excluded.sense_hash,
-                recorded_at = excluded.recorded_at, is_usable = excluded.is_usable
-            """,
-            bind: [.text(noteID.uuidString), .text(answer.origin.rawValue), .text(answer.text),
-                   .optionalText(answer.dictionaryVersion), .optionalText(answer.senseHash),
-                   .real(when.timeIntervalSince1970), .integer(answer.isUsable ? 1 : 0)]) { _ in }
+        try inOneTransaction("setAnswer") {
+            try run(
+                """
+                INSERT INTO study_answers (note_id, origin, text, dictionary_version, sense_hash,
+                                           recorded_at, is_usable)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (note_id) DO UPDATE SET
+                    origin = excluded.origin, text = excluded.text,
+                    dictionary_version = excluded.dictionary_version, sense_hash = excluded.sense_hash,
+                    recorded_at = excluded.recorded_at, is_usable = excluded.is_usable
+                """,
+                bind: [.text(noteID.uuidString), .text(answer.origin.rawValue), .text(answer.text),
+                       .optionalText(answer.dictionaryVersion), .optionalText(answer.senseHash),
+                       .real(when.timeIntervalSince1970), .integer(answer.isUsable ? 1 : 0)]) { _ in }
+            try run("UPDATE study_cards SET revision = revision + 1 WHERE note_id = ?",
+                    bind: [.text(noteID.uuidString)]) { _ in }
+        }
     }
 
     public func answer(of noteID: UUID) throws -> StudyAnswer? {
@@ -524,7 +580,11 @@ extension Ledger {
             "SELECT origin, text, dictionary_version, sense_hash FROM study_answers WHERE note_id = ?",
             bind: [.text(noteID.uuidString)]
         ) { row in
-            guard let origin = StudyAnswer.Origin(rawValue: try row.text(0)) else { return }
+            // An unknown origin is corruption. Skipped, it read as *no answer* and sent the note to
+            // repair — a damaged row presented as work the reader had not done.
+            guard let origin = StudyAnswer.Origin(rawValue: try row.text(0)) else {
+                throw LedgerError.corruptRow("study_answers \(noteID.uuidString)")
+            }
             found = StudyAnswer(origin: origin, text: try row.text(1),
                                 dictionaryVersion: row.optionalText(2), senseHash: row.optionalText(3))
         }

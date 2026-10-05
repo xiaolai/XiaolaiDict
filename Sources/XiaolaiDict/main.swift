@@ -85,6 +85,16 @@ case .success(.panelReport):
     Instruments.run(.panel)
     XiaolaiDictScene.main()
 
+// Review's queue and its model's presentation, read from the reader's ledger. No window and nothing
+// written: it draws a sitting and reveals one card, so `dispatchMain()` is enough.
+case .success(.reviewReport):
+    runHeadlessReport { await ReviewReport.run() }
+
+// The reminder's grant, pending requests, plan and log. No window: the notification center answers a
+// bundled process under `dispatchMain()`, and the stage launches it in the GUI session with `open`.
+case .success(.reminderReport):
+    runHeadlessReport { await ReminderReport.run() }
+
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.
 case .success(.app):

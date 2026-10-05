@@ -18,7 +18,7 @@ struct SenseTapQueueTests {
 
     /// A tap before its own row exists is held, and written the moment that row lands.
     @Test func aTapBeforeItsRowIsHeldUntilTheRowArrives() {
-        var taps = SenseTapQueue()
+        var taps = SenseTapQueue<Int>()
         #expect(taps.tapped(Self.encounter("s1"), request: 7) == nil, "a tap was written to a row that did not exist")
         #expect(taps.heldCount == 1)
         #expect(taps.recorded(request: 7, id: 42).count == 1)
@@ -30,7 +30,7 @@ struct SenseTapQueueTests {
     /// **A tap never attaches to another lookup's row.** The previous word's row is recorded and the
     /// reader taps a sense in the panel that is up now: held, not written to the old one.
     @Test func aTapIsNeverWrittenToAnotherLookupsRow() {
-        var taps = SenseTapQueue()
+        var taps = SenseTapQueue<Int>()
         _ = taps.recorded(request: 1, id: 10)
         #expect(taps.tapped(Self.encounter("s1"), request: 2) == nil)
         #expect(taps.recorded(request: 2, id: 11).count == 1)
@@ -39,7 +39,7 @@ struct SenseTapQueueTests {
     /// A superseded lookup is still recorded — its entry was on screen — but its row landing late
     /// must not become what the next tap attaches to.
     @Test func aLateRowDoesNotBecomeWhatTheNextTapAttachesTo() {
-        var taps = SenseTapQueue()
+        var taps = SenseTapQueue<Int>()
         _ = taps.recorded(request: 5, id: 50)
         _ = taps.recorded(request: 4, id: 40)  // the older lookup's row, arriving afterwards
         #expect(taps.lastLookup?.id == 50, "an older row became the newest lookup")
@@ -54,8 +54,8 @@ struct SenseTapQueueTests {
     /// asserted, so it is spelled out — 32 taps is a reader tapping senses faster than any lookup
     /// can be recorded, and a queue shorter than that loses their work.
     @Test func whatIsHeldIsBounded() {
-        #expect(SenseTapQueue.mostHeld == 32)
-        var taps = SenseTapQueue()
+        #expect(SenseTapQueue<Int>.mostHeld == 32)
+        var taps = SenseTapQueue<Int>()
         for i in 0..<42 {
             #expect(taps.tapped(Self.encounter("s\(i)"), request: 99) == nil)
         }

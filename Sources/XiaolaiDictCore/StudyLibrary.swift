@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 
 /// **The library: every card the reader has, findable months later.** WI-005's query half.
 ///
@@ -97,12 +98,15 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
     /// annotated rather than hidden.
     public let script: ProbeScript?
     public let readiness: StudyReadiness
+    /// What the reader would have to do for it to be asked, from the same facts as `readiness`. **What
+    /// a Confirm control is scoped by**: only `.confirmation` is something confirming removes.
+    public let obstacle: StudyObstacle?
 
     public var id: UUID { note.id }
 
     public init(note: StudyNote, card: StudyCard?, word: String, lemma: String? = nil, excerpt: String,
                 excerptMarks: [NSRange], readAt: Date?,
-                script: ProbeScript?, readiness: StudyReadiness) {
+                script: ProbeScript?, readiness: StudyReadiness, obstacle: StudyObstacle?) {
         self.note = note
         self.card = card
         self.word = word
@@ -112,6 +116,7 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
         self.readAt = readAt
         self.script = script
         self.readiness = readiness
+        self.obstacle = obstacle
     }
 
     /// Where this row's cursor is, for asking for the page after it.
@@ -135,7 +140,7 @@ extension Ledger {
         // **Decoded first, then given their cards in one query.** Asking for a card inside the
         // row callback ran a statement per row while the page's own statement was still open.
         var pending: [(note: StudyNote, word: String, lemma: String?, excerpt: String, excerptMarks: [NSRange],
-                       readAt: Date?, script: ProbeScript?, readiness: StudyReadiness)] = []
+                       readAt: Date?, script: ProbeScript?, facts: StudyReadiness.Facts)] = []
         try run("""
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
                    n.sense_key_kind, n.phrase_text, n.enrollment, n.confirmed_at, n.created_at,
@@ -161,7 +166,7 @@ extension Ledger {
             ORDER BY n.created_at DESC, n.id DESC
             LIMIT ?\(bind.count)
             """, bind: bind) { row in
-            guard let note = try Self.note(from: row) else { return }
+            let note = try Self.note(from: row)
             let facts = StudyReadiness.Facts(
                 isConfirmed: note.confirmedAt != nil,
                 hasUsableAnswer: row.integer(17) == 1,
@@ -179,21 +184,32 @@ extension Ledger {
                 // **The reading's word, or the target's own.** A custom card needs no lookup
                 // (C07), so this was empty for every one of them — a blank row in the library
                 // and a blank label in the inspector, for a card the reader had written.
-                word: row.optionalText(12) ?? note.target.ownText ?? "",
+                word: Self.word(of: note.target, readAs: row.optionalText(12)),
                 lemma: row.optionalText(19),
                 excerpt: excerpt,
                 excerptMarks: row.optionalText(12).map {
                     Lemmatizer.parts(of: row.optionalText(19) ?? $0, surface: $0, in: excerpt, at: range)
                 } ?? [],
                 readAt: row.isNull(14) ? nil : Date(timeIntervalSince1970: row.real(14)),
-                script: row.optionalText(15).flatMap(ProbeScript.init(rawValue:)),
-                readiness: StudyReadiness.of(facts)))
+                script: try row.optional(ProbeScript.self, 15, "lookups.script"),
+                facts: facts))
         }
         let cards = try cards(ofNotes: pending.map(\.note.id), prompt: Self.libraryPrompt)
         return pending.map {
             LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, lemma: $0.lemma, excerpt: $0.excerpt,
-                       excerptMarks: $0.excerptMarks, readAt: $0.readAt, script: $0.script, readiness: $0.readiness)
+                       excerptMarks: $0.excerptMarks, readAt: $0.readAt, script: $0.script,
+                       readiness: StudyReadiness.of($0.facts), obstacle: StudyReadiness.obstacle($0.facts))
         }
+    }
+
+    /// **What a note is called on a surface that lists it**: a phrase by the dictionary's own spelling —
+    /// the reader saved *take something into account*, and the word they hovered, *took*, is not what they
+    /// saved (ADR-0049) — and anything else by the word as it was read, or its own words where no reading
+    /// is left. One rule for the Library and the review card, so a phrase is not one thing in one and
+    /// another in the other.
+    static func word(of target: StudyTarget, readAs surface: String?) -> String {
+        if case .phrase(_, let text) = target { return text }
+        return surface ?? target.ownText ?? ""
     }
 
     /// **Whether there is a single note**, which is not the same question as what they all are.
@@ -231,7 +247,9 @@ extension Ledger {
             WHERE note_id IN (SELECT value FROM json_each(?))
             """, bind: [.text(Self.jsonArray(of: noteIDs.map(\.uuidString)))]) { row in
             guard let id = UUID(uuidString: try row.text(0)),
-                  let origin = StudyAnswer.Origin(rawValue: try row.text(1)) else { return }
+                  let origin = StudyAnswer.Origin(rawValue: try row.text(1)) else {
+                throw LedgerError.corruptRow("study_answers \(try row.text(0))")
+            }
             found[id] = StudyAnswer(origin: origin, text: try row.text(2),
                                     dictionaryVersion: row.optionalText(3),
                                     senseHash: row.optionalText(4))
@@ -263,11 +281,15 @@ extension Ledger {
     ///
     /// **Exactly the set given.** A bulk action that half-applied would leave the reader's library in
     /// a state they did not ask for and cannot see, so either all of it lands or none does.
+    ///
+    /// **The revision moves, as `setPaused(_:ofCard:)` moves it.** Pausing changes whether a card may
+    /// be asked at all, and the revision is the compare-and-swap that stops a grade drawn before the
+    /// change landing after it. Without it a review window's grade survived a bulk pause and resume.
     public func setPaused(_ paused: Bool, ofNotes ids: [UUID]) throws {
         try inOneTransaction("bulkPause") {
             for id in ids {
                 try run("""
-                    UPDATE study_cards SET paused = ? WHERE note_id = ?
+                    UPDATE study_cards SET paused = ?, revision = revision + 1 WHERE note_id = ?
                     """, bind: [.integer(paused ? 1 : 0), .text(id.uuidString)]) { _ in }
             }
         }
@@ -314,7 +336,12 @@ extension Ledger {
             SELECT c.id, c.paused FROM study_cards c
             WHERE c.note_id IN (SELECT value FROM json_each(?1))
             """, bind: [.text(Self.jsonArray(of: ids.map(\.uuidString)))]) { row in
-            if let id = UUID(uuidString: try row.text(0)) { found[id] = row.integer(1) == 1 }
+            // **Refused, not skipped** (audit-fix round 2): the bulk pause's `UPDATE` reaches every card
+            // under these notes, so one left out of this answer is paused and never put back by the undo.
+            guard let id = UUID(uuidString: try row.text(0)) else {
+                throw LedgerError.corruptRow("study_cards \(try row.text(0))")
+            }
+            found[id] = row.integer(1) == 1
         }
         return found
     }
@@ -325,11 +352,14 @@ extension Ledger {
     /// **A card that has since been deleted is skipped, not an error**: an undo of a bulk action is
     /// a convenience, and refusing the whole of it because one row is gone would leave the reader
     /// with neither the action nor its reversal.
+    ///
+    /// **A restore is a pause write and moves the revision too**, even onto the state a card already
+    /// had: the window that drew it saw neither the bulk action nor its reversal.
     public func restorePauseStates(_ states: [UUID: Bool]) throws {
         guard !states.isEmpty else { return }
         try inOneTransaction("restorePause") {
             for (cardID, paused) in states {
-                try run("UPDATE study_cards SET paused = ? WHERE id = ?",
+                try run("UPDATE study_cards SET paused = ?, revision = revision + 1 WHERE id = ?",
                         bind: [.integer(paused ? 1 : 0), .text(cardID.uuidString)]) { _ in }
             }
         }
@@ -343,10 +373,12 @@ extension Ledger {
             SELECT n.id, n.enrollment FROM study_notes n
             WHERE n.id IN (SELECT value FROM json_each(?1))
             """, bind: [.text(Self.jsonArray(of: ids.map(\.uuidString)))]) { row in
-            if let id = UUID(uuidString: try row.text(0)),
-               let enrollment = StudyEnrollment(rawValue: try row.text(1)) {
-                found[id] = enrollment
+            // Refused for the same reason: an enrollment the undo cannot name is one it cannot restore.
+            guard let id = UUID(uuidString: try row.text(0)),
+                  let enrollment = StudyEnrollment(rawValue: try row.text(1)) else {
+                throw LedgerError.corruptRow("study_notes \(try row.text(0))")
             }
+            found[id] = enrollment
         }
         return found
     }

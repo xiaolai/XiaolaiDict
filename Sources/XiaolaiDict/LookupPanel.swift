@@ -164,6 +164,9 @@ final class LookupPanelController: LookupPanelPresenting {
     var onStudySense: (@MainActor (SenseEncounter, Int) -> Void)?
     /// The reader asked to study the meaning on screen. Separate from meeting it.
     var onEnrolSense: (@MainActor (SenseEncounter, Int) -> Void)?
+    /// The reader asked to keep the phrase on the card as a study card (ADR-0049) — under the request the
+    /// card is, for the reason the two above carry one. Answers whether the ask was taken.
+    var onCollectPhrase: (@MainActor (PhraseCollection, Int) -> Bool)?
     /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
     var onOpenDictionarySettings: (@MainActor () -> Void)?
     /// The last two numbers the window fit was computed from: what the card's content wanted, and
@@ -539,6 +542,17 @@ private struct LookupCardWiring: ViewModifier {
                 guard let request else { return }
                 controller.onEnrolSense?(encounter, request)
             }
+            // **And a phrase saved as a card**, filed under this card's request. Unwired, it is loud and
+            // answers false, so the card says the save did not happen rather than taking the press.
+            .environment(\.collectPhrase) { [controller] phrase in
+                guard let request, let collect = controller.onCollectPhrase else {
+                    Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
+                        .fault("phrase: Save This Phrase reached a panel with no request or no app hook")
+                    return false
+                }
+                return collect(phrase, request)
+            }
+            .environment(\.phraseCollectStatuses, request.flatMap { recorder?.phraseStates[$0] } ?? [:])
             // The one window the panel may bring forward: a window the reader chose. The app's own
             // action, so the dictionary discovery that pane depends on is started by the same code
             // path every other route uses.

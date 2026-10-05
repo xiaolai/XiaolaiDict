@@ -79,6 +79,10 @@ struct ModuleBoundaryTests {
         // in this table is what applies that rule to it.
         "XiaolaiDictIndex": ["Foundation"],
         "XiaolaiDictAlign": ["Foundation"],
+        // The review logic a phone, a watch or a TV could run: the scheduler, the session, the study
+        // day. **Foundation and nothing else, and no sibling either** — `reviewKitDependsOnNothing`
+        // holds the second half, because this table filters siblings out (ADR-0047).
+        "ReviewKit": ["Foundation"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
@@ -175,26 +179,834 @@ struct ModuleBoundaryTests {
         #expect(problems.isEmpty, "\(problems)")
     }
 
+    // MARK: - ReviewKit: the first checks, before the compiler's (ADR-0047)
+
+    /// **Every spelling Swift accepts for binding a module, read as the module it binds.**
+    ///
+    /// The scan matched `import`, `@preconcurrency import` and `@_implementationOnly import` and
+    /// nothing else, so an access-levelled import, `@testable`, `@_exported` and `@_spi(…)` were
+    /// invisible to every rule above — and `import struct X.Y` was read as a module called `struct`.
+    /// Harmless while nothing used them; load-bearing once a target's whole boundary rests on this
+    /// scan, since a stale module satisfies the compiler.
+    @Test func theImportScanSeesEverySpelling() {
+        let cases: [(line: String, modules: [String])] = [
+            ("import Foundation", ["Foundation"]),
+            ("import Carbon.HIToolbox", ["Carbon.HIToolbox"]),
+            ("@preconcurrency import AppKit", ["AppKit"]),
+            ("@_implementationOnly import AppKit", ["AppKit"]),
+            ("@testable import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("@_exported import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("@_spi(Internals) import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("internal import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("public import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("package import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("fileprivate import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("private import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("import struct XiaolaiDictCore.Ledger", ["XiaolaiDictCore"]),
+            ("import class XiaolaiDictCore.LedgerStore", ["XiaolaiDictCore"]),
+            ("import enum XiaolaiDictCore.LedgerError", ["XiaolaiDictCore"]),
+            ("import protocol XiaolaiDictCore.Probe", ["XiaolaiDictCore"]),
+            ("import typealias XiaolaiDictCore.Alias", ["XiaolaiDictCore"]),
+            ("import func XiaolaiDictCore.probe", ["XiaolaiDictCore"]),
+            ("import var XiaolaiDictCore.probe", ["XiaolaiDictCore"]),
+            ("import let XiaolaiDictCore.probe", ["XiaolaiDictCore"]),
+            ("    @preconcurrency @_spi(A) public import XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("@_spi(A) @_spi(B) internal import struct XiaolaiDictCore.Ledger", ["XiaolaiDictCore"]),
+            ("import Foundation; import AppKit", ["Foundation", "AppKit"]),
+            // Backticks around a component name the same module (WI-8).
+            ("import `SQLite3`", ["SQLite3"]),
+            ("import `Carbon`.`HIToolbox`", ["Carbon.HIToolbox"]),
+            ("import struct `XiaolaiDictCore`.Ledger", ["XiaolaiDictCore"]),
+            // And what is not an import must stay that way.
+            ("let important = 1", []),
+            ("importer.run()", []),
+            ("let line = \"import AppKit\"", []),
+            ("func imports() {}", []),
+        ]
+        for (line, modules) in cases {
+            #expect(Self.importedModules(in: line) == modules, "\(line)")
+        }
+    }
+
+    /// **Comments are whitespace to Swift, and a line-anchored scan is not.** `/**/ import SwiftUI`
+    /// compiles, and SwiftUI exists on every platform the portability check typechecks for — so for
+    /// ReviewKit this scan is the only thing between "Foundation only" and a view framework. The same
+    /// goes for an import split across lines. Found by trying to get past the four checks (WI-1).
+    @Test func theImportScanReadsPastCommentsAndLineBreaks() {
+        let cases: [(code: String, modules: [String])] = [
+            ("/**/ import SwiftUI", ["SwiftUI"]),
+            ("import/**/SwiftUI", ["SwiftUI"]),
+            ("/* a\n   b */ import SwiftUI", ["SwiftUI"]),
+            ("/* outer /* nested */ still a comment */ import SwiftUI", ["SwiftUI"]),
+            ("import\n    SwiftUI", ["SwiftUI"]),
+            ("@testable\nimport XiaolaiDictCore", ["XiaolaiDictCore"]),
+            ("import Foundation /* ; import AppKit */", ["Foundation"]),
+            ("import Foundation // ; import AppKit", ["Foundation"]),
+            // A string is not an import, whatever it holds.
+            ("let s = \"\"\"\nimport AppKit\n\"\"\"", []),
+            ("let s = \"; import AppKit\"", []),
+            ("let s = #\"a\\\"#; let t = \"; import AppKit\"", []),
+            ("/* import AppKit */", []),
+        ]
+        for (code, modules) in cases {
+            #expect(Self.importedModules(inCode: code) == modules, "\(code)")
+        }
+    }
+
+    /// **A dependency written as `.target(name:)` is not a second declaration.** The manifest reader
+    /// splits on every `.target(`, so `dependencies: [.target(name: "XiaolaiDictBase")]` read as an
+    /// empty list followed by a target called `XiaolaiDictBase` — and `reviewKitDependsOnNothing` saw
+    /// `[]`. Refused loudly instead, and checked on a string so the real manifest is never edited.
+    @Test func aTargetReferenceInADependencyListIsRefused() throws {
+        let manifest = """
+            .target(name: "ReviewKit", dependencies: [.target(name: "XiaolaiDictBase")]),
+            .target(name: "XiaolaiDictBase"),
+            """
+        #expect(throws: (any Error).self) { try Self.dependencyMap(of: manifest) }
+        let plain = """
+            .target(name: "ReviewKit", dependencies: ["XiaolaiDictBase"]),
+            .target(name: "XiaolaiDictBase"),
+            """
+        #expect(try Self.dependencyMap(of: plain)["ReviewKit"] == ["XiaolaiDictBase"])
+    }
+
+    /// **The edge, not just the import.** `eachTargetBindsOnlyWhatItIsAllowedTo` filters siblings out,
+    /// so a dependency on `XiaolaiDictBase` plus an import of it would pass that test and
+    /// `declaredDependenciesAndImportsAgree` both. The declaration is one exact line, so a `path:`,
+    /// `sources:`, `swiftSettings:` or `dependencies:` added to it is refused here too.
+    @Test func reviewKitDependsOnNothing() throws {
+        #expect(try Self.dependencyMap()["ReviewKit"] == [])
+        let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
+        let declarations = manifest.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.contains(#"name: "ReviewKit""#) }
+        #expect(declarations == [#".target(name: "ReviewKit"),"#], "\(declarations)")
+    }
+
+    /// **And its tests link it alone**, which is what makes them evidence that the logic runs without
+    /// the Mac's modules. `declaredDependenciesAndImportsAgree` skips test targets, so without this a
+    /// fixture target or the core could join the list and the claim would go on reading as true.
+    @Test func reviewKitTestsLinkReviewKitAlone() throws {
+        #expect(try Self.dependencyMap()["ReviewKitTests"] == ["ReviewKit"])
+        let bound = try Self.imports(under: Self.repository.appending(path: "Tests/ReviewKitTests"))
+            .reduce(into: Set<String>()) { $0.formUnion($1.modules) }
+        // The same row the compiler's verdict reads, so the two cannot drift apart.
+        #expect(bound == (try #require(Self.testTargetsMayBind["ReviewKitTests"])).union(["ReviewKit"]),
+                "\(bound.sorted())")
+    }
+
+    /// **No conditional compilation in ReviewKit, of any kind.** A `#if` is a second build whose
+    /// conditions the portability check cannot match: `#if canImport(XiaolaiDictCore)` compiled
+    /// against a stale Core module in an incremental build and silently dropped out of a clean one,
+    /// measured. Forbidding the directive closes the class — `SWIFT_PACKAGE`, `DEBUG`, `canImport`,
+    /// `XIAOLAIDICT_CAPTURE_INSTRUMENTS` — instead of enumerating flags. A legitimate future need is
+    /// a reasoned edit to this test.
+    @Test func reviewKitHasNoConditionalCompilation() throws {
+        let root = Self.repository.appending(path: "Sources/ReviewKit")
+        #expect(try SourceScan.code(under: root).count > 0, "nothing scanned under \(root.path)")
+        #expect(try Self.conditionalCompilation(under: root).isEmpty)
+    }
+
+    /// The control, in a copy: a planted `#if` is never written into `Sources`, where a parallel test
+    /// would read it and a crash would leave it for `swift build` to compile.
+    @Test func aPlantedConditionalIsFlagged() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-conditional")
+        let copy = scratch.appending("ReviewKit")
+        try FileManager.default.copyItem(at: Self.repository.appending(path: "Sources/ReviewKit"), to: copy)
+        #expect(try Self.conditionalCompilation(under: copy).isEmpty, "the clean copy was flagged")
+        for directive in ["#if canImport(XiaolaiDictCore)", "    #elseif SWIFT_PACKAGE", "#else",
+                          "let before = 1; #if canImport(AppKit)"] {
+            try "import Foundation\n\(directive)\nlet planted = 1\n"
+                .write(to: copy.appending(path: "Planted.swift"), atomically: true, encoding: .utf8)
+            #expect(try Self.conditionalCompilation(under: copy) == ["Planted.swift:2"], "\(directive)")
+        }
+    }
+
+    // MARK: - The services serve their own subject (ADR-0010)
+
+    /// The two XPC services, and what they may never bind: the review logic and the notification
+    /// center are the reader's side. `verify_service_boundaries` checks the linked binaries for the
+    /// same, which also sees what arrives transitively; this sees a source import the day it is typed.
+    static let services = ["XiaolaiDictService", "XiaolaiDictModelService"]
+    static let neverInAService: Set<String> = ["ReviewKit", "UserNotifications"]
+
+    /// **Neither service imports `ReviewKit` or `UserNotifications`, nor depends on `ReviewKit`.** The
+    /// reminder's delivery is the app's (WI-7), and `UNUserNotificationCenter.current()` aborts a
+    /// process with no app bundle — which a service started on demand would be, as far as that call is
+    /// concerned.
+    @Test func theServicesBindNeitherTheReviewLogicNorNotifications() throws {
+        let dependencies = try Self.dependencyMap()
+        for service in Self.services {
+            let files = try Self.imports(of: service)
+            #expect(!files.isEmpty, "nothing scanned under Sources/\(service)")
+            for (file, modules) in files {
+                let forbidden = Set(modules).intersection(Self.neverInAService)
+                #expect(forbidden.isEmpty, "\(service)/\(file) imports \(forbidden.sorted())")
+            }
+            let declared = try #require(dependencies[service], "\(service) has no declaration this test could read")
+            #expect(declared.intersection(Self.neverInAService).isEmpty, "\(service) depends on \(declared.sorted())")
+        }
+        // The control: the spellings a service would bind them by are read as those modules.
+        #expect(Set(Self.importedModules(inCode: "@preconcurrency import UserNotifications\nimport ReviewKit"))
+                == Self.neverInAService)
+    }
+
+    /// **Every build that tests also typechecks ReviewKit for iOS, watchOS, tvOS and macOS.**
+    /// `portability` is a prerequisite of `test-swift`, and `all`, `run`, `test` and `release` all
+    /// reach `test-swift`, so one edit covers every path and a new path that tests inherits it.
+    @Test func portabilityRunsOnEveryTestedBuild() throws {
+        let makefile = try String(contentsOf: Self.repository.appending(path: "Makefile"), encoding: .utf8)
+        #expect(Self.prerequisites(of: "test-swift", in: makefile).contains("portability"))
+        for rule in ["all", "run", "test", "release"] {
+            #expect(Self.prerequisites(of: rule, in: makefile).contains("test-swift"), "\(rule)")
+        }
+        let recipe = Self.recipe(of: "portability", in: makefile)
+        #expect(recipe.contains("Sources/ReviewKit"), "\(recipe)")
+        #expect(recipe.contains("-DSWIFT_PACKAGE"), "\(recipe)")
+        // **The compiler's import check allows what this table allows, and nothing else** (WI-8): one
+        // list, spelled twice, held equal here.
+        let permitted = try #require(Self.allowed["ReviewKit"]).sorted().joined(separator: ",")
+        #expect(recipe.contains("--imports \(permitted) Sources/ReviewKit"), "\(recipe)")
+
+        // The reader can fail: a rule that lists something else, and a recipe that is elsewhere.
+        let other = "test-swift: metal-guard\n\tswift test\nportability:\n\t@true\n"
+        #expect(!Self.prerequisites(of: "test-swift", in: other).contains("portability"))
+        #expect(!Self.recipe(of: "portability", in: other).contains("Sources/ReviewKit"))
+    }
+
+    // MARK: - The compiler's verdict, for every target (ADR-0047, addendum 2026-10-05)
+
+    /// **What every target binds, as the compiler lists it, judged against the same tables.**
+    ///
+    /// The scans above read text, and text has spellings they cannot read: an `import` between two
+    /// `/"/` regex literals is blanked as the inside of a string (WI-8). `make portability` closed that
+    /// for ReviewKit by asking the compiler; every other target's exact set still rested on the scan.
+    /// So the verdict, for every target `Package.swift` declares and for `ReviewKitTests`, is
+    /// `Tools/portability.sh --list-imports`: `swiftc -emit-imported-modules`, in every configuration a
+    /// real build compiles under and with each module of this package importable and not — so a
+    /// `#if DEBUG` or a `#if canImport(XiaolaiDictCore)` is asked both ways. The scans stay as the first
+    /// check: they name the file, and they keep `Carbon.HIToolbox` apart from `Carbon`, which the
+    /// compiler lists as one module. The list of subjects comes from the manifest, and
+    /// `everyLibraryTargetIsEitherCheckedOrTheViewLayer` is what refuses a manifest read that came back
+    /// short.
+    @Test(.timeLimit(.minutes(1)), arguments: try subjects())
+    func theCompilerHoldsEveryTargetToItsBoundary(target: String) throws {
+        let compiled = try Self.compiledImports(of: Self.sources(of: target))
+        let problems = try Self.verdict(on: target, compiled: compiled)
+        #expect(problems.isEmpty, "\(problems)")
+    }
+
+    /// One planted file, in a copy of `DictionaryIndex` — Foundation and SQLite3, and the format module.
+    struct Plant: Sendable, CustomTestStringConvertible {
+        let name: String
+        let source: String?
+        /// What the verdict must say, or nil for a copy that must pass.
+        let refusal: String?
+        /// Whether the text scan reads no import in it — the hole this verdict exists to close.
+        let pastTheScan: Bool
+        var testDescription: String { name }
+
+        /// The verdict on one module `DictionaryIndex`'s table does not allow.
+        static func unallowed(_ module: String) -> String {
+            "DictionaryIndex binds \(module), which is not in its allowed set"
+        }
+
+        /// The verdict on a condition no build configuration decides and no entry allows.
+        static func undecided(_ condition: String, in place: String = "DictionaryIndex/Planted.swift") -> String {
+            "\(place): \(condition) — no build configuration decides it, and no entry in conditionsAllowed allows it"
+        }
+
+        /// `statement` between two regex literals, which the scan reads as the inside of one string.
+        static func hidden(_ statement: String) -> String {
+            "func plantedBefore() -> Bool { \"x\".contains(/\"/) }\n\(statement)\n"
+                + "func plantedAfter() -> Bool { \"x\".contains(/\"/) }\n"
+        }
+    }
+
+    static let plants: [Plant] = [
+        Plant(name: "nothing planted", source: nil, refusal: nil, pastTheScan: false),
+        // WI-8's three spellings, and the plain import they are spellings of.
+        Plant(name: "an import between two regex literals", source: Plant.hidden("import Dispatch"),
+              refusal: Plant.unallowed("Dispatch"), pastTheScan: true),
+        Plant(name: "a backticked import", source: "import `Compression`\n",
+              refusal: Plant.unallowed("Compression"), pastTheScan: false),
+        Plant(name: "a directive after a semicolon",
+              source: "import Foundation; #if canImport(Dispatch)\nimport Dispatch\n#endif\n",
+              refusal: Plant.unallowed("Dispatch"), pastTheScan: false),
+        Plant(name: "a plain import", source: "import AppKit\n",
+              refusal: Plant.unallowed("AppKit"), pastTheScan: false),
+        // Hidden from the scan *and* in a clause only some builds compile: one configuration is not enough.
+        Plant(name: "hidden in a clause only a release compiles",
+              source: "#if !DEBUG\n" + Plant.hidden("import Accelerate") + "#endif\n",
+              refusal: Plant.unallowed("Accelerate"), pastTheScan: true),
+        Plant(name: "hidden in a clause only a development bundle compiles",
+              source: "#if XIAOLAIDICT_CAPTURE_INSTRUMENTS\n" + Plant.hidden("import Accelerate") + "#endif\n",
+              refusal: Plant.unallowed("Accelerate"), pastTheScan: true),
+        // True in an incremental build, where the module is already in `.build`; false in a clean one.
+        Plant(name: "hidden behind a sibling's canImport",
+              source: "#if canImport(XiaolaiDictCore)\n" + Plant.hidden("import Accelerate") + "#endif\n",
+              refusal: Plant.unallowed("Accelerate"), pastTheScan: true),
+        Plant(name: "a sibling hidden between regex literals", source: Plant.hidden("import XiaolaiDictBase"),
+              refusal: "DictionaryIndex imports XiaolaiDictBase without Package.swift naming it", pastTheScan: true),
+    ]
+
+    /// **The controls: each binding planted in a copy is refused, and the clean copy passes.** Never
+    /// planted into `Sources`, where a parallel test would read it and a crash would leave it for
+    /// `swift build` to compile.
+    @Test(.timeLimit(.minutes(1)), arguments: plants)
+    func aBindingPlantedInACopyIsRefusedByTheCompilersVerdict(plant: Plant) throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-binding")
+        let copy = scratch.appending("DictionaryIndex")
+        try FileManager.default.copyItem(at: Self.sources(of: "DictionaryIndex"), to: copy)
+        if let source = plant.source {
+            try source.write(to: copy.appending(path: "Planted.swift"), atomically: true, encoding: .utf8)
+            #expect(Self.importedModules(inCode: source).isEmpty == plant.pastTheScan,
+                    "the text scan read \(Self.importedModules(inCode: source))")
+        }
+        let problems = try Self.verdict(on: "DictionaryIndex", compiled: Self.compiledImports(of: copy))
+        // Exactly the one problem the plant is: nothing else in the copy may read as one.
+        #expect(problems == (plant.refusal.map { [$0] } ?? []), "\(problems)")
+    }
+
+    /// **The verdict can fail every way it claims to**, on lists no compiler made: an empty one, one
+    /// that lost a permitted module, a declared edge nothing imports, a service binding what it never
+    /// may, and a test target binding more than its own subject.
+    @Test func theVerdictCanFailEveryWay() throws {
+        #expect(try Self.verdict(on: "DictionaryIndex", compiled: []).contains(
+            "DictionaryIndex: the compiler listed no import at all, and a list that found nothing cannot be "
+                + "trusted to have found the rest"))
+        #expect(try Self.verdict(on: "DictionaryIndex", compiled: ["Foundation", "AppleDictionaryFormat"])
+                == ["DictionaryIndex no longer binds SQLite3 — drop it from the list"])
+        #expect(try Self.verdict(on: "DictionaryIndex", compiled: ["Foundation", "SQLite3"])
+                == ["DictionaryIndex depends on AppleDictionaryFormat and imports it nowhere"])
+        #expect(try Self.verdict(on: "DictionaryIndex", compiled: ["Foundation", "SQLite3", "AppleDictionaryFormat"])
+                .isEmpty)
+        // `Carbon.HIToolbox` is permitted as the module the compiler reports it as.
+        #expect(try Self.verdict(on: "XiaolaiDictCore", compiled: [
+            "Foundation", "CoreGraphics", "NaturalLanguage", "CoreServices", "SQLite3", "FoundationModels",
+            "Carbon", "os", "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit",
+        ]).isEmpty)
+        let service = try #require(Self.dependencyMap()["XiaolaiDictService"])
+        #expect(try Self.verdict(on: "XiaolaiDictService", compiled: service.union(["Foundation", "UserNotifications"]))
+                == ["XiaolaiDictService binds UserNotifications, which a service never may"])
+        #expect(try Self.verdict(on: "ReviewKitTests", compiled: ["Foundation", "Testing", "ReviewKit", "Combine"])
+                == ["ReviewKitTests binds Combine, which is not in its allowed set"])
+        #expect(try Self.verdict(on: "Undeclared", compiled: ["Foundation"])
+                == ["Undeclared has no declaration this test could read"])
+    }
+
+    // MARK: - Every condition is one the build configurations decide (the final closing pass, finding 3)
+
+    /// The defines the import list's three configurations are asked under: `theFlagsAreTheConfigurationsDefines`
+    /// holds this to the `configurations` line of `Tools/portability.sh`, so the two cannot drift apart.
+    static let buildFlags: Set<String> = ["SWIFT_PACKAGE", "DEBUG", "XIAOLAIDICT_CAPTURE_INSTRUMENTS"]
+
+    /// **A condition no configuration decides, allowed by name and target, with its reason** — the table this
+    /// verdict reads, and the only way such a condition passes. An entry nothing holds any more is refused too.
+    static let conditionsAllowed: [String: [String: String]] = [
+        "XiaolaiDict": [
+            // `TranslationReport` asks the framework only where the SDK has it. An SDK framework, not a module
+            // of this package or another: importable in every build of every configuration, on every Mac that
+            // builds — so `--list-imports` answers it as every build does, and lists `Translation`.
+            "canImport(Translation)": "an SDK framework, decided by the SDK and never by what a build has built",
+        ],
+    ]
+
+    /// **What a target's conditions are allowed to be, judged as the parser read them, never evaluated.**
+    ///
+    /// The compiler's list is asked in the three configurations and with every sibling importable and not —
+    /// which decides a define and an all-or-nothing `canImport` of a sibling, and nothing else. Another
+    /// package's `canImport(MLX)`, or `canImport(A) && !canImport(B)` of two siblings, is true in some
+    /// incremental build and in no pass the list makes, so the import behind it was never listed: the verdict
+    /// depended on what happened to be importable. So a condition must be built from the configurations' own
+    /// defines — or be in `conditionsAllowed` for this target, with its reason.
+    @Test(.timeLimit(.minutes(1)), arguments: try subjects())
+    func everyConditionIsOneTheBuildConfigurationsDecide(target: String) throws {
+        let problems = Self.conditionVerdict(on: target, listed: try Self.conditions(of: Self.sources(of: target)))
+        #expect(problems.isEmpty, "\(problems)")
+    }
+
+    /// **The hole, planted in a copy of `DictionaryIndex`**, each import hidden from the text scan between
+    /// regex literals: the compiler's verdict passes it, as the reviewer found, and the condition is refused.
+    static let conditionPlants: [Plant] = [
+        Plant(name: "behind another package's canImport",
+              source: "#if canImport(MLX)\n" + Plant.hidden("import AppKit") + "#endif\n",
+              refusal: Plant.undecided("#if canImport(MLX)"), pastTheScan: true),
+        Plant(name: "behind some siblings' canImport and not others'",
+              source: "#if canImport(AppleDictionaryFormat) && !canImport(XiaolaiDictCore)\n"
+                + Plant.hidden("import AppKit") + "#endif\n",
+              refusal: Plant.undecided("#if canImport(AppleDictionaryFormat) && !canImport(XiaolaiDictCore)"),
+              pastTheScan: true),
+        // And the same two after a `;`, the spelling a line-start reader of text misses.
+        Plant(name: "after a semicolon, behind another package's canImport",
+              source: "let opening = 1; #if canImport(MLX)\n" + Plant.hidden("import AppKit") + "#endif\n",
+              refusal: Plant.undecided("#if canImport(MLX)"), pastTheScan: true),
+    ]
+
+    @Test(.timeLimit(.minutes(1)), arguments: conditionPlants)
+    func aConditionOnWhatABuildHasBuiltIsRefused(plant: Plant) throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-condition")
+        let copy = scratch.appending("DictionaryIndex")
+        try FileManager.default.copyItem(at: Self.sources(of: "DictionaryIndex"), to: copy)
+        let source = try #require(plant.source)
+        try source.write(to: copy.appending(path: "Planted.swift"), atomically: true, encoding: .utf8)
+        #expect(Self.importedModules(inCode: source).isEmpty == plant.pastTheScan,
+                "the text scan read \(Self.importedModules(inCode: source))")
+        // The premise: what the compiler lists cannot see it, in any pass it makes.
+        #expect(try Self.verdict(on: "DictionaryIndex", compiled: Self.compiledImports(of: copy)).isEmpty,
+                "premise: the compiler's verdict saw the hidden import after all")
+        let problems = Self.conditionVerdict(on: "DictionaryIndex", listed: try Self.conditions(of: copy))
+        #expect(problems == (plant.refusal.map { [$0] } ?? []), "\(problems)")
+    }
+
+    /// **The verdict can fail every way it claims to**, on lists no parser made.
+    @Test func theConditionVerdictCanFailEveryWay() {
+        func listed(_ text: String, _ directive: String = "#if") -> [ListedCondition] {
+            [ListedCondition(file: "Planted.swift", directive: directive, text: text)]
+        }
+        for decided in ["DEBUG", "!XIAOLAIDICT_CAPTURE_INSTRUMENTS", "SWIFT_PACKAGE && !(DEBUG || XIAOLAIDICT_CAPTURE_INSTRUMENTS)"] {
+            #expect(Self.conditionVerdict(on: "DictionaryIndex", listed: listed(decided)).isEmpty, "\(decided)")
+        }
+        for undecided in ["canImport(XiaolaiDictCore)", "os(macOS)", "FEATURE_NOBODY_PASSES", "DEBUG || canImport(MLX)",
+                          "compiler(>=6.0)", "true"] {
+            #expect(Self.conditionVerdict(on: "DictionaryIndex", listed: listed(undecided))
+                    == [Plant.undecided("#if \(undecided)")], "\(undecided)")
+        }
+        #expect(Self.conditionVerdict(on: "DictionaryIndex", listed: listed("canImport(MLX)", "#elseif"))
+                == [Plant.undecided("#elseif canImport(MLX)")])
+        #expect(Self.conditionVerdict(on: "DictionaryIndex", listed: listed(""))
+                == [Plant.undecided("#if (a condition the parser does not bound)")])
+        // An allowance is its own target's, and one nothing uses any more is a line to drop.
+        #expect(Self.conditionVerdict(on: "XiaolaiDict", listed: listed("canImport(Translation)")).isEmpty)
+        #expect(Self.conditionVerdict(on: "DictionaryIndex", listed: listed("canImport(Translation)"))
+                == [Plant.undecided("#if canImport(Translation)")])
+        #expect(Self.conditionVerdict(on: "XiaolaiDict", listed: [])
+                == ["XiaolaiDict allows canImport(Translation), which no condition holds any more — drop it from the table"])
+    }
+
+    /// **The flags are the configurations' defines, read off the script**, and the reader can fail.
+    @Test func theFlagsAreTheConfigurationsDefines() throws {
+        let script = try String(contentsOf: Self.repository.appending(path: "Tools/portability.sh"), encoding: .utf8)
+        #expect(try Self.configurationDefines(in: script) == Self.buildFlags)
+        let fourth = script.replacingOccurrences(of: #""-DSWIFT_PACKAGE")"#, with: #""-DSWIFT_PACKAGE" "-DFOURTH")"#)
+        #expect(fourth != script, "premise: the configurations line is where the reader looks")
+        #expect(try Self.configurationDefines(in: fourth) == Self.buildFlags.union(["FOURTH"]))
+        #expect(throws: (any Error).self) { try Self.configurationDefines(in: "#!/bin/bash\n") }
+    }
+
+    /// **A list of conditions that could not be made is never an empty one**, as for the compiler's list.
+    @Test(.timeLimit(.minutes(1))) func aListOfConditionsThatCouldNotBeMadeThrows() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-unlistable-conditions")
+        let empty = scratch.appending("Empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(throws: ScriptRefused.self) { try Self.conditions(of: empty) }
+        let broken = scratch.appending("Broken")
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try "#if DEBUG\nlet = \n#endif\n".write(to: broken.appending(path: "Broken.swift"), atomically: true, encoding: .utf8)
+        #expect(throws: ScriptRefused.self) { try Self.conditions(of: broken) }
+    }
+
+    /// One `#if` or `#elseif` and its condition, as the parser read it. An empty condition is one it could
+    /// not bound.
+    struct ListedCondition: Sendable, Equatable {
+        let file: String
+        let directive: String
+        let text: String
+    }
+
+    /// Every rule above, asked of one target's conditions: decided by the configurations, or allowed by name.
+    static func conditionVerdict(on target: String, listed: [ListedCondition]) -> [String] {
+        let allowed = conditionsAllowed[target] ?? [:]
+        var problems: [String] = [], used: Set<String> = []
+        for condition in listed {
+            if decidedByTheConfigurations(condition.text) { continue }
+            if allowed[condition.text] != nil {
+                used.insert(condition.text)
+                continue
+            }
+            let text = condition.text.isEmpty ? "(a condition the parser does not bound)" : condition.text
+            problems.append(Plant.undecided("\(condition.directive) \(text)", in: "\(target)/\(condition.file)"))
+        }
+        for unused in Set(allowed.keys).subtracting(used).sorted() {
+            problems.append("\(target) allows \(unused), which no condition holds any more — drop it from the table")
+        }
+        return problems
+    }
+
+    /// Whether `condition` is built from `buildFlags` alone, with `!`, `&&`, `||` and parentheses: then the
+    /// three configurations decide it, and the import list has asked it every way a build can.
+    static func decidedByTheConfigurations(_ condition: String) -> Bool {
+        let names = condition.matches(of: /[A-Za-z_][A-Za-z0-9_]*/).map { String($0.output) }
+        let rest = condition.replacing(/[A-Za-z_][A-Za-z0-9_]*/, with: "")
+        return !names.isEmpty && Set(names).isSubset(of: buildFlags) && rest.allSatisfy { "!&|() ".contains($0) }
+    }
+
+    /// The `-D` defines on the `configurations=(…)` line of a copy of `Tools/portability.sh`.
+    static func configurationDefines(in script: String) throws -> Set<String> {
+        guard let line = script.split(separator: "\n").first(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("configurations=(")
+        }) else { throw ScriptRefused(arguments: ["configurations"], status: 0, said: "no configurations line") }
+        return Set(line.matches(of: /-D([A-Za-z_][A-Za-z0-9_]*)/).map { String($0.output.1) })
+    }
+
+    /// What the parser reads `directory`'s conditions as: `Tools/portability.sh --list-conditions`. A refusal
+    /// throws, carrying what the script said.
+    static func conditions(of directory: URL) throws -> [ListedCondition] {
+        try portability(["--list-conditions", directory.path]).split(separator: "\n").map { line in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 3 else {
+                throw ScriptRefused(arguments: ["--list-conditions", directory.path], status: 0,
+                                    said: "a line that is not file, directive and condition: \(line)")
+            }
+            return ListedCondition(file: fields[0], directive: fields[1], text: fields[2])
+        }
+    }
+
+    // MARK: - The manifest, as SwiftPM reads it (the final closing pass, finding 4)
+
+    /// **Every target name, whatever it is spelled with.** A target called `Unsafe2` was no target to the
+    /// reader — its name pattern had no digit — so it got no verdict, and the coverage check compared the
+    /// manifest with a reading of itself and could not notice.
+    @Test func theManifestReaderReadsATargetNameWithADigit() throws {
+        let real = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
+        let anchor = #".target(name: "ReviewKit"),"#
+        #expect(real.contains(anchor), "premise: the manifest declares ReviewKit on one line")
+        let planted = real.replacingOccurrences(
+            of: anchor, with: anchor + "\n        .target(name: \"Unsafe2\", dependencies: [\"ReviewKit\"]),")
+        let read = try Self.targets(in: planted)
+        #expect(read.contains("Unsafe2"), "\(read)")
+        #expect(try Self.dependencyMap(of: planted)["Unsafe2"] == ["ReviewKit"])
+    }
+
+    /// **The reader agrees with SwiftPM**, which evaluates the manifest: every target and every in-package
+    /// dependency. What the reader cannot spell, whatever its next blind spot is, is a disagreement here —
+    /// the coverage no longer rests on the reader's own reading. `dump-package` with a scratch path of its
+    /// own: about 0.5 s, byte-identical run to run, and nothing of `swift test`'s `.build` to wait on.
+    @Test(.timeLimit(.minutes(1))) func theManifestReaderAgreesWithSwiftPM() throws {
+        let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
+        let disagreements = try Self.disagreements(reading: manifest, swiftPM: Self.swiftPMTargets(of: Self.repository))
+        #expect(disagreements.isEmpty, "\(disagreements)")
+    }
+
+    /// **The control: a copy of the manifest with a target the reader of the original never saw** — SwiftPM
+    /// lists it, and the comparison names it.
+    @Test(.timeLimit(.minutes(1))) func aTargetTheReaderMissedIsADisagreement() throws {
+        let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
+        let anchor = #".target(name: "ReviewKit"),"#
+        let planted = manifest.replacingOccurrences(
+            of: anchor, with: anchor + "\n        .target(name: \"Unsafe2\", dependencies: [\"ReviewKit\"]),")
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-manifest")
+        try planted.write(to: scratch.appending("Package.swift"), atomically: true, encoding: .utf8)
+        let dumped = try Self.swiftPMTargets(of: scratch.url)
+        #expect(dumped["Unsafe2"] == ["ReviewKit"], "premise: SwiftPM read the planted target")
+        #expect(try Self.disagreements(reading: manifest, swiftPM: dumped)
+                == ["Unsafe2 is a target to SwiftPM and not to the reader"])
+        #expect(try Self.disagreements(reading: planted, swiftPM: dumped).isEmpty)
+    }
+
+    /// Where the reader and SwiftPM differ: a target one has and the other does not, or different in-package
+    /// dependencies. The reader's targets are the non-test ones; its dependency map has the tests too.
+    static func disagreements(reading manifest: String, swiftPM: [String: Set<String>]) throws -> [String] {
+        let read = try dependencyMap(of: manifest)
+        var problems: [String] = []
+        for target in Set(swiftPM.keys).subtracting(read.keys).sorted() {
+            problems.append("\(target) is a target to SwiftPM and not to the reader")
+        }
+        for target in Set(read.keys).subtracting(swiftPM.keys).sorted() {
+            problems.append("\(target) is a target to the reader and not to SwiftPM")
+        }
+        for (target, dependencies) in read.sorted(by: { $0.key < $1.key }) {
+            guard let theirs = swiftPM[target], theirs != dependencies else { continue }
+            problems.append("\(target) depends on \(dependencies.sorted()) to the reader and \(theirs.sorted()) to SwiftPM")
+        }
+        return problems
+    }
+
+    /// Every target of the package at `root` and its in-package dependencies, as `swift package dump-package`
+    /// evaluates the manifest — a product of another package is not one.
+    static func swiftPMTargets(of root: URL) throws -> [String: Set<String>] {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-dump-package")
+        let arguments = ["swift", "package", "--package-path", root.path, "--scratch-path",
+                         scratch.appending("build").path, "dump-package"]
+        let (status, output, said) = try run("/usr/bin/xcrun", arguments, scratch: scratch)
+        guard status == 0 else { throw ScriptRefused(arguments: arguments, status: status, said: said) }
+        guard let dump = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
+              let targets = dump["targets"] as? [[String: Any]] else {
+            throw ScriptRefused(arguments: arguments, status: status, said: "no targets in the dump")
+        }
+        let names = Set(targets.compactMap { $0["name"] as? String })
+        var map: [String: Set<String>] = [:]
+        for target in targets {
+            guard let name = target["name"] as? String else {
+                throw ScriptRefused(arguments: arguments, status: status, said: "a target with no name")
+            }
+            let dependencies = (target["dependencies"] as? [[String: Any]] ?? []).compactMap { dependency in
+                ((dependency["byName"] ?? dependency["target"]) as? [Any])?.first as? String
+            }
+            map[name] = Set(dependencies).intersection(names)
+        }
+        return map
+    }
+
+    /// **A list that could not be made is never an empty one.** The script refuses a directory with no
+    /// Swift in it and a file the compiler cannot read, and the refusal reaches the test as a throw that
+    /// carries what the script said.
+    @Test(.timeLimit(.minutes(1))) func aListTheCompilerCouldNotMakeThrows() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-unlistable")
+        let empty = scratch.appending("Empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(throws: CompilerList.self) { try Self.compiledImports(of: empty) }
+        let broken = scratch.appending("Broken")
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try "import\n".write(to: broken.appending(path: "Broken.swift"), atomically: true, encoding: .utf8)
+        #expect(throws: CompilerList.self) { try Self.compiledImports(of: broken) }
+    }
+
+    /// Every target `Package.swift` declares but the fixture target, and `ReviewKitTests`.
+    static func subjects() throws -> [String] {
+        try targets().filter { $0 != "XiaolaiDictTestSupport" } + ["ReviewKitTests"]
+    }
+
+    /// A test target's directory is under `Tests`, every other under `Sources`.
+    static func sources(of target: String) -> URL {
+        repository.appending(path: target.hasSuffix("Tests") ? "Tests" : "Sources").appending(path: target)
+    }
+
+    /// What a test target may bind besides its declared dependencies. Its own row, because
+    /// `declaredDependenciesAndImportsAgree` skips test targets — and `ReviewKitTests` linking ReviewKit
+    /// alone is the evidence that the logic runs without the Mac's modules.
+    static let testTargetsMayBind: [String: Set<String>] = ["ReviewKitTests": ["Foundation", "Testing"]]
+
+    /// `import Carbon.HIToolbox` is listed by the compiler as `Carbon`: the module, not the submodule.
+    static func topLevel(_ module: String) -> String { String(module.prefix { $0 != "." }) }
+
+    /// Every rule above, asked of one target's compiled list: its table, exactly (top-level names);
+    /// its declared dependencies, exactly; and for a service, nothing it may never bind.
+    static func verdict(on target: String, compiled: Set<String>) throws -> [String] {
+        let ours = Set(try targets())
+        var problems: [String] = []
+        if compiled.isEmpty {
+            problems.append("\(target): the compiler listed no import at all, and a list that found nothing "
+                            + "cannot be trusted to have found the rest")
+        }
+        if let table = allowed[target] ?? testTargetsMayBind[target] {
+            let permitted = Set(table.map(topLevel))
+            let bound = compiled.subtracting(ours)
+            for module in bound.subtracting(permitted).sorted() {
+                problems.append("\(target) binds \(module), which is not in its allowed set")
+            }
+            for module in permitted.subtracting(bound).sorted() {
+                problems.append("\(target) no longer binds \(module) — drop it from the list")
+            }
+        }
+        if let declared = try dependencyMap()[target] {
+            let imported = compiled.intersection(ours)
+            for module in imported.subtracting(declared).sorted() {
+                problems.append("\(target) imports \(module) without Package.swift naming it")
+            }
+            for module in declared.subtracting(imported).sorted() {
+                problems.append("\(target) depends on \(module) and imports it nowhere")
+            }
+        } else {
+            problems.append("\(target) has no declaration this test could read")
+        }
+        if services.contains(target) {
+            for module in compiled.intersection(neverInAService).sorted() {
+                problems.append("\(target) binds \(module), which a service never may")
+            }
+        }
+        return problems
+    }
+
+    /// What the compiler lists `directory` importing, in every build that compiles it, with every module
+    /// of this package importable and not: `Tools/portability.sh --list-imports`. **A refusal throws,
+    /// carrying what the script said** — a list that could not be made is never an empty one. Its module
+    /// cache goes in this call's own scratch directory, removed with it.
+    static func compiledImports(of directory: URL) throws -> Set<String> {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-compiled-imports")
+        let (status, output, said) = try run(
+            repository.appending(path: "Tools/portability.sh").path,
+            ["--list-imports", directory.path, "--siblings", try targets().joined(separator: ",")], scratch: scratch)
+        guard status == 0 else { throw CompilerList.refused(directory: directory.path, status: status, said: said) }
+        return Set(output.split(separator: "\n").map(String.init))
+    }
+
+    /// What `Tools/portability.sh` printed for `arguments`, or a throw carrying what it said.
+    static func portability(_ arguments: [String]) throws -> String {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-portability-run")
+        let (status, output, said) = try run(repository.appending(path: "Tools/portability.sh").path, arguments,
+                                             scratch: scratch)
+        guard status == 0 else { throw ScriptRefused(arguments: arguments, status: status, said: said) }
+        return output
+    }
+
+    /// Runs `executable` with `scratch` as its `TMPDIR`: its exit status, what it printed, and what it said on
+    /// standard error. **Standard output is read before waiting**: a pipe the child fills while nobody reads it
+    /// never lets the child exit. Standard error goes to a file in `scratch`, which is removed with it.
+    static func run(_ executable: String, _ arguments: [String],
+                    scratch: TemporaryDirectory) throws -> (status: Int32, output: String, said: String) {
+        let said = scratch.appending("stderr.txt")
+        try Data().write(to: said)
+        let errors = try FileHandle(forWritingTo: said)
+        defer { try? errors.close() }
+        let listed = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(["TMPDIR": scratch.url.path]) { $1 }
+        process.standardOutput = listed
+        process.standardError = errors
+        try process.run()
+        let output = listed.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self),
+                (try? String(contentsOf: said, encoding: .utf8)) ?? "")
+    }
+
+    /// A run of `Tools/portability.sh` or `swift package` that refused, and what it said.
+    struct ScriptRefused: Error, CustomStringConvertible {
+        let arguments: [String]
+        let status: Int32
+        let said: String
+
+        var description: String { "\(arguments.joined(separator: " ")) exited \(status):\n\(said)" }
+    }
+
+    enum CompilerList: Error, CustomStringConvertible {
+        case refused(directory: String, status: Int32, said: String)
+
+        var description: String {
+            switch self {
+            case .refused(let directory, let status, let said):
+                "Tools/portability.sh --list-imports \(directory) exited \(status):\n\(said)"
+            }
+        }
+    }
+
     // MARK: - Reading the tree and the manifest
 
     /// Every `.swift` under `Sources/<target>`, with its import lines. Comments stripped by
     /// `SourceScan` for the reason it strips them: a doc comment naming `AppKit` is not an import.
     private static func imports(of target: String) throws -> [(file: String, modules: [String])] {
-        let root = repository.appending(path: "Sources").appending(path: target)
-        let line = try Regex(#"^\s*(?:@preconcurrency\s+|@_implementationOnly\s+)?import\s+([A-Za-z_][A-Za-z0-9_.]*)"#)
-        return try SourceScan.code(under: root).map { file, code in
-            let modules = code.components(separatedBy: "\n").compactMap { row -> String? in
-                guard let match = try? line.firstMatch(in: row) else { return nil }
-                return String(match.output[1].substring ?? "")
-            }
-            return (file.lastPathComponent, modules)
+        try imports(under: repository.appending(path: "Sources").appending(path: target))
+    }
+
+    private static func imports(under root: URL) throws -> [(file: String, modules: [String])] {
+        try SourceScan.code(under: root).map { file, code in
+            (file.lastPathComponent, importedModules(inCode: code))
         }
+    }
+
+    /// The modules a line imports, in the order written. See `importedModules(inCode:)`.
+    static func importedModules(in line: String) -> [String] { importedModules(inCode: line) }
+
+    /// The modules a file imports, in the order written. Any run of attributes (`@testable`,
+    /// `@_spi(…)`, …), then an optional access level, then `import`, then an optional kind — and a
+    /// kind import names a declaration, so `import struct X.Y` binds `X`. A plain dotted import keeps
+    /// its path, which is how `Carbon.HIToolbox` is listed above.
+    ///
+    /// **Read as Swift reads it, not line by line.** Comments and string contents are blanked first,
+    /// since a comment is whitespace to the compiler and a string is not code; `;` ends a statement as a
+    /// line break does; and whitespace inside a declaration may cross lines.
+    static func importedModules(inCode code: String) -> [String] {
+        let text = codeOnly(code).replacingOccurrences(of: ";", with: "\n")
+        // A path component may be written in backticks — ``import `SQLite3` `` binds SQLite3 — and was
+        // read as no import at all (WI-8). The compiler is the authority for every target
+        // (`theCompilerHoldsEveryTargetToItsBoundary`); this is the first check, and the one that names the file.
+        let statement = /^[ \t]*(?:@\w+(?:\([^)]*\))?\s*)*(?:(?:public|package|internal|fileprivate|private)\s+)?import\s+(?:(struct|class|enum|protocol|typealias|func|var|let)\s+)?(`?[A-Za-z_][A-Za-z0-9_]*`?(?:\.`?[A-Za-z_][A-Za-z0-9_]*`?)*)/
+            .anchorsMatchLineEndings()
+        return text.matches(of: statement).map { match in
+            let path = String(match.output.2).replacingOccurrences(of: "`", with: "")
+            guard match.output.1 != nil, let last = path.lastIndex(of: ".") else { return path }
+            return String(path[path.startIndex..<last])
+        }
+    }
+
+    /// `code` with every comment replaced by a space and every string literal's contents removed, so
+    /// neither can look like an import or hide one. Block comments nest, as Swift's do; a raw string
+    /// ends only at a quote followed by as many `#` as opened it, and has no backslash escapes.
+    static func codeOnly(_ code: String) -> String {
+        let characters = Array(code)
+        func starts(_ token: String, at index: Int) -> Bool {
+            let token = Array(token)
+            return index + token.count <= characters.count
+                && Array(characters[index..<(index + token.count)]) == token
+        }
+        var out = "", index = 0
+        while index < characters.count {
+            if starts("//", at: index) {
+                while index < characters.count, characters[index] != "\n" { index += 1 }
+            } else if starts("/*", at: index) {
+                var depth = 0
+                repeat {
+                    if starts("/*", at: index) { depth += 1; index += 2 }
+                    else if starts("*/", at: index) { depth -= 1; index += 2 }
+                    else { index += 1 }
+                } while depth > 0 && index < characters.count
+                out += " "
+            } else {
+                var hashes = 0
+                while index + hashes < characters.count, characters[index + hashes] == "#" { hashes += 1 }
+                guard index + hashes < characters.count, characters[index + hashes] == "\"" else {
+                    // `#if`, `#available`, or any character that opens nothing.
+                    let run = max(hashes, 1)
+                    out += String(characters[index..<(index + run)])
+                    index += run
+                    continue
+                }
+                let quote = starts("\"\"\"", at: index + hashes) ? "\"\"\"" : "\""
+                let close = quote + String(repeating: "#", count: hashes)
+                index += hashes + quote.count
+                while index < characters.count, !starts(close, at: index) {
+                    index += characters[index] == "\\" && hashes == 0 ? 2 : 1
+                }
+                index += close.count
+                out += "\"\""
+            }
+        }
+        return out
+    }
+
+    /// `file:line` for every line under `root` that opens or continues a conditional block — at the
+    /// start of the line or of any statement on it: ``import Foundation; #if canImport(AppKit)`` parses,
+    /// and a line-start scan read it as no directive (WI-8). The parser is the authority for ReviewKit
+    /// (`Tools/portability.sh`); this is the fast first check.
+    private static func conditionalCompilation(under root: URL) throws -> [String] {
+        try SourceScan.code(under: root).flatMap { file, code in
+            code.components(separatedBy: "\n").enumerated().compactMap { index, line -> String? in
+                let statements = line.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard statements.contains(where: { text in
+                    ["#if", "#elseif", "#else"].contains(where: { text.hasPrefix($0) })
+                }) else { return nil }
+                return "\(file.lastPathComponent):\(index + 1)"
+            }
+        }.sorted()
+    }
+
+    /// The words after `<rule>:` on the line that declares it, or nothing if no line does.
+    private static func prerequisites(of rule: String, in makefile: String) -> [String] {
+        guard let line = makefile.split(separator: "\n").first(where: { $0.hasPrefix("\(rule):") }) else { return [] }
+        return line.dropFirst(rule.count + 1).split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// The tab-indented lines under `<rule>:`, joined.
+    private static func recipe(of rule: String, in makefile: String) -> String {
+        let lines = makefile.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("\(rule):") }) else { return "" }
+        return lines[lines.index(after: start)...].prefix { $0.hasPrefix("\t") }.joined(separator: "\n")
     }
 
     /// The target names `Package.swift` declares.
     private static func targets() throws -> [String] {
-        let manifest = try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
-        let declared = try Regex(#"\.(?:executableT|t)arget\(\s*name: "([A-Za-z]+)""#)
+        try targets(in: String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8))
+    }
+
+    private static func targets(in manifest: String) throws -> [String] {
+        // **Any name SwiftPM accepts**, not a pattern of letters: `Unsafe2` was no target to this reader (the
+        // final closing pass, finding 4). SwiftPM takes any string and makes a module name of it, so the
+        // reader takes everything up to the closing quote; `theManifestReaderAgreesWithSwiftPM` is what
+        // holds it to SwiftPM's own reading.
+        let declared = try Regex(#"\.(?:executableT|t)arget\(\s*name: "([^"\\]+)""#)
         return manifest.matches(of: declared).map { String($0.output[1].substring ?? "") }
     }
 
@@ -210,19 +1022,26 @@ struct ModuleBoundaryTests {
     /// `.product(name: "MLX", package: …)` entries name external packages and are dropped — the
     /// import check has nothing to say about them.
     private static func dependencyMap() throws -> [String: Set<String>] {
-        let manifest = try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
-        let ours = Set(try targets())
+        try dependencyMap(of: String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8))
+    }
+
+    private static func dependencyMap(of manifest: String) throws -> [String: Set<String>] {
+        let ours = Set(try targets(in: manifest))
         let head = try Regex(#"\.(?:executableT|testT|t)arget\("#)
         var starts = manifest.ranges(of: head).map(\.lowerBound)
         starts.append(manifest.endIndex)
-        let name = try Regex(#"name:\s*"([A-Za-z]+)""#)
-        let quoted = try Regex(#""([A-Za-z]+)""#)
+        let name = try Regex(#"name:\s*"([^"\\]+)""#)
+        let quoted = try Regex(#""([^"\\]+)""#)
         var map: [String: Set<String>] = [:]
         for (start, end) in zip(starts, starts.dropFirst()) {
             let body = manifest[start..<end]
             guard let declared = try? name.firstMatch(in: String(body)),
                   let target = declared.output[1].substring.map(String.init)
             else { continue }
+            // **Twice means the split went wrong, and a wrong split reads as "no dependencies".** A
+            // `.target(name:)` inside a dependency list is a head to this reader, so the list ends
+            // there; refusing is what stops that passing for an empty one.
+            guard map[target] == nil else { throw ManifestRead.declaredTwice(target) }
             guard let list = body.range(of: "dependencies:") else { map[target] = []; continue }
             let names = body[list.upperBound...].matches(of: quoted)
                 .compactMap { $0.output[1].substring.map(String.init) }
@@ -230,5 +1049,16 @@ struct ModuleBoundaryTests {
             map[target] = Set(names)
         }
         return map
+    }
+
+    enum ManifestRead: Error, CustomStringConvertible {
+        case declaredTwice(String)
+
+        var description: String {
+            switch self {
+            case .declaredTwice(let target):
+                "\(target) reads as declared twice: write a dependency as its plain name, not `.target(name:)`"
+            }
+        }
     }
 }

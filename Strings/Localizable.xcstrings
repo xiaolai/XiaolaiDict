@@ -15,6 +15,17 @@
         }
       }
     },
+    "%@ %lld" : {
+      "comment" : "One day of the review forecast: an abbreviated weekday and its count",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$lld"
+          }
+        }
+      }
+    },
     "%@ (%@)" : {
       "localizations" : {
         "en" : {
@@ -200,10 +211,22 @@
         }
       }
     },
+    "%lld from another study dictionary, not asked" : {
+
+    },
     "%lld hidden until tomorrow" : {
 
     },
     "%lld more due" : {
+
+    },
+    "%lld no longer in study, left the sitting" : {
+
+    },
+    "%lld no longer ready to review, left the sitting" : {
+
+    },
+    "%lld not ready to review, not asked" : {
 
     },
     "%lld of %lld" : {
@@ -216,14 +239,29 @@
         }
       }
     },
+    "%lld of them practice, nothing scheduled" : {
+
+    },
+    "%lld paused or put off, not asked" : {
+
+    },
+    "%lld paused, left the sitting" : {
+
+    },
     "%lld permissions are off or could not be checked — open Setup" : {
       "comment" : "Menu warning when some permissions are off and others could not be checked"
     },
     "%lld permissions are off — selections and the screen cannot be read" : {
       "comment" : "Menu warning when more than one permission is missing"
     },
+    "%lld put off until later, left the sitting" : {
+
+    },
     "%lld reviewed" : {
 
+    },
+    "%lld senses" : {
+      "comment" : "A history card's badge where no sense was settled: how many senses the entry has"
     },
     "%lld skipped" : {
 
@@ -231,10 +269,22 @@
     "%lld skipped, still due" : {
 
     },
+    "(no meaning of your own yet — add one in XiaolaiDict)" : {
+      "comment" : "Written into an exported card whose meaning is still the dictionary's, which cannot be exported"
+    },
+    "(word not kept — its reading was deleted)" : {
+      "comment" : "Written into an exported card in place of its word, once the reading the word came from was deleted"
+    },
+    "A backup copy could not be deleted: %@" : {
+
+    },
     "A guess, not confirmed" : {
       "comment" : "On a pinned note whose sense the selector proposed"
     },
     "A guess: these words may not belong together" : {
+
+    },
+    "A meaning you confirm in History, with its answer showing, is first asked on the next study day and no sooner than the time chosen, so that your first answer is recalled rather than just read. Optional and untested: it applies to half of those meanings, chosen at random, so the two halves can be compared." : {
 
     },
     "A meaning you save while reading appears here." : {
@@ -248,6 +298,12 @@
     },
     "A permission could not be checked — open Setup to check again" : {
       "comment" : "Menu warning when a permission probe failed, which is not a refusal"
+    },
+    "A sitting is ready" : {
+      "comment" : "A review reminder's banner without a count, and its hidden preview"
+    },
+    "A sitting of %lld is ready" : {
+      "comment" : "A review reminder's banner; the number is how many meanings the sitting would ask"
     },
     "A word is looked up when you use the key and the pointer has stopped over it." : {
 
@@ -322,6 +378,9 @@
 
     },
     "At least one script has to stay selected." : {
+
+    },
+    "At most one reminder a study day, at the time you choose, and only when a sitting has something in it. A reminder never shows a word or its meaning." : {
 
     },
     "Author" : {
@@ -411,6 +470,9 @@
     "Delete Permanently" : {
 
     },
+    "Delete ^[%lld Backup Copy](inflect: true)" : {
+
+    },
     "Delete ^[%lld Reading](inflect: true)" : {
 
     },
@@ -424,6 +486,12 @@
 
     },
     "Delete the readings behind ^[%lld meaning](inflect: true) permanently?" : {
+
+    },
+    "Deleted" : {
+
+    },
+    "Deleted, but not everything was reached.\n%@" : {
 
     },
     "Deleting your reading history keeps the meanings you saved. They will need a new sentence before they can be reviewed again." : {
@@ -488,6 +556,9 @@
     "Due" : {
       "comment" : "A library row for an overdue card"
     },
+    "Each selected meaning is paused, put off, archived, waiting for you in Needs Attention, or saved under another study dictionary." : {
+
+    },
     "Easy" : {
 
     },
@@ -544,6 +615,19 @@
     },
     "Forgot" : {
 
+    },
+    "Forgot %lld in practice, which schedules nothing" : {
+
+    },
+    "Forgot %lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Forgot %1$lld of %2$lld"
+          }
+        }
+      }
     },
     "From" : {
 
@@ -605,6 +689,12 @@
     "Inspector" : {
 
     },
+    "Introduce More Today" : {
+
+    },
+    "Introduce ^[%lld More New Meaning](inflect: true) Today" : {
+
+    },
     "It could not be hidden until tomorrow: %@" : {
       "comment" : "Shown on a review card when postponing it failed to save"
     },
@@ -617,6 +707,9 @@
     "Japanese kana" : {
 
     },
+    "Keeps slipping: %@" : {
+
+    },
     "Key" : {
 
     },
@@ -624,6 +717,12 @@
 
     },
     "Large" : {
+
+    },
+    "Later" : {
+
+    },
+    "Later reminds again in" : {
 
     },
     "Latin — English and most European languages" : {
@@ -699,9 +798,6 @@
     "Marks the meaning you met, by its place in the entry" : {
       "comment" : "Under a dictionary's name: it can mark a meaning, by position rather than by the publisher's id"
     },
-    "Meanings to Confirm" : {
-
-    },
     "Menu Bar" : {
 
     },
@@ -728,6 +824,9 @@
     },
     "New" : {
       "comment" : "A library row for a card that has never been reviewed"
+    },
+    "New Meanings Wait Until Tomorrow" : {
+
     },
     "No Discarded Readings" : {
 
@@ -780,6 +879,9 @@
     "No shortcut is set, so a selection cannot be looked up until you choose one." : {
 
     },
+    "No study dictionary answered this lookup, so the phrase cannot be saved" : {
+
+    },
     "No voice is installed for this language." : {
 
     },
@@ -813,6 +915,9 @@
     "Not every dictionary could be read for this phrase" : {
 
     },
+    "Not everything was put back. Readings changed since they were discarded: %lld" : {
+      "comment" : "Shown when undoing a discard left the readings that had changed since, as they are"
+    },
     "Not found" : {
 
     },
@@ -825,6 +930,9 @@
     "Not set" : {
 
     },
+    "Nothing Can Be Reviewed Yet" : {
+
+    },
     "Nothing Due" : {
 
     },
@@ -832,6 +940,12 @@
 
     },
     "Nothing Saved Yet" : {
+
+    },
+    "Nothing Selected Can Be Reviewed Now" : {
+
+    },
+    "Nothing comes due in the next ^[%lld day](inflect: true)" : {
 
     },
     "Nothing is selected in %@'s focused element, and its window is too large to search for a page within %lld elements." : {
@@ -862,6 +976,9 @@
     },
     "Nothing to look up" : {
       "comment" : "Lookup panel, when there was no word to look up"
+    },
+    "Notifications from XiaolaiDict are turned off in System Settings." : {
+
     },
     "Offer Again" : {
 
@@ -899,6 +1016,9 @@
 
     },
     "Open Login Items Settings…" : {
+
+    },
+    "Open Notification Settings…" : {
 
     },
     "Open Source" : {
@@ -1029,6 +1149,9 @@
     "Remembered" : {
 
     },
+    "Remind me when a sitting is ready" : {
+
+    },
     "Remove" : {
 
     },
@@ -1051,6 +1174,9 @@
 
     },
     "Remove this tag" : {
+
+    },
+    "Replacing gives the meaning your own answer and tags, and moves the word-only card to Archived in Saved, where it can be restored. A word-only card you have already reviewed is kept beside the meaning." : {
 
     },
     "Request Access…" : {
@@ -1083,6 +1209,21 @@
     "Review Another Batch" : {
 
     },
+    "Review Reminder" : {
+
+    },
+    "Review Selected" : {
+
+    },
+    "Review Selected in Random Order" : {
+
+    },
+    "Review ^[%lld Meaning](inflect: true)" : {
+
+    },
+    "Review ^[%lld Meaning](inflect: true) in Random Order" : {
+
+    },
     "Review starts over with the new dictionary: what you have learned is kept with the dictionary it was learned from, and is there again if you switch back. Your reading history is not affected." : {
 
     },
@@ -1093,6 +1234,9 @@
 
     },
     "Save This Meaning" : {
+
+    },
+    "Save This Phrase" : {
 
     },
     "Save a meaning while reading, and it comes back here when it is due." : {
@@ -1110,6 +1254,12 @@
     "Saved Meanings Could Not Be Read" : {
 
     },
+    "Saved in place of the word-only card, which is now archived" : {
+
+    },
+    "Saved lists them under Struggling" : {
+
+    },
     "Saved meanings come back here when they are due." : {
 
     },
@@ -1117,6 +1267,15 @@
 
     },
     "Saved, with no meaning chosen yet" : {
+
+    },
+    "Saved; the word-only card stays too, because its answer differs from this one" : {
+
+    },
+    "Saved; the word-only card stays too, because you have reviewed it" : {
+
+    },
+    "Saving this phrase…" : {
 
     },
     "Saving…" : {
@@ -1224,6 +1383,9 @@
     "Show as a list" : {
 
     },
+    "Show how many are ready" : {
+
+    },
     "Show in Library" : {
 
     },
@@ -1252,6 +1414,9 @@
 
     },
     "Skip" : {
+
+    },
+    "Skip Today" : {
 
     },
     "Some of this could not be checked." : {
@@ -1329,8 +1494,11 @@
     "Text" : {
 
     },
-    "That answer was not saved: %@" : {
+    "That answer was not recorded: %@" : {
       "comment" : "Shown on a review card when the grade could not be written"
+    },
+    "That answer was not recorded: the card changed after it was shown. It is shown again as it is now." : {
+      "comment" : "Shown on a review card whose grade was refused because the card was changed elsewhere, such as its answer edited, after it was drawn"
     },
     "That could not be changed: %@" : {
 
@@ -1360,7 +1528,16 @@
     "The app is not running" : {
 
     },
+    "The dictionary could not be opened." : {
+      "comment" : "Shown on a review card when asking Apple's Dictionary about its word did nothing"
+    },
     "The dictionary you study from is no longer turned on in the Dictionary app. Meanings are being matched in whichever dictionary answers instead, and study progress is kept separately for each dictionary, so it is building up apart from yours." : {
+
+    },
+    "The files your reading history is kept in could not be rewritten without what was deleted, so parts of it may remain on disk: %@" : {
+
+    },
+    "The folder holding its backup copies could not be read, so some may still be there: %@" : {
 
     },
     "The frontmost app could not be identified, so its selection cannot be read." : {
@@ -1450,7 +1627,19 @@
     "This dictionary does not mark separate meanings, so none can be pointed at here." : {
       "comment" : "Shown where a dictionary's entries carry no sense structure at all"
     },
+    "This phrase could not be saved. Save it again to retry" : {
+
+    },
+    "This phrase was already saved" : {
+
+    },
     "This reading could not be recorded" : {
+
+    },
+    "This reading was deleted, so the phrase cannot be saved" : {
+
+    },
+    "This reading was discarded. Restore it to save the phrase" : {
 
     },
     "This sentence could not be compared against the meanings." : {
@@ -1474,8 +1663,20 @@
     "This word was read off the screen, so it may not be exactly right." : {
 
     },
+    "Time" : {
+
+    },
     "Today" : {
 
+    },
+    "Today %lld" : {
+      "comment" : "One day of the review forecast: today and its count"
+    },
+    "Today's new meanings have all been introduced. ^[%lld new meaning](inflect: true) will be introduced tomorrow." : {
+
+    },
+    "Tomorrow %lld" : {
+      "comment" : "One day of the review forecast: tomorrow and its count"
     },
     "Translate" : {
 
@@ -1506,6 +1707,12 @@
 
     },
     "Try Again" : {
+
+    },
+    "Turn on the reminder to change the settings below." : {
+
+    },
+    "Turn on the wait to choose how long." : {
 
     },
     "Unarchive" : {
@@ -1550,6 +1757,12 @@
     "VoiceOver Utility → Speech" : {
       "comment" : "Where macOS installs voices — use the system's own wording for both names"
     },
+    "Wait at least" : {
+
+    },
+    "Wait before first asking a meaning I confirm" : {
+
+    },
     "Warning" : {
 
     },
@@ -1559,10 +1772,19 @@
     "What does this mean here?" : {
 
     },
+    "What is coming could not be read: %@" : {
+      "comment" : "Shown at the end of a review sitting when its forecast could not be read"
+    },
     "What is saved stays in Saved, but loses the sentences it was saved from and will need attention. This cannot be undone." : {
 
     },
     "What this Mac can do about the local model is not known yet." : {
+
+    },
+    "What's coming: %@" : {
+
+    },
+    "When I choose a meaning for a word I saved, replace the word-only card with it" : {
 
     },
     "Where You Met It" : {
@@ -1570,6 +1792,9 @@
     },
     "Where an app does not expose its text, hover reads the word off the screen. Allow XiaolaiDict in %@, or open Setup in Settings to ask for it." : {
       "comment" : "The placeholder is the System Settings list to grant it in"
+    },
+    "Whether notifications are allowed could not be checked." : {
+
     },
     "Whether this is allowed could not be checked just now. It may well be allowed already; the list it is granted in is below." : {
 
@@ -1596,6 +1821,9 @@
       "comment" : "Reading History notice when nothing has been looked up yet"
     },
     "Words you look up while reading appear here." : {
+
+    },
+    "Write ^[%lld Answer](inflect: true)" : {
 
     },
     "Write an Answer" : {
@@ -1664,6 +1892,9 @@
     "Your reading history is unavailable" : {
       "comment" : "Reading History notice when the reading history could not be read"
     },
+    "Your study dictionary does not have this phrase, so it cannot be saved" : {
+
+    },
     "^[%lld Meaning](inflect: true) Selected" : {
 
     },
@@ -1671,6 +1902,12 @@
 
     },
     "^[%lld backup copy](inflect: true) made by XiaolaiDict will be deleted too." : {
+
+    },
+    "^[%lld backup copy](inflect: true) made by XiaolaiDict will be deleted." : {
+
+    },
+    "^[%lld card](inflect: true) left for another sitting: one per meaning" : {
 
     },
     "^[%lld dictionary](inflect: true) that you have turned on match your language. Choose the one to study from. Changing it later starts review over." : {
@@ -1716,7 +1953,13 @@
         }
       }
     },
-    "^[%lld saved meaning](inflect: true) cannot be reviewed until you choose or confirm what was meant." : {
+    "^[%lld saved meaning](inflect: true) cannot be reviewed until you confirm what was meant." : {
+
+    },
+    "^[%lld saved meaning](inflect: true) cannot be reviewed until you write an answer in your own words. Confirming does not change that." : {
+
+    },
+    "^[%lld saved meaning](inflect: true) cannot be reviewed, because there is no reading left to ask in." : {
 
     },
     "^[%lld saved meaning](inflect: true) will be left without a sentence." : {
@@ -1740,10 +1983,16 @@
     "adverb" : {
 
     },
+    "as they are listed; due ones are scheduled, the rest are practice" : {
+
+    },
     "declined" : {
       "comment" : "History card badge: a model declined to pick a sense for this sentence"
     },
     "example.com" : {
+
+    },
+    "for today only; tomorrow's allowance is unchanged" : {
 
     },
     "hidden until tomorrow; nothing about your memory is recorded" : {
@@ -1771,6 +2020,9 @@
 
     },
     "noun" : {
+
+    },
+    "opens the first one in Saved" : {
 
     },
     "or press Delete" : {

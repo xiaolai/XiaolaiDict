@@ -119,9 +119,11 @@ public struct LoginItemChoice {
 /// app — when it starts, where it shows, what it saves, what it deletes — and Reading is left with
 /// what a card looks and sounds like, which is what its icon says.
 struct GeneralPane: View {
-    @Environment(\.scale) private var scale
     var model: SettingsModel
     var keepPolicy: Binding<LookupKeepPolicy>?
+    /// The two study options (R1b, R1c) — nil in a preview, which draws no switch wired to nothing.
+    var study: StudyChoice?
+    var reminders: ReminderChoice?
     var erase: ErasePresentation?
     var eraseAction: (@MainActor (EraseAction) -> Void)?
 
@@ -135,21 +137,14 @@ struct GeneralPane: View {
         Form {
             startup
             menuBar
-            if let keepPolicy {
-                Section {
-                    Picker("Save meanings for study", selection: keepPolicy) {
-                        Text("Automatically").tag(LookupKeepPolicy.automatic)
-                        Text("Only when I choose Save").tag(LookupKeepPolicy.manual)
-                    }
-                } header: {
-                    Text("Study")
-                } footer: {
-                    Text("""
-                         Every reading is kept in Reading History either way. Meanings saved \
-                         automatically come from your study dictionary, and a meaning that was a \
-                         guess needs your confirmation before it can be reviewed.
-                         """)
-                }
+            if keepPolicy != nil || study != nil {
+                StudySection(keepPolicy: keepPolicy, choice: study)
+            }
+            if let study {
+                ReviewWaitSection(choice: study)
+            }
+            if let reminders {
+                ReminderSection(choice: reminders)
             }
             if let erase, let eraseAction {
                 EraseReadingSection(state: erase, act: eraseAction)

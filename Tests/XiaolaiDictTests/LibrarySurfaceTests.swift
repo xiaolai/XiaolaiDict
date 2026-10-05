@@ -102,18 +102,25 @@ struct LibrarySurfaceTests {
 
     // MARK: - What a right-click acts on
 
-    private func row(_ status: LibraryPresentation.Status?) -> LibraryPresentation.Row {
-        LibraryPresentation.Row(id: UUID(), word: "fine", excerpt: "", marks: [], answer: "", status: status, due: nil)
+    /// A row; confirmable where it says it needs confirming, as the model draws one, unless told.
+    private func row(_ status: LibraryPresentation.Status?, confirmable: Bool? = nil) -> LibraryPresentation.Row {
+        LibraryPresentation.Row(id: UUID(), word: "fine", excerpt: "", marks: [], answer: "", status: status, due: nil,
+                                isConfirmable: confirmable ?? (status == .needsConfirmation))
     }
 
     /// A card outside the selection is acted on alone, and described from itself — the menu used
     /// to offer Pause and Resume together, and no Confirm or Unarchive at all.
     @Test func aRightClickOutsideTheSelectionActsOnThatCardAlone() {
         let paused = row(.paused), unconfirmed = row(.needsConfirmation), archived = row(.archived), plain = row(nil)
-        let state = LibraryPresentation(rows: [paused, unconfirmed, archived, plain], total: 4, selection: [plain.id])
-        #expect(state.target(of: paused) == LibrarySelectionTarget(ids: [paused.id], isPaused: true, isArchived: false, canConfirm: false))
-        #expect(state.target(of: unconfirmed) == LibrarySelectionTarget(ids: [unconfirmed.id], isPaused: false, isArchived: false, canConfirm: true))
-        #expect(state.target(of: archived) == LibrarySelectionTarget(ids: [archived.id], isPaused: false, isArchived: true, canConfirm: false))
+        // A paused proposal is still one confirming would change: the pause names the row, not the remedy.
+        let pausedProposal = row(.paused, confirmable: true)
+        let state = LibraryPresentation(rows: [paused, unconfirmed, archived, plain, pausedProposal], total: 5,
+                                        selection: [plain.id])
+        #expect(state.target(of: paused) == LibrarySelectionTarget(ids: [paused.id], isPaused: true, isArchived: false, confirmable: []))
+        #expect(state.target(of: unconfirmed) == LibrarySelectionTarget(ids: [unconfirmed.id], isPaused: false, isArchived: false,
+                                                                        confirmable: [unconfirmed.id]))
+        #expect(state.target(of: archived) == LibrarySelectionTarget(ids: [archived.id], isPaused: false, isArchived: true, confirmable: []))
+        #expect(state.target(of: pausedProposal).confirmable == [pausedProposal.id])
     }
 
     /// A card inside the selection brings the whole selection, with the selection's own facts —
@@ -121,10 +128,10 @@ struct LibrarySurfaceTests {
     @Test func aRightClickInsideTheSelectionActsOnTheSelection() {
         let one = row(nil), two = row(.paused)
         let state = LibraryPresentation(rows: [one, two], total: 2, selection: [one.id, two.id],
-                                        canConfirm: true, selectionIsPaused: false, selectionIsArchived: true)
+                                        confirmable: [one.id], selectionIsPaused: false, selectionIsArchived: true)
         #expect(state.target(of: two) == state.selectionTarget)
         #expect(state.selectionTarget == LibrarySelectionTarget(ids: [one.id, two.id], isPaused: false,
-                                                                isArchived: true, canConfirm: true))
+                                                                isArchived: true, confirmable: [one.id]))
     }
 
     /// The dialog's count is the count of cards it will reach.

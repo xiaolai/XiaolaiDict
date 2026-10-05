@@ -386,6 +386,44 @@ struct SenseResolverTests {
         #expect(resolution.encounter?.senseKey == nil)
     }
 
+    /// **A primary that answered only the phrase records nothing of another dictionary's word** (audit-fix
+    /// round 3, #3, and its class). Pinned, the choice stands where it answered the phrase alone — but the
+    /// encounter was asked of the word's entries, where the choice is absent, so it fell back to the first
+    /// dictionary there: rung 0 marked the primary's phrase and recorded an auxiliary word's only sense as
+    /// `.onlySense`, the strongest provenance there is, in a dictionary the reader does not study (D7, D8).
+    /// The abstention's fallback and the first recording asked the same way. No word entry of the
+    /// primary is no word encounter; the phrase's mark stands and claims nothing in the ledger, because a
+    /// detected phrase is an inference and `.onlySense` would record it as a fact.
+    @Test func aPrimaryThatAnsweredOnlyThePhraseRecordsNoOtherDictionarysWord() async throws {
+        let word = Self.entry("Other", identifier: "o", entryID: "w1", senses: [Self.sense(1, "w1.001")])
+        let phrase = Self.entry("NOAD", identifier: "n", entryID: "p1", senses: [Self.sense(1, "p1.001")])
+        let pinned = PrimaryDictionary(chosen: "n").pinned(word: [word], phrase: [phrase])
+        try #require(pinned.chosen == "n", "the choice answered the phrase and should stand")
+        func resolve(_ phrase: DictionaryEntry, _ answer: SenseSelection) async -> SenseResolution {
+            await SenseResolver(primary: pinned, selector: Fixed(answer: answer)).resolve(
+                entries: [word], phrase: [phrase], sentence: "He paid the fine.", context: .complete,
+                partOfSpeech: "noun", at: when)
+        }
+
+        let rungZero = await resolve(phrase, .chose(key: "wrong", margin: 9))
+        #expect(rungZero.mark == .chosen(key: "p1.001", by: .onlySense), "the primary's phrase is still marked")
+        #expect(rungZero.encounter == nil,
+                "rung 0 recorded \(rungZero.encounter?.dictionary.key ?? "?")'s word under the primary's phrase")
+
+        let two = Self.entry("NOAD", identifier: "n", entryID: "p2",
+                             senses: [Self.sense(1, "p2.001"), Self.sense(2, "p2.002")])
+        let abstained = await resolve(two, .abstained(.tooClose))
+        #expect(abstained.encounter == nil,
+                "an abstention recorded \(abstained.encounter?.dictionary.key ?? "?")'s word as the primary's entry")
+
+        #expect(pinned.encounter(among: [word], phrase: [phrase], at: when) == nil,
+                "the first recording took an auxiliary dictionary's word")
+        // **The control**: where the primary answered the word, its word is what is recorded.
+        let own = Self.entry("NOAD", identifier: "n", entryID: "m1", senses: [Self.sense(1, "m1.001")])
+        #expect(PrimaryDictionary(chosen: "n").pinned(word: [word, own], phrase: [])
+            .encounter(among: [word, own], at: when)?.entryID == "m1")
+    }
+
     @Test func noPrimaryEntriesResolveToNothing() async {
         #expect(await resolve([], .abstained(.noCandidates)) == SenseResolution(mark: nil, encounter: nil))
     }

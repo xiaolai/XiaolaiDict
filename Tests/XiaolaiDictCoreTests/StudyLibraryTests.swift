@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 @testable import XiaolaiDictCore
 
@@ -463,6 +464,104 @@ struct StudyLibraryTests {
         #expect(after[production.id] == true)
     }
 
+    /// **A bulk pause moves every card's revision, as pausing one card does.** The revision is the
+    /// compare-and-swap that stops a grade computed against one state landing on another, and
+    /// pausing changes whether a card may be asked at all. Every card under every note, because pause
+    /// is per card and a note can carry two.
+    @Test func bulkPauseMovesEveryCardsRevision() throws {
+        let ledger = try ledger()
+        let first = try save(ledger, word: "fine"), second = try save(ledger, word: "hold")
+        let cards = [try ledger.card(of: first.id, prompt: .meaning, at: now),
+                     try ledger.card(of: first.id, prompt: .production, at: now),
+                     try ledger.card(of: second.id, prompt: .meaning, at: now)]
+        let untouched = try ledger.card(of: try save(ledger, word: "bank").id, at: now)
+
+        try ledger.setPaused(true, ofNotes: [first.id, second.id])
+        for card in cards {
+            #expect(try #require(try ledger.card(id: card.id)).revision == card.revision + 1,
+                    "pausing \(card.prompt) of a note left its revision where a drawn grade still fits")
+        }
+        try ledger.setPaused(false, ofNotes: [first.id, second.id])
+        for card in cards {
+            #expect(try #require(try ledger.card(id: card.id)).revision == card.revision + 2,
+                    "and resuming moves it again")
+        }
+        #expect(try #require(try ledger.card(id: untouched.id)).revision == untouched.revision,
+                "a card outside the selection moved")
+    }
+
+    /// **Putting a bulk pause back is a pause too**, and moves the revision the same way.
+    @Test func restoringPauseStatesMovesTheRevision() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        let meaning = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let production = try ledger.card(of: note.id, prompt: .production, at: now)
+
+        try ledger.restorePauseStates([meaning.id: true, production.id: false])
+        #expect(try #require(try ledger.card(id: meaning.id)).revision == meaning.revision + 1)
+        #expect(try #require(try ledger.card(id: production.id)).revision == production.revision + 1,
+                "restored to the state it was already in, and still a write a drawn grade must not cross")
+    }
+
+    /// **The case the revision exists for.** A review window draws a card; the reader bulk-pauses it
+    /// in the library and then undoes the pause. The card is askable again and in the same schedule,
+    /// but the grade the window collected was drawn before two writes it never saw — refused as
+    /// stale, as it is when the same happens to one card.
+    @Test func aGradeDrawnBeforeABulkPauseAndResumeIsStale() throws {
+        let scheduler = try MemoryScheduler()
+        for route in ["resume", "restore"] {
+            let ledger = try ledger()
+            let note = try save(ledger, word: "fine-\(route)")
+            let drawn = try ledger.card(of: note.id, at: now)
+
+            let before = try ledger.pauseStates(ofCardsUnder: [note.id])
+            try ledger.setPaused(true, ofNotes: [note.id])
+            if route == "resume" {
+                try ledger.setPaused(false, ofNotes: [note.id])
+            } else {
+                try ledger.restorePauseStates(before)
+            }
+            #expect(try ledger.readiness(of: note.id) == .ready, "\(route): the fixture's card is not askable")
+            // **Stale, by the two writes**, not any refusal: a card that was still paused would
+            // throw too, and that is not what this asserts.
+            #expect(throws: ReviewError.staleRevision(expected: drawn.revision, found: drawn.revision + 2),
+                    "\(route): a grade drawn before the pause landed") {
+                try ledger.grade(cardID: drawn.id, .good, eventID: UUID(),
+                                 expectedRevision: drawn.revision, at: self.now, using: scheduler)
+            }
+            #expect(try ledger.reviews(ofCard: drawn.id).isEmpty, "\(route): and it was recorded")
+        }
+    }
+
+    /// **Editing the answer is a write a drawn grade must not cross** (audit-fix round 3, #10). The card
+    /// reveals the note's answer, so a review window that drew it, showed the old meaning and collected a
+    /// grade was grading a question the reader has since rewritten — ADR-0031: anything that wrote in
+    /// between invalidates the answer. Every card of the note moves, and a card of another note does not.
+    @Test func editingTheAnswerMakesAGradeDrawnBeforeItStale() throws {
+        let scheduler = try MemoryScheduler()
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        try ledger.setReaderAnswer("the money you pay", of: note.id, at: now)
+        let drawn = try ledger.card(of: note.id, prompt: .meaning, at: now)
+        let sibling = try ledger.card(of: note.id, prompt: .production, at: now)
+        let untouched = try ledger.card(of: try save(ledger, word: "hold").id, at: now)
+        #expect(try ledger.readiness(of: note.id) == .ready, "the fixture's card is not askable")
+
+        try ledger.setReaderAnswer("a sum paid as a penalty", of: note.id, at: now)
+        #expect(try #require(try ledger.card(id: drawn.id)).revision == drawn.revision + 1,
+                "the answer changed under a drawn card and its revision did not move")
+        #expect(try #require(try ledger.card(id: sibling.id)).revision == sibling.revision + 1,
+                "the note's other card reveals the same answer and did not move")
+        #expect(try #require(try ledger.card(id: untouched.id)).revision == untouched.revision,
+                "a card of another note moved")
+        #expect(throws: ReviewError.staleRevision(expected: drawn.revision, found: drawn.revision + 1),
+                "a grade drawn over the old answer landed") {
+            try ledger.grade(cardID: drawn.id, .good, eventID: UUID(),
+                             expectedRevision: drawn.revision, at: self.now, using: scheduler)
+        }
+        #expect(try ledger.reviews(ofCard: drawn.id).isEmpty)
+    }
+
     /// The same for archiving, which is per note. **`.active` is not the answer** — a candidate the
     /// reader never took up, archived by accident and restored, must go back to being a candidate.
     @Test func anUndoOfAbulkArchiveRestoresTheDispositionEachNoteHad() throws {
@@ -481,6 +580,144 @@ struct StudyLibraryTests {
         try ledger.restoreEnrollments(before)
         #expect(try ledger.enrollments(ofNotes: ids) == before,
                 "restored to what each was, not to active")
+    }
+
+    /// **A row the undo's receipt cannot name is refused, not skipped** (audit-fix round 2) — the rule
+    /// `card(from:)` and `note(from:)` already keep. A card whose id is not a UUID was left out of the
+    /// "before" a bulk pause records and paused with the rest by the `UPDATE`, so its undo put back every
+    /// card but that one, silently.
+    @Test func aCardTheUndoCouldNotNameStopsTheBulkPauseBeforeItBegins() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        // A second question on the note, written as an edited file would hold it.
+        try ledger.execute("""
+            INSERT INTO study_cards (id, note_id, prompt, phase, scheduler_version, created_at)
+            VALUES ('not-a-uuid', '\(note.id.uuidString)', 'recall', 'new', 'fsrs', 0)
+            """)
+        #expect(throws: LedgerError.corruptRow("study_cards not-a-uuid")) {
+            _ = try ledger.pauseStates(ofCardsUnder: [note.id])
+        }
+    }
+
+    /// **The rest of the class, found by grepping for it**: every study read that parsed an id and skipped
+    /// the row it could not parse. The queue's agreement check lost a note, the Struggling list and the
+    /// retention figure a card, and the export a note's tags — each silently, each the shape round 1's
+    /// `note(from:)` and these two now refuse. Renamed as an edited file would hold them.
+    @Test func everyStudyReadRefusesAnIdItCannotName() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        let card = try #require(try ledger.existingCard(of: note.id))
+        let scheduler = try MemoryScheduler()
+        for day in 0..<Ledger.repeatedLapseDays {
+            let current = try #require(try ledger.card(id: card.id))
+            _ = try ledger.grade(cardID: card.id, .again, eventID: UUID(), expectedRevision: current.revision,
+                                 at: now.addingTimeInterval(Double(day) * 86_400), using: scheduler)
+        }
+        // **The controls**: each read names this note or card before it is renamed.
+        try #require(try ledger.askableNoteIDs() == [note.id])
+        try #require(try ledger.repeatedlyLapsed(dictionary: nil) == [card.id])
+        try #require(try ledger.retention(dictionary: nil).cardIDs == [card.id])
+        try #require(try ledger.export(dictionary: nil).rows.count == 1)
+        let (noteID, cardID) = (note.id.uuidString, card.id.uuidString)
+        try ledger.execute("""
+            PRAGMA foreign_keys = OFF;
+            UPDATE study_notes SET id = 'bad-note' WHERE id = '\(noteID)';
+            UPDATE study_note_lookups SET note_id = 'bad-note' WHERE note_id = '\(noteID)';
+            UPDATE study_answers SET note_id = 'bad-note' WHERE note_id = '\(noteID)';
+            UPDATE study_keep_metadata SET note_id = 'bad-note' WHERE note_id = '\(noteID)';
+            UPDATE study_cards SET id = 'bad-card', note_id = 'bad-note' WHERE id = '\(cardID)';
+            UPDATE review_events SET card_id = 'bad-card' WHERE card_id = '\(cardID)';
+            PRAGMA foreign_keys = ON;
+            """)
+        #expect(throws: LedgerError.corruptRow("study_notes bad-note")) { _ = try ledger.askableNoteIDs() }
+        #expect(throws: LedgerError.corruptRow("study_cards bad-card")) { _ = try ledger.repeatedlyLapsed(dictionary: nil) }
+        #expect(throws: LedgerError.corruptRow("study_cards bad-card")) { _ = try ledger.retention(dictionary: nil) }
+        #expect(throws: LedgerError.corruptRow("study_notes bad-note")) { _ = try ledger.export(dictionary: nil) }
+    }
+
+    /// **A stored value a read cannot name is a damaged row, never an absent one** (audit-fix round 3,
+    /// #7, and its class). A reading linked to a note whose id did not parse came back with no note and
+    /// a study status beside it — a saved meaning drawn as unsaved; a disposition it did not know read as
+    /// kept; a target kind as no kind; a script as none, which every script filter lets through. Each is
+    /// written the way only an edited file could hold it, and each read that decodes it must refuse.
+    @Test func aReadRefusesAStoredValueItCannotName() throws {
+        func fixture() throws -> (Ledger, StudyNote, Int) {
+            let made = try self.ledger()
+            let note = try save(made, word: "fine")
+            let lookup = try #require(try made.lookupIDs(evidencing: note.id).first)
+            // **The control**: the reading names its note before anything is edited.
+            try #require(try made.reading(ofLookup: lookup)?.studyNoteID == note.id)
+            try #require(try made.library(LibraryQuery()).count == 1)
+            try #require(try made.history(of: "fine").count == 1)
+            return (made, note, lookup)
+        }
+
+        var (ledger, note, lookup) = try fixture()
+        try ledger.execute("""
+            PRAGMA foreign_keys = OFF;
+            UPDATE study_notes SET id = 'bad-note' WHERE id = '\(note.id.uuidString)';
+            UPDATE study_note_lookups SET note_id = 'bad-note' WHERE note_id = '\(note.id.uuidString)';
+            UPDATE study_answers SET note_id = 'bad-note' WHERE note_id = '\(note.id.uuidString)';
+            UPDATE study_keep_metadata SET note_id = 'bad-note' WHERE note_id = '\(note.id.uuidString)';
+            UPDATE study_cards SET note_id = 'bad-note' WHERE note_id = '\(note.id.uuidString)';
+            PRAGMA foreign_keys = ON;
+            """)
+        #expect(throws: LedgerError.corruptRow("study_notes.id 'bad-note'"),
+                "a reading linked to a note it could not name was drawn as unsaved") {
+            _ = try ledger.reading(ofLookup: lookup)
+        }
+
+        (ledger, note, lookup) = try fixture()
+        try ledger.execute("""
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE study_notes SET target_kind = 'shelf' WHERE id = '\(note.id.uuidString)';
+            PRAGMA ignore_check_constraints = OFF;
+            """)
+        #expect(throws: LedgerError.corruptRow("study_notes.target_kind 'shelf'"),
+                "a target kind it could not name was read as none") {
+            _ = try ledger.reading(ofLookup: lookup)
+        }
+
+        (ledger, note, lookup) = try fixture()
+        try ledger.execute("""
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE lookups SET disposition = 'shelved' WHERE id = \(lookup);
+            PRAGMA ignore_check_constraints = OFF;
+            """)
+        #expect(throws: LedgerError.corruptRow("lookups.disposition 'shelved'"),
+                "a disposition it could not name was read as kept") {
+            _ = try ledger.reading(ofLookup: lookup)
+        }
+
+        (ledger, note, lookup) = try fixture()
+        try ledger.execute("""
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE lookups SET script = 'runic' WHERE id = \(lookup);
+            PRAGMA ignore_check_constraints = OFF;
+            """)
+        #expect(throws: LedgerError.corruptRow("lookups.script 'runic'"),
+                "a script it could not name was read as none in the history") {
+            _ = try ledger.history(of: "fine")
+        }
+        #expect(throws: LedgerError.corruptRow("lookups.script 'runic'"),
+                "a script it could not name was read as none in the library") {
+            _ = try ledger.library(LibraryQuery())
+        }
+    }
+
+    /// The same for archiving: an enrollment this build cannot read is refused rather than left out of
+    /// what the undo restores. Written past the `CHECK` the way only an edited file could be.
+    @Test func anEnrollmentTheUndoCouldNotRestoreIsRefused() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, word: "fine")
+        try ledger.execute("""
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE study_notes SET enrollment = 'shelved' WHERE id = '\(note.id.uuidString)';
+            PRAGMA ignore_check_constraints = OFF;
+            """)
+        #expect(throws: LedgerError.corruptRow("study_notes \(note.id.uuidString)")) {
+            _ = try ledger.enrollments(ofNotes: [note.id])
+        }
     }
 
     /// A bulk action lands on **exactly the set it was given** — every one of them, and nothing

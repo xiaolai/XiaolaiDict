@@ -14,9 +14,11 @@ import XiaolaiDictCore
 ///
 /// A value rather than three properties on the app delegate, because the ordering is the whole
 /// point and cannot be seen from outside one.
-struct SenseTapQueue {
+/// **Generic over what names the row**: the recorder holds a `LookupIdentity`, so a tap can only ever be
+/// written to the reading it was made on (audit-fix round 2); the rules here are the same for any name.
+struct SenseTapQueue<Row: Equatable> {
     /// The newest recorded lookup: its request, and the row it became.
-    private(set) var lastLookup: (request: Int, id: Int)?
+    private(set) var lastLookup: (request: Int, id: Row)?
     private var waiting: [(request: Int, tap: SenseTap)] = []
 
     /// What the reader did, and what it is waiting for its lookup's row in order to become.
@@ -38,13 +40,13 @@ struct SenseTapQueue {
 
     /// How many taps may wait. A reader can only tap what is on screen, so this is generous; the cap
     /// is there so a lookup that is never recorded cannot grow the list for ever.
-    static let mostHeld = 32
+    static var mostHeld: Int { 32 }
 
     /// The row to write this tap to, or nil where there is none yet and it has been kept.
     mutating func tapped(
         _ encounter: SenseEncounter, request: Int, enrolling: Bool = false, source: StudyKeepSource = .manual,
         language: String? = nil
-    ) -> Int? {
+    ) -> Row? {
         if let lastLookup, lastLookup.request == request { return lastLookup.id }
         waiting.append((request, SenseTap(encounter: encounter, enrolling: enrolling, source: source, language: language)))
         if waiting.count > Self.mostHeld { waiting.removeFirst() }
@@ -52,7 +54,7 @@ struct SenseTapQueue {
     }
 
     /// A lookup's row has landed. Answers with what was waiting for it, in the order it was tapped.
-    mutating func recorded(request: Int, id: Int) -> [SenseTap] {
+    mutating func recorded(request: Int, id: Row) -> [SenseTap] {
         // Newer only: a row that lands late must not become what the next tap attaches to.
         if lastLookup.map({ request >= $0.request }) ?? true { lastLookup = (request, id) }
         let mine = waiting.filter { $0.request == request }

@@ -24,8 +24,10 @@ public struct StudyExport: Sendable, Equatable {
         /// is ours, and manufacturing one of theirs is how a collection acquires duplicates nobody
         /// can reconcile.
         public let externalID: String
-        /// The word or phrase. A word is not a publisher's property; a definition is.
-        public let front: String
+        /// The word or phrase. A word is not a publisher's property; a definition is. **Nil where nothing
+        /// names it any more**: a sense or an entry is filed under the word the reader looked up, and a
+        /// card whose readings were deleted (ADR-0033) has none left — it still leaves, labelled.
+        public let front: String?
         /// The reader's own sentence, where one was captured.
         public let sentence: String
         /// **The reader's own words only.** Nil where the card still carries the dictionary's,
@@ -35,8 +37,10 @@ public struct StudyExport: Sendable, Equatable {
 
         /// Whether this row is missing the one thing that cannot be exported for it.
         public var isIncomplete: Bool { answer == nil }
+        /// Whether nothing names this card's word any more — its readings were deleted.
+        public var isWithoutAWord: Bool { front == nil }
 
-        public init(externalID: String, front: String, sentence: String, answer: String?,
+        public init(externalID: String, front: String?, sentence: String, answer: String?,
                     tags: [String]) {
             self.externalID = externalID
             self.front = front
@@ -52,14 +56,33 @@ public struct StudyExport: Sendable, Equatable {
     /// meaning, and the field names — so nobody discovers after the fact that half their collection
     /// arrived blank.
     public var preview: Preview {
-        Preview(cards: rows.count, incomplete: rows.count { $0.isIncomplete }, fields: Self.fields)
+        Preview(cards: rows.count, incomplete: rows.count { $0.isIncomplete },
+                withoutAWord: rows.count { $0.isWithoutAWord }, fields: Self.fields)
     }
 
     public struct Preview: Sendable, Equatable {
         public let cards: Int
         /// Cards whose answer is still the dictionary's and so cannot travel.
         public let incomplete: Int
+        /// Cards whose word nothing names any more, because their readings were deleted.
+        public let withoutAWord: Int
         public let fields: [String]
+    }
+
+    /// **What a row says where something could not travel — the caller's words, never Core's.** Core
+    /// holds no display text (ADR-0025): the English sentence that lived here was written into every
+    /// export past the string catalog, so no reader saw it in their own language (audit-fix round 3, #8).
+    /// Not empty, either of them: a blank field reads as a defect, and a label reads as what it is.
+    public struct Labels: Sendable, Equatable {
+        /// For a card whose meaning is still the dictionary's, which cannot travel.
+        public let incomplete: String
+        /// For a card whose word nothing names any more.
+        public let withoutAWord: String
+
+        public init(incomplete: String, withoutAWord: String) {
+            self.incomplete = incomplete
+            self.withoutAWord = withoutAWord
+        }
     }
 
     /// The columns, in order. The external id is first for the reason its own note gives.
@@ -71,23 +94,19 @@ public struct StudyExport: Sendable, Equatable {
     /// changed card from a reshuffled file. Tabs and newlines inside a field are flattened rather
     /// than escaped — the same rule the phrase inventory's own file follows, and for the same
     /// reason: an escape scheme for a case that does not arise is a parser nobody has tested.
-    public func tabSeparated() -> String {
+    public func tabSeparated(labels: Labels) -> String {
         var lines = ["#separator:tab", "#html:false", "#columns:" + Self.fields.joined(separator: "\t")]
         for row in rows.sorted(by: { $0.externalID < $1.externalID }) {
             lines.append([
-                row.externalID, Self.flattened(row.front), Self.flattened(row.sentence),
+                row.externalID, Self.flattened(row.front ?? labels.withoutAWord), Self.flattened(row.sentence),
                 // **The label travels with the row**, so an incomplete card is visibly incomplete
                 // in Anki rather than a card with a blank back that looks like a mistake.
-                row.answer.map(Self.flattened) ?? Self.incompleteMarker,
+                Self.flattened(row.answer ?? labels.incomplete),
                 row.tags.map(Self.flattened).joined(separator: " "),
             ].joined(separator: "\t"))
         }
         return lines.joined(separator: "\n")
     }
-
-    /// What a row says where its meaning could not travel. Not empty: a blank back reads as a
-    /// defect, and this reads as what it is.
-    public static let incompleteMarker = "(no meaning of your own yet — add one in XiaolaiDict)"
 
     static func flattened(_ text: String) -> String {
         text.replacingOccurrences(of: "\t", with: " ")
@@ -129,12 +148,19 @@ extension Ledger {
             // looked up otherwise. A word is not a publisher's property; a definition is.
             let front = (kind == StudyTarget.Kind.phrase.rawValue
                          || kind == StudyTarget.Kind.custom.rawValue)
-                ? try row.text(3) : (row.optionalText(5) ?? "")
-            guard !front.isEmpty else { return }
-            var tags: [String] = []
-            if let id = UUID(uuidString: try row.text(0)) { tags = try self.tags(of: id) }
+                ? try row.text(3) : row.optionalText(5)
+            // **No word is not no card** (audit-fix round 3, #9). A note whose readings were deleted is
+            // kept (ADR-0033) with its answer and tags, and skipping it here made the export quietly
+            // short — the shape ADR-0036 rejected for incomplete cards. It leaves, labelled by the caller.
+            // Refused, not exported without its tags: a row that travels short of what the reader gave it
+            // is a loss nobody would see until it was imported somewhere else.
+            guard let id = UUID(uuidString: try row.text(0)) else {
+                throw LedgerError.corruptRow("study_notes \(try row.text(0))")
+            }
+            let tags = try self.tags(of: id)
             rows.append(StudyExport.Row(
-                externalID: try row.text(0), front: front, sentence: row.optionalText(6) ?? "",
+                externalID: try row.text(0), front: front?.isEmpty == false ? front : nil,
+                sentence: row.optionalText(6) ?? "",
                 answer: row.optionalText(4), tags: tags))
         }
         return StudyExport(rows: rows)

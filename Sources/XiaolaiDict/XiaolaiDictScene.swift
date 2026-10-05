@@ -193,6 +193,10 @@ struct XiaolaiDictSettings: View {
             modelLicence: app.models.licenceURL,
             erase: app.eraseModel.presentation,
             eraseAction: { [model = app.eraseModel] in model.act($0) },
+            // Observed: the switch follows the settings and the grant the coordinator last read.
+            reminders: app.reminders.choice,
+            // Observed: the two study options (R1b, R1c), each written through the key its reader reads.
+            study: app.studyOptions.choice,
             // The setup board's own inputs. It is a pane of this window now, so what it needs
             // arrives here rather than through a second scene.
             setup: app.setup,

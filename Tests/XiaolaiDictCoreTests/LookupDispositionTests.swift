@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 @testable import XiaolaiDictCore
 
@@ -104,7 +105,8 @@ struct LookupDispositionTests {
         // auxiliary encounter recorded after it.
         let shown = row.shown
         #expect(shown.sense?.dictionary == "NOAD")
-        #expect(shown.sense?.label == "4/12")
+        // The sense by its numbers: how a card spells them is the view layer's (`SenseNote.label`).
+        #expect(shown.sense?.ordinal == 4 && shown.sense?.outOf == 12)
         #expect(shown.sense?.gloss == "the primary meaning")
         #expect(shown.meaning == row.meaning)
         let unkept = try lookup(ledger)

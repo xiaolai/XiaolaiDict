@@ -60,7 +60,7 @@ extension EnvironmentValues {
 /// The word is percent-encoded, because a looked-up term can contain a space, and a URL built by
 /// interpolation would silently fail to open for exactly the words worth opening.
 @MainActor
-enum SystemDictionary {
+public enum SystemDictionary {
     static func url(for term: String) -> URL? {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -69,9 +69,12 @@ enum SystemDictionary {
         return URL(string: "dict://\(encoded)")
     }
 
-    static func open(_ term: String) {
-        guard let url = url(for: term) else { return }
-        NSWorkspace.shared.open(url)
+    /// Whether the dictionary was asked and took it. **Said, not ignored**: a caller that wants to
+    /// tell the reader a key did nothing needs to know it did nothing.
+    @discardableResult
+    public static func open(_ term: String) -> Bool {
+        guard let url = url(for: term) else { return false }
+        return NSWorkspace.shared.open(url)
     }
 }
 

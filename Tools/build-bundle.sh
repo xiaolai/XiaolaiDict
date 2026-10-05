@@ -126,8 +126,10 @@ BUNDLE_LIST=()
 # records the measurement that showed a release must not carry them: from an SSH session holding
 # neither TCC grant, the binary exec'd directly is refused, while the same session going through
 # `open -n --args` gets a sentinel string out of TextEdit and an OCR read of a terminal. Every other
-# instrument reports on XiaolaiDict's own behaviour and ships unchanged, so the difference between the
-# artifact end-to-end tests run against and the artifact a reader gets is these two commands.
+# instrument reports on XiaolaiDict's own behaviour and ships unchanged — but for `--reminder-report`
+# (WI-7), which rides the same flag because it lists what this app asked the notification center for
+# and a reader has no use for it. So the difference between the artifact end-to-end tests run against
+# and the artifact a reader gets is these three commands.
 #
 # **The flag costs a full rebuild when it changes** — measured 2026-09-26: `-Xswiftc` applies to every
 # target, so switching recompiles MLX and everything else, about 22 minutes. That lands on releases,
@@ -559,46 +561,87 @@ verify_release_timestamps() {
 # it is on that service's real execution path. An earlier draft of this check forbade it and was
 # wrong; the algorithm cannot change without invalidating every `sense_hash` already in a reader's
 # ledger.
+#
+# `ReviewKit` is forbidden to both services as defence in depth, not because either links it today: the
+# review logic is the reader's side, and a service carrying its symbols would mean a dependency edge
+# arrived that no test below the view layer was asked about (ADR-0047).
+#
+# `UserNotifications` likewise (WI-7): the review reminder is delivered by the app alone, and
+# `UNUserNotificationCenter.current()` aborts a process that is not the app's bundle.
+# `ModuleBoundaryTests.theServicesBindNeitherTheReviewLogicNorNotifications` holds the source half.
 verify_service_boundaries() {
     local bundle=$1 binary problem=0
     # service path : frameworks it must not link : module symbols it must not carry
     local checks=(
-        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices!XiaolaiDictCore|ModelKit|Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply"
-        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3!XiaolaiDictCore|DictionaryModel|Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy"
+        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices|UserNotifications!XiaolaiDictCore|ReviewKit|ModelKit|Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply|ReminderDelivery"
+        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3|UserNotifications!XiaolaiDictCore|ReviewKit|DictionaryModel|Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy|ReminderDelivery"
     )
-    local spec path frameworks symbols found
+    local spec path frameworks symbols found name links linked raw demangled raw_count demangled_count
     for spec in "${checks[@]}"; do
         path=${spec%%|*}; spec=${spec#*|}
         frameworks=${spec%%!*}; symbols=${spec#*!}
         binary="$bundle/$path"
+        name=$(basename "$path")
         [ -f "$binary" ] || { echo "no binary to check at $path"; return 1; }
 
-        found=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' \
-            | grep -E "($(tr '|' '\n' <<<"$frameworks" | paste -sd'|' -))" || true)
+        # **A scan that finds nothing because it read nothing passes**, so each reader below must be
+        # seen to answer before an empty answer means anything — its status, and a witness that only a
+        # real reading holds (`Tools/tests/test_service_boundaries.py`).
+        #
+        # `otool -L` exits 0 on a file that is not an object (measured: "is not an object file"), so
+        # its status alone proves nothing. Every Mach-O executable links libSystem; a list without it
+        # was not read from one.
+        if ! links=$(otool -L "$binary" 2>&1); then
+            echo "$name: otool -L could not read it — the link check read nothing:"; sed 's/^/    /' <<<"$links"
+            problem=1; continue
+        fi
+        linked=$(tail -n +2 <<<"$links" | awk '{print $1}')
+        if ! grep -qx '/usr/lib/libSystem.B.dylib' <<<"$linked"; then
+            echo "$name: otool -L listed no libSystem — the link check read nothing:"; sed 's/^/    /' <<<"$links"
+            problem=1; continue
+        fi
+        found=$(grep -E "($(tr '|' '\n' <<<"$frameworks" | paste -sd'|' -))" <<<"$linked" || true)
         if [ -n "$found" ]; then
-            echo "$(basename "$path") links what it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+            echo "$name links what it must not:"; sed 's/^/    /' <<<"$found"; problem=1
         fi
 
+        # `nm` on an unreadable or stripped binary is silent, so it must answer with a symbol table.
+        if ! raw=$(nm "$binary" 2>/dev/null); then
+            echo "$name: nm could not read it — the boundary check read nothing"; problem=1; continue
+        fi
+        raw_count=$(grep -c '' <<<"$raw" || true)
+        if [ "${raw_count:-0}" -lt 100 ]; then
+            echo "$name: nm returned $raw_count symbols — the boundary check read nothing"
+            problem=1; continue
+        fi
         # Demangled, because a mangled name spells a module differently and a scan is only as wide
-        # as the spelling it searches for.
-        found=$(nm "$binary" 2>/dev/null | xcrun swift-demangle 2>/dev/null \
-            | grep -oE "\b($(tr '|' '\n' <<<"$symbols" | paste -sd'|' -))\b" | sort -u || true)
-        if [ -n "$found" ]; then
-            echo "$(basename "$path") carries symbols it must not:"; sed 's/^/    /' <<<"$found"; problem=1
+        # as the spelling it searches for. The demangler answers one line for each line it is given,
+        # and a Swift binary's demangled table names `Swift.` types, which no mangled name spells: a
+        # demangler that failed, stopped early or passed the names through unchanged is refused.
+        if ! demangled=$(xcrun swift-demangle <<<"$raw" 2>/dev/null); then
+            echo "$name: swift-demangle could not read its symbols — the boundary check read nothing"
+            problem=1; continue
         fi
-
-        # **A scan that finds nothing because it read nothing passes.** `nm` on an unreadable or
-        # stripped binary is silent, and so is this check — so it asserts the tool answered at all.
-        found=$(nm "$binary" 2>/dev/null | wc -l | tr -d ' ')
-        if [ "${found:-0}" -lt 100 ]; then
-            echo "$(basename "$path"): nm returned $found symbols — the boundary check read nothing"
-            problem=1
+        demangled_count=$(grep -c '' <<<"$demangled" || true)
+        if [ "${demangled_count:-0}" -ne "$raw_count" ]; then
+            echo "$name: swift-demangle returned $demangled_count lines for $raw_count symbols"
+            problem=1; continue
+        fi
+        if ! grep -q '\bSwift\.' <<<"$demangled"; then
+            echo "$name: swift-demangle demangled no Swift name — the symbol check would read mangled ones"
+            problem=1; continue
+        fi
+        found=$(grep -oE "\b($(tr '|' '\n' <<<"$symbols" | paste -sd'|' -))\b" <<<"$demangled" | sort -u || true)
+        if [ -n "$found" ]; then
+            echo "$name carries symbols it must not:"; sed 's/^/    /' <<<"$found"; problem=1
         fi
     done
     [ "$problem" -eq 0 ]
 }
 
-# **A release must refuse the capture instruments, and a development bundle must offer them.**
+# **A release must refuse the development instruments, and a development bundle must offer them** —
+# the two capture instruments, and `--reminder-report`, which reports what this app asked the
+# notification center for and is no use to a reader.
 #
 # Both directions, because a gate only ever checked the safe way round is a gate that could be
 # inverted and still pass. The marker is the refusal sentence the `#if` compiles in, and the witness
@@ -609,21 +652,33 @@ verify_capture_instruments() {
     # b="$a"` expands `$a` before assigning it, so `binary` was built from whatever `bundle` the
     # caller happened to have in scope — it worked only because `verify_bundle` has one of the same
     # name with the same value, and broke the moment this was called on its own.
-    local bundle=$1 refusals live binary
+    local bundle=$1 refusals live reminder_refusal reminder_live binary
     binary="$bundle/Contents/MacOS/$APP_NAME"
     [ -f "$binary" ] || { echo "no app binary to check for the capture instruments"; return 1; }
     refusals=$(strings -a "$binary" 2>/dev/null | grep -c 'is a development instrument and is not built into a release' || true)
     live=$(strings -a "$binary" 2>/dev/null | grep -c 'has no window to find its process by' || true)
+    # **`--reminder-report` rides the same gate (WI-7), and is checked by its own two sentences**: a
+    # count shared with the other two would pass with one of the three gates missing.
+    reminder_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--reminder-report is a development instrument' || true)
+    reminder_live=$(strings -a "$binary" 2>/dev/null | grep -c "reading this app's requests from the notification center" || true)
     if is_release; then
         [ "${refusals:-0}" -ge 1 ] \
             || { echo "a release does not refuse --read-point/--read-selection: the gate did not compile in"; return 1; }
         [ "${live:-0}" -eq 0 ] \
             || { echo "a release still carries the capture instruments' own code"; return 1; }
+        [ "${reminder_refusal:-0}" -ge 1 ] \
+            || { echo "a release does not refuse --reminder-report: the gate did not compile in"; return 1; }
+        [ "${reminder_live:-0}" -eq 0 ] \
+            || { echo "a release still carries --reminder-report's own code"; return 1; }
     else
         [ "${live:-0}" -ge 1 ] \
             || { echo "a development bundle has no capture instruments — the end-to-end hover and selection stages cannot run"; return 1; }
         [ "${refusals:-0}" -eq 0 ] \
             || { echo "a development bundle refuses its own instruments: the gate is inverted"; return 1; }
+        [ "${reminder_live:-0}" -ge 1 ] \
+            || { echo "a development bundle has no --reminder-report — the reminder stage cannot run"; return 1; }
+        [ "${reminder_refusal:-0}" -eq 0 ] \
+            || { echo "a development bundle refuses --reminder-report: the gate is inverted"; return 1; }
     fi
 }
 

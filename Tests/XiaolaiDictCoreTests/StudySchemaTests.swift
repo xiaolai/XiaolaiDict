@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import SQLite3
 import Testing
 @testable import XiaolaiDictCore
@@ -314,9 +315,20 @@ struct StudyMigrationTests {
     /// behind — each time, the migration test failed on a table the unwind did not know to drop, and
     /// each time the fix was to add a line to a copy. A new schema adds one case here and the older
     /// paths get it for free.
+    ///
+    /// **And to the shape that version created, not today's minus a column** (audit-fix round 2). A table
+    /// whose `CREATE` changed — a `CHECK` widened, a column added with a constraint — is rebuilt from the
+    /// historic statement, because `DROP COLUMN` cannot take a column a `CHECK` names and a dropped
+    /// column leaves today's `CHECK`s behind. Winding back to 8 by dropping `confirmed_at` and adding a
+    /// constraint-free `readiness` is how a migration that failed on every real schema-8 ledger passed.
+    /// The historic statements are below, verbatim but for comments, from the commits that shipped them,
+    /// and the migration was run against real ledgers built from each of those commits' own SQL as well
+    /// (review-module-plan §13, audit-fix round 2).
     private func windBack(to version: Int, at path: String) throws {
         let ledger = try Ledger(path: path)
-        var statements: [String] = []
+        // **Off, or a rebuild deletes the children.** Dropping a parent table with foreign keys on is a
+        // `DELETE` that cascades; this connection is gone once the statements below have run.
+        var statements: [String] = ["PRAGMA foreign_keys = OFF;"]
         if version < 13 {
             statements += ["DROP TRIGGER remember_removed_target;", "DROP TRIGGER study_keep_new_note;",
                 "DROP TABLE lookup_disposition_receipts;", "DROP TABLE lookup_disposition_operations;",
@@ -333,39 +345,177 @@ struct StudyMigrationTests {
             // version of this that stays true.
             statements += Self.tablesCreated(by: Ledger.studyOrganisationSchema)
                 .map { "DROP TABLE \($0);" }
-            // `kind` came with 12 for a database that already had the table; a fresh one at 10 or
-            // 11 never had it, so winding back below 12 takes it off again.
-            if version >= 10 { statements += ["ALTER TABLE review_events DROP COLUMN kind;"] }
         }
-        if version < 11, version >= 9 {
-            // `study_answers` carries a `CHECK` on `is_usable`, so SQLite refuses to drop the
-            // column — the table would have to be rebuilt. Nothing winds back to 9 or 10 today, so
-            // rather than carry a rebuild no test exercises, this says so and stops.
-            struct Unsupported: Error, CustomStringConvertible {
-                var description: String {
-                    "winding back to 9 or 10 needs study_answers rebuilt, which nothing needs yet"
-                }
-            }
-            throw Unsupported()
-        }
-        // Below 9 the whole table goes, so the column goes with it.
+        // `kind` came with 12 for a database that already had the table; one made at 10 or 11 never
+        // had it — nor its `CHECK`, which is also why the column cannot simply be dropped.
         if version < 10 {
             statements += ["DROP TABLE review_events;", "DROP TABLE study_cards;"]
+        } else if version < 12 {
+            statements += Self.rebuild("review_events", as: Self.reviewEventsAtTenAndEleven,
+                                       columns: Self.reviewEventColumnsAtTen)
         }
+        // `is_usable` came with 11, under a `CHECK`.
         if version < 9 {
-            statements += ["DROP TABLE study_answers;",
-                           "ALTER TABLE study_notes DROP COLUMN confirmed_at;",
-                           "ALTER TABLE study_notes ADD COLUMN readiness TEXT NOT NULL DEFAULT 'ready';"]
+            statements += ["DROP TABLE study_answers;"]
+        } else if version < 11 {
+            statements += Self.rebuild("study_answers", as: Self.studyAnswersAtNineAndTen,
+                                       columns: Self.studyAnswerColumnsAtNine)
         }
         if version < 8 {
-            // Schema 8's own columns go with its tables, so the `readiness` line above is undone too.
             statements += ["DROP TABLE study_note_lookups;", "DROP TABLE study_locators;",
                            "DROP TABLE study_notes;",
                            "ALTER TABLE sense_encounters DROP COLUMN key_issuer;"]
+        } else if version == 8 {
+            // Readiness stored, under a `CHECK`, and no confirmation: what 9 corrected. Every row was
+            // `ready` or one of two others; which is unknowable now, and the migration drops it anyway.
+            statements += Self.rebuild("study_notes", as: Self.studyNotesAtEight,
+                                       columns: Self.studyNoteColumnsBeforeTwelve,
+                                       adding: ("readiness", "'ready'"))
+        } else if version < 12 {
+            // No `custom` before 12: the kind and its branch shape both came with it.
+            statements += Self.rebuild("study_notes", as: Self.studyNotesAtNineToEleven,
+                                       columns: Self.studyNoteColumnsBeforeTwelve + ["confirmed_at"])
         }
         statements.append("PRAGMA user_version = \(version);")
         try ledger.execute(statements.joined(separator: "\n"))
     }
+
+    /// One table put back to a historic `CREATE`, its rows kept: the shared columns copied through a
+    /// temporary table, and `adding` filled with a constant where the old shape had a column today's
+    /// does not.
+    static func rebuild(_ table: String, as ddl: String, columns: [String],
+                        adding extra: (column: String, value: String)? = nil) -> [String] {
+        let shared = columns.joined(separator: ", ")
+        let into = extra.map { shared + ", " + $0.column } ?? shared
+        let from = extra.map { shared + ", " + $0.value } ?? shared
+        return ["DROP TABLE IF EXISTS temp.wound_back;",
+                "CREATE TEMP TABLE wound_back AS SELECT \(shared) FROM \(table);",
+                "DROP TABLE \(table);", ddl,
+                "INSERT INTO \(table) (\(into)) SELECT \(from) FROM temp.wound_back;",
+                "DROP TABLE temp.wound_back;"]
+    }
+
+    static let studyNoteColumnsBeforeTwelve = [
+        "id", "target_kind", "issuer", "language", "dictionary", "entry_id", "sense_key", "sense_key_kind",
+        "phrase_text", "enrollment", "created_at",
+    ]
+
+    /// `study_notes` as 6369857 created it (schema 8).
+    static let studyNotesAtEight = """
+        CREATE TABLE study_notes (
+            id              TEXT PRIMARY KEY,
+            target_kind     TEXT NOT NULL,
+            issuer          TEXT NOT NULL,
+            language        TEXT NOT NULL,
+            dictionary      TEXT NOT NULL,
+            entry_id        TEXT NOT NULL,
+            sense_key       TEXT NOT NULL,
+            sense_key_kind  TEXT NOT NULL,
+            phrase_text     TEXT NOT NULL,
+            enrollment      TEXT NOT NULL,
+            readiness       TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            CHECK (target_kind IN ('sense', 'entry', 'phrase')),
+            CHECK (issuer IN ('live', 'index', 'inventory')),
+            CHECK (enrollment IN ('candidate', 'active', 'ignored', 'archived')),
+            CHECK (readiness IN ('ready', 'needsConfirmation', 'needsRepair')),
+            CHECK (language <> '' AND dictionary <> ''),
+            CHECK (
+                (target_kind = 'sense'
+                    AND entry_id <> '' AND sense_key <> '' AND sense_key_kind <> '' AND phrase_text = '')
+             OR (target_kind = 'entry'
+                    AND entry_id <> '' AND sense_key = '' AND phrase_text = '')
+             OR (target_kind = 'phrase'
+                    AND entry_id = '' AND sense_key = '' AND sense_key_kind = '' AND phrase_text <> '')
+            )
+        );
+        CREATE UNIQUE INDEX study_notes_identity ON study_notes (
+            target_kind, issuer, language, dictionary, entry_id, sense_key, sense_key_kind, phrase_text
+        );
+        CREATE INDEX study_notes_by_dictionary ON study_notes (dictionary, enrollment);
+        """
+
+    /// `study_notes` as 2bce356, bb1e57d and 405d14f created it (schemas 9, 10 and 11).
+    static let studyNotesAtNineToEleven = """
+        CREATE TABLE study_notes (
+            id              TEXT PRIMARY KEY,
+            target_kind     TEXT NOT NULL,
+            issuer          TEXT NOT NULL,
+            language        TEXT NOT NULL,
+            dictionary      TEXT NOT NULL,
+            entry_id        TEXT NOT NULL,
+            sense_key       TEXT NOT NULL,
+            sense_key_kind  TEXT NOT NULL,
+            phrase_text     TEXT NOT NULL,
+            enrollment      TEXT NOT NULL,
+            confirmed_at    REAL,
+            created_at      REAL NOT NULL,
+            CHECK (target_kind IN ('sense', 'entry', 'phrase')),
+            CHECK (issuer IN ('live', 'index', 'inventory')),
+            CHECK (enrollment IN ('candidate', 'active', 'ignored', 'archived')),
+            CHECK (language <> '' AND dictionary <> ''),
+            CHECK (
+                (target_kind = 'sense'
+                    AND entry_id <> '' AND sense_key <> '' AND sense_key_kind <> '' AND phrase_text = '')
+             OR (target_kind = 'entry'
+                    AND entry_id <> '' AND sense_key = '' AND phrase_text = '')
+             OR (target_kind = 'phrase'
+                    AND entry_id = '' AND sense_key = '' AND sense_key_kind = '' AND phrase_text <> '')
+            )
+        );
+        CREATE UNIQUE INDEX study_notes_identity ON study_notes (
+            target_kind, issuer, language, dictionary, entry_id, sense_key, sense_key_kind, phrase_text
+        );
+        CREATE INDEX study_notes_by_dictionary ON study_notes (dictionary, enrollment);
+        """
+
+    static let studyAnswerColumnsAtNine = [
+        "note_id", "origin", "text", "dictionary_version", "sense_hash", "recorded_at",
+    ]
+
+    /// `study_answers` as 2bce356 and bb1e57d created it (schemas 9 and 10): no stored verdict.
+    static let studyAnswersAtNineAndTen = """
+        CREATE TABLE study_answers (
+            note_id            TEXT PRIMARY KEY REFERENCES study_notes (id) ON DELETE CASCADE,
+            origin             TEXT NOT NULL,
+            text               TEXT NOT NULL,
+            dictionary_version TEXT,
+            sense_hash         TEXT,
+            recorded_at        REAL NOT NULL,
+            CHECK (origin IN ('dictionary', 'reader'))
+        );
+        """
+
+    static let reviewEventColumnsAtTen = [
+        "id", "card_id", "grade", "reviewed_at", "before_phase", "before_stability", "before_difficulty",
+        "before_last_review", "before_due", "after_phase", "after_stability", "after_difficulty", "after_due",
+        "scheduler_version", "retention", "card_revision", "voided_at",
+    ]
+
+    /// `review_events` as bb1e57d and 405d14f created it (schemas 10 and 11): no kind.
+    static let reviewEventsAtTenAndEleven = """
+        CREATE TABLE review_events (
+            id                 TEXT PRIMARY KEY,
+            card_id            TEXT NOT NULL REFERENCES study_cards (id) ON DELETE CASCADE,
+            grade              INTEGER NOT NULL,
+            reviewed_at        REAL NOT NULL,
+            before_phase       TEXT NOT NULL,
+            before_stability   REAL,
+            before_difficulty  REAL,
+            before_last_review REAL,
+            before_due         REAL,
+            after_phase        TEXT NOT NULL,
+            after_stability    REAL NOT NULL,
+            after_difficulty   REAL NOT NULL,
+            after_due          REAL NOT NULL,
+            scheduler_version  TEXT NOT NULL,
+            retention          REAL NOT NULL,
+            card_revision      INTEGER NOT NULL,
+            voided_at          REAL,
+            CHECK (grade BETWEEN 1 AND 4)
+        );
+        CREATE INDEX review_events_by_card ON review_events (card_id, reviewed_at);
+        """
 
     @Test func themigrationPreservesEveryLookupAndAddsNoNote() throws {
         let path = path()
@@ -441,5 +591,189 @@ struct StudyMigrationTests {
         // is not askable, which is the honest state for a card with nothing to reveal.
         #expect(try migrated.readiness(of: id) == .needsRepair)
         #expect(notes.first?.confirmedAt == nil, "a column that did not exist is unknown, never guessed")
+    }
+
+    // MARK: - Every older schema, to today's shape (audit-fix round 2)
+
+    /// **A ledger migrated from any schema this build still upgrades is the ledger a fresh one is** —
+    /// the same columns, constraints, foreign keys, indexes and triggers, read from SQLite. Each step
+    /// that altered a table rather than creating it is a place the two could part, and they had: a
+    /// schema-9 ledger reached 13 without `is_usable`, so writing an answer, the library and the queue
+    /// all failed on the missing column; 8 to 11 kept a `CHECK` that refuses a card the reader wrote;
+    /// and every real schema-8 ledger failed its upgrade outright, because `DROP COLUMN` cannot take a
+    /// column a `CHECK` names. Reproduced on ledgers built from each version's own SQL before this
+    /// existed (the plan's round-2 entry).
+    @Test(arguments: [7, 8, 9, 10, 11, 12])
+    func aLedgerMigratedFromAnOlderSchemaHasTheShapeOfAFreshOne(version: Int) throws {
+        let fresh = path(), old = path()
+        defer { remove(fresh); remove(old) }
+        _ = try Ledger(path: fresh)
+        do {
+            let ledger = try Ledger(path: old)
+            _ = try ledger.record(lookup("fine"))
+        }
+        try windBack(to: version, at: old)
+        let migrated = try Self.shape(of: try Ledger(path: old))
+        let expected = try Self.shape(of: try Ledger(path: fresh))
+        for table in Set(expected.keys).union(migrated.keys).sorted() {
+            #expect(migrated[table] == expected[table], """
+                from schema \(version), \(table) is \(migrated[table].map(String.init(describing:)) ?? "missing") \
+                where a fresh ledger has \(expected[table].map(String.init(describing:)) ?? "nothing")
+                """)
+        }
+    }
+
+    /// **And keeps every row while it gets there**, the study rows above all: a table rebuilt with its
+    /// parent's foreign keys enforced cascades, and the reader's notes, answers, schedules and histories
+    /// would go with it. Written by the shipping code, wound back, migrated, and counted.
+    @Test(arguments: [8, 9, 10, 11, 12])
+    func themigrationFromAnOlderSchemaKeepsEveryRow(version: Int) throws {
+        let path = path()
+        defer { remove(path) }
+        let usable: UUID, blank: UUID
+        do {
+            let ledger = try Ledger(path: path)
+            let fine = try ledger.record(lookup("fine"))
+            let hold = try ledger.record(lookup("hold"))
+            usable = try ledger.enroll(
+                .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.001", senseKeyKind: .publisher),
+                issuer: .live, language: "en", chosenBy: .reader,
+                answer: StudyAnswer(origin: .reader, text: "a penalty"), lookupID: fine, at: now).id
+            // **Blank to Swift and not to SQL's `trim()`**: the answer the stored verdict exists for. A
+            // migration that judged it by default would put a card with nothing on its back in the queue.
+            blank = try ledger.enroll(
+                .sense(dictionary: "noad", entryID: "e2", senseKey: "e2.001", senseKeyKind: .publisher),
+                issuer: .live, language: "en", chosenBy: .reader,
+                answer: StudyAnswer(origin: .reader, text: "\t\n\u{3000}"), lookupID: hold, at: now).id
+            let card = try #require(try ledger.existingCard(of: usable))
+            _ = try ledger.grade(cardID: card.id, .good, eventID: UUID(), expectedRevision: card.revision,
+                                 at: now, using: try MemoryScheduler())
+        }
+        let before = try Self.rowCounts(at: path)
+        try windBack(to: version, at: path)
+        let wound = try Self.rowCounts(at: path)
+        let migrated = try Ledger(path: path)
+        let after = try Self.rowCounts(at: path)
+        for (table, count) in wound where count > 0 {
+            #expect(after[table] == count, "from schema \(version), \(table) held \(count) rows and now \(after[table] ?? 0)")
+        }
+        #expect(after["study_notes"] == before["study_notes"], "a note was lost on the way back or forward")
+        #expect(try migrated.lookupIDs(evidencing: usable).count == 1, "the note's reading was unlinked")
+        // Readable by every query that reads the verdict — the library, the queue and the reading — and
+        // the verdict is Swift's.
+        let rows = try migrated.library(LibraryQuery())
+        #expect(Set(rows.map(\.id)) == [usable, blank])
+        _ = try migrated.sittingCandidates(dictionary: nil, introducedSince: now)
+        _ = try migrated.reading(ofLookup: 1)
+        if version >= 9 {
+            #expect(rows.first { $0.id == usable }?.readiness == .ready)
+            #expect(rows.first { $0.id == blank }?.readiness == .needsRepair,
+                    "an answer of tabs, newlines and an ideographic space was judged usable")
+        }
+        // A card the reader writes needs the `custom` branch 8 to 11 did not have.
+        try migrated.add(StudyNote(target: .custom(dictionary: "noad", text: "my own words"), issuer: .live,
+                                   language: "en", createdAt: now))
+        try migrated.setReaderAnswer("a fine paid", of: usable, at: now)
+    }
+
+    /// Rows per table, read on a connection of its own so nothing is migrated by counting.
+    static func rowCounts(at path: String) throws -> [String: Int] {
+        var handle: OpaquePointer?
+        defer { sqlite3_close(handle) }
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            throw LedgerError.sqlite(code: SQLITE_CANTOPEN, message: "cannot open \(path)")
+        }
+        var tables: [String] = []
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(handle, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+                           -1, &statement, nil)
+        while sqlite3_step(statement) == SQLITE_ROW { tables.append(String(cString: sqlite3_column_text(statement, 0))) }
+        sqlite3_finalize(statement)
+        var counts: [String: Int] = [:]
+        for table in tables {
+            sqlite3_prepare_v2(handle, "SELECT COUNT(*) FROM \"\(table)\"", -1, &statement, nil)
+            if sqlite3_step(statement) == SQLITE_ROW { counts[table] = Int(sqlite3_column_int64(statement, 0)) }
+            sqlite3_finalize(statement)
+        }
+        return counts
+    }
+
+    /// What one table *is*, as SQLite reports it: its columns, the `CHECK`s in its definition, its
+    /// foreign keys, and the indexes and triggers on it. Order-free, so a column added by `ALTER` at the
+    /// end compares equal to the same column declared in place — which is all this schema relies on.
+    struct TableShape: Equatable, CustomStringConvertible {
+        var columns: Set<String> = []
+        var checks: Set<String> = []
+        var foreignKeys: Set<String> = []
+        var indexes: Set<String> = []
+        var triggers: Set<String> = []
+        var description: String {
+            "columns \(columns.sorted()), checks \(checks.sorted()), foreign keys \(foreignKeys.sorted()), "
+                + "indexes \(indexes.sorted()), triggers \(triggers.sorted())"
+        }
+    }
+
+    static func shape(of ledger: Ledger) throws -> [String: TableShape] {
+        var shapes: [String: TableShape] = [:]
+        var objects: [(type: String, name: String, table: String, sql: String?)] = []
+        try ledger.run("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+                       bind: []) { row in
+            objects.append((try row.text(0), try row.text(1), try row.text(2), row.optionalText(3)))
+        }
+        for object in objects where object.type == "table" {
+            var shape = TableShape()
+            try ledger.run("SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_xinfo(?)",
+                           bind: [.text(object.name)]) { row in
+                shape.columns.insert([try row.text(0), try row.text(1), String(row.integer(2)),
+                                      row.optionalText(3) ?? "-", String(row.integer(4))].joined(separator: " "))
+            }
+            try ledger.run("SELECT \"table\", \"from\", \"to\", on_delete FROM pragma_foreign_key_list(?)",
+                           bind: [.text(object.name)]) { row in
+                shape.foreignKeys.insert([try row.text(0), try row.text(1), row.optionalText(2) ?? "-",
+                                          try row.text(3)].joined(separator: " "))
+            }
+            shape.checks = Set(checks(in: object.sql ?? ""))
+            shapes[object.name] = shape
+        }
+        for object in objects where object.type == "index" || object.type == "trigger" {
+            guard let sql = object.sql else { continue }
+            if object.type == "index" { shapes[object.table, default: TableShape()].indexes.insert(normalised(sql)) }
+            else { shapes[object.table, default: TableShape()].triggers.insert(normalised(sql)) }
+        }
+        return shapes
+    }
+
+    /// Comments out, whitespace collapsed, and no space inside a parenthesis — so two spellings of one
+    /// statement compare equal and two statements never do.
+    static func normalised(_ sql: String) -> String {
+        sql.split(separator: "\n").map { line in
+            line.range(of: "--").map { String(line[..<$0.lowerBound]) } ?? String(line)
+        }
+        .joined(separator: " ")
+        .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        .replacingOccurrences(of: "( ", with: "(").replacingOccurrences(of: " )", with: ")")
+    }
+
+    /// Every `CHECK (…)` in a table's definition, table-level and column-level alike, as its expression.
+    static func checks(in sql: String) -> [String] {
+        let text = normalised(sql)
+        var found: [String] = []
+        var rest = text[...]
+        // A keyword, not a substring: `checked_at` is a column, not a constraint.
+        while let check = rest.firstMatch(of: /(?i)\bCHECK ?\(/) {
+            rest = rest[check.range.upperBound...]
+            rest = text[text.index(before: rest.startIndex)...]
+            var depth = 0
+            var expression = ""
+            for character in rest {
+                if character == "(" { depth += 1 }
+                if character == ")" { depth -= 1 }
+                expression.append(character)
+                if depth == 0 { break }
+            }
+            found.append(expression)
+            rest = rest.dropFirst(expression.count)
+        }
+        return found
     }
 }

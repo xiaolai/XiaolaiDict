@@ -51,10 +51,20 @@ public struct StudyCard: Sendable, Equatable, Identifiable {
     /// the note must be enrolled and ready and in scope — so the queue is where the question is really
     /// answered, and this is only the half the card itself can see.
     public func isDue(at when: Date) -> Bool {
-        guard !isPaused else { return false }
-        if let hiddenUntil, hiddenUntil > when { return false }
+        guard !isPaused, !isHidden(at: when) else { return false }
         guard let due = scheduled.due else { return true }  // never reviewed: due as soon as it is ready
         return due <= when
+    }
+
+    /// Whether the reader has put this card off past `when`. **Equal is not hidden**: a card put off
+    /// until nine is askable at nine.
+    ///
+    /// The queue spells the same rule in SQL, `(hidden_until IS NULL OR hidden_until <= ?)`, and
+    /// `theHiddenPredicateAgreesWithTheQueueSql` keeps the two copies honest. They agree at a stored
+    /// instant, which is what the commit asks with: `grade` and `practise` canonicalise `when` first.
+    public func isHidden(at when: Date) -> Bool {
+        guard let hiddenUntil else { return false }
+        return hiddenUntil > when
     }
 }
 

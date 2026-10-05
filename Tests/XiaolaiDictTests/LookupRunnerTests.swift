@@ -113,16 +113,30 @@ struct LookupRunnerTests {
 
     /// A lookup superseded while it waited was never seen: it neither fills the newer panel nor
     /// leaves a record behind.
+    ///
+    /// **The order is the test's, not a race against a deadline.** This used the shipped three-second
+    /// deadline against a service that never answers, and superseded the lookup once the panel had
+    /// been shown — so under a loaded parallel run, with the main actor starved past three seconds,
+    /// the deadline fired first, the fallback answered a lookup that was still current, and it filled
+    /// the panel and was recorded, correctly (2026-10-04, `make e2e`: failed after 10.9 s, passed in
+    /// the `make test` before it). The service now answers — with entries, which would fill the panel
+    /// — only once the reader has pressed again, and the deadline is one no starvation reaches.
     @Test func aSupersededLookupNeitherFillsThePanelNorIsRecorded() async throws {
         let panel = RecordingPanel()
+        let gate = ReplyGate()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in nil }), panel: panel)
+            client: DictionaryClient(deadline: .seconds(600),
+                                     connect: { [entry = Self.twoSenses] _ in RepliesWhenReleased(gate: gate, entry: entry) },
+                                     fallback: { _ in nil }),
+            panel: panel)
         let ticket = panel.newRequest()
         let lookup = Task { await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: ticket) }
         try await panel.waitForShow()
         _ = panel.newRequest()  // the reader pressed the shortcut again
+        gate.open()             // and only then does the dictionary answer
 
         let recording = await lookup.value
+        #expect(gate.wasAsked, "the service was never asked, so nothing was superseded while it waited")
         #expect(recording == nil, "a lookup nobody saw was recorded")
         #expect(panel.updates.isEmpty, "a superseded lookup filled the newer panel")
     }
@@ -250,6 +264,28 @@ struct NeverReplies: DictionaryTransport {
         return .lookup(LookupAnswer(word: .notFound))
     }
 
+    func cancel(reason: String) {}
+}
+
+/// When a gated service may answer, opened by the test — so what happens while a lookup waits is
+/// ordered by the test rather than raced against a deadline.
+private final class ReplyGate: Sendable {
+    private let state = Mutex((asked: false, open: false))
+    func open() { state.withLock { $0.open = true } }
+    var wasAsked: Bool { state.withLock { $0.asked } }
+    fileprivate func ask() { state.withLock { $0.asked = true } }
+    fileprivate var isOpen: Bool { state.withLock { $0.open } }
+}
+
+/// A service that answers with one entry once its gate is opened, and not before.
+private struct RepliesWhenReleased: DictionaryTransport {
+    let gate: ReplyGate
+    let entry: DictionaryEntry
+    func send(_ request: ServiceRequest) async throws -> ServiceReply {
+        gate.ask()
+        while !gate.isOpen { try await Task.sleep(for: .milliseconds(5)) }
+        return .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: [])))
+    }
     func cancel(reason: String) {}
 }
 

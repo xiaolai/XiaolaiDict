@@ -323,6 +323,9 @@ struct StringCatalogTests {
         // Added 2026-09-29 when `IndexStore` moved out of `AppleDictionaryFormat` so the dictionary service
         // would stop linking SQLite for code it never calls.
         "Sources/DictionaryIndex",
+        // Added 2026-10-04 with the target. A phone or a watch would draw its own surface, so nothing
+        // a reader reads may be written here (ADR-0047).
+        "Sources/ReviewKit",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there
@@ -389,11 +392,32 @@ struct StringCatalogTests {
             .write(to: scratch.appending("Planted.swift"), atomically: true, encoding: .utf8)
         caught = try Self.filesHoldingDisplayText(under: scratch.url)
         #expect(caught == ["Planted.swift"], "the scan did not see a planted literal: \(caught)")
+
+        // **A call broken across a line is the same call** (audit-fix round 1). The scan matched one
+        // spelling, `String(localized:` on one line, and a sentence in `StudyRecovery.swift` written
+        // `String(` then `localized:` on the next sat in Core past it. So did the other initialisers.
+        // Composed, as `forbidden` is, so this file does not match the search it is testing.
+        let call = "String" + "("
+        for (index, split) in ["\(call)\n    localized: \"split\", comment: \"c\")",
+                               "\(call) localized : \"spaced\", comment: \"c\")",
+                               "Attributed\(call)\n localized: \"attributed\")",
+                               "LocalizedStringKey" + "(\n \"key\")",
+                               "LocalizedStringResource" + "(\n \"resource\")"].enumerated() {
+            let name = "Split\(index).swift"
+            try "let planted = \(split)\n".write(to: scratch.appending(name), atomically: true, encoding: .utf8)
+            caught = try Self.filesHoldingDisplayText(under: scratch.url)
+            #expect(caught.contains(name), "the scan did not see \(split.debugDescription): \(caught)")
+        }
     }
 
     /// The one predicate both checks above use, so neither can drift from the other.
+    ///
+    /// **A pattern, not a spelling**: whitespace — a line break included — may stand anywhere Swift
+    /// allows it inside the call, and every initialiser that takes a key is named.
     private static func filesHoldingDisplayText(under root: URL) throws -> [String] {
-        try SourceScan.offenders(of: "String(localized:", under: root).names.sorted()
+        let call = try Regex(#"\b(?:Attributed)?String\s*\(\s*localized\s*:|\bLocalizedString(?:Resource|Key)\s*\(|\bNSLocalizedString\s*\("#)
+        return try SourceScan.code(under: root).filter { $0.code.contains(call) }
+            .map(\.file.lastPathComponent).sorted()
     }
 
     /// **And a translation in the catalog reaches the reader.** The bundle carries compiled

@@ -18,7 +18,8 @@ public enum KeyIssuer: String, Codable, Sendable, CaseIterable {
     case live
     /// `DictionaryIndex`, built by `EntryIndexer`.
     case index
-    /// `PhraseInventory`'s body walk, which is the only reader of a sub-entry's parent and block ids.
+    /// `PhraseInventory`, which issues a phrase's spelling and is the only reader of a sub-entry's parent
+    /// and block ids. **What a phrase the reader saved is keyed under** (ADR-0049).
     case inventory
 }
 
@@ -34,7 +35,10 @@ public enum StudyTarget: Sendable, Equatable, Hashable {
     /// One entry, sense unresolved — which still separates *fine* the penalty from *fine* the adjective,
     /// and is what every dictionary that marks no senses can offer.
     case entry(dictionary: String, entryID: String)
-    /// A phrase filed inside another word's entry, keyed by the dictionary's own spelling of it.
+    /// A phrase, keyed by the dictionary's own spelling of it — **made only by the reader's *Save This
+    /// Phrase*** (ADR-0049), never automatically and never from the sense ladder. A phrase filed inside
+    /// another word's entry is why this case exists; one with an entry of its own is saved the same way,
+    /// so one gesture makes one identity whichever way the study dictionary files it.
     ///
     /// **The text is the label, and the locators are evidence.** `StudyLocator` records where the meaning
     /// was found — parent, block, content version, extraction version — and a phrase may have several.
@@ -304,4 +308,37 @@ extension StudyReadiness {
         if facts.isEntryRung, facts.answerIsPublishers { return .needsConfirmation }
         return .ready
     }
+
+    /// **What the reader has to do next**, from the same facts — nil exactly when `of(_:)` is `.ready`.
+    ///
+    /// Finer than the verdict on purpose, and never a second verdict: `of(_:)` stays the one decision
+    /// (ADR-0033). The verdict cannot say which remedy applies — `.needsConfirmation` holds both a
+    /// proposal that Confirm fixes and an entry rung carrying the dictionary's text that it cannot
+    /// (ADR-0030), so a Confirm offered by the verdict wrote nothing, or wrote a fact that changed
+    /// nothing, and counted itself either way. `StudyAttentionTests` holds the two together over every
+    /// combination of facts.
+    ///
+    /// **Ordered as the remedies must be applied.** An answer is no use to a note with no reading to ask
+    /// it in, and a confirmation is no use without an answer.
+    public static func obstacle(_ facts: Facts) -> StudyObstacle? {
+        if facts.senseMoved { return .senseMoved }
+        guard facts.hasReading || !facts.needsReading else { return .readingDeleted }
+        guard facts.hasUsableAnswer, !(facts.isEntryRung && facts.answerIsPublishers) else { return .answer }
+        guard facts.isConfirmed else { return .confirmation }
+        return nil
+    }
+}
+
+/// **What stands between a note and being asked: the one thing the reader would have to do.**
+public enum StudyObstacle: String, Sendable, CaseIterable {
+    /// The dictionary's text moved under the stored key. **Only ever on evidence** — a surface that
+    /// cannot ask a dictionary never claims it.
+    case senseMoved
+    /// No reading evidences it any more, so there is no sentence to ask it in.
+    case readingDeleted
+    /// No answer that can be graded: none, a blank one, or the dictionary's whole entry for an entry
+    /// rung. Written by the reader; **confirming does not change it.**
+    case answer
+    /// Everything is there but the reader's agreement — the one obstacle Confirm removes.
+    case confirmation
 }

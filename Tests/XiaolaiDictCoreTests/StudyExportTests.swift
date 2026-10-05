@@ -13,6 +13,10 @@ struct StudyExportTests {
 
     private func ledger() throws -> Ledger { try Ledger(path: ":memory:") }
 
+    /// The caller's words for what could not travel. **Not the app's**: Core is tested on what it does
+    /// with labels it is given, and the app's own are held to the catalog by `LibraryOrganisationWiringTests`.
+    private static let labels = StudyExport.Labels(incomplete: "LABEL-INCOMPLETE", withoutAWord: "LABEL-NO-WORD")
+
     @discardableResult
     private func save(_ ledger: Ledger, _ word: String, gloss: String,
                       sentence: String? = nil) throws -> StudyNote {
@@ -35,7 +39,7 @@ struct StudyExportTests {
         let gloss = "PUBLISHERWORDSTHATMUSTNOTTRAVEL"
         try save(ledger, "fine", gloss: gloss)
         let export = try ledger.export(dictionary: nil)
-        let text = export.tabSeparated()
+        let text = export.tabSeparated(labels: Self.labels)
         #expect(!text.contains(gloss), "the dictionary's definition reached the export")
         #expect(export.rows.allSatisfy { $0.answer == nil })
     }
@@ -53,9 +57,9 @@ struct StudyExportTests {
         #expect(export.rows.count == 2, "an incomplete card is still the reader's")
         #expect(export.preview.cards == 2)
         #expect(export.preview.incomplete == 1)
-        let text = export.tabSeparated()
+        let text = export.tabSeparated(labels: Self.labels)
         #expect(text.contains("the money you pay"))
-        #expect(text.contains(StudyExport.incompleteMarker))
+        #expect(text.contains(Self.labels.incomplete))
     }
 
     /// **The external id is first and is ours.** Anki matches its text import on the first field,
@@ -65,7 +69,7 @@ struct StudyExportTests {
         let ledger = try ledger()
         let note = try save(ledger, "fine", gloss: "a penalty")
         try ledger.setReaderAnswer("the money", of: note.id, at: now)
-        let text = try ledger.export(dictionary: nil).tabSeparated()
+        let text = try ledger.export(dictionary: nil).tabSeparated(labels: Self.labels)
         let header = try #require(text.split(separator: "\n").first { $0.hasPrefix("#columns:") })
         #expect(header.hasPrefix("#columns:XiaolaiDictID\t"))
         let row = try #require(text.split(separator: "\n").first { !$0.hasPrefix("#") })
@@ -77,8 +81,8 @@ struct StudyExportTests {
     @Test func theexportIsDeterministic() throws {
         let ledger = try ledger()
         for word in ["fine", "hold", "bank", "spring"] { try save(ledger, word, gloss: "x") }
-        #expect(try ledger.export(dictionary: nil).tabSeparated()
-            == (try ledger.export(dictionary: nil).tabSeparated()))
+        #expect(try ledger.export(dictionary: nil).tabSeparated(labels: Self.labels)
+            == (try ledger.export(dictionary: nil).tabSeparated(labels: Self.labels)))
     }
 
     /// Tags travel; they are the reader's own.
@@ -88,7 +92,7 @@ struct StudyExportTests {
         try ledger.setReaderAnswer("the money", of: note.id, at: now)
         try ledger.tag(noteID: note.id, "law")
         try ledger.tag(noteID: note.id, "reading")
-        let text = try ledger.export(dictionary: nil).tabSeparated()
+        let text = try ledger.export(dictionary: nil).tabSeparated(labels: Self.labels)
         #expect(text.contains("law reading"))
     }
 
@@ -97,10 +101,53 @@ struct StudyExportTests {
         let ledger = try ledger()
         let note = try save(ledger, "fine", gloss: "x", sentence: "He\tpaid\tthe fine.")
         try ledger.setReaderAnswer("the\tmoney", of: note.id, at: now)
-        let text = try ledger.export(dictionary: nil).tabSeparated()
+        let text = try ledger.export(dictionary: nil).tabSeparated(labels: Self.labels)
         let row = try #require(text.split(separator: "\n").first { !$0.hasPrefix("#") })
         #expect(row.split(separator: "\t", omittingEmptySubsequences: false).count
             == StudyExport.fields.count)
+    }
+
+    /// **A card whose reading was deleted still leaves, with everything that is the reader's** (audit-fix
+    /// round 3, #9). Deleting a reading keeps the note (ADR-0033), and the word it is filed under came only
+    /// from that reading — so the row was skipped, and the reader's own answer and tags with it: a quietly
+    /// short file, which ADR-0036 rejected for incomplete cards. It goes out labelled, and counted.
+    @Test func acardWhoseReadingWasDeletedLeavesWithItsAnswerAndTags() throws {
+        let ledger = try ledger()
+        let note = try save(ledger, "fine", gloss: "a penalty")
+        try ledger.setReaderAnswer("the money you pay", of: note.id, at: now)
+        try ledger.tag(noteID: note.id, "law")
+        try save(ledger, "hold", gloss: "a compartment")
+        try ledger.deleteReading(lookups: try ledger.lookupIDs(evidencing: note.id))
+
+        let export = try ledger.export(dictionary: nil)
+        #expect(export.rows.count == 2, "a card whose reading was deleted was dropped from the export")
+        let row = try #require(export.rows.first { $0.externalID == note.id.uuidString })
+        #expect(row.front == nil, "a word was invented for a card that no longer has one")
+        #expect(row.answer == "the money you pay")
+        #expect(row.tags == ["law"])
+        #expect(export.preview.cards == 2)
+        #expect(export.preview.withoutAWord == 1)
+
+        let line = try #require(export.tabSeparated(labels: Self.labels).split(separator: "\n")
+            .first { $0.hasPrefix(note.id.uuidString) })
+        #expect(line.split(separator: "\t", omittingEmptySubsequences: false)
+                == [Substring(note.id.uuidString), "LABEL-NO-WORD", "", "the money you pay", "law"])
+    }
+
+    /// **What a row says where something could not travel is the caller's to word** (audit-fix round 3,
+    /// #8). Core holds no display text (AGENTS.md, ADR-0025): the English marker that lived here was
+    /// written into every export in English, past the catalog. Both labels are the caller's, verbatim,
+    /// and each only where its own case holds.
+    @Test func theLabelsAreTheCallersAndAppearOnlyWhereTheyApply() throws {
+        let ledger = try ledger()
+        try save(ledger, "hold", gloss: "a compartment")
+        let labels = StudyExport.Labels(incomplete: "标签：未完成", withoutAWord: "UNUSED-NO-WORD")
+        let text = try ledger.export(dictionary: nil).tabSeparated(labels: labels)
+        let row = try #require(text.split(separator: "\n").first { !$0.hasPrefix("#") })
+        let fields = row.split(separator: "\t", omittingEmptySubsequences: false)
+        #expect(fields[1] == "hold")
+        #expect(fields[3] == "标签：未完成")
+        #expect(!text.contains("UNUSED-NO-WORD"), "the no-word label was written for a card that has its word")
     }
 
     /// The export is scoped to one study namespace, like everything else about study state.

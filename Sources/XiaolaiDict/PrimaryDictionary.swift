@@ -90,9 +90,14 @@ struct LookupRecording {
     /// from the primary dictionary and no reader tap and no selector, which one the reader was
     /// reading is unknown, and unknown is not written down as a guess.
     let encounter: SenseEncounter?
-    var lookupID: Int? = nil
+    /// The reading this lookup reopens, by its row's identity — nil for a new lookup.
+    var lookup: LookupIdentity? = nil
     var keepPolicy: LookupKeepPolicy = .manual
     var primaryDictionary: String? = nil
+    /// **The phrase whose own entry `encounter` is in**, by the inventory's spelling — nil where it is the
+    /// word's. Automatic keeping keeps that sense as the entry's, as it always did (ADR-0028), unless the
+    /// reader saved the phrase as a card already: then that card stands for it (ADR-0049).
+    var phraseOfEncounter: String? = nil
 }
 
 extension PrimaryDictionary {
@@ -109,8 +114,16 @@ extension PrimaryDictionary {
     /// dictionary's withdraws `.onlySense`**, exactly as it stops rung 0 in `SenseResolver.resolve`:
     /// the word's one sense and the phrase's are two readings, and recording the first as the only one
     /// there was let automatic keeping confirm it while the selector was still choosing.
+    ///
+    /// **The primary is decided over the word's entries and the phrase's together** — the list the
+    /// resolver's candidates come from — **and the encounter is taken from that dictionary's word entries
+    /// alone** (audit-fix round 3, #3). Decided over the word's alone, a choice that answered only the
+    /// phrase is absent there, and `identity(among:)` fell back to whichever other dictionary answered the
+    /// word: rung 0 marked the primary's phrase and recorded an auxiliary word's only sense as
+    /// `.onlySense`. A primary with no entry for the word has no word encounter to record.
     func encounter(among entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [], at when: Date) -> SenseEncounter? {
-        let mine = self.entries(among: entries)
+        guard let primary = identity(among: entries + phraseEntries) else { return nil }
+        let mine = entries.filter { $0.dictionary == primary }
         guard mine.count == 1, let entry = mine.first, let entryKey = entry.entryKey else { return nil }
         // One sense, and it can be keyed → the shared builder, the same call the resolver and the
         // reader's tap make. **Not a guard that matches theirs — their guard.** An entry with one
@@ -218,9 +231,13 @@ struct SenseResolver: Sendable {
         // ledger as the id of a sense nothing can point at again.
         if mine.count == 1, candidates.count == 1, let only = candidates.first,
            only.keyKind != SenseKeyKind.none, !only.key.isEmpty {
+            // **Asked with the phrase's entries too**, so the encounter is decided over the list `mine`
+            // was: where the one candidate is the primary's phrase, no word of another dictionary is
+            // recorded under it (audit-fix round 3, #3). The phrase's mark stands; the ledger records
+            // nothing for it, because a detected phrase is an inference and `.onlySense` is a fact.
             return SenseResolution(
                 mark: .chosen(key: only.key, by: .onlySense),
-                encounter: primary.encounter(among: entries, at: when),
+                encounter: primary.encounter(among: entries, phrase: phraseEntries, at: when),
                 owner: mine.first.map { PanelSelection.identity(of: $0) })
         }
 

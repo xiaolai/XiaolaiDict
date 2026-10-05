@@ -66,6 +66,10 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     public let disposition: LookupDisposition
     public let studyNoteID: UUID?
     public let studyStatus: StudyReadiness?
+    /// What the kept note lacks to be asked, from the same facts as `studyStatus`. **What History's
+    /// Confirm is offered by**: an entry rung carrying the dictionary's text is `.needsConfirmation` and
+    /// confirming it changes nothing (ADR-0030), so the verdict alone offered a control that did nothing.
+    public let studyObstacle: StudyObstacle?
     /// What the kept note reveals — **its** answer, off the same association as `studyNoteID`.
     ///
     /// Not `sense?.gloss`: that is the newest encounter, which an auxiliary tap can be, and the note
@@ -110,7 +114,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         partOfSpeech: String? = nil, sense: SenseNote? = nil, senseAbstention: Abstention? = nil,
         language: String? = nil, repeats: [Int] = [], disposition: LookupDisposition = .kept,
         studyNoteID: UUID? = nil, studyStatus: StudyReadiness? = nil, studyAnswer: String? = nil,
-        studySense: SenseNote? = nil
+        studySense: SenseNote? = nil, studyObstacle: StudyObstacle? = nil
     ) {
         self.id = id
         self.lemma = lemma
@@ -129,6 +133,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         self.disposition = disposition
         self.studyNoteID = studyNoteID
         self.studyStatus = studyStatus
+        self.studyObstacle = studyObstacle
         self.studyAnswer = studyAnswer
         self.studySense = studySense
     }
@@ -142,7 +147,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
             place: place, at: at, result: result, quality: quality, partOfSpeech: partOfSpeech,
             sense: sense, senseAbstention: senseAbstention, language: language, repeats: repeats,
             disposition: disposition, studyNoteID: studyNoteID, studyStatus: studyStatus,
-            studyAnswer: studyAnswer, studySense: studySense)
+            studyAnswer: studyAnswer, studySense: studySense, studyObstacle: studyObstacle)
     }
 
     /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a
@@ -216,14 +221,6 @@ public struct SenseNote: Equatable, Sendable {
     /// Whether the card may state this as fact. A sense the model proposed is drawn as the
     /// hypothesis it is; the reader's own tap, and an entry with only one sense, are facts.
     public var isConfirmed: Bool { chosenBy == .reader || chosenBy == .onlySense }
-
-    /// How a card names the sense. `4/12` where the entry has one block, `2·4/12` where the
-    /// ordinal restarts and the bare number would be ambiguous between blocks.
-    public var label: String {
-        guard let ordinal else { return "\(outOf) senses" }
-        guard let block, block > 1 else { return "\(ordinal)/\(outOf)" }
-        return "\(block)·\(ordinal)/\(outOf)"
-    }
 
     /// Nothing to reveal is not the same as a meaning withheld, and the card must not offer to
     /// show something it does not have.

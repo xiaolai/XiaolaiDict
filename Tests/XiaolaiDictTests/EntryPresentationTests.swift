@@ -156,16 +156,6 @@ struct MemoryStripTests {
         ])
         let strip = try #require(MemoryStrip(prior))
         #expect(strip.occasion == 3)
-        #expect(strip.headline == "3rd lookup")
-    }
-
-    @Test(arguments: [(2, "2nd lookup"), (3, "3rd lookup"), (4, "4th lookup"),
-                      (11, "11th lookup"), (21, "21st lookup"), (22, "22nd lookup"), (23, "23rd lookup")])
-    func theOrdinalReadsCorrectly(occasion: Int, headline: String) throws {
-        let earlier = (1..<occasion).map {
-            PriorEncounter(at: now.addingTimeInterval(TimeInterval(-86_400 * $0)), where: "Safari", title: nil)
-        }
-        #expect(try #require(MemoryStrip(PriorEncounters(occasions: earlier))).headline == headline)
     }
 
     /// The strip says where and when, and is bounded — a strip that grows without bound is not one.

@@ -65,6 +65,80 @@ struct LookupKeepRaceTests {
         #expect(try ledger.notes().count == 1)
         #expect(try ledger.notes().first?.target.dictionary == "noad")
     }
+    /// **A reading deleted under an open card is said, and its id forgotten** (audit-fix round 1). The
+    /// refresh read no row, changed nothing, and the card went on saying what it had said of a reading
+    /// that is gone — while keeping its row id. Lookup ids are SQLite rowids and are reused once the
+    /// largest is deleted, so a later choice on that card was written onto someone else's reading.
+    @Test func aDeletedReadingSaysSoAndItsIdIsNeverWrittenTo() async throws {
+        let directory = TemporaryDirectory(); let path = directory.appending("ledger.sqlite").path
+        let recorder = LookupRecorder(); recorder.start { try LedgerStore(path:path) }
+        await settled(recorder, request:1, row:row(policy:.manual))
+        #expect(recorder.states[1] == .manual)
+        let ledger = try Ledger(path:path)
+        let gone = try #require(try ledger.readingArchive(ReadingArchiveQuery()).first?.id)
+        try ledger.delete(lookup: gone)
+        await recorder.refreshStatus(request:1)
+        #expect(recorder.states[1] == .deleted, "the card still describes a reading that was deleted")
+        let reused = try ledger.record(LookupRecord(surface:"other",lemma:"other",context:"Another day.",language:"en",
+            lookedUpAt:now,result:.found,answeredBy:.dictionaryService,quality:nil))
+        try #require(reused == gone, "the id was not reused, so this cannot show the hazard")
+        recorder.enrol(sense("reader"), request:1, language:"en")
+        await recorder.settled(request:1)
+        #expect(try ledger.notes().isEmpty, "a choice on the deleted reading's card was saved onto another reading")
+        #expect(try ledger.preferredEvidence(ofLookup: reused) == nil, "and recorded as met there")
+    }
+    /// **The rowid given to another reading before the card noticed is not this card's reading**
+    /// (audit-fix round 2). Round 1 forgot a deleted reading's id once a refresh found no row; reused
+    /// first — another lookup recorded between the deletion and the refresh — the refresh found a row,
+    /// drew the other reading's status on this card, and a choice made on it was written there. The
+    /// card's reading is its row *and* the instant stored with it, checked where each read and write
+    /// lands.
+    @Test func aRowIdReusedBeforeTheRefreshIsNotTheCardsReading() async throws {
+        let directory = TemporaryDirectory(); let path = directory.appending("ledger.sqlite").path
+        let recorder = LookupRecorder(); recorder.start { try LedgerStore(path:path) }
+        await settled(recorder, request:1, row:row(policy:.manual))
+        #expect(recorder.states[1] == .manual)
+        let ledger = try Ledger(path:path)
+        let gone = try #require(try ledger.readingArchive(ReadingArchiveQuery()).first?.id)
+        try ledger.delete(lookup: gone)
+        // Another reading, a minute later, takes the id before this card is told anything.
+        let reused = try ledger.record(LookupRecord(surface:"other",lemma:"other",context:"Another day.",language:"en",
+            lookedUpAt:now.addingTimeInterval(60),result:.found,answeredBy:.dictionaryService,quality:nil))
+        try #require(reused == gone, "the id was not reused, so this cannot show the hazard")
+        let note = try ledger.enroll(.entry(dictionary: "noad", entryID: "other"), issuer: .live, language: "en",
+                                     chosenBy: .reader, answer: StudyAnswer(origin: .reader, text: "else"),
+                                     lookupID: reused, at: now)
+        try ledger.confirm(noteID: note.id, at: now)
+
+        await recorder.refreshStatus(request:1)
+        #expect(recorder.states[1] == .deleted, "the card drew another reading's status as its own")
+        recorder.enrol(sense("reader"), request:1, language:"en")
+        await recorder.settled(request:1)
+        #expect(try ledger.notes().map(\.id) == [note.id], "a choice on the deleted reading's card was saved onto another reading")
+        #expect(try ledger.encounters(ofLookup: reused).isEmpty, "and recorded as met there")
+    }
+
+    /// **And a write already on its way is refused where it lands**, not only by the refresh: the
+    /// card's tap was queued before anything said the reading was gone, and the reading at that id by
+    /// then was someone else's.
+    @Test func aWriteForADeletedReadingIsRefusedWhereItLands() async throws {
+        let directory = TemporaryDirectory(); let path = directory.appending("ledger.sqlite").path
+        let recorder = LookupRecorder(); recorder.start { try LedgerStore(path:path) }
+        await settled(recorder, request:1, row:row(policy:.manual))
+        let ledger = try Ledger(path:path)
+        let gone = try #require(try ledger.readingArchive(ReadingArchiveQuery()).first?.id)
+        try ledger.delete(lookup: gone)
+        let reused = try ledger.record(LookupRecord(surface:"other",lemma:"other",context:"Another day.",language:"en",
+            lookedUpAt:now.addingTimeInterval(60),result:.found,answeredBy:.dictionaryService,quality:nil))
+        try #require(reused == gone, "the id was not reused, so this cannot show the hazard")
+
+        recorder.enrol(sense("reader"), request:1, language:"en")
+        await recorder.settled(request:1)
+        #expect(try ledger.notes().isEmpty, "the queued choice was saved onto another reading")
+        #expect(try ledger.encounters(ofLookup: reused).isEmpty, "and recorded as met there")
+        #expect(recorder.states[1] == .deleted, "the card did not learn its reading had gone")
+    }
+
     @Test func failedWriteHasRetryAndNoSuccessStatus() async {
         let recorder = LookupRecorder(); recorder.start { throw LedgerError.blankLemma }
         await settled(recorder,request:1,row:row())
@@ -176,7 +250,9 @@ struct LookupKeepRaceTests {
         let ledger = try Ledger(path:path)
         #expect(try ledger.reading(ofLookup:1)?.result == .found, "positive control: the first answer landed")
         let original = row(policy:.manual)
-        let reopened = LookupRecording(record:original.record.pending(), encounter:nil, lookupID:1, keepPolicy:.manual)
+        // As `reopenReading` hands it over: the reading's own identity, read from its row.
+        let identity = try #require(try ledger.reading(ofLookup:1)?.identity)
+        let reopened = LookupRecording(record:original.record.pending(), encounter:nil, lookup:identity, keepPolicy:.manual)
         await settled(recorder, request:2, row:reopened)
         #expect(try ledger.reading(ofLookup:1)?.result == .found, "a pending reopening overwrote the answer")
         #expect(try ledger.readingArchive(ReadingArchiveQuery()).count == 1)

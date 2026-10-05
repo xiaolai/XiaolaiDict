@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import XiaolaiDictCore
 
 /// The ledger on disk, owned by one actor so lookups can be recorded from anywhere.
@@ -37,6 +38,36 @@ actor LedgerStore {
         }.value
     }
 
+    /// The reader's ledger **for an instrument that changes nothing**: opened only if it is there, and
+    /// only at this build's schema — never created, never migrated, and never written, because the one
+    /// connection is read-only (`Ledger(readingAt:)`). `--reminder-report` opened it through
+    /// `openDefault`, which makes one where there is none and upgrades an older one (audit-fix round 1);
+    /// then through a version check followed by the writable door, which switched the journal and would
+    /// have created or migrated whatever was at the path by the second open (round 2).
+    static func openForReading(applicationSupport: URL? = nil) async throws -> LedgerStore {
+        try await Task.detached(priority: .utility) {
+            let root = try applicationSupport ?? FileManager.default
+                .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let path = root.appendingPathComponent(directoryName, isDirectory: true)
+                .appendingPathComponent(fileName).path
+            // Said by name rather than as SQLite's "unable to open". Not a guard against creation: the
+            // read-only open cannot create, whatever is at the path by then.
+            guard FileManager.default.fileExists(atPath: path) else { throw NotOpenedForReading.absent(path) }
+            return try LedgerStore(readingAt: path)
+        }.value
+    }
+
+    /// One read-only connection to `path`. Every write through it is refused by SQLite.
+    init(readingAt path: String) throws {
+        self.path = path
+        ledger = try Ledger(readingAt: path)
+    }
+
+    /// Why `openForReading` did not open: nothing there. Another schema is `LedgerError.anotherSchema`.
+    enum NotOpenedForReading: Error, Equatable {
+        case absent(String)
+    }
+
     /// What the reader met of this lemma before `before`. Encounters, never meanings.
     ///
     /// **In this language.** English *gift* and German *Gift* share a lemma and are two words; asked
@@ -46,20 +77,26 @@ actor LedgerStore {
     }
 
     /// The lookup, and the sense it met where that is a fact — in one call, so a sense can never
-    /// end up in the ledger without the lookup it belongs to.
+    /// end up in the ledger without the lookup it belongs to. **Answers the row's identity**, read back
+    /// in the same call: everything later said about this reading is checked against it, because its id
+    /// alone is reused once the largest is deleted (audit-fix round 2).
     @discardableResult
-    func record(_ recording: LookupRecording) throws -> Int {
+    func record(_ recording: LookupRecording) throws -> LookupIdentity {
         // One transaction, so a sense that cannot be written takes its lookup with it rather than
         // leaving a row the caller has been told does not exist.
-        try ledger.recordForLearning(recording.record, with: recording.encounter,
+        let id = try ledger.recordForLearning(recording.record, with: recording.encounter,
             policy: recording.keepPolicy, primary: recording.primaryDictionary)
+        guard let identity = try ledger.identity(ofLookup: id) else { throw LedgerError.lookupGone(id) }
+        return identity
     }
 
-    /// A sense the reader picked, hung off a lookup already recorded. Kept apart from the model's
-    /// guesses by `chosenBy`, which is the whole point of that column.
-    func record(_ encounter: SenseEncounter, for lookup: Int) throws {
-        guard !(try ledger.encounters(ofLookup: lookup)).contains(encounter) else { return }
-        try ledger.record(encounter, for: lookup)
+    /// A sense the reader picked, hung off a lookup already recorded — **that** lookup, or nothing.
+    /// Kept apart from the model's guesses by `chosenBy`, which is the whole point of that column.
+    func record(_ encounter: SenseEncounter, for lookup: LookupIdentity) throws {
+        try ledger.holding(lookup) {
+            guard !(try ledger.encounters(ofLookup: lookup.id)).contains(encounter) else { return }
+            try ledger.record(encounter, for: lookup.id)
+        }
     }
 
     /// What the history drawer shows. Bounded in both directions — a window of days and a cap on
@@ -73,23 +110,10 @@ actor LedgerStore {
         try ledger.recentLookups(since: since, limit: limit, studying: studying)
     }
 
-    /// **The reader asked to study this meaning.** Separate from meeting it: an encounter is something
-    /// reading produces, an enrollment is something the reader decides, and the ledger keeps them apart.
-    ///
-    /// The target is built from the encounter, so what is enrolled is exactly what was on screen — a
-    /// keyed sense where the dictionary marks one, the entry rung where it does not. The answer is the
-    /// dictionary's own snapshot, which is **local only**, carried with the version and hash that let a
-    /// later content update be noticed rather than silently re-pointing the card.
-    @discardableResult
-    func enroll(_ encounter: SenseEncounter, for lookup: Int, language: String?,
-                at when: Date) throws -> StudyNote {
-        try ledger.enroll(
-            Self.studyTarget(of: encounter), issuer: .live, language: language ?? StudyNote.unknownLanguage,
-            chosenBy: encounter.chosenBy, answer: Self.studyAnswer(of: encounter), lookupID: lookup, at: when)
-    }
-
-    /// What an encounter enrols as. **One conversion for enrolling and keeping**, so the two
-    /// persistence paths cannot come to disagree about which target a reading is.
+    /// What an encounter enrols as, when it is kept: a keyed sense where the dictionary marks one, the
+    /// entry rung where it does not. The answer is the dictionary's own snapshot, which is **local
+    /// only**, carried with the version and hash that let a later content update be noticed rather than
+    /// silently re-pointing the card.
     private static func studyTarget(of encounter: SenseEncounter) -> StudyTarget {
         let dictionary = encounter.dictionary.key
         return if let key = encounter.senseKey, encounter.senseKeyKind != .none {
@@ -107,14 +131,84 @@ actor LedgerStore {
         }
     }
 
-    func attentionCount(dictionary: String?) throws -> Int { try ledger.collectedCount(dictionary: dictionary, needingAttention: true) }
+    /// What is in the way of the meanings that need the reader, by reason — Review's empty state and
+    /// the toolbar's count of what Confirm can fix.
+    func attentionCounts(dictionary: String?) throws -> StudyAttention { try ledger.attentionCounts(dictionary: dictionary) }
     func eraseReadings(_ ids: [Int]) throws -> Ledger.ErasureReport { try ledger.eraseReadingData(at: path, lookups: ids) }
-    func enrich(_ recording: LookupRecording, lookup: Int) throws {
-        try ledger.resolvePrimary(ofLookup: lookup, dictionary: recording.primaryDictionary)
-        try ledger.enrichLookup(lookup, result: recording.record.result, answeredBy: recording.record.answeredBy,
-                                abstention: recording.record.senseAbstention)
+    // **One reading, by its identity** (audit-fix round 2): what a lookup card says and does about the
+    // reading it drew, each checked against that reading's row in the transaction that reads or writes
+    // it — `LedgerError.lookupGone` where the id now names another reading, or none.
+    func enrich(_ recording: LookupRecording, lookup: LookupIdentity) throws {
+        try ledger.holding(lookup) {
+            try ledger.resolvePrimary(ofLookup: lookup.id, dictionary: recording.primaryDictionary)
+            try ledger.enrichLookup(lookup.id, result: recording.record.result,
+                                    answeredBy: recording.record.answeredBy,
+                                    abstention: recording.record.senseAbstention)
+        }
     }
-    func disposition(ofLookup id: Int) throws -> LookupDisposition? { try ledger.disposition(ofLookup: id) }
+    func disposition(of lookup: LookupIdentity) throws -> LookupDisposition? {
+        try ledger.holding(lookup) { try ledger.disposition(ofLookup: lookup.id) }
+    }
+    func changeDisposition(_ value: LookupDisposition, of lookup: LookupIdentity,
+                           operation: UUID) throws -> DispositionResult {
+        try ledger.holding(lookup) { try ledger.changeDisposition(value, lookups: [lookup.id], operation: operation) }
+    }
+    func reading(of lookup: LookupIdentity) throws -> ReadingEntry? {
+        try ledger.holding(lookup) { try ledger.reading(ofLookup: lookup.id) }
+    }
+    func keep(_ encounter: SenseEncounter, for lookup: LookupIdentity, language: String?,
+              source: StudyKeepSource) throws -> StudyNote? {
+        try ledger.holding(lookup) { try keep(encounter, for: lookup.id, language: language, source: source) }
+    }
+
+    /// What automatic keeping did with a reading's encounter.
+    enum AutomaticKeep: Equatable {
+        /// Kept as the meaning it is — nil where the reading or its primary refused it, as `keep` answers.
+        case kept(StudyNote?)
+        /// **The encounter is in the own entry of a phrase the reader saved as a card**: that card stands
+        /// for it, and nothing is enrolled (ADR-0049).
+        case phraseSaved(StudyNote)
+    }
+
+    /// **Automatic keeping, one card for a phrase** (ADR-0049). An encounter is kept as the meaning the ladder
+    /// chose, a sense of a phrase's own entry included (ADR-0028) — unless `phrase`, the phrase whose own
+    /// entry it is in, is a card the reader saved already. Asked and kept in the one transaction that holds
+    /// the reading, so no save can land between the question and the keep.
+    func keepAutomatically(_ encounter: SenseEncounter, for lookup: LookupIdentity, language: String?,
+                           ownEntryOf phrase: String?) throws -> AutomaticKeep {
+        try ledger.holding(lookup) {
+            if let phrase, let saved = try ledger.phraseCard(
+                phrase, dictionary: encounter.dictionary.key, language: language ?? StudyNote.unknownLanguage) {
+                return .phraseSaved(saved)
+            }
+            return .kept(try keep(encounter, for: lookup.id, language: language, source: .automatic))
+        }
+    }
+
+    /// **The keep, and then the reading's word-only cards replaced by the meaning it kept — in one
+    /// transaction** (R1b, with the reader's option on). A word-only card that cannot be read refuses
+    /// both: no meaning is saved over a card it was meant to replace and could not.
+    func keepReplacingWordCards(_ encounter: SenseEncounter, for lookup: LookupIdentity, language: String?,
+                                source: StudyKeepSource) throws -> (note: StudyNote?, wordCards: WordCardReplacement) {
+        try ledger.holding(lookup) {
+            guard let note = try keep(encounter, for: lookup.id, language: language, source: source) else {
+                return (nil, .nothing)
+            }
+            return (note, try ledger.replaceWordCards(onLookup: lookup.id, with: note.id, at: .now))
+        }
+    }
+
+    /// **A phrase the reader saved as a card, linked to the reading it was saved from** — checked against
+    /// that reading's row in the transaction that writes it, like every other write a lookup card makes.
+    /// An unrecorded language is `unknown`, as a saved meaning's is.
+    func collectPhrase(_ phrase: PhraseCollection, for lookup: LookupIdentity,
+                       language: String?) throws -> PhraseCollectOutcome {
+        try ledger.holding(lookup) {
+            try ledger.collectPhrase(phrase, language: language ?? StudyNote.unknownLanguage,
+                                     lookupID: lookup.id, at: .now)
+        }
+    }
+
     func changeDisposition(_ value: LookupDisposition, lookups: [Int], operation: UUID) throws -> DispositionResult {
         try ledger.changeDisposition(value, lookups: lookups, operation: operation)
     }
@@ -134,13 +228,23 @@ actor LedgerStore {
 
     // MARK: - Review
 
-    /// The batch a sitting is offered, and how much did not fit. **Two calls, both in SQL**: a count
-    /// taken by subtracting what fitted from what the surface guessed would be wrong the moment a
-    /// card became due between them.
-    func dueCards(at when: Date, limit: Int, dictionary: String?,
-                  newAllowance: Int, dayStart: Date) throws -> [StudyCard] {
-        try ledger.dueCards(at: when, limit: limit, dictionary: dictionary,
-                            newAllowance: newAllowance, dayStart: dayStart)
+    /// What a Review sitting is planned from: every card of every askable note and today's
+    /// introductions, read in one call so no write lands between the two.
+    func sittingCandidates(dictionary: String?, introducedSince dayStart: Date) throws -> SittingCandidates {
+        try ledger.sittingCandidates(dictionary: dictionary, introducedSince: dayStart)
+    }
+
+    /// What a Selected sitting is planned from: the same read, the reader's choice beside it, and which
+    /// of the chosen notes belong to another study dictionary — in one call, so no write lands between.
+    func selectedCandidates(noteIDs: [UUID], dictionary: String?,
+                            introducedSince dayStart: Date) throws -> SelectedCandidates {
+        try ledger.selectedCandidates(noteIDs: noteIDs, dictionary: dictionary, introducedSince: dayStart)
+    }
+
+    /// Today's introductions — the allowance spent so far — for a surface that must count as a sitting
+    /// would without drawing one: the Library's Review Selected.
+    func introductions(since dayStart: Date, dictionary: String?) throws -> Int {
+        try ledger.introductions(since: dayStart, dictionary: dictionary)
     }
 
     /// **"Not today."** Out of the way until `when`, with the schedule untouched — the reader
@@ -156,6 +260,13 @@ actor LedgerStore {
     @discardableResult
     func practise(cardID: UUID, _ grade: Grade, eventID: UUID, at when: Date) throws -> ReviewEvent {
         try ledger.practise(cardID: cardID, grade, eventID: eventID, at: when)
+    }
+
+    /// The cards the reader keeps failing — R09's rule, the Struggling filter's own — which the end of a
+    /// review sitting names where this sitting forgot them too. **A read**: nothing is paused or
+    /// rescheduled by asking.
+    func repeatedlyLapsed(dictionary: String?) throws -> [UUID] {
+        try ledger.repeatedlyLapsed(dictionary: dictionary)
     }
 
     func queueCounts(at when: Date, dictionary: String?, newAllowance: Int,
@@ -198,6 +309,12 @@ actor LedgerStore {
     /// session cannot know the new number and a grade committed against the old one is refused.
     func revision(ofCard cardID: UUID) throws -> Int? {
         try ledger.card(id: cardID)?.revision
+    }
+
+    /// Why a card can no longer be asked now, or nil where it can — what a grade's eligibility check would
+    /// refuse, by name. What a sitting asks before it shows a card, and after a grade is refused.
+    func departure(ofCard cardID: UUID, at when: Date) throws -> Departure? {
+        try ledger.departure(ofCard: cardID, at: when)
     }
 
     // MARK: - Library
@@ -245,7 +362,11 @@ actor LedgerStore {
         try ledger.setEnrollment(enrollment, ofNotes: ids)
         return before
     }
-    func confirm(noteID: UUID, at when: Date) throws { try ledger.confirm(noteID: noteID, at: when) }
+    /// Confirms one note and, where `hidden` is given, hides its card — the cooldown experiment's write.
+    /// Nil is a plain confirmation.
+    func confirm(noteID: UUID, at when: Date, hidingCardsUntil hidden: Date?) throws {
+        try ledger.confirm(noteID: noteID, at: when, hidingCardsUntil: hidden)
+    }
     func confirm(noteIDs ids: [UUID], at when: Date) throws {
         try ledger.confirm(noteIDs: ids, at: when)
     }
@@ -255,7 +376,6 @@ actor LedgerStore {
     func setReaderAnswer(_ text: String, of noteID: UUID, at when: Date) throws {
         try ledger.setReaderAnswer(text, of: noteID, at: when)
     }
-    func tag(noteID: UUID, _ tag: String) throws { try ledger.tag(noteID: noteID, tag) }
     func untag(noteID: UUID, _ tag: String) throws { try ledger.untag(noteID: noteID, tag) }
     func timeline(of noteID: UUID) throws -> NoteTimeline { try ledger.timeline(of: noteID) }
     func tags(of noteID: UUID) throws -> [String] { try ledger.tags(of: noteID) }
@@ -301,9 +421,4 @@ actor LedgerStore {
     /// Removes every lookup above `baseline`. **An instrument's own rows**, identified by an id
     /// it took before it wrote any.
     func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
-
-    /// A lookup the reader did not mean to make. The senses met in it go with it.
-    func delete(lookup id: Int) throws {
-        try ledger.delete(lookup: id)
-    }
 }

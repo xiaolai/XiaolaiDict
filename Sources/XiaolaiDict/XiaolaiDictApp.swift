@@ -48,7 +48,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// suite stayed green because tests call the initializer Swift can see.
     override convenience init() {
         // The one place the real model directory and the real XPC service are reached for.
-        self.init(defaults: .standard, models: LocalModelCoordinator(defaults: .standard), shell: .appKit)
+        self.init(defaults: .standard, models: LocalModelCoordinator(defaults: .standard), shell: .appKit,
+                  reminders: ReminderDelivery())
     }
 
     /// `defaults` is a parameter so a test can be given a suite of its own. Without it, asserting
@@ -60,6 +61,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// to the service. **It has no default**, because a default is what made that happen anyway: the
     /// comment said what the parameter was for while `nil` quietly built the production coordinator
     /// for every test that omitted it. `init()` supplies the real one.
+    /// `reminders` is the notification center, for the same reason as `shell` and with the same
+    /// default: **one that holds nothing and delivers nothing.** The real one aborts a process with no
+    /// bundle, so a test that forgot this must not reach it; `init()` names `ReminderDelivery()`.
     /// `shell` is a parameter for the same reason again: `showLibrary()` moves the app into the
     /// Dock and brings it forward, and a test that opened the Library would do both to the test
     /// runner — taking the keyboard from whoever is at the building Mac.
@@ -70,12 +74,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         defaults: UserDefaults, hotkeys: HotkeyCenter = .shared,
         models: LocalModelCoordinator,
         shell: ShellActivationController.System = .inert,
-        panelWindows: LookupPanelController.Windows = .shared
+        panelWindows: LookupPanelController.Windows = .shared,
+        reminders scheduling: any ReminderScheduling = NoNotificationCenter()
     ) {
         // Loaded once, here, rather than lazily: `@Observable` makes stored properties computed,
         // so there is no `lazy` to be had — and a per-use load would be the mouse-move decode
         // this property exists to avoid.
         preferences = defaults
+        appearance = Appearance(store: AppearanceStore(defaults: defaults))
         self.hotkeys = hotkeys
         // `panelWindows` is a seam for a test about what the panel is asked to show, the way
         // `LookupPanelController` already takes one; the app itself passes nothing and gets `.shared`.
@@ -91,7 +97,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // The suite the app was given: which pane Settings opens on and whether the menu bar icon
         // is shown are the reader's, and a model built without it would keep neither.
         settings = SettingsModel(defaults: defaults, loginItem: LoginItem.choice)
+        // **The study options and the recorder that reads one of them, over the same suite** (R1b, R1c):
+        // the switch Settings draws and the Choose a Meaning write meet at one key in it.
+        studyOptions = StudyOptions(defaults: defaults)
+        recorder = LookupRecorder(wordCards: WordCardReplacementSetting(defaults: defaults))
         self.models = models
+        reminderScheduling = scheduling
         super.init()
         // After `super.init()`: the registrar's press handler captures `self`, which an
         // initialiser may not hand out before the object exists.
@@ -103,6 +114,25 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         }
         activation = ShellActivationController(
             system: shell, settingsWindow: { [weak self] in self?.settingsWindow })
+        // **The panel's two reader acts, wired with the app rather than at launch**, so the wire a reader
+        // presses is the one a test presses (audit-fix round 3, #5). Nothing calls them before a lookup.
+        panel.onStudySense = { [weak self] encounter, request in
+            self?.recorder.study(encounter, request: request)
+        }
+        // **Both, and in that order.** The reader met the sense *and* asked to study it; the ledger
+        // keeps the two apart, so enrolling writes the encounter as well rather than instead.
+        // **Under the lookup's own language**, which is what a tap and automatic keeping write under:
+        // a note's language is part of its identity, and `nil` made a second note under `unknown`.
+        panel.onEnrolSense = { [weak self] encounter, request in
+            guard let self else { return }
+            recorder.enrol(encounter, request: request, language: recorder.language(of: request))
+        }
+        // **A phrase saved as a card** (ADR-0049) — the only way a phrase card is made — under the lookup's own
+        // language, the language every note saved from this card is keyed by.
+        panel.onCollectPhrase = { [weak self] phrase, request in
+            guard let self else { return false }
+            return recorder.collect(phrase, request: request, language: recorder.language(of: request))
+        }
     }
 
     /// Whether the app is in the Dock — see `ShellActivation`. Set in `init` after `super.init()`,
@@ -211,7 +241,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
     /// What reaches the reader's ledger, and what to tell them when nothing did — see
     /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
-    let recorder = LookupRecorder()
+    let recorder: LookupRecorder
     /// The lookup in flight. A new shortcut press cancels it: one lookup at a time.
     private(set) var lookup: Task<Void, Never>?
     private var termination: (any DispatchSourceSignal)?
@@ -221,6 +251,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // the bundle behaves the same. Before *did* finish, so no window can flash as an ordinary
         // app's would.
         NSApp.setActivationPolicy(.accessory)
+        // **The notification center's delegate, before launch finishes**: a click on a reminder that
+        // launched the app is delivered to whatever is the delegate by then, and lost otherwise
+        // (review-module-plan §5.3). Not in an instrument run, which answers no reader.
+        if !Self.isInstrumented { reminders.listen() }
     }
 
     /// **Opening the app again shows the Library.** From Finder, Spotlight, `open -a`, or the Dock
@@ -241,14 +275,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.onStudySense = { [weak self] encounter, request in
-            self?.recorder.study(encounter, request: request)
-        }
-        // **Both, and in that order.** The reader met the sense *and* asked to study it; the ledger
-        // keeps the two apart, so enrolling writes the encounter as well rather than instead.
-        panel.onEnrolSense = { [weak self] encounter, request in
-            self?.recorder.enrol(encounter, request: request, language: nil)
-        }
         panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
         recorder.start()
         Task { [weak self] in self?.permissions = await .probe() }
@@ -271,6 +297,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         activation.watchForClosingWindows()
         // The lookup window opens as wide as the card is at the reader's text size.
         panel.textSize = { [weak self] in self?.appearance.textSize ?? .standard }
+        // **The reminder re-plans from here on**: now, and at every ledger change, wake, zone or clock
+        // change and study-day start. Off by default, and then it touches nothing (R3). Not in an
+        // instrument run, for the reason hover is not.
+        if !Self.isInstrumented { reminders.start() }
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.
@@ -401,12 +431,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// of getting the ticket, which is where they differ.
     private func launch(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
-        ticket: PanelTicket, existingLookupID: Int? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         lookup?.cancel()
         lookup = Task {
             await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt,
-                         ticket: ticket, existingLookupID: existingLookupID, seen: seen)
+                         ticket: ticket, existingLookup: existingLookup, seen: seen)
         }
     }
 
@@ -454,7 +484,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // Dated for the timings from now: `row.at` is when it was first read, and the figures would
         // otherwise carry the reading's whole age.
         launch(selection, near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at, askedAt: .now,
-               ticket: panel.newRequest(), existingLookupID: row.id)
+               ticket: panel.newRequest(), existingLookup: row.identity)
     }
 
     // MARK: - Hover
@@ -466,14 +496,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// time spent reading the word is in the figures, as `captured`.
     private func lookUp(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
-        ticket: PanelTicket, existingLookupID: Int? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
         timings.begin(request: ticket.number, at: askedAt, source: selection.quality.source.rawValue)
         timings.mark(.captured, request: ticket.number)
         // Whether the compositor ever drew this panel, heard on the way to whoever delivered the word.
         var drawn = false
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket,
-                                         existingLookupID: existingLookupID,
+                                         existingLookup: existingLookup,
                                          seen: { shown in drawn = shown; seen(shown) }) else {
             // **Ended with no row to finish, and still said.** A lookup dropped after its pending row
             // was written has that row in the ledger, so the write is waited for and counted; one
@@ -531,13 +561,25 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// that appear while they are mid-sentence in another app. The launch-time open does **not**
     /// come through here — see `openSetupOnFirstLaunch` for why it must not ask to activate.
 
-    /// Opens the Library and brings it forward — a window the reader chose, and types into.
-    func showLibrary() {
+    /// Opens the Library and brings it forward — a window the reader chose, and types into. Says
+    /// whether it could.
+    @discardableResult
+    func showLibrary() -> Bool {
         // `NSApplication.shared`, never `NSApp`: nil in a process that has not made one, where the
         // log line itself trapped — every unit test that opens the Library.
         log.notice("library: opened on request (app active before: \(NSApplication.shared.isActive, privacy: .public))")
         activation.bringForward(for: .library)
-        if !WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID) { activation.reconsider() }
+        let opened = WindowActions.shared.openWindow(id: XiaolaiDictScene.libraryID)
+        if !opened { activation.reconsider() }
+        return opened
+    }
+
+    /// **The Library on Review, brought forward** — where a reminder's banner leads. A window the
+    /// reader chose by clicking it, so it comes forward and the app is in the Dock while it is open.
+    @discardableResult
+    func showReview() -> Bool {
+        libraryModel.show(.review)
+        return showLibrary()
     }
 
     /// Opens the board unasked, once in the life of an install.
@@ -636,6 +678,25 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     func attachHistoryWindow(_ window: NSWindow) { drawer.attach(window) }
     var drawerModel: HistoryDrawerModel { drawer.model }
 
+    /// The notification center the reminders are delivered through — the real one, or a test's.
+    @ObservationIgnored private let reminderScheduling: any ReminderScheduling
+
+    /// **The reminder: its settings, its log, its re-plans and the reader's answers to it** — a
+    /// collaborator of its own (ADR-0011), over the reader's ledger and study dictionary.
+    @ObservationIgnored lazy var reminders = ReminderCoordinator(
+        scheduling: reminderScheduling, defaults: preferences,
+        store: { [weak self] in self?.recorder.store },
+        primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() },
+        openReview: { [weak self] in await self?.reviewRoute.open() ?? false },
+        // The observable copy of the choice, so choosing another study dictionary re-plans.
+        triggers: .live(studyDictionary: { [weak self] in self?.dictionary.chosen }))
+
+    /// **A click on a reminder, to the Library on Review**, waiting for the window actions a click that
+    /// launched the app arrives before.
+    @ObservationIgnored lazy var reviewRoute = ReviewRoute(
+        areWired: { WindowActions.shared.areWired },
+        open: { [weak self] in self?.showReview() ?? false })
+
     /// The Review window's model. **Built once and kept**, so a window closed mid-batch and reopened
     /// does not lose the sitting — and so the grade in flight when it closed has somewhere to land.
     /// `@ObservationIgnored` because the *reference* never changes and the model is `@Observable`
@@ -644,13 +705,21 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     @ObservationIgnored lazy var reviewModel = ReviewModel(
         store: { [weak self] in self?.recorder.store },
         primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() },
-        dictionaryName: { [weak self] key in self?.dictionary.enabled?.first { $0.identity.key == key }?.identity.name })
+        dictionaryName: { [weak self] key in self?.dictionary.enabled?.first { $0.identity.key == key }?.identity.name },
+        // **The app's suite**, where today's one-day increase of the new-meaning allowance is kept —
+        // the one the Library's badge counts with, so the two cannot disagree about it.
+        defaults: preferences,
+        // A scheduled answer may have left nothing askable today, which withdraws today's reminder.
+        graded: { [weak self] in self?.reminders.answered() })
 
     /// The Library window's model, kept for the same reason.
     @ObservationIgnored lazy var libraryModel = LibraryModel(
         store: { [weak self] in self?.recorder.store },
         lookUp: { [weak self] word in self?.lookUpWord(word) },
-        reopen: { [weak self] row in self?.reopenReading(row) }, defaults: preferences,
+        reopen: { [weak self] row in self?.reopenReading(row) },
+        // **Review Selected draws its sitting in the one review model**, which the Review pane shows.
+        reviewSelected: { [weak self] ids, order in self?.reviewModel.startSelected(noteIDs: ids, order: order) },
+        defaults: preferences,
         primary: { [weak self] in self?.dictionary.store.load() ?? PrimaryDictionary() },
         primaryName: { [weak self] key in self?.dictionary.enabled?.first { $0.identity.key == key }?.identity.name },
         // The drawer's filter, read the same way: History is the reading history too.
@@ -659,6 +728,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// The erase command's model, in the Reading settings pane.
     @ObservationIgnored lazy var eraseModel = EraseModel(
         store: { [weak self] in self?.recorder.store })
+
+    /// **The study options Settings › General draws** (R1b, R1c) — a collaborator of its own over the
+    /// suite the app was given, which the recorder and the Library's Confirm read through their own keys.
+    let studyOptions: StudyOptions
 
     /// What the settings window is showing — which pane, and the permission probe's last answer.
     /// Owned here rather than inside the window so `--settings-report` can select a pane from
@@ -686,8 +759,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
 
     /// The reader's text size, and the scale every surface is drawn from. Owned here because it
     /// outlives any one window: the drawer, the panel and a pinned note all read the same one, and
-    /// changing it has to move all of them at once.
-    let appearance = Appearance()
+    /// changing it has to move all of them at once. **From the suite the app was given**: built as
+    /// `Appearance()` it read and wrote `.standard` whatever the app was handed (audit-fix round 1).
+    let appearance: Appearance
     var drawerPlacement: CGRect? { drawer.placement }
     var drawerIsDrawn: Bool { drawer.isDrawnOnScreen }
     var drawerWindowFrame: CGRect { drawer.windowFrame }
@@ -764,10 +838,6 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
 
     func toggleHistory() {
         drawer.toggle()
-    }
-
-    func hideHistory() {
-        drawer.hide()
     }
 
 

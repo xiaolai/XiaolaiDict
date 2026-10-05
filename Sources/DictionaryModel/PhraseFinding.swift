@@ -55,13 +55,26 @@ public struct PhraseFiling: Codable, Sendable, Equatable {
     public let blockID: String
     /// Every definition in the block, in document order. `give up` has five.
     public let definitions: [String]
+    /// Which build of the dictionary the block was read from — `DictionaryBundle.contentVersion()`. A block
+    /// id is only true of the bytes it came from, and Apple re-masters these.
+    public let contentVersion: String
+    /// Which extraction read it — `PhraseInventory.formatVersion`. The walk can change while the bytes do not,
+    /// and `contentVersion` cannot see that.
+    ///
+    /// **Both travel because a saved phrase records them** (ADR-0049): a `StudyLocator` is where a meaning was
+    /// found, in which build, read by which walk, and only the service has the inventory that knows.
+    public let formatVersion: String
 
+    /// **No defaults for the two versions.** One that defaulted to an empty string would let a filing built
+    /// without them reach a saved card's evidence as a build nobody can name.
     public init(dictionary: DictionaryIdentity, parentEntryID: String, blockID: String,
-                definitions: [String]) {
+                definitions: [String], contentVersion: String, formatVersion: String) {
         self.dictionary = dictionary
         self.parentEntryID = parentEntryID
         self.blockID = blockID
         self.definitions = definitions
+        self.contentVersion = contentVersion
+        self.formatVersion = formatVersion
     }
 
     /// The leading definition, for a surface with room for one. **A choice, not the meaning** — a caller
