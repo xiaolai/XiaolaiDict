@@ -67,6 +67,22 @@ final class ScreenTextRecogniser: Sendable {
     /// 349 ms against the box's 267 ms and gets the sentence whole.
     static let bandHeight: CGFloat = 140
 
+    /// **The widest image, in pixels, Vision is given in one call.** The band is the window's whole width — 5120
+    /// px on the dev Mac — and the width of the *image* decides whether small text is read: in one call that band
+    /// read 47% of uncommon words exactly on real Ghostty captures (0% at 12 pt, 25–30% at 14 pt) and 2000 px strips
+    /// 100%, the one call returning in 24 ms — Vision answering fast with almost nothing. The cliff sits between
+    /// 2400 and 2600 px (99.7% and 93.1%), so this is under it with a fifth to spare. Measured at 2x only; the
+    /// limit is in pixels because Vision works in them, which is a premise for 1x and 3x and not a result.
+    ///
+    /// **The band is tiled, not narrowed**: its width is the sentence the reader pointed into, and narrowing it
+    /// would have traded the context for the accuracy of the word. `BandTiling` has the rest, and
+    /// `ScreenTextRecogniserBandTests` the table.
+    static let maximumTilePixels: CGFloat = 2000
+
+    /// How far neighbouring tiles overlap, in pixels: a word on a boundary is whole in one of them when the overlap
+    /// reaches half its length past the boundary on each side, so this holds a word of 25 cells at 2x.
+    static let tileOverlapPixels: CGFloat = 600
+
     private let cache = ShareableContentCache()
 
     /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system`
@@ -381,6 +397,33 @@ final class ScreenTextRecogniser: Sendable {
     }
 
     private func recognise(_ image: CGImage) throws -> [RecognisedLine] {
+        try Self.recognise(image, reading: Self.recogniseWhole)
+    }
+
+    /// **The band as the tiles it is read in.** One call where it fits; otherwise overlapping tiles, each read on
+    /// its own and put back together by position (`BandTiling`), so the sentence is the band's and the words are read
+    /// at the accuracy of a narrow strip. `readTile` is the seam: the wire from here to Vision is asserted without it.
+    ///
+    /// A reader who has moved on stops being read for between tiles — Vision cannot be interrupted, but the next
+    /// tile need not be started. Sequential, because Vision does not run them faster side by side (measured).
+    static func recognise(
+        _ image: CGImage, reading readTile: (CGImage) throws -> [RecognisedLine]
+    ) throws -> [RecognisedLine] {
+        let tiles = BandTiling.tiles(
+            forWidth: image.width, maximum: Int(maximumTilePixels), overlap: Int(tileOverlapPixels))
+        guard tiles.count > 1 else { return try readTile(image) }
+        var read: [(tile: BandTile, lines: [RecognisedLine])] = []
+        for tile in tiles {
+            try Task.checkCancellation()
+            guard let part = image.cropping(to: CGRect(x: tile.x, y: 0, width: tile.width, height: image.height))
+            else { throw RecognitionError.windowNotCapturable }
+            read.append((tile, try readTile(part)))
+        }
+        return BandTiling.merged(read, bandWidth: image.width)
+    }
+
+    /// One Vision call on `image`, as it has always been read.
+    private static func recogniseWhole(_ image: CGImage) throws -> [RecognisedLine] {
         let request = VNRecognizeTextRequest()
         // `.fast` is 10× quicker and truncates words — "rendipity", "repa". For a dictionary a
         // wrong word is worse than a miss.
