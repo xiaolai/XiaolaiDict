@@ -353,11 +353,173 @@ public enum DictionaryBridge {
         }
     }
 
+    /// **The term as written, and only on a miss the term with what framed it taken off, a layer at a time.** `hold.`,
+    /// `(hold)` and `“hold”` have no answer in the dictionaries here while `hold—`, `don’t` and `e-mail` do (measured
+    /// 2026-10-05), so which edge a dictionary tolerates is its own business: asking as written first keeps `U.S.` and
+    /// `e.g.`, whose full stops are part of the key, and each layer after it costs only a word that would have been a
+    /// miss anyway. The layers are `framingCandidates`, least stripped first, so `(U.S.)` is tried as `U.S.` before
+    /// anything could make it `U.S`.
+    ///
+    /// **An unreadable answer is an answer**, at any layer. The dictionary had the term and could not show it; asking
+    /// again with less would report a word the reader did not select. `lookingUp` is the framework's lookup, a seam so
+    /// the order of asking is checked without a dictionary deciding it.
+    static func lookUp(
+        _ term: String, using lookingUp: (String) throws(DictionaryBridgeError) -> DictionaryLookup
+    ) throws(DictionaryBridgeError) -> DictionaryLookup {
+        var asked = try lookingUp(term)
+        for candidate in framingCandidates(term) {
+            guard asked.entries.isEmpty, asked.unreadable.isEmpty else { break }
+            asked = try lookingUp(candidate)
+        }
+        return asked
+    }
+
+    /// The most extra lookups a miss can cost, however deeply a term is wrapped.
+    static let maximumFramingCandidates = 6
+
+    /// `term` with the punctuation that framed it taken off, **one layer per candidate and the least stripped first**,
+    /// or nothing where there is no framing or nothing would be left.
+    ///
+    /// **Framing, not every symbol.** `C++`, `C#`, `@home`, `100%` and `$5` end in or start with what belongs to them, and
+    /// only what a sentence puts round a word comes off. Every way to take **one layer** off is a candidate, fewest layers
+    /// first, up to `maximumFramingCandidates`: a **matched pair** round the whole (`(…)`, `“…”`, `「…」`, or one quote or
+    /// dash on both sides), which keeps the punctuation inside it — `(U.S.)` gives `U.S.`, `“.NET”` gives `.NET`; a
+    /// **repeated mark** off the start (`...hold`), never a lone `.` or `'`, which begin `.NET` and `'tis`; a bracket,
+    /// quote or dash with **nothing to pair with** (`hold)`, `(hold`); and **one** sentence-ending mark off the end, so
+    /// `U.S.,` is tried as `U.S.` before `U.S` and `(Dr.,)` as `Dr.,`, `Dr.`, then `Dr`. Nothing inside is touched:
+    /// `don’t` keeps its apostrophe because it is not at an end.
+    ///
+    /// **Known limit, found by the fourth verification and left alone:** forms are ordered by how many layers came off, not
+    /// by how many characters, and the cap is six. Several marks stacked on one word (`....NET,?`) can therefore reach the
+    /// cap, or answer as `NET,`, before `.NET` is tried; and a repeated `’` at the start is not seen as a run, since it is
+    /// not a sentence-ending mark. Both need punctuation no one types round a word, and a different headword is shown
+    /// as one (`entry.match`), so they are not worth the rules they would take.
+    static func framingCandidates(_ term: String) -> [String] {
+        let original = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        // **Breadth-first, so no form is skipped by the order things were peeled in.** A chain that takes the first move
+        // available loses `U.S.` from `(U.S.`: it took the trailing stop first and never came back for the bracket.
+        var seen: Set<String> = [original]
+        var frontier = [original]
+        var layers: [String] = []
+        while !frontier.isEmpty, layers.count < maximumFramingCandidates {
+            var next: [String] = []
+            for text in frontier {
+                for peeled in peels(of: text) where !seen.contains(peeled) {
+                    seen.insert(peeled)
+                    next.append(peeled)
+                    // A candidate with no letter or number in it is not a word to look up, and nothing is left to peel.
+                    if peeled.contains(where: { $0.isLetter || $0.isNumber }), layers.count < maximumFramingCandidates {
+                        layers.append(peeled)
+                    }
+                }
+            }
+            frontier = next.filter { $0.contains(where: { $0.isLetter || $0.isNumber }) }
+        }
+        return layers
+    }
+
+    /// Every way to take one layer off `text`, in the order they are tried: a matched pair round the whole, which is then the
+    /// only way; else what is at the start (a run of one repeated mark, or one orphan bracket, quote or dash); then what is at the end (an
+    /// orphan, or **one** sentence-ending mark).
+    private static func peels(of text: String) -> [String] {
+        // **A pair round the whole is one layer**, not two marks: `"hold"` is `hold`, and `hold"` and `"hold` are not forms
+        // anyone wrote.
+        if let inside = unwrapped(text) { return [inside] }
+        return strippingLeadingMarks(text)
+            + [strippingOrphan(text, at: .start), strippingOrphan(text, at: .end), strippingTrailingMark(text)].compactMap { $0 }
+    }
+
+    private static let pairs: [Character: Character] = [
+        "(": ")", "[": "]", "{": "}", "\u{201C}": "\u{201D}", "\u{2018}": "\u{2019}", "\u{00AB}": "\u{00BB}",
+        "\u{2039}": "\u{203A}", "\u{300C}": "\u{300D}", "\u{300E}": "\u{300F}", "\u{FF08}": "\u{FF09}",
+        "\u{3010}": "\u{3011}",
+    ]
+
+    /// One quote or dash on both sides is a pair of its own.
+    private static func isSymmetricWrapper(_ character: Character) -> Bool {
+        character == "\"" || character == "'" || character == "`" || character.unicodeScalars.allSatisfy {
+            $0.properties.generalCategory == .dashPunctuation
+        }
+    }
+
+    /// `text` with a matched pair round the whole of it taken off, or nil.
+    private static func unwrapped(_ text: String) -> String? {
+        guard text.count >= 2, let first = text.first, let last = text.last else { return nil }
+        guard pairs[first] == last || (first == last && isSymmetricWrapper(first)) else { return nil }
+        return String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What a word may begin with that is part of it: `.NET`, `.gitignore`, `'tis`, `’em`. Never taken off the start
+    /// unless it is repeated, which is an ellipsis (`...hold`).
+    private static let lexicalStarters: Set<Character> = [".", "'", "\u{2019}"]
+
+    /// `text` with the run of one repeated sentence-ending mark taken off its start. A single `.` or `'` stays — `.NET`
+    /// and `'tis` begin with it — and a **repeated** one is an ellipsis, a word's own first mark, or both (`....NET`), so a
+    /// run of them gives two forms: all but one, which keeps what the word begins with, and the whole run.
+    private static func strippingLeadingMarks(_ text: String) -> [String] {
+        guard let first = text.first, endingMarks.contains(first) else { return [] }
+        let run = text.prefix { $0 == first }.count
+        if lexicalStarters.contains(first), run < 2 { return [] }
+        let rests = lexicalStarters.contains(first) ? [run - 1, run] : [run]
+        return rests.map { String(text.dropFirst($0)).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// `text` with **one** sentence-ending mark taken off its end, or nil — one at a time, so `Dr.,` is tried as `Dr.` before
+    /// `Dr` and `U.S..` as `U.S.` before `U.S`. There is no rule for telling an abbreviation's stop from a sentence's: both are
+    /// tried, the longer first, and the dictionary says which.
+    private static func strippingTrailingMark(_ text: String) -> String? {
+        guard let last = text.last, endingMarks.contains(last) else { return nil }
+        return String(text.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private enum End { case start, end }
+
+    /// `text` with one character taken off an end that has **nothing to pair with**: an opener whose closer is not in the
+    /// text, a closer whose opener is not, or a quote or dash that occurs once. A bracket that has its partner is part of a
+    /// pair and is `unwrapped`'s to take, so `(U.S.).` is not stripped of its `(` before its full stop. Never a sentence-ending
+    /// mark — those are `strippingTrailingMark`'s and `strippingLeadingMarks`'s, which know what a word may begin with.
+    private static func strippingOrphan(_ text: String, at end: End) -> String? {
+        guard let character = end == .start ? text.first : text.last, isFraming(character),
+              !endingMarks.contains(character), !character.isWhitespace,
+              !(end == .start && lexicalStarters.contains(character)) else { return nil }
+        let closers = Set(pairs.values)
+        let partnerless: Bool
+        if let closer = pairs[character] {
+            partnerless = !text.contains(closer)
+        } else if closers.contains(character), let opener = pairs.first(where: { $0.value == character })?.key {
+            partnerless = !text.contains(opener)
+        } else {
+            partnerless = text.filter { $0 == character }.count == 1
+        }
+        guard partnerless else { return nil }
+        return String(end == .start ? text.dropFirst() : text.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whitespace, the Unicode categories a sentence uses to wrap a word, and the few marks of "other punctuation" that
+    /// end one. `#`, `%`, `&`, `*`, `/` and `@` are also "other punctuation" and are deliberately absent: they are part
+    /// of what people look up.
+    private static func isFraming(_ character: Character) -> Bool {
+        if character.isWhitespace || endingMarks.contains(character) { return true }
+        return character.unicodeScalars.allSatisfy { scalar in
+            switch scalar.properties.generalCategory {
+            case .openPunctuation, .closePunctuation, .initialPunctuation, .finalPunctuation, .dashPunctuation:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    private static let endingMarks: Set<Character> = [
+        ".", ",", ";", ":", "!", "?", "\"", "'", "\u{2026}",
+        "\u{3002}", "\u{FF0C}", "\u{3001}", "\u{FF1B}", "\u{FF1A}", "\u{FF01}", "\u{FF1F}",
+    ]
+
     /// The service's answer to one lookup. Errors become typed `.failure` values, so the app
     /// can tell "nothing found" from "could not look", and why.
     public static func reply(to request: LookupRequest) -> LookupReply {
         do {
-            let lookup = try entries(for: request.term)
+            let lookup = try lookUp(request.term, using: entries(for:))
             guard let entries = NonEmpty(lookup.entries) else { return .notFound }
             return .entries(entries, unreadable: lookup.unreadable)
         } catch {
