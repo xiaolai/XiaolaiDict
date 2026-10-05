@@ -588,8 +588,12 @@ struct ReminderWiringTests {
     /// menu-bar label has handed them over, and must open Review once they come rather than nothing.
     @Test func aRouteArrivingBeforeWindowActionsWaitsForThem() async throws {
         let wired = Box(false), opened = Box(0), faults = Box<[String]>([])
+        // **The limit is generous because this is the success path**: the route returns the moment the actions are
+        // wired, so the limit only decides how long a starved main actor may take to notice. At the shipped five seconds
+        // this failed in a full run on a busy machine, the whole suite having slowed to twice its usual time, with the
+        // wait itself taking 11 s; the bound is for the sibling test below, which is about *not* getting them.
         let route = ReviewRoute(areWired: { wired.value }, open: { opened.value += 1; return true },
-                                fault: { faults.value.append($0) }, limit: .seconds(5))
+                                fault: { faults.value.append($0) }, limit: .seconds(120))
         let routing = Task { await route.open() }
         try await Task.sleep(for: .milliseconds(150))
         #expect(opened.value == 0, "Review was opened before there was a window action to open it with")
