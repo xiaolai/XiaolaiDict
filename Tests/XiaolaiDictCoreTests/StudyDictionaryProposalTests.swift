@@ -96,6 +96,76 @@ struct StudyDictionaryProposalTests {
                 == .propose(oxfordChinese))
     }
 
+    // MARK: - The dictionary chosen for a reader who is not asked
+
+    private func keyed(_ name: String, _ kind: SenseKeyKind, identifier: String? = nil,
+                       languages: [DictionaryLanguages]) -> DictionaryCapability {
+        DictionaryCapability(
+            identity: DictionaryIdentity(name: name, identifier: identifier), senseKeyKind: kind,
+            probed: true, languages: languages, indexes: [.latin])
+    }
+
+    /// NOAD as Apple ships it: the identifier is what the preference below keys on, never the name.
+    private var realNoad: DictionaryCapability {
+        keyed("New Oxford American Dictionary", .publisher, identifier: DictionaryIdentity.noad,
+              languages: [.init(index: "en_US", explains: "en_US")])
+    }
+
+    /// A Chinese reader is never asked: exactly one enabled dictionary teaches them English, and
+    /// that one is the study dictionary. Another dictionary being first in Dictionary.app's order
+    /// changes nothing.
+    @Test func aChineseReaderGetsTheDictionaryTheirLanguageNames() {
+        let enabled = [longman, noad, thesaurus, oxfordChinese, dreye]
+        #expect(StudyDictionaryProposal.automatic(for: "zh-Hans-CN", among: enabled) == oxfordChinese)
+        #expect(StudyDictionaryProposal.automatic(for: "zh-Hant-TW", among: enabled) == dreye)
+        #expect(StudyDictionaryProposal.automatic(for: "zh-Hans-SG", among: enabled) == oxfordChinese,
+                "Singapore is Simplified")
+    }
+
+    /// An English reader has several suitable dictionaries, and the rule's answer is NOAD: it is
+    /// the only one the accuracy figures describe. A thesaurus that the reader ranked first in
+    /// Dictionary.app does not become the dictionary they study from.
+    @Test func anEnglishReaderGetsNOADWhateverTheOrder() {
+        let enabled = [thesaurus, longman, realNoad]
+        #expect(StudyDictionaryProposal.automatic(for: "en-US", among: enabled) == realNoad)
+    }
+
+    /// Without NOAD the reader's own order decides, but a dictionary that can key a sense beats one
+    /// that cannot: a primary that cannot key is a primary that can never produce a sense-level card.
+    @Test func withoutNOADTheFirstThatCanKeyASenseWins() {
+        let english = [DictionaryLanguages(index: "en_GB", explains: "en_GB")]
+        let wholeEntries = keyed("Whole entries", .none, languages: english)
+        let positional = keyed("Positional", .position, languages: english)
+        let publisher = keyed("Publisher", .publisher, languages: english)
+        #expect(StudyDictionaryProposal.automatic(for: "en-GB", among: [wholeEntries, positional, publisher])
+            == positional)
+        #expect(StudyDictionaryProposal.automatic(for: "en-GB", among: [wholeEntries]) == wholeEntries,
+                "if none can, an entry-level study item is still a study item")
+    }
+
+    @Test func aReaderNothingSuitsGetsNoAutomaticDictionary() {
+        #expect(StudyDictionaryProposal.automatic(for: "ko", among: everything) == nil)
+        #expect(StudyDictionaryProposal.automatic(for: "en", among: []) == nil)
+        // A dictionary declaring nothing is never chosen for a reader, as with the proposal.
+        #expect(StudyDictionaryProposal.automatic(for: "en", among: [longman]) == nil)
+    }
+
+    /// **One rule, two spellings, and they must not drift.** The setup board branches on the proposal
+    /// and the lookup on this; if they disagreed, a reader would be told nothing suits them while
+    /// lookups studied from something, or the reverse.
+    @Test func theAutomaticChoiceExistsExactlyWhereTheProposalIsNotNothingSuitable() {
+        let sets: [[DictionaryCapability]] = [
+            [], [longman], [noad], [oxfordChinese], [dreye, oxfordChinese], everything, [thesaurus, noad, realNoad],
+        ]
+        for language in ["en", "en-US", "zh-Hans", "zh-Hant-HK", "ko", "ja", "yue", "fr"] {
+            for enabled in sets {
+                let proposed = StudyDictionaryProposal.forReader(of: language, among: enabled) != .nothingSuitable
+                #expect((StudyDictionaryProposal.automatic(for: language, among: enabled) != nil) == proposed,
+                        "\(language) over \(enabled.map(\.identity.name))")
+            }
+        }
+    }
+
     /// The reader's language comes from the system's list, never from `Locale.current`.
     ///
     /// **The two are distinguishable here, which is what keeps this from being a restatement of a

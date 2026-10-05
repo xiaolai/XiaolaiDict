@@ -68,6 +68,10 @@ actor LedgerStore {
         case absent(String)
     }
 
+    /// Every dictionary a study note belongs to — what decides whether a reader who never chose has
+    /// study progress that a changed default would orphan.
+    func studiedDictionaries() throws -> [String] { try ledger.studiedDictionaries() }
+
     /// What the reader met of this lemma before `before`. Encounters, never meanings.
     ///
     /// **In this language.** English *gift* and German *Gift* share a lemma and are two words; asked

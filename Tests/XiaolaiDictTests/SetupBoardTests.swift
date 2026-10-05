@@ -106,13 +106,35 @@ struct SetupBoardTests {
         #expect(!empty.isSettled(.screenRecording))
     }
 
-    /// Settled by the reader having chosen, never by a proposal existing.
-    @Test func aProposalIsAnOfferAndDoesNotSettleTheDictionaryRow() {
+    /// **The dictionary row is settled by a dictionary being decided, not by the reader being asked.**
+    /// A reader whose language names exactly one is studying from it already, so the row has nothing left
+    /// to ask; a reader nothing suits still has the row open, and it says why.
+    @Test func aDictionaryTheLanguageNamesSettlesTheRowWithoutAChoice() {
         let waiting = board(chosen: nil, language: "zh-Hans-CN")
         #expect(waiting.proposal == .propose(Self.oxford))
-        #expect(!waiting.isSettled(.dictionary))
-        #expect(waiting.outstanding.contains(.dictionary))
+        #expect(waiting.automaticDictionary == Self.oxford)
+        #expect(waiting.isSettled(.dictionary))
+        #expect(!waiting.outstanding.contains(.dictionary))
         #expect(board().isSettled(.dictionary))
+    }
+
+    @Test func aReaderNothingSuitsStillHasTheDictionaryRowOpen() {
+        let korean = board(chosen: nil, language: "ko-KR")
+        #expect(korean.automaticDictionary == nil)
+        #expect(!korean.isSettled(.dictionary))
+        #expect(korean.outstanding.contains(.dictionary))
+        // And an unanswered list is not a decision either.
+        #expect(!board(available: nil, chosen: nil).isSettled(.dictionary))
+    }
+
+    /// The board and the lookup must agree about whom nothing suits.
+    @Test func theBoardsAutomaticDictionaryIsTheCoreRulesAnswer() {
+        for language in ["en-US", "zh-Hans-CN", "zh-Hant-TW", "ko-KR"] {
+            let shown = board(chosen: nil, language: language)
+            #expect(shown.automaticDictionary
+                == StudyDictionaryProposal.automatic(for: language, among: [Self.oxford, Self.noad]))
+            #expect((shown.automaticDictionary != nil) == (shown.proposal != .nothingSuitable))
+        }
     }
 
     /// The proposal follows the reader's language, which is the whole point of the rule.
@@ -169,7 +191,7 @@ struct SetupBoardTests {
     }
 
     @Test func everythingOutstandingIsListedInBoardOrder() {
-        let board = board(accessibility: false, screenRecording: false, chosen: nil)
+        let board = board(accessibility: false, screenRecording: false, chosen: nil, language: "ko-KR")
         #expect(board.outstanding == [.accessibility, .screenRecording, .dictionary])
         #expect(!board.isComplete)
     }

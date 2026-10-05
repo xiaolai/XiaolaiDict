@@ -113,6 +113,13 @@ public struct SetupBoard: Equatable, Sendable {
         .forReader(of: language, among: available ?? [])
     }
 
+    /// The dictionary the reader's language names, which is what is studied from until they choose one.
+    /// **The same rule the lookup applies**, so the board cannot say a dictionary is settled that no
+    /// lookup will use — nor the reverse.
+    public var automaticDictionary: DictionaryCapability? {
+        StudyDictionaryProposal.automatic(for: language, among: available ?? [])
+    }
+
     /// The dictionary the reader chose, if it is still enabled.
     ///
     /// Nil with a non-nil `chosen` is a real and important state: the reader disabled their study
@@ -165,11 +172,12 @@ public struct SetupBoard: Equatable, Sendable {
     public func isSettled(_ step: Step) -> Bool {
         switch step {
         case .permission(let permission): isGranted(permission)
-        // Settled by the reader having chosen, never by a proposal being available. A proposal is
-        // an offer; until it is taken the seat is empty, and the unchosen primary is whatever comes
-        // first in Dictionary.app's order — which on the development Mac is a dictionary that
-        // labels its blocks `n.`/`vt.` and narrows nothing.
-        case .dictionary: chosen != nil && !chosenDictionaryIsMissing
+        // Settled by a dictionary being decided: the reader's own choice, still enabled, or else the one
+        // their language names. A reader nothing suits is not settled, and neither is one whose list has
+        // not arrived. (This used to wait for the reader to *take* a proposal, with the unchosen primary
+        // meanwhile whatever came first in Dictionary.app's order — on the development Mac a dictionary
+        // that labels its blocks `n.`/`vt.` and narrows nothing.)
+        case .dictionary: chosen != nil ? !chosenDictionaryIsMissing : automaticDictionary != nil
         case .shortcut: shortcut?.isUsable == true && shortcutIsRegistered
         // Downloaded, or declined. And a Mac that cannot hold even the smallest size has nothing to
         // ask of its reader: a row that stayed "needed" there could never be settled at all.

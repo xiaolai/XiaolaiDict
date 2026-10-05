@@ -444,7 +444,12 @@ struct ReminderWiringTests {
         let trigger = try #require(request.trigger as? UNCalendarNotificationTrigger)
         #expect(trigger.dateComponents.timeZone == Self.shanghai)
         #expect(!trigger.repeats)
-        #expect(trigger.nextTriggerDate() == instant(2026, 10, 5, 19, 0))
+        // **The components, not `nextTriggerDate()`.** That is computed against the real clock, so the
+        // test passed only until 19:00 on the planned day and failed on every day after. The instant the
+        // request carries is the planned one, in the planning zone.
+        let components = trigger.dateComponents
+        #expect([components.year, components.month, components.day, components.hour, components.minute]
+            == [2026, 10, 5, 19, 0])
     }
 
     // MARK: - Later and Skip Today

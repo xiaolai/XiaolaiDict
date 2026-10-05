@@ -109,9 +109,19 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         shortcuts = ShortcutRegistrar(defaults: defaults, hotkeys: hotkeys) { [weak self] in
             self?.lookUpSelection()
         }
-        dictionary = StudyDictionary(defaults: defaults) { [client] refreshing in
+        dictionary = StudyDictionary(defaults: defaults, studied: {
+            do {
+                return try await LedgerStore.openForReading().studiedDictionaries()
+            } catch LedgerStore.NotOpenedForReading.absent {
+                return []   // no ledger yet: nothing to preserve
+            } catch {
+                return nil  // unreadable: say nothing, and be asked again
+            }
+        }) { [client] refreshing in
             await client.dictionaries(reprobing: refreshing)
         }
+        // The derivation must not wait for a surface to be opened: a lookup reads it from disk.
+        Task { @MainActor [dictionary] in await dictionary?.settled(bound: .seconds(30)) }
         activation = ShellActivationController(
             system: shell, settingsWindow: { [weak self] in self?.settingsWindow })
         // **The panel's two reader acts, wired with the app rather than at launch**, so the wire a reader
@@ -230,6 +240,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
                     of: lemma, before: before, language: language)) ?? PriorEncounters()
             },
             prewarm: { await models.prewarm() },
+            settle: { [weak self] in await self?.dictionary.settled() },
             keepPolicy: { [weak self] in self?.keepPolicyStore.load() ?? .automatic },
             initialRecording: { [weak self] row, request in self?.recorder.begin(row, request: request) },
             mark: { [weak self] stage, request, at in self?.timings.mark(stage, request: request, at: at) })

@@ -32,6 +32,22 @@ struct LookupRunnerTests {
         #expect(DictionaryClient.defaultDeadline == .seconds(3))
     }
 
+    /// **The wire:** a lookup waits for the study dictionary to be derived, and only then reads the
+    /// primary — after the panel is up, never before.
+    @Test func theLookupSettlesTheStudyDictionaryBeforeFreezingItsPrimary() async throws {
+        let panel = RecordingPanel()
+        let order = Mutex<[String]>([])
+        let runner = LookupRunner(
+            client: DictionaryClient(
+                deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+            panel: panel,
+            primary: { order.withLock { $0.append("primary") }; return PrimaryDictionary() },
+            settle: { order.withLock { $0.append("settle") } })
+        _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        #expect(order.withLock { $0 } == ["settle", "primary"])
+        #expect(!panel.contents.isEmpty, "the panel was shown")
+    }
+
     /// The promise: a service that never replies holds the content, and the panel must not wait
     /// with it.
     ///

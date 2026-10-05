@@ -32,6 +32,8 @@ final class LookupRunner {
     /// Loads the local model while the dictionaries are asked, so the sense question that follows
     /// does not pay for the load: the first answer measured 1.6–2.5 s cold, 0.24–0.44 s warm.
     private let prewarm: @Sendable () async -> Void
+    /// Waits, bounded, until the study dictionary has been derived for this reader's language.
+    private let settle: () async -> Void
     /// Notes each stage this lookup reaches, under its request — `LookupTimeline`.
     private let mark: @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void
 
@@ -41,6 +43,7 @@ final class LookupRunner {
         selector: any SenseSelecting = LadderSenseSelector(),
         priorEncounters: @escaping @Sendable (String, Date, String?) async -> PriorEncounters = { _, _, _ in PriorEncounters() },
         prewarm: @escaping @Sendable () async -> Void = {},
+        settle: @escaping () async -> Void = {},
         keepPolicy: @escaping @MainActor () -> LookupKeepPolicy = { .manual },
         initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in },
         mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in }
@@ -54,6 +57,7 @@ final class LookupRunner {
         self.selector = selector
         self.priorEncounters = priorEncounters
         self.prewarm = prewarm
+        self.settle = settle
     }
 
     /// Shows the panel, asks the dictionaries, fills the panel in.
@@ -64,7 +68,6 @@ final class LookupRunner {
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
         seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
-        let chosenPrimary = primary()
         let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
@@ -84,12 +87,17 @@ final class LookupRunner {
         // that never drew is never timed as shown.
         let seen = Task { () -> ContinuousClock.Instant? in await panel.seenOnScreen(ticket) ? .now : nil }
         let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
+        // **The primary is frozen only now, after the panel is up and not before**: a reader whose language
+        // has not been derived yet (first lookup after an upgrade or a language change) waits here, bounded,
+        // rather than studying from whatever is first in Dictionary.app's order for this one lookup.
+        await settle()
+        let chosenPrimary = primary()
         // **What every recording of this lookup shares, worked out once** — the pending row, the
         // answered one and the final one differ only in what they add to it (audit round 3, #29).
         let basis = RecordingBasis(
             selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
             lookup: existingLookup, keepPolicy: frozenKeepPolicy)
-        let pending = basis.pending(primaryDictionary: chosenPrimary.chosen)
+        let pending = basis.pending(primaryDictionary: chosenPrimary.chosen ?? chosenPrimary.automatic)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
         // another wants the model that was being loaded for the first. Detached for that reason —
@@ -168,7 +176,7 @@ final class LookupRunner {
         // compares against it, and a fallback is not a choice.
         // **And it is the study dictionary a phrase is saved in** (ADR-0049): the namespace Review asks, so
         // a phrase card made here is one the reader's sittings can reach.
-        let effectivePrimary = chosenPrimary.chosen ?? pinned.chosen
+        let effectivePrimary = chosenPrimary.chosen ?? chosenPrimary.automatic ?? pinned.chosen
         // **Built against the sentence the card holds, not the one that was sent.** The request sends the
         // sentence whatever the capture's quality, while the presentation drops it for an incomplete one —
         // so a span measured against the first and drawn on the second would bracket whatever sits at that

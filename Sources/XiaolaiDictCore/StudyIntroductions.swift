@@ -10,6 +10,14 @@ extension Ledger {
     /// a `new` card into a scheduled one. Practice cannot introduce anything — it never touches a
     /// card with no memory state — and a voided introduction is not one, so undoing a first review
     /// gives the allowance back without anything having to remember to.
+    public func studiedDictionaries() throws -> [String] {
+        var found: [String] = []
+        try run("SELECT DISTINCT dictionary FROM study_notes ORDER BY dictionary", bind: []) {
+            found.append(try $0.text(0))
+        }
+        return found
+    }
+
     public func introductions(since: Date, dictionary: String?) throws -> Int {
         var bind: [SQLiteValue] = [.real(since.timeIntervalSince1970)]
         var scope = ""

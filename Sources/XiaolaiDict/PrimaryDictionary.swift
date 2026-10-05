@@ -18,18 +18,30 @@ struct PrimaryDictionary: Equatable, Sendable {
     /// `DictionaryIdentity.key` of the dictionary the reader chose, or nil until they choose one.
     let chosen: String?
 
-    init(chosen: String? = nil) {
+    /// `DictionaryIdentity.key` of the dictionary this reader's language names, or nil where none does.
+    ///
+    /// **Not a choice, and never read as one.** Library, Review and the reminder scope themselves by
+    /// `chosen`, where nil means every dictionary; a reader who never chose must not find their study
+    /// history narrowed by a derivation. This decides only which dictionary a lookup studies from.
+    let automatic: String?
+
+    init(chosen: String? = nil, automatic: String? = nil) {
         self.chosen = chosen
+        self.automatic = automatic
     }
 
     /// The primary among the dictionaries that answered this lookup.
     ///
-    /// The reader's choice when it answered. Otherwise the first dictionary — in the order they set
-    /// in Dictionary.app, which is the order these arrive in — that can key a sense at all, because
-    /// a primary that cannot is a primary that can never produce a card. Failing that, simply the
-    /// first: an entry-level study item is still a study item.
+    /// The reader's choice when it answered. Then the dictionary their language names, when it
+    /// answered. Otherwise the first dictionary — in the order they set in Dictionary.app, which is the
+    /// order these arrive in — that can key a sense at all, because a primary that cannot is a primary
+    /// that can never produce a card. Failing that, simply the first: an entry-level study item is
+    /// still a study item.
     func identity(among entries: [DictionaryEntry]) -> DictionaryIdentity? {
         if let chosen, let match = entries.first(where: { $0.dictionary.key == chosen }) {
+            return match.dictionary
+        }
+        if let automatic, let match = entries.first(where: { $0.dictionary.key == automatic }) {
             return match.dictionary
         }
         if let keyable = entries.first(where: { $0.senseKeyKind != SenseKeyKind.none }) {
@@ -48,7 +60,7 @@ struct PrimaryDictionary: Equatable, Sendable {
     func pinned(word entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry]) -> PrimaryDictionary {
         if let chosen, (entries + phraseEntries).contains(where: { $0.dictionary.key == chosen }) { return self }
         guard let identity = identity(among: entries) ?? identity(among: phraseEntries) else { return self }
-        return PrimaryDictionary(chosen: identity.key)
+        return PrimaryDictionary(chosen: identity.key, automatic: automatic)
     }
 
     /// The primary's own entries, in order.
@@ -61,15 +73,46 @@ struct PrimaryDictionary: Equatable, Sendable {
 /// The reader's choice of primary dictionary, kept across launches.
 struct PrimaryDictionaryStore {
     static let defaultsKey = "PrimaryDictionary"
+    /// **A separate key, so a derivation can never be mistaken for a choice.** It is kept at all because a
+    /// lookup reads the primary from disk, and the language-derived dictionary needs the service's list.
+    static let automaticKey = "PrimaryDictionaryAutomatic"
+    /// **The language the derivation was made for.** A system-language change must not leave the
+    /// previous language's dictionary in force until some surface happens to rediscover: a stored
+    /// derivation for another language is simply not read.
+    static let automaticLanguageKey = "PrimaryDictionaryAutomaticLanguage"
+    /// Set once the one-time pin of an implicit primary has been assessed, or the reader has chosen
+    /// anything — including "my language", which is `nil`. Without it, clearing a pinned choice
+    /// would be undone at the next discovery.
+    static let pinAssessedKey = "PrimaryDictionaryPinAssessed"
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    private let language: () -> String
+
+    init(defaults: UserDefaults = .standard, language: @escaping () -> String = { ReaderLanguage.preferred }) {
         self.defaults = defaults
+        self.language = language
     }
 
+    var pinAssessed: Bool { defaults.bool(forKey: Self.pinAssessedKey) }
+    func markPinAssessed() { defaults.set(true, forKey: Self.pinAssessedKey) }
+
     func load() -> PrimaryDictionary {
-        PrimaryDictionary(chosen: defaults.string(forKey: Self.defaultsKey))
+        PrimaryDictionary(chosen: defaults.string(forKey: Self.defaultsKey),
+                          automatic: defaults.string(forKey: Self.automaticLanguageKey) == language()
+                              ? defaults.string(forKey: Self.automaticKey) : nil)
+    }
+
+    /// What the reader's language names, written by whoever last read the dictionary list. `nil`
+    /// withdraws it. Never touches the reader's own choice.
+    func saveAutomatic(_ key: String?, language: String? = nil) {
+        if let key {
+            defaults.set(key, forKey: Self.automaticKey)
+            defaults.set(language ?? self.language(), forKey: Self.automaticLanguageKey)
+        } else {
+            defaults.removeObject(forKey: Self.automaticKey)
+            defaults.removeObject(forKey: Self.automaticLanguageKey)
+        }
     }
 
     /// `nil` clears the choice, which returns XiaolaiDict to picking the first dictionary that can key a

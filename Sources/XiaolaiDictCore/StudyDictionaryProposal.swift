@@ -37,4 +37,24 @@ public enum StudyDictionaryProposal: Sendable, Equatable {
         default: return .choose(suitable)
         }
     }
+
+    /// The dictionary a reader studies from when they have not chosen one, and are not asked to.
+    ///
+    /// **The same rule as `forReader`, answered rather than put as a question**, so the two cannot
+    /// disagree about whom nothing suits: this is nil exactly when that is `.nothingSuitable`. Among
+    /// several suitable dictionaries — which only an English reader has — NOAD is taken whatever the
+    /// order, because it is the one dictionary every accuracy figure describes; a thesaurus the reader
+    /// ranked first in Dictionary.app does not become the dictionary they study from. Without NOAD, the
+    /// first that can key a sense in the reader's own order, since a primary that cannot is a primary
+    /// that can never produce a sense-level card; and if none can, the first.
+    ///
+    /// Nothing here is stored. The caller derives it again whenever the list or the language changes.
+    public static func automatic(
+        for language: String, among dictionaries: [DictionaryCapability]
+    ) -> DictionaryCapability? {
+        let suitable = dictionaries.filter { $0.teachesEnglish(to: language) }
+        return suitable.first { $0.identity.identifier == DictionaryIdentity.noad }
+            ?? suitable.first { $0.senseKeyKind != SenseKeyKind.none }
+            ?? suitable.first
+    }
 }

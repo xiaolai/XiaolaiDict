@@ -287,6 +287,8 @@ public struct SetupView: View {
                  """)
         } else if let chosen = board.chosenDictionary {
             Text(DictionaryLabels.studying(from: chosen))
+        } else if board.chosen == nil, let automatic = board.automaticDictionary {
+            Text(DictionaryLabels.studying(from: automatic))
         } else if board.isAsking {
             // **Asked and failed is not still asking.** The list is fetched once, in a task that
             // has already ended, so without this distinction a service that answered nothing left
@@ -665,10 +667,6 @@ public struct SetupView: View {
 
     @ViewBuilder private var dictionaryActions: some View {
         HStack(spacing: scale.space.stack) {
-            if case .propose(let one) = board.proposal, board.chosenDictionary == nil {
-                Button("Use \(one.identity.name)") { dictionary?.choose(one.identity.key) }
-                    .stepAction(prominent: isNext(.dictionary))
-            }
             if case .nothingSuitable = board.proposal, !board.isAsking {
                 // The sideways offer comes first and is the step's action, because for a reader
                 // who installed a dictionary for their own language it is the answer — and "Open

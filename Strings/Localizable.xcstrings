@@ -386,9 +386,6 @@
     "Author" : {
 
     },
-    "Automatic — the first dictionary that can mark a meaning" : {
-
-    },
     "Automatically" : {
 
     },
@@ -1531,6 +1528,12 @@
     "The dictionary could not be opened." : {
       "comment" : "Shown on a review card when asking Apple's Dictionary about its word did nothing"
     },
+    "The dictionary for my language" : {
+
+    },
+    "The dictionary for my language (none of your dictionaries suits it)" : {
+
+    },
     "The dictionary you study from is no longer turned on in the Dictionary app. Meanings are being matched in whichever dictionary answers instead, and study progress is kept separately for each dictionary, so it is building up apart from yours." : {
 
     },
@@ -1749,6 +1752,9 @@
 
     },
     "Use %@" : {
+
+    },
+    "Use a different dictionary" : {
 
     },
     "Voice" : {

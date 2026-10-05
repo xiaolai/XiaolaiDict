@@ -78,6 +78,62 @@ struct PrimaryDictionaryTests {
         #expect(PrimaryDictionary().pinned(word: [], phrase: [Self.noad]).chosen == "com.apple.dictionary.NOAD")
     }
 
+    // MARK: - The dictionary chosen for the reader who has not chosen
+
+    private static let ocd = "com.apple.dictionary.zh_CN-en.OCD"
+
+    /// Unchosen, the language decides, not Dictionary.app's order: NOAD can key a sense and is listed
+    /// first, and a Simplified reader is still studying from 牛津英汉汉英.
+    @Test func theAutomaticDictionaryOutranksTheFirstThatCanKey() {
+        let primary = PrimaryDictionary(automatic: Self.ocd)
+        #expect(primary.identity(among: [Self.collins, Self.noad, Self.oxford])?.name == "牛津英汉汉英词典")
+    }
+
+    @Test func theReadersChoiceStillBeatsTheAutomaticOne() {
+        let primary = PrimaryDictionary(chosen: "com.apple.dictionary.NOAD", automatic: Self.ocd)
+        #expect(primary.identity(among: [Self.noad, Self.oxford])?.name == "New Oxford American Dictionary")
+    }
+
+    /// The automatic dictionary was disabled, or simply has no entry for this word: the old rule
+    /// answers, so a lookup is never left without a primary.
+    @Test func anAutomaticDictionaryThatDidNotAnswerFallsBack() {
+        let primary = PrimaryDictionary(automatic: Self.ocd)
+        #expect(primary.identity(among: [Self.collins, Self.noad])?.name == "New Oxford American Dictionary")
+        #expect(primary.identity(among: [Self.collins])?.name == "Collins COBUILD")
+    }
+
+    /// A chosen dictionary that did not answer falls to the automatic one before it falls to whatever
+    /// is first.
+    @Test func aChoiceThatDidNotAnswerFallsToTheAutomaticOne() {
+        let primary = PrimaryDictionary(chosen: "com.apple.dictionary.gone", automatic: Self.ocd)
+        #expect(primary.identity(among: [Self.noad, Self.oxford])?.name == "牛津英汉汉英词典")
+    }
+
+    @Test func pinningACardAndItsResolverStillAgreeWithAnAutomaticDictionary() {
+        let pinned = PrimaryDictionary(automatic: Self.ocd).pinned(word: [Self.noad, Self.oxford], phrase: [])
+        #expect(pinned.identity(among: [Self.noad, Self.oxford])?.name == "牛津英汉汉英词典")
+        #expect(pinned.identity(among: [Self.oxford, Self.noad])?.name == "牛津英汉汉英词典")
+    }
+
+    /// **The automatic dictionary is not the reader's choice and is never read as one.** Library,
+    /// Review and the reminder scope themselves by `chosen`, where nil means every dictionary — a
+    /// reader who never chose must not find their study history narrowed by a derivation.
+    @Test func anAutomaticDictionaryIsNotAChoice() {
+        let defaults = TemporaryDefaults.suite()
+        let store = PrimaryDictionaryStore(defaults: defaults)
+        store.saveAutomatic(Self.ocd)
+        #expect(store.load().chosen == nil)
+        #expect(store.load().automatic == Self.ocd)
+        store.save("com.apple.dictionary.NOAD")
+        #expect(store.load().chosen == "com.apple.dictionary.NOAD")
+        #expect(store.load().automatic == Self.ocd, "choosing must not erase the derivation")
+        store.save(nil)
+        #expect(store.load().automatic == Self.ocd, "clearing a choice must not erase the derivation")
+        store.saveAutomatic(nil)
+        #expect(store.load().automatic == nil)
+        #expect(PrimaryDictionaryStore.defaultsKey != PrimaryDictionaryStore.automaticKey)
+    }
+
     // MARK: - What a lookup may record
 
     private let when = Date(timeIntervalSince1970: 1_800_000_000)

@@ -13,6 +13,9 @@ import SwiftUI
 public struct DictionaryChoice {
     public var available: [DictionaryCapability]?
     public var chosen: String?
+    /// The dictionary the reader's language names, as a `DictionaryIdentity.key`. **Not a choice**:
+    /// `chosen` is nil for a reader who never picked, and this is what is used meanwhile.
+    public var automatic: String?
     public var choose: (String?) -> Void
     /// Whether the service has been asked and has finished answering.
     ///
@@ -31,11 +34,12 @@ public struct DictionaryChoice {
     public var reask: () -> Void
 
     public init(
-        available: [DictionaryCapability]?, chosen: String?, hasAsked: Bool = false,
+        available: [DictionaryCapability]?, chosen: String?, automatic: String? = nil, hasAsked: Bool = false,
         choose: @escaping (String?) -> Void, reask: @escaping () -> Void = {}
     ) {
         self.available = available
         self.chosen = chosen
+        self.automatic = automatic
         self.hasAsked = hasAsked
         self.reask = reask
         self.choose = choose
@@ -594,28 +598,16 @@ struct DictionaryPane: View {
         Form {
             Section {
                 if let choice, let available = choice.available {
-                    // **Radio buttons, because it is one of several and each needs its note.**
-                    // `.inline` in a grouped form drew the unselected choices as filled grey
-                    // discs at the trailing edge, which read as disabled. A pop-up would fit
-                    // eight names and lose the line under each that says what choosing it gives.
-                    Picker("Dictionary", selection: binding(choice)) {
-                        Text("Automatic — the first dictionary that can mark a meaning").tag(String?.none)
-                        ForEach(available, id: \.identity.key) { capability in
-                            // What choosing it can key, under its name: a dictionary that marks
-                            // senses with nothing a parser can read only ever gives whole-entry
-                            // cards, and the reader should see that before choosing rather than
-                            // after a week of them.
-                            VStack(alignment: .leading) {
-                                Text(verbatim: capability.identity.name)
-                                Text(DictionaryLabels.capability(capability))
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .tag(String?.some(capability.identity.key))
-                        }
+                    let shown = StudyDictionaryPresentation.of(
+                        available: available, chosen: choice.chosen, automatic: choice.automatic)
+                    switch shown {
+                    case .automatic(let capability), .chosen(let capability):
+                        Text(DictionaryLabels.studying(from: capability))
+                            .fixedSize(horizontal: false, vertical: true)
+                        DisclosureGroup("Use a different dictionary") { list(choice, available) }
+                    case .listOnly:
+                        list(choice, available)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.radioGroup)
                 } else if let choice, !choice.hasAsked {
                     Text("Looking for your dictionaries…").foregroundStyle(.secondary)
                 } else if let choice {
@@ -663,6 +655,40 @@ struct DictionaryPane: View {
                  reading history is not affected.
                  """)
         }
+    }
+
+    /// The full list, for the reader who wants a dictionary other than the one their language names.
+    @ViewBuilder private func list(_ choice: DictionaryChoice, _ available: [DictionaryCapability]) -> some View {
+                    // **Radio buttons, because it is one of several and each needs its note.**
+                    // `.inline` in a grouped form drew the unselected choices as filled grey
+                    // discs at the trailing edge, which read as disabled. A pop-up would fit
+                    // eight names and lose the line under each that says what choosing it gives.
+                    Picker("Dictionary", selection: binding(choice)) {
+                        Group {
+                            if choice.automatic == nil {
+                                Text("The dictionary for my language (none of your dictionaries suits it)")
+                            } else {
+                                Text("The dictionary for my language")
+                            }
+                        }
+                        .disabled(choice.automatic == nil)
+                        .tag(String?.none)
+                        ForEach(available, id: \.identity.key) { capability in
+                            // What choosing it can key, under its name: a dictionary that marks
+                            // senses with nothing a parser can read only ever gives whole-entry
+                            // cards, and the reader should see that before choosing rather than
+                            // after a week of them.
+                            VStack(alignment: .leading) {
+                                Text(verbatim: capability.identity.name)
+                                Text(DictionaryLabels.capability(capability))
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .tag(String?.some(capability.identity.key))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.radioGroup)
     }
 
     /// A binding rather than a button per row, so the pane says "one of these" the way the
