@@ -72,6 +72,22 @@ actor LedgerStore {
     /// study progress that a changed default would orphan.
     func studiedDictionaries() throws -> [String] { try ledger.studiedDictionaries() }
 
+    /// What the developer pane shows: how much the ledger holds.
+    func developerCounts() throws -> (lookups: Int, notes: Int) {
+        try ledger.developerCounts()
+    }
+
+    /// **A copy first, then every row.** The copy is timestamped and never replaces an earlier one, so a
+    /// clear after a deploy cannot overwrite the only copy of real data with test data.
+    func clearForDeveloper(now: Date) throws -> (rows: Int, backup: String) {
+        let stamp = DateFormatter.developerStamp.string(from: now)
+        let backup = "\(path).dev-before-clear-\(stamp).backup"
+        try ledger.backUp(to: backup)
+        return (try ledger.clearEveryRow(), backup)
+    }
+
+    func deployForDeveloper(now: Date) throws -> TestDataReport { try ledger.deployTestData(now: now) }
+
     /// What the reader met of this lemma before `before`. Encounters, never meanings.
     ///
     /// **In this language.** English *gift* and German *Gift* share a lemma and are two words; asked
@@ -425,4 +441,14 @@ actor LedgerStore {
     /// Removes every lookup above `baseline`. **An instrument's own rows**, identified by an id
     /// it took before it wrote any.
     func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
+}
+
+private extension DateFormatter {
+    /// `20261005-195500`: sorts as time does, and has no character a file name refuses.
+    static let developerStamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
 }

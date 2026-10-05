@@ -189,6 +189,8 @@ struct XiaolaiDictSettings: View {
             // Observed: a wedged capture is said here, the place a reader goes when hover stops.
             captureStuck: app.hover.isCaptureStuck,
             dictionary: app.dictionary.choice,
+            // The developer pane's operations: a development build's, nil in a release (which draws no pane).
+            developer: app.developerChoice,
             shortcut: app.shortcuts.choice,
             modelLicence: app.models.licenceURL,
             erase: app.eraseModel.presentation,

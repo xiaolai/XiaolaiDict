@@ -94,6 +94,14 @@ struct PrimaryDictionaryStore {
         self.language = language
     }
 
+    /// Forgets the choice, the derivation and the one-time pin, so the pin migration can be tried again.
+    /// For the developer pane.
+    func resetForDeveloper() {
+        for key in [Self.defaultsKey, Self.automaticKey, Self.automaticLanguageKey, Self.pinAssessedKey] {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     var pinAssessed: Bool { defaults.bool(forKey: Self.pinAssessedKey) }
     func markPinAssessed() { defaults.set(true, forKey: Self.pinAssessedKey) }
 

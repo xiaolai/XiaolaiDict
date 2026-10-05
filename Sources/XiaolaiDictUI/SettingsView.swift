@@ -25,8 +25,41 @@ public final class SettingsModel {
     /// The reader picked a tab: show it, and open there next time.
     public func choose(_ pane: SettingsPane) {
         self.pane = pane
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        // A hidden pane is not a preference: opening on it next time would draw a pane nobody can see.
+        if pane == .developer { return }
+        #endif
         paneStore?.save(pane)
     }
+
+    /// The tabs drawn: every build's, plus the developer pane once it has been revealed.
+    public var panes: [SettingsPane] {
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        if developerRevealed { return SettingsPane.allCases + [.developer] }
+        #endif
+        return SettingsPane.allCases
+    }
+
+    #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+    /// Whether Shift+Up three times has been pressed in this window. **Not stored**: closing the window
+    /// hides the pane again, so a developer tool never lingers where a reader could find it by accident.
+    public internal(set) var developerRevealed = false
+
+    func revealDeveloper() {
+        developerRevealed = true
+        pane = .developer
+    }
+
+    /// The gesture is a toggle: the same three presses that show the pane hide it again.
+    func toggleDeveloper() {
+        if developerRevealed { hideDeveloper() } else { revealDeveloper() }
+    }
+
+    func hideDeveloper() {
+        developerRevealed = false
+        if pane == .developer { pane = SettingsPane.allCases[0] }
+    }
+    #endif
 
     /// What the setup pane found, once it can say. Stored so the *next* launch knows whether to
     /// open on it — the board itself cannot be asked before the window exists, because its
@@ -124,6 +157,8 @@ public struct SettingsView: View {
     /// Reading the screen has stopped answering. See `LookupPane.captureStuck`.
     private var captureStuck: Bool
     private var dictionary: DictionaryChoice?
+    /// The developer pane's operations. Nil in a release, which does not draw the pane at all.
+    private var developer: DeveloperChoice?
     private var shortcut: ShortcutChoice?
     /// The local model's licence, downloaded with its weights — nil until there is a model.
     private var modelLicence: URL?
@@ -159,6 +194,7 @@ public struct SettingsView: View {
         hover: Binding<HoverPolicy>? = nil, hoverEnabled: Binding<Bool>? = nil,
         captureStuck: Bool = false,
         dictionary: DictionaryChoice? = nil,
+        developer: DeveloperChoice? = nil,
         shortcut: ShortcutChoice? = nil, modelLicence: URL? = nil,
         erase: ErasePresentation? = nil,
         eraseAction: (@MainActor (EraseAction) -> Void)? = nil,
@@ -175,6 +211,7 @@ public struct SettingsView: View {
         self.hoverEnabled = hoverEnabled
         self.captureStuck = captureStuck
         self.dictionary = dictionary
+        self.developer = developer
         self.shortcut = shortcut
         self.modelLicence = modelLicence
         self.erase = erase
@@ -191,7 +228,7 @@ public struct SettingsView: View {
         // **Through `choose`, so a tab the reader clicked is remembered** and a pane something
         // else selected is not.
         TabView(selection: Binding(get: { model.pane }, set: { model.choose($0) })) {
-            ForEach(SettingsPane.allCases) { pane in
+            ForEach(model.panes) { pane in
                 Tab(pane.title, systemImage: pane.symbol, value: pane) {
                     content(of: pane)
                         .onScrollGeometryChange(for: ContentFit.self) { ContentFit(of: $0) }
@@ -216,6 +253,7 @@ public struct SettingsView: View {
         // here at all — the content fills the window, and `SettingsWindowFit` moves the window.
         .frame(width: Token.Panel.settingsWidth)
         .frame(maxHeight: .infinity)
+        .developerReveal(model)
         .background(WindowReader { found in
             // **A new window, or none, invalidates every queued fit at once** — not when SwiftUI next
             // runs `onChange`, by which time a fit queued for the old window may already have moved
@@ -321,6 +359,9 @@ public struct SettingsView: View {
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
                        captureStuck: captureStuck, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        case .developer: DeveloperPane(choice: developer)
+        #endif
         // `Bundle.main` is the app when XiaolaiDict is running and the test runner when it is not, which
         // is why `AppRelease` is nil-able rather than invented: a pane that printed a version it
         // could not read would be worse than one that prints none.
@@ -361,6 +402,14 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     case lookup
     case dictionary
     case about
+    #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+    /// **Development builds only, and hidden until Shift+Up three times** (`RevealSequence`). Never in
+    /// `allCases`: an instrument that walks the panes, and the tabs a reader sees, do not include it.
+    case developer
+    #endif
+
+    /// The panes every build has. Written out because the developer pane must not join it.
+    public static var allCases: [SettingsPane] { [.setup, .general, .reading, .lookup, .dictionary, .about] }
 
     public var id: String { rawValue }
 
@@ -376,6 +425,9 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
         case .about: "About"
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        case .developer: rawValue
+        #endif
         }
     }
 
@@ -391,6 +443,10 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
         case .about: "About"
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        // Built, not written: a development build's label is not a string anyone translates.
+        case .developer: LocalizedStringKey(rawValue.capitalized)
+        #endif
         }
     }
 
@@ -406,6 +462,9 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .lookup: "text.magnifyingglass"
         case .dictionary: "character.book.closed"
         case .about: "info.circle"
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        case .developer: "hammer"
+        #endif
         }
     }
 }

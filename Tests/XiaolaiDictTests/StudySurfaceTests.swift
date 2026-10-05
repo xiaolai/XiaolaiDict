@@ -97,7 +97,6 @@ struct StudySurfaceTests {
         "explicitlyKeep(noteID:": "Marks a note as one the reader asked for, inside enrol, the only correct caller.",
         "locators(of:": "Evidence carried with a phrase note; read by the note's own equality.",
         "existingCard(of:": "Reads without creating; the timeline and the queue use it.",
-        "backUp(to:": "Taken before a migration changes the ledger's shape; not a reader's command.",
         // WI-5: `OneDayIncrease` keeps its day as seconds since 1970, as the ledger does, so it spells
         // its own encoding rather than let `JSONEncoder` choose one for a `Date`.
         "encode(to:": """

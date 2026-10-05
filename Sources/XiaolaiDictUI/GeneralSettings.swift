@@ -61,7 +61,8 @@ public struct SettingsPaneStore {
     public func openingPane() -> SettingsPane {
         let unfinished = defaults.object(forKey: Self.setupUnfinishedKey) as? Bool ?? true
         guard !unfinished else { return .setup }
-        return defaults.string(forKey: Self.paneKey).flatMap(SettingsPane.init(rawValue:)) ?? .setup
+        return defaults.string(forKey: Self.paneKey).flatMap(SettingsPane.init(rawValue:))
+            .flatMap { SettingsPane.allCases.contains($0) ? $0 : nil } ?? .setup
     }
 
     public func save(_ pane: SettingsPane) {

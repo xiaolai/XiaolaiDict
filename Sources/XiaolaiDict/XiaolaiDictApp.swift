@@ -736,6 +736,21 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // The drawer's filter, read the same way: History is the reading history too.
         studying: { [weak self] in self?.hover.policy.scripts ?? HoverPolicy.defaultScripts })
 
+    #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+    /// The developer pane's operations. A development build only.
+    @ObservationIgnored lazy var developerTools = DeveloperTools(
+        store: { [weak self] in self?.recorder.store }, dictionary: dictionary)
+    #endif
+
+    /// `nil` in a release: the pane's operations exist only where the pane does.
+    var developerChoice: DeveloperChoice? {
+        #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        developerTools.choice
+        #else
+        nil
+        #endif
+    }
+
     /// The erase command's model, in the Reading settings pane.
     @ObservationIgnored lazy var eraseModel = EraseModel(
         store: { [weak self] in self?.recorder.store })
