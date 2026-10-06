@@ -103,8 +103,12 @@ public struct DictionaryProfile: Sendable, Equatable {
     /// the ranking is what matters; the shares are kept as the historical evidence rather than re-stated as
     /// current. None of the five is installed on this Mac, so re-ranking them needs the full catalogue.
     ///
-    /// Odia and Sanskrit nest deeply too but did not clear the margin the test requires, so they are
-    /// absent — a dictionary belongs here on evidence, not on resemblance to one that does.
+    /// **Odia and Sanskrit were left out for clearing a margin they did not clear, and both are in now.** The depth
+    /// test's margin (25 points) is a guard against churn, not a standard: `DefinitionReachTests` holds every
+    /// dictionary to nearly all of its declared definitions, and on that standard `or-en.oup` failed at depth 1.
+    /// Re-measured 2026-10-06 on the corrected metric: Odia keeps 85.4% at depth 1 and 100.0% at depth 2
+    /// (192,874 of 221,970 reached at depth 1); Sanskrit 50.9% and 100.0%. Where the shallowest depth that keeps
+    /// every definition is not the default, it is the one declared.
     public static let overrides: [String: DictionaryProfile] = [
         // 23% retained at depth 1, 103% at depth 2
         "com.apple.dictionary.vi.oup": DictionaryProfile(
@@ -121,6 +125,12 @@ public struct DictionaryProfile: Sendable, Equatable {
         // 78% at depth 1, 153% at depth 2
         "com.apple.dictionary.kn-en.oup": DictionaryProfile(
             identifier: "com.apple.dictionary.kn-en.oup", senseDepth: 2),
+        // 85.4% at depth 1, 100.0% at depth 2 — measured 2026-10-06, installed on this Mac
+        "com.apple.dictionary.or-en.oup": DictionaryProfile(
+            identifier: "com.apple.dictionary.or-en.oup", senseDepth: 2),
+        // 50.9% at depth 1, 100.0% at depth 2 — measured 2026-10-06, installed on this Mac
+        "com.apple.dictionary.sa-en.oup": DictionaryProfile(
+            identifier: "com.apple.dictionary.sa-en.oup", senseDepth: 2),
     ]
 
     /// `class` split into whole tokens. One place, because `class` is a space-separated list and every

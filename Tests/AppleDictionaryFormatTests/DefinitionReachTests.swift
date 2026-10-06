@@ -370,16 +370,20 @@ import Testing
             print("DictionarySurveyTests: XIAOLAIDICT_BUNDLES not set, not measured"); return
         }
         let bundles = DictionaryLocator.installed(in: [URL(fileURLWithPath: root)])
-        // The smallest readable body, so this is seconds rather than minutes.
-        let smallest = bundles.compactMap { bundle -> (DictionaryBundle, Int)? in
+        // **The smallest body that is a dictionary**, so this is seconds rather than minutes. Readable is not enough:
+        // `com.apple.accessibility.dictionary.TTY` reads fine and holds 72 records that all lack a headword, so it
+        // survives a "readable" test, measures 0 entries and makes every assertion below about nothing. A candidate
+        // has to yield an entry when surveyed, and smaller ones are tried first.
+        let bySize = bundles.compactMap { bundle -> (DictionaryBundle, Int)? in
             guard let body = try? ContainerReader.bodyURL(of: bundle.url),
                   let size = (try? FileManager.default.attributesOfItem(atPath: body.path))?[.size] as? Int,
                   (try? ContainerReader.forEachEntry(in: bundle.url, limit: 1) { _ in }) != nil
             else { return nil }
             return (bundle, size)
-        }.sorted { $0.1 < $1.1 }.first?.0
+        }.sorted { $0.1 < $1.1 }.map(\.0)
+        let smallest = bySize.first { DictionarySurvey.measure($0, includingKeys: false).entries > 0 }
         guard let smallest else {
-            print("DictionarySurveyTests: no readable bundle, not measured"); return
+            print("DictionarySurveyTests: no readable bundle yields an entry, not measured"); return
         }
         let facts = DictionarySurvey.measure(smallest, includingKeys: false)
         print("""

@@ -22,15 +22,18 @@ import Testing
 
     /// **Every one of the 84 readable dictionaries is depth 1** under the strict test — the block must
     /// carry a definition, not merely an `id`. An earlier table named six exceptions read off a looser
-    /// probe and all six were artifacts; these are the three it got wrong.
+    /// probe and all six were artifacts; these are the three it got wrong — two of which still are; see below for the third.
     @Test func onlyRetentionPutsADictionaryInTheOverrideTable() {
-        // The five that lose definitions at depth 1, measured through the indexer.
+        // The five that lose definitions at depth 1, measured through the indexer, and two the margin once
+        // kept out — Sanskrit (50.9% kept at depth 1, 100.0% at depth 2, which the superseded metric called an
+        // artifact) and Odia (85.4% and 100.0%, which `DefinitionReachTests` fails at depth 1). Re-measured 2026-10-06.
         #expect(DictionaryProfile.profile(for: "com.apple.dictionary.vi.oup").senseDepth == 2)
         #expect(DictionaryProfile.profile(for: "com.apple.dictionary.el.oup").senseDepth == 3)
-        #expect(DictionaryProfile.overrides.count == 5)
-        // These three were named by a looser probe and are artifacts — they index fine at depth 1.
-        for identifier in ["com.apple.dictionary.sa-en.oup", "com.apple.dictionary.ko.NewAce",
-                           "com.apple.dictionary.zh_HK-en.idioms.cp"] {
+        #expect(DictionaryProfile.profile(for: "com.apple.dictionary.sa-en.oup").senseDepth == 2)
+        #expect(DictionaryProfile.profile(for: "com.apple.dictionary.or-en.oup").senseDepth == 2)
+        #expect(DictionaryProfile.overrides.count == 7)
+        // These two were named by a looser probe and are artifacts — they index fine at depth 1.
+        for identifier in ["com.apple.dictionary.ko.NewAce", "com.apple.dictionary.zh_HK-en.idioms.cp"] {
             #expect(DictionaryProfile.profile(for: identifier).senseDepth == 1, "\(identifier)")
         }
     }
