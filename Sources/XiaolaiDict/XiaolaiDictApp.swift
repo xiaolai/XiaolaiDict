@@ -1,4 +1,5 @@
 import AppKit
+import DictionaryModel
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
@@ -262,6 +263,12 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // the bundle behaves the same. Before *did* finish, so no window can flash as an ordinary
         // app's would.
         NSApp.setActivationPolicy(.accessory)
+        // **Where the lemma table is read from** (ADR-0051). Built by the dictionary service, which is the one
+        // process that links the container reader; this process only reads the file, and `LookupRunner` asks
+        // whether it has changed before it decides a lemma. Before any lookup, so the first one has it.
+        // Off the main thread: reading the table parses 76,000 titles, which is not a launch's business. A lookup
+        // waits for it, bounded (`LookupRunner`), so the first lemma of a session is not keyed without it.
+        FormAuthority.shared.useInBackground(FormTableStore())
         // **The notification center's delegate, before launch finishes**: a click on a reminder that
         // launched the app is delivered to whatever is the delegate by then, and lost otherwise
         // (review-module-plan §5.3). Not in an instrument run, which answers no reader.

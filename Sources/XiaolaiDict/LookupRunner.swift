@@ -69,7 +69,13 @@ final class LookupRunner {
         seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
         let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
-        let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+        // **A `stat`, and only to notice that the service finished a build** since this process last read the
+        // table; the read itself is off this path, and a lookup meanwhile uses the table in force.
+        FormAuthority.shared.refreshInBackground()
+        // Provisional: the card must not wait for the table, so the first lookup of a session shows the lemma the
+        // tagger gave; the lemma that keys the ledger is settled below, once the panel is up.
+        let tableAtFirst = FormAuthority.shared.revision
+        var lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
         // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
@@ -91,6 +97,17 @@ final class LookupRunner {
         // has not been derived yet (first lookup after an upgrade or a language change) waits here, bounded,
         // rather than studying from whatever is first in Dictionary.app's order for this one lookup.
         await settle()
+        // **The ledger's lemma waits, bounded, for the table the app is still reading at launch** — after the panel
+        // is up, so the wait is never blank screen — and is decided again if it arrived. Without it the same word
+        // would be keyed one way in the first second of a session and another way after.
+        if await FormAuthority.shared.settled(within: .milliseconds(750)) == .timedOut {
+            log.notice("lemma: the form table was still loading; this lookup is keyed without it")
+        }
+        // **Decided again if the table changed since the first reading**, however it got there: a load can finish
+        // before the wait begins, which the wait reports as idle.
+        if FormAuthority.shared.revision != tableAtFirst {
+            lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+        }
         let chosenPrimary = primary()
         // **What every recording of this lookup shares, worked out once** — the pending row, the
         // answered one and the final one differ only in what they add to it (audit round 3, #29).

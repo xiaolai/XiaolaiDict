@@ -32,7 +32,10 @@ struct ModuleBoundaryTests {
         // CryptoKit is here because `DictionarySense.hash` keys a sense the publisher gave no id by
         // a SHA-256 of its own text, and `DictionaryBridge` builds those values — so it is on the
         // dictionary service's own execution path and cannot be moved out of it.
-        "DictionaryModel": ["Foundation", "NaturalLanguage", "CryptoKit"],
+        // Synchronization is `FormAuthority`: the form table is read by every lemma and replaced when the
+        // dictionary service finishes a build or the app finds a newer file, so it is one lock-guarded value.
+        // A decision, not a drift — ADR-0051.
+        "DictionaryModel": ["Foundation", "NaturalLanguage", "CryptoKit", "Synchronization"],
         // FoundationModels for `@Generable` and the refusal it reports; CryptoKit for the weights'
         // per-file hashes; NaturalLanguage for `TranslationCheck`. **No MLX** — that is the model
         // service executable's alone, and this target exists so the app can talk about a model it

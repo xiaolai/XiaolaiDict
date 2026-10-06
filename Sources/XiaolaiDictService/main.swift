@@ -44,6 +44,23 @@ let phrases = PhraseReader.forReader(ReaderLanguage.preferred) { why in
     // feature works without it. Logged so "my idioms are missing" has an answer.
     log.notice("phrases: \(why, privacy: .public)")
 }
+// **The lemma table, read the same way and for the same reason**: what a reader's own dictionaries print as
+// inflections, which `NLTagger` answers nothing for or answers wrongly (ADR-0051). The stored one is put in force first,
+// off the reply path, so a lookup that arrives meanwhile answers with the tagger alone; the dictionaries are read only where it
+// is stale, and the app — a different process — finds the file when it next asks.
+DispatchQueue.global(qos: .utility).async {
+    FormAuthority.shared.use(FormTableStore())
+    let forms = FormTableReader.read { why in log.notice("forms: \(why, privacy: .public)") }
+    if let table = forms.table { FormAuthority.shared.publish(table) }
+    // **Counted, not assumed**: a table that judges nothing looks like a reader whose words are all the
+    // tagger's, so the numbers are how the two are told apart afterwards.
+    log.notice("""
+        forms: \(forms.table?.count ?? 0, privacy: .public) from \(forms.read.count, privacy: .public) \
+        dictionaries, \(forms.failed.count, privacy: .public) unread, \
+        \(forms.wasCurrent ? "stored" : "rebuilt", privacy: .public)
+        """)
+    for name in forms.failed { log.error("forms: could not read \(name, privacy: .public)") }
+}
 DispatchQueue.global(qos: .utility).async {
     let reading = phrases.read()
     // **Counted, not assumed.** A detector over an empty inventory finds nothing and looks exactly like a
