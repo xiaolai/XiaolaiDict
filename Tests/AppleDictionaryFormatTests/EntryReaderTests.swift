@@ -31,6 +31,32 @@ import Testing
         #expect(carriesDelimiter == false, "the pronunciation delimiter reached the headword")
     }
 
+    /// **A pronunciation written in the headword's own text.** Prisma, the Dutch dictionary, prints the syllabified
+    /// form and the plain one inside the `hw` span itself — `aal·glad | aalglad` — with no class naming either, so
+    /// no class filter can remove it: 141 of its first 6,000 headwords carried the `|`. The delimiter is Apple's, and
+    /// the headword is what stands before it.
+    @Test(arguments: [("aal<span class=\"hsb\"></span>gl<span class=\"sy_underline\">a</span>d  |  <span class=\"sy_underline\">aa</span>l<span class=\"hsb\"></span>glad ", "aalglad"),
+                      ("aangeërfde | aangeerfde", "aangeërfde"), ("plain ", "plain")])
+    func aPronunciationInTheHeadwordsOwnTextIsCutAtTheDelimiter(markup: String, expected: String) {
+        let xml = """
+            <d:entry xmlns:d="\(EntryTree.namespace)" id="e1" d:title="\(expected)" class="entry">\
+            <span class="hg x_xh0"><span role="text" class="hw">\(markup)</span></span>\
+            <span class="x_xd0"><span class="x_xd1"><span class="df">meaning</span></span></span></d:entry>
+            """
+        #expect(Self.index(xml)?.headword == expected)
+    }
+
+    /// **Cutting must never empty a headword**, for the reason filtering must not: an empty headword is a refused
+    /// entry. A block that is only the delimiter keeps what it had.
+    @Test func aBlockThatIsOnlyTheDelimiterIsNotEmptied() {
+        let xml = """
+            <d:entry xmlns:d="\(EntryTree.namespace)" id="e1" class="entry">\
+            <span class="hg x_xh0"><span class="hw"> | x</span></span>\
+            <span class="x_xd0"><span class="x_xd1"><span class="df">meaning</span></span></span></d:entry>
+            """
+        #expect(Self.index(xml)?.headword.isEmpty == false)
+    }
+
     /// The homograph number is printed inside `hw` as guide punctuation, so it comes out of the headword
     /// while staying available as the homograph marker.
     @Test func theHomographNumberIsNotPartOfTheHeadword() {

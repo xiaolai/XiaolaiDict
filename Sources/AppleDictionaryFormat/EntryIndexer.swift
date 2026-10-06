@@ -391,10 +391,23 @@ struct Walk {
     func headword() -> String {
         guard let block = headwordBlock() else { return "" }
         let node = block.firstDescendant { $0.classes.contains("hw") } ?? block
-        let filtered = EntryIndexer.collapsed(node.text(excluding: Self.isNotPartOfAName))
+        let filtered = Self.beforeThePronunciation(EntryIndexer.collapsed(node.text(excluding: Self.isNotPartOfAName)))
         if !filtered.isEmpty { return filtered }
         let whole = EntryIndexer.collapsed(node.text)
         return whole.isEmpty ? EntryIndexer.collapsed(block.text) : whole
+    }
+
+    /// **What stands before Apple's `|`**, for a dictionary that writes the pronunciation into the headword's own
+    /// text. Prisma prints `aal·glad | aalglad` inside the `hw` span with no class on either half, so no class
+    /// filter can reach it — 141 of its first 6,000 headwords carried the delimiter. The delimiter is the one the
+    /// plan's own check forbids in a headword, and the word is what comes first.
+    ///
+    /// **Never to nothing**: a text that is only the delimiter and what follows keeps what it had, because an empty
+    /// headword is a rejected entry and rejecting an entry throws away every definition it held.
+    static func beforeThePronunciation(_ text: String) -> String {
+        guard let bar = text.firstIndex(of: "|") else { return text }
+        let head = EntryIndexer.collapsed(String(text[..<bar]))
+        return head.isEmpty ? text : head
     }
 
     func homograph() -> String? {
