@@ -7,8 +7,9 @@ public struct Lemma: Equatable, Sendable {
     public enum Basis: Int, Comparable, CaseIterable, Sendable {
         /// NLTagger's lemma.
         case tagger
-        /// An irregular form NLTagger leaves unchanged — "saw", "found" — resolved from the grammar
-        /// around it.
+        /// A lemma a rule decided where the tagger gave none or a word the dictionary contradicts: an
+        /// irregular form NLTagger leaves unchanged — "saw", "found" — resolved from the grammar around it,
+        /// or an inflection the reader's own dictionary prints (`FormTable`, ADR-0051).
         case inferred
         /// An irregular form the grammar did **not** settle, read as whichever meaning is usual.
         ///
@@ -140,13 +141,17 @@ public enum Lemmatizer {
         // `occurrence` checks word boundaries, and answers nil where the sentence is ambiguous,
         // which is what this function's own comment already promised.
         guard let target = occurrence(of: word, in: sentence, at: range) else { return nil }
-        let tag = tagger.tag(at: target.lowerBound, unit: .word, scheme: .lexicalClass).0
+        return partOfSpeech(for: tagger.tag(at: target.lowerBound, unit: .word, scheme: .lexicalClass).0)
+    }
+
+    /// The dictionaries' word for a lexical class, or nil for one they have no block for.
+    private static func partOfSpeech(for tag: NLTag?) -> String? {
         switch tag {
-        case .noun, .personalName, .placeName, .organizationName: return "noun"
-        case .verb: return "verb"
-        case .adjective: return "adjective"
-        case .adverb: return "adverb"
-        default: return nil
+        case .noun, .personalName, .placeName, .organizationName: "noun"
+        case .verb: "verb"
+        case .adjective: "adjective"
+        case .adverb: "adverb"
+        default: nil
         }
     }
 
@@ -172,15 +177,23 @@ public enum Lemmatizer {
     /// which occurrence was meant is not guessed. A word the tagger has no lemma for is its own
     /// lemma; it is never dropped.
     public static func lemma(of word: String, in sentence: String?, at range: NSRange? = nil) -> Lemma {
+        lemma(of: word, in: sentence, at: range, using: FormAuthority.shared.table)
+    }
+
+    /// `lemma(of:in:at:)` against a table the caller names — or none, for the tagger alone. The one a test
+    /// uses, so that no result depends on whatever the process-wide authority happens to hold.
+    public static func lemma(of word: String, in sentence: String?, at range: NSRange? = nil,
+                             using table: FormTable?) -> Lemma {
         let term = word.trimmingCharacters(in: .whitespacesAndNewlines)
         if let sentence, let span = occurrence(of: term, in: sentence, at: range),
-           let lemma = lemmatize(span, of: sentence) {
+           let lemma = lemmatize(span, of: sentence, using: table) {
             return lemma
         }
         // On its own, a phrase selected across a line break is still one phrase: tagged with the
         // break, its words read as separate paragraphs and get no lemma.
         let phrase = term.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return lemmatize(phrase.startIndex..<phrase.endIndex, of: phrase) ?? Lemma(text: canonical(phrase), basis: .surface)
+        return lemmatize(phrase.startIndex..<phrase.endIndex, of: phrase, using: table)
+            ?? Lemma(text: canonical(phrase), basis: .surface)
     }
 
     /// Every word of `sentence` in lemma form, with the UTF-16 range it occupies.
@@ -197,9 +210,13 @@ public enum Lemmatizer {
     /// Punctuation and whitespace are not words and are absent; the ranges of the words around them are
     /// unaffected, which is what makes dropping them safe.
     public static func lemmas(in sentence: String) -> [LemmatizedWord] {
+        lemmas(in: sentence, using: FormAuthority.shared.table)
+    }
+
+    public static func lemmas(in sentence: String, using table: FormTable?) -> [LemmatizedWord] {
         let tokens = tag(sentence)
         return tokens.indices.map { index in
-            LemmatizedWord(lemma: resolve(index, in: tokens),
+            LemmatizedWord(lemma: resolve(index, in: tokens, using: table),
                            range: NSRange(tokens[index].range, in: sentence))
         }
     }
@@ -220,7 +237,11 @@ public enum Lemmatizer {
     /// - **Punctuation at an edge is not part of the word.** `account.` at the end of a sentence would match
     ///   no key; inside a word it is kept, because `one's` and `24-hour` are words.
     public static func forms(in sentence: String) -> [WordForms] {
-        let tagged = lemmas(in: sentence)
+        forms(in: sentence, using: FormAuthority.shared.table)
+    }
+
+    public static func forms(in sentence: String, using table: FormTable?) -> [WordForms] {
+        let tagged = lemmas(in: sentence, using: table)
         let text = sentence as NSString
         var out: [WordForms] = []
         var cursor = 0
@@ -328,17 +349,22 @@ public enum Lemmatizer {
     /// characters are all letters and the script has no spaces, so it grew from 屹立 across
     /// 他屹立在山顶上 and stopped only at the full stop.
     ///
-    /// The rest of a phrase is matched on the token's own text, not on its lemma. A phrasal verb's
-    /// particle — *over*, *up*, *off* — does not inflect, so this is right for the cases that exist
-    /// and costs no tagger. Where it fails it marks the anchor and stops: a partly marked phrase is
-    /// honest, a wrongly marked one is not.
+    /// The rest of a phrase is matched on the token's own text first. A phrasal verb's particle — *over*,
+    /// *up*, *off* — does not inflect, so that is right for the cases that exist and costs no tagger.
     ///
-    /// **The case it gives up on**, named so nobody has to rediscover it: a lemma whose later words
-    /// inflect. Lemma *prepare mind* read as "prepared minds" marks `prepared` and leaves `minds`,
-    /// because `mind` and `minds` are different spellings. Lemmatising each candidate token would
-    /// catch it, at a tagger per card for a shape English phrasal verbs do not have.
+    /// **Then on the token's lemma, only where its own text found nothing.** A lemma whose later words inflect —
+    /// *prepare mind* read as "prepared minds" — has a `minds` that is not `mind`, and marking `prepared` alone
+    /// left the phrase half drawn. The sentence is lemmatised once, on that first miss and never for a phrase
+    /// whose words all matched, so the particle case still costs no tagger. Where neither finds the word it
+    /// marks what it has and stops: a partly marked phrase is honest, a wrongly marked one is not.
     public static func parts(
         of lemma: String, surface: String, in sentence: String, at range: NSRange?
+    ) -> [NSRange] {
+        parts(of: lemma, surface: surface, in: sentence, at: range, using: FormAuthority.shared.table)
+    }
+
+    static func parts(
+        of lemma: String, surface: String, in sentence: String, at range: NSRange?, using table: FormTable?
     ) -> [NSRange] {
         guard let range, let captured = Range(range, in: sentence) else { return [] }
         let tokens = wordRanges(in: sentence)
@@ -372,15 +398,39 @@ public enum Lemmatizer {
               capturedText.range(of: parts[covered], options: .caseInsensitive) != nil {
             covered += 1
         }
+        // Built on the first word that needs it, and kept for the rest of the phrase.
+        var tagged: [LemmatizedWord]?
         for part in parts.dropFirst(covered) {
             let window = tokens[searchFrom...].prefix(phraseLookahead)
-            guard let hit = window.firstIndex(where: {
-                sentence[$0].compare(part, options: .caseInsensitive) == .orderedSame
-            }) else { break }
+            let wanted = canonical(part)
+            let written = window.firstIndex { sentence[$0].compare(part, options: .caseInsensitive) == .orderedSame }
+            let hit = written ?? window.firstIndex { token in
+                let words = tagged ?? lemmas(in: sentence, using: table)
+                tagged = words
+                return dictionaryForm(of: token, among: words, in: sentence) == wanted
+            }
+            guard let hit else { break }
             marked.append(tokens[hit])
             searchFrom = hit + 1
         }
         return marked.map { NSRange($0, in: sentence) }
+    }
+
+    /// The lemma of the tagger word that **is** `token` — the same range, not merely an overlapping one.
+    ///
+    /// A tagger word that is wider than the token (it merged `well-known`) holds the lemma of something else, and
+    /// marking the token for it would draw the wrong word; narrower or split, there is no one lemma. `tagged` is in
+    /// document order and its words do not overlap, so the first word that reaches the token is found by bisection
+    /// and, if its range is the token's, it is the only one.
+    static func dictionaryForm(of token: Range<String.Index>, among tagged: [LemmatizedWord], in sentence: String) -> String? {
+        let target = NSRange(token, in: sentence)
+        var low = 0, high = tagged.count
+        while low < high {
+            let middle = (low + high) / 2
+            if NSMaxRange(tagged[middle].range) <= target.location { low = middle + 1 } else { high = middle }
+        }
+        guard low < tagged.count, tagged[low].range == target else { return nil }
+        return tagged[low].lemma.text
     }
 
     /// How far past the anchor the rest of a phrase may sit. "He took the whole thing over" is
@@ -414,7 +464,7 @@ public enum Lemmatizer {
     /// The lemma of the words in `span`, tagged in the context of all of `text`. Each word is
     /// replaced by its lemma, so "gave up" becomes "give up". Nil when the tagger's words do not
     /// line up with `span` — then slicing by them is not safe.
-    private static func lemmatize(_ span: Range<String.Index>, of text: String) -> Lemma? {
+    private static func lemmatize(_ span: Range<String.Index>, of text: String, using table: FormTable?) -> Lemma? {
         let tokens = tag(text)
         let inside = tokens.indices.filter { tokens[$0].range.overlaps(span) }
         guard !inside.isEmpty, inside.allSatisfy({
@@ -427,7 +477,7 @@ public enum Lemmatizer {
             if position > 0 {
                 lemma += separator(text[tokens[inside[position - 1]].range.upperBound..<tokens[index].range.lowerBound])
             }
-            let word = resolve(index, in: tokens)
+            let word = resolve(index, in: tokens, using: table)
             lemma += word.text
             basis = max(basis, word.basis)
         }
@@ -445,7 +495,7 @@ public enum Lemmatizer {
             let lemma = tagger.tag(at: range.lowerBound, unit: .word, scheme: .lemma).0?.rawValue
             tokens.append(LemmaToken(
                 range: range, word: String(text[range]).lowercased(), lemma: lemma?.lowercased(),
-                lexicalClass: lexicalClass))
+                lexicalClass: lexicalClass, hasCapital: text[range].contains(where: \.isUppercase)))
             return true
         }
         return tokens
@@ -461,7 +511,7 @@ public enum Lemmatizer {
         return String(gap)
     }
 
-    private static func resolve(_ index: Int, in tokens: [LemmaToken]) -> Lemma {
+    private static func resolve(_ index: Int, in tokens: [LemmaToken], using table: FormTable?) -> Lemma {
         let token = tokens[index]
         // **Before the nil guard, because "no lemma" is one of the answers being corrected.** Four
         // of the 189 forms probed answer nothing at all — `swore`, `sprang`, `leant`, `learnt` —
@@ -470,6 +520,21 @@ public enum Lemmatizer {
         // the correction could never see them.
         if token.lexicalClass == .verb, let corrected = TaggerCorrection.table[token.word] {
             return Lemma(text: corrected, basis: .inferred)
+        }
+        // **The dictionary's own inflection list, asked after the tagger and able only to add** (ADR-0051): it
+        // fills the gap where the tagger answered nothing, and refuses a word it contradicts. Below the hand
+        // corrections, which were measured one form at a time and are the more specific, and above the
+        // grammar table, which is only ever reached for a form that is also a headword — and the table never
+        // decides those.
+        switch table?.judge(token.word, tagged: token.lemma, partOfSpeech: partOfSpeech(for: token.lexicalClass),
+                              // A capital anywhere is a name, an abbreviation or a brand — `Barnes`, `BWRs`, `iPhones` —
+                              // whatever the tagger made of it, so none is detached. A sentence's first word loses
+                              // a rare plural to this, which is the cheaper error: a wrong lemma is never confident.
+                              isName: [.personalName, .placeName, .organizationName].contains(token.lexicalClass)
+                                  || token.hasCapital) {
+        case .lemma(let found)?: return Lemma(text: found, basis: .inferred)
+        case .unresolved?: return Lemma(text: token.word, basis: .ambiguous)
+        case .keep?, nil: break
         }
         guard let tagged = token.lemma, !tagged.isEmpty else { return Lemma(text: token.word, basis: .surface) }
         // **A lemma the tagger got wrong, which the table above cannot reach.** `AmbiguousPastForm`
@@ -492,6 +557,8 @@ private struct LemmaToken {
     let word: String
     let lemma: String?
     let lexicalClass: NLTag?
+    /// Whether the word was written with any capital, which `word` — lowercased — no longer says.
+    let hasCapital: Bool
 }
 
 /// Forms NLTagger resolves to the **wrong** word, corrected by surface form.
