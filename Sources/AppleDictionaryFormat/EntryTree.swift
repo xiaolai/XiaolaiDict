@@ -190,6 +190,8 @@ public struct EntryTree: Sendable {
     /// is what stops `xmlns:d="urn:something-else"` being read as Apple's: with a default of `d` a document
     /// that explicitly binds `d` elsewhere had its `d:def` attributes accepted anyway.
     public let prefix: String?
+    /// Every prefix the document bound to Apple's namespace, the conventional `d` first. `prefix` is the first.
+    let appleAliases: [String]
     /// Prefixes this document bound to some *other* namespace. A `d:def` under one of these is not Apple's.
     let foreignPrefixes: Set<String>
     /// Whether the document bound its **default** namespace to something that is not Apple's.
@@ -209,6 +211,13 @@ public struct EntryTree: Sendable {
     /// declares the namespace, but a record that omits the declaration is still read — while one that binds
     /// `d` to something else is not.
     public func dictionaryAttribute(_ local: String, of node: EntryNode) -> String? {
+        // **Every alias the document bound to Apple's namespace**, not only the first: a record binding `d` and
+        // `dict` both may carry its `title` under the second.
+        // A prefix the document **also** bound to another vocabulary somewhere is ambiguous, and is not taken as
+        // Apple's: that is the refusal `applePrefix` has always made for the first alias, kept for every one.
+        for alias in appleAliases where !foreignPrefixes.contains(alias) {
+            if let value = node.attributes["\(alias):\(local)"] { return value }
+        }
         let prefix = applePrefix
         if prefix.isEmpty { return node.attributes[local] }
         return node.attributes["\(prefix):\(local)"] ?? node.attributes[local]
@@ -248,6 +257,59 @@ public struct EntryTree: Sendable {
         return String(parts[0]) == applePrefix
     }
 
+    /// What one start tag declares about namespaces: the prefixes bound to Apple's — **in a fixed order, the
+    /// conventional `d` first** — those bound to anything else, and whether the default namespace is someone
+    /// else's. One reading, shared by the whole-tree parse and the opening-tag parse, so the two cannot drift.
+    static func namespaceBindings(in attributes: [String: String])
+        -> (apple: [String], foreign: Set<String>, foreignDefault: Bool) {
+        var apple: [String] = []
+        var foreign = Set<String>()
+        for (name, value) in attributes where name.hasPrefix("xmlns:") {
+            let bound = String(name.dropFirst("xmlns:".count))
+            if value == namespace { apple.append(bound) } else { foreign.insert(bound) }
+        }
+        apple.sort { lhs, rhs in
+            if lhs == conventionalPrefix || rhs == conventionalPrefix { return lhs == conventionalPrefix && rhs != conventionalPrefix }
+            return lhs < rhs
+        }
+        let foreignDefault = attributes["xmlns"].map { !$0.isEmpty && $0 != namespace } ?? false
+        return (apple, foreign, foreignDefault)
+    }
+
+    /// The record's `d:title` — the name the entry is filed under — read from its **opening tag alone**.
+    ///
+    /// **For the caller that needs every entry's name and nothing inside it.** `parse` builds the whole tree,
+    /// which across a 111,606-entry body is the cost of reading it; this stops the parser after the first
+    /// element, so it is still a parse — the namespace prefix is resolved from the declaration and a
+    /// `d:title` bound to another vocabulary is not Apple's — and does not scan markup for an attribute.
+    /// Nil where the record declares none, or does not begin with an element at all.
+    public static func title(of xhtml: String) -> String? {
+        let reader = OpeningTag()
+        let parser = XMLParser(data: Data(xhtml.utf8))
+        parser.shouldProcessNamespaces = false
+        parser.delegate = reader
+        // Aborted by the delegate once it has the first element, which `parse()` reports as a failure.
+        _ = parser.parse()
+        return reader.title
+    }
+
+    /// Reads one element's attributes and stops the parser.
+    private final class OpeningTag: NSObject, XMLParserDelegate {
+        var title: String?
+
+        func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?,
+                    qualifiedName: String?, attributes: [String: String] = [:]) {
+            // The same resolution `applePrefix` makes for a whole document, from the same reading of the tag, and
+            // **every alias**: a tag binding both `d` and `dict` to Apple's namespace may carry the title under
+            // either, and taking whichever came first out of a dictionary's unordered keys lost it half the time.
+            let bindings = EntryTree.namespaceBindings(in: attributes)
+            let prefixes = bindings.apple.isEmpty && !bindings.foreign.contains(EntryTree.conventionalPrefix)
+                ? [EntryTree.conventionalPrefix] : bindings.apple
+            title = prefixes.lazy.compactMap { attributes["\($0):title"] }.first ?? attributes["title"]
+            parser.abortParsing()
+        }
+    }
+
     /// The tree, or nil when the record is not well-formed XML.
     public static func parse(_ xhtml: String) -> EntryTree? {
         let builder = Builder()
@@ -260,7 +322,7 @@ public struct EntryTree: Sendable {
         // `ab` — the entity's text simply gone. A definition quietly missing a word still hashes to a key,
         // so this is the shape of silent loss that gets persisted and never noticed.
         guard !builder.sawUnexpandedEntity else { return nil }
-        return EntryTree(root: root, prefix: builder.appleNamespacePrefix,
+        return EntryTree(root: root, prefix: builder.appleNamespacePrefix, appleAliases: builder.appleAliases,
                          foreignPrefixes: builder.foreignPrefixes,
                          hasForeignDefaultNamespace: builder.hasForeignDefaultNamespace)
     }
@@ -280,6 +342,7 @@ public struct EntryTree: Sendable {
         var finished: EntryNode?
         /// The prefix this document bound to Apple's namespace, or nil if no declaration named it.
         var appleNamespacePrefix: String?
+        var appleAliases: [String] = []
         /// Prefixes bound to anything else, so a `d:` that belongs to another vocabulary is not read as
         /// Apple's.
         var foreignPrefixes: Set<String> = []
@@ -292,17 +355,11 @@ public struct EntryTree: Sendable {
             // The prefix bound to Apple's namespace, read from the declaration rather than assumed. **The
             // first declaration wins**: a child rebinding the prefix used to overwrite it document-wide, so
             // an earlier sibling's valid `d:def` became invisible.
-            if let declared = attributes["xmlns"], declared != EntryTree.namespace, !declared.isEmpty {
-                hasForeignDefaultNamespace = true
-            }
-            for (name, value) in attributes where name.hasPrefix("xmlns:") {
-                let bound = String(name.dropFirst("xmlns:".count))
-                if value == EntryTree.namespace {
-                    if appleNamespacePrefix == nil { appleNamespacePrefix = bound }
-                } else {
-                    foreignPrefixes.insert(bound)
-                }
-            }
+            let bindings = EntryTree.namespaceBindings(in: attributes)
+            if bindings.foreignDefault { hasForeignDefaultNamespace = true }
+            if appleNamespacePrefix == nil { appleNamespacePrefix = bindings.apple.first }
+            for alias in bindings.apple where !appleAliases.contains(alias) { appleAliases.append(alias) }
+            foreignPrefixes.formUnion(bindings.foreign)
             stack.append(Open(name: element, attributes: attributes))
         }
 

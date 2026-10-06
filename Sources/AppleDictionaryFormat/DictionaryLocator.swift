@@ -82,6 +82,17 @@ public struct DictionaryBundle: Sendable, Equatable {
     /// pinyin — while NOAD sitting right beside it holds 104,009.
     public var indexesEnglish: Bool { languages.contains(where: \.indexesEnglish) }
 
+    /// Whether this is a dictionary of English **in English** and of nothing else — NOAD, ODE and the two
+    /// thesauri here — which is the only kind whose printed inflections mean what a lemmatiser needs.
+    ///
+    /// **Every declared language, not any.** A bilingual declares an English index too, and its inflection
+    /// groups are another language's: of Oxford German's 833,680 key groups, 801,182 are a German form filed
+    /// under a German headword. An undeclared bundle is not English monolingual, because guessing would feed a
+    /// lemma table from a language nobody checked.
+    public var isEnglishMonolingual: Bool {
+        !languages.isEmpty && languages.allSatisfy { $0.indexesEnglish && $0.explainsInEnglish }
+    }
+
     public func serves(reader: String) -> Bool {
         languages.contains { $0.indexesEnglish && ($0.explainsInEnglish || DeclaredLanguage.same($0.explains, reader)) }
     }
