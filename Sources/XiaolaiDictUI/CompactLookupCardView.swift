@@ -46,7 +46,11 @@ struct CompactLookupSummary: Equatable {
     struct MeaningGroup: Equatable {
         let partOfSpeech: String?
         var labels: [String]
-        var text: String { labels.joined(separator: "；") }
+        /// A fullwidth semicolon where any gloss is CJK, which is what a Chinese dictionary's glosses are written with, and
+        /// a plain one followed by a space otherwise — a fullwidth mark between two English definitions reads as a typo.
+        var text: String {
+            labels.joined(separator: labels.contains(where: LineJoiner.isCJKText) ? "；" : "; ")
+        }
     }
 
     private struct Meaning: Hashable {

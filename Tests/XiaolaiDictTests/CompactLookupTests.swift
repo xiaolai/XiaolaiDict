@@ -43,6 +43,18 @@ struct CompactLookupTests {
         #expect(original.senseToKeep == nil)
     }
 
+    /// **The separator belongs to the script of the meanings, not to the app.** A fullwidth semicolon between two
+    /// English definitions reads as a typo; between two Chinese glosses it is the right mark.
+    @Test func meaningsAreJoinedWithTheSemicolonTheirScriptUses() {
+        let english = card(.undecided(reason: nil), alternatives: [sense("a", "to say no"), sense("b", "to turn down")])
+        #expect(CompactLookupSummary(card: english).groups.first?.text == "to say no; to turn down")
+        let chinese = card(.undecided(reason: nil), alternatives: [sense("a", "拒绝"), sense("b", "拒收")])
+        #expect(CompactLookupSummary(card: chinese).groups.first?.text == "拒绝；拒收")
+        // One CJK gloss among others is enough: the line is set in that script.
+        let mixed = card(.undecided(reason: nil), alternatives: [sense("a", "拒绝"), sense("b", "to turn down")])
+        #expect(CompactLookupSummary(card: mixed).groups.first?.text == "拒绝；to turn down")
+    }
+
     @Test func guessesKeepTheirCaveatInTheQuickPreviewAndCopiedText() {
         let guess = sense("guess", "拒绝", standing: .proposed)
         for answer in [LookupCard.Answer.sense(guess), .ambiguous(guess, among: 2)] {

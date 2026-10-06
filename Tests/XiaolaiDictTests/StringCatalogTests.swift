@@ -106,6 +106,10 @@ struct StringCatalogTests {
         "Serena": "a voice's name, for the reason given under Ava",
         "transitive verb": "a dictionary part-of-speech identifier mapped to the compact label v.",
         "intransitive verb": "a dictionary part-of-speech identifier mapped to the compact label v.",
+        "; ":
+            "the mark between two meanings in one row of the compact preview, drawn with `Text(verbatim:)`. "
+            + "It is punctuation, not a sentence, and which mark it is follows the script of the meanings "
+            + "(`MeaningGroup.text`), not the reader's language, so a translator has nothing to decide",
     ]
 
     /// Every literal in a file, with what preceded it, and continuations rejoined.
