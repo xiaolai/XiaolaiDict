@@ -1,3 +1,4 @@
+import CaptureModel
 import Foundation
 import ReviewKit
 import Testing

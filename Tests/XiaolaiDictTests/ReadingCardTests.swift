@@ -1,5 +1,7 @@
 import AppKit
+import CaptureModel
 import CoreGraphics
+import DictionaryModel
 import Foundation
 import SwiftUI
 import Testing

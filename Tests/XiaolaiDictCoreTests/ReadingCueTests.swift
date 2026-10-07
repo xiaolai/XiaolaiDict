@@ -1,3 +1,5 @@
+import CaptureModel
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 import Testing

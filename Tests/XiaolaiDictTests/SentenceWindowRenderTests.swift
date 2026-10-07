@@ -1,4 +1,5 @@
 import AppKit
+import CaptureModel
 import CoreGraphics
 import SwiftUI
 import Testing

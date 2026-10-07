@@ -1,3 +1,4 @@
+import CaptureModel
 import DictionaryModel
 import Synchronization
 import XiaolaiDictCore

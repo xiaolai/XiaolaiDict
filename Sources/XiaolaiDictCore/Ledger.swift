@@ -1,23 +1,9 @@
+import CaptureModel
 import DictionaryModel
 import Foundation
 import SQLite3
 import XiaolaiDictBase
 import os
-
-/// Whether the dictionaries had the word. A miss is recorded too — usually a typo or a stray
-/// selection, which later triage can tell from a real gap — but it does not rank in the study list.
-public enum LookupResult: String, Sendable, CaseIterable {
-    case found
-    case notFound
-    case pending
-}
-
-/// What answered a lookup: the dictionary service with its rich entries, or — when it could not —
-/// the public API's plain text. A degraded answer stays marked as one after it is stored.
-public enum AnswerSource: String, Sendable, CaseIterable {
-    case dictionaryService
-    case publicFallback
-}
 
 /// One lookup, as the ledger stores it (design note §9).
 public struct LookupRecord: Equatable, Sendable {

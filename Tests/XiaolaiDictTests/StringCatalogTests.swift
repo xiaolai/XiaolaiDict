@@ -338,6 +338,8 @@ struct StringCatalogTests {
         // Added 2026-10-04 with the target. A phone or a watch would draw its own surface, so nothing
         // a reader reads may be written here (ADR-0047).
         "Sources/ReviewKit",
+        // Added 2026-10-08 with the target, the first of the core's split (plan-macos-modularisation, P1).
+        "Sources/CaptureModel",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there

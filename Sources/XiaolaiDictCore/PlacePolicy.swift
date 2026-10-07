@@ -1,3 +1,5 @@
+import CaptureModel
+
 /// Which apps' page and file XiaolaiDict is willing to record.
 ///
 /// A URL or a file path is considerably more sensitive than the word it came with: the probe that

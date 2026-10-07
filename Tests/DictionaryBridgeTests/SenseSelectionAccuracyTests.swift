@@ -1,3 +1,4 @@
+import CaptureModel
 @testable import DictionaryBridge
 import DictionaryModel
 import Foundation

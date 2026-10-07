@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 
 /// What the panel says about the sense, once something is known about it.

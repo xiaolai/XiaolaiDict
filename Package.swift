@@ -65,11 +65,16 @@ let package = Package(
         // is what holds the boundary (ADR-0047).
         .target(name: "ReviewKit"),
 
+        // How a word was captured and where it was read: the two values the study ledger and the capture
+        // policy both speak and neither owns (`CaptureQuality`, `ReadingPlace`). **Depends on nothing**, and
+        // binds Foundation alone — `ReadingPlace` percent-decodes a file name.
+        .target(name: "CaptureModel"),
+
         // The reader's side: the lookup ledger, the sense ladder, reading history, hover policy,
         // screen geometry. No AppKit and no private API — the part that has to be exhaustively
         // testable. Not portable, and not meant to be: it binds CoreGraphics, NaturalLanguage,
         // SQLite3, CoreServices and FoundationModels.
-        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit"]),
+        .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel"]),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
         // by the app: its failure mode is a segfault, and a crash must take down the service, not
@@ -105,8 +110,8 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
@@ -129,14 +134,14 @@ let package = Package(
         .testTarget(
             name: "PhraseLookupTests",
             dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.
         .testTarget(
             name: "DictionaryBridgeTests",
-            dependencies: ["DictionaryModel", "ModelKit", "XiaolaiDictCore",
+            dependencies: ["DictionaryModel", "ModelKit", "CaptureModel", "XiaolaiDictCore",
                            "DictionaryBridge", "AppleDictionaryFormat", "PhraseLookup"]),
         .testTarget(name: "LocalModelTests", dependencies: ["ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
         // ReviewKit alone, and no fixture target: what passes here passes without the Mac's modules.

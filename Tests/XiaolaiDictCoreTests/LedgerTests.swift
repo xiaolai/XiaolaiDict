@@ -1,3 +1,5 @@
+import CaptureModel
+import DictionaryModel
 import Foundation
 @testable import XiaolaiDictCore
 import SQLite3

@@ -1,3 +1,4 @@
+import CaptureModel
 import ModelKit
 import os
 import XiaolaiDictBase

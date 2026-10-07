@@ -1,3 +1,4 @@
+import CaptureModel
 @testable import DictionaryModel
 import Foundation
 @testable import XiaolaiDictCore

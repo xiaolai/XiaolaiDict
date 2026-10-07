@@ -1,3 +1,5 @@
+import DictionaryModel
+
 /// One labelled case: a sentence the reader might be reading, and the sense of it NOAD actually
 /// means. The keys are NOAD's own, read out of the live entries.
 public struct LabelledCase: Sendable {

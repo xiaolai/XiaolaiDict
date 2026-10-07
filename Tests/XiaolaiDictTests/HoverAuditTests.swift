@@ -1,4 +1,5 @@
 import AppKit
+import CaptureModel
 @testable import XiaolaiDict
 import DictionaryModel
 import Synchronization

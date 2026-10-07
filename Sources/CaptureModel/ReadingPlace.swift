@@ -1,3 +1,5 @@
+import Foundation
+
 /// Where a word was read, as precisely as the app could say.
 ///
 /// Three separate coordinates, not one. **Most apps can say nothing at all** — 12 of the 17 running

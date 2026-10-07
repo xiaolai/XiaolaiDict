@@ -86,6 +86,11 @@ struct ModuleBoundaryTests {
         // day. **Foundation and nothing else, and no sibling either** — `reviewKitDependsOnNothing`
         // holds the second half, because this table filters siblings out (ADR-0047).
         "ReviewKit": ["Foundation"],
+        // How a word was captured and where it was read — `CaptureQuality` and `ReadingPlace`, the two values
+        // the study ledger and the capture policy share. Foundation for `ReadingPlace`'s percent-decoding and
+        // `range(of:)`: without it the module does not compile, measured — it had compiled in the core only
+        // because its siblings imported Foundation.
+        "CaptureModel": ["Foundation"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
@@ -538,7 +543,7 @@ struct ModuleBoundaryTests {
         // `Carbon.HIToolbox` is permitted as the module the compiler reports it as.
         #expect(try Self.verdict(on: "XiaolaiDictCore", compiled: [
             "Foundation", "CoreGraphics", "NaturalLanguage", "CoreServices", "SQLite3", "FoundationModels",
-            "Carbon", "os", "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit",
+            "Carbon", "os", "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel",
         ]).isEmpty)
         let service = try #require(Self.dependencyMap()["XiaolaiDictService"])
         #expect(try Self.verdict(on: "XiaolaiDictService", compiled: service.union(["Foundation", "UserNotifications"]))

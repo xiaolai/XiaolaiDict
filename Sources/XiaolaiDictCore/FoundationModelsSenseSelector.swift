@@ -1,3 +1,4 @@
+import CaptureModel
 import FoundationModels
 import Foundation
 import ModelKit

@@ -1,4 +1,5 @@
 import AppKit
+import CaptureModel
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 import DictionaryModel

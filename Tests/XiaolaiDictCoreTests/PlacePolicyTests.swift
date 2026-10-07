@@ -1,3 +1,4 @@
+import CaptureModel
 import XiaolaiDictCore
 import Testing
 

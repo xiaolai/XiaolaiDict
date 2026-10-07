@@ -1,4 +1,5 @@
 import AppKit
+import CaptureModel
 import Foundation
 import Testing
 import XiaolaiDictCore
