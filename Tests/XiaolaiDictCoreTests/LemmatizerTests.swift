@@ -1,4 +1,3 @@
-import CaptureModel
 @testable import DictionaryModel
 import Foundation
 @testable import XiaolaiDictCore
@@ -390,18 +389,6 @@ struct LemmaPartsTests {
             of: "take", surface: "took it over", in: sentence,
             at: (sentence as NSString).range(of: "took"))
         #expect(parts.map { (sentence as NSString).substring(with: $0) } == ["took", "it", "over"])
-    }
-
-    /// `ReadingEntry.markedRanges` is an adapter and nothing more. This is what says so.
-    @Test func aCardAsksTheLemmatizerRatherThanRepeatingIt() {
-        let sentence = "He took it over."
-        let entry = ReadingEntry(
-            id: 1, lemma: "take over", surface: "took", sentence: sentence,
-            sentenceRange: (sentence as NSString).range(of: "took"),
-            place: ReadingPlace(name: "TextEdit"), at: .distantPast, result: .found, quality: nil)
-        #expect(entry.markedRanges == Lemmatizer.parts(
-            of: "take over", surface: "took", in: sentence,
-            at: (sentence as NSString).range(of: "took")))
     }
 
     /// One word looked up in a sentence that happens to contain a phrase is still one word.

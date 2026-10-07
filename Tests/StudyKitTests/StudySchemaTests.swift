@@ -4,7 +4,7 @@ import Foundation
 import ReviewKit
 import SQLite3
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 import XiaolaiDictTestSupport
 
 /// **Schema 8: the study system's durable entities, and nothing that grades anything yet.**

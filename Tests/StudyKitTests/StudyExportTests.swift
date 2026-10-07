@@ -2,7 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **What leaves this Mac, and what does not.** WI-007's D03/D04.
 ///

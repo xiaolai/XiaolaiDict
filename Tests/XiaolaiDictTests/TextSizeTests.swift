@@ -2,6 +2,7 @@ import AppKit
 import CaptureModel
 import CoreGraphics
 import Foundation
+import StudyKit
 import SwiftUI
 import Testing
 

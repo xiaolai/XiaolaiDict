@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import StudyKit
 import SwiftUI
 import XiaolaiDictCore
 import XiaolaiDictUI

@@ -1,3 +1,4 @@
+import StudyKit
 import XiaolaiDictCore
 import SwiftUI
 

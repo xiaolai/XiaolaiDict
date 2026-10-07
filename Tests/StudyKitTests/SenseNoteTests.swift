@@ -1,6 +1,6 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
+import StudyKit
 import Testing
 
 /// What a card may say about the sense the reader met.

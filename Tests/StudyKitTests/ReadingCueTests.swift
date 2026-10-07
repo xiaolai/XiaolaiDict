@@ -1,7 +1,7 @@
 import CaptureModel
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
+import StudyKit
 import Testing
 
 /// What a card may say about the context stored beside a word.

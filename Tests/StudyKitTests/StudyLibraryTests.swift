@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **The library: finding a card months later, and changing it without losing anything.** WI-005.
 ///

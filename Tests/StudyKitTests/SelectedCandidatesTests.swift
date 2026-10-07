@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **A Selected sitting against a real ledger** (review-module-plan §8.2, WI-3b). `SelectedSittingTests`
 /// proves the planner's rules on values; these prove the ledger hands it the right set, that each

@@ -1,6 +1,7 @@
 import AppKit
 import CaptureModel
 import DictionaryModel
+import StudyKit
 import XiaolaiDictCore
 
 /// One lookup, as the panel shows it — a container that fills in rather than a payload that is

@@ -1,5 +1,6 @@
 import CaptureModel
 import DictionaryModel
+import StudyKit
 import XiaolaiDictCore
 import SwiftUI
 

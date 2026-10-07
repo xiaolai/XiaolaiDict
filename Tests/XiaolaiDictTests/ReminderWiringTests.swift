@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import ReviewKit
+import StudyKit
 import Testing
 import UserNotifications
 import XiaolaiDictCore

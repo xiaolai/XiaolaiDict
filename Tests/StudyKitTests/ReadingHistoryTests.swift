@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 private func calendar(_ zone: String) -> Calendar {
     var calendar = Calendar(identifier: .gregorian)

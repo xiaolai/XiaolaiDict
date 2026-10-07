@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **The one read a Review sitting is planned from, and the SQL queue the plan is held to**
 /// (review-module-plan §8.1, WI-2). `SittingPlannerTests` proves the planner's rules on values; these

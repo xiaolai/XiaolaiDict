@@ -3,6 +3,7 @@ import CaptureModel
 import CoreGraphics
 import DictionaryModel
 import Foundation
+@testable import StudyKit
 @testable import XiaolaiDictCore
 import Testing
 

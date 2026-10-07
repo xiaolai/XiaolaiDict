@@ -1,4 +1,5 @@
 import AppKit
+import StudyKit
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI

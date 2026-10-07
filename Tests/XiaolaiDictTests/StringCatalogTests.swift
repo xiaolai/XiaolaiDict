@@ -340,6 +340,8 @@ struct StringCatalogTests {
         "Sources/ReviewKit",
         // Added 2026-10-08 with the target, the first of the core's split (plan-macos-modularisation, P1).
         "Sources/CaptureModel",
+        // Added 2026-10-08 with the target: the study ledger, out of the core (P2).
+        "Sources/StudyKit",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there

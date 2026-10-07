@@ -1,6 +1,7 @@
 import CaptureModel
 import DictionaryModel
 import Foundation
+import StudyKit
 import Testing
 import XiaolaiDictBase
 import XiaolaiDictCore

@@ -1,6 +1,7 @@
 
 import DictionaryModel
 import ModelKit
+import StudyKit
 import XiaolaiDictBase
 import XiaolaiDictCore
 import SwiftUI

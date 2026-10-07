@@ -2,7 +2,7 @@ import DictionaryModel
 import Foundation
 import Testing
 import XiaolaiDictTestSupport
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 struct LegacyKeepBackfillTests {
     let now = Date(timeIntervalSince1970: 1_800_000_000)

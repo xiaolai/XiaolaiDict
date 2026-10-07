@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **What stands between a saved meaning and being asked it** — review-module-plan §8.3, WI-4.
 ///

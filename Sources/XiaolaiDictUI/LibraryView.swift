@@ -1,5 +1,6 @@
 import Foundation
 import ReviewKit
+import StudyKit
 import SwiftUI
 import XiaolaiDictCore
 

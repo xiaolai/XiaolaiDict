@@ -1,4 +1,5 @@
 import DictionaryModel
+import StudyKit
 import XiaolaiDictCore
 
 /// What a fresh install still needs, read from live state every time it is asked.

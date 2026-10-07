@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **The ledger's own history, replayed by `integrity()`** (review-module-plan §7.2, WI-9b).
 ///

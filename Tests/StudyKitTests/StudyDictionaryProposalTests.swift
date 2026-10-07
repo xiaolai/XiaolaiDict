@@ -2,7 +2,7 @@ import DictionaryModel
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// The rule that decides what the setup checklist offers for a study dictionary.
 ///

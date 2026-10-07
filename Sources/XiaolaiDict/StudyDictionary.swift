@@ -1,3 +1,4 @@
+import StudyKit
 import XiaolaiDictUI
 import Foundation
 import Observation

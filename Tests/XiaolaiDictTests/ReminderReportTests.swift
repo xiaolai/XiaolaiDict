@@ -1,6 +1,7 @@
 import Foundation
 import ReviewKit
 import SQLite3
+import StudyKit
 import Testing
 @testable import XiaolaiDictCore
 import XiaolaiDictUI

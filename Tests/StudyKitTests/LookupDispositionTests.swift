@@ -2,7 +2,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 struct LookupDispositionTests {
     let now = Date(timeIntervalSince1970: 1_800_000_000)

@@ -1,4 +1,5 @@
 import AppKit
+import StudyKit
 import XiaolaiDictCore
 import Observation
 import SwiftUI

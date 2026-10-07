@@ -16,17 +16,17 @@ struct StudySurfaceTests {
     /// Where the study capabilities are declared. **Named as a list and checked against the disk**,
     /// because a rule that names a directory stops covering its subject the day that subject moves.
     private static let declaring = [
-        "Sources/XiaolaiDictCore/StudyLedger.swift",
-        "Sources/XiaolaiDictCore/StudyLibrary.swift",
-        "Sources/XiaolaiDictCore/StudyOrganisation.swift",
-        "Sources/XiaolaiDictCore/StudyReviewLedger.swift",
-        "Sources/XiaolaiDictCore/StudyExport.swift",
-        "Sources/XiaolaiDictCore/StudyRecovery.swift",
+        "Sources/StudyKit/StudyLedger.swift",
+        "Sources/StudyKit/StudyLibrary.swift",
+        "Sources/StudyKit/StudyOrganisation.swift",
+        "Sources/StudyKit/StudyReviewLedger.swift",
+        "Sources/StudyKit/StudyExport.swift",
+        "Sources/StudyKit/StudyRecovery.swift",
         // The allowance's denominator, which stayed with the ledger when the `StudyDay` struct moved.
-        "Sources/XiaolaiDictCore/StudyIntroductions.swift",
+        "Sources/StudyKit/StudyIntroductions.swift",
         // The ledger proper: reading history, recovery and erasure are study capabilities too,
         // and `history`, `encounters` and `integrity` are exactly the shape this looks for.
-        "Sources/XiaolaiDictCore/Ledger.swift",
+        "Sources/StudyKit/Ledger.swift",
         // The review logic, a target of its own since 2026-10-04 (ADR-0047).
         "Sources/ReviewKit/StudyDay.swift",
         "Sources/ReviewKit/StudyCards.swift",
@@ -41,7 +41,7 @@ struct StudySurfaceTests {
         "Sources/ReviewKit/OneDayIncrease.swift",
         // A card's history re-run, and the ledger's read that feeds it (WI-9b).
         "Sources/ReviewKit/Replay.swift",
-        "Sources/XiaolaiDictCore/StudyReplay.swift",
+        "Sources/StudyKit/StudyReplay.swift",
         // The reminder: what to plan, the log of what was asked for, and the reconciler (WI-6), wired by
         // the app's `ReminderCoordinator` (WI-7).
         "Sources/ReviewKit/ReminderSettings.swift",
@@ -50,21 +50,26 @@ struct StudySurfaceTests {
         "Sources/ReviewKit/ReminderReconciler.swift",
         // Keeping, the collection's own predicate, and what is in the way of a kept meaning — Review's
         // count by reason sits beside the count it replaced.
-        "Sources/XiaolaiDictCore/LookupKeeping.swift",
+        "Sources/StudyKit/LookupKeeping.swift",
         // R1b: a reading's word-only cards replaced by the meaning chosen on it, a reader option.
-        "Sources/XiaolaiDictCore/WordCardReplacement.swift",
+        "Sources/StudyKit/WordCardReplacement.swift",
         // A phrase the reader saved as a card from the lookup panel (ADR-0049).
-        "Sources/XiaolaiDictCore/PhraseCollection.swift",
+        "Sources/StudyKit/PhraseCollection.swift",
     ]
 
     /// Where a caller would be — **minus the declaring file's own module**, since a method called
     /// only by its own module is what this looks for, and never the tests, since a test is not a
-    /// surface. So a Core capability is wired by the app, the view layer, the dictionary service or
-    /// the instruments; a ReviewKit one by any of those or by Core, which became a legitimate
-    /// outside caller the day the review logic left it. `ReviewKit` is not a calling root: it
+    /// surface. So a StudyKit capability is wired by the app, the view layer, the dictionary service or
+    /// the instruments; a ReviewKit one by any of those or by StudyKit, which became a legitimate
+    /// outside caller the day the review logic left the core. `ReviewKit` is not a calling root: it
     /// depends on nothing, so it cannot call anything declared here but its own.
+    ///
+    /// **`StudyKit` replaced `XiaolaiDictCore` here when the ledger left the core (2026-10-08), and the
+    /// core is no root at all**: it depends on neither `StudyKit` nor `ReviewKit` any more, so it cannot
+    /// call a capability declared in either — kept, it could only vouch for one by a name that happens to
+    /// match. The unwired set and the exemption table were the same before and after the change.
     private static let calling = [
-        "Sources/XiaolaiDictCore", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
+        "Sources/StudyKit", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
         "Sources/XiaolaiDictService", "Tools",
     ]
 
@@ -72,7 +77,7 @@ struct StudySurfaceTests {
     /// that walked other files, or none of its own, would report every capability declared elsewhere as
     /// wired or unwired by accident.
     private static let callingCanaries: [String: [String]] = [
-        "Sources/XiaolaiDictCore": ["Ledger.swift"],
+        "Sources/StudyKit": ["Ledger.swift"],
         "Sources/XiaolaiDict": ["XiaolaiDictApp.swift"],
         "Sources/XiaolaiDictUI": ["LibraryView.swift"],
         "Sources/XiaolaiDictService": ["main.swift"],
@@ -325,14 +330,14 @@ struct StudySurfaceTests {
     /// The scan can fail. A name that is not declared anywhere must not be quietly absorbed.
     @Test func thescanSeesWhatItClaimsTo() throws {
         let declared = try Self.publicFunctions(in: String(
-            contentsOf: Self.root.appending(path: "Sources/XiaolaiDictCore/StudyIntroductions.swift"),
+            contentsOf: Self.root.appending(path: "Sources/StudyKit/StudyIntroductions.swift"),
             encoding: .utf8))
         #expect(declared.contains("introductions(since:"), "the scan read the file it thinks it did")
-        #expect(Self.callers(of: "Sources/XiaolaiDictCore/Ledger.swift")
+        #expect(Self.callers(of: "Sources/StudyKit/Ledger.swift")
                 == ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI", "Sources/XiaolaiDictService", "Tools"],
-                "a Core method is not wired by Core itself")
+                "a StudyKit method is not wired by StudyKit itself")
         #expect(Self.callers(of: "Sources/ReviewKit/StudyCards.swift") == Self.calling,
-                "a ReviewKit method is wired by Core too")
+                "a ReviewKit method is wired by StudyKit too")
         #expect(Self.publicFunctions(in: "public func abc(") == ["abc("])
         #expect(Self.publicFunctions(in: "public func abc(of x: Int)") == ["abc(of:"])
         #expect(Self.publicFunctions(in: "public func abc(_ x: Int)") == ["abc("],

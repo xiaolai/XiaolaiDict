@@ -1,3 +1,4 @@
+import StudyKit
 import XiaolaiDictCore
 
 /// Which lookup a sense the reader tapped belongs to.

@@ -2,7 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **Making one trustworthy study target out of a lookup.** WI-002.
 ///

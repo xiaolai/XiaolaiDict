@@ -1,4 +1,5 @@
 import Foundation
+import StudyKit
 import XiaolaiDictCore
 import XiaolaiDictUI
 

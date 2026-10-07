@@ -2,7 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **The library marks the word the reader looked up, where they looked it up.**
 ///

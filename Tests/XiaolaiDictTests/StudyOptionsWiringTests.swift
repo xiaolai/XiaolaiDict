@@ -1,6 +1,7 @@
 import CaptureModel
 import Foundation
 import ReviewKit
+import StudyKit
 import Testing
 import XiaolaiDictCore
 @testable import XiaolaiDictUI

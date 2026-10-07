@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **A ledger's handle is closed by one owner, once.**
 ///
@@ -24,7 +24,7 @@ struct LedgerConnectionTests {
     private func ledgerSource() throws -> String {
         let file = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "Sources/XiaolaiDictCore/Ledger.swift")
+            .appending(path: "Sources/StudyKit/Ledger.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         // Comment lines dropped: the note explaining the double close names `sqlite3_close` itself.
         return text.split(separator: "\n", omittingEmptySubsequences: false)

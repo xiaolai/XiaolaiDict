@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **A phrase the reader saved as a card** — the owner's decision of 2026-10-05, ADR-0049.
 ///

@@ -2,7 +2,7 @@
 
 The end-to-end fixtures write rows straight into an isolated ledger with SQL, and a seed that violates
 the schema is found out only on the E2E Mac, ten minutes into a run. So the tests build their ledgers
-from the literals `XiaolaiDictCore` itself executes, read out of the sources rather than restated here:
+from the literals `StudyKit` itself executes, read out of the sources rather than restated here:
 a test that passes cannot be passing against a shape the app no longer writes.
 
 Shared by `test_library_layout` and `test_review`, which each had a copy of the first two readers.
@@ -14,7 +14,8 @@ import re
 import sqlite3
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-CORE = REPO / "Sources" / "XiaolaiDictCore"
+# The ledger left the core for its own target on 2026-10-08 (the core split's P2).
+STUDY_KIT = REPO / "Sources" / "StudyKit"
 # The scheduler and the card types left the core for their own target on 2026-10-04 (ADR-0047).
 REVIEW_KIT = REPO / "Sources" / "ReviewKit"
 
@@ -40,10 +41,10 @@ def swift_literal(source: str, name: str) -> str:
 LEDGER_FILES = ("Ledger.swift", "StudyLedger.swift", "LookupKeeping.swift")
 
 
-def _core_sources() -> str:
-    paths = sorted(CORE.glob("*.swift"))
+def _study_kit_sources() -> str:
+    paths = sorted(STUDY_KIT.glob("*.swift"))
     unread = sorted(set(LEDGER_FILES) - {path.name for path in paths})
-    assert not unread, f"the walk of {CORE} no longer reads {unread}; the ledger has moved"
+    assert not unread, f"the walk of {STUDY_KIT} no longer reads {unread}; the ledger has moved"
     return "\n".join(path.read_text() for path in paths)
 
 
@@ -55,7 +56,7 @@ def _created(sources: str, table: str) -> str:
 
 def lookups_schema() -> list[str]:
     """`lookups` as the migrations leave it: the table they create and every column they add."""
-    sources = _core_sources()
+    sources = _study_kit_sources()
     added = re.findall(r"ALTER TABLE lookups ADD COLUMN [^;]*;", sources, re.S)
     assert len(added) >= 20, f"found only {len(added)} lookups columns added; the scan has gone blind"
     return [_created(sources, "lookups"), *added]
@@ -67,9 +68,9 @@ def study_ledger(path: pathlib.Path) -> None:
     `studyKeepingSchema` is included because it is what makes a new note *collected*: its trigger
     gives every inserted note an explicit keep, and without it no seeded card is askable at all.
     """
-    sources = _core_sources()
-    study = (CORE / "StudyLedger.swift").read_text()
-    keeping = (CORE / "LookupKeeping.swift").read_text()
+    sources = _study_kit_sources()
+    study = (STUDY_KIT / "StudyLedger.swift").read_text()
+    keeping = (STUDY_KIT / "LookupKeeping.swift").read_text()
     db = sqlite3.connect(path)
     try:
         for statement in lookups_schema():
@@ -92,7 +93,7 @@ def askable_predicate() -> str:
     `gradableAnswerPredicate` the literal reached SQLite with `\\(` still in it — an "unrecognized
     token" from a predicate the app itself compiles. A clause that moves must not need this file edited.
     """
-    sources = _core_sources()
+    sources = _study_kit_sources()
     askable = swift_literal(sources, "askableNotePredicate")
     assert r"\(Ledger.collectedNotePredicate)" in askable, \
         "askableNotePredicate no longer interpolates collectedNotePredicate"

@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **Grading, undo and the queue.** WI-003's storage half; `MemorySchedulerParityTests` covers the
 /// arithmetic.

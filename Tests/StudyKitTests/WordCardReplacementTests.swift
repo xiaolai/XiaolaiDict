@@ -3,7 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import Testing
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **Narrowing a saved word to the meaning the reader chose** — R1b, a reader option that is off by
 /// default (review-module-plan §8.3b, §9).

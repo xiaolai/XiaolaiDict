@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import XiaolaiDictTestSupport
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 struct LookupKeepPolicyTests {
     @Test func automaticDefaultManualRestartAndSuiteIsolation() {

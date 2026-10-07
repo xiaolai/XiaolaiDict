@@ -1,4 +1,5 @@
 import DictionaryModel
+import StudyKit
 import Testing
 @testable import XiaolaiDict
 import XiaolaiDictCore

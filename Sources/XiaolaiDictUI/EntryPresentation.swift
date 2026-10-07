@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import StudyKit
 import XiaolaiDictCore
 
 /// How far a sense is claimed to be the one the reader read. The whole point of the type is that

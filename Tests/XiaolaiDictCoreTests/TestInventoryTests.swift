@@ -153,7 +153,12 @@ struct TestInventoryTests {
         // Raised 973 → 1,072 on 2026-10-08 to the exact count before the core was split: 1,070 were there (the
         // floor had lagged by 97), and two came with the split's guards — an undeclared import planted in a copy
         // of a test target refused, and each service refusing every module it may never bind.
-        "XiaolaiDictCoreTests": 1_072,
+        // **1,072 → 686 the same day, a transfer and not a loss**: 386 `@Test` left for `StudyKitTests` with the
+        // ledger they test — 385 in 29 files, and `aCardAsksTheLemmatizerRatherThanRepeatingIt`, split out of
+        // `LemmatizerTests` as the one test that mixed the two subjects.
+        "XiaolaiDictCoreTests": 686,
+        // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
+        "StudyKitTests": 386,
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
         "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,

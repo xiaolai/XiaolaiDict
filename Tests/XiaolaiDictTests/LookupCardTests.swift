@@ -3,6 +3,7 @@ import CoreGraphics
 import DictionaryModel
 import Foundation
 import ModelKit
+import StudyKit
 import SwiftUI
 import Testing
 import XiaolaiDictBase

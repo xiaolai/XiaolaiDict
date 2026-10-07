@@ -1,4 +1,5 @@
 import DictionaryModel
+import StudyKit
 import XiaolaiDictCore
 
 /// The one badge a history card shows at the end of its line — **decided here, not in the view**,

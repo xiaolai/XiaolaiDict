@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import XiaolaiDictTestSupport
 
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// The developer pane's two data operations, on a scratch ledger. Nothing here may touch the reader's own.
 struct DeveloperDataTests {

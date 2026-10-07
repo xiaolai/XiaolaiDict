@@ -2,6 +2,7 @@ import AppKit
 import CaptureModel
 import DictionaryModel
 import Foundation
+import StudyKit
 import SwiftUI
 import Testing
 import XiaolaiDictTestSupport

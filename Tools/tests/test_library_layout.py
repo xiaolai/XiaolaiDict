@@ -18,7 +18,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from ledger_schema import CORE, REPO, lookups_schema, swift_literal
+from ledger_schema import REPO, STUDY_KIT, lookups_schema, swift_literal
 
 SCRIPT = REPO / "Tools" / "e2e" / "library-layout.py"
 _spec = importlib.util.spec_from_file_location("library_layout", SCRIPT)
@@ -28,7 +28,7 @@ _spec.loader.exec_module(layout)
 
 def ledger(path: pathlib.Path, kind: str) -> int:
     """A ledger holding one live lookup whose study note is of `kind`, with a dictionary answer."""
-    study = (CORE / "StudyLedger.swift").read_text()
+    study = (STUDY_KIT / "StudyLedger.swift").read_text()
     db = sqlite3.connect(path)
     for statement in lookups_schema():
         db.executescript(statement)

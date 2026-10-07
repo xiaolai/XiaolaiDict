@@ -5,7 +5,7 @@ import ReviewKit
 import SQLite3
 import Testing
 import XiaolaiDictTestSupport
-@testable import XiaolaiDictCore
+@testable import StudyKit
 
 /// **Recovery and erasure.** WI-006, and the gate P0 closes on.
 ///
