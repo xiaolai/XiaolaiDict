@@ -1047,6 +1047,13 @@ struct LibraryOrganisationWiringTests {
         let strings = try #require(try JSONSerialization.jsonObject(
             with: Data(contentsOf: Self.repository.appending(path: "Strings/Localizable.xcstrings")))
             as? [String: Any])["strings"] as? [String: Any]
+        // **The walk below the view layer reads the export itself**, named rather than counted, so a root
+        // list that shrank to other targets still fails (SourceScan.unread).
+        let below = try StringCatalogTests.targetsBelowTheViewLayer.flatMap {
+            try SourceScan.code(under: Self.repository.appending(path: $0)).map(\.file)
+        }
+        let missed = SourceScan.unread(["StudyExport.swift"], in: below)
+        #expect(missed.isEmpty, "the scan below the view layer no longer reads \(missed)")
         for label in labels {
             #expect(strings?[label] != nil, "the export labels a card with text no translator has: \(label)")
             var held: [String] = []

@@ -35,6 +35,11 @@ PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 SERVICE = "XiaolaiDictService"
 MODEL_SERVICE = "XiaolaiDictModelService"
 
+# The reader's side as the core is split into it, forbidden to both services **by module name**: until
+# 2026-10-08 the check named `XiaolaiDictCore` and relied on type names (`Ledger`, `HoverPolicy`) for the
+# rest, so a subject that arrived in a module it did not know was invisible to it.
+READERS_SIDE = ("StudyKit", "Capture", "CaptureModel", "StudyPresentation", "StudyModels", "MacCapture")
+
 # `otool -L`: the binary's name, then one dependency a line. STUB_OTOOL picks the answer.
 OTOOL = """#!/bin/bash
 case "${STUB_OTOOL:-ok}" in
@@ -45,10 +50,14 @@ case "${STUB_OTOOL:-ok}" in
 esac
 """
 
-# `nm`: 200 mangled symbols, and one that demangles to a forbidden module when STUB_NM=ledger.
+# `nm`: 200 mangled symbols, and one that demangles to a forbidden module when STUB_NM=ledger — or to a
+# type no entry names, `<STUB_MODULE>.Probe`, so only the module's own name can refuse it.
 NM = """#!/bin/bash
 for i in $(seq 1 200); do echo "0000000100000000 T \\$sSS${i}MANGLED"; done
 [ "${STUB_NM:-}" = ledger ] && echo "0000000100000000 T \\$sMANGLED_LEDGER"
+[ -n "${STUB_MODULE:-}" ] && echo "0000000100000000 T \\$sMANGLED_MODULE_${STUB_MODULE}"
+[ "${STUB_NM:-}" = foreign ] && echo "0000000100000000 U \\$sMANGLED_FOREIGN"
+[ "${STUB_NM:-}" = extension ] && echo "0000000100000000 T \\$sMANGLED_EXTENSION"
 exit 0
 """
 
@@ -58,7 +67,10 @@ XCRUN = """#!/bin/bash
 case "${STUB_DEMANGLE:-ok}" in
     fail) echo "xcrun: error: unable to find utility \\"swift-demangle\\"" >&2; exit 72 ;;
     passthrough) cat ;;
-    *) sed -e 's/\\$sMANGLED_LEDGER/XiaolaiDictCore.Ledger.init() -> XiaolaiDictCore.Ledger/' -e 's/\\$sSS/Swift.String./' ;;
+    *) sed -e 's/\\$sMANGLED_LEDGER/XiaolaiDictCore.Ledger.init() -> XiaolaiDictCore.Ledger/' \\
+           -e 's/\\$sMANGLED_MODULE_\\([A-Za-z]*\\)/\\1.Probe.init() -> \\1.Probe/' \\
+           -e 's/\\$sMANGLED_FOREIGN/RegexBuilder.Capture.init(_StringProcessing.Regex<A>) -> RegexBuilder.Capture<A>/' \\
+           -e 's/\\$sMANGLED_EXTENSION/(extension in Capture):Swift.String.probe() -> ()/' -e 's/\\$sSS/Swift.String./' ;;
 esac
 """
 
@@ -117,6 +129,29 @@ class ServiceBoundaryTests(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertIn("carries symbols it must not", done.stdout)
         self.assertIn("Ledger", done.stdout)
+
+    def test_every_readers_side_module_is_refused_in_both_services(self):
+        """Each module of the reader's side, carried by a type no other entry forbids, is refused by name in
+        both services — the control that the module names are in both lists, not just the type names."""
+        for module in READERS_SIDE:
+            with self.subTest(module=module):
+                done = self.verify(module=module)
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                for service in (SERVICE, MODEL_SERVICE):
+                    self.assertIn(f"{service} carries symbols it must not", done.stdout)
+                self.assertEqual(done.stdout.count(f"    {module}\n"), 2, done.stdout)
+
+    def test_a_type_of_another_module_named_like_a_forbidden_one_passes(self):
+        """`RegexBuilder.Capture`, which the model service really carries: a type, not the capture module.
+        Matched as a bare word it refused the first bundle built after `Capture` joined the list."""
+        done = self.verify(nm="foreign")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_a_forbidden_module_seen_only_as_an_extension_is_refused(self):
+        """A module that only extends another's type is named once, as `(extension in Capture):` — no dot."""
+        done = self.verify(nm="extension")
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("    Capture\n"), 2, done.stdout)
 
     def test_otool_failing_fails_the_check(self):
         done = self.verify(otool="fail")

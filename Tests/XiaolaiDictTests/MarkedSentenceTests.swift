@@ -3,6 +3,7 @@ import DictionaryModel
 import Foundation
 import SwiftUI
 import Testing
+import XiaolaiDictTestSupport
 
 @testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
@@ -116,6 +117,9 @@ struct MarkedSentenceTests {
             .contentsOfDirectory(at: views, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "MarkedSentence.swift" }
         #expect(files.count > 1, "no view files were found to scan")
+        // Named, not counted: the two cards that draw a marked sentence (SourceScan.unread).
+        let unread = SourceScan.unread(["LookupCardView.swift", "ReadingCardComponents.swift"], in: files)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         for file in files {
             let source = try String(contentsOf: file, encoding: .utf8)
             #expect(!source.contains(".foregroundColor = "),

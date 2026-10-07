@@ -153,33 +153,54 @@ struct ModuleBoundaryTests {
     /// lookup" during the split, three files having kept `import XiaolaiDictCore` after their target
     /// stopped depending on it. The second is a dependency nobody needs, which is how a target comes
     /// to link a subject it does not use.
+    ///
+    /// **Every target, test targets and the fixture target included** (2026-10-08, before the core was
+    /// split). Test targets were skipped on the theory that one depends on modules it never imports; read,
+    /// none did, and the skip let a spike of the split plant an undeclared `import StudyKit` in a test that
+    /// every check passed — it compiled only because the module was on the search path. Extending the scan
+    /// found three such edges, each fixed in the manifest: `XiaolaiDictTests` imported `XiaolaiDictCore`
+    /// undeclared, and `DictionaryBridgeTests` and `LocalModelTests` declared `XiaolaiDictBase` and imported
+    /// it nowhere.
     @Test func declaredDependenciesAndImportsAgree() throws {
-        let declaredFor = try Self.dependencyMap()
         let ours = Set(try Self.targets())
         var problems: [String] = []
-        // Test targets are excluded: a test target legitimately depends on a module it reaches only
-        // through `@testable import`, and on modules whose types it names without importing them
-        // directly. `XiaolaiDictTestSupport` ships nothing and is the fixture target.
-        let libraries = try Self.targets().filter {
-            !$0.hasSuffix("Tests") && $0 != "XiaolaiDictTestSupport"
-        }
-        for target in libraries {
-            guard let declared = declaredFor[target] else {
-                problems.append("\(target) has no declaration this test could read")
-                continue
-            }
-            var imported: Set<String> = []
-            for (_, imports) in try Self.imports(of: target) {
-                imported.formUnion(imports.filter { ours.contains($0) })
-            }
-            for module in imported.subtracting(declared).sorted() {
-                problems.append("\(target) imports \(module) without Package.swift naming it")
-            }
-            for module in declared.subtracting(imported).sorted() {
-                problems.append("\(target) depends on \(module) and imports it nowhere")
-            }
+        for (target, declared) in try Self.dependencyMap().sorted(by: { $0.key < $1.key }) {
+            let files = try Self.imports(under: Self.sources(of: target))
+            // A walk that read nothing agrees with every declaration that happens to be empty.
+            if files.isEmpty { problems.append("nothing scanned under \(Self.sources(of: target).path)") }
+            let imported = files.reduce(into: Set<String>()) { $0.formUnion($1.modules.filter(ours.contains)) }
+            problems += Self.dependencyProblems(of: target, imported: imported, declared: declared)
         }
         #expect(problems.isEmpty, "\(problems)")
+    }
+
+    /// **The control: an undeclared import planted in a test file is refused** — in a copy of a test
+    /// target's directory, never in `Tests`, for the reason `aPlantedConditionalIsFlagged` gives — and so is
+    /// a test target's declared edge nothing imports.
+    @Test func aTestTargetsUndeclaredImportIsRefused() throws {
+        let target = "ReviewKitTests"
+        let declared = try #require(Self.dependencyMap()[target])
+        let ours = Set(try Self.targets())
+        let scratch = TemporaryDirectory(named: "xiaolaidict-planted-test-import")
+        let copy = scratch.appending(target)
+        try FileManager.default.copyItem(at: Self.sources(of: target), to: copy)
+        func problems() throws -> [String] {
+            let imported = try Self.imports(under: copy)
+                .reduce(into: Set<String>()) { $0.formUnion($1.modules.filter(ours.contains)) }
+            return Self.dependencyProblems(of: target, imported: imported, declared: declared)
+        }
+        #expect(try problems().isEmpty, "the clean copy was flagged")
+        try "@testable import XiaolaiDictCore\n"
+            .write(to: copy.appending(path: "Planted.swift"), atomically: true, encoding: .utf8)
+        #expect(try problems() == ["ReviewKitTests imports XiaolaiDictCore without Package.swift naming it"])
+        #expect(Self.dependencyProblems(of: target, imported: [], declared: declared)
+                == ["ReviewKitTests depends on ReviewKit and imports it nowhere"])
+    }
+
+    /// The two ways a target's imports and its declared edges disagree, in the words every check here uses.
+    static func dependencyProblems(of target: String, imported: Set<String>, declared: Set<String>) -> [String] {
+        imported.subtracting(declared).sorted().map { "\(target) imports \($0) without Package.swift naming it" }
+            + declared.subtracting(imported).sorted().map { "\(target) depends on \($0) and imports it nowhere" }
     }
 
     // MARK: - ReviewKit: the first checks, before the compiler's (ADR-0047)
@@ -331,12 +352,20 @@ struct ModuleBoundaryTests {
     /// center are the reader's side. `verify_service_boundaries` checks the linked binaries for the
     /// same, which also sees what arrives transitively; this sees a source import the day it is typed.
     static let services = ["XiaolaiDictService", "XiaolaiDictModelService"]
-    static let neverInAService: Set<String> = ["ReviewKit", "UserNotifications"]
+    static let neverInAService: Set<String> = [
+        "ReviewKit", "UserNotifications",
+        // **The reader's side as the core is split into it** (2026-10-08): the study ledger, the capture policy
+        // and the two values they share, then the study models, their presentation and the Apple capture
+        // readers. Named before any of them exists, so no file moves while a service could bind one unseen —
+        // a spike of the split planted `StudyKit` in the dictionary service and every check here passed.
+        // `verify_service_boundaries` forbids the same names in both binaries.
+        "StudyKit", "Capture", "CaptureModel", "StudyPresentation", "StudyModels", "MacCapture",
+    ]
 
-    /// **Neither service imports `ReviewKit` or `UserNotifications`, nor depends on `ReviewKit`.** The
-    /// reminder's delivery is the app's (WI-7), and `UNUserNotificationCenter.current()` aborts a
-    /// process with no app bundle — which a service started on demand would be, as far as that call is
-    /// concerned.
+    /// **Neither service imports anything in `neverInAService`, nor depends on it.** The reminder's
+    /// delivery is the app's (WI-7), and `UNUserNotificationCenter.current()` aborts a process with no app
+    /// bundle — which a service started on demand would be, as far as that call is concerned; the study and
+    /// capture modules are the reader's side, as `ReviewKit` is.
     @Test func theServicesBindNeitherTheReviewLogicNorNotifications() throws {
         let dependencies = try Self.dependencyMap()
         for service in Self.services {
@@ -350,8 +379,30 @@ struct ModuleBoundaryTests {
             #expect(declared.intersection(Self.neverInAService).isEmpty, "\(service) depends on \(declared.sorted())")
         }
         // The control: the spellings a service would bind them by are read as those modules.
-        #expect(Set(Self.importedModules(inCode: "@preconcurrency import UserNotifications\nimport ReviewKit"))
-                == Self.neverInAService)
+        #expect(Set(Self.importedModules(inCode: """
+            @preconcurrency import UserNotifications
+            import ReviewKit
+            import StudyKit
+            @testable import Capture
+            import struct CaptureModel.ReadingPlace
+            internal import StudyPresentation
+            import StudyModels
+            import MacCapture
+            """)) == Self.neverInAService)
+    }
+
+    /// **The compiler's verdict refuses each of them in each service**, on lists no compiler made: a planted
+    /// import of any module in `neverInAService`, beside everything the service declares, is named as a binding
+    /// the service never may have.
+    @Test func eachServiceRefusesEveryModuleItMayNeverBind() throws {
+        for service in Self.services {
+            let declared = try #require(Self.dependencyMap()[service], "\(service) has no declaration")
+            #expect(try Self.verdict(on: service, compiled: declared.union(["Foundation"])).isEmpty, "\(service)")
+            for module in Self.neverInAService.sorted() {
+                #expect(try Self.verdict(on: service, compiled: declared.union(["Foundation", module]))
+                        .contains("\(service) binds \(module), which a service never may"), "\(service), \(module)")
+            }
+        }
     }
 
     /// **Every build that tests also typechecks ReviewKit for iOS, watchOS, tvOS and macOS.**
@@ -770,9 +821,11 @@ struct ModuleBoundaryTests {
         try targets().filter { $0 != "XiaolaiDictTestSupport" } + ["ReviewKitTests"]
     }
 
-    /// A test target's directory is under `Tests`, every other under `Sources`.
+    /// A test target's directory is under `Tests`, every other under `Sources` — but the fixture target,
+    /// the one declaration in `Package.swift` with a `path:` of its own.
     static func sources(of target: String) -> URL {
-        repository.appending(path: target.hasSuffix("Tests") ? "Tests" : "Sources").appending(path: target)
+        if target == "XiaolaiDictTestSupport" { return repository.appending(path: "Tests/Support") }
+        return repository.appending(path: target.hasSuffix("Tests") ? "Tests" : "Sources").appending(path: target)
     }
 
     /// What a test target may bind besides its declared dependencies. Its own row, because
@@ -803,13 +856,7 @@ struct ModuleBoundaryTests {
             }
         }
         if let declared = try dependencyMap()[target] {
-            let imported = compiled.intersection(ours)
-            for module in imported.subtracting(declared).sorted() {
-                problems.append("\(target) imports \(module) without Package.swift naming it")
-            }
-            for module in declared.subtracting(imported).sorted() {
-                problems.append("\(target) depends on \(module) and imports it nowhere")
-            }
+            problems += dependencyProblems(of: target, imported: compiled.intersection(ours), declared: declared)
         } else {
             problems.append("\(target) has no declaration this test could read")
         }

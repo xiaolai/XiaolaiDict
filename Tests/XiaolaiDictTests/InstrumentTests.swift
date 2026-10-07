@@ -68,6 +68,9 @@ struct InstrumentSerialisationTests {
         // read — this used to walk with no error handler, so an unreadable subtree passed in
         // silence while the floor below still held on whatever remained.
         #expect(scanned > 20, "the scan found \(scanned) Swift files, so it is not reading the sources")
+        // Named, not counted: the one serialiser allowed, and the instrument that encodes instead.
+        let unread = SourceScan.unread(["Instrument.swift", "LookupCommand.swift"], in: found.read)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(offenders.isEmpty, "a report is serialised outside Instrument.write: \(offenders)")
     }
 

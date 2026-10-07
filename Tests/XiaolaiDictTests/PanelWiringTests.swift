@@ -33,10 +33,12 @@ struct PanelWiringTests {
             .joined(separator: "\n")
     }
 
-    private var cardView: String { (try? source("Sources/XiaolaiDictUI/LookupCardView.swift")) ?? "" }
+    /// **Thrown, never defaulted to ""**: a moved file read as empty, and every assertion below then failed
+    /// with a message about the card rather than about the read.
+    private var cardView: String { get throws { try source("Sources/XiaolaiDictUI/LookupCardView.swift") } }
     /// Where `PanelSurface` lives: the scrolling region, its cap and the window fit moved there
     /// when the message panel and the status row came onto the same surface as the card.
-    private var surface: String { (try? source("Sources/XiaolaiDictUI/LookupPanelViews.swift")) ?? "" }
+    private var surface: String { get throws { try source("Sources/XiaolaiDictUI/LookupPanelViews.swift") } }
 
     /// **The confirmation is handed to the card.** Without this the control is a parameter defaulting
     /// to nil that nothing supplies — the `HoverPause` shape exactly, and every test over
@@ -88,31 +90,31 @@ struct PanelWiringTests {
 
     /// **A pane is drawn only beside the question it answers.** The explanation had no key at all, so
     /// an answer outlived its own question; the translation has had one since it was written.
-    @Test func bothPanesAreDrawnAgainstTheirOwnQuestion() {
-        #expect(cardView.contains("explanation.of == SentenceQuestion.reading("),
+    @Test func bothPanesAreDrawnAgainstTheirOwnQuestion() throws {
+        #expect(try cardView.contains("explanation.of == SentenceQuestion.reading("),
                 "the sentence pane is drawn without checking what it was asked")
-        #expect(cardView.contains("translation.of == translationKey(for: entry)"),
+        #expect(try cardView.contains("translation.of == translationKey(for: entry)"),
                 "the translation pane is drawn without checking what it was asked")
     }
 
     /// **Translate is absent where translating could say nothing**, and the decision is read from the
     /// translator rather than recomputed — two copies of that condition would drift, and the drift is
     /// a control that lies about what is about to happen.
-    @Test func translateIsHiddenWhereItCouldSayNothing() {
-        #expect(cardView.contains("if !alreadyInTheReadersLanguage { translateButton }"),
+    @Test func translateIsHiddenWhereItCouldSayNothing() throws {
+        #expect(try cardView.contains("if !alreadyInTheReadersLanguage { translateButton }"),
                 "the translate control is drawn for a sentence already in the reader's language")
-        #expect(cardView.contains("translator.sourceLanguage(sentence)"),
+        #expect(try cardView.contains("translator.sourceLanguage(sentence)"),
                 "the sentence's language is not read through the translator's own detector")
         // Off the layout path: `NLLanguageRecognizer` is the cost that forced `Speech.caveat` to
         // memoise at 43 ms a call, and a view body is evaluated many times per layout.
-        #expect(cardView.contains(".task(id: presentation.sentence)"),
+        #expect(try cardView.contains(".task(id: presentation.sentence)"),
                 "the language is detected from a view body rather than once per sentence")
     }
 
     /// **The route to the dictionary setting exists, and the app supplies it.** A default of `{}` is
     /// what a missing wire looks like here, and it would be a button that does nothing.
     @Test func theRouteToTheDictionarySettingIsSuppliedByTheApp() throws {
-        #expect(cardView.contains("openDictionarySettings()"),
+        #expect(try cardView.contains("openDictionarySettings()"),
                 "nothing on the card asks for the dictionary setting")
         let panel = try source("Sources/XiaolaiDict/LookupPanel.swift")
         #expect(panel.contains(".environment(\\.openDictionarySettings)"),
@@ -134,32 +136,32 @@ struct PanelWiringTests {
     /// A source scan because there is no window in a unit test to measure — and it is the *wire* that
     /// went missing here, not the arithmetic. `PanelFitTests` covers the arithmetic;
     /// `--panel-report` measures the real window on a real screen.
-    @Test func theWindowIsFittedToTheCard() {
+    @Test func theWindowIsFittedToTheCard() throws {
         // Matched up to the ceiling, not to the whole call: the measurement hook after it is an
         // argument this rule has no opinion about, and pinning the exact spelling made the scan fail
         // the moment one was added — a scan that breaks on its subject changing shape teaches people
         // to loosen it.
-        #expect(surface.contains(".fitsItsContent(upTo: contentCap"),
+        #expect(try surface.contains(".fitsItsContent(upTo: contentCap"),
                 "nothing asks the panel's window to be the height of its content")
     }
 
     /// **And the fit is bounded by the same cap the scrolling region has.** Unbounded, the window
     /// would grow past the height its content is clipped to and hold empty space under the card.
-    @Test func theFitStopsWhereTheScrollingStarts() {
+    @Test func theFitStopsWhereTheScrollingStarts() throws {
         // Matched on the bound alone: the frame carries a floor beside it since 2026-10-02, and
         // the rule here is about the ceiling.
-        let capped = surface.contains("maxHeight: scrollCap)")
+        let capped = try surface.contains("maxHeight: scrollCap)")
         #expect(capped, "the scrolling region is no longer capped, so the fit's ceiling means nothing")
         // **One number for both**, and it comes from the card's cap: the fit's ceiling and the
         // frame's bound are the same property, less the status row pinned under the scrolling
         // region — which is inside the card now, and would otherwise make the window taller than
         // the ceiling `--panel-report` holds it to.
-        #expect(surface.contains("max(0, scale.space.cardMaxHeight - statusHeight)"),
+        #expect(try surface.contains("max(0, scale.space.cardMaxHeight - statusHeight)"),
                 "the scrolling cap is no longer derived from the card's own cap")
         // **And the fit's ceiling excludes the pinned bar**, because the container it is compared
         // against does. With the frame's own bound as the ceiling, a long list asked for a bar's
         // height more than the frame could give and the window outgrew the card by that much.
-        #expect(surface.contains("max(0, scrollCap - barHeight)"),
+        #expect(try surface.contains("max(0, scrollCap - barHeight)"),
                 "the fit's ceiling counts the pinned bar, which its container does not")
     }
 

@@ -136,6 +136,11 @@ struct EndToEndTextTests {
     /// admitting it would let an assertion pass because the script echoes its own vocabulary.
     private static func readerText() throws -> String {
         let files = try SourceScan.code(under: repository.appendingPathComponent("Sources"))
+        // **Named, not counted**: the surfaces most of the asserted sentences are drawn by. A walk that
+        // shrank to other files would make every phrase look removed, or every exemption look current.
+        let unread = SourceScan.unread(["LookupCardView.swift", "SettingsView.swift", "XiaolaiDictApp.swift"],
+                                       in: files.map(\.file))
+        guard unread.isEmpty else { throw Failure.unread(files: unread) }
         // **Refuse input the scanner cannot parse, rather than mis-parsing it quietly.** A multiline
         // literal interpolating another multiline literal — `\("""` inside `"""` — is valid Swift and
         // desynchronises the scanner below, after which every later comment survives as code and a
@@ -151,6 +156,7 @@ struct EndToEndTextTests {
 
     enum Failure: Error, CustomStringConvertible {
         case tooHardToParse(files: [String])
+        case unread(files: [String])
 
         var description: String {
             switch self {
@@ -161,6 +167,8 @@ struct EndToEndTextTests {
                 opener as the outer closer and keep every later comment. Teach `strippingComments` \
                 interpolation depth, or write that sentence another way.
                 """
+            case .unread(let files):
+                "the scan of Sources no longer reads \(files.joined(separator: ", ")), so it is not reading the surfaces"
             }
         }
     }
@@ -659,6 +667,9 @@ struct EndToEndReportKeyTests {
         let directory = Self.repository.appendingPathComponent("Tools/e2e")
         let helpers = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
+        // Named, not counted: two of the helpers that post a mouse event (SourceScan.unread).
+        let unread = SourceScan.unread(["click-element.swift", "menu-click.swift"], in: helpers)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         var made = 0
         for helper in helpers {
             let lines = try String(contentsOf: helper, encoding: .utf8).components(separatedBy: "\n")

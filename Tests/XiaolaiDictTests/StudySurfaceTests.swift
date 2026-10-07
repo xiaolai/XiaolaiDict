@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 /// **Every study capability the ledger offers has a surface, or an exemption that says why.**
 ///
@@ -66,6 +67,24 @@ struct StudySurfaceTests {
         "Sources/XiaolaiDictCore", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
         "Sources/XiaolaiDictService", "Tools",
     ]
+
+    /// **What each calling root must be seen to read** — named, not counted (`SourceScan.unread`): a root
+    /// that walked other files, or none of its own, would report every capability declared elsewhere as
+    /// wired or unwired by accident.
+    private static let callingCanaries: [String: [String]] = [
+        "Sources/XiaolaiDictCore": ["Ledger.swift"],
+        "Sources/XiaolaiDict": ["XiaolaiDictApp.swift"],
+        "Sources/XiaolaiDictUI": ["LibraryView.swift"],
+        "Sources/XiaolaiDictService": ["main.swift"],
+        "Tools": ["e2e.sh"],
+    ]
+
+    /// A calling root that did not read the files it is known to hold.
+    struct Unread: Error, CustomStringConvertible {
+        let root: String
+        let files: [String]
+        var description: String { "the walk of \(root) did not read \(files)" }
+    }
 
     /// The calling roots for one declaring file: every root but the module it lives in.
     static func callers(of declaringFile: String) -> [String] {
@@ -196,6 +215,7 @@ struct StudySurfaceTests {
             #expect(FileManager.default.fileExists(atPath: Self.root.appending(path: path).path),
                     "\(path) is named by this scan and is not there")
         }
+        #expect(Set(Self.callingCanaries.keys) == Set(Self.calling), "every calling root names what it must read")
     }
 
     /// Which public study methods no surface calls.
@@ -220,6 +240,7 @@ struct StudySurfaceTests {
                 // how a scan reports a capability as wired when nothing in this app touches it.
                 options: [.skipsHiddenFiles])
             var seen = 0
+            var read: [URL] = []
             while let file = walk?.nextObject() as? URL {
                 guard ["swift", "sh", "py"].contains(file.pathExtension) else { continue }
                 guard !file.pathComponents.contains(".build") else { continue }
@@ -235,10 +256,13 @@ struct StudySurfaceTests {
                 // every method as unwired — or, worse, leaves an exemption looking current.
                 text += try String(contentsOf: file, encoding: .utf8)
                 seen += 1
+                read.append(file)
             }
             guard seen > 0 else {
                 throw CocoaError(.fileReadNoSuchFile)
             }
+            let unread = SourceScan.unread(callingCanaries[root] ?? [], in: read)
+            guard unread.isEmpty else { throw Unread(root: root, files: unread) }
             // **Comments and string literals are not callers.** Raw substring matching counted a
             // commented-out call as wiring, so removing the last caller by commenting it out left
             // this check satisfied — the exact move the table is meant to catch.

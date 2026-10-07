@@ -255,9 +255,12 @@ struct StringCatalogTests {
     @Test func everyLiteralTheReaderSeesIsInTheCatalog() throws {
         let strings = try #require(try catalog()["strings"] as? [String: Any])
         var missing: [String] = []
+        var read: [URL] = []
         for directory in ["Sources/XiaolaiDictUI", "Sources/XiaolaiDict"] {
             let viewLayer = directory == "Sources/XiaolaiDictUI"
-            for file in try swiftFiles(under: directory) {
+            let files = try swiftFiles(under: directory)
+            read += files
+            for file in files {
                 for literal in try literals(in: file) {
                     guard let rule = Self.rule(for: literal, inTheViewLayer: viewLayer) else { continue }
                     guard strings[literal.text] == nil else { continue }
@@ -265,6 +268,9 @@ struct StringCatalogTests {
                 }
             }
         }
+        // Named, not counted: the settings window and the app's shell, one in each root (SourceScan.unread).
+        let unread = SourceScan.unread(["SettingsView.swift", "XiaolaiDictApp.swift"], in: read)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(missing.isEmpty, "run `make strings`; the catalog does not have: \(missing)")
     }
 
@@ -340,6 +346,9 @@ struct StringCatalogTests {
         var offenders: [String] = []
         for directory in Self.targetsBelowTheViewLayer {
             let target = directory.replacingOccurrences(of: "Sources/", with: "")
+            // A root that reads empty holds no display text and covers nothing; every target has a source.
+            #expect(try !SourceScan.code(under: repository.appending(path: directory)).isEmpty,
+                    "nothing scanned under \(directory)")
             for name in try Self.filesHoldingDisplayText(under: repository.appending(path: directory)) {
                 offenders.append("\(target)/\(name)")
             }

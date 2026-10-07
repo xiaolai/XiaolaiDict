@@ -130,15 +130,15 @@ let package = Package(
             name: "PhraseLookupTests",
             dependencies: ["DictionaryModel", "AppleDictionaryFormat", "PhraseLookup", "XiaolaiDictTestSupport"]),
         .testTarget(name: "XiaolaiDictCoreTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.
         .testTarget(
             name: "DictionaryBridgeTests",
-            dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "XiaolaiDictCore",
+            dependencies: ["DictionaryModel", "ModelKit", "XiaolaiDictCore",
                            "DictionaryBridge", "AppleDictionaryFormat", "PhraseLookup"]),
-        .testTarget(name: "LocalModelTests", dependencies: ["XiaolaiDictBase", "ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "LocalModelTests", dependencies: ["ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
         // ReviewKit alone, and no fixture target: what passes here passes without the Mac's modules.
         .testTarget(name: "ReviewKitTests", dependencies: ["ReviewKit"]),
     ]

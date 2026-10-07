@@ -189,7 +189,7 @@ struct ScreenRecordingProbeTests {
     }
 
     @Test func theGrantCheckNeverAsksCoreGraphics() throws {
-        let (offenders, scanned) = try SourceScan.offenders(
+        let (offenders, scanned, read) = try SourceScan.offenders(
             of: "CGPreflightScreenCaptureAccess", under: sources)
 
         // The positive control, and a floor this tree justifies rather than a round number: the
@@ -197,6 +197,10 @@ struct ScreenRecordingProbeTests {
         // 100 means a subtree went unread. `SourceScan` throws on a traversal error, which is the
         // other half — this used to skip an unreadable directory in silence.
         #expect(scanned > 100, "scanned only \(scanned) files — the source walk is broken")
+        // Named, not counted: the probe's owner, its access wrapper and the capture it must agree with.
+        let unread = SourceScan.unread(
+            ["Permissions.swift", "ScreenRecordingAccess.swift", "ScreenTextRecogniser.swift"], in: read)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(
             offenders.isEmpty,
             "CGPreflightScreenCaptureAccess does not match the API the capture uses, so it must not decide the grant: \(offenders.joined(separator: ", "))")

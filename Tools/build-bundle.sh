@@ -569,17 +569,31 @@ verify_release_timestamps() {
 # `UserNotifications` likewise (WI-7): the review reminder is delivered by the app alone, and
 # `UNUserNotificationCenter.current()` aborts a process that is not the app's bundle.
 # `ModuleBoundaryTests.theServicesBindNeitherTheReviewLogicNorNotifications` holds the source half.
+#
+# `StudyKit`, `Capture`, `CaptureModel`, `StudyPresentation`, `StudyModels` and `MacCapture` likewise, as
+# module names: the reader's side as the core is split into it (2026-10-08). Named before the first file
+# moved, so the type names above (`Ledger`, `HoverPolicy`) are no longer the only thing between a service
+# and a subject that arrived in a module the list did not know. `ModuleBoundaryTests.neverInAService` is
+# the same list for the sources.
+#
+# **A module is matched as the root of a qualified name, a type as a word.** `XiaolaiDictCore.Ledger`,
+# `(extension in Capture):…` and `… in ReviewKit` name a module; `RegexBuilder.Capture` names a type of
+# another module, which the model service's tokenizer uses. Matched as a bare word, `Capture` refused the
+# first bundle built after it was added (2026-10-08) on nine `RegexBuilder.Capture` symbols. A type name
+# is matched anywhere, because a forbidden type arriving in a module this list does not know is exactly
+# what the type names are here to catch.
 verify_service_boundaries() {
     local bundle=$1 binary problem=0
-    # service path : frameworks it must not link : module symbols it must not carry
+    # service path | frameworks it must not link ! modules it must not carry ! types it must not carry
     local checks=(
-        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices|UserNotifications!XiaolaiDictCore|ReviewKit|ModelKit|Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply|ReminderDelivery"
-        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3|UserNotifications!XiaolaiDictCore|ReviewKit|DictionaryModel|Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy|ReminderDelivery"
+        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|ModelKit!Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply|ReminderDelivery"
+        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|DictionaryModel!Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy|ReminderDelivery"
     )
-    local spec path frameworks symbols found name links linked raw demangled raw_count demangled_count
+    local spec path frameworks modules types found name links linked raw demangled raw_count demangled_count
     for spec in "${checks[@]}"; do
         path=${spec%%|*}; spec=${spec#*|}
-        frameworks=${spec%%!*}; symbols=${spec#*!}
+        frameworks=${spec%%!*}; spec=${spec#*!}
+        modules=${spec%%!*}; types=${spec#*!}
         binary="$bundle/$path"
         name=$(basename "$path")
         [ -f "$binary" ] || { echo "no binary to check at $path"; return 1; }
@@ -631,7 +645,11 @@ verify_service_boundaries() {
             echo "$name: swift-demangle demangled no Swift name — the symbol check would read mangled ones"
             problem=1; continue
         fi
-        found=$(grep -oE "\b($(tr '|' '\n' <<<"$symbols" | paste -sd'|' -))\b" <<<"$demangled" | sort -u || true)
+        found=$( {
+            grep -oE "(^|[^.[:alnum:]_])($(tr '|' '\n' <<<"$modules" | paste -sd'|' -))([^[:alnum:]_]|$)" <<<"$demangled" \
+                | sed -E 's/^[^[:alnum:]_]//; s/[^[:alnum:]_]$//' || true
+            grep -oE "\b($(tr '|' '\n' <<<"$types" | paste -sd'|' -))\b" <<<"$demangled" || true
+        } | sort -u)
         if [ -n "$found" ]; then
             echo "$name carries symbols it must not:"; sed 's/^/    /' <<<"$found"; problem=1
         fi

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 /// The token system, enforced by reading the source rather than by remembering.
 ///
@@ -105,6 +106,9 @@ struct NoMagicValuesTests {
         // A scan of nothing passes. Naming the count is what makes the pass mean something, and
         // what fails loudly the day the exemption list quietly swallows the view layer.
         #expect(files.count >= 6, "only \(files.count) view files were found to scan")
+        // Named, not counted: the lookup card and the Library, the two largest views (SourceScan.unread).
+        let unread = SourceScan.unread(["LookupCardView.swift", "LibraryView.swift"], in: files)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
 
         var offenders: [String] = []
         for file in files {
@@ -141,10 +145,12 @@ struct NoMagicValuesTests {
             .contentsOfDirectory(at: viewLayer, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
         var checked = 0
+        var withPreviews: [URL] = []
         for file in files {
             let whole = try String(contentsOf: file, encoding: .utf8)
             guard let marker = whole.range(of: "// MARK: - Previews") else { continue }
             checked += 1
+            withPreviews.append(file)
             let below = whole[marker.upperBound...]
             // A `View` declared below the cut is production code the scan never reads. `: View` is
             // the marker because that is what every offending declaration has in common, and it
@@ -158,6 +164,9 @@ struct NoMagicValuesTests {
         // A scan of nothing passes, so the count is named: every file that has previews at all was
         // looked at, and today that is most of the view layer.
         #expect(checked >= 4, "only \(checked) files with previews were checked")
+        // Named, not counted: the file whose mid-file previews hid 550 lines, and another with previews.
+        let unread = SourceScan.unread(["LookupCardView.swift", "HistoryDrawerViews.swift"], in: withPreviews)
+        #expect(unread.isEmpty, "the scan no longer checks \(unread)")
     }
 
     /// The exemptions have to stay reasons. A file that no longer exists is how the rule turns

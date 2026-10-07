@@ -52,6 +52,9 @@ struct TemporaryDefaultsTests {
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" && !$0.standardizedFileURL.path.hasPrefix(support) }
         try #require(files.count > 20, "found only \(files.count) test files — the scan is not looking where the tests are")
+        // Named, not counted: users of the suites in the two test targets that have them (SourceScan.unread).
+        let unread = SourceScan.unread(["ShortcutTests.swift", "SettingsModelTests.swift"], in: files)
+        try #require(unread.isEmpty, "the scan no longer reads \(unread)")
         // Built from parts so this file does not match its own search.
         let opening = "UserDefaults(" + "suiteName:"
         let emptying = "removePersistent" + "Domain("

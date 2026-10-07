@@ -5,6 +5,7 @@ import XiaolaiDictBase
 import XiaolaiDictCore
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// The client's policy around the service: fallback, session replacement after a crash, and which
 /// session a late failure may touch. The transport is faked; `XiaolaiDict --lookup` covers the real one.
@@ -167,9 +168,11 @@ struct DictionaryClientCancellationDriftTests {
         // `catch` … `where Task.isCancelled`, with whatever pattern stands between them.
         let cancellationCatch = #/catch (?<pattern>[^{]*?)where Task\.isCancelled/#
         var scanned = 0
+        var read: [URL] = []
         var offenders: [String] = []
         for case let file as URL in walk where file.pathExtension == "swift" {
             scanned += 1
+            read.append(file)
             // Thrown rather than defaulted to "": a scanner that silently reads nothing passes
             // forever and guards nothing.
             let code = try String(contentsOf: file, encoding: .utf8)
@@ -183,6 +186,9 @@ struct DictionaryClientCancellationDriftTests {
         // The positive control. If the walk ever stops finding files this test would pass while
         // reading nothing at all.
         #expect(scanned > 20, "the scan found \(scanned) Swift files, so it is not reading the sources")
+        // Named, not counted: the two clients whose clause is the rule (SourceScan.unread).
+        let unread = SourceScan.unread(Self.clients, in: read)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(offenders.isEmpty, "a cancellation read off the task rather than the error: \(offenders)")
     }
 

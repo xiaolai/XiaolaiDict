@@ -35,8 +35,16 @@ def swift_literal(source: str, name: str) -> str:
     return "\n".join(swift_literal(source, part) for part in joined.group(1).split(' + "\\n" + '))
 
 
+# **What the walk below must be seen to read**, named rather than counted: a glob of a directory the
+# ledger has left reads the files that remain, and would fail only at the first table it cannot find.
+LEDGER_FILES = ("Ledger.swift", "StudyLedger.swift", "LookupKeeping.swift")
+
+
 def _core_sources() -> str:
-    return "\n".join(path.read_text() for path in sorted(CORE.glob("*.swift")))
+    paths = sorted(CORE.glob("*.swift"))
+    unread = sorted(set(LEDGER_FILES) - {path.name for path in paths})
+    assert not unread, f"the walk of {CORE} no longer reads {unread}; the ledger has moved"
+    return "\n".join(path.read_text() for path in paths)
 
 
 def _created(sources: str, table: str) -> str:

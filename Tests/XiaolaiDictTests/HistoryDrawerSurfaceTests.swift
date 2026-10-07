@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 /// The Reading History panel's surface, read from its source.
 ///
@@ -103,10 +104,12 @@ struct HistoryDrawerSurfaceTests {
     /// The setting is gone from the whole tree, not merely unread here.
     @Test func noSourceFileKnowsAboutAChoiceOfGlass() throws {
         var scanned = 0
+        var read: [URL] = []
         for directory in ["Sources/XiaolaiDictUI", "Sources/XiaolaiDict"] {
             let files = try FileManager.default
                 .contentsOfDirectory(at: Self.root.appending(path: directory), includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "swift" }
+            read += files
             for file in files {
                 scanned += 1
                 let source = try String(contentsOf: file, encoding: .utf8)
@@ -115,6 +118,9 @@ struct HistoryDrawerSurfaceTests {
             }
         }
         #expect(scanned > 20, "the scan found \(scanned) files, which is not the source tree")
+        // Named, not counted: the drawer's views and its controller, one in each root.
+        let unread = SourceScan.unread(["HistoryDrawerViews.swift", "HistoryDrawer.swift"], in: read)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
     }
 
     // MARK: - Names and counts

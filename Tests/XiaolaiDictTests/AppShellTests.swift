@@ -315,6 +315,10 @@ struct SceneShellTests {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
         #expect(files.count > 20, "the scan found \(files.count) files; it is looking in the wrong place")
+        // **Named, not counted**: the two files that look windows up, so a walk that shrank to other files
+        // still fails (SourceScan.unread).
+        let unread = SourceScan.unread(["XiaolaiDictApp.swift", "XiaolaiDictScene.swift"], in: files)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         var comparisons = 0, mentions = 0
         for file in files {
             let source = try code("Sources/XiaolaiDict/\(file.lastPathComponent)")

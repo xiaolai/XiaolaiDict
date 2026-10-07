@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 @testable import XiaolaiDictUI
 
@@ -288,6 +289,9 @@ struct SetupWiringTests {
         let files = try viewLayerFiles()
         // A scan of nothing passes. Naming the count is what makes the pass mean something.
         #expect(files.count >= 6, "only \(files.count) view files were found to scan")
+        // Named, not counted: the card, and the file the offence once sat in (SourceScan.unread).
+        let unread = SourceScan.unread(["LookupCardView.swift", "LookupPanelViews.swift"], in: files)
+        #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         var offenders: [String] = []
         for file in files {
             let text = withoutComments(try String(contentsOf: file, encoding: .utf8))

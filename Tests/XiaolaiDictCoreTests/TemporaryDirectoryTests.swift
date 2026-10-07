@@ -45,6 +45,10 @@ struct TemporaryDirectoryTests {
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" && !$0.standardizedFileURL.path.hasPrefix(support) }
         try #require(files.count > 20, "found only \(files.count) test files — the scan is not looking where the tests are")
+        // Named, not counted: users of scratch directories in three test targets (SourceScan.unread).
+        let unread = SourceScan.unread(["ModelStoreTests.swift", "LocalModelControllerTests.swift",
+                                        "PhraseInventoryStoreTests.swift"], in: files)
+        try #require(unread.isEmpty, "the scan no longer reads \(unread)")
         // Built from parts so this file does not match its own search. **Two spellings**, because the
         // leak has two: `FileManager.default.temporaryDirectory` and Foundation's older
         // `NSTemporaryDirectory()`. Case-sensitive, so `TemporaryDirectory(named:)` — the fix — is not

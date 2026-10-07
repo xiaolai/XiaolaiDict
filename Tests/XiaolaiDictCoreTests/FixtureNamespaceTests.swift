@@ -1,6 +1,7 @@
 import DictionaryModel
 import Foundation
 import Testing
+import XiaolaiDictTestSupport
 
 /// **A fixture in the wrong namespace tests less than it looks like it tests.**
 ///
@@ -20,6 +21,10 @@ struct FixtureNamespaceTests {
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" }
         try #require(files.count > 20, "found only \(files.count) test files — the scan is not looking where the tests are")
+        // Named, not counted: fixtures that declare the namespace, in three test targets (SourceScan.unread).
+        let unread = SourceScan.unread(["EntryDocumentTests.swift", "LookupCardTests.swift", "DictionaryBridgeTests.swift"],
+                                       in: files)
+        try #require(unread.isEmpty, "the scan no longer reads \(unread)")
         // Built from parts, and comments skipped, so this file does not match its own search — it has to
         // name both spellings to explain itself, and the first version flagged three of its own lines.
         let stem = "DictionaryService" + "-1.0."

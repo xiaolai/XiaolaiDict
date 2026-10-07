@@ -35,6 +35,10 @@ struct TestInventoryTests {
     /// trade: requiring an edit here for every test added would make this a line people bump
     /// without reading, and a floor that lags by a handful still catches what it is for — the
     /// incident it was written for was 47 to 4.
+    ///
+    /// **Exact while the core is split** (2026-10-08, plan-macos-modularisation P0): every floor below was
+    /// raised to its target's count, because a split *moves* tests between targets and a floor that lags by
+    /// 97 lets a move lose 97 unseen. Each move lowers one floor and raises another by the same number.
     static let floors = [
         // Raised 2026-10-03 to the counts after the hover request lifecycle (ADR-0045, ADR-0046): six
         // source-grep checks of the watcher became behavioural tests, and the new lifecycle, lane,
@@ -96,7 +100,9 @@ struct TestInventoryTests {
         // leaving a Review sitting — replaced by R1b and graded, dropped on resume, paused, its reading
         // deleted, never drawn, passed over by Undo, and kept where it is askable again by the time the
         // reason is read (`ReviewWiringTests`, 7).
-        "XiaolaiDictTests": 1_318,
+        // Raised 1,318 → 1,370 on 2026-10-08 to the exact count before the core was split (see above): it had
+        // lagged by 52.
+        "XiaolaiDictTests": 1_370,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -144,22 +150,28 @@ struct TestInventoryTests {
         // reviewer's two `canImport` plants and one after a `;`, the verdict failing every way, its flags
         // read off the script, an unlistable directory throwing, a target name with a digit, and the
         // manifest reader held to SwiftPM's own reading with a control it fails.
-        "XiaolaiDictCoreTests": 973,
-        "DictionaryBridgeTests": 54,
+        // Raised 973 → 1,072 on 2026-10-08 to the exact count before the core was split: 1,070 were there (the
+        // floor had lagged by 97), and two came with the split's guards — an undeclared import planted in a copy
+        // of a test target refused, and each service refusing every module it may never bind.
+        "XiaolaiDictCoreTests": 1_072,
+        // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
+        "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,
         // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each
         // round adding regression tests. **It had no floor at all before that**, which
         // `everyTestTargetHasAFloor` existed to catch and did: the target shipped with the module and
         // was never registered, so the guard covered four of the five directories on disk. The count
         // was 45 before `PLAN.md` steps 0–5 and is not backdated — a floor records what is there, and
-        // a drop from here is the signal. 162 before the sense aligner, 187 with it.
-        "AppleDictionaryFormatTests": 206,
+        // a drop from here is the signal. 162 before the sense aligner, 187 with it. Raised 206 → 300 on
+        // 2026-10-08 to the exact count before the core was split.
+        "AppleDictionaryFormatTests": 300,
         // Added 2026-09-29 with the target, at the count it shipped with. The three translations between a
         // reader's sentence and the matcher — lemma form, a captured range to a word, a word range back to
         // UTF-16 — have each been a defect class here before, so this floor guards the thin part.
         // Raised 10 → 16 on 2026-10-05: it had lagged at the shipping count (15 by then), and ADR-0049's
-        // filings carrying the build and the walk that read them add one.
-        "PhraseLookupTests": 16,
+        // filings carrying the build and the walk that read them add one. Raised 16 → 29 on 2026-10-08 to the
+        // exact count before the core was split.
+        "PhraseLookupTests": 29,
         // Added 2026-10-04 with the target, at the 25 that moved out of `XiaolaiDictCoreTests` above.
         // The target links ReviewKit alone, so these passing is itself evidence the logic runs
         // without the Mac's modules. Raised to 28 the same day by WI-4's cooldown rule, the arm and the
