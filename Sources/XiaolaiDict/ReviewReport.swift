@@ -1,6 +1,7 @@
 import Foundation
 import ReviewKit
 import StudyKit
+import StudyModels
 import StudyPresentation
 
 /// `--review-report`: **what Review will ask, and what its model holds on each side of the reveal**,

@@ -132,10 +132,10 @@ struct LibraryPaneChromeTests {
         let chrome = try source("LibraryPaneChrome.swift")
         #expect(chrome.contains("IconButton(.undo, title: title, shortcut: KeyboardShortcut(\"z\", modifiers: .command)"))
         #expect(try source("LibraryReviewPane.swift").contains("LibraryUndoToolbar(title: canUndo ?"))
-        let scene = try app("ReviewModel.swift")
+        let scene = try app("ReviewSceneView.swift")
         #expect(!scene.contains(".opacity(0)"), "Review still hides its Undo")
         #expect(!scene.contains(".keyboardShortcut(\"z\""), "Command-Z is bound twice")
-        #expect(try app("LibraryModel.swift").contains("canUndo: review.canUndo"))
+        #expect(try app("LibrarySceneView.swift").contains("canUndo: review.canUndo"))
     }
 
     /// **"Show More" is the last row of the collection**, where a reader who reached the end is
@@ -300,7 +300,7 @@ struct LibraryPaneChromeTests {
         // corner pill on every visit. It is a toolbar item now, and only when there are some.
         #expect(pane.contains("if unconfirmed > 0, !sittingOffersFind {"))
         #expect(pane.contains("IconButton(.findUnconfirmed"))
-        #expect(try app("LibraryModel.swift").contains("LibraryReviewPane("), "the Library still lays Review out by hand")
+        #expect(try app("LibrarySceneView.swift").contains("LibraryReviewPane("), "the Library still lays Review out by hand")
     }
 
     /// **And nothing pads the pane around its collection.** The collection pads its own content; a
@@ -458,7 +458,7 @@ struct LibraryPaneChromeTests {
 
     /// **History draws one card per reading, by the drawer's rule and not a second one.**
     @Test func theArchiveFoldsRepeatsWithTheDrawersRule() throws {
-        let model = try app("LibraryModel.swift")
+        let model = try underSources("StudyModels/LibraryModel.swift")
         #expect(model.contains("ReadingHistory.days(from: lookups, now: now, calendar: calendar).flatMap(\\.entries)"))
         // Drawn by the card both surfaces share: the count beside the word, and the hour for a
         // reading made today.

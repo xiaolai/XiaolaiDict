@@ -10,11 +10,14 @@ import os
 /// Off unless the reader turns it on in Settings › General › Study. **The one spelling of its key, and
 /// what `LookupRecorder` reads** at each Choose a Meaning write, so the switch and the write cannot
 /// disagree. What it does is `Ledger.replaceWordCards`, in the keep's own transaction.
-struct WordCardReplacementSetting {
+public struct WordCardReplacementSetting {
     /// **A persistent contract**: renaming it turns the option off for every reader who chose it.
     static let key = "studyReplacesWordCards"
 
     let defaults: UserDefaults
+
+    /// The memberwise initialiser, said: a struct's own is never public, and the app builds one.
+    public init(defaults: UserDefaults) { self.defaults = defaults }
 
     /// Absent, or anything but true, is off — and off is today's Choose a Meaning, byte for byte.
     var isOn: Bool { defaults.bool(forKey: Self.key) }
@@ -31,7 +34,7 @@ struct WordCardReplacementSetting {
 /// suite, so what Settings shows is what was stored.
 @MainActor
 @Observable
-final class StudyOptions {
+public final class StudyOptions {
     private(set) var replacesWordCards: Bool
     private(set) var waitsAfterConfirming: Bool
     private(set) var minimumWait: TimeInterval
@@ -41,7 +44,7 @@ final class StudyOptions {
     @ObservationIgnored private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "settings")
 
     /// `defaults` is the suite the app was given — never `.standard` reached for here.
-    init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults) {
         replacement = WordCardReplacementSetting(defaults: defaults)
         cooldown = ConfirmationCooldownSetting(defaults: defaults)
         replacesWordCards = replacement.isOn
@@ -69,7 +72,7 @@ final class StudyOptions {
     }
 
     /// What Settings › General draws.
-    var choice: StudyChoice {
+    public var choice: StudyChoice {
         StudyChoice(
             replacesWordCards: replacesWordCards, waitsAfterConfirming: waitsAfterConfirming,
             minimumWait: minimumWait, minimumWaitChoices: ConfirmationCooldown.minimumDelayChoices,

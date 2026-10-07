@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import ReviewKit
+import StudyModels
 import XiaolaiDictBase
 import XiaolaiDictUI
 import os

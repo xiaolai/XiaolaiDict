@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import StudyKit
 import StudyPresentation
-import SwiftUI
 
 /// **The erase command's model.** WI-006's surface.
 ///
@@ -12,8 +11,8 @@ import SwiftUI
 /// number at all.
 @MainActor
 @Observable
-final class EraseModel {
-    private(set) var presentation = ErasePresentation()
+public final class EraseModel {
+    public private(set) var presentation = ErasePresentation()
 
     private let store: @MainActor () -> Task<LedgerStore, any Error>?
     /// Told when an erase has changed the ledger, as every other write tells it. A parameter so a test
@@ -28,12 +27,12 @@ final class EraseModel {
     /// the last Cancel or Delete, may publish.
     private var previewGeneration = 0
 
-    init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?, changes: LedgerChanges = .shared) {
+    public init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?, changes: LedgerChanges = .shared) {
         self.store = store
         self.changes = changes
     }
 
-    func act(_ action: EraseAction) {
+    public func act(_ action: EraseAction) {
         // **One erase at a time, decided here, synchronously** (audit-fix round 2). The task below does
         // not run at the point it is made, so a second click queued a second erase, which found nothing
         // and replaced the first one's report. Nothing else is taken while one runs either: Cancel would

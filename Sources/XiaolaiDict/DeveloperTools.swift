@@ -1,5 +1,6 @@
 import Foundation
 import StudyKit
+import StudyModels
 import XiaolaiDictUI
 
 #if XIAOLAIDICT_CAPTURE_INSTRUMENTS

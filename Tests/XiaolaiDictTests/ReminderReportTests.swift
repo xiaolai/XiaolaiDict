@@ -2,6 +2,7 @@ import Foundation
 import ReviewKit
 import SQLite3
 import StudyKit
+@testable import StudyModels
 import Testing
 import XiaolaiDictUI
 @testable import XiaolaiDict

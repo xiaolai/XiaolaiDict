@@ -4,7 +4,7 @@ import StudyPresentation
 import Testing
 import XiaolaiDictTestSupport
 
-@testable import XiaolaiDict
+@testable import StudyModels
 
 /// The reader is not asked which dictionary to study from: their language says, and the answer is
 /// remembered beside — never as — the reader's own choice.

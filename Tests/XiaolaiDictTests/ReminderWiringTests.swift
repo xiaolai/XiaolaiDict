@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import ReviewKit
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
 import UserNotifications
@@ -197,7 +198,7 @@ struct ReminderWiringTests {
 
         let review = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
                                  clock: { self.now }, defaults: rig.defaults,
-                                 graded: { reminders.answered() })
+                                 graded: { reminders.answered() }, finish: {}, openInDictionary: { _ in false })
         await review.start()
         review.act(.grade(.good))
         let key = ReminderKey(day: Self.today, kind: .daily)
@@ -223,7 +224,7 @@ struct ReminderWiringTests {
 
         let review = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
                                  clock: { self.now }, defaults: rig.defaults,
-                                 graded: { reminders.answered() })
+                                 graded: { reminders.answered() }, finish: {}, openInDictionary: { _ in false })
         await review.start()
         review.act(.grade(.again))
         try await Wiring.settle("the grade never reached the coordinator") { reminders.answerCount > 0 }
@@ -255,7 +256,7 @@ struct ReminderWiringTests {
 
         let review = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
                                  clock: { self.now }, defaults: rig.defaults,
-                                 graded: { reminders.answered() })
+                                 graded: { reminders.answered() }, finish: {}, openInDictionary: { _ in false })
         await review.start()
         let passes = reminders.passCount
         review.act(.grade(.good))

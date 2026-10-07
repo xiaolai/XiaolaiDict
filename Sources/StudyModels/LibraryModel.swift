@@ -5,8 +5,6 @@ import Observation
 import ReviewKit
 import StudyKit
 import StudyPresentation
-import SwiftUI
-import XiaolaiDictUI
 
 /// **The Library window's model.** WI-005's wire.
 ///
@@ -18,20 +16,20 @@ import XiaolaiDictUI
 /// through would watch rows disappear between pages with nothing to explain it.
 @MainActor
 @Observable
-final class LibraryModel {
-    private(set) var layout: LibraryLayout
+public final class LibraryModel {
+    public private(set) var layout: LibraryLayout
     /// Whether the inspector column is open. **The reader's choice, kept in the defaults suite the
     /// layout is kept in** — the scene has restoration turned off, so scene storage would forget it.
     /// Open the first time, so the details a selection used to bring with it are still there.
-    private(set) var inspectorShown: Bool
+    public private(set) var inspectorShown: Bool
     private var archiveSelections: [LibraryPane: Set<Int>] = [:]
     private var extendingArchive: Int?
     /// How many pages of the archive the reader has opened. **A refresh re-reads all of them**:
     /// every ledger change reloads the pane, and reloading one page dropped the older readings they
     /// had paged to, and the selection with them. One again whenever the pane or the search changes.
     private var archivePages = 1
-    private(set) var pane: LibraryPane = .history
-    private(set) var archive = ArchivePresentation()
+    public private(set) var pane: LibraryPane = .history
+    public private(set) var archive = ArchivePresentation()
     private let defaults: UserDefaults
     private var archiveRows: [ReadingEntry] = []
     private var archiveSearch = ""
@@ -40,20 +38,20 @@ final class LibraryModel {
     private var archiveUndo: DispositionResult?
     private var focusedLookup: Int?
     private var imported = false
-    private(set) var reviewProblem: String?
-    private(set) var reviewCount = 0
-    private(set) var reviewHeldBack = 0
+    public private(set) var reviewProblem: String?
+    public private(set) var reviewCount = 0
+    public private(set) var reviewHeldBack = 0
     /// How many saved meanings confirming would make askable — **not** every one needing attention,
     /// which counted 22 answerless notes on the measured ledger as meanings to confirm. What decides
     /// whether Review offers the way to them at all.
-    private(set) var reviewUnconfirmed = 0
-    private(set) var reviewDictionary: String?
+    public private(set) var reviewUnconfirmed = 0
+    public private(set) var reviewDictionary: String?
     private let primaryName: @MainActor (String?) -> String?
     private let primary: @MainActor () -> PrimaryDictionary
     /// The scripts the reader studies, or nil for every script. **The setting the drawer reads**:
     /// History is the reading history too, and the two must agree about what was read.
     private let studying: @MainActor () -> Set<ProbeScript>?
-    private(set) var presentation = LibraryPresentation(rows: [], total: 0)
+    public private(set) var presentation = LibraryPresentation(rows: [], total: 0)
     private var search = ""
     private var filter = LibraryPresentation.Filter.all
     /// One of the reader's own tags, or nil for all. Part of the query, never a filter on the page.
@@ -139,7 +137,7 @@ final class LibraryModel {
     /// there — every `make test` on any Mac, destroying an export they had made.
     private let exportDirectory: @MainActor () -> URL
 
-    init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
+    public init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
          clock: @escaping @MainActor () -> Date = { .now },
          exportDirectory: @escaping @MainActor () -> URL = {
              FileManager.default.homeDirectoryForCurrentUser.appending(path: "Downloads")
@@ -169,17 +167,17 @@ final class LibraryModel {
         self.lookUp = lookUp
     }
 
-    func setLayout(_ layout: LibraryLayout) {
+    public func setLayout(_ layout: LibraryLayout) {
         self.layout = layout
         defaults.set(layout.rawValue, forKey: "libraryLayout")
     }
 
-    func setInspector(_ shown: Bool) {
+    public func setInspector(_ shown: Bool) {
         inspectorShown = shown
         defaults.set(shown, forKey: "libraryInspector")
     }
 
-    func show(_ pane: LibraryPane, lookup: Int? = nil) {
+    public func show(_ pane: LibraryPane, lookup: Int? = nil) {
         archiveGeneration += 1
         archivePublishedGeneration = archiveGeneration
         // **Another pane's rows go at once, not when the new ones arrive.** The controls change with
@@ -197,7 +195,7 @@ final class LibraryModel {
     }
     /// Goes to the saved meanings waiting to be chosen or confirmed: the Saved pane, narrowed to
     /// Needs Attention. One spelling, for the toolbar button and the empty state's.
-    func findUnconfirmed() {
+    public func findUnconfirmed() {
         show(.saved)
         act(.filter(.needsAttention))
     }
@@ -213,14 +211,14 @@ final class LibraryModel {
     /// confirming first writes `confirmed_at` and changes nothing else. Narrowing the entry to one of
     /// its senses in place is not offered: whether that is the same note is an ADR-0029 identity
     /// question, the owner's (R1b).
-    func findUnanswered() {
+    public func findUnanswered() {
         opensFirstNeedingAnAnswer = true
         setInspector(true)
         show(.saved)
         act(.filter(.needsAttention))
     }
 
-    func refreshPane() async {
+    public func refreshPane() async {
         if pane == .saved { await reload() }
         else if pane != .review { await reloadArchive() }
         await refreshReviewCount()
@@ -242,7 +240,7 @@ final class LibraryModel {
             reviewUnconfirmed = waiting.toConfirm
         } catch { reviewProblem = error.localizedDescription; publishArchiveProblem(error.localizedDescription) }
     }
-    func importLegacy() async {
+    public func importLegacy() async {
         guard !imported, LookupKeepPolicyStore(defaults: defaults).load() == .automatic, let opening = store() else { return }
         imported = true
         defer { imported = false }
@@ -330,7 +328,7 @@ final class LibraryModel {
             focused: archive.focused, selection: archiveSelections[pane] ?? [])
     }
     private var failedArchiveAction: ArchiveAction?
-    func actArchive(_ action: ArchiveAction) {
+    public func actArchive(_ action: ArchiveAction) {
         switch action {
         case .retry: if let failedArchiveAction { actArchive(failedArchiveAction) } else { Task { await reloadArchive() } }
         case .search(let text): archiveGeneration += 1; archivePublishedGeneration = archiveGeneration; focusedLookup = nil; archiveSearch = text; archivePages = 1; Task { await reloadArchive() }
@@ -430,7 +428,7 @@ final class LibraryModel {
         return .written
     }
 
-    func act(_ action: LibraryAction) {
+    public func act(_ action: LibraryAction) {
         problem = nil
         switch action {
         case .retry:
@@ -1142,29 +1140,5 @@ final class LibraryModel {
             comment: "A library row for a card that has never been reviewed") }
         if due <= now { return String(localized: "Due", comment: "A library row for an overdue card") }
         return due.formatted(date: .abbreviated, time: .omitted)
-    }
-}
-
-/// The Library window's content. A view, not scene-body code — see `ReviewSceneView`.
-struct LibrarySceneView: View {
-    let model: LibraryModel
-    let review: ReviewModel
-    var body: some View {
-        LearningLibraryView(pane: model.pane, saved: model.presentation, archive: model.archive,
-            layout: model.layout, chooseLayout: { model.setLayout($0) },
-            inspectorShown: model.inspectorShown, showInspector: { model.setInspector($0) },
-            choose: { model.show($0) }, savedAction: { model.act($0) }, archiveAction: { model.actArchive($0) }) {
-            LibraryReviewPane(due: model.reviewCount, dictionary: model.reviewDictionary,
-                              problem: model.reviewProblem, heldBack: model.reviewHeldBack,
-                              unconfirmed: model.reviewUnconfirmed,
-                              sittingOffersFind: review.presentation.offersFindUnconfirmed,
-                              canUndo: review.canUndo, undo: { review.act(.undo) },
-                              findUnconfirmed: { model.findUnconfirmed() }) {
-                ReviewSceneView(model: review, findUnconfirmed: { model.findUnconfirmed() },
-                                findUnanswered: { model.findUnanswered() })
-            }
-        }
-        .task { await model.refreshPane(); await model.importLegacy() }
-        .onChange(of: LedgerChanges.shared.revision) { _, _ in Task { await model.refreshPane() } }
     }
 }

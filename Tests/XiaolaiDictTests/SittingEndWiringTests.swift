@@ -1,6 +1,7 @@
 import Foundation
 import ReviewKit
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
 @testable import XiaolaiDictUI
@@ -37,7 +38,7 @@ struct SittingEndWiringTests {
 
     private func review(_ path: String, _ defaults: UserDefaults = TemporaryDefaults.suite()) -> ReviewModel {
         ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
-                    clock: { self.now }, defaults: defaults)
+                    clock: { self.now }, defaults: defaults, finish: {}, openInDictionary: { _ in false })
     }
 
     private func question(_ model: ReviewModel) -> ReviewPresentation.Question? {

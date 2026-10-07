@@ -99,6 +99,13 @@ let package = Package(
         // a symbol a surface draws with stays with `ActionSymbol`, in the view layer. Foundation alone.
         .target(name: "StudyPresentation", dependencies: ["DictionaryModel", "ReviewKit", "StudyKit"]),
 
+        // The study surfaces' models, apart from the app that composes them (2026-10-08): the Library's, Review's
+        // and the erase's models, the lookup recorder and the ledger's actor, the study dictionary and the reader's
+        // study options. **A presentation target**, as `StudyPresentation` is: reader-facing text is allowed, and no
+        // UI framework and no view layer is — the scenes that draw these models, and what Review's Done closes and
+        // Explore opens, are the app's and are handed in. Foundation, Observation and os.
+        .target(name: "StudyModels", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "XiaolaiDictCore"]),
+
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
         // by the app: its failure mode is a segfault, and a crash must take down the service, not
         // the app the reader is using (design note §10).
@@ -134,7 +141,7 @@ let package = Package(
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
         .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
@@ -166,7 +173,12 @@ let package = Package(
         // its gesture, the screen's geometry, the drawer's frame, the recognised text and its sentence.
         .testTarget(name: "CaptureTests",
                     dependencies: ["DictionaryModel", "CaptureModel", "Capture", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        // The study models' own tests, moved out of `XiaolaiDictTests` with the code they test: the ledger's actor, the
+        // lookup recorder, the primary dictionary and its resolver, the sense-tap queue, the study dictionary. A test
+        // that also drives the app, a view or the window tests' shared fixture stays there, as an integration test.
+        .testTarget(name: "StudyModelsTests",
+                    dependencies: ["DictionaryModel", "CaptureModel", "StudyKit", "StudyPresentation", "XiaolaiDictCore", "StudyModels", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.

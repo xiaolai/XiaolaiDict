@@ -3,9 +3,9 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
-@testable import XiaolaiDict
 import XiaolaiDictTestSupport
 
 /// **The Library window against a real ledger.** WI-005's wire.
@@ -1062,8 +1062,10 @@ struct LibraryOrganisationWiringTests {
                 held += try Self.files(under: Self.repository.appending(path: root)) { Self.holdsText(label, in: $0) }
             }
             #expect(held.isEmpty, "a target below the view layer holds the export's label as text: \(held), \(label)")
+            // Wherever reader-facing text may be written: the view layer and the presentation targets, which since P4b
+            // hold the Library's model and the export's labels with it.
             var sites: [String] = []
-            for root in ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI"] {
+            for root in ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI"] + StringCatalogTests.presentationTargets {
                 sites += try Self.files(under: Self.repository.appending(path: root)) { try Self.localizes(label, in: $0) }
             }
             #expect(!sites.isEmpty, "the export's label is written at no localizing call site in the app: \(label)")

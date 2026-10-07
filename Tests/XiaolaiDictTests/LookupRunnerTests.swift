@@ -2,6 +2,7 @@ import AppKit
 import Capture
 import CaptureModel
 import StudyKit
+@testable import StudyModels
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 import DictionaryModel

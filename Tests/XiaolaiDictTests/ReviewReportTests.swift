@@ -2,6 +2,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
+import StudyModels
 import StudyPresentation
 import Testing
 @testable import XiaolaiDict

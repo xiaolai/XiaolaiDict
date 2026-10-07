@@ -4,8 +4,6 @@ import Observation
 import ReviewKit
 import StudyKit
 import StudyPresentation
-import SwiftUI
-import XiaolaiDictUI
 
 /// **The Review window's model: a session, a ledger, and nothing between them that guesses.**
 ///
@@ -18,8 +16,8 @@ import XiaolaiDictUI
 /// are, and the one that failed is the one they will never see again.
 @MainActor
 @Observable
-final class ReviewModel {
-    private(set) var presentation = ReviewPresentation(stage: .empty(.nothingEnrolled))
+public final class ReviewModel {
+    public private(set) var presentation = ReviewPresentation(stage: .empty(.nothingEnrolled))
     private var session: ReviewSession?
     /// The cue in front of the reader, held so a reveal does not go back to disk.
     private var cue: ReviewCue?
@@ -43,11 +41,11 @@ final class ReviewModel {
     @ObservationIgnored private var selecting = 0
 
     /// How many cards one sitting offers. A bound on the sitting, never on the reader's debt.
-    static let batchSize = 10
+    public static let batchSize = 10
     /// **First introductions a day, and nothing else is rationed** (C08). Five is the feature
     /// ledger's proposal and a guess: ten new cards on Monday are ten reviews on Tuesday and
     /// twenty by Wednesday, and the number that keeps that bearable has not been measured.
-    static let newCardsPerDay = 5
+    public static let newCardsPerDay = 5
 
     /// Frozen when the sitting starts. A reader crossing a timezone mid-session must not have the
     /// day boundary move under them, and the allowance must not be replenished by travelling.
@@ -63,10 +61,12 @@ final class ReviewModel {
     /// The study day a sitting is drawn in, asked at each draw and frozen for the sitting — the reader's
     /// zone at that moment. A parameter, like the clock, so a test can travel.
     private let studyDayNow: @MainActor () -> StudyDay
-    /// What Done closes. Review is a pane of the Library window, so by default that window.
+    /// What Done closes. Review is a pane of the Library window, so the app hands in that window's dismissal.
+    /// **No default**: this module can reach neither the app's window actions nor its scenes, and a default
+    /// that did nothing would be a Done that refuses its click (plan-macos-modularisation P4b).
     private let finish: @MainActor () -> Void
-    /// Opens a word in the system dictionary and says whether it took. A parameter so a test can see
-    /// what was asked without launching an app.
+    /// Opens a word in the system dictionary and says whether it took. **Handed in by the app**, for the
+    /// reason `finish` is; a parameter too so a test can see what was asked without launching an app.
     private let openInDictionary: @MainActor (String) -> Bool
     /// The primary dictionary the held sitting was drawn from. **Study state belongs to one
     /// dictionary**, so a sitting kept across pane switches (ADR-0044) is not kept across a switch of
@@ -79,7 +79,7 @@ final class ReviewModel {
     /// §5.4). Practice moves no schedule and tells nothing.
     private let graded: @MainActor () -> Void
 
-    init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
+    public init(store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
          primary: @escaping @MainActor () -> PrimaryDictionary = { PrimaryDictionaryStore().load() },
          dictionaryName: @escaping @MainActor (String) -> String? = { _ in nil },
          clock: @escaping @MainActor () -> Date = { .now },
@@ -88,10 +88,8 @@ final class ReviewModel {
          // write the one-day increase into the runner's own domain, where the next run reads it.
          defaults: UserDefaults,
          graded: @escaping @MainActor () -> Void = {},
-         finish: @escaping @MainActor () -> Void = {
-             WindowActions.shared.dismissWindow(id: XiaolaiDictScene.libraryID)
-         },
-         openInDictionary: @escaping @MainActor (String) -> Bool = { SystemDictionary.open($0) }) {
+         finish: @escaping @MainActor () -> Void,
+         openInDictionary: @escaping @MainActor (String) -> Bool) {
         self.finish = finish
         self.openInDictionary = openInDictionary
         self.store = store
@@ -147,7 +145,7 @@ final class ReviewModel {
 
     /// Whether there is an answered card to go back to — what puts Undo in the toolbar. The same
     /// question `undo()` asks before it does anything, so the button is never there over nothing.
-    var canUndo: Bool {
+    public var canUndo: Bool {
         !writing && session?.presentations.contains { $0.isAnswered } ?? false
     }
 
@@ -159,7 +157,7 @@ final class ReviewModel {
     /// finding 2). The reader leaves Review for Saved or History and comes back; what they did there —
     /// archive, pause, choose a meaning that replaces a word-only card, delete a reading — can leave the
     /// card on screen one no grade will ever be taken for, and the sitting held it for good.
-    func resume() async {
+    public func resume() async {
         if session != nil, sittingScope == primary().chosen, !resuming, selecting == 0 {
             await recheckTheCardOnScreen()
             return
@@ -186,7 +184,7 @@ final class ReviewModel {
         await draw()
     }
 
-    func start() async {
+    public func start() async {
         guard let opening = store() else { return }
         problem = nil
         drawing += 1
@@ -251,7 +249,7 @@ final class ReviewModel {
     /// Review pane — whose `resume` would otherwise find no sitting held and draw the queue's over this
     /// one. The draw itself is the returned task, which the caller need not wait for.
     @discardableResult
-    func startSelected(noteIDs: [UUID], order: SittingOrder) -> Task<Void, Never> {
+    public func startSelected(noteIDs: [UUID], order: SittingOrder) -> Task<Void, Never> {
         drawing += 1
         selecting += 1
         let mine = drawing
@@ -295,7 +293,7 @@ final class ReviewModel {
     /// What the reader did. `showing` is **the card it was done to**: the showing the surface drew
     /// when they pressed, which the view names. Nil is for a caller with no surface of its own — the
     /// instrument, a test — and means the card this model last put on screen.
-    func act(_ action: ReviewAction, on showing: UUID? = nil) {
+    public func act(_ action: ReviewAction, on showing: UUID? = nil) {
         // **Which card the reader acted on is decided here, synchronously.** A `Task` body does
         // not run at the point it is created: between `act` and the task's first line the reader
         // can skip, and a reveal that read `session.current` inside the task then revealed — and
@@ -839,26 +837,5 @@ final class ReviewModel {
         guard let readAt = cue.readAt else { return where_ }
         let when = readAt.formatted(date: .abbreviated, time: .omitted)
         return where_.isEmpty ? when : "\(where_) · \(when)"
-    }
-}
-
-/// The Review window's content.
-///
-/// **A view, not scene-body code.** Reading observable state in an `App`'s `body` invalidates every
-/// scene in it — measured in this project as a sibling window whose menu item opened nothing — so the
-/// model is read here, one level down.
-///
-/// **Undo is not here.** It is the window's — a toolbar item on Command-Z, put there by
-/// `LibraryReviewPane` — where it was a button at zero opacity behind this view, hidden from
-/// VoiceOver, that only a reader who guessed the key could reach.
-struct ReviewSceneView: View {
-    let model: ReviewModel
-    var findUnconfirmed: (@MainActor () -> Void)?
-    var findUnanswered: (@MainActor () -> Void)?
-
-    var body: some View {
-        ReviewView(state: model.presentation, findUnconfirmed: findUnconfirmed,
-                   findUnanswered: findUnanswered) { model.act($0, on: $1) }
-            .task { await model.resume() }
     }
 }

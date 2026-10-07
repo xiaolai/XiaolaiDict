@@ -1,4 +1,5 @@
 import AppKit
+import StudyModels
 import XiaolaiDictUI
 
 /// Whether the settings window is the size of the pane it is showing, and **moves between the

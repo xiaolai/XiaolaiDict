@@ -2,6 +2,7 @@ import AppKit
 import Capture
 import CaptureModel
 import os
+import StudyModels
 import XiaolaiDictBase
 import XiaolaiDictUI
 

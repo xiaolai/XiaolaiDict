@@ -2,8 +2,8 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import StudyKit
+@testable import StudyModels
 import Testing
-@testable import XiaolaiDict
 import XiaolaiDictTestSupport
 
 /// **What the window tests share**, in one place.

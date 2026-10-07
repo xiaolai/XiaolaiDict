@@ -3,6 +3,7 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import StudyKit
+import StudyModels
 import StudyPresentation
 import XiaolaiDictBase
 import XiaolaiDictCore
@@ -732,7 +733,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // the one the Library's badge counts with, so the two cannot disagree about it.
         defaults: preferences,
         // A scheduled answer may have left nothing askable today, which withdraws today's reminder.
-        graded: { [weak self] in self?.reminders.answered() })
+        graded: { [weak self] in self?.reminders.answered() },
+        // **Handed in, because the model's module can reach neither** (P4b): Done closes the Library window
+        // Review is a pane of, and Explore opens the card's word in the system dictionary.
+        finish: { WindowActions.shared.dismissWindow(id: XiaolaiDictScene.libraryID) },
+        openInDictionary: { SystemDictionary.open($0) })
 
     /// The Library window's model, kept for the same reason.
     @ObservationIgnored lazy var libraryModel = LibraryModel(

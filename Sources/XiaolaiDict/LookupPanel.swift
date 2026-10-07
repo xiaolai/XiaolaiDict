@@ -1,6 +1,7 @@
 import AppKit
 import Capture
 import StudyKit
+import StudyModels
 import XiaolaiDictBase
 import XiaolaiDictUI
 import SwiftUI

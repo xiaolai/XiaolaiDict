@@ -2,6 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Synchronization
 import Testing

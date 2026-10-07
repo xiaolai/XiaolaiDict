@@ -1,7 +1,6 @@
 import CoreGraphics
 import Testing
 
-@testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
 /// The pile's arithmetic, checked without rendering anything. Separating it from the `Layout` is

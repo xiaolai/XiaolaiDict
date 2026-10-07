@@ -2,6 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import ModelKit
+import StudyModels
 import XiaolaiDictBase
 import XiaolaiDictCore
 

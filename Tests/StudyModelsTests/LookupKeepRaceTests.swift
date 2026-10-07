@@ -5,7 +5,7 @@ import os
 import StudyPresentation
 import Testing
 import XiaolaiDictTestSupport
-@testable import XiaolaiDict
+@testable import StudyModels
 
 @MainActor
 struct LookupKeepRaceTests {

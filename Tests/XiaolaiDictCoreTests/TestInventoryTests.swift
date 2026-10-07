@@ -102,7 +102,10 @@ struct TestInventoryTests {
         // reason is read (`ReviewWiringTests`, 7).
         // Raised 1,318 → 1,370 on 2026-10-08 to the exact count before the core was split (see above): it had
         // lagged by 52.
-        "XiaolaiDictTests": 1_370,
+        // **1,370 → 1,295 the same day, a transfer and not a loss** (P4b): 76 `@Test` in 5 files left for
+        // `StudyModelsTests` with the study models they test, and one came — the app handing the review model what
+        // Done closes and what Explore opens, which were the model's own defaults until it left the app.
+        "XiaolaiDictTests": 1_295,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -165,6 +168,10 @@ struct TestInventoryTests {
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
         "CaptureTests": 229,
+        // Added 2026-10-08 with the target, at the 76 that moved out of `XiaolaiDictTests` above: the ledger's
+        // actor, the lookup recorder's races, the primary dictionary and its resolver, the sense-tap queue and the
+        // study dictionary's derivation.
+        "StudyModelsTests": 76,
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
         "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,

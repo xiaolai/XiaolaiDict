@@ -15,18 +15,18 @@ import XiaolaiDictCore
 ///
 /// It also bounds the card: without it, one lookup of *fine* could leave seven study items behind
 /// for a single meaning.
-struct PrimaryDictionary: Equatable, Sendable {
+public struct PrimaryDictionary: Equatable, Sendable {
     /// `DictionaryIdentity.key` of the dictionary the reader chose, or nil until they choose one.
-    let chosen: String?
+    public let chosen: String?
 
     /// `DictionaryIdentity.key` of the dictionary this reader's language names, or nil where none does.
     ///
     /// **Not a choice, and never read as one.** Library, Review and the reminder scope themselves by
     /// `chosen`, where nil means every dictionary; a reader who never chose must not find their study
     /// history narrowed by a derivation. This decides only which dictionary a lookup studies from.
-    let automatic: String?
+    public let automatic: String?
 
-    init(chosen: String? = nil, automatic: String? = nil) {
+    public init(chosen: String? = nil, automatic: String? = nil) {
         self.chosen = chosen
         self.automatic = automatic
     }
@@ -58,21 +58,21 @@ struct PrimaryDictionary: Equatable, Sendable {
     ///
     /// A choice that answered anywhere — word or phrase — stands. Otherwise the word's own entries
     /// decide, because the card opens on them; a phrase's decide only where the word had none.
-    func pinned(word entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry]) -> PrimaryDictionary {
+    public func pinned(word entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry]) -> PrimaryDictionary {
         if let chosen, (entries + phraseEntries).contains(where: { $0.dictionary.key == chosen }) { return self }
         guard let identity = identity(among: entries) ?? identity(among: phraseEntries) else { return self }
         return PrimaryDictionary(chosen: identity.key, automatic: automatic)
     }
 
     /// The primary's own entries, in order.
-    func entries(among entries: [DictionaryEntry]) -> [DictionaryEntry] {
+    public func entries(among entries: [DictionaryEntry]) -> [DictionaryEntry] {
         guard let identity = identity(among: entries) else { return [] }
         return entries.filter { $0.dictionary == identity }
     }
 }
 
 /// The reader's choice of primary dictionary, kept across launches.
-struct PrimaryDictionaryStore {
+public struct PrimaryDictionaryStore {
     static let defaultsKey = "PrimaryDictionary"
     /// **A separate key, so a derivation can never be mistaken for a choice.** It is kept at all because a
     /// lookup reads the primary from disk, and the language-derived dictionary needs the service's list.
@@ -90,23 +90,25 @@ struct PrimaryDictionaryStore {
 
     private let language: () -> String
 
-    init(defaults: UserDefaults = .standard, language: @escaping () -> String = { ReaderLanguage.preferred }) {
+    public init(defaults: UserDefaults = .standard, language: @escaping () -> String = { ReaderLanguage.preferred }) {
         self.defaults = defaults
         self.language = language
     }
 
+    #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
     /// Forgets the choice, the derivation and the one-time pin, so the pin migration can be tried again.
-    /// For the developer pane.
-    func resetForDeveloper() {
+    /// For the developer pane, and compiled only where the pane is, as `LedgerStore`'s three are.
+    public func resetForDeveloper() {
         for key in [Self.defaultsKey, Self.automaticKey, Self.automaticLanguageKey, Self.pinAssessedKey] {
             defaults.removeObject(forKey: key)
         }
     }
+    #endif
 
     var pinAssessed: Bool { defaults.bool(forKey: Self.pinAssessedKey) }
     func markPinAssessed() { defaults.set(true, forKey: Self.pinAssessedKey) }
 
-    func load() -> PrimaryDictionary {
+    public func load() -> PrimaryDictionary {
         PrimaryDictionary(chosen: defaults.string(forKey: Self.defaultsKey),
                           automatic: defaults.string(forKey: Self.automaticLanguageKey) == language()
                               ? defaults.string(forKey: Self.automaticKey) : nil)
@@ -136,7 +138,10 @@ struct PrimaryDictionaryStore {
 }
 
 /// What one lookup leaves in the ledger.
-struct LookupRecording {
+///
+/// **`Sendable` said, not inferred**: Swift infers it only for a type that is not public, and the recorder hands
+/// this across to the ledger's actor — it was inferred until the type left the app (P4b).
+public struct LookupRecording: Sendable {
     let record: LookupRecord
     /// Recorded only where the sense — or at least the entry — is a **fact**. With several entries
     /// from the primary dictionary and no reader tap and no selector, which one the reader was
@@ -150,6 +155,18 @@ struct LookupRecording {
     /// word's. Automatic keeping keeps that sense as the entry's, as it always did (ADR-0028), unless the
     /// reader saved the phrase as a card already: then that card stands for it (ADR-0049).
     var phraseOfEncounter: String? = nil
+
+    /// The memberwise initialiser, said: a struct's own is never public, and the lookup runner builds these.
+    public init(record: LookupRecord, encounter: SenseEncounter?, lookup: LookupIdentity? = nil,
+                keepPolicy: LookupKeepPolicy = .manual, primaryDictionary: String? = nil,
+                phraseOfEncounter: String? = nil) {
+        self.record = record
+        self.encounter = encounter
+        self.lookup = lookup
+        self.keepPolicy = keepPolicy
+        self.primaryDictionary = primaryDictionary
+        self.phraseOfEncounter = phraseOfEncounter
+    }
 }
 
 extension PrimaryDictionary {
@@ -173,7 +190,7 @@ extension PrimaryDictionary {
     /// phrase is absent there, and `identity(among:)` fell back to whichever other dictionary answered the
     /// word: rung 0 marked the primary's phrase and recorded an auxiliary word's only sense as
     /// `.onlySense`. A primary with no entry for the word has no word encounter to record.
-    func encounter(among entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [], at when: Date) -> SenseEncounter? {
+    public func encounter(among entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [], at when: Date) -> SenseEncounter? {
         guard let primary = identity(among: entries + phraseEntries) else { return nil }
         let mine = entries.filter { $0.dictionary == primary }
         guard mine.count == 1, let entry = mine.first, let entryKey = entry.entryKey else { return nil }
@@ -198,17 +215,24 @@ extension PrimaryDictionary {
 }
 
 
-struct SenseResolution: Equatable, Sendable {
-    let mark: SenseMark?
-    let encounter: SenseEncounter?
+public struct SenseResolution: Equatable, Sendable {
+    public let mark: SenseMark?
+    public let encounter: SenseEncounter?
     /// Which entry the mark is about — `PanelSelection.identity(of:)`'s spelling, so the card can
     /// compare without knowing how identity is built. Nil where nothing was marked. The resolver
     /// only ever looks at the primary dictionary's entries, so a mark drawn on any other entry was
     /// always borrowed.
-    var owner: String? = nil
+    public var owner: String? = nil
+
+    /// The memberwise initialiser, said: a struct's own is never public, and the lookup runner starts from one.
+    public init(mark: SenseMark?, encounter: SenseEncounter?, owner: String? = nil) {
+        self.mark = mark
+        self.encounter = encounter
+        self.owner = owner
+    }
 
     /// Why no sense was marked, where the selector said.
-    var abstention: Abstention? {
+    public var abstention: Abstention? {
         guard case .couldNot(let why, _)? = mark else { return nil }
         return why
     }
@@ -222,9 +246,15 @@ struct SenseResolution: Equatable, Sendable {
 /// already `Sendable` and `PrimaryDictionary` is a `String?`. What must *not* travel is the closure
 /// that reads the reader's chosen dictionary — that is called on this actor and the resolved value
 /// is what goes with the work.
-struct SenseResolver: Sendable {
+public struct SenseResolver: Sendable {
     let primary: PrimaryDictionary
     let selector: any SenseSelecting
+
+    /// The memberwise initialiser, said: a struct's own is never public, and the lookup runner builds one.
+    public init(primary: PrimaryDictionary, selector: any SenseSelecting) {
+        self.primary = primary
+        self.selector = selector
+    }
 
     /// Every sense of every entry, flattened into what the selector takes.
     ///
@@ -236,7 +266,7 @@ struct SenseResolver: Sendable {
     ///
     /// The part of speech comes from the block rather than the sense: it is a property of the
     /// entry's grammatical division, and the selector matches on it.
-    static func candidates(in entries: [DictionaryEntry]) -> [SenseCandidate] {
+    public static func candidates(in entries: [DictionaryEntry]) -> [SenseCandidate] {
         entries.flatMap { entry in
             entry.blocks.flatMap { block in
                 block.senses.map {
@@ -264,7 +294,7 @@ struct SenseResolver: Sendable {
     /// **Rung 0 stops firing when a phrase is present, and that is correct.** A word with one sense is no
     /// longer unambiguous once the sentence also holds a phrase: there is something to choose between, so
     /// `.onlySense` — the strongest mark there is — must not be claimed.
-    func resolve(
+    public func resolve(
         entries: [DictionaryEntry], phrase phraseEntries: [DictionaryEntry] = [],
         sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?, at when: Date

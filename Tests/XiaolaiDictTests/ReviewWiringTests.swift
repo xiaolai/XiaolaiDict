@@ -3,6 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 @testable import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
 @testable import XiaolaiDictUI
@@ -71,7 +72,8 @@ struct ReviewWiringTests {
         return ReviewModel(store: Wiring.store(path),
                            primary: { PrimaryDictionary(chosen: "noad") },
                            dictionaryName: { key in named && key == "noad" ? "New Oxford American Dictionary" : nil },
-                           clock: { when }, defaults: TemporaryDefaults.suite())
+                           clock: { when }, defaults: TemporaryDefaults.suite(),
+                           finish: {}, openInDictionary: { _ in false })
     }
 
     private func question(_ model: ReviewModel) -> ReviewPresentation.Question? {
@@ -309,7 +311,8 @@ struct ReviewWiringTests {
         let newYork = StudyDay(timeZone: try #require(TimeZone(identifier: "America/New_York")))
         let day = Travelling(tokyo)
         let model = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
-                                clock: { self.now }, studyDay: { day.now }, defaults: TemporaryDefaults.suite())
+                                clock: { self.now }, studyDay: { day.now }, defaults: TemporaryDefaults.suite(),
+                                finish: {}, openInDictionary: { _ in false })
         await model.start()
         try #require(question(model) != nil, "the review sitting drew nothing")
         day.now = newYork
@@ -729,7 +732,8 @@ struct ReviewWiringTests {
             let model = ReviewModel(store: {
                 guard gate.closed, let held = opening() else { return opening() }
                 return Task { await gate.wait(); return try await held.value }
-            }, primary: { PrimaryDictionary(chosen: "noad") }, clock: { self.now }, defaults: TemporaryDefaults.suite())
+            }, primary: { PrimaryDictionary(chosen: "noad") }, clock: { self.now }, defaults: TemporaryDefaults.suite(),
+               finish: {}, openInDictionary: { _ in false })
             await model.start()
             let shown = try #require(question(model))
 
@@ -795,7 +799,8 @@ struct ReviewWiringTests {
 
     private func rigged(_ path: String, _ rig: Rigged) -> ReviewModel {
         ReviewModel(store: rig.store(Wiring.store(path)), primary: { PrimaryDictionary(chosen: "noad") },
-                    clock: { self.now }, defaults: TemporaryDefaults.suite())
+                    clock: { self.now }, defaults: TemporaryDefaults.suite(),
+                    finish: {}, openInDictionary: { _ in false })
     }
 
     /// **Undo waits for the write in flight** (audit-fix round 1). With the second card's grade being
@@ -950,7 +955,8 @@ struct ReviewWiringTests {
     private func reviewAndSaved(_ path: String) -> (review: ReviewModel, saved: LibraryModel) {
         let store = Wiring.store(path)
         return (ReviewModel(store: store, primary: { PrimaryDictionary(chosen: "noad") },
-                            clock: { self.now }, defaults: TemporaryDefaults.suite()),
+                            clock: { self.now }, defaults: TemporaryDefaults.suite(),
+                            finish: {}, openInDictionary: { _ in false }),
                 LibraryModel(store: store, clock: { self.now }, defaults: TemporaryDefaults.suite(),
                              primary: { PrimaryDictionary(chosen: "noad") }))
     }
@@ -1091,7 +1097,8 @@ struct ReviewWiringTests {
 
         let model = ReviewModel(store: { Task { try LedgerStore(path: directory.path) } },
                                 primary: { PrimaryDictionary(chosen: "noad") },
-                                clock: { self.now }, defaults: TemporaryDefaults.suite())
+                                clock: { self.now }, defaults: TemporaryDefaults.suite(),
+                                finish: {}, openInDictionary: { _ in false })
         await model.start()
         guard case .empty(let reason) = model.presentation.stage else {
             Issue.record("expected an empty stage, got \(model.presentation.stage)")
@@ -1190,7 +1197,8 @@ struct ReviewWiringTests {
         try ready(path)
         let chosen = Chosen()
         let model = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: chosen.key) },
-                                clock: { self.now }, defaults: TemporaryDefaults.suite())
+                                clock: { self.now }, defaults: TemporaryDefaults.suite(),
+                                finish: {}, openInDictionary: { _ in false })
         await model.resume()
         #expect(question(model) != nil, "positive control: the noad sitting was drawn")
         await model.resume()
@@ -1211,7 +1219,7 @@ struct ReviewWiringTests {
 
     private func exploring(_ path: String, _ opened: Opened) -> ReviewModel {
         ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
-                    clock: { self.now }, defaults: TemporaryDefaults.suite(),
+                    clock: { self.now }, defaults: TemporaryDefaults.suite(), finish: {},
                     openInDictionary: { term in opened.terms.append(term); return opened.launches })
     }
 
@@ -1327,7 +1335,7 @@ struct ReviewWiringTests {
         let closed = Chosen()
         let model = ReviewModel(store: Wiring.store(path), primary: { PrimaryDictionary(chosen: "noad") },
                                 clock: { self.now }, defaults: TemporaryDefaults.suite(),
-                                finish: { closed.finished += 1 })
+                                finish: { closed.finished += 1 }, openInDictionary: { _ in false })
         await model.resume()
         model.act(.grade(.good))
         try await settle { if case .finished = model.presentation.stage { return true }; return false }
@@ -1335,6 +1343,24 @@ struct ReviewWiringTests {
         #expect(closed.finished == 1)
         await model.resume()
         if case .finished = model.presentation.stage { Issue.record("Done left the finished sitting to be resumed") }
+    }
+
+    /// **The app hands the model what Done closes and what Explore opens** (plan-macos-modularisation P4b). Both
+    /// were defaults inside the model until it left the app for `StudyModels`, which can reach neither the window
+    /// actions nor the system dictionary; the composition root supplies them now, and a construction that passed
+    /// `{}` would compile and leave both controls doing nothing. The two tests above prove the model calls what it
+    /// is given; this proves what it is given.
+    @Test func theAppGivesTheReviewModelDoneAndExplore() throws {
+        let app = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/XiaolaiDict/XiaolaiDictApp.swift"), encoding: .utf8)
+        let start = try #require(app.range(of: "lazy var reviewModel = ReviewModel("))
+        let end = try #require(app.range(of: "lazy var libraryModel", range: start.upperBound..<app.endIndex))
+        let construction = app[start.upperBound..<end.lowerBound]
+        #expect(construction.contains("finish: { WindowActions.shared.dismissWindow(id: XiaolaiDictScene.libraryID) }"),
+                "Done is not given the Library window to close")
+        #expect(construction.contains("openInDictionary: { SystemDictionary.open($0) }"),
+                "Explore is not given the system dictionary to open")
     }
 
     // MARK: - A card that can no longer be asked leaves the sitting (final closing pass, finding 2)
@@ -1521,7 +1547,7 @@ struct ReviewWiringTests {
                                 clock: {
                                     clock.calls += 1
                                     return clock.calls > clock.jumpAfter ? later : early
-                                }, defaults: TemporaryDefaults.suite())
+                                }, defaults: TemporaryDefaults.suite(), finish: {}, openInDictionary: { _ in false })
         await model.start()
         let note = try #require(try ledger.notes().first)
         let card = try #require(try ledger.existingCard(of: note.id))

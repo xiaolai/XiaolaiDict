@@ -4,7 +4,7 @@ import ReviewKit
 import StudyKit
 
 /// The ledger on disk, owned by one actor so lookups can be recorded from anywhere.
-actor LedgerStore {
+public actor LedgerStore {
     private let ledger: Ledger
 
     /// A ledger at `path`, created if absent. Opening is file and database work — creation, and a
@@ -28,7 +28,7 @@ actor LedgerStore {
     /// `~/Library/Application Support/XiaolaiDict/ledger.sqlite`, created on first use, opened on a
     /// background task whoever calls it. `applicationSupport` is a parameter so it can be opened
     /// against a temporary directory instead of the reader's own.
-    static func openDefault(applicationSupport: URL? = nil) async throws -> LedgerStore {
+    public static func openDefault(applicationSupport: URL? = nil) async throws -> LedgerStore {
         try await Task.detached(priority: .utility) {
             let root = try applicationSupport ?? FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -44,7 +44,7 @@ actor LedgerStore {
     /// `openDefault`, which makes one where there is none and upgrades an older one (audit-fix round 1);
     /// then through a version check followed by the writable door, which switched the journal and would
     /// have created or migrated whatever was at the path by the second open (round 2).
-    static func openForReading(applicationSupport: URL? = nil) async throws -> LedgerStore {
+    public static func openForReading(applicationSupport: URL? = nil) async throws -> LedgerStore {
         try await Task.detached(priority: .utility) {
             let root = try applicationSupport ?? FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
@@ -64,35 +64,42 @@ actor LedgerStore {
     }
 
     /// Why `openForReading` did not open: nothing there. Another schema is `LedgerError.anotherSchema`.
-    enum NotOpenedForReading: Error, Equatable {
+    public enum NotOpenedForReading: Error, Equatable {
         case absent(String)
     }
 
     /// Every dictionary a study note belongs to — what decides whether a reader who never chose has
     /// study progress that a changed default would orphan.
-    func studiedDictionaries() throws -> [String] { try ledger.studiedDictionaries() }
+    public func studiedDictionaries() throws -> [String] { try ledger.studiedDictionaries() }
+
+    #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+    // **The developer pane's three operations ride the define the pane rides**, so a release does not compile
+    // them (plan-macos-modularisation P4b). In the app they were internal and a release's optimiser dropped them
+    // with the pane that calls them; public in this module, an actor's method keeps its descriptor, and a release
+    // binary carried `dev-before-clear` — measured, the string `verify_capture_instruments` refuses a release for.
 
     /// What the developer pane shows: how much the ledger holds.
-    func developerCounts() throws -> (lookups: Int, notes: Int) {
+    public func developerCounts() throws -> (lookups: Int, notes: Int) {
         try ledger.developerCounts()
     }
 
     /// **A copy first, then every row.** The copy is timestamped and never replaces an earlier one, so a
     /// clear after a deploy cannot overwrite the only copy of real data with test data.
-    func clearForDeveloper(now: Date) throws -> (rows: Int, backup: String) {
+    public func clearForDeveloper(now: Date) throws -> (rows: Int, backup: String) {
         let stamp = DateFormatter.developerStamp.string(from: now)
         let backup = "\(path).dev-before-clear-\(stamp).backup"
         try ledger.backUp(to: backup)
         return (try ledger.clearEveryRow(), backup)
     }
 
-    func deployForDeveloper(now: Date) throws -> TestDataReport { try ledger.deployTestData(now: now) }
+    public func deployForDeveloper(now: Date) throws -> TestDataReport { try ledger.deployTestData(now: now) }
+    #endif
 
     /// What the reader met of this lemma before `before`. Encounters, never meanings.
     ///
     /// **In this language.** English *gift* and German *Gift* share a lemma and are two words; asked
     /// without one, a reader of both is shown the other word's history as this one's.
-    func priorEncounters(of lemma: String, before: Date, language: String?) throws -> PriorEncounters {
+    public func priorEncounters(of lemma: String, before: Date, language: String?) throws -> PriorEncounters {
         try ledger.priorEncounters(of: lemma, before: before, language: language)
     }
 
@@ -126,7 +133,7 @@ actor LedgerStore {
     /// `studying` is passed through rather than defaulted here, for the reason the ledger makes it
     /// required: a surface that forgot the reader's setting would go on drawing the words they
     /// filtered out, and read as a setting that does nothing.
-    func recentLookups(since: Date, limit: Int, studying: Set<ProbeScript>) throws -> [ReadingEntry] {
+    public func recentLookups(since: Date, limit: Int, studying: Set<ProbeScript>) throws -> [ReadingEntry] {
         try ledger.recentLookups(since: since, limit: limit, studying: studying)
     }
 
@@ -229,10 +236,10 @@ actor LedgerStore {
         }
     }
 
-    func changeDisposition(_ value: LookupDisposition, lookups: [Int], operation: UUID) throws -> DispositionResult {
+    public func changeDisposition(_ value: LookupDisposition, lookups: [Int], operation: UUID) throws -> DispositionResult {
         try ledger.changeDisposition(value, lookups: lookups, operation: operation)
     }
-    func undoDisposition(operation: UUID) throws -> DispositionResult { try ledger.undoDisposition(operation: operation) }
+    public func undoDisposition(operation: UUID) throws -> DispositionResult { try ledger.undoDisposition(operation: operation) }
     func reading(ofLookup id: Int) throws -> ReadingEntry? { try ledger.reading(ofLookup: id) }
     func readingArchive(_ query: ReadingArchiveQuery) throws -> [ReadingEntry] { try ledger.readingArchive(query) }
     func readingArchiveCount(_ query: ReadingArchiveQuery) throws -> Int { try ledger.readingArchiveCount(query) }
@@ -241,7 +248,7 @@ actor LedgerStore {
         try ledger.keep(Self.studyTarget(of: encounter), issuer: .live, language: language ?? StudyNote.unknownLanguage,
             chosenBy: encounter.chosenBy, answer: Self.studyAnswer(of: encounter), lookupID: lookup, at: .now, source: source)
     }
-    func keepHistory(_ id: Int) throws -> StudyNote? {
+    public func keepHistory(_ id: Int) throws -> StudyNote? {
         guard let row = try ledger.reading(ofLookup: id), let encounter = try ledger.preferredEvidence(ofLookup: id) else { return nil }
         return try keep(encounter, for: id, language: row.language, source: .manual)
     }
@@ -250,7 +257,7 @@ actor LedgerStore {
 
     /// What a Review sitting is planned from: every card of every askable note and today's
     /// introductions, read in one call so no write lands between the two.
-    func sittingCandidates(dictionary: String?, introducedSince dayStart: Date) throws -> SittingCandidates {
+    public func sittingCandidates(dictionary: String?, introducedSince dayStart: Date) throws -> SittingCandidates {
         try ledger.sittingCandidates(dictionary: dictionary, introducedSince: dayStart)
     }
 
@@ -289,7 +296,7 @@ actor LedgerStore {
         try ledger.repeatedlyLapsed(dictionary: dictionary)
     }
 
-    func queueCounts(at when: Date, dictionary: String?, newAllowance: Int,
+    public func queueCounts(at when: Date, dictionary: String?, newAllowance: Int,
                      dayStart: Date) throws -> QueueCounts {
         try ledger.queueCounts(at: when, dictionary: dictionary, newAllowance: newAllowance,
                                dayStart: dayStart)
@@ -436,15 +443,17 @@ actor LedgerStore {
     }
 
     /// The newest lookup's id, for an instrument that has to put back exactly what it added.
-    func newestLookupID() throws -> Int { try ledger.newestLookupID() }
+    public func newestLookupID() throws -> Int { try ledger.newestLookupID() }
 
     /// Removes every lookup above `baseline`. **An instrument's own rows**, identified by an id
     /// it took before it wrote any.
-    func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
+    public func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
 }
 
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
 private extension DateFormatter {
-    /// `20261005-195500`: sorts as time does, and has no character a file name refuses.
+    /// `20261005-195500`: sorts as time does, and has no character a file name refuses. The developer clear's
+    /// alone, so it rides the same define.
     static let developerStamp: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -452,3 +461,4 @@ private extension DateFormatter {
         return formatter
     }()
 }
+#endif

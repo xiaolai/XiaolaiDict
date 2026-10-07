@@ -1,7 +1,7 @@
 import DictionaryModel
 import StudyKit
 import Testing
-@testable import XiaolaiDict
+@testable import StudyModels
 
 /// **Which lookup a reader's tap belongs to.** The entry is interactive as soon as it is drawn, and
 /// its ledger row is written only once the selector has decided — seconds later on the local model's

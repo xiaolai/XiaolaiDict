@@ -2,9 +2,9 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
-@testable import XiaolaiDict
 import XiaolaiDictTestSupport
 
 /// **The erase command's wire.** WI-006's surface.

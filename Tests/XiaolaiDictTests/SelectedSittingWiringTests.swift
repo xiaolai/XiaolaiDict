@@ -3,10 +3,10 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
 @testable import XiaolaiDictUI
-@testable import XiaolaiDict
 import XiaolaiDictTestSupport
 
 /// **The Selected sitting, from Saved's selection to the ledger's rows** (review-module-plan §8.2, R4,
@@ -62,7 +62,8 @@ struct SelectedSittingWiringTests {
     private func review(_ store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
                         clock: MovableClock? = nil) -> ReviewModel {
         ReviewModel(store: store, primary: { PrimaryDictionary(chosen: "noad") },
-                    clock: { clock?.now ?? self.now }, defaults: TemporaryDefaults.suite())
+                    clock: { clock?.now ?? self.now }, defaults: TemporaryDefaults.suite(),
+                    finish: {}, openInDictionary: { _ in false })
     }
 
     private func library(_ store: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
@@ -184,7 +185,7 @@ struct SelectedSittingWiringTests {
         let construction = app[start.upperBound..<end.lowerBound]
         #expect(construction.contains("reviewSelected:"), "the Library is built without the action's wire")
         #expect(construction.contains("reviewModel.startSelected(noteIDs:"), "and it does not reach the review model")
-        let model = try source("Sources/XiaolaiDict/LibraryModel.swift")
+        let model = try source("Sources/StudyModels/LibraryModel.swift")
         #expect(model.contains("reviewSelected(listed, order)"), "the Library's action does not call it")
 
         let root = URL(fileURLWithPath: #filePath)
@@ -425,7 +426,8 @@ struct SelectedSittingWiringTests {
             asked.stores += 1
             guard asked.stores == 1, let held = opening() else { return opening() }
             return Task { await asked.gate(); return try await held.value }
-        }, primary: { PrimaryDictionary(chosen: "noad") }, clock: { self.now }, defaults: TemporaryDefaults.suite())
+        }, primary: { PrimaryDictionary(chosen: "noad") }, clock: { self.now }, defaults: TemporaryDefaults.suite(),
+           finish: {}, openInDictionary: { _ in false })
         let queue = Task { await second.start() }
         try await Wiring.settle { asked.stores > 0 }
         await second.startSelected(noteIDs: chosen, order: .asListed).value
@@ -502,7 +504,7 @@ struct SelectedSittingWiringTests {
         }
         #expect(!finished.contains("summary.wasPractice ? "), "skips are worded by the sitting, not by the card")
         #expect(view.contains("if question.isPractice {"))
-        let model = try source("Sources/XiaolaiDict/ReviewModel.swift")
+        let model = try source("Sources/StudyModels/ReviewModel.swift")
         #expect(model.contains("isPractice: current.mode == .practice"), "the card is not told its own mode")
         #expect(!model.contains("private var isPractice"), "a sitting-wide flag decides the call")
     }

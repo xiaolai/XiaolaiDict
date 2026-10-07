@@ -1,6 +1,5 @@
 import AVFoundation
 import SwiftUI
-@testable import XiaolaiDict
 @testable import XiaolaiDictUI
 import Testing
 

@@ -8,15 +8,18 @@ import ReviewKit
 /// kept from an earlier study day is ignored by reading it, and replaced by the next raise, so nothing
 /// has to remember to clear it at the cutoff. Read every time a sitting is planned or the queue is
 /// counted, so the sitting, the Library's badge and the instrument agree without being told.
-struct OneDayIncreaseStore {
+public struct OneDayIncreaseStore {
     /// **A persistent contract**: renaming it drops whatever a reader raised today, silently.
     static let key = "reviewNewCardIncrease"
 
     let defaults: UserDefaults
 
+    /// The memberwise initialiser, said: a struct's own is never public, and the app builds one.
+    public init(defaults: UserDefaults) { self.defaults = defaults }
+
     /// What today's allowance is raised by on the study day containing `instant`: nothing where no
     /// increase is kept, where the kept one is another day's, or where it cannot be read.
-    func extra(in studyDay: StudyDay, at instant: Date) -> Int {
+    public func extra(in studyDay: StudyDay, at instant: Date) -> Int {
         kept?.extra(in: studyDay, at: instant) ?? 0
     }
 

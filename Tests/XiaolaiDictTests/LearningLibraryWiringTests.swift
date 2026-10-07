@@ -2,10 +2,10 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 @testable import StudyKit
+@testable import StudyModels
 import StudyPresentation
 import Testing
 import XiaolaiDictTestSupport
-@testable import XiaolaiDict
 
 @MainActor
 struct LearningLibraryWiringTests {

@@ -104,7 +104,9 @@ struct ModuleBoundaryTests {
 
     /// **The presentation layer: pure values a surface draws, and a class of its own** (2026-10-08,
     /// plan-macos-modularisation §3, P4a) — the Library's, Review's and the erase's presentations and actions, a
-    /// lookup's keep and save status, the study and dictionary choices Settings is handed.
+    /// lookup's keep and save status, the study and dictionary choices Settings is handed — **and the observable
+    /// models that drive them** (P4b): the Library's, Review's and the erase's models, the lookup recorder, the
+    /// study dictionary and options, and the ledger's actor.
     ///
     /// Neither of the other two classes. **Reader-facing text is allowed here**, which below the view layer it is
     /// not: `StringCatalogTests` reads these targets with the view layer's prose rule instead. **No UI framework and
@@ -113,6 +115,9 @@ struct ModuleBoundaryTests {
     static let presentation: [String: Set<String>] = [
         // Foundation alone: `LocalizedStringResource` is Foundation's, and nothing here draws, logs or observes.
         "StudyPresentation": ["Foundation"],
+        // Observation for `@Observable`, which is what a surface on any Apple platform watches; `os` is the
+        // recorder's and the options' log. The scenes that draw these models are the app's, never this target's.
+        "StudyModels": ["Foundation", "Observation", "os"],
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.

@@ -30,15 +30,15 @@ import XiaolaiDictBase
 ///   against.
 @Observable
 @MainActor
-final class StudyDictionary {
+public final class StudyDictionary {
     /// **The store is the truth for a lookup**, because a lookup can happen while no window is open
     /// to have observed anything. The observable copies below are what the windows draw.
-    @ObservationIgnored let store: PrimaryDictionaryStore
+    @ObservationIgnored public let store: PrimaryDictionaryStore
     @ObservationIgnored private let ask: (Bool) async -> [DictionaryCapability]?
 
     /// The enabled dictionaries, as the service last reported them. Nil until it has been asked: the
     /// menu says it does not know rather than showing a list it made up.
-    private(set) var enabled: [DictionaryCapability]?
+    public private(set) var enabled: [DictionaryCapability]?
 
     /// Whether the service has been asked and has finished answering. **Set whatever the answer
     /// was, including none** — "asked and got nothing" is a state that does not resolve, and a
@@ -50,7 +50,7 @@ final class StudyDictionary {
     /// defaults registers no dependency, so a view reading it is never invalidated when it changes.
     /// The setup board exposed this: pressing "Use 牛津英汉汉英词典" saved the choice and the row went
     /// on saying the seat was empty, because nothing told the view to look again.
-    private(set) var chosen: String?
+    public private(set) var chosen: String?
 
     /// The dictionary the reader's language names, derived from `enabled` and remembered under its own
     /// key. **Not the reader's choice** — `chosen` stays nil — so Library and Review, which scope by it,
@@ -76,7 +76,7 @@ final class StudyDictionary {
     /// before they enabled a dictionary, marked as a finished answer.
     @ObservationIgnored private var askEpoch = 0
 
-    init(defaults: UserDefaults, language: @escaping () -> String = { ReaderLanguage.preferred },
+    public init(defaults: UserDefaults, language: @escaping () -> String = { ReaderLanguage.preferred },
          studied: @escaping () async -> [String]? = { [] },
          ask: @escaping (Bool) async -> [DictionaryCapability]?) {
         let store = PrimaryDictionaryStore(defaults: defaults, language: language)
@@ -96,7 +96,7 @@ final class StudyDictionary {
     ///
     /// `revalidate` asks the service again without discarding its cache, for a caller that must have an
     /// answer *from this process* rather than one a menu opening happened to leave behind.
-    func refresh(refreshing: Bool = false, revalidate: Bool = false) async {
+    public func refresh(refreshing: Bool = false, revalidate: Bool = false) async {
         _ = await pass(refreshing: refreshing, revalidate: revalidate)
     }
 
@@ -176,7 +176,7 @@ final class StudyDictionary {
     /// Returns once this process has a derivation for the current language, or after `bound`.
     /// Immediate when it has, which is every lookup but the first of a launch. **Bounded** because the
     /// probe parses real entries and a slow service must not hold a lookup; the pass itself carries on.
-    func settled(bound: Duration = .seconds(2)) async {
+    public func settled(bound: Duration = .seconds(2)) async {
         guard !isSettled else { return }
         _ = try? await withDeadline(bound) { @MainActor [self] in
             // A pass stopped by `askAgain` answered nothing: the replacement it made way for is waited
@@ -213,7 +213,7 @@ final class StudyDictionary {
     /// right for a menu opening and wrong here: this is the path that has to see a dictionary the
     /// reader has just enabled, so the request carries `reprobing` and the service discards its
     /// answer before re-probing.
-    func askAgain() async {
+    public func askAgain() async {
         askEpoch += 1
         enabled = nil
         hasAsked = false
@@ -225,7 +225,7 @@ final class StudyDictionary {
     /// to how a retry is wired, had to be made twice and would compile either way if it were made
     /// once.
     @MainActor
-    var choice: DictionaryChoice {
+    public var choice: DictionaryChoice {
         DictionaryChoice(
             available: enabled,
             chosen: chosen,

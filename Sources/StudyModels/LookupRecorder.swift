@@ -9,7 +9,7 @@ import os
 
 /// Request-keyed durable reading, enrichment and ordered reader intent.
 @Observable @MainActor
-final class LookupRecorder {
+public final class LookupRecorder {
     @ObservationIgnored private var opening: Task<LedgerStore, any Error>?
     @ObservationIgnored private var opener: (@Sendable () async throws -> LedgerStore)?
     @ObservationIgnored private var writeVersions: [Int: Int] = [:]
@@ -54,20 +54,20 @@ final class LookupRecorder {
     private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "lookup-keeping")
     private var newest = 0
     static let retainedRequests = 64
-    private(set) var problem: String?
-    private(set) var states: [Int: LookupKeepStatus] = [:]
+    public private(set) var problem: String?
+    public private(set) var states: [Int: LookupKeepStatus] = [:]
     /// What became of each phrase saved from a request's card, **by its spelling** — so a card that switches
     /// to another phrase is not drawn with this one's state (ADR-0049).
-    private(set) var phraseStates: [Int: [String: PhraseCollectStatus]] = [:]
+    public private(set) var phraseStates: [Int: [String: PhraseCollectStatus]] = [:]
     var isOpen: Bool { opening != nil }
-    var store: Task<LedgerStore, any Error>? { opening }
+    public var store: Task<LedgerStore, any Error>? { opening }
     var heldTaps: Int { taps.heldCount }
 
-    init(wordCards: WordCardReplacementSetting? = nil) {
+    public init(wordCards: WordCardReplacementSetting? = nil) {
         self.wordCards = wordCards
     }
 
-    func start(open: @escaping @Sendable () async throws -> LedgerStore = { try await LedgerStore.openDefault() }) {
+    public func start(open: @escaping @Sendable () async throws -> LedgerStore = { try await LedgerStore.openDefault() }) {
         opener = open
         let task = Task { try await open() }; opening = task
         Task { [weak self] in
@@ -76,7 +76,7 @@ final class LookupRecorder {
         }
     }
     /// Scheduling is synchronous; the lookup display never waits for SQLite.
-    func begin(_ recording: LookupRecording, request: Int) {
+    public func begin(_ recording: LookupRecording, request: Int) {
         // A deleted reading stays deleted: writing its recording again would bring back a reading the
         // reader removed.
         guard !deleted.contains(request) else { return }
@@ -96,7 +96,7 @@ final class LookupRecorder {
             if self?.writeVersions[request] == version { self?.writes[request] = nil; self?.prune() }
         }
     }
-    func record(_ recording: LookupRecording, request: Int) async {
+    public func record(_ recording: LookupRecording, request: Int) async {
         begin(recording, request: request)
         await writes[request]?.value
     }
@@ -233,7 +233,7 @@ final class LookupRecorder {
             heldPhrases[request] = nil; phraseStates[request] = nil
         }
     }
-    func refreshStatus(request: Int) async {
+    public func refreshStatus(request: Int) async {
         guard writes[request] == nil, states[request] != .failed,
               let id = ids[request], let opening else { return }
         // **Applied only if no write began meanwhile.** The guard above is checked before the awaits
@@ -315,7 +315,7 @@ final class LookupRecorder {
               encounter.senseKey != nil, encounter.senseKeyKind != .none else { return false }
         return true
     }
-    func retry(request: Int) {
+    public func retry(request: Int) {
         guard !deleted.contains(request) else { return }
         states[request] = .keeping
         let failed = failedIntents[request]
@@ -374,7 +374,7 @@ final class LookupRecorder {
         if encounter.senseKey == nil { return .needsMeaning }
         return note.confirmedAt == nil ? .needsConfirmation : .kept
     }
-    func discard(request: Int) {
+    public func discard(request: Int) {
         guard !discarded.contains(request), !deleted.contains(request) else { return }
         log.info("request \(request) discard requested")
         states[request] = .keeping
@@ -382,7 +382,7 @@ final class LookupRecorder {
         discardOperations[request] = UUID()
         if let row = recordings[request] { begin(row, request: request) }
     }
-    func undoDiscard(request: Int) {
+    public func undoDiscard(request: Int) {
         guard let opening, !deleted.contains(request) else { return }
         guard let operation = discardOperations[request] else {
             guard let id = ids[request] else { return }
@@ -430,7 +430,7 @@ final class LookupRecorder {
         failedIntents[request] = .undo
         states[request] = .failed
     }
-    func study(_ encounter: SenseEncounter, request: Int) {
+    public func study(_ encounter: SenseEncounter, request: Int) {
         guard isOpen, !discarded.contains(request) else { return }
         let clarification = recordings[request]?.lookup != nil
         let automatic = clarification || (recordings[request]?.keepPolicy == .automatic && recordings[request]?.primaryDictionary == encounter.dictionary.key)
@@ -440,7 +440,7 @@ final class LookupRecorder {
     /// Waits for every write scheduled for `request` so far. **For a caller that started a write
     /// and must not race it** — the work, not a clock: a test that polled the ledger for two
     /// seconds failed whenever the machine was busier than that.
-    func settled(request: Int) async { await writes[request]?.value }
+    public func settled(request: Int) async { await writes[request]?.value }
 
     /// Whether `request`'s reading is in the ledger — its row written, and no failed recording
     /// waiting to be retried. A failed sense choice is a different failure and does not count.
@@ -451,7 +451,7 @@ final class LookupRecorder {
 
     /// How `request` ended in the ledger: its row written, or handed over and not written — **nil where
     /// it was never handed over**, which only the caller, who knows whether the panel drew, can name.
-    func ending(request: Int) -> LookupTimeline.Ending? {
+    public func ending(request: Int) -> LookupTimeline.Ending? {
         if didRecord(request: request) { return .recorded }
         return recordings[request] == nil ? nil : .notRecorded
     }
@@ -461,9 +461,9 @@ final class LookupRecorder {
     /// and automatic keeping already write under, so a Save and a tap on one meaning are one note. The
     /// panel's Save passed no language, and the note it wrote under `unknown` split the reader's progress
     /// from the one automatic keeping had made (audit-fix round 3, #5).
-    func language(of request: Int) -> String? { recordings[request]?.record.language }
+    public func language(of request: Int) -> String? { recordings[request]?.record.language }
 
-    func enrol(_ encounter: SenseEncounter, request: Int, language: String?) {
+    public func enrol(_ encounter: SenseEncounter, request: Int, language: String?) {
         guard isOpen, !discarded.contains(request) else { return }
         enqueue(encounter, request: request, enrolling: true, language: language, source: .manual)
     }
@@ -473,7 +473,7 @@ final class LookupRecorder {
     ///
     /// Answers false, and writes nothing, where it cannot be taken: no ledger, or a reading the reader
     /// discarded or that was deleted. The card then says the save did not happen.
-    func collect(_ phrase: PhraseCollection, request: Int, language: String?) -> Bool {
+    public func collect(_ phrase: PhraseCollection, request: Int, language: String?) -> Bool {
         guard isOpen, !discarded.contains(request), !deleted.contains(request) else {
             log.error("request \(request) phrase save refused: the ledger is not open or the reading is gone")
             return false
@@ -583,8 +583,8 @@ final class LookupRecorder {
 /// That the ledger changed, and nothing about where. **Every observer refreshes what it shows**, so
 /// the ids this once carried were read by nobody — a payload that looks like scoping and is not.
 @Observable @MainActor
-final class LedgerChanges {
-    static let shared = LedgerChanges()
-    private(set) var revision = 0
-    func committed() { revision += 1 }
+public final class LedgerChanges {
+    public static let shared = LedgerChanges()
+    public private(set) var revision = 0
+    public func committed() { revision += 1 }
 }

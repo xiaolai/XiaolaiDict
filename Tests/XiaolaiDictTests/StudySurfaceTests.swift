@@ -55,6 +55,10 @@ struct StudySurfaceTests {
         "Sources/StudyKit/WordCardReplacement.swift",
         // A phrase the reader saved as a card from the lookup panel (ADR-0049).
         "Sources/StudyKit/PhraseCollection.swift",
+        // **The ledger as the surfaces reach it**, a module's public surface since the study models left the app
+        // (2026-10-08, plan-macos-modularisation P4b): a method made public with no caller outside `StudyModels` is
+        // a door no surface walks through, the shape this scan looks for one layer up.
+        "Sources/StudyModels/LedgerStore.swift",
     ]
 
     /// Where a caller would be — **minus the declaring file's own module**, since a method called
@@ -68,8 +72,11 @@ struct StudySurfaceTests {
     /// core is no root at all**: it depends on neither `StudyKit` nor `ReviewKit` any more, so it cannot
     /// call a capability declared in either — kept, it could only vouch for one by a name that happens to
     /// match. The unwired set and the exemption table were the same before and after the change.
+    ///
+    /// **`StudyModels` joined when the study models left the app (P4b)**: they are where most capabilities are
+    /// called, and without this root every one only they reach would read as unwired.
     private static let calling = [
-        "Sources/StudyKit", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
+        "Sources/StudyKit", "Sources/StudyModels", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI",
         "Sources/XiaolaiDictService", "Tools",
     ]
 
@@ -78,6 +85,7 @@ struct StudySurfaceTests {
     /// wired or unwired by accident.
     private static let callingCanaries: [String: [String]] = [
         "Sources/StudyKit": ["Ledger.swift"],
+        "Sources/StudyModels": ["LedgerStore.swift"],
         "Sources/XiaolaiDict": ["XiaolaiDictApp.swift"],
         "Sources/XiaolaiDictUI": ["LibraryView.swift"],
         "Sources/XiaolaiDictService": ["main.swift"],
@@ -334,8 +342,11 @@ struct StudySurfaceTests {
             encoding: .utf8))
         #expect(declared.contains("introductions(since:"), "the scan read the file it thinks it did")
         #expect(Self.callers(of: "Sources/StudyKit/Ledger.swift")
-                == ["Sources/XiaolaiDict", "Sources/XiaolaiDictUI", "Sources/XiaolaiDictService", "Tools"],
+                == ["Sources/StudyModels", "Sources/XiaolaiDict", "Sources/XiaolaiDictUI", "Sources/XiaolaiDictService",
+                    "Tools"],
                 "a StudyKit method is not wired by StudyKit itself")
+        #expect(!Self.callers(of: "Sources/StudyModels/LedgerStore.swift").contains("Sources/StudyModels"),
+                "a StudyModels method is not wired by StudyModels itself")
         #expect(Self.callers(of: "Sources/ReviewKit/StudyCards.swift") == Self.calling,
                 "a ReviewKit method is wired by StudyKit too")
         #expect(Self.publicFunctions(in: "public func abc(") == ["abc("])

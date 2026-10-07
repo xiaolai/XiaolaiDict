@@ -110,6 +110,11 @@ struct StringCatalogTests {
             "the mark between two meanings in one row of the compact preview, drawn with `Text(verbatim:)`. "
             + "It is punctuation, not a sentence, and which mark it is follows the script of the meanings "
             + "(`MeaningGroup.text`), not the reader's language, so a translator has nothing to decide",
+        "Downloads":
+            "a path component, never shown: the folder under the home directory the Library's export is written "
+            + "to, which is called that on disk in every language — Finder translates only the name it displays. "
+            + "A translated one would send the export to a folder that does not exist. Read here since the study "
+            + "models joined the prose rule (2026-10-08, plan-macos-modularisation P4b)",
     ]
 
     /// Every literal in a file, with what preceded it, and continuations rejoined.
@@ -269,10 +274,10 @@ struct StringCatalogTests {
                 }
             }
         }
-        // Named, not counted: the settings window, the Library's presentation and the app's shell, one in each
-        // root (SourceScan.unread).
-        let unread = SourceScan.unread(["SettingsView.swift", "LibraryPresentation.swift", "XiaolaiDictApp.swift"],
-                                       in: read)
+        // Named, not counted: the settings window, the Library's presentation, the Library's model and the app's
+        // shell, one in each root (SourceScan.unread).
+        let unread = SourceScan.unread(["SettingsView.swift", "LibraryPresentation.swift", "LibraryModel.swift",
+                                        "XiaolaiDictApp.swift"], in: read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(missing.isEmpty, "run `make strings`; the catalog does not have: \(missing)")
     }
@@ -354,8 +359,9 @@ struct StringCatalogTests {
     /// below the view layer (`ModuleBoundaryTests.presentation` holds the rest of the class). Added 2026-10-08 with
     /// the first of them (plan-macos-modularisation, P4a): the Library's, Review's and the erase's values left the
     /// SwiftUI files that declared them, and the prose rule would otherwise have stopped reading their sentences
-    /// the day they moved.
-    static let presentationTargets = ["Sources/StudyPresentation"]
+    /// the day they moved. The second (P4b) holds the study models, which left the app with their 20
+    /// `String(localized:)` calls where they were written (ADR-0025).
+    static let presentationTargets = ["Sources/StudyPresentation", "Sources/StudyModels"]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there
     /// can be shown and never extracted — `Tools/strings.sh` would not find it.
