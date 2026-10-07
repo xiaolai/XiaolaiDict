@@ -1,3 +1,4 @@
+import StudyPresentation
 import SwiftUI
 
 /// The skeleton every collection pane of the Library is built on.
@@ -157,7 +158,7 @@ struct LibrarySelectionToolbar<Actions: View>: ToolbarContent {
 /// affordances in adjacent panes, and in one of them no way to find it at all.
 struct LibraryUndoToolbar: ToolbarContent {
     /// What pressing it takes back, or nil when there is nothing to.
-    let title: LocalizedStringKey?
+    let title: LocalizedStringResource?
     let undo: @MainActor () -> Void
 
     var body: some ToolbarContent {

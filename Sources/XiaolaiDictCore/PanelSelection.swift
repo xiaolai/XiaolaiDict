@@ -1,5 +1,4 @@
 import DictionaryModel
-import XiaolaiDictCore
 
 /// **Which sense the reader tapped, per entry.**
 ///

@@ -86,10 +86,18 @@ let package = Package(
 
         // What is left of the reader's side once the study ledger and the capture policy have their own
         // targets (2026-10-08): the sense ladder and its selectors, the sentence pane and its translation,
-        // the sense mark, the lookup's outcome and timeline, the public dictionary's fallback, the setup
+        // the sense mark and which sense the reader tapped in each entry (`PanelSelection`, beside the mark it
+        // holds), the lookup's outcome and timeline, the public dictionary's fallback, the setup
         // board's presentation and the lookup shortcut. No AppKit and no private API. Not portable, and not
         // meant to be: it binds NaturalLanguage, CoreServices, FoundationModels and Carbon's key codes.
         .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "CaptureModel"]),
+
+        // What the study surfaces draw, as values, apart from the SwiftUI files that used to declare them
+        // (2026-10-08): the Library's, Review's and the erase's presentations and actions, a lookup's keep and
+        // save status, the study and dictionary choices Settings is handed. **A presentation target**: reader-facing
+        // text is allowed here and read by the view layer's prose rule, and no UI framework and no view layer is —
+        // a symbol a surface draws with stays with `ActionSymbol`, in the view layer. Foundation alone.
+        .target(name: "StudyPresentation", dependencies: ["DictionaryModel", "ReviewKit", "StudyKit"]),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
         // by the app: its failure mode is a segfault, and a crash must take down the service, not
@@ -125,8 +133,8 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
@@ -158,7 +166,7 @@ let package = Package(
         // its gesture, the screen's geometry, the drawer's frame, the recognised text and its sentence.
         .testTarget(name: "CaptureTests",
                     dependencies: ["DictionaryModel", "CaptureModel", "Capture", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.

@@ -3,7 +3,6 @@ import DictionaryModel
 import Foundation
 import StudyKit
 import XiaolaiDictCore
-import XiaolaiDictUI
 
 /// Which dictionary XiaolaiDict studies from (decision D7).
 ///

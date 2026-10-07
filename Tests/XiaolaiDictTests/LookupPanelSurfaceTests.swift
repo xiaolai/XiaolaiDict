@@ -3,6 +3,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import ModelKit
+import StudyPresentation
 import SwiftUI
 import Testing
 import XiaolaiDictBase

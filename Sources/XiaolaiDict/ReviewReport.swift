@@ -1,7 +1,7 @@
 import Foundation
 import ReviewKit
 import StudyKit
-import XiaolaiDictUI
+import StudyPresentation
 
 /// `--review-report`: **what Review will ask, and what its model holds on each side of the reveal**,
 /// read through the same `ReviewModel` the Library window draws from.

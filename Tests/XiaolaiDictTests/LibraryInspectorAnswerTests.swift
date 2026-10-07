@@ -1,6 +1,6 @@
 import Foundation
+import StudyPresentation
 import Testing
-@testable import XiaolaiDictUI
 
 /// **A saved target with no answer can be given one.**
 ///

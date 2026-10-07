@@ -1,5 +1,5 @@
 import StudyKit
-import XiaolaiDictUI
+import StudyPresentation
 import Foundation
 import Observation
 import DictionaryModel

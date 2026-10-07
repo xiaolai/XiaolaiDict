@@ -246,18 +246,19 @@ struct StringCatalogTests {
     /// string is skipped and a concatenated one is rejoined. The catalog stays the source of
     /// truth; this is the guard against the two ways it goes stale.
     ///
-    /// The prose rule runs over `Sources/XiaolaiDictUI` alone, and the limit is deliberate rather
-    /// than an oversight. The view layer is where reader-facing text belongs, and the app module is
-    /// mostly the opposite — instrument output, report keys and log lines, which are not translated
-    /// and would swamp the check. What that costs: a sentence written as a bare `String` in
+    /// The prose rule runs over `Sources/XiaolaiDictUI` and the presentation targets alone, and the
+    /// limit is deliberate rather than an oversight. Those are where reader-facing text belongs, and the
+    /// app module is mostly the opposite — instrument output, report keys and log lines, which are not
+    /// translated and would swamp the check. What that costs: a sentence written as a bare `String` in
     /// `Sources/XiaolaiDict` is seen only if it sits at one of the call sites above. That is why
     /// the panel's own four messages were moved to `PanelContent`, where they are covered.
     @Test func everyLiteralTheReaderSeesIsInTheCatalog() throws {
         let strings = try #require(try catalog()["strings"] as? [String: Any])
         var missing: [String] = []
         var read: [URL] = []
-        for directory in ["Sources/XiaolaiDictUI", "Sources/XiaolaiDict"] {
-            let viewLayer = directory == "Sources/XiaolaiDictUI"
+        let proseRoots = ["Sources/XiaolaiDictUI"] + Self.presentationTargets
+        for directory in proseRoots + ["Sources/XiaolaiDict"] {
+            let viewLayer = proseRoots.contains(directory)
             let files = try swiftFiles(under: directory)
             read += files
             for file in files {
@@ -268,8 +269,10 @@ struct StringCatalogTests {
                 }
             }
         }
-        // Named, not counted: the settings window and the app's shell, one in each root (SourceScan.unread).
-        let unread = SourceScan.unread(["SettingsView.swift", "XiaolaiDictApp.swift"], in: read)
+        // Named, not counted: the settings window, the Library's presentation and the app's shell, one in each
+        // root (SourceScan.unread).
+        let unread = SourceScan.unread(["SettingsView.swift", "LibraryPresentation.swift", "XiaolaiDictApp.swift"],
+                                       in: read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(missing.isEmpty, "run `make strings`; the catalog does not have: \(missing)")
     }
@@ -346,6 +349,14 @@ struct StringCatalogTests {
         "Sources/Capture",
     ]
 
+    /// Every presentation target: pure values a surface draws, **where reader-facing text is allowed** — so it
+    /// is read with the view layer's prose rule, as `Sources/XiaolaiDictUI` is, and never refused as display text
+    /// below the view layer (`ModuleBoundaryTests.presentation` holds the rest of the class). Added 2026-10-08 with
+    /// the first of them (plan-macos-modularisation, P4a): the Library's, Review's and the erase's values left the
+    /// SwiftUI files that declared them, and the prose rule would otherwise have stopped reading their sentences
+    /// the day they moved.
+    static let presentationTargets = ["Sources/StudyPresentation"]
+
     /// **No display text below the view layer.** None of these targets has one, so a sentence there
     /// can be shown and never extracted — `Tools/strings.sh` would not find it.
     @Test func noTargetBelowTheViewLayerHoldsDisplayText() throws {
@@ -362,9 +373,10 @@ struct StringCatalogTests {
         #expect(offenders.isEmpty, "these belong in the view layer: \(offenders)")
     }
 
-    /// **And the list has to name every target that has no view layer.** Read off `Package.swift`
-    /// rather than kept by hand: a target added later and left off the list above is a target the
-    /// scan silently does not cover, which is the same defect one directory deep.
+    /// **And the two lists have to name every target that has no view layer, each once.** Read off
+    /// `Package.swift` rather than kept by hand: a target added later and left off both is a target
+    /// neither scan covers, which is the same defect one directory deep — and a target on both would be
+    /// refused its text by one rule and read for it by the other.
     ///
     /// `XiaolaiDictUI` and `XiaolaiDict` are the view layer and are excluded by name;
     /// the two service executables carry no reader text and are excluded for the reason
@@ -383,9 +395,11 @@ struct StringCatalogTests {
             .map { String($0.output[1].substring ?? "") }
             .filter { !viewLayerOrAnExecutable.contains($0) }
         let scanned = Self.targetsBelowTheViewLayer.map { $0.replacingOccurrences(of: "Sources/", with: "") }
-        #expect(Set(shouldScan) == Set(scanned), """
+        let presenting = Self.presentationTargets.map { $0.replacingOccurrences(of: "Sources/", with: "") }
+        #expect(Set(scanned).isDisjoint(with: presenting), "below the view layer and presentation both: \(presenting)")
+        #expect(Set(shouldScan) == Set(scanned).union(presenting), """
             targets in Package.swift that have no view layer: \(shouldScan.sorted()); \
-            targets this scan covers: \(scanned.sorted())
+            targets these scans cover: \((scanned + presenting).sorted())
             """)
     }
 

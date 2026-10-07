@@ -1,6 +1,7 @@
 import Foundation
 import ReviewKit
 import StudyKit
+import StudyPresentation
 import Testing
 @testable import XiaolaiDictUI
 @testable import XiaolaiDict

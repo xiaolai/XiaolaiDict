@@ -102,8 +102,24 @@ struct ModuleBoundaryTests {
         "CaptureModel": ["Foundation"],
     ]
 
+    /// **The presentation layer: pure values a surface draws, and a class of its own** (2026-10-08,
+    /// plan-macos-modularisation §3, P4a) — the Library's, Review's and the erase's presentations and actions, a
+    /// lookup's keep and save status, the study and dictionary choices Settings is handed.
+    ///
+    /// Neither of the other two classes. **Reader-facing text is allowed here**, which below the view layer it is
+    /// not: `StringCatalogTests` reads these targets with the view layer's prose rule instead. **No UI framework and
+    /// no view layer is**, which in the view layer would be: a value that imported `XiaolaiDictUI` would be the view
+    /// layer's again, and nothing but this app's surface could draw it. Exact sets, as below the view layer.
+    static let presentation: [String: Set<String>] = [
+        // Foundation alone: `LocalizedStringResource` is Foundation's, and nothing here draws, logs or observes.
+        "StudyPresentation": ["Foundation"],
+    ]
+
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
     static let viewLayer: Set<String> = ["XiaolaiDictUI", "XiaolaiDict"]
+
+    /// What draws: the frameworks no target outside the view layer may bind, below it or in the presentation layer.
+    static let viewFrameworks: Set<String> = ["AppKit", "SwiftUI", "UIKit", "QuartzCore", "WebKit"]
 
     // MARK: - No view layer below the view layer
 
@@ -113,7 +129,7 @@ struct ModuleBoundaryTests {
     /// testable without a window server, and the segfault-prone DictionaryServices calls stay behind
     /// the XPC boundary only while the targets on this side of it have no reason to draw.
     @Test func nothingBelowTheViewLayerBindsAppKitOrSwiftUI() throws {
-        let forbidden = ["AppKit", "SwiftUI", "UIKit", "QuartzCore", "WebKit"]
+        let forbidden = Self.viewFrameworks
         var offenders: [String] = []
         for target in Self.allowed.keys.sorted() {
             for (file, imports) in try Self.imports(of: target) {
@@ -125,26 +141,67 @@ struct ModuleBoundaryTests {
         #expect(offenders.isEmpty, "\(offenders)")
     }
 
+    /// **The presentation layer binds no UI framework, and not the view layer either** — §3's second class. The
+    /// first half is the rule below the view layer; the second is what keeps these values drawable by a surface
+    /// that is not this app's.
+    @Test func thePresentationLayerBindsNoUIFrameworkAndNotTheViewLayer() throws {
+        var problems: [String] = []
+        for target in Self.presentation.keys.sorted() {
+            let files = try Self.imports(of: target)
+            // A walk that read nothing has nothing to refuse, and would pass for a target that is not there.
+            if files.isEmpty { problems.append("nothing scanned under Sources/\(target)") }
+            problems += Self.presentationProblems(of: target, files: files)
+        }
+        #expect(problems.isEmpty, "\(problems)")
+        // The control: each refusal, on a list no scan made, and nothing for what a presentation target may bind.
+        #expect(Self.presentationProblems(of: "StudyPresentation", files: [
+            ("Clean.swift", ["Foundation", "StudyKit"]), ("Drawn.swift", ["SwiftUI"]),
+            ("Shown.swift", ["XiaolaiDictUI"]), ("Both.swift", ["AppKit", "XiaolaiDict"]),
+        ]) == [
+            "StudyPresentation/Drawn.swift imports SwiftUI, a UI framework",
+            "StudyPresentation/Shown.swift imports XiaolaiDictUI, the view layer",
+            "StudyPresentation/Both.swift imports AppKit, a UI framework",
+            "StudyPresentation/Both.swift imports XiaolaiDict, the view layer",
+        ])
+    }
+
+    /// What a presentation target's imports break of its class's rule, in the words the check above uses.
+    static func presentationProblems(of target: String, files: [(file: String, modules: [String])]) -> [String] {
+        files.flatMap { file, modules in
+            modules.compactMap { module -> String? in
+                if viewFrameworks.contains(module) { return "\(target)/\(file) imports \(module), a UI framework" }
+                if viewLayer.contains(module) { return "\(target)/\(file) imports \(module), the view layer" }
+                return nil
+            }
+        }
+    }
+
     /// **And the list of targets to check is read off `Package.swift`, not kept by hand.** A target
     /// added later and forgotten here is a target the rule above does not cover, and it would go on
     /// passing — the same shape as a source scan that names one directory.
     @Test func everyLibraryTargetIsEitherCheckedOrTheViewLayer() throws {
         let declared = try Self.targets()
         let accountedFor = Set(Self.allowed.keys)
+            .union(Self.presentation.keys)
             .union(Self.viewLayer)
             .union(["XiaolaiDictService", "XiaolaiDictModelService", "XiaolaiDictTestSupport"])
         #expect(Set(declared) == accountedFor, """
             declared in Package.swift: \(declared.sorted()); accounted for here: \
             \(accountedFor.sorted())
             """)
+        // One class each: a target in both tables would be held to whichever rule happened to be read first.
+        #expect(Set(Self.allowed.keys).isDisjoint(with: Self.presentation.keys))
     }
 
     // MARK: - What each target binds
 
+    /// Every target held to an exact framework set: below the view layer, and the presentation layer.
+    static var exactSets: [String: Set<String>] { allowed.merging(presentation) { below, _ in below } }
+
     @Test func eachTargetBindsOnlyWhatItIsAllowedTo() throws {
         var surprises: [String] = []
-        for (target, permitted) in Self.allowed.sorted(by: { $0.key < $1.key }) {
-            let siblings = Set(Self.allowed.keys).union(Self.viewLayer)
+        for (target, permitted) in Self.exactSets.sorted(by: { $0.key < $1.key }) {
+            let siblings = Set(Self.exactSets.keys).union(Self.viewLayer)
             var bound: Set<String> = []
             for (_, imports) in try Self.imports(of: target) {
                 bound.formUnion(imports.filter { !siblings.contains($0) })
@@ -559,6 +616,15 @@ struct ModuleBoundaryTests {
                 == ["XiaolaiDictService binds UserNotifications, which a service never may"])
         #expect(try Self.verdict(on: "ReviewKitTests", compiled: ["Foundation", "Testing", "ReviewKit", "Combine"])
                 == ["ReviewKitTests binds Combine, which is not in its allowed set"])
+        // A presentation target binding the view layer is refused as that, not only as an undeclared import —
+        // which a declared edge would silence — and its exact set holds it as the tables below the view layer do.
+        let presenting = try #require(Self.dependencyMap()["StudyPresentation"], "StudyPresentation has no declaration")
+        let declaredView = try Self.verdict(on: "StudyPresentation",
+                                            compiled: presenting.union(["Foundation", "XiaolaiDictUI"]))
+        #expect(declaredView.contains("StudyPresentation binds XiaolaiDictUI, which a presentation target never may"),
+                "\(declaredView)")
+        #expect(try Self.verdict(on: "StudyPresentation", compiled: presenting.union(["Foundation", "SwiftUI"]))
+                == ["StudyPresentation binds SwiftUI, which is not in its allowed set"])
         #expect(try Self.verdict(on: "Undeclared", compiled: ["Foundation"])
                 == ["Undeclared has no declaration this test could read"])
     }
@@ -859,7 +925,7 @@ struct ModuleBoundaryTests {
             problems.append("\(target): the compiler listed no import at all, and a list that found nothing "
                             + "cannot be trusted to have found the rest")
         }
-        if let table = allowed[target] ?? testTargetsMayBind[target] {
+        if let table = exactSets[target] ?? testTargetsMayBind[target] {
             let permitted = Set(table.map(topLevel))
             let bound = compiled.subtracting(ours)
             for module in bound.subtracting(permitted).sorted() {
@@ -877,6 +943,13 @@ struct ModuleBoundaryTests {
         if services.contains(target) {
             for module in compiled.intersection(neverInAService).sorted() {
                 problems.append("\(target) binds \(module), which a service never may")
+            }
+        }
+        // The view layer is this package's own, so the exact set above filters it out with every sibling: a
+        // presentation target that declared it as well as importing it would pass every other line here.
+        if presentation[target] != nil {
+            for module in compiled.intersection(viewLayer).sorted() {
+                problems.append("\(target) binds \(module), which a presentation target never may")
             }
         }
         return problems

@@ -158,7 +158,9 @@ struct TestInventoryTests {
         // `LemmatizerTests` as the one test that mixed the two subjects.
         // Then 686 → 457, a transfer again: 229 `@Test` in 15 files left for `CaptureTests` with the capture
         // policy — hover, geometry, the drawer's frame, recognised text and the sentence cut from it.
-        "XiaolaiDictCoreTests": 457,
+        // Raised 457 → 458 by P4a (1): the presentation layer binding no UI framework and not the view layer,
+        // with its control (`ModuleBoundaryTests`).
+        "XiaolaiDictCoreTests": 458,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.

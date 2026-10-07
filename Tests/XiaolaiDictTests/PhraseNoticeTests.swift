@@ -2,6 +2,7 @@ import AppKit
 import DictionaryModel
 import Foundation
 import StudyKit
+import StudyPresentation
 import SwiftUI
 import Testing
 

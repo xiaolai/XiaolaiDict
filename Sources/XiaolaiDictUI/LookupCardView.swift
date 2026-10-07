@@ -2,6 +2,7 @@ import CaptureModel
 import DictionaryModel
 import ModelKit
 import StudyKit
+import StudyPresentation
 import XiaolaiDictCore
 import SwiftUI
 

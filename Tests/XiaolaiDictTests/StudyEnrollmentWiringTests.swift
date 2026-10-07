@@ -2,6 +2,7 @@ import CaptureModel
 import DictionaryModel
 import Foundation
 import StudyKit
+import StudyPresentation
 import Synchronization
 import Testing
 import XiaolaiDictCore

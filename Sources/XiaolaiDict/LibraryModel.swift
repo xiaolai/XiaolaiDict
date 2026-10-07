@@ -4,6 +4,7 @@ import Foundation
 import Observation
 import ReviewKit
 import StudyKit
+import StudyPresentation
 import SwiftUI
 import XiaolaiDictUI
 

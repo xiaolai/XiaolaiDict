@@ -2,8 +2,8 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
+import StudyPresentation
 import Testing
-import XiaolaiDictUI
 @testable import XiaolaiDict
 import XiaolaiDictTestSupport
 

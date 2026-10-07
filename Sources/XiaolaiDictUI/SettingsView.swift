@@ -2,6 +2,7 @@ import AppKit
 import Capture
 import StudyKit
 import Observation
+import StudyPresentation
 import SwiftUI
 
 @Observable

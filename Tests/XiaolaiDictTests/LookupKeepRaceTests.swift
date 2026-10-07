@@ -2,9 +2,9 @@ import DictionaryModel
 import Foundation
 import os
 @testable import StudyKit
+import StudyPresentation
 import Testing
 import XiaolaiDictTestSupport
-import XiaolaiDictUI
 @testable import XiaolaiDict
 
 @MainActor

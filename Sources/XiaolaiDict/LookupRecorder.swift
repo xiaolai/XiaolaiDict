@@ -2,9 +2,9 @@ import DictionaryModel
 import Foundation
 import Observation
 import StudyKit
+import StudyPresentation
 import XiaolaiDictBase
 import XiaolaiDictCore
-import XiaolaiDictUI
 import os
 
 /// Request-keyed durable reading, enrichment and ordered reader intent.

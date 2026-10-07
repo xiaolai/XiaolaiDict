@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import StudyPresentation
 import SwiftUI
 import Testing
 @testable import XiaolaiDictUI

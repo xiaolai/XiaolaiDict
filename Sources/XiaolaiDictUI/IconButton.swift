@@ -119,6 +119,24 @@ struct IconButton: View {
         self.action = action
     }
 
+    /// The same, for a name handed over as a `LocalizedStringResource` — a value's own name from
+    /// `StudyPresentation`, which binds no SwiftUI and so has no `LocalizedStringKey` to give. Drawn as
+    /// `Text(title)`, which renders what the key would, inflection included (measured pixel for pixel,
+    /// 2026-10-08); never `String(localized:)`, which does not inflect. Disfavoured, so a literal still
+    /// takes the key above.
+    @_disfavoredOverload
+    init(
+        _ kind: ActionSymbol, title: LocalizedStringResource, shortcut: KeyboardShortcut? = nil, size: CGFloat? = nil,
+        action: @escaping () -> Void
+    ) {
+        name = Text(title)
+        symbol = kind.symbol
+        self.shortcut = shortcut
+        self.size = size
+        role = kind.role
+        self.action = action
+    }
+
     var body: some View {
         latest.action = action
         return content

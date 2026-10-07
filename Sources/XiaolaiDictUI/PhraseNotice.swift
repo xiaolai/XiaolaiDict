@@ -1,6 +1,7 @@
 import DictionaryModel
 import Foundation
 import StudyKit
+import StudyPresentation
 import SwiftUI
 import XiaolaiDictBase
 import os
@@ -222,18 +223,6 @@ public enum PhraseCollectRefusal: Equatable, Sendable, CaseIterable {
         case .readingDeleted: "This reading was deleted, so the phrase cannot be saved"
         }
     }
-}
-
-/// What the ledger did with a save of the phrase — **the recorder's, per request and spelling**, so a phrase
-/// the card switches to is not drawn with another's state.
-public enum PhraseCollectStatus: Equatable, Sendable, CaseIterable {
-    /// Asked for, and not yet written — waiting for the reading's row, or for the ledger.
-    case collecting
-    case collected
-    /// It was saved before, from this reading or another: the same card, one more reading behind it.
-    case alreadyCollected
-    /// It was not written. The control offers the same save again.
-    case failed
 }
 
 /// **The phrase control's state, as a decision rather than view code** — a `@ViewBuilder` condition cannot

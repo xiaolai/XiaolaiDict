@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 import ReviewKit
+import StudyPresentation
 import XiaolaiDictBase
-import XiaolaiDictUI
 import os
 
 /// **R1b's switch: choosing a meaning for a word saved without one replaces the word-only card.**

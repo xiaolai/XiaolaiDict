@@ -1,6 +1,6 @@
 import Foundation
+import StudyPresentation
 import Testing
-@testable import XiaolaiDictUI
 
 /// Every pane of the Library is built on one skeleton, so they look like one window.
 ///
@@ -28,10 +28,26 @@ struct LibraryPaneChromeTests {
             encoding: .utf8)
     }
 
-    /// Every file of the Library window, for the sweeps that hold of all of them.
-    static let libraryFiles = ["LearningLibraryView.swift", "LibraryView.swift", "LibraryCollection.swift",
-                               "LibraryPaneChrome.swift", "LibraryReviewPane.swift", "ReviewView.swift",
-                               "LibrarySearch.swift", "LibraryLayout.swift"]
+    /// A file by its path under `Sources`: the sweeps below read two targets.
+    private func underSources(_ path: String) throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/\(path)"),
+            encoding: .utf8)
+    }
+
+    /// Every file of the Library window, for the sweeps that hold of all of them, by its path under `Sources`: the
+    /// views, and the values they draw — which left the views' files for `StudyPresentation` (P4a) and took their
+    /// text with them, so a sweep of the views alone would pass over the undo's counted name.
+    static let libraryFiles = ["XiaolaiDictUI/LearningLibraryView.swift", "XiaolaiDictUI/LibraryView.swift",
+                               "XiaolaiDictUI/LibraryCollection.swift", "XiaolaiDictUI/LibraryPaneChrome.swift",
+                               "XiaolaiDictUI/LibraryReviewPane.swift", "XiaolaiDictUI/ReviewView.swift",
+                               "XiaolaiDictUI/LibrarySearch.swift", "XiaolaiDictUI/LibrarySymbols.swift",
+                               "StudyPresentation/LibraryLayout.swift", "StudyPresentation/LibraryPane.swift",
+                               "StudyPresentation/LibraryPresentation.swift",
+                               "StudyPresentation/ArchivePresentation.swift",
+                               "StudyPresentation/ReviewPresentation.swift"]
 
     @Test(arguments: ["LearningLibraryView.swift", "LibraryView.swift"])
     func aCollectionPaneIsBuiltOnTheSharedSkeleton(file: String) throws {
@@ -392,7 +408,7 @@ struct LibraryPaneChromeTests {
     /// text that is meant to be read.
     @Test(arguments: libraryFiles)
     func symbolsAndColoursComeFromTheSharedTables(file: String) throws {
-        let text = try source(file)
+        let text = try underSources(file)
         #expect(!text.contains("systemImage: \""), "\(file) names a symbol by string")
         #expect(!text.contains("symbol: \""), "\(file) names a symbol by string")
         #expect(!text.contains("IconButton(title: "), "\(file) builds an icon button outside ActionSymbol")
@@ -406,7 +422,7 @@ struct LibraryPaneChromeTests {
     /// both on screen. A number followed by a counted noun must sit inside `^[…](inflect: true)`.
     @Test(arguments: libraryFiles)
     func everyCountedNounIsInflected(file: String) throws {
-        let text = try source(file)
+        let text = try underSources(file)
         let bare = try NSRegularExpression(
             pattern: #"(?<!\^\[)\\\([^()]*(?:\([^()]*\))?[^()]*\) (readings?|cards?|meanings?|days?|places?|reviews?|times?)\b"#,
             options: [.caseInsensitive])
@@ -424,6 +440,11 @@ struct LibraryPaneChromeTests {
         #expect(hits(#"Text("\(archive.total) reading encounters")"#) == 1)
         #expect(hits(#""Discard \(ids.count) readings""#) == 1)
         #expect(hits(#""Discard ^[\(ids.count) Reading](inflect: true)""#) == 0)
+        // And the sweep reads where the Library's counted names are: the undo's left `LibraryView.swift` with the
+        // presentation (P4a), and a list of the views alone went on passing without it.
+        let swept = try Self.libraryFiles.map(underSources).joined()
+        #expect(swept.contains(#""Undo Pausing ^[\(count) Meaning](inflect: true)""#),
+                "the sweep no longer reads the undo's name")
     }
 
     /// **The dead split-view branch is gone.** `showsSidebar: true` had no caller and still carried

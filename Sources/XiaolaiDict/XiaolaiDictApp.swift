@@ -3,6 +3,7 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import StudyKit
+import StudyPresentation
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI

@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 import StudyKit
+import StudyPresentation
 import SwiftUI
-import XiaolaiDictUI
 
 /// **The erase command's model.** WI-006's surface.
 ///

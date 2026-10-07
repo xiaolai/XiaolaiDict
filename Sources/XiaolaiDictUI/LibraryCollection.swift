@@ -1,4 +1,5 @@
 import AppKit
+import StudyPresentation
 import SwiftUI
 
 /// How many columns the grid has and how wide a card in one is — decided by the width the grid is

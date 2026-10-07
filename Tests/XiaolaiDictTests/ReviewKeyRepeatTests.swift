@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import StudyPresentation
 import SwiftUI
 import Testing
 @testable import XiaolaiDictUI

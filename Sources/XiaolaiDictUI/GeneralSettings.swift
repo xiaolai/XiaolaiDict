@@ -1,6 +1,7 @@
 import AppKit
 import Capture
 import StudyKit
+import StudyPresentation
 import SwiftUI
 
 /// **Whether the menu bar icon is shown** — the one setting two targets have to agree about.

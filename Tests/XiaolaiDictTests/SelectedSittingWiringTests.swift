@@ -3,6 +3,7 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
+import StudyPresentation
 import Testing
 @testable import XiaolaiDictUI
 @testable import XiaolaiDict
@@ -491,8 +492,9 @@ struct SelectedSittingWiringTests {
     @Test func theFinishedStateDrawsEveryCount() throws {
         let view = try source("Sources/XiaolaiDictUI/ReviewView.swift")
         let start = try #require(view.range(of: "private func finishedState"))
-        let end = try #require(view.range(of: "public enum ReviewAction", range: start.upperBound..<view.endIndex))
-        let finished = view[start.upperBound..<end.lowerBound]
+        // To the end of the file, which is where this range always ended: `ReviewAction`, which closed it, left
+        // with the presentation for `StudyPresentation` (P4a), and nothing after it was ever in the range.
+        let finished = view[start.upperBound...]
         for count in ["excluded(summary.excluded)", "left.pausedOrHidden", "left.notAskable",
                       "left.otherDictionary", "left.siblings", "summary.practised",
                       "summary.skippedStillDue", "summary.skippedPractice", "summary.heldBack", "summary.stillDue"] {
