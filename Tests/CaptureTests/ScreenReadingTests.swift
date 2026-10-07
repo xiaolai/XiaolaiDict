@@ -1,7 +1,7 @@
 import CoreGraphics
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
+import Capture
 import Testing
 
 /// The word-edge rule, which is **one rule for every capture path**. With a tolerance per path the

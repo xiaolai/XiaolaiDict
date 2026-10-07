@@ -1,6 +1,6 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
+import Capture
 import Testing
 
 /// The three gates the feature ledger marks P0 for hover — a held modifier (A4), per-app and

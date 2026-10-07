@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// **Hover's request lifecycle, driven by event sequences** — no clock, no screen, no AppKit.
 ///

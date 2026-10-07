@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// A 2560×1440 display with a 30 pt menu bar and no Dock, which is what the spike was measured on.
 private let wide = ScreenMetrics(

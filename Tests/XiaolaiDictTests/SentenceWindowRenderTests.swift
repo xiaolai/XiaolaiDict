@@ -1,4 +1,5 @@
 import AppKit
+import Capture
 import CaptureModel
 import CoreGraphics
 import StudyKit

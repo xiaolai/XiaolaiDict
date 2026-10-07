@@ -342,6 +342,8 @@ struct StringCatalogTests {
         "Sources/CaptureModel",
         // Added 2026-10-08 with the target: the study ledger, out of the core (P2).
         "Sources/StudyKit",
+        // Added 2026-10-08 with the target: the capture policy, out of the core (P3).
+        "Sources/Capture",
     ]
 
     /// **No display text below the view layer.** None of these targets has one, so a sentence there

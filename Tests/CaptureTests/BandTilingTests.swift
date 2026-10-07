@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// **A wide band is read in tiles, and read back as the one band it was.**
 ///

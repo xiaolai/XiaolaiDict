@@ -1,5 +1,5 @@
 import Foundation
-import XiaolaiDictCore
+import Capture
 import Testing
 import XiaolaiDictTestSupport
 

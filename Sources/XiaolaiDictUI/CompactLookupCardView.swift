@@ -1,3 +1,4 @@
+import Capture
 import DictionaryModel
 import SwiftUI
 import XiaolaiDictCore

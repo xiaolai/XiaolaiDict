@@ -77,10 +77,18 @@ let package = Package(
         // link this without either.
         .target(name: "StudyKit", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ReviewKit", "CaptureModel"]),
 
-        // The reader's side: the sense ladder, hover policy, screen geometry. No AppKit and no private
-        // API — the part that has to be exhaustively testable. Not portable, and not meant to be: it
-        // binds CoreGraphics, NaturalLanguage, CoreServices and FoundationModels. The lookup ledger and
-        // reading history left for `StudyKit` (2026-10-08), and SQLite3 with them.
+        // The capture policy, as values and arithmetic: hover and its gesture, the screen's geometry, the
+        // drawer's frame, the recognised text and the sentence cut from it, which places are excluded.
+        // No Accessibility, no AppKit and no private API — the part of capture that has to be exhaustively
+        // testable without a window server, and the part a capture adapter on another platform would match.
+        // Foundation, CoreGraphics (its value types, never a window server) and os.
+        .target(name: "Capture", dependencies: ["XiaolaiDictBase", "DictionaryModel", "CaptureModel"]),
+
+        // What is left of the reader's side once the study ledger and the capture policy have their own
+        // targets (2026-10-08): the sense ladder and its selectors, the sentence pane and its translation,
+        // the sense mark, the lookup's outcome and timeline, the public dictionary's fallback, the setup
+        // board's presentation and the lookup shortcut. No AppKit and no private API. Not portable, and not
+        // meant to be: it binds NaturalLanguage, CoreServices, FoundationModels and Carbon's key codes.
         .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "CaptureModel"]),
 
         // The private DictionaryServices API. Linked only by the XPC service and its tests, never
@@ -117,8 +125,8 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore", "XiaolaiDictUI"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
@@ -146,7 +154,11 @@ let package = Package(
         // its schema, the library's queries, notes, cards, the export, the recovery and the replay.
         .testTarget(name: "StudyKitTests",
                     dependencies: ["DictionaryModel", "ReviewKit", "CaptureModel", "StudyKit", "XiaolaiDictTestSupport"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        // The capture policy's own tests, moved out of `XiaolaiDictCoreTests` with the code they test: hover and
+        // its gesture, the screen's geometry, the drawer's frame, the recognised text and its sentence.
+        .testTarget(name: "CaptureTests",
+                    dependencies: ["DictionaryModel", "CaptureModel", "Capture", "XiaolaiDictTestSupport"]),
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "Capture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.

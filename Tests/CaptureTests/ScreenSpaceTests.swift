@@ -1,7 +1,7 @@
 import CoreGraphics
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// The two screen spaces, and the one conversion between them.
 ///

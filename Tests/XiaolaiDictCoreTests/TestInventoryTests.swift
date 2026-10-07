@@ -156,9 +156,13 @@ struct TestInventoryTests {
         // **1,072 → 686 the same day, a transfer and not a loss**: 386 `@Test` left for `StudyKitTests` with the
         // ledger they test — 385 in 29 files, and `aCardAsksTheLemmatizerRatherThanRepeatingIt`, split out of
         // `LemmatizerTests` as the one test that mixed the two subjects.
-        "XiaolaiDictCoreTests": 686,
+        // Then 686 → 457, a transfer again: 229 `@Test` in 15 files left for `CaptureTests` with the capture
+        // policy — hover, geometry, the drawer's frame, recognised text and the sentence cut from it.
+        "XiaolaiDictCoreTests": 457,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
+        // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
+        "CaptureTests": 229,
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
         "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,

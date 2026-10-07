@@ -1,5 +1,5 @@
 import CaptureModel
-import XiaolaiDictCore
+import Capture
 import Testing
 
 /// The exclusion list has to exist before the place columns are first written, not after, or the

@@ -1,6 +1,6 @@
 import CoreGraphics
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// **Which window a capture reads**, decided once per hover over the compositor's list.
 struct PointerTargetTests {

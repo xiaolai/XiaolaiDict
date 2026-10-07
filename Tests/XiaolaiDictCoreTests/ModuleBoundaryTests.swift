@@ -42,16 +42,20 @@ struct ModuleBoundaryTests {
         // never links.
         "ModelKit": ["Foundation", "FoundationModels", "CryptoKit", "NaturalLanguage", "Darwin"],
         // The reader's side. `Carbon.HIToolbox` is virtual key codes for `Shortcut`, never
-        // registration — that is `Hotkey`, in the app. **No SQLite3 since the ledger left for `StudyKit`**
-        // (2026-10-08): nothing that remains opens a database.
+        // registration — that is `Hotkey`, in the app. **No SQLite3 since the ledger left for `StudyKit`, and no
+        // CoreGraphics since the capture policy left for `Capture`** (2026-10-08): nothing that remains opens a
+        // database or measures a screen.
         "XiaolaiDictCore": [
-            "Foundation", "CoreGraphics", "NaturalLanguage", "CoreServices",
+            "Foundation", "NaturalLanguage", "CoreServices",
             "FoundationModels", "Carbon.HIToolbox", "os",
         ],
         // The study side: the ledger and its schema (SQLite3), reading history, notes and cards, the library's
         // queries, the export and the recovery. `os` is the ledger's log. No CoreGraphics, no NaturalLanguage:
         // a lemma it stores is computed by `DictionaryModel`, never here.
         "StudyKit": ["Foundation", "SQLite3", "os"],
+        // The capture policy as values and arithmetic: CoreGraphics for `CGRect` and `CGPoint`, never a window
+        // server; `os` is hover's log. Accessibility, ScreenCaptureKit and Vision are the app's.
+        "Capture": ["Foundation", "CoreGraphics", "os"],
         // What the model service *does* with a request, written against any `LanguageModel` so its
         // tests need no GPU.
         "LocalModel": ["Foundation", "FoundationModels", "Synchronization"],
@@ -547,7 +551,7 @@ struct ModuleBoundaryTests {
                 .isEmpty)
         // `Carbon.HIToolbox` is permitted as the module the compiler reports it as.
         #expect(try Self.verdict(on: "XiaolaiDictCore", compiled: [
-            "Foundation", "CoreGraphics", "NaturalLanguage", "CoreServices", "FoundationModels",
+            "Foundation", "NaturalLanguage", "CoreServices", "FoundationModels",
             "Carbon", "os", "XiaolaiDictBase", "DictionaryModel", "ModelKit", "CaptureModel",
         ]).isEmpty)
         let service = try #require(Self.dependencyMap()["XiaolaiDictService"])

@@ -1,4 +1,5 @@
 import AppKit
+import Capture
 import Carbon.HIToolbox
 import Foundation
 import SwiftUI

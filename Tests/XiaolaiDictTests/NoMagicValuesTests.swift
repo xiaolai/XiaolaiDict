@@ -239,7 +239,7 @@ struct NoMagicValuesTests {
     /// `shadowMargin = 48`, `thickness = 380` and `cornerRadius = 16`.
     ///
     /// **The rule here is weaker than the view layer's, deliberately.** These files cannot read
-    /// `Token`: it lives in `XiaolaiDictUI`, and `XiaolaiDictCore` importing the view layer would
+    /// `Token`: it lives in `XiaolaiDictUI`, and `Capture` importing the view layer would
     /// invert the module boundary this branch just built. So what is required is not that a number
     /// come from the scale, but that it be **a named constant with a role** rather than arithmetic
     /// at a call site. That is the part that was actually going wrong, and it is checkable without
@@ -248,7 +248,7 @@ struct NoMagicValuesTests {
         "Sources/XiaolaiDict/LookupPanel.swift",
         "Sources/XiaolaiDict/PinnedNoteController.swift",
         "Sources/XiaolaiDict/HistoryDrawer.swift",
-        "Sources/XiaolaiDictCore/DrawerGeometry.swift",
+        "Sources/Capture/DrawerGeometry.swift",
     ]
 
     /// A line that *declares* something: `static let margin: CGFloat = 8` names its role, and

@@ -1,4 +1,4 @@
-import XiaolaiDictCore
+import Capture
 import Testing
 
 /// On macOS 27 `NSWorkspace` reports Safari — launched from a system cryptex — with process ID -1,

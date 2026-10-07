@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// **A capture with no size joins nothing.**
 ///

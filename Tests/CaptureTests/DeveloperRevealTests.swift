@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// Shift+Up three times in quick succession reveals the developer pane. The detector is a value, so the
 /// gesture is tested without posting an event.

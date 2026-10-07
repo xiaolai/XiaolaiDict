@@ -1,3 +1,4 @@
+import Capture
 import XiaolaiDictCore
 import SwiftUI
 

@@ -1,5 +1,5 @@
 import Foundation
-import XiaolaiDictCore
+import Capture
 import Testing
 
 /// A window onto the reader's sentence that is guaranteed to show the word.

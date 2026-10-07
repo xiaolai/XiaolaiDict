@@ -1,3 +1,4 @@
+import Capture
 import CoreGraphics
 import Foundation
 import Testing

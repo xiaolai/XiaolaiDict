@@ -1,3 +1,4 @@
+import Capture
 import CaptureModel
 import DictionaryModel
 import StudyKit

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Capture
 import DictionaryModel
 import Synchronization
 import Testing

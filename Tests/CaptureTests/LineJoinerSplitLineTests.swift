@@ -2,7 +2,7 @@ import CaptureModel
 import CoreGraphics
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// **Vision does not return one observation per visual line, and the joiner assumes it does.**
 ///

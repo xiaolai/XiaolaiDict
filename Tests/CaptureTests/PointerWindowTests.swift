@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import XiaolaiDictCore
+@testable import Capture
 
 /// Whose window is under the pointer, which the hover path has to know **before** it asks
 /// Accessibility anything — see `PointerWindow`'s own note and the 2026-09-25 crash report.
