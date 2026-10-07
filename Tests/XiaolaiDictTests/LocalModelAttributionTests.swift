@@ -1,6 +1,5 @@
 import ModelKit
 import Testing
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// **What About says about the model is tied to what the app actually downloads.** The attribution

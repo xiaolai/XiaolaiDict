@@ -1,10 +1,10 @@
+import CaptureModel
 import DictionaryModel
 import Foundation
 import Observation
 import ReviewKit
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 /// **The Library window's model.** WI-005's wire.

@@ -3,7 +3,6 @@ import AVFoundation
 import DictionaryModel
 import SwiftUI
 import XiaolaiDictBase
-import XiaolaiDictCore
 import os
 
 /// Saying a word aloud, with the best voice the reader actually has.

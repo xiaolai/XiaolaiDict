@@ -1,8 +1,8 @@
 import CaptureModel
+import DictionaryModel
 import Foundation
 @testable import StudyKit
 import Testing
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// **Undo puts back the discard it was asked to, and clears only that discard's receipt.**

@@ -4,7 +4,6 @@ import Foundation
 import Observation
 import DictionaryModel
 import XiaolaiDictBase
-import XiaolaiDictCore
 
 /// The dictionary the reader studies from, and the list it was chosen out of.
 ///

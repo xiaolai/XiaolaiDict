@@ -2,7 +2,6 @@ import AppKit
 import Capture
 import Foundation
 import Testing
-import XiaolaiDictCore
 import XiaolaiDictTestSupport
 import XiaolaiDictUI
 

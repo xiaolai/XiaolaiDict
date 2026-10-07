@@ -1,4 +1,3 @@
-import XiaolaiDictCore
 import SwiftUI
 
 /// The reader's own sentence with the looked-up word picked out.

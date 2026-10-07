@@ -1,5 +1,4 @@
 import DictionaryModel
-import XiaolaiDictCore
 import Testing
 
 /// Reading senses out of an entry. The structural layer — `x_xd0` a part-of-speech block, `x_xd1`

@@ -1,6 +1,5 @@
 @testable import ModelKit
 import Testing
-@testable import XiaolaiDictCore
 
 /// **The pins themselves, checked mechanically.** These manifests are hand-transcribed from what
 /// the mirror published: a path, a byte count and a hash per file, for each size the catalogue

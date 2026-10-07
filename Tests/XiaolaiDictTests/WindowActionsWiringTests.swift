@@ -1,8 +1,8 @@
 import AppKit
+import Capture
 import CaptureModel
 import Foundation
 import Testing
-import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 @testable import XiaolaiDict

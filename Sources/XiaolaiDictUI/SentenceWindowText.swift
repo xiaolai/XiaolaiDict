@@ -1,5 +1,4 @@
 import Capture
-import XiaolaiDictCore
 import SwiftUI
 
 /// The reader's sentence, as much of it as the card's lines hold with the word still in view.

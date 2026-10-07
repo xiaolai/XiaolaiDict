@@ -1,8 +1,8 @@
 import ApplicationServices
+import CaptureModel
 import DictionaryModel
 import Foundation
 @testable import XiaolaiDict
-import XiaolaiDictCore
 import Synchronization
 import Testing
 

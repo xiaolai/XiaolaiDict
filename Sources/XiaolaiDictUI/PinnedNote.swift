@@ -1,6 +1,5 @@
 import AppKit
 import DictionaryModel
-import XiaolaiDictCore
 import SwiftUI
 
 /// A sense the reader kept: a sticky note that survives the next lookup and is dismissed on its own

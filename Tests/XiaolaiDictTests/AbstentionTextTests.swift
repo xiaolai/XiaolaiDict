@@ -1,7 +1,6 @@
 import DictionaryModel
 import Foundation
 import Testing
-import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// What the reader is told when no sense was marked.

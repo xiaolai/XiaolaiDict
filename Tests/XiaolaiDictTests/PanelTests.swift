@@ -1,5 +1,6 @@
 import AppKit
 import Capture
+import CaptureModel
 import Carbon.HIToolbox
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI

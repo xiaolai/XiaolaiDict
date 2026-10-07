@@ -4,7 +4,6 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import XiaolaiDictBase
-import XiaolaiDictCore
 import XiaolaiDictUI
 import os
 

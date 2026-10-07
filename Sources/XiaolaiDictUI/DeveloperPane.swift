@@ -1,6 +1,5 @@
 import Capture
 import SwiftUI
-import XiaolaiDictCore
 
 /// What the developer pane can do, handed in by the app: `XiaolaiDictUI` reaches neither the ledger's file
 /// nor the preferences. Compiled in every build and nil in a release, which draws no such pane.

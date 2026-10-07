@@ -1,6 +1,5 @@
 import Foundation
 import ReviewKit
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 /// `--reminder-report`: **the grant, what is pending and when it fires, what the reader's settings

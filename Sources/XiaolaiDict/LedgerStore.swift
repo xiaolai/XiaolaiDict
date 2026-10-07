@@ -2,7 +2,6 @@ import DictionaryModel
 import Foundation
 import ReviewKit
 import StudyKit
-import XiaolaiDictCore
 
 /// The ledger on disk, owned by one actor so lookups can be recorded from anywhere.
 actor LedgerStore {

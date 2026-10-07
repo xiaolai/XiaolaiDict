@@ -2,7 +2,6 @@ import Foundation
 import ReviewKit
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 
 /// **The library: everything the reader has saved, and the operations that change it.**
 ///

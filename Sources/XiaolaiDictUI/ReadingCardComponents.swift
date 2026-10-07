@@ -1,8 +1,9 @@
 import Capture
+import CaptureModel
+import DictionaryModel
 import Foundation
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 
 /// Shared paper, edge and lift. Callers retain their own content and pile sizing.
 ///

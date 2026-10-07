@@ -1,5 +1,4 @@
 import StudyKit
-import XiaolaiDictCore
 import SwiftUI
 
 /// What a reading card is made of — the semantic layer over `Token`.

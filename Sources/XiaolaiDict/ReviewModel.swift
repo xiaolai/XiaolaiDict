@@ -1,9 +1,9 @@
+import CaptureModel
 import Foundation
 import Observation
 import ReviewKit
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 /// **The Review window's model: a session, a ledger, and nothing between them that guesses.**

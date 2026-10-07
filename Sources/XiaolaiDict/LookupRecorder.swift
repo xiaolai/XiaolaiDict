@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import Observation
 import StudyKit

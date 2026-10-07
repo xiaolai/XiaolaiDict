@@ -1,6 +1,5 @@
 import DictionaryModel
 import StudyKit
-import XiaolaiDictCore
 
 /// The one badge a history card shows at the end of its line — **decided here, not in the view**,
 /// because there are two kinds of it and which one applies is the question the view got wrong.

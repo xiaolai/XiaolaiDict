@@ -1,6 +1,5 @@
 import Capture
 import DictionaryModel
-import XiaolaiDictCore
 import XiaolaiDictUI
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import Vision

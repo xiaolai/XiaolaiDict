@@ -1,7 +1,6 @@
 import CoreFoundation
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
 
 /// The term a selection stands for: whitespace and the punctuation that only wraps or ends a word
 /// come off — “ephemeral,” is ephemeral — while punctuation that belongs to the term stays: C#,

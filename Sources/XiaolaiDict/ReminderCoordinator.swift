@@ -3,7 +3,6 @@ import Foundation
 import Observation
 import ReviewKit
 import XiaolaiDictBase
-import XiaolaiDictCore
 import XiaolaiDictUI
 import os
 

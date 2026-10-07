@@ -3,7 +3,6 @@ import DictionaryModel
 import Foundation
 import StudyKit
 @testable import XiaolaiDict
-import XiaolaiDictCore
 import Testing
 import XiaolaiDictTestSupport
 

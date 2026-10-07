@@ -2,6 +2,7 @@ import AppKit
 import DictionaryModel
 import OSLog
 import ModelKit
+import StudyKit
 import SwiftUI
 import XiaolaiDictBase
 import XiaolaiDictCore

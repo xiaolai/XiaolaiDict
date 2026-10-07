@@ -5,7 +5,6 @@ import CoreGraphics
 import DictionaryModel
 import Foundation
 @testable import StudyKit
-@testable import XiaolaiDictCore
 import Testing
 
 @testable import XiaolaiDict

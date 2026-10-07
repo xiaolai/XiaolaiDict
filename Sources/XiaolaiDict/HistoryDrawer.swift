@@ -2,7 +2,6 @@ import AppKit
 import Capture
 import StudyKit
 import XiaolaiDictBase
-import XiaolaiDictCore
 import XiaolaiDictUI
 import Observation
 import SwiftUI

@@ -1,7 +1,6 @@
 import Capture
 import Foundation
 import Testing
-import XiaolaiDictCore
 @testable import XiaolaiDict
 
 /// **Which token of a run the reader meant — the thing Vision cannot say and the pointer can.**

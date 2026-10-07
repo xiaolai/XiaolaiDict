@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 /// **The erase command's model.** WI-006's surface.

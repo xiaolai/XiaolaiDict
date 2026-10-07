@@ -1,4 +1,5 @@
 import AppKit
+import CaptureModel
 import DictionaryModel
 import SwiftUI
 import Testing

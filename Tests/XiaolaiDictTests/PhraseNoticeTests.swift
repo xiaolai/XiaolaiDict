@@ -5,7 +5,6 @@ import StudyKit
 import SwiftUI
 import Testing
 
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// **The phrase, on the card.**

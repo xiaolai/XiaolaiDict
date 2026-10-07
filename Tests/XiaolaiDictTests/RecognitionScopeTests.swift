@@ -1,7 +1,6 @@
 import Capture
 import Foundation
 import Testing
-import XiaolaiDictCore
 @testable import XiaolaiDict
 
 /// **The quality signals must describe the sentence that is returned, and the CJK case is where

@@ -1,10 +1,10 @@
 import AppKit
 import Capture
 import CaptureModel
+import StudyKit
 @testable import XiaolaiDict
 import DictionaryModel
 import Synchronization
-import XiaolaiDictCore
 import Testing
 
 /// Found by audit, in the hover paths.

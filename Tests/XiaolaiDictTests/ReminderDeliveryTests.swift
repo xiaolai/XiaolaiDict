@@ -3,7 +3,6 @@ import ReviewKit
 import StudyKit
 import Testing
 import UserNotifications
-import XiaolaiDictCore
 import XiaolaiDictUI
 @testable import XiaolaiDict
 import XiaolaiDictTestSupport

@@ -1,7 +1,7 @@
 import AppKit
 import Capture
+import CaptureModel
 import XiaolaiDictBase
-import XiaolaiDictCore
 import os
 
 /// Where hover's events come from — **the seam that lets the watcher be driven by a test.**

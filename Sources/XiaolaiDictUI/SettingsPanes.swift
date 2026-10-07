@@ -1,7 +1,6 @@
 import AppKit
 import Capture
 import DictionaryModel
-import XiaolaiDictCore
 import AVFoundation
 import SwiftUI
 

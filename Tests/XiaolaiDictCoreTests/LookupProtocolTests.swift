@@ -1,7 +1,6 @@
 import DictionaryModel
 import Foundation
 import XiaolaiDictBase
-import XiaolaiDictCore
 import Testing
 
 /// The messages cross a process boundary as encoded bytes; what arrives must be what was sent.

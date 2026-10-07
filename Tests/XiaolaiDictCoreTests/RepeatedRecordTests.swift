@@ -1,6 +1,5 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
 import Testing
 
 /// One entry indexed under several headwords is **one entry**, however many records the framework

@@ -5,7 +5,6 @@ import CaptureModel
 import DictionaryModel
 import Synchronization
 import Testing
-import XiaolaiDictCore
 @testable import XiaolaiDict
 
 /// The stand-ins hover's behavioural tests share — **one spelling each**, for the reason

@@ -1,6 +1,5 @@
 import SwiftUI
 import XiaolaiDictBase
-import XiaolaiDictCore
 import os
 
 /// The environment's real window actions, captured from a live view.

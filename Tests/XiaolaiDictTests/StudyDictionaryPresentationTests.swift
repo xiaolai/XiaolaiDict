@@ -2,7 +2,6 @@ import DictionaryModel
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// What the Study pane shows before the reader asks to see anything else.

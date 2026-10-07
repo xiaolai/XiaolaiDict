@@ -3,7 +3,6 @@ import Foundation
 @testable import ModelKit
 import XiaolaiDictTestSupport
 import Testing
-@testable import XiaolaiDictCore
 
 /// The model's download: resumable, checked against the listed hash, moved into place whole, and
 /// refused up front where the disk cannot hold it. **A partial model is never loadable** — that is

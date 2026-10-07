@@ -1,6 +1,5 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
 import Testing
 
 /// The sentence a selection sits in: the ledger's context now, and what the LLM pane will explain

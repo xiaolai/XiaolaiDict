@@ -1,6 +1,5 @@
 import Capture
 import Foundation
-import XiaolaiDictCore
 
 /// Everything `HoverReader` asks of the screen — **the seam its tests replace.**
 ///

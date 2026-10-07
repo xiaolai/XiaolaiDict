@@ -3,7 +3,6 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import XiaolaiDictBase
-import XiaolaiDictCore
 import Synchronization
 import os
 

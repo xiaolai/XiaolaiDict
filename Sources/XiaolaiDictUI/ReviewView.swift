@@ -3,7 +3,6 @@ import Foundation
 import ReviewKit
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 
 /// **The review surface: the reader's own sentence, and a question about it.**
 ///

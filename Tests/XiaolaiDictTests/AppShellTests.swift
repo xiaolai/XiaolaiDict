@@ -2,7 +2,6 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 import Testing
-import XiaolaiDictCore
 import XiaolaiDictTestSupport
 @testable import XiaolaiDictUI
 

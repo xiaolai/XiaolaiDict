@@ -1,7 +1,6 @@
 import Capture
 import DictionaryModel
 import SwiftUI
-import XiaolaiDictCore
 
 /// A reading preview, not a new sense selection. The original card retains every sense and claim.
 struct CompactLookupSummary: Equatable {

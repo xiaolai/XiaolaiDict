@@ -1,5 +1,4 @@
 import DictionaryModel
-import XiaolaiDictCore
 
 /// What the Study pane shows before the reader asks to see anything else.
 ///

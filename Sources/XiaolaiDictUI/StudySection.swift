@@ -1,6 +1,5 @@
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 
 /// **Two study options the reader chooses, and what changes them** (R1b, R1c — 2026-10-05), handed in
 /// by the app like the reminder: the keys and the code that reads them are the app's, and this layer

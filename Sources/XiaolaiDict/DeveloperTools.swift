@@ -1,6 +1,5 @@
 import Foundation
 import StudyKit
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 #if XIAOLAIDICT_CAPTURE_INSTRUMENTS

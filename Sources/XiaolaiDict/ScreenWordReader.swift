@@ -3,7 +3,6 @@ import ApplicationServices
 import Capture
 import CaptureModel
 import DictionaryModel
-import XiaolaiDictCore
 import Synchronization
 
 /// The word under a screen point, read through Accessibility — the fast path, and the one that

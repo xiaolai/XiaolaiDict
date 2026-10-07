@@ -1,7 +1,6 @@
 import Capture
 import Foundation
 import Observation
-import XiaolaiDictCore
 
 /// Everything the reader can do to hover, and the one place each of those values lives.
 ///

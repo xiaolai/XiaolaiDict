@@ -1,6 +1,5 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
 
 public extension Abstention {
     /// What the panel says instead of a mark. It says why it did not choose, which is the other

@@ -4,7 +4,6 @@ import Capture
 import DictionaryModel
 import Synchronization
 import Testing
-import XiaolaiDictCore
 import XiaolaiDictTestSupport
 @testable import XiaolaiDict
 

@@ -3,7 +3,6 @@ import Capture
 import CaptureModel
 import os
 import XiaolaiDictBase
-import XiaolaiDictCore
 import XiaolaiDictUI
 
 /// **What the lookup panel's window actually is, and what an ordinary click on it costs the reader.**

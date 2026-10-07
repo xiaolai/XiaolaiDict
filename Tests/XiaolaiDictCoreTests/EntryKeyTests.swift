@@ -1,6 +1,5 @@
 import DictionaryModel
 import Foundation
-import XiaolaiDictCore
 import Testing
 
 /// What a ledger row and a study card hang on.

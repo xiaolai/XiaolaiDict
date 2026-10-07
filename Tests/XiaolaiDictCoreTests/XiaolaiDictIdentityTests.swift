@@ -1,6 +1,5 @@
 import Foundation
 import XiaolaiDictBase
-import XiaolaiDictCore
 import Testing
 
 /// The app finds its services, and each service admits the app, by identifiers compiled into both —

@@ -1,13 +1,13 @@
 import AppKit
 import CaptureModel
 import CoreGraphics
+import DictionaryModel
 import Foundation
 import StudyKit
 import SwiftUI
 import Testing
 
 @testable import XiaolaiDict
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 import XiaolaiDictTestSupport
 

@@ -2,7 +2,6 @@ import DictionaryModel
 import Foundation
 import Testing
 
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// **The footer's dictionary control, as a value — because the chips it replaces could not name their

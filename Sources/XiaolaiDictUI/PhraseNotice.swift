@@ -3,7 +3,6 @@ import Foundation
 import StudyKit
 import SwiftUI
 import XiaolaiDictBase
-import XiaolaiDictCore
 import os
 
 /// The phrase a reader was standing inside, ready to be drawn.

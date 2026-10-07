@@ -1,8 +1,6 @@
 import Foundation
 import Testing
 
-@testable import StudyKit
-
 /// **A ledger's handle is closed by one owner, once.**
 ///
 /// `Ledger.init` closed its handle when a later step threw, and Swift then ran `deinit`, which

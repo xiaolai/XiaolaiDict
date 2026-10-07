@@ -1,5 +1,4 @@
 import DictionaryModel
-import XiaolaiDictCore
 import Testing
 
 /// What can be read out of the document a dictionary returns. The structural layer — `d:entry`'s

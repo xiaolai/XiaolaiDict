@@ -1,4 +1,5 @@
 import CaptureModel
+import DictionaryModel
 import ModelKit
 import XiaolaiDictTestSupport
 import Testing

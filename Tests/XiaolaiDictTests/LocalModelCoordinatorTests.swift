@@ -2,7 +2,6 @@ import Foundation
 import ModelKit
 import Testing
 @testable import XiaolaiDict
-@testable import XiaolaiDictCore
 import XiaolaiDictTestSupport
 @testable import XiaolaiDictUI
 

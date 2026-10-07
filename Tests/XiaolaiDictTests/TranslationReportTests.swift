@@ -2,7 +2,6 @@ import Foundation
 import ModelKit
 import Testing
 @testable import XiaolaiDict
-import XiaolaiDictCore
 
 /// Spike: whether a **Developer ID-signed bundle** can actually translate, not whether an
 /// availability API says it could. The precedent is `PrivateCloudComputeLanguageModel`, which

@@ -1,6 +1,6 @@
 import Foundation
 import ReviewKit
-import XiaolaiDictCore
+import StudyKit
 import XiaolaiDictUI
 
 /// `--review-report`: **what Review will ask, and what its model holds on each side of the reveal**,

@@ -1,4 +1,5 @@
 import CaptureModel
+import DictionaryModel
 import FoundationModels
 import Foundation
 import ModelKit

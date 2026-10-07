@@ -1,8 +1,6 @@
 import DictionaryModel
 import Testing
 
-@testable import XiaolaiDictCore
-
 /// Reading a dictionary's declared languages, and the script probe that covers the bundles which
 /// declare none.
 struct DictionaryLanguageTests {

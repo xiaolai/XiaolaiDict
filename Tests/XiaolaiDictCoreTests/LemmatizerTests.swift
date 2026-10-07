@@ -1,6 +1,5 @@
 @testable import DictionaryModel
 import Foundation
-@testable import XiaolaiDictCore
 import Testing
 
 /// Lemmas are what collapse running / ran / runs into one ledger row (design note §9).

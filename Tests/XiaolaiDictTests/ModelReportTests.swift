@@ -2,7 +2,6 @@ import Foundation
 import ModelKit
 import Testing
 @testable import XiaolaiDict
-@testable import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 /// `--model-report`'s idle watch, on a clock its own polls move.

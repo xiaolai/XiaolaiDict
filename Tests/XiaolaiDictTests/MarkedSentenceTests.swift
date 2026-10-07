@@ -7,7 +7,6 @@ import SwiftUI
 import Testing
 import XiaolaiDictTestSupport
 
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// How a looked-up word is picked out of the reader's own sentence.

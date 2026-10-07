@@ -4,7 +4,6 @@ import DictionaryModel
 import Foundation
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
-import XiaolaiDictCore
 import Testing
 
 /// The decisions the selection reader makes once Accessibility has answered: what the term is,

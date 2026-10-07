@@ -1,6 +1,5 @@
 import Capture
 import CoreGraphics
-import XiaolaiDictCore
 import Testing
 
 @testable import XiaolaiDict

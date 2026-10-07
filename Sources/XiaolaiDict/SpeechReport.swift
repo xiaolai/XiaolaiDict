@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import XiaolaiDictCore
 
 /// Spike S1: what voices a **signed app bundle** actually has, and whether it can synthesise with
 /// them.

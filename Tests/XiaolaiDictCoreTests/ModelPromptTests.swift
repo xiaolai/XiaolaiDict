@@ -1,7 +1,6 @@
 import Foundation
 import ModelKit
 import Testing
-@testable import XiaolaiDictCore
 
 /// **What a prompt carries from outside the app.** Three of its fields are written by someone who
 /// is not this program: the reader's own captured sentence, and — twice over — a dictionary

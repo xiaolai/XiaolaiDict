@@ -3,7 +3,6 @@ import Foundation
 import os
 @testable import StudyKit
 import Testing
-@testable import XiaolaiDictCore
 import XiaolaiDictTestSupport
 import XiaolaiDictUI
 @testable import XiaolaiDict

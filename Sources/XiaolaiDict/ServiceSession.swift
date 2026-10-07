@@ -1,7 +1,6 @@
 import DictionaryModel
 import ModelKit
 import XiaolaiDictBase
-import XiaolaiDictCore
 import XPC
 
 /// One XPC service's session, as both clients keep it: opened on demand, numbered, and forgotten

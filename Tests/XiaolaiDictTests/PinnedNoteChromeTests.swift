@@ -1,7 +1,6 @@
 import AppKit
 import DictionaryModel
 import Testing
-import XiaolaiDictCore
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI

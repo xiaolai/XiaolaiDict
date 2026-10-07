@@ -1,7 +1,8 @@
+import CaptureModel
+import DictionaryModel
 import Foundation
 import StudyKit
 import SwiftUI
-import XiaolaiDictCore
 
 public enum LibraryPane: String, Sendable, CaseIterable {
     case history, saved, review, discarded

@@ -1,3 +1,4 @@
+import CaptureModel
 @testable import DictionaryBridge
 import AppleDictionaryFormat
 import DictionaryModel

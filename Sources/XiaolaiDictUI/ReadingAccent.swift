@@ -1,6 +1,6 @@
 import AppKit
+import DictionaryModel
 import StudyKit
-import XiaolaiDictCore
 import SwiftUI
 
 /// One word's colour on its card, defined once per appearance **and per contrast setting**.

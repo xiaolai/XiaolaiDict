@@ -2,11 +2,11 @@ import AppKit
 import Capture
 import CaptureModel
 import CoreGraphics
+import DictionaryModel
 import StudyKit
 import SwiftUI
 import Testing
 
-@testable import XiaolaiDictCore
 @testable import XiaolaiDictUI
 
 /// **The card shows the word**, checked on the card rather than on the arithmetic.

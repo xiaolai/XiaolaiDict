@@ -2,7 +2,6 @@ import Capture
 import CoreGraphics
 import Foundation
 import Testing
-import XiaolaiDictCore
 @testable import XiaolaiDict
 
 /// **The band is the window's width, and Vision is given it in tiles no wider than it reads reliably.**
