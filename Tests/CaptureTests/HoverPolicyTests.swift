@@ -245,7 +245,7 @@ struct HoverHostMatchingTests {
         #expect(Set(values).count == values.count, "two choices share a value, so one cannot be picked")
     }
 
-    /// **The core names nothing.** Each rest carried an English `name` the picker drew verbatim,
+    /// **The capture policy names nothing.** Each rest carried an English `name` the picker drew verbatim,
     /// so "Quick" and its three siblings were in no catalog. The names live in the UI module now
     /// (`HoverLabels`, held by `HoverLabelsTests`); what is left here is that a rest is a case,
     /// so a switch over them there cannot miss one.

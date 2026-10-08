@@ -211,11 +211,11 @@ struct GeneralPane: View {
 
 /// What the hover controls are called, in the reader's own language.
 ///
-/// **Here and not on the types themselves**, which live in `XiaolaiDictCore` — a module with no
+/// **Here and not on the types themselves**, which live in `Capture` — a module with no
 /// view layer, where a word can be written and never extracted for a translator. They were there:
 /// "Quick", "Hold", "Option" and five more were plain `String`s drawn with `Text(verbatim:)`, and
-/// none had a key in the catalog. Every function switches over the cases, so a case added in the
-/// core fails to compile here rather than appearing unnamed in a picker.
+/// none had a key in the catalog. Every function switches over the cases, so a case added in
+/// `Capture` fails to compile here rather than appearing unnamed in a picker.
 enum HoverLabels {
     static func name(of modifier: HoverModifier) -> String {
         switch modifier {

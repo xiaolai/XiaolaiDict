@@ -5,9 +5,9 @@ public extension Abstention {
     /// What the panel says instead of a mark. It says why it did not choose, which is the other
     /// half of "the popup can mark a sense, and can say why it did not".
     ///
-    /// Here rather than beside the enum in `XiaolaiDictCore`: these are the only sentences the
-    /// reader sees from the selector, and a string is only translatable where the catalog can
-    /// extract it — `Tools/strings.sh` reads the view layer and the app, never the core.
+    /// Here rather than beside the enum in `DictionaryModel`: these are the only sentences the
+    /// reader sees from the selector, and no target below the view layer may hold one — a sentence
+    /// there could be shown and never given to a translator (ADR-0025).
     var reason: String {
         switch self {
         case .noCandidates:

@@ -31,7 +31,7 @@ mkdir -p "$EXTRACTED" "$(dirname "$CATALOG")"
 [ -e "$CATALOG" ] || printf '{\n  "sourceLanguage" : "en",\n  "strings" : {},\n  "version" : "1.0"\n}\n' > "$CATALOG"
 
 # The app's product only — which is every module the reader sees text from: the app, the view layer
-# and the core. The two services carry no reader-facing text, and building the model service would
+# and the two presentation targets, `StudyPresentation` and `StudyModels`. The two services carry no reader-facing text, and building the model service would
 # compile all of MLX again into this scratch path, minutes of it, to extract nothing.
 # **A basename collision loses one file's strings outright, silently.** `.stringsdata` files are
 # named after the *source file*, not its path, so two sources with one name write to one file and

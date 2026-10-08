@@ -23,8 +23,8 @@ struct ModuleBoundaryTests {
     ///
     /// **Exact sets, not floors.** A floor would let a framework in silently, which is the whole
     /// thing being prevented; an exact set makes adding one a decision. Each target's own siblings
-    /// (`XiaolaiDictBase`, `DictionaryModel`, `ModelKit`, `XiaolaiDictCore`) are checked separately
-    /// against `Package.swift` below, so they are not listed here.
+    /// (this package's modules) are checked separately against `Package.swift` below, so they are not
+    /// listed here.
     static let allowed: [String: Set<String>] = [
         // No domain vocabulary, and so almost no framework. If this set grows, the target has
         // stopped being what it is for.
@@ -460,8 +460,9 @@ struct ModuleBoundaryTests {
     }
 
     /// **And its tests link it alone**, which is what makes them evidence that the logic runs without
-    /// the Mac's modules. `declaredDependenciesAndImportsAgree` skips test targets, so without this a
-    /// fixture target or the core could join the list and the claim would go on reading as true.
+    /// the Mac's modules. `declaredDependenciesAndImportsAgree` reads test targets too (since 2026-10-08),
+    /// but it passes an edge that is declared *and* imported, so without this a fixture target or the core
+    /// could join the list and the claim would go on reading as true.
     @Test func reviewKitTestsLinkReviewKitAlone() throws {
         #expect(try Self.dependencyMap()["ReviewKitTests"] == ["ReviewKit"])
         let bound = try Self.imports(under: Self.repository.appending(path: "Tests/ReviewKitTests"))

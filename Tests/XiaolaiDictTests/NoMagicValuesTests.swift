@@ -235,7 +235,7 @@ struct NoMagicValuesTests {
     /// it still reads as one" — and that had already happened here by module placement rather than
     /// by a new file. Measured 2026-09-26: `PanelPlacement` put the panel at `pointer.x + 12,
     /// pointer.y - 24` inline, `PinnedNoteController` cascaded notes by a bare `% 8) * 24` and
-    /// sized them `320 × 200`, and `DrawerLayout` — in `XiaolaiDictCore`, two modules away — carries
+    /// sized them `320 × 200`, and `DrawerLayout` — in `Capture`, two modules away — carries
     /// `shadowMargin = 48`, `thickness = 380` and `cornerRadius = 16`.
     ///
     /// **The rule here is weaker than the view layer's, deliberately.** These files cannot read

@@ -219,7 +219,7 @@ struct HoverLabelsTests {
         #expect(Set(HoverPolicy.Settle.allCases.map(HoverLabels.name(of:))).count == HoverPolicy.Settle.allCases.count)
     }
 
-    /// The pickers draw these and not a string from the core.
+    /// The pickers draw these and not a string from the capture policy.
     @Test func thePickersDrawTheLocalizedNames() throws {
         let panes = try SettingsSources.code("SettingsPanes.swift")
         #expect(panes.contains("HoverLabels.name(of: modifier)"))

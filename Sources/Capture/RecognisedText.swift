@@ -415,8 +415,8 @@ public enum LineJoiner {
         return overlap / shorter >= sameRowOverlap
     }
 
-    /// Where a caller's mistake about the capture goes. No reader-facing text: `XiaolaiDictCore` carries
-    /// none (ADR-0025).
+    /// Where a caller's mistake about the capture goes. No reader-facing text: no target below the view
+    /// layer carries any (ADR-0025).
     static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "recognition")
 
     static func sameRow(_ a: CGRect, _ b: CGRect, _ region: CGSize) -> Bool {

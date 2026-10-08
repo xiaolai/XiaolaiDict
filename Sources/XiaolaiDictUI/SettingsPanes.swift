@@ -453,9 +453,9 @@ struct LookupPane: View {
 
     /// What each script is called, in the reader's own words.
     ///
-    /// **Here and not on `ProbeScript`**, which lives in `XiaolaiDictCore` — a module with no view
+    /// **Here and not on `ProbeScript`**, which lives in `DictionaryModel` — a module with no view
     /// layer, where a sentence can be written and never extracted for a translator.
-    /// `theCoreHoldsNoDisplayText` is what keeps that true. The scripts are named the way a reader
+    /// `noTargetBelowTheViewLayerHoldsDisplayText` is what keeps that true. The scripts are named the way a reader
     /// names them rather than the way Unicode does: "Chinese characters", not "Han".
     static func label(for script: ProbeScript) -> Text {
         switch script {

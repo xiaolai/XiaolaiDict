@@ -159,8 +159,8 @@ final class Connection {
 public final class Ledger {
     public static let schemaVersion = 13
     /// A mistake in this file's own SQL has to reach the log whatever a caller does with the thrown
-    /// error — see `ProjectionFault`. Nothing reader-facing is written here: `XiaolaiDictCore` carries
-    /// no display text (ADR-0025).
+    /// error — see `ProjectionFault`. Nothing reader-facing is written here: no target below the view
+    /// layer carries display text (ADR-0025).
     static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "ledger")
     /// How long a write waits for another connection — a second XiaolaiDict, a database browser — to
     /// release its lock before failing. SQLite's default is not to wait at all.

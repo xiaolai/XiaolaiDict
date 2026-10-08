@@ -2,7 +2,7 @@ import Foundation
 
 /// **Shift+Up, three times in quick succession.** The gesture that shows the developer pane.
 ///
-/// A value, so it is tested without posting a key event (which ends a test process). **In Core, not the view
+/// A value, so it is tested without posting a key event (which ends a test process). **In `Capture`, not the view
 /// layer**: it is gesture logic, and its counts are not design values. It is compiled in every build and acts
 /// on nothing: the pane it reveals exists only in a development build.
 public struct RevealSequence: Equatable {

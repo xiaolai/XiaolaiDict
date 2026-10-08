@@ -963,7 +963,7 @@ public final class LibraryModel {
     }
 
     /// **What an exported row says where something could not travel, in the reader's language** (audit-fix
-    /// round 3, #8). Core writes no display text, so the words are supplied from here, through the catalog.
+    /// round 3, #8). `StudyKit` writes no display text, so the words are supplied from here, through the catalog.
     static var exportLabels: StudyExport.Labels {
         StudyExport.Labels(
             incomplete: String(localized: "(no meaning of your own yet — add one in XiaolaiDict)",

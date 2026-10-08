@@ -14,7 +14,7 @@ struct StudyExportTests {
 
     private func ledger() throws -> Ledger { try Ledger(path: ":memory:") }
 
-    /// The caller's words for what could not travel. **Not the app's**: Core is tested on what it does
+    /// The caller's words for what could not travel. **Not the app's**: `StudyKit` is tested on what it does
     /// with labels it is given, and the app's own are held to the catalog by `LibraryOrganisationWiringTests`.
     private static let labels = StudyExport.Labels(incomplete: "LABEL-INCOMPLETE", withoutAWord: "LABEL-NO-WORD")
 
@@ -136,7 +136,7 @@ struct StudyExportTests {
     }
 
     /// **What a row says where something could not travel is the caller's to word** (audit-fix round 3,
-    /// #8). Core holds no display text (AGENTS.md, ADR-0025): the English marker that lived here was
+    /// #8). `StudyKit` holds no display text (AGENTS.md, ADR-0025): the English marker that lived here was
     /// written into every export in English, past the catalog. Both labels are the caller's, verbatim,
     /// and each only where its own case holds.
     @Test func theLabelsAreTheCallersAndAppearOnlyWhereTheyApply() throws {

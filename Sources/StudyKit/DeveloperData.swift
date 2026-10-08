@@ -16,7 +16,7 @@ public struct TestDataReport: Equatable, Sendable {
     public let reviewed: Int
 }
 
-/// **The developer pane's data operations.** Core and unconditional so they can be tested; reached only
+/// **The developer pane's data operations.** Here and unconditional so they can be tested; reached only
 /// from the pane, which a release does not contain.
 extension Ledger {
     /// Tables that hold the schema's own state and not anything a reader made. **Clearing one would change

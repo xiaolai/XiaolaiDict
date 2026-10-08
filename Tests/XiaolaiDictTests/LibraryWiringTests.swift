@@ -935,7 +935,7 @@ extension LibraryWiringTests {
     }
 }
 
-/// **WI-007's surfaces, at the wire.** Tags, export and suggestions are Core features with library
+/// **WI-007's surfaces, at the wire.** Tags, export and suggestions are `StudyKit` features with library
 /// controls; each of these asserts the control reaches the ledger, because a feature nothing calls
 /// is not one.
 @MainActor

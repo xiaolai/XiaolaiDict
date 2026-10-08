@@ -21,10 +21,9 @@ let package = Package(
     targets: [
         // **No domain vocabulary at all**, which is the whole of its remit: an identity, a deadline,
         // a watchdog, a non-empty collection, and the first of two answers (`FirstAnswer`, which the
-        // capture readers and the lookup runner both wait on, since 2026-10-08). Every target links it,
-        // so anything that would need explaining in terms of dictionaries, models or readers belongs
-        // somewhere else. Foundation,
-        // Dispatch and Synchronization, and nothing further.
+        // capture readers and the lookup runner both wait on, since 2026-10-08). The app and both
+        // services link it, so anything that would need explaining in terms of dictionaries, models or
+        // readers belongs somewhere else. Foundation, Dispatch and Synchronization, and nothing further.
         .target(name: "XiaolaiDictBase"),
 
         // The dictionary itself: entries, senses, entry documents, lemmas, and the dictionary
@@ -61,7 +60,7 @@ let package = Package(
         // The review logic a phone, a watch or a TV could run as it is: the scheduler, a sitting, the
         // study day, the queue's counts. **Foundation only, depends on nothing, no conditional
         // compilation**, and typechecked for iOS, watchOS, tvOS and macOS by `make portability`. The
-        // ledger, every SQL predicate and anything holding an answer's text stay in the core.
+        // ledger, every SQL predicate and anything holding an answer's text are `StudyKit`'s.
         // **One line, and nothing on it but the name**: `ModuleBoundaryTests.reviewKitDependsOnNothing`
         // reads this declaration exactly, because a stale module satisfies the compiler and the scan
         // is what holds the boundary (ADR-0047).
@@ -87,11 +86,13 @@ let package = Package(
         .target(name: "Capture", dependencies: ["XiaolaiDictBase", "DictionaryModel", "CaptureModel"]),
 
         // What is left of the reader's side once the study ledger and the capture policy have their own
-        // targets (2026-10-08): the sense ladder and its selectors, the sentence pane and its translation,
-        // the sense mark and which sense the reader tapped in each entry (`PanelSelection`, beside the mark it
-        // holds), the lookup's outcome and timeline, the public dictionary's fallback, the setup
-        // board's presentation and the lookup shortcut. No AppKit and no private API. Not portable, and not
-        // meant to be: it binds NaturalLanguage, CoreServices, FoundationModels and Carbon's key codes.
+        // targets (2026-10-08): the sense ladder, its selectors and the labelled cases it is measured against,
+        // the sentence pane and its translation, the sense mark and which sense the reader tapped in each entry
+        // (`PanelSelection`, beside the mark it holds), the lookup's outcome and timeline, the public
+        // dictionary's fallback, the setup board's presentation and the lookup shortcut — 14 files. Kept by its
+        // name rather than renamed for what is left (ADR-0052). No AppKit, no private API and no display text.
+        // Not portable, and not meant to be: it binds NaturalLanguage, CoreServices, FoundationModels and
+        // Carbon's key codes.
         .target(name: "XiaolaiDictCore", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "CaptureModel"]),
 
         // What the study surfaces draw, as values, apart from the SwiftUI files that used to declare them

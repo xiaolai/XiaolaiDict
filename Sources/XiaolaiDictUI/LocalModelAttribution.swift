@@ -5,8 +5,8 @@ import Foundation
 /// three chances for a future model to be downloaded while the old one's attribution is still on
 /// screen.
 ///
-/// Here rather than in `XiaolaiDictCore` beside the pins: the publisher is a sentence the reader
-/// sees, and the core has no view layer to extract it from. `LocalModelAttributionTests` ties this
+/// Here rather than in `ModelKit` beside the pins: the publisher is a sentence the reader
+/// sees, and `ModelKit` has no view layer to extract it from. `LocalModelAttributionTests` ties this
 /// to the catalogue instead, by asserting the family against the repositories actually pinned.
 public enum LocalModelAttribution {
     /// The model family the pins come from.

@@ -69,8 +69,8 @@ public struct StudyExport: Sendable, Equatable {
         public let fields: [String]
     }
 
-    /// **What a row says where something could not travel — the caller's words, never Core's.** Core
-    /// holds no display text (ADR-0025): the English sentence that lived here was written into every
+    /// **What a row says where something could not travel — the caller's words, never this module's.**
+    /// It holds no display text (ADR-0025): the English sentence that lived here was written into every
     /// export past the string catalog, so no reader saw it in their own language (audit-fix round 3, #8).
     /// Not empty, either of them: a blank field reads as a defect, and a label reads as what it is.
     public struct Labels: Sendable, Equatable {

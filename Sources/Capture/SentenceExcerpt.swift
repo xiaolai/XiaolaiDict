@@ -95,8 +95,8 @@ public struct SentenceExcerpt: Equatable, Sendable {
         return windows
     }
 
-    /// Where a mistake in this file's own arithmetic goes. No reader-facing text: `XiaolaiDictCore`
-    /// carries none (ADR-0025).
+    /// Where a mistake in this file's own arithmetic goes. No reader-facing text: no target below the
+    /// view layer carries any (ADR-0025).
     private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "excerpt")
 
     private init(text: String, marks: [NSRange], clippedBefore: Bool) {

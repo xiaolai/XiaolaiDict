@@ -390,7 +390,7 @@ struct StringCatalogTests {
     ///
     /// `XiaolaiDictUI` and `XiaolaiDict` are the view layer and are excluded by name;
     /// the two service executables carry no reader text and are excluded for the reason
-    /// `HoverRefusal` stays in the core — what they print is instrument output.
+    /// `HoverRefusal` stays below the view layer, in `Capture` — what they print is instrument output.
     @Test func everyTargetBelowTheViewLayerIsScanned() throws {
         let manifest = try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
         let declared = try Regex(#"\.(?:executableT|t)arget\(\s*name: "([A-Za-z]+)""#)

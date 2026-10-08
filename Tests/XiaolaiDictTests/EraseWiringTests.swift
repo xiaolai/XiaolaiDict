@@ -9,7 +9,7 @@ import XiaolaiDictTestSupport
 
 /// **The erase command's wire.** WI-006's surface.
 ///
-/// The Core is covered by `StudyRecoveryTests`; these assert the three-stage shape the reader sees,
+/// The ledger's side is covered by `StudyRecoveryTests`, in `StudyKitTests`; these assert the three-stage shape the reader sees,
 /// because the thing that makes this command safe is that nothing destructive happens on the first
 /// click and the preview is a real count.
 @MainActor
