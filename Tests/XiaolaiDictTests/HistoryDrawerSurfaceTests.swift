@@ -101,25 +101,21 @@ struct HistoryDrawerSurfaceTests {
         #expect(surface.contains(".safeAreaBar(edge: .top"))
     }
 
-    /// The setting is gone from the whole tree, not merely unread here.
+    /// **The setting is gone from every module the app links, not merely unread here.** A setting can live wherever the
+    /// reader's options do — the study models, the drawer's geometry in `Capture`, the presentation values — so the
+    /// roots are the app's modules (`AppModules`), not the two directories this walked until 2026-10-08, when the split
+    /// had moved 24 of their files elsewhere. Read as raw text, comments and all: a mention anywhere is a file that
+    /// still knows about the setting.
     @Test func noSourceFileKnowsAboutAChoiceOfGlass() throws {
-        var scanned = 0
-        var read: [URL] = []
-        for directory in ["Sources/XiaolaiDictUI", "Sources/XiaolaiDict"] {
-            let files = try FileManager.default
-                .contentsOfDirectory(at: Self.root.appending(path: directory), includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "swift" }
-            read += files
-            for file in files {
-                scanned += 1
-                let source = try String(contentsOf: file, encoding: .utf8)
-                #expect(!source.contains("DrawerGlass") && !source.contains("drawerGlass"),
-                        "\(file.lastPathComponent) still refers to the drawer's glass setting")
-            }
+        let scan = try AppModules.scan()
+        #expect(scan.problems.isEmpty, "\(scan.problems)")
+        for (module, file, _) in scan.files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            #expect(!source.contains("DrawerGlass") && !source.contains("drawerGlass"),
+                    "\(module)/\(file.lastPathComponent) still refers to the drawer's glass setting")
         }
-        #expect(scanned > 20, "the scan found \(scanned) files, which is not the source tree")
-        // Named, not counted: the drawer's views and its controller, one in each root.
-        let unread = SourceScan.unread(["HistoryDrawerViews.swift", "HistoryDrawer.swift"], in: read)
+        // Named, not counted: the drawer's views and its controller; each root's own witness is `AppModules.witnesses`.
+        let unread = SourceScan.unread(["HistoryDrawerViews.swift", "HistoryDrawer.swift"], in: scan.read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
     }
 

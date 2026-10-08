@@ -31,7 +31,7 @@ extension SelectionReader.Refusal {
 
 extension SelectionReader {
     /// What the reader is told when reading the selection failed, one sentence a failure.
-    public static func message(for error: CaptureError, app: String) -> String {
+    static func message(for error: CaptureError, app: String) -> String {
         switch error {
         // **Localized where written** (ADR-0025): these reach the panel as its detail line.
         case .notResponding:

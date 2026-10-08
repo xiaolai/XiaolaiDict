@@ -307,26 +307,26 @@ struct SceneShellTests {
                 "a pinned note is still titled with the app's name")
     }
 
-    /// **No window is found by its title, anywhere in the app target.** A title is localised; three
+    /// **No window is found by its title, anywhere in the app.** A title is localised; three
     /// lookups compared one against an English literal. Searched two ways, because a scan is only
-    /// as wide as the spelling it knows.
+    /// as wide as the spelling it knows — and in every module the app links, because it is only as wide as its
+    /// roots too: it walked `Sources/XiaolaiDict` alone until 2026-10-08, by when the ten capture readers, which
+    /// speak AppKit and read other apps' windows, had left it for `MacCapture` (`AppModules`).
     @Test func noWindowIsFoundByItsTitle() throws {
-        let directory = Self.repository.appending(path: "Sources/XiaolaiDict")
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "swift" }
-        #expect(files.count > 20, "the scan found \(files.count) files; it is looking in the wrong place")
+        let scan = try AppModules.scan()
+        #expect(scan.problems.isEmpty, "\(scan.problems)")
         // **Named, not counted**: the two files that look windows up, so a walk that shrank to other files
-        // still fails (SourceScan.unread).
-        let unread = SourceScan.unread(["XiaolaiDictApp.swift", "XiaolaiDictScene.swift"], in: files)
+        // still fails (SourceScan.unread); each root's own witness is `AppModules.witnesses`.
+        let unread = SourceScan.unread(["XiaolaiDictApp.swift", "XiaolaiDictScene.swift"], in: scan.read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
-        var comparisons = 0, mentions = 0
-        for file in files {
-            let source = try code("Sources/XiaolaiDict/\(file.lastPathComponent)")
-            comparisons += source.components(separatedBy: ".title ==").count - 1
-            mentions += source.components(separatedBy: "$0.title").count - 1
+        var comparisons: [String] = [], mentions: [String] = []
+        for (module, file, source) in scan.files {
+            let place = "\(module)/\(file.lastPathComponent)"
+            comparisons += Array(repeating: place, count: source.components(separatedBy: ".title ==").count - 1)
+            mentions += Array(repeating: place, count: source.components(separatedBy: "$0.title").count - 1)
         }
-        #expect(comparisons == 0, "\(comparisons) window lookup(s) compare a localisable title")
-        #expect(mentions == 0, "\(mentions) closure(s) read a window's title to pick it")
+        #expect(comparisons.isEmpty, "\(comparisons.count) window lookup(s) compare a localisable title: \(comparisons)")
+        #expect(mentions.isEmpty, "\(mentions.count) closure(s) read a window's title to pick it: \(mentions)")
     }
 
     /// Positive control for the scan above: the helper it sends everyone to does match on the

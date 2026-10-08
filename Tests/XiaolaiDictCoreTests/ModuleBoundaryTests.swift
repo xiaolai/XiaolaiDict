@@ -143,9 +143,11 @@ struct ModuleBoundaryTests {
     ]
 
     /// The subjects a platform adapter never binds, besides the view layer: what it would have to stop adapting to
-    /// bind — the study side and its presentation, the model, and the sense ladder.
+    /// bind — the study side, its review logic and its presentation, the model, and the sense ladder. **`ReviewKit`
+    /// joined 2026-10-08**, after a review planted `MacCapture → ReviewKit` and nothing here refused it; plan §3's row
+    /// for the class had left it out too. `permittedDependencies` holds the adapter's edges exactly besides.
     static let adapterNeverBinds: Set<String> = [
-        "StudyKit", "StudyPresentation", "StudyModels", "ModelKit", "XiaolaiDictCore",
+        "StudyKit", "ReviewKit", "StudyPresentation", "StudyModels", "ModelKit", "XiaolaiDictCore",
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
@@ -224,11 +226,12 @@ struct ModuleBoundaryTests {
         // The control: each refusal, on a list no scan made, and nothing for what an adapter may bind.
         #expect(Self.adapterProblems(of: "MacCapture", files: [
             ("Clean.swift", ["AppKit", "ApplicationServices", "Capture"]), ("Drawn.swift", ["SwiftUI"]),
-            ("Studied.swift", ["StudyKit"]), ("Shown.swift", ["XiaolaiDictUI"]),
+            ("Studied.swift", ["StudyKit"]), ("Reviewed.swift", ["ReviewKit"]), ("Shown.swift", ["XiaolaiDictUI"]),
             ("Both.swift", ["QuartzCore", "XiaolaiDictCore"]),
         ]) == [
             "MacCapture/Drawn.swift imports SwiftUI, a UI framework other than AppKit",
             "MacCapture/Studied.swift imports StudyKit, a subject a platform adapter does not adapt",
+            "MacCapture/Reviewed.swift imports ReviewKit, a subject a platform adapter does not adapt",
             "MacCapture/Shown.swift imports XiaolaiDictUI, the view layer",
             "MacCapture/Both.swift imports QuartzCore, a UI framework other than AppKit",
             "MacCapture/Both.swift imports XiaolaiDictCore, a subject a platform adapter does not adapt",
@@ -353,6 +356,154 @@ struct ModuleBoundaryTests {
     static func dependencyProblems(of target: String, imported: Set<String>, declared: Set<String>) -> [String] {
         imported.subtracting(declared).sorted().map { "\(target) imports \($0) without Package.swift naming it" }
             + declared.subtracting(imported).sorted().map { "\(target) depends on \($0) and imports it nowhere" }
+    }
+
+    // MARK: - Which of this package's targets each target may depend on
+
+    /// **Every target `Package.swift` declares but the tests, and the siblings it may depend on — exact sets, each row
+    /// with its reason**, as `allowed` is for what a target binds of the SDK.
+    ///
+    /// The tables above filter this package's own modules out, and `declaredDependenciesAndImportsAgree` holds a
+    /// target's imports equal to its declared edges — so **an import and its declaration added together passed every
+    /// check in this file**. A review in refute mode planted `StudyKit → Capture` (the study side bound to the capture
+    /// policy the split separated) and `MacCapture → ReviewKit` (review logic in the capture adapter), each as an import
+    /// and a declared edge, and all 3,034 tests passed (2026-10-08). The graph the split was for is written down here
+    /// instead: the subjects' rows are plan-macos-modularisation §3's target graph after P5, and every other row is
+    /// the edge set the target had on `main` before the split, which the plan kept. A new edge is a decision recorded
+    /// in a row, never a line that compiles.
+    static let permittedDependencies: [String: Set<String>] = [
+        // No domain vocabulary, so nothing of this package to speak (Package.swift's own comment). Every target that
+        // depends on it is below.
+        "XiaolaiDictBase": [],
+        // §3 `DM --> Base`: the dictionary's vocabulary, and its identities and deadlines from Base.
+        "DictionaryModel": ["XiaolaiDictBase"],
+        // A file format plus a table of measured facts, testable and reusable without the app — depends on nothing,
+        // not even Base (`main`, unchanged by the split).
+        "AppleDictionaryFormat": [],
+        // The index the format module feeds, apart from it so the dictionary service never links SQLite (`main`).
+        "DictionaryIndex": ["AppleDictionaryFormat"],
+        // Talks about a model the app never links; it needs no sibling to (`main`).
+        "ModelKit": [],
+        // The review logic a phone, a watch or a TV could run: depends on nothing (ADR-0047;
+        // `reviewKitDependsOnNothing` also reads its declaration line).
+        "ReviewKit": [],
+        // §3: the two values the study ledger and the capture policy share, owned by neither — so it depends on neither.
+        "CaptureModel": [],
+        // §3 `SK --> Base & DM & RK & CM`. **No `Capture`, no core, no model**: a client that reviews links the study
+        // side without the capture policy, which is what the split was for.
+        "StudyKit": ["XiaolaiDictBase", "DictionaryModel", "ReviewKit", "CaptureModel"],
+        // §3 `CP --> Base & DM & CM`. **No `StudyKit`**: the capture policy records nothing.
+        "Capture": ["XiaolaiDictBase", "DictionaryModel", "CaptureModel"],
+        // §3 `CORE --> Base & DM & MK & CM`: the sense ladder and the sentence pane ask the model; the ledger and the
+        // capture policy are no longer the core's.
+        "XiaolaiDictCore": ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "CaptureModel"],
+        // §3 `SP --> DM & SK & RK` (corrected in the plan during P4b): values drawn from the study side's records.
+        "StudyPresentation": ["DictionaryModel", "ReviewKit", "StudyKit"],
+        // §3 `SM --> SP & SK & Base & DM & RK & CM & CORE`: the study models drive the ledger and resolve the sense the
+        // reader tapped through the core (`PanelSelection`). **No capture adapter and no view layer.**
+        "StudyModels": [
+            "XiaolaiDictBase", "DictionaryModel", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation",
+            "XiaolaiDictCore",
+        ],
+        // §3 `MC --> Base & DM & CP & CM`: the adapter drives `Capture`'s policy and nothing else of the reader's side —
+        // **no study side, review logic, model or core**; `adapterNeverBinds` refuses the same by import.
+        "MacCapture": ["XiaolaiDictBase", "DictionaryModel", "CaptureModel", "Capture"],
+        // The private DictionaryServices API, linked only by the dictionary service (`main`).
+        "DictionaryBridge": ["XiaolaiDictBase", "DictionaryModel"],
+        // A sentence in, a span out, from the format reader to the wire protocol (`main`).
+        "PhraseLookup": ["DictionaryModel", "AppleDictionaryFormat"],
+        // The dictionary service: the bridge and the phrase lookup, and **none of the reader's side**
+        // (`neverInAService` says the same by name; `main`).
+        "XiaolaiDictService": ["XiaolaiDictBase", "DictionaryModel", "DictionaryBridge", "PhraseLookup"],
+        // What the model service does with a request, against any `LanguageModel` (`main`).
+        "LocalModel": ["ModelKit"],
+        // The model service: its MLX products are another package's and not in this table (`main`).
+        "XiaolaiDictModelService": ["XiaolaiDictBase", "ModelKit", "LocalModel"],
+        // §3 `UI --> SP & MC & SK & CP & CORE & CM & DM`, plus the three it had on `main`, which the graph does not
+        // redraw: Base, ModelKit (the model's choices in Settings) and ReviewKit (Review's surface). **No
+        // `StudyModels`**: the models are the app's to compose and hand in.
+        "XiaolaiDictUI": [
+            "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit",
+            "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore",
+        ],
+        // §3 `APP --> UI & SM & MC & SK & CP & CORE`, plus Base, DictionaryModel, ModelKit and ReviewKit, which it had on
+        // `main`, and two §3 does not draw: `CaptureModel` (the app records where and how a word was read, since P1) and
+        // `StudyPresentation` (it composes the values its scenes hand the view layer, since P4a). **Never
+        // `DictionaryBridge`**: the private API's failure mode is a segfault, and it stays behind the XPC boundary.
+        "XiaolaiDict": [
+            "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit",
+            "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDictUI",
+        ],
+        // The index builder and the aligner, as commands: the format module and the index, nothing else (`main`).
+        "XiaolaiDictIndex": ["AppleDictionaryFormat", "DictionaryIndex"],
+        "XiaolaiDictAlign": ["AppleDictionaryFormat", "DictionaryIndex"],
+        // What the test targets share: depends on nothing, so a test that links it links nothing else by it (`main`).
+        "XiaolaiDictTestSupport": [],
+    ]
+
+    /// **`Package.swift`'s graph is exactly `permittedDependencies`, in both directions** — an edge no row permits, an
+    /// edge a row permits that the manifest dropped, a target with no row and a row with no target are each refused.
+    @Test func everyTargetDependsOnExactlyWhatItsRowPermits() throws {
+        let problems = Self.graphProblems(declared: try Self.declaredGraph(of: Self.manifest()))
+        #expect(problems.isEmpty, "\(problems)")
+    }
+
+    /// **The controls: the two edges the review planted, each with its import's declaration, in a copy of the manifest**
+    /// — each refused by name and nothing else in the copy refused — and the other three disagreements, on a map no
+    /// manifest made. Never planted into `Package.swift`, which a parallel test is reading.
+    @Test func anEdgeTheGraphDoesNotDrawIsRefused() throws {
+        let manifest = try Self.manifest()
+        #expect(Self.graphProblems(declared: try Self.declaredGraph(of: manifest)).isEmpty, "the real manifest was flagged")
+        for (target, edge) in [("StudyKit", "Capture"), ("MacCapture", "ReviewKit")] {
+            let planted = try Self.planting(edge, into: target, in: manifest)
+            #expect(try Self.dependencyMap(of: planted)[target]?.contains(edge) == true, "premise: \(target) → \(edge) was read")
+            #expect(Self.graphProblems(declared: try Self.declaredGraph(of: planted))
+                    == ["\(target) depends on \(edge), which its row in permittedDependencies does not permit"])
+        }
+        var declared = try Self.declaredGraph(of: manifest)
+        declared["StudyKit"]?.remove("ReviewKit")
+        declared["Unsafe2"] = []
+        declared["ReviewKit"] = nil
+        #expect(Self.graphProblems(declared: declared) == [
+            "Unsafe2 is declared in Package.swift and has no row in permittedDependencies",
+            "ReviewKit has a row in permittedDependencies and no declaration in Package.swift",
+            "StudyKit no longer depends on ReviewKit — drop it from its row",
+        ])
+    }
+
+    /// Where `declared` and `permittedDependencies` disagree, in the words the two checks above use.
+    static func graphProblems(declared: [String: Set<String>]) -> [String] {
+        let permitted = permittedDependencies
+        var problems = Set(declared.keys).subtracting(permitted.keys).sorted()
+            .map { "\($0) is declared in Package.swift and has no row in permittedDependencies" }
+        problems += Set(permitted.keys).subtracting(declared.keys).sorted()
+            .map { "\($0) has a row in permittedDependencies and no declaration in Package.swift" }
+        for (target, edges) in declared.sorted(by: { $0.key < $1.key }) {
+            guard let row = permitted[target] else { continue }
+            problems += edges.subtracting(row).sorted()
+                .map { "\(target) depends on \($0), which its row in permittedDependencies does not permit" }
+            problems += row.subtracting(edges).sorted().map { "\(target) no longer depends on \($0) — drop it from its row" }
+        }
+        return problems
+    }
+
+    /// Every target `manifest` declares but the tests, and its in-package dependencies.
+    static func declaredGraph(of manifest: String) throws -> [String: Set<String>] {
+        let targets = Set(try Self.targets(in: manifest))
+        return try Self.dependencyMap(of: manifest).filter { targets.contains($0.key) }
+    }
+
+    /// `manifest` with `edge` added to the front of `target`'s dependency list — the declaration a planted import needs.
+    static func planting(_ edge: String, into target: String, in manifest: String) throws -> String {
+        var lines = manifest.components(separatedBy: "\n")
+        let index = try #require(lines.firstIndex { $0.contains("name: \"\(target)\"") && $0.contains("dependencies: [") },
+                                 "premise: \(target) declares its dependencies on one line")
+        lines[index] = lines[index].replacingOccurrences(of: "dependencies: [", with: "dependencies: [\"\(edge)\", ")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func manifest() throws -> String {
+        try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
     }
 
     // MARK: - ReviewKit: the first checks, before the compiler's (ADR-0047)
@@ -714,6 +865,8 @@ struct ModuleBoundaryTests {
         #expect(try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet)).isEmpty)
         let studied = try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["StudyKit"]))
         #expect(studied.contains("MacCapture binds StudyKit, which a platform adapter never may"), "\(studied)")
+        let reviewed = try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["ReviewKit"]))
+        #expect(reviewed.contains("MacCapture binds ReviewKit, which a platform adapter never may"), "\(reviewed)")
         let shown = try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["XiaolaiDictUI"]))
         #expect(shown.contains("MacCapture binds XiaolaiDictUI, which a platform adapter never may"), "\(shown)")
         #expect(try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["SwiftUI"]))
@@ -1254,64 +1407,16 @@ struct ModuleBoundaryTests {
         try targets(in: String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8))
     }
 
-    private static func targets(in manifest: String) throws -> [String] {
-        // **Any name SwiftPM accepts**, not a pattern of letters: `Unsafe2` was no target to this reader (the
-        // final closing pass, finding 4). SwiftPM takes any string and makes a module name of it, so the
-        // reader takes everything up to the closing quote; `theManifestReaderAgreesWithSwiftPM` is what
-        // holds it to SwiftPM's own reading.
-        let declared = try Regex(#"\.(?:executableT|t)arget\(\s*name: "([^"\\]+)""#)
-        return manifest.matches(of: declared).map { String($0.output[1].substring ?? "") }
-    }
+    /// The fixture target's reader (`Manifest`), which every test that reads targets shares; the two tests above it
+    /// are what hold it to SwiftPM, for all of them.
+    private static func targets(in manifest: String) throws -> [String] { try Manifest.targets(in: manifest) }
 
-    /// The in-package dependencies `Package.swift` gives each target.
-    ///
-    /// **Split on the target declarations rather than searched forward from a name.** The first
-    /// version looked for the *next* `target(name:` after the one it had found, and the manifest
-    /// writes `.target(\n    name:` in places — so a target's "body" ran on into its neighbours and
-    /// the test reported `LocalModel` depending on `LocalModel` and on `XiaolaiDictModelService`.
-    /// That was the test being wrong, not the manifest, and it is the reason this returns the whole
-    /// map at once: one parse whose boundaries are the declarations themselves.
-    ///
-    /// `.product(name: "MLX", package: …)` entries name external packages and are dropped — the
-    /// import check has nothing to say about them.
+    /// The in-package dependencies `Package.swift` gives each target, the tests included.
     private static func dependencyMap() throws -> [String: Set<String>] {
         try dependencyMap(of: String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8))
     }
 
     private static func dependencyMap(of manifest: String) throws -> [String: Set<String>] {
-        let ours = Set(try targets(in: manifest))
-        let head = try Regex(#"\.(?:executableT|testT|t)arget\("#)
-        var starts = manifest.ranges(of: head).map(\.lowerBound)
-        starts.append(manifest.endIndex)
-        let name = try Regex(#"name:\s*"([^"\\]+)""#)
-        let quoted = try Regex(#""([^"\\]+)""#)
-        var map: [String: Set<String>] = [:]
-        for (start, end) in zip(starts, starts.dropFirst()) {
-            let body = manifest[start..<end]
-            guard let declared = try? name.firstMatch(in: String(body)),
-                  let target = declared.output[1].substring.map(String.init)
-            else { continue }
-            // **Twice means the split went wrong, and a wrong split reads as "no dependencies".** A
-            // `.target(name:)` inside a dependency list is a head to this reader, so the list ends
-            // there; refusing is what stops that passing for an empty one.
-            guard map[target] == nil else { throw ManifestRead.declaredTwice(target) }
-            guard let list = body.range(of: "dependencies:") else { map[target] = []; continue }
-            let names = body[list.upperBound...].matches(of: quoted)
-                .compactMap { $0.output[1].substring.map(String.init) }
-                .filter { ours.contains($0) && $0 != target }
-            map[target] = Set(names)
-        }
-        return map
-    }
-
-    enum ManifestRead: Error, CustomStringConvertible {
-        case declaredTwice(String)
-
-        var description: String {
-            switch self {
-            case .declaredTwice(let target):
-                "\(target) reads as declared twice: write a dependency as its plain name, not `.target(name:)`"
-            }
-        }
+        try Manifest.dependencyMap(of: manifest)
     }
 }

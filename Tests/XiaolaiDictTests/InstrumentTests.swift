@@ -47,29 +47,26 @@ struct InstrumentWriteTests {
 /// **The rule, mechanically.** The two instruments that bypassed `Instrument.write` did it by
 /// serialising for themselves, and their tests could not see it: what they built was correct JSON
 /// and what it was handed to never answered. What can fail is the presence of the second
-/// serialiser, so `JSONSerialization` must appear in `Sources/XiaolaiDict` in one file only.
+/// serialiser, so `JSONSerialization` must appear in one file only of every module the app links.
 ///
 /// `LookupCommand` is not an exemption in disguise — it encodes typed `Encodable` reports through
 /// `JSONEncoder`, and writes many lines per run rather than one report.
+///
+/// **Every module the app links, not `Sources/XiaolaiDict`** (2026-10-08): code an instrument reaches left that
+/// directory with the split — the developer pane's ledger counts for `StudyModels`, the readers `--read-point` and
+/// `--read-selection` drive for `MacCapture` — and a second serialiser there was outside the walk (`AppModules`).
 struct InstrumentSerialisationTests {
-    private static var app: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "Sources/XiaolaiDict")
-    }
-
     @Test func onlyInstrumentSerialisesAReport() throws {
-        let found = try SourceScan.offenders(of: "JSONSerialization", under: Self.app)
-        // `Instrument.swift` is the one place allowed to serialise, which is the rule this asserts.
-        let offenders = found.names.filter { $0 != "Instrument.swift" }
-        let scanned = found.scanned
-
-        // The positive control, and `SourceScan` throws rather than skipping a directory it cannot
-        // read — this used to walk with no error handler, so an unreadable subtree passed in
-        // silence while the floor below still held on whatever remained.
-        #expect(scanned > 20, "the scan found \(scanned) Swift files, so it is not reading the sources")
+        let scan = try AppModules.scan()
+        #expect(scan.problems.isEmpty, "\(scan.problems)")
+        // `Instrument.swift` is the one place allowed to serialise, which is the rule this asserts. `SourceScan`
+        // throws rather than skipping a directory it cannot read — this used to walk with no error handler, so an
+        // unreadable subtree passed in silence while a count floor still held on whatever remained.
+        let offenders = scan.files.filter { $0.code.contains("JSONSerialization") }
+            .map { "\($0.module)/\($0.file.lastPathComponent)" }
+            .filter { $0 != "XiaolaiDict/Instrument.swift" }
         // Named, not counted: the one serialiser allowed, and the instrument that encodes instead.
-        let unread = SourceScan.unread(["Instrument.swift", "LookupCommand.swift"], in: found.read)
+        let unread = SourceScan.unread(["Instrument.swift", "LookupCommand.swift"], in: scan.read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(offenders.isEmpty, "a report is serialised outside Instrument.write: \(offenders)")
     }

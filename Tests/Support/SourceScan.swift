@@ -70,13 +70,19 @@ public enum SourceScan {
     /// its own — `String(contentsOf:)` throws when the file has moved — and needs no canary.
     ///
     /// The scans of source and test paths, classified on 2026-10-08 before `XiaolaiDictCore` was split
-    /// (plan-macos-modularisation, P0):
+    /// (plan-macos-modularisation, P0). Corrected the same day after the split: the first three rows walked
+    /// `Sources/XiaolaiDict` (and the view layer) while 22 of its files left for `StudyModels`, `MacCapture` and
+    /// `XiaolaiDictBase`, and their canaries stayed behind, so a named file per walker was not enough — their roots
+    /// are now derived and each root names its own witness. Of the eleven walks of the app's or the view layer's
+    /// directory, those three were the ones whose subject left with the files; the others' subjects stayed (views,
+    /// a SwiftUI shortcut, an `AttributedString` colour) or their roots had already been widened with the moves.
+    ///
     ///
     /// | Scan | Reads | Class | What makes a shrink loud |
     /// |---|---|---|---|
-    /// | `AppShellTests.noWindowIsFoundByItsTitle` | `Sources/XiaolaiDict` | walker | canaries |
-    /// | `InstrumentSerialisationTests` | `Sources/XiaolaiDict` | walker | canaries |
-    /// | `HistoryDrawerSurfaceTests.noSourceFileKnowsAboutAChoiceOfGlass` | `XiaolaiDictUI`, `XiaolaiDict` | walker | canaries |
+    /// | `AppShellTests.noWindowIsFoundByItsTitle` | every module the app links (`AppModules`) | walker | roots read off `Package.swift`; a named witness per root; canaries |
+    /// | `InstrumentSerialisationTests` | every module the app links (`AppModules`) | walker | roots read off `Package.swift`; a named witness per root; canaries |
+    /// | `HistoryDrawerSurfaceTests.noSourceFileKnowsAboutAChoiceOfGlass` | every module the app links (`AppModules`) | walker | roots read off `Package.swift`; a named witness per root; canaries |
     /// | `LibraryWiringTests` (export labels) | targets below the view layer; `XiaolaiDict`, `XiaolaiDictUI` | walker | canary; the call sites must be found |
     /// | `SetupWiringTests.noViewInTheLayerBuildsApplesExplainerForItself` | `Sources/XiaolaiDictUI` | walker | canaries |
     /// | `ScreenRecordingProbeTests` | `Sources` | walker | canaries |

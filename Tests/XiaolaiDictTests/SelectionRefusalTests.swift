@@ -12,14 +12,18 @@ struct SelectionRefusalTests {
         #expect(PrivacySettings.accessibilityLocation(majorVersion: 26) == "System Settings → Privacy & Security → Accessibility")
         #expect(PrivacySettings.accessibilityLocation(majorVersion: 27)
             == "System Settings → Privacy & Security → Device Control and Data Access")
-        #expect(SelectionReader.message(for: .accessibilityDisabled, app: "Safari").contains(PrivacySettings.accessibilityLocation))
+        #expect(SelectionReader.Refusal.failed(.accessibilityDisabled, app: "Safari").message
+                .contains(PrivacySettings.accessibilityLocation))
     }
 
+    /// Through the refusal the reader returns, which is the view layer's whole public surface for these words: the
+    /// sentence for each failure is an internal helper of `SelectionRefusals.swift` (it was public with no caller
+    /// outside the view layer until 2026-10-08).
     @Test(arguments: [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled])
     func eachFailureHasItsOwnMessage(error: CaptureError) {
         let others = [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled]
-            .filter { $0 != error }.map { SelectionReader.message(for: $0, app: "Safari") }
-        #expect(!others.contains(SelectionReader.message(for: error, app: "Safari")))
+            .filter { $0 != error }.map { SelectionReader.Refusal.failed($0, app: "Safari").message }
+        #expect(!others.contains(SelectionReader.Refusal.failed(error, app: "Safari").message))
     }
 
     /// **Each refusal says what it is, with what it carries.** The reader's own tests read these words inline — "too

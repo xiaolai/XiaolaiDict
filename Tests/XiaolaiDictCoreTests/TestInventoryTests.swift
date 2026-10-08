@@ -110,7 +110,10 @@ struct TestInventoryTests {
         // refusals' wording stayed, since that wording is the view layer's — and one came: each refusal of the
         // selection reader worded as its own case, which the reader's tests had checked inline until the words
         // left it.
-        "XiaolaiDictTests": 1_225,
+        // Raised 1,225 → 1,227 after the split's review in refute mode (2, `AppModulesTests`): the walks whose
+        // subject is anywhere in the app read every module it links, each held to a named witness, and the controls
+        // refusing a module with no witness, a witness for a module the app does not link, and an unread witness.
+        "XiaolaiDictTests": 1_227,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -170,7 +173,10 @@ struct TestInventoryTests {
         // with its control (`ModuleBoundaryTests`).
         // Raised 458 → 459 by P5 (1): the platform adapter binding AppKit and no other UI framework, and none of
         // the subjects it does not adapt, with its control (`ModuleBoundaryTests`).
-        "XiaolaiDictCoreTests": 459,
+        // Raised 459 → 461 after the split's review in refute mode (2): `Package.swift`'s graph held to
+        // `permittedDependencies` in both directions, and its controls — the review's two planted edges each refused
+        // in a copy of the manifest, and the other three disagreements on a map (`ModuleBoundaryTests`).
+        "XiaolaiDictCoreTests": 461,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
