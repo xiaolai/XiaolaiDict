@@ -26,5 +26,7 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 xiaolai</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>XiaolaiDict asks Ghostty to copy selected terminal text when you use Translate Selection.</string>
 </dict>
 </plist>

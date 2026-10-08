@@ -57,6 +57,8 @@ struct Selection: Sendable, Equatable {
     /// Where it was read: the app always, and the page or the file where the app could say — never
     /// both in one field, which is the defect `where-a-word-was-read.md` §2 is about.
     let place: ReadingPlace
+    /// The complete selection, including sentence punctuation, for direct translation.
+    var originalText: String? = nil
 
     var appName: String { place.name ?? "" }
     var bundleID: String? { place.bundleID }
@@ -95,23 +97,24 @@ enum SelectionReader {
     /// the second instance of the class the compositor check in `ScreenWordReader.target(at:)` closes,
     /// whose first instance is crash report 2026-09-25. There is no hung app to be stalled by here and
     /// nothing to serialise against, so the two reasons `AccessibilityLane` exists do not apply.
-    static func read(from app: FrontApp) async -> Outcome {
-        guard app.pid != getpid() else { return await MainActor.run { readNow(app) } }
+    static func read(from app: FrontApp, maximumLength: Int = maximumLength) async -> Outcome {
+        guard app.pid != getpid() else { return await MainActor.run { readNow(app, maximumLength: maximumLength) } }
         return await AccessibilityLane.system.run(timeout: AccessibilitySession.messagingTimeout) {
-            readNow(app)
+            readNow(app, maximumLength: maximumLength)
         } cancelled: {
             .nothing(message(for: .cancelled, app: app.name))
         }
     }
 
     /// One read of `app`, wherever the caller has decided it may happen.
-    private static func readNow(_ app: FrontApp) -> Outcome {
+    private static func readNow(_ app: FrontApp, maximumLength: Int) -> Outcome {
         let application = AXUIElementCreateApplication(app.pid)
-        return read(application: application, of: app, with: AccessibilitySession(budget: budget))
+        return read(application: application, of: app, with: AccessibilitySession(budget: budget), maximumLength: maximumLength)
     }
 
     /// The whole read, against any Accessibility client — the real one, or a test's.
-    static func read(application: AXUIElement, of app: FrontApp, with ax: some AccessibilityReading) -> Outcome {
+    static func read(application: AXUIElement, of app: FrontApp, with ax: some AccessibilityReading,
+                     maximumLength: Int = maximumLength) -> Outcome {
         do {
             // Chromium and Electron build their tree only when asked — inside the budget, and an
             // app that does not answer is told as one, not asked everything else.
@@ -122,7 +125,7 @@ enum SelectionReader {
                 // the selection stands without it.
                 let place = (try? readPlace(host: capture.host, app: app, ax, policy: .shipped)) ?? ReadingPlace(
                     bundleID: app.bundleID, name: app.name)
-                return selection(from: capture, app: app, place: place)
+                return selection(from: capture, app: app, place: place, maximumLength: maximumLength)
             case .nothing:
                 return .nothing(String(localized: "Nothing is selected in \(app.name), or it does not expose its selection to Accessibility.",
                                        comment: "Lookup panel; the placeholder is the app's name"))
@@ -330,7 +333,8 @@ enum SelectionReader {
 
     // MARK: - The result
 
-    static func selection(from capture: Capture, app: FrontApp, place: ReadingPlace) -> Outcome {
+    static func selection(from capture: Capture, app: FrontApp, place: ReadingPlace,
+                          maximumLength: Int = maximumLength) -> Outcome {
         guard let term = SelectedTerm(from: capture.text) else {
             return .nothing(String(localized: "The selection in \(app.name) has no word in it.",
                                    comment: "Lookup panel; the placeholder is the app's name"))
@@ -350,7 +354,8 @@ enum SelectionReader {
         }
         return .selected(Selection(
             text: term.text, sentence: context?.text, rangeInSentence: rangeInSentence,
-            quality: .accessibility(capture.source, context: quality), place: place))
+            quality: .accessibility(capture.source, context: quality), place: place,
+            originalText: capture.text.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
     static func message(for error: CaptureError, app: String) -> String {

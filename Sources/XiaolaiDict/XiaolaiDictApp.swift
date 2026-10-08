@@ -251,6 +251,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     // Set in `init` after `super.init()`, for the same reason as `dictionary`.
     // swiftlint:disable:next implicitly_unwrapped_optional
     @ObservationIgnored private(set) var shortcuts: ShortcutRegistrar!
+    @ObservationIgnored private var translateHotkey: Hotkey?
     /// What reaches the reader's ledger, and what to tell them when nothing did — see
     /// `LookupRecorder`, which holds the three ordering rules this delegate used to interleave.
     let recorder: LookupRecorder
@@ -386,12 +387,50 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // field they are typing into — `suspend(true)` releases the hot key precisely so the key
         // reaches the field, and registering puts it back unconditionally.
         if !shortcuts.isRegistered, !shortcuts.isSuspended { shortcuts.registerSaved() }
+        if translateHotkey == nil {
+            do {
+                translateHotkey = try hotkeys.register(.defaultTranslate) { [weak self] in self?.translateSelection() }
+            } catch {
+                log.error("translation shortcut: \(error.description, privacy: .public)")
+            }
+        }
     }
 
     /// Whether this process is an instrument rather than the reader's app — see `Instruments`.
     static var isInstrumented: Bool { Instruments.isInstrumented }
 
     // MARK: - Looking up
+
+    func translateSelection() {
+        let pointer = UpPoint(NSEvent.mouseLocation)
+        let ticket = panel.newRequest()
+        lookup?.cancel()
+        guard let app = FrontApp.frontmost() else {
+            panel.show(.frontmostAppUnknown, near: pointer, for: ticket)
+            return
+        }
+        if app.bundleID == GhosttySelectionReader.bundleID {
+            switch GhosttySelectionReader.read() {
+            case .selected(let text):
+                panel.show(.translation(request: ticket.number, text: text), near: pointer, for: ticket)
+            case .nothing(let reason):
+                panel.show(.nothingToTranslate(reason), near: pointer, for: ticket)
+            }
+            return
+        }
+        guard accessibility.ensure() == .granted else {
+            panel.show(.accessibilityIsOff, near: pointer, for: ticket)
+            return
+        }
+        lookup = Task {
+            switch await SelectionReader.read(from: app, maximumLength: GhosttySelectionReader.maximumLength) {
+            case .selected(let selection):
+                panel.show(.translation(request: ticket.number, text: selection.originalText ?? selection.text), near: pointer, for: ticket)
+            case .nothing(let reason):
+                panel.show(.nothingToTranslate(reason), near: pointer, for: ticket)
+            }
+        }
+    }
 
     func lookUpSelection() {
         let pointer = UpPoint(NSEvent.mouseLocation)

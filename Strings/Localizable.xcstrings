@@ -650,6 +650,9 @@
     "Gesture" : {
 
     },
+    "Ghostty could not copy the selected text. Select text in its focused terminal and allow XiaolaiDict to control Ghostty when macOS asks." : {
+      "comment" : "Sentence translation panel when Ghostty's AppleScript copy failed"
+    },
     "Grid" : {
 
     },
@@ -991,6 +994,9 @@
     },
     "Nothing to look up" : {
       "comment" : "Lookup panel, when there was no word to look up"
+    },
+    "Nothing to translate" : {
+      "comment" : "Sentence translation panel"
     },
     "Notifications from XiaolaiDict are turned off in System Settings." : {
 
@@ -1356,6 +1362,9 @@
     "Select one reading to see its details" : {
 
     },
+    "Select text in Ghostty before translating." : {
+      "comment" : "Sentence translation panel when Ghostty copied no selection"
+    },
     "Settings…" : {
       "comment" : "Menu bar item"
     },
@@ -1613,6 +1622,9 @@
     "The readings stay in History, but review progress is lost. This cannot be undone." : {
 
     },
+    "The selected text is too long to translate (limit: 2,000 characters)." : {
+      "comment" : "Sentence translation panel when selected text exceeds the limit"
+    },
     "The selection in %@ has no word in it." : {
       "comment" : "Lookup panel; the placeholder is the app's name"
     },
@@ -1735,6 +1747,9 @@
           }
         }
       }
+    },
+    "Translating selection…" : {
+      "comment" : "Direct selection translation while the engine is working"
     },
     "Translating this sentence…" : {
 

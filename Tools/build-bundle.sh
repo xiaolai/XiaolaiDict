@@ -509,12 +509,16 @@ verify_signatures() {
 # silent tries.
 sign_part() {  # $1: the timestamp option; $2: the code object to sign
     local stamp=$1 part=$2 attempt
+    local -a entitlements=()
+    if [ "$part" = "$STAGE" ]; then
+        entitlements=(--entitlements "$RESOURCES/App.entitlements")
+    fi
     for (( attempt = 1; attempt <= SIGN_TRIES; attempt++ )); do
         if (( attempt == SIGN_TRIES )); then
-            codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null
+            codesign --force --options runtime "${entitlements[@]}" "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null
             return
         fi
-        codesign --force --options runtime "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null 2>&1 && return
+        codesign --force --options runtime "${entitlements[@]}" "$stamp" --sign "$XIAOLAIDICT_SIGN_ID" "$part" >/dev/null 2>&1 && return
         note "signing $(basename "$part") failed on attempt $attempt of $SIGN_TRIES — retrying"
         sleep $(( attempt * 2 ))
     done
