@@ -16,15 +16,15 @@ import os
 /// - **The key is read from the `CredentialStore` on every call** and kept nowhere — not in a property, not in a
 ///   log, not in a failure — so this type has nothing to describe. A key is optional: a local server has none, and
 ///   then no `Authorization` header is sent at all.
+/// - **The key read is the one filed for this endpoint's origin** (`EndpointAddress.keyAccount`), so an instance made
+///   for another host — the reader's URL changed, or rewritten in the defaults by something else — finds no key and
+///   sends none.
 /// - **A redirect is followed only within the endpoint's own origin.** Following one elsewhere would send the body —
 ///   the reader's sentence, and for an endpoint on this Mac the dictionary's text — to a host `RemoteDisclosure` never
 ///   judged, and the key with it.
 /// - **The answer is read up to `responseByteLimit` and no further.**
 /// - **It fails in `ProviderFailure` alone**, and no failure carries what the server said.
 public actor OpenAICompatibleProvider: TextGenerating {
-    /// The Keychain account the key is filed under (`KeychainCredentialStore`): one per provider, and this is this
-    /// provider's.
-    public static let credentialAccount = ProviderChoice.openAICompatible.rawValue
     /// How long a request may go without the server sending anything, and how long it may take in all.
     public static let defaultTimeout = Duration.seconds(30)
     /// The most of an answer that is read. A completion of the budgets `ModelPrompt` sets is a few kilobytes; a
@@ -36,13 +36,16 @@ public actor OpenAICompatibleProvider: TextGenerating {
     private let completions: URL
     private let model: String
     private let credentials: any CredentialStore
+    /// The account this endpoint's key is filed under — its origin's — or nil where the URL names no origin, for which
+    /// no key is read at all.
+    private let keyAccount: String?
     private let session: URLSession
     private let responseByteLimit: Int
     /// The name the token budget goes under next. Starts with the newer name, which OpenAI's newer models require.
     private var tokenField = ChatCompletionsWire.TokenField.maxCompletionTokens
 
     /// A provider for the endpoint whose base URL is `endpoint` — `https://api.openai.com/v1`, say — asking for
-    /// `model`, its key read from `credentials` under `credentialAccount` on every call.
+    /// `model`, its key read from `credentials` on every call, under the account of `endpoint`'s origin.
     public init(endpoint: URL, model: String, credentials: any CredentialStore,
                 timeout: Duration = OpenAICompatibleProvider.defaultTimeout) {
         self.init(endpoint: endpoint, model: model, credentials: credentials, timeout: timeout,
@@ -56,6 +59,7 @@ public actor OpenAICompatibleProvider: TextGenerating {
         completions = endpoint.appending(path: "chat/completions")
         self.model = model
         self.credentials = credentials
+        keyAccount = EndpointAddress(url: endpoint)?.keyAccount
         self.responseByteLimit = responseByteLimit
         let seconds = Self.seconds(timeout)
         sessionConfiguration.timeoutIntervalForRequest = seconds
@@ -138,22 +142,31 @@ public actor OpenAICompatibleProvider: TextGenerating {
         return try Self.outcome(status: status, body: body, field: field)
     }
 
-    /// The key, or nil where there is none — and none is legal: a local server takes no key. A key that is not a
-    /// plain run of visible ASCII is never sent: a line break in it would end the header and start another.
+    /// The key filed for this endpoint's origin, or nil where there is none — and none is legal: a local server takes
+    /// no key. A key that is not a plain run of visible ASCII is never sent: a line break in it would end the header
+    /// and start another.
     private func readKey() throws(ProviderFailure) -> String? {
+        guard let keyAccount else { return nil }
         let stored: String?
         do {
-            stored = try credentials.read(account: Self.credentialAccount)
+            stored = try credentials.read(account: keyAccount)
         } catch {
             Self.log.error("the endpoint's key could not be read: \(String(describing: error), privacy: .public)")
             throw .unauthorised
         }
         guard let stored, !stored.isEmpty else { return nil }
-        guard stored.unicodeScalars.allSatisfy({ (0x21...0x7E).contains($0.value) }) else {
+        guard Self.canSend(key: stored) else {
             Self.log.error("the endpoint's key holds a character a header cannot carry; nothing was sent")
             throw .unauthorised
         }
         return stored
+    }
+
+    /// **Whether `key` can travel in a request header**: one run of visible ASCII and nothing else — a line break in it
+    /// would end the header and start another. The one spelling of the rule: Settings refuses to save what this refuses
+    /// to send, so a key the reader saved never fails every question for a reason they cannot see.
+    public static func canSend(key: String) -> Bool {
+        !key.isEmpty && key.unicodeScalars.allSatisfy { (0x21...0x7E).contains($0.value) }
     }
 
     /// Sends `request` on the kept session and reads the answer, up to the bound.
@@ -278,11 +291,15 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
         init?(_ url: URL) {
             guard let scheme = url.scheme?.lowercased(), let host = url.host(percentEncoded: true)?.lowercased(),
                   !host.isEmpty else { return nil }
-            let standard = ["http": 80, "https": 443][scheme]
-            guard let port = url.port ?? standard else { return nil }
+            guard let port = url.port ?? Self.standardPort(of: scheme) else { return nil }
             self.scheme = scheme
             self.host = host
             self.port = port
+        }
+
+        /// The port a URL of `scheme` means where it writes none.
+        static func standardPort(of scheme: String) -> Int? {
+            ["http": 80, "https": 443][scheme]
         }
     }
 }

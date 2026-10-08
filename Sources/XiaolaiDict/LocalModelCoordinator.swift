@@ -30,13 +30,20 @@ final class LocalModelCoordinator {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var settingsObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "model")
+    /// **What Settings › Language Model shows and changes**, over the suite this coordinator was given and the Keychain
+    /// items the providers read — so the key the pane files is the key a provider reads, under the account its endpoint's
+    /// origin names. Its check asks the router; the warming at a change is handed to it by `start()`.
+    let languageModel: LanguageModelPaneModel
 
+    /// `credentials` is the store the pane files a key in; it must be the one `providers` reads from, which for the
+    /// app's own is the Keychain. A test handing a factory of its own hands a store of its own.
     init(
         defaults: UserDefaults, store: ModelStore = .standard(), client: ModelClient = ModelClient(),
         transport: any ModelFileTransport = URLSessionModelTransport(),
         probe: any ModelHostProbe = URLSessionModelHostProbe(),
         physicalMemory: UInt64 = SystemMemory.physical,
-        providers: ProviderFactory = .standard
+        providers: ProviderFactory = .standard,
+        credentials: any CredentialStore = KeychainCredentialStore()
     ) {
         controller = LocalModelController(
             defaults: defaults, store: store, physicalMemory: physicalMemory,
@@ -50,6 +57,9 @@ final class LocalModelCoordinator {
             local: .init(ask: { request in await access.ask(request) }, prewarm: { await access.prewarm() }),
             factory: providers)
         self.defaults = defaults
+        languageModel = LanguageModelPaneModel(defaults: defaults, credentials: credentials) { [router] in
+            await router.check()
+        }
         // A new model is answered from only once the service holding the old one has gone.
         //
         // **Ready is still published if it will not go.** The model is on disk and is what the next
@@ -108,14 +118,20 @@ final class LocalModelCoordinator {
     /// change made in this process (the settings pane writes the suite this coordinator was given) puts the source left
     /// away and warms the one chosen at once; one made outside it is seen at the next question, which reads the
     /// settings itself. Idempotent: a second call watches nothing twice.
+    ///
+    /// **What the warmed source said is handed to the Language Model pane** — the preflight's answer, with the source
+    /// it is about — so the pane shows it without spending a second question of the reader's subscription.
     func start() {
         guard settingsObserver == nil else { return }
-        let router = router
-        Task { await router.reconcile() }
+        let router = router, pane = languageModel
+        let reconcile: @Sendable () -> Void = {
+            Task { @MainActor in pane.record(await router.reconcile()) }
+        }
+        reconcile()
         settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
         ) { _ in
-            Task { await router.reconcile() }
+            reconcile()
         }
     }
 
@@ -168,7 +184,8 @@ final class LocalModelCoordinator {
             sourceLanguage: { [router] sentence in
                 Self.translator(asking: router, keeping: RoutedAnswer()).sourceLanguage(of: sentence)
             },
-            canDownloadModel: choice.canDownload,
+            // **Only where the bundled model's setup is shown** (ADR-0053): hidden, not removed.
+            canDownloadModel: choice.canDownload && choice.isShown,
             // **What the row would download, read at the click** — which is the size a stopped
             // download was of, not the recommended one. Started from `recommended`, a stopped 9B
             // download answered the reader's "download" by fetching 4B instead: another three

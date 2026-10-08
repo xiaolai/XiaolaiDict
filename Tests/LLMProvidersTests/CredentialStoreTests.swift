@@ -38,8 +38,11 @@ struct CredentialStoreTests {
         defer { try? store.delete(account: account) }
 
         #expect(try store.read(account: account) == nil, "a fresh service already holds a key")
+        #expect(try store.contains(account: account) == false, "a fresh service says it holds a key")
         try store.write("sk-first", account: account)
         #expect(try store.read(account: account) == "sk-first")
+        #expect(try store.contains(account: account), "a written key is not seen without reading it")
+        #expect(try store.contains(account: "someOtherProvider") == false)
         try store.write("sk-second", account: account)
         #expect(try store.read(account: account) == "sk-second", "an overwrite did not replace the key")
         // Another account under the same service is another key.
@@ -49,6 +52,7 @@ struct CredentialStoreTests {
 
         try store.delete(account: account)
         #expect(try store.read(account: account) == nil, "a deleted key is still read")
+        #expect(try store.contains(account: account) == false, "a deleted key is still said to be there")
         // Deleting what is not there is not a failure: removing a key is safe to repeat.
         try store.delete(account: account)
     }

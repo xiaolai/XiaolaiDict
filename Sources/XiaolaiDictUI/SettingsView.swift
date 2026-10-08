@@ -190,6 +190,9 @@ public struct SettingsView: View {
     private let shortcutIsRegistered: Bool
     private let localModel: LocalModelChoice?
     private let refreshDictionaries: (() async -> Void)?
+    /// The Language Model pane's model — the app's, over the suite and the Keychain the providers read. Nil in a
+    /// preview, where the pane says it is unavailable rather than drawing controls wired to nothing.
+    private let languageModel: LanguageModelPaneModel?
 
     public init(
         model: SettingsModel = SettingsModel(), appearance: Appearance? = nil,
@@ -205,7 +208,8 @@ public struct SettingsView: View {
         study: StudyChoice? = nil,
         setup: SetupModel? = nil, shortcutIsRegistered: Bool = false,
         localModel: LocalModelChoice? = nil,
-        refreshDictionaries: (() async -> Void)? = nil
+        refreshDictionaries: (() async -> Void)? = nil,
+        languageModel: LanguageModelPaneModel? = nil
     ) {
         _model = State(initialValue: model)
         self.keepPolicy = keepPolicy
@@ -225,6 +229,7 @@ public struct SettingsView: View {
         self.shortcutIsRegistered = shortcutIsRegistered
         self.localModel = localModel
         self.refreshDictionaries = refreshDictionaries
+        self.languageModel = languageModel
     }
 
     public var body: some View {
@@ -347,6 +352,8 @@ public struct SettingsView: View {
                 SetupView(
                     model: setup, dictionary: dictionary, shortcut: shortcut,
                     shortcutIsRegistered: shortcutIsRegistered, localModel: localModel,
+                    // The source in force, so a CLI chosen with its switch off reads as nothing chosen.
+                    languageModel: languageModel?.effectiveChoice,
                     // Not `choose`: the board sent the reader there, they did not pick the tab.
                     openSettings: { model.pane = $0 },
                     refreshDictionaries: refreshDictionaries,
@@ -362,6 +369,8 @@ public struct SettingsView: View {
             LookupPane(policy: hover ?? $unattached, hoverEnabled: hoverEnabled,
                        captureStuck: captureStuck, shortcut: shortcut, capture: model.shortcutCapture)
         case .dictionary: DictionaryPane(choice: dictionary)
+        case .languageModel:
+            LanguageModelPane(model: languageModel, showsLocalModel: localModel?.isShown ?? false)
         #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
         case .developer: DeveloperPane(choice: developer)
         #endif
@@ -370,6 +379,7 @@ public struct SettingsView: View {
         // could not read would be worse than one that prints none.
         case .about:
             AboutPane(release: AppRelease(Bundle.main), modelLicence: modelLicence,
+                      showsLocalModel: localModel?.isShown ?? false,
                       notices: Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt"))
         }
     }
@@ -404,6 +414,8 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     case reading
     case lookup
     case dictionary
+    /// **Which language model the translation and explanation panes ask** (ADR-0053): a service the reader already has.
+    case languageModel
     case about
     #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
     /// **Development builds only, and hidden until Shift+Up three times** (`RevealSequence`). Never in
@@ -412,7 +424,9 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     #endif
 
     /// The panes every build has. Written out because the developer pane must not join it.
-    public static var allCases: [SettingsPane] { [.setup, .general, .reading, .lookup, .dictionary, .about] }
+    public static var allCases: [SettingsPane] {
+        [.setup, .general, .reading, .lookup, .dictionary, .languageModel, .about]
+    }
 
     public var id: String { rawValue }
 
@@ -427,6 +441,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
+        case .languageModel: "Language Model"
         case .about: "About"
         #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
         case .developer: rawValue
@@ -445,6 +460,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "Reading"
         case .lookup: "Lookup"
         case .dictionary: "Dictionary"
+        case .languageModel: "Language Model"
         case .about: "About"
         #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
         // Built, not written: a development build's label is not a string anyone translates.
@@ -464,6 +480,8 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .reading: "textformat.size"
         case .lookup: "text.magnifyingglass"
         case .dictionary: "character.book.closed"
+        // What the pane is about — a model that writes an answer — not an action.
+        case .languageModel: "text.bubble"
         case .about: "info.circle"
         #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
         case .developer: "hammer"

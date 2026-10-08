@@ -32,7 +32,9 @@ struct ProviderCompositionTests {
                             backend: FakeProvider) -> (LocalModelCoordinator, UserDefaults) {
         let suite = TemporaryDefaults.suite()
         ProviderChoiceStore(defaults: suite).save(choice)
-        ProviderSettingsStore(defaults: suite).save(ProviderSettings(endpointURL: endpoint, endpointModel: "m"))
+        // The CLIs' switch on, as a reader who chose one has it: with it off a CLI is no source.
+        ProviderSettingsStore(defaults: suite).save(ProviderSettings(endpointURL: endpoint, endpointModel: "m",
+                                                                     subscriptionCLIsEnabled: true))
         struct NoService: Error {}
         let coordinator = LocalModelCoordinator(
             defaults: suite, store: ModelStore(root: ScratchFile.unmade("providers", file: "models")),
@@ -136,6 +138,48 @@ struct ProviderCompositionTests {
         let (models, _) = Self.coordinator(choosing: .claudeCLI, backend: backend)
         models.start()
         try await Wiring.settle("the chosen CLI was not warmed at launch") { backend.checks == 1 }
+    }
+
+    /// **A CLI chosen with the reader's switch off is never started** — at launch, by a question, or by the switch's
+    /// own write — and its question goes where `none` sends it. The control: turning the switch on starts it.
+    @Test func aCLIChosenWithTheSwitchOffIsNeverStarted() async throws {
+        let backend = FakeProvider(warmsByAsking: true)
+        let (models, suite) = Self.coordinator(choosing: .claudeCLI, backend: backend)
+        let store = ProviderSettingsStore(defaults: suite)
+        var settings = store.load()
+        settings.subscriptionCLIsEnabled = false
+        store.save(settings)
+        models.start()
+        _ = await models.explanationActions.explain(Self.explanation)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(backend.requests.isEmpty && backend.checks == 0, "a CLI was asked with the reader's switch off")
+
+        settings.subscriptionCLIsEnabled = true
+        store.save(settings)
+        try await Wiring.settle("turning the switch on did not start the chosen CLI") { backend.checks == 1 }
+    }
+
+    /// **What the chosen source said when it was warmed reaches the Language Model pane** — the preflight's answer, so
+    /// the pane shows it without asking a second trivial question of the reader's subscription.
+    @Test func whatTheWarmedSourceSaidReachesThePane() async throws {
+        let backend = FakeProvider(warmsByAsking: true)
+        let (models, _) = Self.coordinator(choosing: .claudeCLI, backend: backend)
+        #expect(models.languageModel.shownReadiness == nil)
+        models.start()
+        try await Wiring.settle("the warming's answer never reached the pane") {
+            models.languageModel.shownReadiness == .cli(.ready(version: "9.9.9", answeredIn: .milliseconds(5)))
+        }
+        #expect(backend.checks == 1, "the pane asked the source a question of its own")
+    }
+
+    /// **The pane's check asks the router the app holds** — the source the reader's settings name, one trivial
+    /// question — and shows what it said.
+    @Test func thePanesCheckAsksTheAppsRouter() async throws {
+        let backend = FakeProvider()
+        let (models, _) = Self.coordinator(choosing: .openAICompatible, backend: backend)
+        await models.languageModel.check()
+        #expect(backend.checks == 1)
+        #expect(models.languageModel.shownReadiness == .cli(.ready(version: "9.9.9", answeredIn: .milliseconds(5))))
     }
 
     /// **A write to the app's suite that is not the reader's choice asks the source nothing** — the suite holds window

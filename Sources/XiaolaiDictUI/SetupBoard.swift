@@ -1,5 +1,6 @@
 import DictionaryModel
 import MacCapture
+import ModelKit
 import StudyKit
 import XiaolaiDictCore
 
@@ -23,14 +24,20 @@ public struct SetupBoard: Equatable, Sendable {
         case permission(Permission)
         case dictionary
         case shortcut
-        /// The local model: one row for translation and sense picking, because one download does both.
+        /// **The language model the translation and explanation panes ask** (ADR-0053): a service the reader already
+        /// has, chosen in Settings › Language Model. Optional, and never "Needed" — the dictionary is the product.
+        case languageModel
+        /// The bundled local model: one row for translation and sense picking, because one download does both.
+        /// **Hidden, not removed**: on the board only where `LocalModelChoice.isShown` says its setup is shown.
         case localModel
 
         public static let accessibility = Step.permission(.accessibility)
         public static let screenRecording = Step.permission(.screenRecording)
 
         /// Board order: the permissions in their own order, then the rest.
-        public static var allCases: [Step] { Permission.allCases.map(Step.permission) + [.dictionary, .shortcut, .localModel] }
+        public static var allCases: [Step] {
+            Permission.allCases.map(Step.permission) + [.dictionary, .shortcut, .languageModel, .localModel]
+        }
 
         /// The same identifiers the two permission cases had as raw values.
         public var id: String {
@@ -38,6 +45,7 @@ public struct SetupBoard: Equatable, Sendable {
             case .permission(let permission): permission.rawValue
             case .dictionary: "dictionary"
             case .shortcut: "shortcut"
+            case .languageModel: "languageModel"
             case .localModel: "localModel"
             }
         }
@@ -57,8 +65,12 @@ public struct SetupBoard: Equatable, Sendable {
         /// **The local model is**, which the sense-engine row it replaced was not. That row's
         /// reason — "nothing a reader can do about it inside this app" — stopped being true once
         /// there was a download only the reader can agree to. It is settled by the download, or by
-        /// the reader choosing **Not now**; either way it is their answer, and it is asked once.
-        public var needsReader: Bool { self != .shortcut }
+        /// the reader choosing **Not now**; either way it is their answer, and it is asked once —
+        /// on a board that shows it at all (`showsLocalModel`).
+        ///
+        /// **The language model is not** (ADR-0053): it is a service the reader may or may not have,
+        /// and a reader with none has the dictionary, which is the product.
+        public var needsReader: Bool { self != .shortcut && self != .languageModel }
     }
 
     public let permissions: PermissionsReport
@@ -87,12 +99,21 @@ public struct SetupBoard: Equatable, Sendable {
     /// Apple's on-device model, which is no longer a row of its own: it is the fallback the model
     /// row names while the model is absent, because that is what picks senses meanwhile.
     public let engine: SenseEngineStatus
+    /// The language-model source in force — `LanguageModelPaneModel.effectiveChoice`, so a CLI chosen with the switch
+    /// off reads as `none`, as the router reads it. **No default**, for `modelDeclined`'s reason.
+    public let provider: ProviderChoice
+    /// Whether the bundled model's setup is shown (`LocalModelChoice.isShown`). **No default**: defaulted to shown, a
+    /// caller that forgot would ask every reader for a download the product no longer offers.
+    public let showsLocalModel: Bool
 
     public init(
         permissions: PermissionsReport, available: [DictionaryCapability]?, chosen: String?,
         language: String, shortcut: Shortcut?, shortcutIsRegistered: Bool = true,
-        model: LocalModelState?, modelDeclined: Bool, engine: SenseEngineStatus
+        model: LocalModelState?, modelDeclined: Bool, engine: SenseEngineStatus,
+        provider: ProviderChoice, showsLocalModel: Bool
     ) {
+        self.provider = provider
+        self.showsLocalModel = showsLocalModel
         self.permissions = permissions
         self.available = available
         self.chosen = chosen
@@ -107,7 +128,10 @@ public struct SetupBoard: Equatable, Sendable {
     /// Every step, always, in a fixed order. The board shows all of them whether or not they are
     /// settled — a row that vanishes once it is done takes with it the only place the reader could
     /// go to change their mind.
-    public var steps: [Step] { Step.allCases }
+    ///
+    /// **The one exception is the bundled model's row, which is hidden, not removed** (ADR-0053): it
+    /// is on the board only where its setup is shown, and then it stays whether or not it is settled.
+    public var steps: [Step] { Step.allCases.filter { $0 != .localModel || showsLocalModel } }
 
     /// What to offer a reader who has not chosen. Computed rather than stored, so it cannot go
     /// stale against the list it was derived from.
@@ -181,6 +205,8 @@ public struct SetupBoard: Equatable, Sendable {
         // that labels its blocks `n.`/`vt.` and narrows nothing.)
         case .dictionary: chosen != nil ? !chosenDictionaryIsMissing : automaticDictionary != nil
         case .shortcut: shortcut?.isUsable == true && shortcutIsRegistered
+        // Settled by a source being in force — never asked for, so never "Needed" without one.
+        case .languageModel: provider != .none
         // Downloaded, or declined. And a Mac that cannot hold even the smallest size has nothing to
         // ask of its reader: a row that stayed "needed" there could never be settled at all.
         case .localModel:
@@ -243,7 +269,10 @@ public struct SetupBoard: Equatable, Sendable {
     /// had answered, which is the onboarding invariant read backwards.
     /// **And not while a permission could not be checked** — not outstanding, since it may well be
     /// granted, but not known to be in place either.
-    public var isComplete: Bool { outstanding.isEmpty && unchecked.isEmpty && available != nil && model != nil }
+    /// **Only while that row is on the board**: a hidden row has nothing to settle, known or not.
+    public var isComplete: Bool {
+        outstanding.isEmpty && unchecked.isEmpty && available != nil && (model != nil || !showsLocalModel)
+    }
 
     /// The permission steps whose probe could not tell — neither needed nor in place.
     public var unchecked: [Step] {

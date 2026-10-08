@@ -61,6 +61,9 @@ public struct SetupView: View {
     private var shortcutIsRegistered: Bool
     /// The local model's row: its state, and the download the reader can agree to or decline.
     private var localModel: LocalModelChoice?
+    /// The language-model source in force, for the row that opens its pane. Nil where the board was drawn without the
+    /// app, and then the row reads as nothing chosen.
+    private var languageModel: ProviderChoice?
     /// Told whether anything here still needs the reader, whenever that is known and changes —
     /// so the window can open on this pane next time while something does.
     private var onOutstandingChange: ((Bool) -> Void)?
@@ -72,6 +75,8 @@ public struct SetupView: View {
         // and a default made that the quiet outcome of forgetting to wire it: the row says "Not
         // known" and offers nothing, with nothing to say it was a mistake rather than a state.
         localModel: LocalModelChoice?,
+        // **No default either**, for `localModel`'s reason: a board built without it would say nothing is chosen.
+        languageModel: ProviderChoice?,
         openSettings: ((SettingsPane) -> Void)? = nil,
         refreshDictionaries: (() async -> Void)? = nil,
         onOutstandingChange: ((Bool) -> Void)? = nil
@@ -81,6 +86,7 @@ public struct SetupView: View {
         self.shortcut = shortcut
         self.shortcutIsRegistered = shortcutIsRegistered
         self.localModel = localModel
+        self.languageModel = languageModel
         self.openSettings = openSettings
         self.refreshDictionaries = refreshDictionaries
         self.onOutstandingChange = onOutstandingChange
@@ -107,7 +113,10 @@ public struct SetupView: View {
             // download the board had no way to start, and `SetupBoard`'s own nil branch — written
             // for exactly this — could never be reached.
             model: localModel?.state, modelDeclined: localModel?.declined ?? false,
-            engine: SenseEngine.status())
+            engine: SenseEngine.status(),
+            provider: languageModel ?? .none,
+            // Hidden where nothing says to show it — and a board never told about the model is one such.
+            showsLocalModel: localModel?.isShown ?? false)
     }
 
     public var body: some View {
@@ -185,14 +194,14 @@ public struct SetupView: View {
             // needed" would be said over a row reading "Not checked".
             case 0 where !board.unchecked.isEmpty:
                 Text("Nothing is waiting on you, but a permission could not be checked.")
-            case 0 where board.model == nil:
+            case 0 where board.showsLocalModel && board.model == nil:
                 Text("Nothing is waiting on you. What this Mac can do about the local model is not known yet.")
             case 0 where board.steps.contains(where: { !board.isAvailable($0) }):
                 Text("Everything this Mac can do is in place. Anything here can still be changed.")
             // **A model the reader put off is not one that is in place.** Nothing is waiting on
             // them — they answered — but saying everything needed is here would be saying they have
             // something they declined.
-            case 0 where localModel?.declined == true && board.model?.answering == nil:
+            case 0 where board.showsLocalModel && localModel?.declined == true && board.model?.answering == nil:
                 // "above" was wrong: this summary sits before every row, so the model row is below
                 // it. Named rather than pointed at, because which direction it is in depends on a
                 // layout this sentence should not have to know.
@@ -235,12 +244,17 @@ public struct SetupView: View {
         case .permission(.screenRecording): Text("Screen Recording")
         case .dictionary: Text("Study Dictionary")
         case .shortcut: Text("Lookup Shortcut")
-        case .localModel: Text("Translation and Meanings")
+        // **The title the bundled model's row had**, because this is the row that does its job now (plan §6): what the
+        // reader gets — a translation, a meaning explained — and not which engine gives it.
+        case .languageModel: Text("Translation and Meanings")
+        case .localModel: Text("Local Model")
         }
     }
 
     @ViewBuilder private func state(_ step: SetupBoard.Step) -> some View {
-        if step == .localModel, let modelState = modelStateLabel {
+        if step == .languageModel {
+            languageModelState
+        } else if step == .localModel, let modelState = modelStateLabel {
             modelState
         } else if board.isSettled(step), board.isAvailable(step) {
             Text("Ready")
@@ -258,7 +272,47 @@ public struct SetupView: View {
         case .permission(let permission): permissionDetail(permission)
         case .dictionary: dictionaryDetail
         case .shortcut: shortcutDetail
+        case .languageModel: languageModelDetail
         case .localModel: modelDetail
+        }
+    }
+
+    /// The optional row's state word: the source in force, or that none is needed. **Never "Needed"** — a reader with
+    /// no model at all has the dictionary, which is the product.
+    @ViewBuilder private var languageModelState: some View {
+        switch board.provider {
+        case .none: Text("Optional")
+        // Product names, not prose.
+        case .claudeCLI: Text(verbatim: "Claude")
+        case .codexCLI: Text(verbatim: "Codex")
+        case .openAICompatible: Text("Service")
+        case .localModel: Text("Local Model")
+        }
+    }
+
+    /// What the row is for, and what answers while nothing is chosen — said of what is really on this Mac: where the
+    /// bundled model is on disk, `none` still sends its questions there (ADR-0053).
+    @ViewBuilder private var languageModelDetail: some View {
+        switch board.provider {
+        case .none where board.showsLocalModel && board.model?.answering != nil:
+            Text("""
+                 Optional. A language model you already use — your Claude or Codex subscription, or a service you \
+                 have an address for — can translate the sentence and explain how a word is used in it. Until you \
+                 choose one, the model downloaded to this Mac does.
+                 """)
+        case .none:
+            Text("""
+                 Optional. A language model you already use — your Claude or Codex subscription, or a service you \
+                 have an address for — can translate the sentence and explain how a word is used in it. Without one, \
+                 Apple's own engines do what they can, on this Mac.
+                 """)
+        case .localModel:
+            Text("The model downloaded to this Mac translates the sentence and explains how a word is used in it.")
+        case .claudeCLI, .codexCLI, .openAICompatible:
+            Text("""
+                 The source chosen in Language Model settings translates the sentence and explains how a word is used \
+                 in it, when you ask.
+                 """)
         }
     }
 
@@ -530,6 +584,12 @@ public struct SetupView: View {
             dictionaryActions
         case .localModel:
             modelActions
+        case .languageModel:
+            if let openSettings {
+                Button(board.provider == .none ? "Choose…" : "Change…") { openSettings(.languageModel) }
+                    .stepAction()
+                    .controlSize(.small)
+            }
         case .shortcut:
             if let openSettings {
                 Button("Change…") { openSettings(.lookup) }

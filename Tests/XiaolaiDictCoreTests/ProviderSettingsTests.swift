@@ -54,6 +54,7 @@ struct ProviderSettingsStoreTests {
         #expect(settings.codexCLIPath == nil)
         #expect(settings.claudeCLIModel == "haiku")
         #expect(settings.codexCLIModel.isEmpty)
+        #expect(!settings.subscriptionCLIsEnabled, "the CLI sources are on before the reader turned them on")
     }
 
     /// The keys are the stored spelling, and the end-to-end stages will write them by name. Pinned.
@@ -64,6 +65,7 @@ struct ProviderSettingsStoreTests {
         #expect(ProviderSettingsStore.Key.codexCLIPath == "CodexCLIPath")
         #expect(ProviderSettingsStore.Key.claudeCLIModel == "ClaudeCLIModel")
         #expect(ProviderSettingsStore.Key.codexCLIModel == "CodexCLIModel")
+        #expect(ProviderSettingsStore.Key.subscriptionCLIsEnabled == "SubscriptionCLIsEnabled")
     }
 
     @Test func whatIsSavedIsWhatComesBack() {
@@ -71,7 +73,7 @@ struct ProviderSettingsStoreTests {
         let chosen = ProviderSettings(
             endpointURL: "http://127.0.0.1:11434/v1", endpointModel: "qwen3:4b",
             claudeCLIPath: "/opt/homebrew/bin/claude", codexCLIPath: "/opt/tools/bin/codex",
-            claudeCLIModel: "sonnet", codexCLIModel: "gpt-6.1-sol")
+            claudeCLIModel: "sonnet", codexCLIModel: "gpt-6.1-sol", subscriptionCLIsEnabled: true)
         ProviderSettingsStore(defaults: defaults).save(chosen)
         #expect(ProviderSettingsStore(defaults: defaults).load() == chosen, "settings did not survive a new store")
     }
@@ -81,13 +83,16 @@ struct ProviderSettingsStoreTests {
     @Test func aDefaultIsNotWrittenAndAnOverrideTakenBackIsRemoved() {
         let defaults = TemporaryDefaults.suite()
         let store = ProviderSettingsStore(defaults: defaults)
-        store.save(ProviderSettings(claudeCLIPath: "/usr/local/bin/claude", claudeCLIModel: "sonnet"))
+        store.save(ProviderSettings(claudeCLIPath: "/usr/local/bin/claude", claudeCLIModel: "sonnet",
+                                    subscriptionCLIsEnabled: true))
         #expect(defaults.object(forKey: ProviderSettingsStore.Key.claudeCLIPath) as? String == "/usr/local/bin/claude")
         #expect(defaults.object(forKey: ProviderSettingsStore.Key.claudeCLIModel) as? String == "sonnet")
+        #expect(defaults.object(forKey: ProviderSettingsStore.Key.subscriptionCLIsEnabled) as? Bool == true)
         store.save(ProviderSettings())
         for key in [ProviderSettingsStore.Key.endpointURL, ProviderSettingsStore.Key.endpointModel,
                     ProviderSettingsStore.Key.claudeCLIPath, ProviderSettingsStore.Key.codexCLIPath,
-                    ProviderSettingsStore.Key.claudeCLIModel, ProviderSettingsStore.Key.codexCLIModel] {
+                    ProviderSettingsStore.Key.claudeCLIModel, ProviderSettingsStore.Key.codexCLIModel,
+                    ProviderSettingsStore.Key.subscriptionCLIsEnabled] {
             #expect(defaults.object(forKey: key) == nil, "\(key) was written though it holds its default")
         }
         #expect(store.load() == ProviderSettings())
@@ -114,10 +119,44 @@ struct ProviderSettingsStoreTests {
         #expect(read.claudeCLIPath == "/usr/local/bin/claude")
     }
 
+    /// **The CLI switch is on only where a yes was written as one** — it is the reader's consent to this app starting
+    /// their CLI, so a string, a number other than a boolean's, or anything else is off. The control: a real yes.
+    @Test func theCLISwitchIsOffUnlessAYesWasWritten() {
+        let stored: [Any] = ["YES", "true", 2, ["on"]]
+        for value in stored {
+            let defaults = TemporaryDefaults.suite()
+            defaults.set(value, forKey: ProviderSettingsStore.Key.subscriptionCLIsEnabled)
+            #expect(!ProviderSettingsStore(defaults: defaults).load().subscriptionCLIsEnabled, "\(value) turned it on")
+            defaults.set(true, forKey: ProviderSettingsStore.Key.subscriptionCLIsEnabled)
+            #expect(ProviderSettingsStore(defaults: defaults).load().subscriptionCLIsEnabled)
+        }
+    }
+
     /// An empty endpoint is no endpoint, so it reads as the default rather than as a URL nothing can parse.
     @Test func anEmptyEndpointIsTheDefault() {
         let defaults = TemporaryDefaults.suite()
         defaults.set("", forKey: ProviderSettingsStore.Key.endpointURL)
         #expect(ProviderSettingsStore(defaults: defaults).load().endpointURL == ProviderSettings.defaultEndpointURL)
+    }
+}
+
+/// **The bundled model's setup is hidden unless the reader asked for it** (ADR-0053): `ShowLocalModelSetup`, in the
+/// spellings `defaults write` writes a yes in.
+struct LocalModelSetupFlagTests {
+    @Test func unsetIsHidden() {
+        #expect(!LocalModelSetupFlag(defaults: TemporaryDefaults.suite()).isSet())
+        #expect(LocalModelSetupFlag.defaultsKey == "ShowLocalModelSetup")
+    }
+
+    /// `-bool YES`, `-bool true`, `-int 1` and `-string YES` all say yes; a no says no.
+    @Test func aYesInAnySpellingShowsIt() {
+        let spellings: [(stored: Any, shown: Bool)] = [
+            (true, true), (1, true), ("YES", true), ("1", true), (false, false), ("NO", false), (0, false),
+        ]
+        for (stored, shown) in spellings {
+            let defaults = TemporaryDefaults.suite()
+            defaults.set(stored, forKey: LocalModelSetupFlag.defaultsKey)
+            #expect(LocalModelSetupFlag(defaults: defaults).isSet() == shown, "\(stored)")
+        }
     }
 }

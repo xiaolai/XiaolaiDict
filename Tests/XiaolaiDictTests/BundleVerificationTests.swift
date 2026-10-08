@@ -151,6 +151,24 @@ struct BundleVerificationTests {
         #expect(run.said.contains(says), "\(name): the refusal was \"\(run.said)\"")
     }
 
+    /// **App Transport Security is loosened for this Mac's own servers and for nothing else** (ADR-0053), checked in both
+    /// directions: without `NSAllowsLocalNetworking` an endpoint on loopback — Ollama, LM Studio, `mlx_lm.server`, which
+    /// speak plain HTTP — is refused in the bundle while every unit test passes, and with any other exception beside it
+    /// a remote endpoint's key could travel in the clear.
+    @Test(.enabled(if: bundleIsCurrent, "the published bundle was not built from these inputs; run make"), arguments: [
+        ("the local-networking key is missing", "Delete :NSAppTransportSecurity:NSAllowsLocalNetworking"),
+        ("the whole dictionary is missing", "Delete :NSAppTransportSecurity"),
+        ("arbitrary loads are allowed beside it", "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true"),
+        ("the key says no", "Set :NSAppTransportSecurity:NSAllowsLocalNetworking false"),
+    ])
+    func transportSecurityLoosenedOtherwiseIsRefused(_ name: String, command: String) throws {
+        let copy = try clone()
+        try plist(copy.appending(path: "Contents/Info.plist").path, command)
+        let run = try verify(copy)
+        #expect(run.status != 0, "\(name) and the bundle verified anyway")
+        #expect(run.said.contains("NSAppTransportSecurity"), "\(name): the refusal was \"\(run.said)\"")
+    }
+
     /// An ad-hoc signature verifies as a signature. It also keeps none of the permission grants
     /// macOS keys to a signing identity, so a reader would be asked for Accessibility again — and
     /// this is the check that says so rather than letting it ship.
@@ -169,5 +187,24 @@ struct BundleVerificationTests {
         #expect(run.status != 0, "an ad-hoc signature was accepted")
         #expect(run.said.contains("team identifier") || run.said.contains("not by"),
                 "the refusal was \"\(run.said)\"")
+    }
+}
+
+/// **The tracked `Info.plist` loosens App Transport Security for this Mac's own servers, and for nothing else**
+/// (ADR-0053, plan §4) — read from the file the bundle is built from, so it runs in every test run, built bundle or not.
+/// `verify_bundle` holds the bundle itself to the same, both ways (`BundleVerificationTests`).
+struct AppTransportSecurityTests {
+    @Test func theAppAllowsLocalNetworkingAndNothingElse() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Resources/Info.plist")
+        let plist = try #require(
+            try PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+        #expect(plist["CFBundleIdentifier"] as? String == "com.xiaolaidict", "the control: this is the app's plist")
+        let security = try #require(plist["NSAppTransportSecurity"] as? [String: Any],
+                                    "the app does not declare NSAppTransportSecurity, so loopback endpoints are refused")
+        #expect(Set(security.keys) == ["NSAllowsLocalNetworking"], "ATS is loosened beyond this Mac: \(security.keys)")
+        let allows = try #require(security["NSAllowsLocalNetworking"] as? NSNumber)
+        #expect(CFGetTypeID(allows) == CFBooleanGetTypeID() && allows.boolValue, "NSAllowsLocalNetworking is not true")
     }
 }

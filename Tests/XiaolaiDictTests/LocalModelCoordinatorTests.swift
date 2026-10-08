@@ -161,4 +161,24 @@ struct LocalModelCoordinatorTests {
         }
         #expect(!coordinator.choice.state.isDownloading)
     }
+
+    /// **The translation pane offers the bundled model's download only where its setup is shown** (ADR-0053): the
+    /// reader set `ShowLocalModelSetup`, or a model is on disk. Nothing else changes: the controller is the same, and
+    /// the control — the flag set, on the same Mac with the same empty store — offers it again.
+    @Test func theTranslationPaneOffersNoDownloadUnlessTheSetupIsShown() {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-coordinator")
+        scratches.withLock { $0.append(scratch) }
+        let suite = TemporaryDefaults.suite()
+        let coordinator = LocalModelCoordinator(
+            defaults: suite, store: ModelStore(root: scratch.url),
+            transport: LocalModelControllerTests.Transport(fails: true),
+            probe: LocalModelControllerTests.FixedProbe(), physicalMemory: 48 * Self.gigabyte)
+        #expect(coordinator.choice.canDownload, "the premise: this Mac is offered a download")
+        #expect(!coordinator.choice.isShown)
+        #expect(!coordinator.translationActions.canDownloadModel, "a download was offered with the setup hidden")
+
+        suite.set(true, forKey: LocalModelSetupFlag.defaultsKey)
+        #expect(coordinator.choice.isShown, "the flag set in the app's suite did not reach the choice")
+        #expect(coordinator.translationActions.canDownloadModel)
+    }
 }

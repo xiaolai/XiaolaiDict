@@ -63,9 +63,13 @@ public struct ProviderFactory: Sendable {
                                      configuration: configuration, events: events)
                 }
             case .endpoint(let url, let model):
-                guard let base = Self.endpoint(url), !model.isEmpty else { return ProviderBuild(refusal: .endpointUnusable) }
+                // The one parse of the reader's address — the one their key's account is read from too — and what is
+                // sent where is judged from the same text by `RemoteDisclosure`, which reads it failing closed.
+                guard let address = EndpointAddress(url), !model.isEmpty else {
+                    return ProviderBuild(refusal: .endpointUnusable)
+                }
                 return ProviderBuild(backend: OpenAICompatibleProvider(
-                    endpoint: base, model: model, credentials: credentials,
+                    endpoint: address.url, model: model, credentials: credentials,
                     timeout: OpenAICompatibleProvider.defaultTimeout, sessionConfiguration: endpointSession(),
                     responseByteLimit: OpenAICompatibleProvider.responseByteLimit))
             }
@@ -85,16 +89,6 @@ public struct ProviderFactory: Sendable {
         // A directory that could not be made is a source that cannot be started, said as one that did not answer.
         guard let directory = scratch() else { return ProviderBuild(refusal: .cli(.unavailable(.unreachable))) }
         return ProviderBuild(backend: start(executable, directory.url), refusal: nil, keeps: directory)
-    }
-
-    /// The base URL an endpoint is asked at: http or https, with a host. Anything else cannot be asked anything — and
-    /// what is sent where is judged from the same text by `RemoteDisclosure`, which reads it failing closed.
-    private static func endpoint(_ text: String) -> URL? {
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces)),
-              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = url.host(percentEncoded: true), !host.isEmpty
-        else { return nil }
-        return url
     }
 
     /// A factory that makes whatever `make` makes — a test's own backend, answering in-process.

@@ -18,6 +18,9 @@ public enum CredentialStoreFailure: Error, Equatable, Sendable {
 /// Reading answers nil where there is no key, which for a local server is the ordinary case, not a failure.
 public protocol CredentialStore: Sendable {
     func read(account: String) throws(CredentialStoreFailure) -> String?
+    /// **Whether the account holds a key, without reading it** — what Settings shows. The secret is fetched only by
+    /// the request that sends it, so a pane saying "a key is saved" never holds one.
+    func contains(account: String) throws(CredentialStoreFailure) -> Bool
     func write(_ secret: String, account: String) throws(CredentialStoreFailure)
     /// Removes the account's key. Removing one that is not there is not a failure, so this is safe to repeat.
     func delete(account: String) throws(CredentialStoreFailure)
@@ -53,6 +56,18 @@ public struct KeychainCredentialStore: CredentialStore {
         guard status == errSecSuccess else { throw .keychain(status: status) }
         guard let data = found as? Data, let secret = String(data: data, encoding: .utf8) else { throw .notText }
         return secret
+    }
+
+    /// Asks for the item's attributes, never its data: the secret does not leave the Keychain for this.
+    public func contains(account: String) throws(CredentialStoreFailure) -> Bool {
+        var query = item(account)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var found: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &found)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw .keychain(status: status) }
+        return true
     }
 
     public func write(_ secret: String, account: String) throws(CredentialStoreFailure) {

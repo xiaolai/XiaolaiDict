@@ -1,5 +1,6 @@
 import ApplicationServices
 import MacCapture
+import ModelKit
 import ScreenCaptureKit
 import Testing
 import XiaolaiDictCore
@@ -176,7 +177,7 @@ struct SetupBoardUncheckedTests {
                 PermissionState(permission: .screenRecording, found: .couldNotTell),
             ]),
             available: nil, chosen: nil, language: "en", shortcut: nil,
-            model: nil, modelDeclined: false, engine: .onDevice)
+            model: nil, modelDeclined: false, engine: .onDevice, provider: .none, showsLocalModel: false)
         #expect(board.isUnchecked(.screenRecording))
         #expect(!board.isUnchecked(.accessibility))
         #expect(SetupBoard.Step.screenRecording.permission == .screenRecording)

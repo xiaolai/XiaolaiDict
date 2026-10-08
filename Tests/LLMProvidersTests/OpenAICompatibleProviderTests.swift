@@ -12,12 +12,15 @@ struct OpenAICompatibleProviderTests {
         instructions: "Answer with the number of the sense.", prompt: "Sentence: She banked the fire.\nWhich number?",
         maxTokens: 16, temperature: 0)
 
-    static func provider(_ endpoint: StubEndpoint, credentials: any CredentialStore = InMemoryCredentials(key: "sk-test"),
+    /// A provider for `endpoint`, its key `sk-test` filed for that endpoint's origin unless the test hands another store.
+    static func provider(_ endpoint: StubEndpoint, credentials: (any CredentialStore)? = nil,
                          model: String = "gpt-test", endpointURL: URL? = nil,
                          limit: Int = OpenAICompatibleProvider.responseByteLimit) -> OpenAICompatibleProvider {
-        OpenAICompatibleProvider(endpoint: endpointURL ?? endpoint.baseURL, model: model, credentials: credentials,
-                                 timeout: .seconds(10), sessionConfiguration: StubEndpoint.configuration(),
-                                 responseByteLimit: limit)
+        let base = endpointURL ?? endpoint.baseURL
+        return OpenAICompatibleProvider(endpoint: base, model: model,
+                                        credentials: credentials ?? InMemoryCredentials(key: "sk-test", for: base),
+                                        timeout: .seconds(10), sessionConfiguration: StubEndpoint.configuration(),
+                                        responseByteLimit: limit)
     }
 
     /// The failure `call` threw, or nil where it answered.
@@ -88,7 +91,7 @@ struct OpenAICompatibleProviderTests {
         #expect(sent.header("Authorization") == nil)
         // An empty stored value is no key either.
         let blank = StubEndpoint(always: .completion("2"))
-        _ = try await Self.provider(blank, credentials: InMemoryCredentials(key: "")).generate(Self.request)
+        _ = try await Self.provider(blank, credentials: InMemoryCredentials(key: "", for: blank.baseURL)).generate(Self.request)
         #expect(try #require(blank.requests.first).header("Authorization") == nil)
     }
 
@@ -96,13 +99,33 @@ struct OpenAICompatibleProviderTests {
     /// second call sends, and each call reads the store once.
     @Test func theKeyIsReadPerCall() async throws {
         let endpoint = StubEndpoint(always: .completion("2"))
-        let credentials = InMemoryCredentials(key: "sk-first")
+        let credentials = InMemoryCredentials(key: "sk-first", for: endpoint.baseURL)
         let provider = Self.provider(endpoint, credentials: credentials)
         _ = try await provider.generate(Self.request)
-        try credentials.write("sk-second", account: OpenAICompatibleProvider.credentialAccount)
+        try credentials.write("sk-second", account: InMemoryCredentials.account(for: endpoint.baseURL))
         _ = try await provider.generate(Self.request)
         #expect(endpoint.requests.map { $0.header("Authorization") } == ["Bearer sk-first", "Bearer sk-second"])
         #expect(credentials.reads == 2)
+    }
+
+    /// **The key read is the one filed for this endpoint's origin, and no other** (plan §10 P4): a key filed for
+    /// another host, or under the provider's bare name — where P1 filed one — is not this endpoint's, and nothing is
+    /// sent with it. The control: the same store with the key filed for this origin sends it.
+    @Test func aKeyFiledForAnotherOriginIsNotSent() async throws {
+        let endpoint = StubEndpoint(always: .completion("2"))
+        let elsewhere = try #require(URL(string: "https://other-host.example/v1"))
+        // Written one by one rather than as a literal: were two of these accounts one, a literal would end the
+        // process instead of failing the test.
+        let credentials = InMemoryCredentials()
+        try credentials.write("sk-elsewhere", account: InMemoryCredentials.account(for: elsewhere))
+        try credentials.write("sk-unbound", account: "openAICompatible")
+        _ = try await Self.provider(endpoint, credentials: credentials).generate(Self.request)
+        #expect(try #require(endpoint.requests.first).header("Authorization") == nil,
+                "a key filed for another origin was sent to \(endpoint.host)")
+
+        try credentials.write("sk-here", account: InMemoryCredentials.account(for: endpoint.baseURL))
+        _ = try await Self.provider(endpoint, credentials: credentials).generate(Self.request)
+        #expect(endpoint.requests.last?.header("Authorization") == "Bearer sk-here")
     }
 
     /// **A key that could break a header is never sent**: a line break in it would end the header and begin
@@ -110,17 +133,17 @@ struct OpenAICompatibleProviderTests {
     @Test(arguments: ["sk-a\r\nX-Injected: 1", "sk-a\nb", "sk a", "sk-\u{7F}", "sk-é"])
     func aKeyThatCouldBreakAHeaderIsNeverSent(key: String) async {
         let endpoint = StubEndpoint(always: .completion("2"))
-        #expect(await Self.failure(of: Self.provider(endpoint, credentials: InMemoryCredentials(key: key))) == .unauthorised)
+        #expect(await Self.failure(of: Self.provider(endpoint, credentials: InMemoryCredentials(key: key, for: endpoint.baseURL))) == .unauthorised)
         #expect(endpoint.requests.isEmpty, "a request left with a key that is not a header value")
         let control = StubEndpoint(always: .completion("2"))
-        #expect(await Self.failure(of: Self.provider(control, credentials: InMemoryCredentials(key: "sk-a_b.c-9"))) == nil)
+        #expect(await Self.failure(of: Self.provider(control, credentials: InMemoryCredentials(key: "sk-a_b.c-9", for: control.baseURL))) == nil)
     }
 
     /// **A store that will not answer is unauthorised, and nothing is sent** — never a request without the key the
     /// reader saved, which a server would answer 401 for a reason nobody could see.
     @Test func aStoreThatWillNotAnswerSendsNothing() async {
         let endpoint = StubEndpoint(always: .completion("2"))
-        let credentials = InMemoryCredentials(key: "sk-test")
+        let credentials = InMemoryCredentials(key: "sk-test", for: endpoint.baseURL)
         credentials.failEveryCall(with: .keychain(status: -25_308))
         #expect(await Self.failure(of: Self.provider(endpoint, credentials: credentials)) == .unauthorised)
         #expect(endpoint.requests.isEmpty)
@@ -341,7 +364,7 @@ struct OpenAICompatibleProviderTests {
         ]
         for answer in answers {
             let endpoint = StubEndpoint(always: answer)
-            let provider = Self.provider(endpoint, credentials: InMemoryCredentials(key: key))
+            let provider = Self.provider(endpoint, credentials: InMemoryCredentials(key: key, for: endpoint.baseURL))
             guard let failure = await Self.failure(of: provider) else {
                 Issue.record("\(answer) answered")
                 continue
@@ -358,7 +381,7 @@ struct OpenAICompatibleProviderTests {
     @Test func theProviderDescribesNoKey() async throws {
         let key = "sk-KEY-MARKER-5d0e"
         let endpoint = StubEndpoint(always: .completion("1"))
-        let provider = Self.provider(endpoint, credentials: InMemoryCredentials(key: key))
+        let provider = Self.provider(endpoint, credentials: InMemoryCredentials(key: key, for: endpoint.baseURL))
         _ = try await provider.generate(Self.request)
         #expect(!Self.reflects(provider, key))
         struct Holding { let key: String }

@@ -432,10 +432,12 @@ struct ModuleBoundaryTests {
         "XiaolaiDictModelService": ["XiaolaiDictBase", "ModelKit", "LocalModel"],
         // §3 `UI --> SP & MC & SK & CP & CORE & CM & DM`, plus the three it had on `main`, which the graph does not
         // redraw: Base, ModelKit (the model's choices in Settings) and ReviewKit (Review's surface). **No
-        // `StudyModels`**: the models are the app's to compose and hand in.
+        // `StudyModels`**: the models are the app's to compose and hand in. `LLMProviders` since 2026-10-09 (ADR-0053,
+        // plan §4): a provider fails in types and the Language Model pane words them — `CLIReadiness`, `ProviderFailure`
+        // — and files the reader's key under `EndpointAddress.keyAccount`, the one spelling the provider reads it by.
         "XiaolaiDictUI": [
             "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit",
-            "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore",
+            "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore", "LLMProviders",
         ],
         // §3 `APP --> UI & SM & MC & SK & CP & CORE`, plus Base, DictionaryModel, ModelKit and ReviewKit, which it had on
         // `main`, and two §3 does not draw: `CaptureModel` (the app records where and how a word was read, since P1) and

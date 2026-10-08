@@ -142,7 +142,7 @@ struct ModelBackendRouterTests {
         let refused = ProviderFactory { _ in ProviderBuild(refusal: .cli(.notInstalled)) }
         let router = Self.router(Settings(.claudeCLI(path: nil, model: "haiku")), LocalModel(), refused)
         #expect(await router.ask(.explain(Self.explanation), origin: .reader) == RoutedReply(reply: nil, tier: .remote))
-        #expect(await router.check() == .cli(.notInstalled))
+        #expect(await router.check()?.readiness == .cli(.notInstalled))
     }
 
     // MARK: - Warming
@@ -166,7 +166,7 @@ struct ModelBackendRouterTests {
     @Test func reconcilingWarmsAResidentSourceAndAsksAnEndpointNothing() async {
         let resident = Handing(RecordingProvider(warmsByAsking: true) { _ in "ready" })
         #expect(await Self.router(Settings(.claudeCLI(path: nil, model: "haiku")), LocalModel(), resident.factory)
-            .reconcile() == .endpointReady(answeredIn: .milliseconds(1)))
+            .reconcile()?.readiness == .endpointReady(answeredIn: .milliseconds(1)))
         #expect(resident.provider.checks == 1)
 
         let endpoint = Handing(RecordingProvider(warmsByAsking: false) { _ in "ready" })
@@ -182,7 +182,7 @@ struct ModelBackendRouterTests {
         let settings = Settings(.claudeCLI(path: nil, model: "haiku"))
         let resident = Handing(RecordingProvider(warmsByAsking: true) { _ in "ready" })
         let router = Self.router(settings, LocalModel(), resident.factory)
-        #expect(await router.reconcile() == .endpointReady(answeredIn: .milliseconds(1)))
+        #expect(await router.reconcile()?.readiness == .endpointReady(answeredIn: .milliseconds(1)))
         for _ in 0..<3 { await router.reconcile() }
         #expect(resident.provider.checks == 1, "an unchanged source was asked its question again")
         settings.choose(.local)
@@ -196,9 +196,24 @@ struct ModelBackendRouterTests {
     @Test func checkingAsksEvenAnEndpoint() async {
         let endpoint = Handing(RecordingProvider { _ in "ready" })
         let router = Self.router(Settings(Self.hosted), LocalModel(), endpoint.factory)
-        #expect(await router.check() == .endpointReady(answeredIn: .milliseconds(1)))
+        #expect(await router.check()?.readiness == .endpointReady(answeredIn: .milliseconds(1)))
         #expect(endpoint.provider.checks == 1)
         #expect(await Self.router(Settings(.local), LocalModel(), endpoint.factory).check() == nil)
+    }
+
+    /// **What a source says is said with the source that said it**, by every path — a refusal, a check, a warming — so
+    /// a check still running when the reader changes their mind comes back about the source they left, and whatever
+    /// shows it can tell.
+    @Test func aReadinessNamesTheSourceItIsAbout() async {
+        let claude = ProviderSource.claudeCLI(path: nil, model: "haiku")
+        let refused = ProviderFactory { _ in ProviderBuild(refusal: .cli(.notInstalled)) }
+        #expect(await Self.router(Settings(claude), LocalModel(), refused).reconcile()
+            == SourceReadiness(source: claude, readiness: .cli(.notInstalled)))
+        #expect(await Self.router(Settings(claude), LocalModel(), refused).check()?.source == claude)
+        let endpoint = Handing(RecordingProvider { _ in "ready" })
+        #expect(await Self.router(Settings(Self.hosted), LocalModel(), endpoint.factory).check()?.source == Self.hosted)
+        let resident = Handing(RecordingProvider(warmsByAsking: true) { _ in "ready" })
+        #expect(await Self.router(Settings(claude), LocalModel(), resident.factory).reconcile()?.source == claude)
     }
 
     // MARK: - No orphan: a real CLI process, ended and seen to end
@@ -262,7 +277,7 @@ struct ModelBackendRouterTests {
         let fake = try FakeCLI.claude()
         let router = Self.router(Settings(.claudeCLI(path: nil, model: "haiku")), LocalModel(),
                                  Self.factory(finding: fake, events: EventLog()))
-        guard case .cli(.ready)? = await router.reconcile() else {
+        guard case .cli(.ready)? = await router.reconcile()?.readiness else {
             Issue.record("the chosen CLI was not started and asked")
             return
         }
@@ -285,7 +300,22 @@ struct ModelBackendRouterTests {
 struct ProviderSourceTests {
     static let settings = ProviderSettings(
         endpointURL: "http://localhost:11434/v1", endpointModel: "llama", claudeCLIPath: "/opt/claude",
-        codexCLIPath: "/opt/codex", claudeCLIModel: "sonnet", codexCLIModel: "gpt")
+        codexCLIPath: "/opt/codex", claudeCLIModel: "sonnet", codexCLIModel: "gpt", subscriptionCLIsEnabled: true)
+
+    /// **Both CLIs sit behind the reader's one switch** (ADR-0053): with it off a CLI chosen — written into the
+    /// defaults by anything, or left from before the reader turned it off — is no source, and nothing is started. The
+    /// other sources do not depend on it.
+    @Test func aCLIChosenWithTheSwitchOffIsNoSource() {
+        var off = Self.settings
+        off.subscriptionCLIsEnabled = false
+        #expect(ProviderSource(choice: .claudeCLI, settings: off) == .local)
+        #expect(ProviderSource(choice: .codexCLI, settings: off) == .local)
+        #expect(ProviderSource(choice: .openAICompatible, settings: off) == .endpoint(url: "http://localhost:11434/v1",
+                                                                                      model: "llama"))
+        #expect(ProviderSource(choice: .localModel, settings: off) == .local)
+        // The control: the same choice with the switch on is the CLI.
+        #expect(ProviderSource(choice: .claudeCLI, settings: Self.settings) != .local)
+    }
 
     @Test func eachChoiceNamesItsSourceWithOnlyTheSettingsItUses() {
         #expect(ProviderSource(choice: .none, settings: Self.settings) == .local)

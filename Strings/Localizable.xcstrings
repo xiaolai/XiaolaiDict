@@ -284,6 +284,15 @@
     "A guess: these words may not belong together" : {
 
     },
+    "A key can be saved once the address above is usable." : {
+
+    },
+    "A key is one run of letters, digits and punctuation, with no spaces." : {
+
+    },
+    "A key is saved for %@." : {
+
+    },
     "A meaning you confirm in History, with its answer showing, is first asked on the next study day and no sooner than the time chosen, so that your first answer is recalled rather than just read. Optional and untested: it applies to half of those meanings, chosen at random, so the two halves can be compared." : {
 
     },
@@ -299,6 +308,9 @@
     "A permission could not be checked — open Setup to check again" : {
       "comment" : "Menu warning when a permission probe failed, which is not a refusal"
     },
+    "A service with an OpenAI-compatible address" : {
+
+    },
     "A sitting is ready" : {
       "comment" : "A review reminder's banner without a count, and its hidden preview"
     },
@@ -309,6 +321,9 @@
 
     },
     "A word you look up on more than one day appears here." : {
+
+    },
+    "API Key" : {
 
     },
     "About" : {
@@ -338,6 +353,9 @@
     "Add an App…" : {
 
     },
+    "Address" : {
+
+    },
     "All" : {
 
     },
@@ -364,6 +382,9 @@
     },
     "Answer with" : {
 
+    },
+    "Anthropic, through your claude program" : {
+      "comment" : "Where a question goes: the reader's own Claude Code CLI, which sends it to Anthropic"
     },
     "Any Tag" : {
 
@@ -407,6 +428,9 @@
     "Check Again" : {
 
     },
+    "Check Connection" : {
+
+    },
     "Checking…" : {
       "comment" : "While the permissions are being probed"
     },
@@ -422,10 +446,22 @@
     "Choose…" : {
 
     },
+    "Claude and Codex can be chosen once the switch above is on." : {
+
+    },
+    "Claude, through your claude program" : {
+
+    },
     "Clear Search" : {
 
     },
     "Close Lookup" : {
+
+    },
+    "Codex's own default" : {
+
+    },
+    "Codex, through your codex program" : {
 
     },
     "Collapsed" : {
@@ -562,6 +598,9 @@
     "Easy" : {
 
     },
+    "Enter an address this app can use and the name of a model." : {
+
+    },
     "Error" : {
 
     },
@@ -635,6 +674,9 @@
         }
       }
     },
+    "Found where it was installed" : {
+
+    },
     "From" : {
 
     },
@@ -704,11 +746,23 @@
     "Introduce ^[%lld More New Meaning](inflect: true) Today" : {
 
     },
+    "It answered with something that is not an answer. It may not be a service of this kind." : {
+
+    },
     "It could not be hidden until tomorrow: %@" : {
       "comment" : "Shown on a review card when postponing it failed to save"
     },
+    "It did not answer this time — it may be busy or limited. Try again later." : {
+
+    },
+    "It is too old for this app. Update it, then choose Check Again." : {
+
+    },
     "It reads your selection through Accessibility. Allow XiaolaiDict in %@, then press the shortcut again." : {
       "comment" : "The placeholder is the System Settings list to grant it in"
+    },
+    "It runs in the background while this app is open, so a question is answered without starting it again. Leave the location empty unless it was installed somewhere unusual." : {
+
     },
     "Italic" : {
 
@@ -723,6 +777,9 @@
 
     },
     "Korean" : {
+
+    },
+    "Language Model" : {
 
     },
     "Large" : {
@@ -753,6 +810,9 @@
 
     },
     "Local Model" : {
+
+    },
+    "Location" : {
 
     },
     "Look up on hover" : {
@@ -861,6 +921,9 @@
     "No entry for “%@” in your dictionaries." : {
 
     },
+    "No key is saved for %@." : {
+
+    },
     "No meaning in this entry clearly fits this sentence." : {
       "comment" : "Shown on the lookup card when no sense is close enough to claim"
     },
@@ -906,6 +969,9 @@
     "None of your dictionaries explains English in your language. Turn one on in the Dictionary app, under Settings, then choose Check Again." : {
 
     },
+    "None — the dictionary and Apple's own engines" : {
+
+    },
     "Not Now" : {
 
     },
@@ -920,6 +986,9 @@
     },
     "Not checked yet" : {
       "comment" : "Under a dictionary's name: what it can do for study is not known yet"
+    },
+    "Not checked yet." : {
+
     },
     "Not confirmed" : {
 
@@ -936,13 +1005,28 @@
     "Not found" : {
 
     },
+    "Not installed. Install it, sign in to it in Terminal, then choose Check Again." : {
+
+    },
     "Not known" : {
+
+    },
+    "Not needed for a server on this Mac" : {
 
     },
     "Not reviewed yet." : {
 
     },
     "Not set" : {
+
+    },
+    "Not signed in. In Terminal, run %@ and sign in, then choose Check Again." : {
+
+    },
+    "Not usable: an address starts with https:// or http:// and names a server." : {
+
+    },
+    "Not used: a location is a full path, starting with /." : {
 
     },
     "Nothing Can Be Reviewed Yet" : {
@@ -958,6 +1042,9 @@
 
     },
     "Nothing Selected Can Be Reviewed Now" : {
+
+    },
+    "Nothing answered at this address. Check it, and that the server is running." : {
 
     },
     "Nothing comes due in the next ^[%lld day](inflect: true)" : {
@@ -976,6 +1063,9 @@
     },
     "Nothing is selected in %@, or it does not expose its selection to Accessibility." : {
       "comment" : "Lookup panel; the placeholder is the app's name"
+    },
+    "Nothing is sent off this Mac." : {
+
     },
     "Nothing is waiting on you, but a permission could not be checked." : {
 
@@ -1054,8 +1144,20 @@
     "Open in Dictionary" : {
 
     },
+    "OpenAI, through your codex program" : {
+      "comment" : "Where a question goes: the reader's own Codex CLI, which sends it to OpenAI"
+    },
     "Option" : {
       "comment" : "The Option key, in the hover key picker"
+    },
+    "Optional" : {
+
+    },
+    "Optional. A language model you already use — your Claude or Codex subscription, or a service you have an address for — can translate the sentence and explain how a word is used in it. Until you choose one, the model downloaded to this Mac does." : {
+
+    },
+    "Optional. A language model you already use — your Claude or Codex subscription, or a service you have an address for — can translate the sentence and explain how a word is used in it. Without one, Apple's own engines do what they can, on this Mac." : {
+
     },
     "Partial result" : {
 
@@ -1152,6 +1254,19 @@
     "Ready" : {
 
     },
+    "Ready — answered in %@." : {
+
+    },
+    "Ready — version %@, answered in %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ready — version %1$@, answered in %2$@."
+          }
+        }
+      }
+    },
     "Record this as the meaning you read" : {
 
     },
@@ -1179,6 +1294,9 @@
     "Remove %@" : {
 
     },
+    "Remove Key" : {
+
+    },
     "Remove ^[%lld Meaning](inflect: true) from Saved…" : {
 
     },
@@ -1201,6 +1319,9 @@
 
     },
     "Request Access…" : {
+
+    },
+    "Required — the service's name for it" : {
 
     },
     "Rest the pointer" : {
@@ -1252,6 +1373,9 @@
 
     },
     "Save" : {
+
+    },
+    "Save Key" : {
 
     },
     "Save This Meaning" : {
@@ -1356,6 +1480,9 @@
     "Select one reading to see its details" : {
 
     },
+    "Service" : {
+
+    },
     "Settings…" : {
       "comment" : "Menu bar item"
     },
@@ -1453,6 +1580,9 @@
 
     },
     "Some readings changed after they were discarded and were left as they are." : {
+
+    },
+    "Source" : {
 
     },
     "Space" : {
@@ -1576,6 +1706,12 @@
     "The frontmost app could not be identified, so its selection cannot be read." : {
       "comment" : "Lookup panel, when no app is frontmost"
     },
+    "The key could not be kept in your keychain." : {
+
+    },
+    "The key is kept in your keychain for this address alone. Change the address to another server and no key is sent there until you save one for it." : {
+
+    },
     "The last reading was not recorded: %@" : {
 
     },
@@ -1592,6 +1728,9 @@
     "The local model needs 16 GB of memory. This Mac has less, so it cannot run it." : {
 
     },
+    "The location above is not a program. Correct it, or empty it to have the program found." : {
+
+    },
     "The meaning here is a guess, not confirmed" : {
 
     },
@@ -1600,6 +1739,12 @@
     },
     "The model declined to compare this sentence against the meanings." : {
       "comment" : "Shown on the lookup card when a language model refused to answer for this sentence"
+    },
+    "The model downloaded to this Mac" : {
+
+    },
+    "The model downloaded to this Mac translates the sentence and explains how a word is used in it." : {
+
     },
     "The notices could not be opened. They are in the app itself, at %@." : {
 
@@ -1631,6 +1776,18 @@
 
     },
     "The sentence may be cut short" : {
+
+    },
+    "The service does not know the model named. Check its name." : {
+
+    },
+    "The service refused the key, or wants one. Save the key it gave you for this address." : {
+
+    },
+    "The source chosen in Language Model settings translates the sentence and explains how a word is used in it, when you ask." : {
+
+    },
+    "The switch lets this app start the claude or codex program you installed and signed in to. Each question uses your subscription, whose limits are shared with everything else you use it for. Nothing here signs you in, and nothing those programs keep for their sign-in is read." : {
 
     },
     "The system would not register this shortcut (error %d)." : {
@@ -1796,6 +1953,12 @@
     "Use a different dictionary" : {
 
     },
+    "Use my Claude and Codex subscriptions" : {
+
+    },
+    "Version %@ is too old for this app. Update it, then choose Check Again." : {
+
+    },
     "Voice" : {
 
     },
@@ -1812,6 +1975,9 @@
 
     },
     "Website" : {
+
+    },
+    "What Leaves This Mac" : {
 
     },
     "What does this mean here?" : {
@@ -1832,11 +1998,20 @@
     "When I choose a meaning for a word I saved, replace the word-only card with it" : {
 
     },
+    "When you ask for a translation or an explanation, the sentence and the word you looked up are sent to %@. The dictionary's own text is never sent, so it does not choose which meaning you met." : {
+
+    },
+    "When you ask for a translation or an explanation, the sentence, the word you looked up and the dictionary's meanings for it are sent to %@." : {
+
+    },
     "Where You Met It" : {
 
     },
     "Where an app does not expose its text, hover reads the word off the screen. Allow XiaolaiDict in %@, or open Setup in Settings to ask for it." : {
       "comment" : "The placeholder is the System Settings list to grant it in"
+    },
+    "Whether a key is saved could not be read from your keychain." : {
+
     },
     "Whether notifications are allowed could not be checked." : {
 
@@ -1936,6 +2111,9 @@
     },
     "Your reading history is unavailable" : {
       "comment" : "Reading History notice when the reading history could not be read"
+    },
+    "Your sentence and the dictionary's meanings go to the server at %@, which is on this Mac. Nothing is sent off it." : {
+
     },
     "Your study dictionary does not have this phrase, so it cannot be saved" : {
 
@@ -2081,6 +2259,9 @@
     },
     "stops suggesting this word" : {
 
+    },
+    "the address above" : {
+      "comment" : "Where a question goes: an endpoint whose address names no server"
     },
     "the connection failed" : {
       "comment" : "Why the model download stopped"

@@ -122,23 +122,29 @@ public actor ModelBackendRouter {
 
     /// **Brings the source up to the reader's settings** — at launch, and when they change. A source they have left is
     /// put away; a resident CLI they have chosen is started and asked one trivial question, once for that choice, so
-    /// their first real one is warm. Answers what that question said, or nil where nothing was asked.
+    /// their first real one is warm. Answers what that question said, or why the source could not be made — with the
+    /// source it is about — or nil where nothing was asked.
     @discardableResult
-    public func reconcile() async -> ProviderReadiness? {
+    public func reconcile() async -> SourceReadiness? {
         guard let held = await settle(on: currentSource) else { return nil }
-        guard let backend = held.build.backend else { return held.build.refusal }
+        guard let backend = held.build.backend else { return Self.readiness(held.build.refusal, of: held) }
         // Taken before the question is awaited, so a second reconcile arriving meanwhile does not ask it again.
         guard backend.warmsByAsking, warmed != held.making else { return nil }
         warmed = held.making
-        return await check()
+        return Self.readiness(await backend.readiness(), of: held)
     }
 
-    /// **What the chosen source says when asked one trivial question** — always asked, an endpoint too. Nil where the
-    /// source is the local model, which `--model-status` asks.
-    public func check() async -> ProviderReadiness? {
+    /// **What the chosen source says when asked one trivial question** — always asked, an endpoint too — and which
+    /// source said it. Nil where the source is the local model, which `--model-status` asks.
+    public func check() async -> SourceReadiness? {
         guard let held = await settle(on: currentSource) else { return nil }
-        guard let backend = held.build.backend else { return held.build.refusal }
-        return await backend.readiness()
+        guard let backend = held.build.backend else { return Self.readiness(held.build.refusal, of: held) }
+        return Self.readiness(await backend.readiness(), of: held)
+    }
+
+    /// `readiness`, said of the source `held` was made for.
+    private static func readiness(_ readiness: ProviderReadiness?, of held: Held) -> SourceReadiness? {
+        readiness.map { SourceReadiness(source: held.source, readiness: $0) }
     }
 
     /// The source the settings name now.

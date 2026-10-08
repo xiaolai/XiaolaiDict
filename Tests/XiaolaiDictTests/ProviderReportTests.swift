@@ -16,7 +16,8 @@ struct ProviderReportTests {
         ProviderChoiceStore(defaults: suite).save(choice)
         ProviderSettingsStore(defaults: suite).save(ProviderSettings(
             endpointURL: endpoint, endpointModel: "private-endpoint-model",
-            claudeCLIPath: "/Users/someone-private/.local/bin/claude", claudeCLIModel: "private-claude-model"))
+            claudeCLIPath: "/Users/someone-private/.local/bin/claude", claudeCLIModel: "private-claude-model",
+            subscriptionCLIsEnabled: true))
         return suite
     }
 

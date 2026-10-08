@@ -71,6 +71,8 @@ public struct LocalModelChoice {
     public var answering: ModelChoice
     public var choose: @MainActor (LocalModelSize?) -> Void
     public var removeModel: @MainActor (LocalModelSize) -> Void
+    /// The reader set `ShowLocalModelSetup` (`LocalModelSetupFlag`). Read from the app's suite each time this is built.
+    public var setupFlagged: Bool
 
     /// A model on this Mac, as the switch lists it.
     public struct InstalledModel: Sendable, Equatable, Identifiable {
@@ -94,8 +96,10 @@ public struct LocalModelChoice {
         chosen: LocalModelSize? = nil,
         answering: ModelChoice = .none(wanted: nil),
         choose: @escaping @MainActor (LocalModelSize?) -> Void = { _ in },
-        removeModel: @escaping @MainActor (LocalModelSize) -> Void = { _ in }
+        removeModel: @escaping @MainActor (LocalModelSize) -> Void = { _ in },
+        setupFlagged: Bool = false
     ) {
+        self.setupFlagged = setupFlagged
         self.source = source
         self.chooseSource = chooseSource
         self.onDisk = onDisk
@@ -150,4 +154,13 @@ public struct LocalModelChoice {
     /// half-finished; "none is on disk", which this said first, describes only the first of the two.
     /// **Not now does not take it away** — the row keeps it one click away.
     public var canDownload: Bool { downloadable != nil }
+
+    /// **Whether the bundled model's setup is shown at all** (ADR-0053): its setup row, the translation pane's
+    /// download, its About section and its place among the Language Model pane's choices. Hidden, not removed — shown
+    /// where the reader set `ShowLocalModelSetup`, **or where a model is already on disk**: a reader who has one keeps
+    /// it, keeps it answering, and keeps the controls that switch between and remove the gigabytes it occupies.
+    public var isShown: Bool { setupFlagged || hasModelOnDisk }
+
+    /// A model is on this Mac: one answering, or any whole one the switch lists.
+    public var hasModelOnDisk: Bool { state.answering != nil || !onDisk.isEmpty }
 }

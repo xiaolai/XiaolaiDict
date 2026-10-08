@@ -447,6 +447,16 @@ verify_bundle_metadata() {
     done
     [ "$(plist_value "$bundle/Contents/Info.plist" LSMinimumSystemVersion)" = "$MINIMUM_MACOS" ] \
         || { echo "the app declares a different LSMinimumSystemVersion from $MINIMUM_MACOS"; return 1; }
+
+    # **App Transport Security loosened for this Mac's own servers, and for nothing else** (ADR-0053). Both ways: an
+    # endpoint on loopback — Ollama, LM Studio, mlx_lm.server — speaks plain HTTP and is refused in the bundle without
+    # `NSAllowsLocalNetworking`, while every unit test passes; and any exception beside it (`NSAllowsArbitraryLoads`,
+    # a domain's) would let a remote endpoint's key travel in the clear. Compared whole, as plutil writes it: compact,
+    # keys sorted, so one more key or a `false` is a different string.
+    local ats
+    ats=$(plutil -extract NSAppTransportSecurity json -o - "$bundle/Contents/Info.plist" 2>/dev/null || true)
+    [ "$ats" = '{"NSAllowsLocalNetworking":true}' ] \
+        || { echo "the app's NSAppTransportSecurity is not NSAllowsLocalNetworking alone: ${ats:-absent}"; return 1; }
 }
 
 verify_signatures() {

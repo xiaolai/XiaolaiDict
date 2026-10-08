@@ -762,6 +762,9 @@ struct AboutPane: View {
     /// from the upstream repository, because the MLX mirror carries none — so a reader who has the
     /// model has the licence it was published under.
     var modelLicence: URL?
+    /// Whether the bundled model is named at all (`LocalModelChoice.isShown`): hidden, not removed (ADR-0053), so its
+    /// section is here where the reader asked for its setup or has a model on disk — whose licence they are owed.
+    var showsLocalModel = false
     /// The licences of the open-source packages the app is built from, as the bundle carries them.
     /// Handed in rather than read here for the same reason the release is: a preview and a test
     /// would otherwise be looking at Xcode's bundle.
@@ -788,7 +791,7 @@ struct AboutPane: View {
         Form {
             identity
             author
-            localModel
+            if showsLocalModel { localModel }
             openSource
         }
         .formStyle(.grouped)

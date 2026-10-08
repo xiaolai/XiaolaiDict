@@ -20,7 +20,10 @@ struct SettingsPaneNamesTests {
         let line = try #require(
             script.split(separator: "\n").first { $0.hasPrefix("names = {") },
             "e2e.sh no longer declares a `names` set, so this guard covers nothing")
-        let listed = Set(line.split(separator: "\"").filter { $0.allSatisfy(\.isLetter) }.map(String.init))
+        // A name is letters and the spaces between words ("Language Model"); the punctuation between names is not one.
+        let listed = Set(line.split(separator: "\"")
+            .filter { $0.contains(where: \.isLetter) && $0.allSatisfy { $0.isLetter || $0 == " " } }
+            .map(String.init))
         let panes = Set(SettingsPane.allCases.map(\.name))
         #expect(listed == panes, """
             e2e.sh knows \(listed.sorted()) and the app has \(panes.sorted()) — \

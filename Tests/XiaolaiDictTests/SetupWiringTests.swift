@@ -227,9 +227,36 @@ struct SetupWiringTests {
                 ("shortcut:", "app.shortcuts.choice"), ("shortcutIsRegistered:", "app.shortcuts.isRegistered"),
                 ("localModel:", "app.models.choice"),
                 ("refreshDictionaries:", "app.dictionary.askAgain("),
+                // The coordinator's pane model: over the suite and the Keychain the router reads (ADR-0053).
+                ("languageModel:", "app.models.languageModel"),
             ],
             of: "SettingsView", in: try code("Sources/XiaolaiDict/XiaolaiDictScene.swift"),
             "the board would silently lose what it carries")
+    }
+
+    /// **And `SettingsView` hands each on** (ADR-0053): the board gets the source *in force* — a CLI chosen with its
+    /// switch off is nothing chosen, as the router reads it — and whether the bundled model is shown; the Language Model
+    /// pane gets the model and the same visibility; About names the bundled model only where it is shown. A scene
+    /// argument with nothing passing it on is the `modelLicence` defect's shape.
+    @Test func settingsHandsTheLanguageModelAndTheVisibilityOn() throws {
+        let settings = try code("Sources/XiaolaiDictUI/SettingsView.swift")
+        try expectArguments(
+            [("languageModel:", "languageModel?.effectiveChoice"), ("localModel:", "localModel")],
+            of: "SetupView", in: settings, "the board's rows would be drawn without what decides them")
+        try expectArguments(
+            [("model:", "languageModel"), ("showsLocalModel:", "localModel?.isShown")],
+            of: "LanguageModelPane", in: settings, "the pane would draw nothing, or offer a model it hides")
+        let about = try #require(settings.range(of: "case .about:"), "the About pane is not reached from the switch")
+        try expectArguments(
+            [("showsLocalModel:", "localModel?.isShown")],
+            of: "AboutPane", in: String(settings[about.lowerBound...]),
+            "About would name a model whose setup is hidden, or never name one a reader has")
+
+        // **The board decides from those, and from nothing else**: the visibility reaches `SetupBoard` itself.
+        let setup = try code("Sources/XiaolaiDictUI/SetupView.swift")
+        try expectArguments(
+            [("provider:", "languageModel"), ("showsLocalModel:", "localModel?.isShown")],
+            of: "SetupBoard", in: setup, "the board would show the bundled model's row to every reader")
     }
 
     /// **The panel is handed both model panes.** The card's content reads the translator and the

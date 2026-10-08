@@ -15,9 +15,15 @@ public enum ProviderSource: Sendable, Equatable {
     /// An OpenAI-compatible endpoint at the base URL `url`, asked for `model`.
     case endpoint(url: String, model: String)
 
+    ///
+    /// **A CLI is a source only while the reader's switch is on** (`subscriptionCLIsEnabled`, ADR-0053): a CLI chosen
+    /// with it off — left from before they turned it off, or written into the defaults by anything — is what `none` is,
+    /// so nothing is started that the reader has not agreed to.
     public init(choice: ProviderChoice, settings: ProviderSettings) {
         self = switch choice {
         case .none, .localModel: .local
+        case .claudeCLI where !settings.subscriptionCLIsEnabled, .codexCLI where !settings.subscriptionCLIsEnabled:
+            .local
         case .claudeCLI: .claudeCLI(path: settings.claudeCLIPath, model: settings.claudeCLIModel)
         case .codexCLI: .codexCLI(path: settings.codexCLIPath, model: settings.codexCLIModel)
         case .openAICompatible: .endpoint(url: settings.endpointURL, model: settings.endpointModel)
@@ -47,6 +53,19 @@ public enum ProviderReadiness: Sendable, Equatable {
     case endpointReady(answeredIn: Duration)
     /// The endpoint was asked and did not answer.
     case endpointFailed(ProviderFailure)
+}
+
+/// **What a source said about itself, and which source said it** — so whatever shows it can tell an answer about the
+/// source the reader has now from one about a source they have since left, which a check still running when they
+/// changed their mind hands back late.
+public struct SourceReadiness: Sendable, Equatable {
+    public let source: ProviderSource
+    public let readiness: ProviderReadiness
+
+    public init(source: ProviderSource, readiness: ProviderReadiness) {
+        self.source = source
+        self.readiness = readiness
+    }
 }
 
 /// **A source the router can hold**: it answers questions, says what the reader must do, and is put away. This

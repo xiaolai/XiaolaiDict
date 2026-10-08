@@ -67,16 +67,22 @@ public struct ProviderSettings: Sendable, Equatable {
     /// The model Codex's server is asked for. **Empty is the server's own default**, which is what the plan asks
     /// for (`model/list`'s default-low entry), never a name written into this build.
     public var codexCLIModel: String
+    /// **The one switch both CLI sources sit behind** (ADR-0053): the reader agreed that this app may start the
+    /// `claude` or `codex` they installed and signed in to. **Off by default**, and off is what anything unreadable is:
+    /// with it off a CLI is never started, whatever source is chosen (`ProviderSource`).
+    public var subscriptionCLIsEnabled: Bool
 
     public init(endpointURL: String = ProviderSettings.defaultEndpointURL, endpointModel: String = "",
                 claudeCLIPath: String? = nil, codexCLIPath: String? = nil,
-                claudeCLIModel: String = ProviderSettings.defaultClaudeCLIModel, codexCLIModel: String = "") {
+                claudeCLIModel: String = ProviderSettings.defaultClaudeCLIModel, codexCLIModel: String = "",
+                subscriptionCLIsEnabled: Bool = false) {
         self.endpointURL = endpointURL
         self.endpointModel = endpointModel
         self.claudeCLIPath = claudeCLIPath
         self.codexCLIPath = codexCLIPath
         self.claudeCLIModel = claudeCLIModel
         self.codexCLIModel = codexCLIModel
+        self.subscriptionCLIsEnabled = subscriptionCLIsEnabled
     }
 }
 
@@ -97,6 +103,7 @@ public struct ProviderSettingsStore: @unchecked Sendable {
         public static let codexCLIPath = "CodexCLIPath"
         public static let claudeCLIModel = "ClaudeCLIModel"
         public static let codexCLIModel = "CodexCLIModel"
+        public static let subscriptionCLIsEnabled = "SubscriptionCLIsEnabled"
     }
 
     private let defaults: UserDefaults
@@ -111,7 +118,8 @@ public struct ProviderSettingsStore: @unchecked Sendable {
             claudeCLIPath: path(Key.claudeCLIPath),
             codexCLIPath: path(Key.codexCLIPath),
             claudeCLIModel: text(Key.claudeCLIModel) ?? standard.claudeCLIModel,
-            codexCLIModel: text(Key.codexCLIModel) ?? standard.codexCLIModel)
+            codexCLIModel: text(Key.codexCLIModel) ?? standard.codexCLIModel,
+            subscriptionCLIsEnabled: isOn(Key.subscriptionCLIsEnabled))
     }
 
     public func save(_ settings: ProviderSettings) {
@@ -122,6 +130,21 @@ public struct ProviderSettingsStore: @unchecked Sendable {
         write(settings.codexCLIPath ?? "", Key.codexCLIPath, unless: "")
         write(settings.claudeCLIModel, Key.claudeCLIModel, unless: standard.claudeCLIModel)
         write(settings.codexCLIModel, Key.codexCLIModel, unless: standard.codexCLIModel)
+        // Off is the default, so off is no value at all.
+        if settings.subscriptionCLIsEnabled {
+            defaults.set(true, forKey: Key.subscriptionCLIsEnabled)
+        } else {
+            defaults.removeObject(forKey: Key.subscriptionCLIsEnabled)
+        }
+    }
+
+    /// **On only where a boolean yes was written** — the CLI switch is the reader's consent to this app starting their
+    /// CLI, so a string or a number that merely reads as yes is not one. `bool(forKey:)` would take `"YES"` and `2`.
+    private func isOn(_ key: String) -> Bool {
+        guard let number = defaults.object(forKey: key) as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return false }
+        return number.boolValue
     }
 
     /// The stored string, trimmed, or nil where there is none, it is not a string, or it is blank.

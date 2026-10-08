@@ -41,7 +41,10 @@ struct SetupBoardTests {
         shortcutIsRegistered: Bool = true,
         model: LocalModelState? = .ready(.standard),
         modelDeclined: Bool = false,
-        engine: SenseEngineStatus = .onDevice
+        engine: SenseEngineStatus = .onDevice,
+        provider: ProviderChoice = .none,
+        // Shown, so the tests of the bundled model's row have a row to test; the hidden board has tests of its own.
+        showsLocalModel: Bool = true
     ) -> SetupBoard {
         SetupBoard(
             permissions: PermissionsReport(states: [
@@ -50,7 +53,7 @@ struct SetupBoardTests {
             ]),
             available: available, chosen: chosen, language: language, shortcut: shortcut,
             shortcutIsRegistered: shortcutIsRegistered, model: model, modelDeclined: modelDeclined,
-            engine: engine)
+            engine: engine, provider: provider, showsLocalModel: showsLocalModel)
     }
 
     // MARK: - A dictionary for another language is still a dictionary the reader has
@@ -103,7 +106,7 @@ struct SetupBoardTests {
         let empty = SetupBoard(
             permissions: PermissionsReport(states: []), available: nil, chosen: nil,
             language: "en", shortcut: nil, model: .notDownloaded, modelDeclined: false,
-            engine: .onDevice)
+            engine: .onDevice, provider: .none, showsLocalModel: true)
         #expect(!empty.isGranted(.accessibility))
         #expect(!empty.isSettled(.screenRecording))
     }
@@ -205,7 +208,7 @@ struct SetupBoardTests {
         let finished = board()
         #expect(finished.isComplete)
         #expect(finished.steps == SetupBoard.Step.allCases)
-        #expect(finished.steps.count == 5)
+        #expect(finished.steps.count == 6)
 
         let fresh = board(
             accessibility: false, screenRecording: false, chosen: nil, shortcut: nil, model: .notDownloaded)
@@ -253,7 +256,8 @@ struct SetupBoardTests {
                 PermissionState(permission: .screenRecording, found: .couldNotTell),
             ]),
             available: settled.available, chosen: settled.chosen, language: settled.language,
-            shortcut: settled.shortcut, model: settled.model, modelDeclined: false, engine: settled.engine)
+            shortcut: settled.shortcut, model: settled.model, modelDeclined: false, engine: settled.engine,
+            provider: settled.provider, showsLocalModel: settled.showsLocalModel)
         #expect(unchecked.outstanding.isEmpty, "an unchecked permission is not a request")
         #expect(unchecked.unchecked == [.screenRecording])
         #expect(!unchecked.isComplete, "completeness was claimed over a permission nobody could check")
@@ -353,6 +357,43 @@ struct SetupBoardTests {
         #expect(!board(model: .downloading(progress, size: .standard), modelDeclined: true).isSettled(.localModel))
     }
 
+    // MARK: - The bundled model hidden, the language model optional (ADR-0053)
+
+    /// **The bundled model's row is not on the board unless its setup is shown** — no row, nothing outstanding, and the
+    /// board complete without it. The control: the same board with the setup shown asks for the download as before.
+    @Test func theBundledModelsRowIsHiddenUnlessItsSetupIsShown() {
+        let hidden = board(model: .notDownloaded, showsLocalModel: false)
+        #expect(!hidden.steps.contains(.localModel), "the bundled model's row is on a board that hides it")
+        #expect(hidden.outstanding.isEmpty)
+        #expect(hidden.isComplete)
+        #expect(hidden.steps.count == 5)
+
+        let shown = board(model: .notDownloaded, showsLocalModel: true)
+        #expect(shown.steps.contains(.localModel))
+        #expect(shown.outstanding == [.localModel])
+        #expect(!shown.isComplete)
+    }
+
+    /// **A hidden row's unknown state does not hold the board open**: a board never told about the model cannot say
+    /// that row is settled, but where there is no row there is nothing to settle.
+    @Test func aHiddenRowsUnknownStateDoesNotHoldTheBoardOpen() {
+        #expect(board(model: nil, showsLocalModel: false).isComplete)
+        #expect(!board(model: nil, showsLocalModel: true).isComplete, "the control: shown, unknown still holds it")
+    }
+
+    /// **The language model's row is optional — on every board, never needed, never holding it open** — and settled by
+    /// a source being in force.
+    @Test(arguments: ProviderChoice.allCases)
+    func theLanguageModelRowIsOptional(provider: ProviderChoice) {
+        let shown = board(provider: provider, showsLocalModel: false)
+        #expect(shown.steps.contains(.languageModel))
+        #expect(!SetupBoard.Step.languageModel.needsReader)
+        #expect(!shown.outstanding.contains(.languageModel))
+        #expect(shown.isComplete, "the board is unfinished for want of a language model")
+        #expect(shown.isSettled(.languageModel) == (provider != .none))
+        #expect(shown.isAvailable(.languageModel))
+    }
+
     /// Apple's model is no longer a row; it is what the model row names as the fallback, so it is
     /// still read — and still read from the one place that asks.
     @Test func appleIntelligenceIsTheFallbackNotARow() {
@@ -388,8 +429,32 @@ struct SetupBoardTests {
 /// what the two separate cases gave — so nothing that reads them moved.
 struct SetupStepShapeTests {
     @Test func theOrderAndIdentifiersAreUnchanged() {
-        #expect(SetupBoard.Step.allCases.map(\.id) == ["accessibility", "screenRecording", "dictionary", "shortcut", "localModel"])
+        #expect(SetupBoard.Step.allCases.map(\.id)
+                == ["accessibility", "screenRecording", "dictionary", "shortcut", "languageModel", "localModel"])
         #expect(SetupBoard.Step.allCases.compactMap(\.permission) == Permission.allCases)
         #expect(SetupBoard.Step.screenRecording.permission == .screenRecording)
+    }
+}
+
+/// **Whether the bundled model's setup is shown** (ADR-0053): where the reader set `ShowLocalModelSetup`, or where a model
+/// is already on disk — answering, or listed by the switch — and nowhere else.
+@MainActor
+struct LocalModelVisibilityTests {
+    static func choice(_ state: LocalModelState, onDisk: [LocalModelChoice.InstalledModel] = [],
+                       flagged: Bool) -> LocalModelChoice {
+        LocalModelChoice(state: state, declined: false, offered: [.standard, .large], recommended: .standard,
+                         download: { _ in }, decline: {}, cancel: {}, onDisk: onDisk, setupFlagged: flagged)
+    }
+
+    @Test func itIsShownWhereFlaggedOrWhereAModelIsOnDisk() {
+        let progress = ModelDownloadProgress(received: 1, total: 2)
+        #expect(!Self.choice(.notDownloaded, flagged: false).isShown, "a reader with no model was shown its setup")
+        #expect(!Self.choice(.tooLittleMemory, flagged: false).isShown)
+        #expect(!Self.choice(.downloading(progress, size: .standard), flagged: false).isShown)
+        #expect(!Self.choice(.stopped(reason: "x", size: .standard), flagged: false).isShown)
+        #expect(Self.choice(.notDownloaded, flagged: true).isShown, "the flag did not show it")
+        #expect(Self.choice(.ready(.standard), flagged: false).isShown, "a reader with a model lost its controls")
+        #expect(Self.choice(.stopped(reason: "x", size: .large, replacing: .standard), flagged: false).isShown)
+        #expect(Self.choice(.notDownloaded, onDisk: [.init(size: .large, bytes: 1)], flagged: false).isShown)
     }
 }

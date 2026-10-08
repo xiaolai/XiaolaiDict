@@ -3432,7 +3432,7 @@ import json, sys
 # added and this was not. Keep every apostrophe out of this block: it is passed to python3 as a
 # single-quoted argument, and one apostrophe ends that argument. bash -n accepted the broken
 # version anyway, by luck of what re-balanced after it; the remote script is where it was caught.
-names = {"Setup", "General", "Reading", "Lookup", "Dictionary", "About"}
+names = {"Setup", "General", "Reading", "Lookup", "Dictionary", "Language Model", "About"}
 print(next((t for w in json.load(sys.stdin)["windows"] for t in w["texts"][:1] if t in names), ""))')
     if ! why=$("$helpers/close-window" "${pane:-Lookup}" 2>&1); then
         flunk "shortcut: could not close the settings window afterwards ($why)"

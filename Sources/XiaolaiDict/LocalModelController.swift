@@ -28,6 +28,9 @@ final class LocalModelController {
     /// so changing it in Settings takes effect on the next one without anything being rebuilt.
     @ObservationIgnored private let sources: ModelSourceStore
     @ObservationIgnored private let choices: ModelChoiceStore
+    /// `ShowLocalModelSetup`, read each time the choice is built — so a reader who sets it sees the setup the next time
+    /// a surface draws, without a relaunch.
+    @ObservationIgnored private let setupFlag: LocalModelSetupFlag
     @ObservationIgnored private let physicalMemory: UInt64
     /// **Read at each question, and injected like the clock.** Free memory changes minute to
     /// minute, and a test that asked the real machine would be measuring the machine.
@@ -64,6 +67,7 @@ final class LocalModelController {
         self.availableMemory = availableMemory
         self.manifest = manifest
         declines = LocalModelDeclineStore(defaults: defaults)
+        setupFlag = LocalModelSetupFlag(defaults: defaults)
         declined = declines.hasDeclined()
         offered = ModelSizing.offered(physicalMemory: physicalMemory)
         recommended = ModelSizing.recommended(physicalMemory: physicalMemory)
@@ -394,7 +398,8 @@ final class LocalModelController {
             chosen: wanted,
             answering: answeringChoice,
             choose: { [weak self] in self?.choose($0) },
-            removeModel: { [weak self] in self?.remove($0) })
+            removeModel: { [weak self] in self?.remove($0) },
+            setupFlagged: setupFlag.isSet())
     }
 }
 

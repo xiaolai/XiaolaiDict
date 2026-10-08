@@ -158,7 +158,9 @@ let package = Package(
         // Xcode cannot preview an executable target: "Previewing in executable targets now
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
-        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore"]),
+        // `LLMProviders` since the providers' P4 (ADR-0053): a provider fails in types and the Language Model pane words
+        // them, and the pane files the reader's key under the account its endpoint's origin names.
+        .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore", "LLMProviders"]),
         .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDictUI", "LLMProviders"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in

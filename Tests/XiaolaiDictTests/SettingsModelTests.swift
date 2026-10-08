@@ -235,7 +235,7 @@ struct SettingsChromeTests {
     /// Every file the settings window is drawn from.
     static let files = [
         "SettingsView.swift", "SettingsPanes.swift", "SetupView.swift", "ShortcutField.swift",
-        "EraseReadingSection.swift", "GeneralSettings.swift",
+        "EraseReadingSection.swift", "GeneralSettings.swift", "LanguageModelPane.swift",
     ]
 
     /// Glass is for what floats over content; these are rows of a form. Twelve buttons in Setup

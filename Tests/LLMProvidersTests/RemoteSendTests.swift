@@ -57,7 +57,9 @@ struct RemoteSendTests {
                        session: @escaping @Sendable () -> URLSessionConfiguration = { .ephemeral }) -> ModelBackendRouter {
         let factory = ProviderFactory(
             locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
-            credentials: InMemoryCredentials(key: "sk-remote-send"), configuration: ResidentSessionTests.configuration(),
+            credentials: InMemoryCredentials(key: "sk-remote-send",
+                                             for: URL(string: "http://\(remoteHost)/v1").unsafelyUnwrapped),
+            configuration: ResidentSessionTests.configuration(),
             endpointSession: session, scratch: { nil }, events: { _ in })
         return ModelBackendRouter(
             source: { source }, local: .init(ask: { _ in nil }, prewarm: {}), factory: factory,

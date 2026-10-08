@@ -115,6 +115,10 @@ struct StringCatalogTests {
             + "to, which is called that on disk in every language — Finder translates only the name it displays. "
             + "A translated one would send the export to a folder that does not exist. Read here since the study "
             + "models joined the prose rule (2026-10-08, plan-macos-modularisation P4b)",
+        "codex login":
+            "a command the reader types in Terminal to sign in to their own Codex CLI (ADR-0053), set into the "
+            + "Language Model pane's localized sentence as it is. A command is the same in every language, and a "
+            + "translated one is a command that does not exist",
     ]
 
     /// Every literal in a file, with what preceded it, and continuations rejoined.

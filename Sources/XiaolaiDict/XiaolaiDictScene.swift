@@ -209,7 +209,10 @@ struct XiaolaiDictSettings: View {
             // shortcut that answered nothing.
             shortcutIsRegistered: app.shortcuts.isRegistered,
             localModel: app.models.choice,
-            refreshDictionaries: { await app.dictionary.askAgain() })
+            refreshDictionaries: { await app.dictionary.askAgain() },
+            // The Language Model pane's model: the coordinator's, so the pane and the router read one suite and one
+            // Keychain, and what the router hears when it warms a source reaches the pane.
+            languageModel: app.models.languageModel)
         .xiaolaiDictAppearance(app.appearance)
         // Identified from inside, for `--settings-report` to measure — and so the app can tell when
         // the reader has actually *seen* the setup pane, which is this window becoming key while

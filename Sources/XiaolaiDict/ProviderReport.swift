@@ -43,7 +43,7 @@ enum ProviderReport {
         report["sendsDictionaryText"] = disclosure.sendsDictionaryText
         report["asksSenseOnLookup"] = disclosure.asksSenseOnLookup
         report["asksSenseOnTap"] = disclosure.asksSenseOnTap
-        let readiness = await router.check()
+        let readiness = await router.check()?.readiness
         // **Put away before the line is written**, so a report that could not be written still leaves nothing running.
         await router.shutDown()
         if let readiness { describe(readiness, into: &report) }

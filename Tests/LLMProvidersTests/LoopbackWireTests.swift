@@ -13,7 +13,7 @@ struct LoopbackWireTests {
     static func provider(_ base: URL, key: String? = "sk-loopback",
                          timeout: Duration = .seconds(10)) -> OpenAICompatibleProvider {
         OpenAICompatibleProvider(endpoint: base, model: "loopback-model",
-                                 credentials: key.map { InMemoryCredentials(key: $0) } ?? InMemoryCredentials(),
+                                 credentials: key.map { InMemoryCredentials(key: $0, for: base) } ?? InMemoryCredentials(),
                                  timeout: timeout)
     }
 

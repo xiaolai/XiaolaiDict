@@ -19,12 +19,19 @@ final class InMemoryCredentials: CredentialStore {
         state = Mutex(State(secrets: secrets))
     }
 
-    /// One secret, under the account an OpenAI-compatible provider reads.
-    convenience init(key: String) {
-        self.init([OpenAICompatibleProvider.credentialAccount: key])
+    /// One secret, filed for `endpoint`'s origin — the account a provider for that endpoint reads, and no other.
+    convenience init(key: String, for endpoint: URL) {
+        self.init([Self.account(for: endpoint): key])
+    }
+
+    /// The account a provider for `endpoint` reads its key from. A test that cannot name one has a wrong fixture.
+    static func account(for endpoint: URL) -> String {
+        EndpointAddress(url: endpoint).map(\.keyAccount) ?? "an endpoint with no origin: \(endpoint)"
     }
 
     var reads: Int { state.withLock { $0.reads } }
+    /// The accounts that hold a secret now.
+    var accounts: Set<String> { state.withLock { Set($0.secrets.keys) } }
 
     func failEveryCall(with failure: CredentialStoreFailure?) {
         state.withLock { $0.failure = failure }
@@ -37,6 +44,13 @@ final class InMemoryCredentials: CredentialStore {
         }
         if let failure { throw failure }
         return secret
+    }
+
+    /// Not a read: the secret is not handed out, which is what `contains` is for.
+    func contains(account: String) throws(CredentialStoreFailure) -> Bool {
+        let (held, failure) = state.withLock { ($0.secrets[account] != nil, $0.failure) }
+        if let failure { throw failure }
+        return held
     }
 
     func write(_ secret: String, account: String) throws(CredentialStoreFailure) {
