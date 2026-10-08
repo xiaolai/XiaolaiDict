@@ -35,6 +35,7 @@ enum AppModules {
         "ModelKit": "ModelProtocol.swift",
         "DictionaryModel": "DictionaryProtocol.swift",
         "XiaolaiDictBase": "XiaolaiDictIdentity.swift",
+        "LLMProviders": "OpenAICompatibleProvider.swift",
     ]
 
     /// Every module the app links, its Swift files with full-line comments removed (`SourceScan.code`), and every way

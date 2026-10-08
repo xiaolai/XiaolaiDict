@@ -1,0 +1,104 @@
+import Foundation
+@testable import ModelKit
+import Testing
+
+/// **What may leave the Mac is one value, and where an endpoint is decides it** (ADR-0053, plan §3).
+///
+/// The tier is a licence boundary: an endpoint called "on this Mac" may be sent the dictionary's text. So every case
+/// that is not loopback beyond doubt is remote — misreading a loopback server as remote costs answer quality, and
+/// misreading a remote one as loopback sends a publisher's text off the Mac. Each refusal below has a positive control
+/// beside it: the same shape, made loopback, is on this Mac, so the refusal is the host and not the parser failing.
+struct RemoteDisclosureTests {
+    /// The owner has not said the dictionary's text may leave (ADR-0053). Flipping this is the whole change.
+    @Test func theDictionarysTextMayNotLeave() {
+        #expect(RemoteDisclosure.dictionaryTextMayLeave == false)
+        #expect(RemoteDisclosure.mayCarryDictionaryText(.onThisMac))
+        #expect(!RemoteDisclosure.mayCarryDictionaryText(.remote))
+    }
+
+    /// **The flip is a constant**: with it set, the remote tier may carry the text too, and nothing else changes.
+    @Test func theFlipIsTheOnlyThingBetweenTheRemoteTierAndTheText() {
+        #expect(RemoteDisclosure.mayCarryDictionaryText(.remote, dictionaryTextMayLeave: true))
+        #expect(!RemoteDisclosure.mayCarryDictionaryText(.remote, dictionaryTextMayLeave: false))
+        #expect(RemoteDisclosure.mayCarryDictionaryText(.onThisMac, dictionaryTextMayLeave: false))
+    }
+
+    /// Loopback, in every spelling the system resolver answers with loopback and nothing else. `*.localhost` is here
+    /// because macOS 27's resolver answers it with `::1` and `127.0.0.1` without asking DNS (measured 2026-10-09,
+    /// `dscacheutil -q host -a name xiaolaidict-probe.localhost`), as RFC 6761 §6.3 asks.
+    @Test(arguments: [
+        "http://localhost:11434/v1", "https://localhost/v1", "http://LOCALHOST:1234", "http://localhost",
+        "http://ollama.localhost:11434/v1", "http://a.b.localhost/v1",
+        "http://127.0.0.1:8080/v1", "http://127.1.2.3/v1", "http://127.255.255.255", "http://127.0.0.0",
+        "http://[::1]:8080/v1", "http://[0:0:0:0:0:0:0:1]/v1", "http://[0000::0001]/v1", "HTTP://127.0.0.1/v1",
+    ])
+    func loopbackIsOnThisMac(endpoint: String) {
+        #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .onThisMac, "\(endpoint)")
+    }
+
+    /// Every other host — a hosted API, a machine on the reader's own network, a `.local` name — is remote.
+    @Test(arguments: [
+        "https://api.openai.com/v1", "https://api.deepseek.com/v1",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "http://192.168.1.20:11434/v1", "http://10.0.0.5/v1", "http://172.16.0.1/v1", "http://169.254.1.1/v1",
+        "http://another-mac.local:1234/v1", "http://[fe80::1]/v1", "http://[::2]/v1", "http://[::]/v1",
+        "http://0.0.0.0:8080/v1", "http://128.0.0.1/v1", "http://126.0.0.1/v1",
+    ])
+    func everyOtherHostIsRemote(endpoint: String) {
+        #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .remote, "\(endpoint)")
+    }
+
+    /// **Host tricks are remote.** A name that merely starts with a loopback spelling, userinfo that reads like a
+    /// host, a host spelled in a form an address parser and a URL parser read differently — each is a place where
+    /// "the URL says localhost" and "the connection goes to localhost" can part. Refused, never interpreted.
+    @Test(arguments: [
+        // A loopback spelling as the first label of someone else's name.
+        "http://localhost.evil.com/v1", "http://127.0.0.1.evil.com/v1", "http://localhost.evil.com.",
+        // Userinfo: the host is after the @, and a URL with any userinfo at all is refused.
+        "http://localhost@evil.com/v1", "http://localhost:11434@evil.com/v1", "http://user@localhost/v1",
+        "http://user:pass@127.0.0.1/v1",
+        // Address forms `inet_aton` reads as some address and a strict reader does not: octal (0177 is 127, but
+        // 0127 is 87), short forms, hex and a bare integer.
+        "http://0127.0.0.1/v1", "http://127.000.000.001/v1", "http://127.1/v1", "http://0x7f.0.0.1/v1",
+        "http://2130706433/v1", "http://127.0.0.1.1/v1", "http://127.0.0.256/v1",
+        // IPv6 that only maps or embeds a loopback, or carries a zone.
+        "http://[::ffff:127.0.0.1]/v1", "http://[::127.0.0.1]/v1", "http://[::1%25lo0]/v1",
+        // Percent-encoding, a trailing dot and a non-ASCII spelling (full-width letters map to ASCII under IDNA).
+        "http://local%68ost/v1", "http://localhost./v1", "http://ｌｏｃａｌｈｏｓｔ/v1",
+    ])
+    func hostTricksAreRemote(endpoint: String) {
+        #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .remote, "\(endpoint)")
+    }
+
+    /// Anything that is not an http(s) URL with a host is remote: nothing about it says the text stays here.
+    @Test(arguments: [
+        "", " ", "localhost:11434/v1", "127.0.0.1", "ftp://127.0.0.1/v1", "file:///tmp/socket", "ws://localhost/v1",
+        "http://", "http:///v1", "http://[::1/v1", "not a url at all", "http://localhost:99999/v1",
+    ])
+    func whatIsNotAnHTTPURLWithAHostIsRemote(endpoint: String) {
+        #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .remote, "\(endpoint)")
+    }
+
+    /// **The positive controls for the refusals above, one each**: the same shape with the trick taken out is
+    /// on this Mac — so a refusal is the trick, not a parser that refuses everything.
+    @Test func eachRefusedShapeIsOnThisMacWithoutItsTrick() {
+        for endpoint in ["http://localhost/v1", "http://127.0.0.1/v1", "http://localhost:11434/v1",
+                         "http://[::1]/v1", "http://127.0.0.1:8080/v1", "https://localhost/v1"] {
+            #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .onThisMac, "\(endpoint)")
+        }
+    }
+
+    /// **Both CLIs are remote whatever the endpoint says**, the bundled model is on this Mac, an endpoint is what
+    /// its URL is, and no source chosen is no tier at all — nothing is asked.
+    @Test func theTierOfEachChoice() {
+        for endpoint in ["http://localhost:11434/v1", "https://api.openai.com/v1"] {
+            #expect(RemoteDisclosure.tier(of: .claudeCLI, endpoint: endpoint) == .remote)
+            #expect(RemoteDisclosure.tier(of: .codexCLI, endpoint: endpoint) == .remote)
+            #expect(RemoteDisclosure.tier(of: .localModel, endpoint: endpoint) == .onThisMac)
+            #expect(RemoteDisclosure.tier(of: .none, endpoint: endpoint) == nil)
+        }
+        #expect(RemoteDisclosure.tier(of: .openAICompatible, endpoint: "http://localhost:11434/v1") == .onThisMac)
+        #expect(RemoteDisclosure.tier(of: .openAICompatible, endpoint: "https://api.openai.com/v1") == .remote)
+        #expect(RemoteDisclosure.tier(of: .openAICompatible, endpoint: "http://localhost.evil.com/v1") == .remote)
+    }
+}

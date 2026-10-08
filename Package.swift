@@ -133,6 +133,12 @@ let package = Package(
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
         // and need no GPU. No MLX here: that is the executable's alone.
         .target(name: "LocalModel", dependencies: ["ModelKit"]),
+        // The language model as a service the reader already has (ADR-0053): an OpenAI-compatible endpoint now, the
+        // reader's own `claude` and `codex` next, the API key in the Keychain. **The app's alone, never a service's**:
+        // the Keychain item is the app's, and a CLI child must live and die with the app. Below the view layer, so no
+        // display text — a provider fails in types, and the view layer words them. Foundation, Security and os; the
+        // prompts, the wire types and what may leave the Mac come from ModelKit, the app's identifier from Base.
+        .target(name: "LLMProviders", dependencies: ["XiaolaiDictBase", "ModelKit"]),
         // The local model, behind its own XPC boundary. A GPU fault or an out-of-memory kill takes
         // this process and not the app, and unloading is ending it — which is exact, where MLX's
         // own release is not. Never linked by the app: the app talks to it in typed messages, the
@@ -153,7 +159,7 @@ let package = Package(
         // requires a new build layout… or break out your preview code into a separate framework."
         // Nothing here knows about windows, XPC or the ledger.
         .target(name: "XiaolaiDictUI", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "Capture", "MacCapture", "XiaolaiDictCore"]),
-        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDictUI"]),
+        .executableTarget(name: "XiaolaiDict", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDictUI", "LLMProviders"]),
 
         // The index builder, as a command. The module it drives has no other entry point: everything in
         // `AppleDictionaryFormat` was reachable only from its own tests until this existed, which is a
@@ -204,6 +210,9 @@ let package = Package(
             dependencies: ["DictionaryModel", "ModelKit", "CaptureModel", "XiaolaiDictCore",
                            "DictionaryBridge", "AppleDictionaryFormat", "PhraseLookup"]),
         .testTarget(name: "LocalModelTests", dependencies: ["ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
+        // The providers against a URLProtocol stub and a loopback HTTP server of their own, in this process: no test
+        // here reaches a network endpoint, and only one touches the real Keychain, under a service name of its own.
+        .testTarget(name: "LLMProvidersTests", dependencies: ["ModelKit", "LLMProviders"]),
         // ReviewKit alone, and no fixture target: what passes here passes without the Mac's modules.
         .testTarget(name: "ReviewKitTests", dependencies: ["ReviewKit"]),
     ]

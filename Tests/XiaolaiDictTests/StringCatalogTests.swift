@@ -356,6 +356,9 @@ struct StringCatalogTests {
         // target below the view layer (`ModuleBoundaryTests.platformAdapters`), but held to the same rule here: what a
         // refusal is shown in is the view layer's, so a sentence written there could be shown and never extracted.
         "Sources/MacCapture",
+        // Added 2026-10-09 with the target: the language-model providers (ADR-0053). A provider fails in types, and the
+        // sentence a reader is shown for one is the view layer's to write.
+        "Sources/LLMProviders",
     ]
 
     /// Every presentation target: pure values a surface draws, **where reader-facing text is allowed** — so it

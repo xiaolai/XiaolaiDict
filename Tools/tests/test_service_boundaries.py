@@ -38,7 +38,9 @@ MODEL_SERVICE = "XiaolaiDictModelService"
 # The reader's side as the core is split into it, forbidden to both services **by module name**: until
 # 2026-10-08 the check named `XiaolaiDictCore` and relied on type names (`Ledger`, `HoverPolicy`) for the
 # rest, so a subject that arrived in a module it did not know was invisible to it.
-READERS_SIDE = ("StudyKit", "Capture", "CaptureModel", "StudyPresentation", "StudyModels", "MacCapture")
+READERS_SIDE = ("StudyKit", "Capture", "CaptureModel", "StudyPresentation", "StudyModels", "MacCapture",
+                # The language-model providers (ADR-0053): the app's alone, from the day the target was made.
+                "LLMProviders")
 
 # `otool -L`: the binary's name, then one dependency a line. STUB_OTOOL picks the answer.
 OTOOL = """#!/bin/bash

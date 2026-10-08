@@ -60,6 +60,11 @@ struct ModuleBoundaryTests {
         // What the model service *does* with a request, written against any `LanguageModel` so its
         // tests need no GPU.
         "LocalModel": ["Foundation", "FoundationModels", "Synchronization"],
+        // The language model as a service the reader already has (ADR-0053, 2026-10-09): `URLSession` for an
+        // OpenAI-compatible endpoint (Foundation), the API key in the Keychain (Security), the providers' log (`os`).
+        // **No FoundationModels and no MLX** — a provider is not a local model — and no UI framework: a provider
+        // fails in types, which the view layer words.
+        "LLMProviders": ["Foundation", "Security", "os"],
         // The private DictionaryServices API, reached by `dlopen` rather than by linking it.
         "DictionaryBridge": ["Foundation", "Synchronization"],
         // Apple's `.dictionary` container, and the facts that differ between the 86 of them. It
@@ -148,6 +153,8 @@ struct ModuleBoundaryTests {
     /// for the class had left it out too. `permittedDependencies` holds the adapter's edges exactly besides.
     static let adapterNeverBinds: Set<String> = [
         "StudyKit", "ReviewKit", "StudyPresentation", "StudyModels", "ModelKit", "XiaolaiDictCore",
+        // The model's providers (ADR-0053), for the reason `ModelKit` is here: an adapter reads the screen, never asks a model.
+        "LLMProviders",
     ]
 
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
@@ -417,6 +424,10 @@ struct ModuleBoundaryTests {
         "XiaolaiDictService": ["XiaolaiDictBase", "DictionaryModel", "DictionaryBridge", "PhraseLookup"],
         // What the model service does with a request, against any `LanguageModel` (`main`).
         "LocalModel": ["ModelKit"],
+        // The providers (ADR-0053): the prompts, the wire types, the defaults stores and `RemoteDisclosure` from ModelKit,
+        // the log's subsystem from Base. **Nothing of the study side, the capture policy, the core or the view layer** —
+        // a provider is asked a question and answers it; what the question is about is the caller's.
+        "LLMProviders": ["XiaolaiDictBase", "ModelKit"],
         // The model service: its MLX products are another package's and not in this table (`main`).
         "XiaolaiDictModelService": ["XiaolaiDictBase", "ModelKit", "LocalModel"],
         // §3 `UI --> SP & MC & SK & CP & CORE & CM & DM`, plus the three it had on `main`, which the graph does not
@@ -430,9 +441,12 @@ struct ModuleBoundaryTests {
         // `main`, and two §3 does not draw: `CaptureModel` (the app records where and how a word was read, since P1) and
         // `StudyPresentation` (it composes the values its scenes hand the view layer, since P4a). **Never
         // `DictionaryBridge`**: the private API's failure mode is a segfault, and it stays behind the XPC boundary.
+        // `LLMProviders` since 2026-10-09 (ADR-0053): the providers run in the app's process and no other, so the app
+        // is the one target that links them.
         "XiaolaiDict": [
             "XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit",
             "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDictUI",
+            "LLMProviders",
         ],
         // The index builder and the aligner, as commands: the format module and the index, nothing else (`main`).
         "XiaolaiDictIndex": ["AppleDictionaryFormat", "DictionaryIndex"],
@@ -664,6 +678,9 @@ struct ModuleBoundaryTests {
         // a spike of the split planted `StudyKit` in the dictionary service and every check here passed.
         // `verify_service_boundaries` forbids the same names in both binaries.
         "StudyKit", "Capture", "CaptureModel", "StudyPresentation", "StudyModels", "MacCapture",
+        // **The providers** (ADR-0053, 2026-10-09): the reader's API key is the app's Keychain item, which another signing
+        // identity cannot read without a prompt, and a CLI child must die with the app — so they run in the app alone.
+        "LLMProviders",
     ]
 
     /// **Neither service imports anything in `neverInAService`, nor depends on it.** The reminder's
@@ -692,6 +709,7 @@ struct ModuleBoundaryTests {
             internal import StudyPresentation
             import StudyModels
             import MacCapture
+            public import LLMProviders
             """)) == Self.neverInAService)
     }
 

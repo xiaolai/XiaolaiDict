@@ -181,7 +181,11 @@ struct TestInventoryTests {
         // Raised 461 → 463 with `MemberImportVisibility` on every target (ADR-0052's addendum): every target SwiftPM
         // evaluates carries it and warnings as errors, and its control — a target declared after the loop, and a loop
         // without the feature, each named in a copy of the manifest (`ModuleBoundaryTests`).
-        "XiaolaiDictCoreTests": 463,
+        // Raised 463 → 483 by the language-model providers' P1 (ADR-0053, 2026-10-09): the floor had lagged by 2 (465
+        // were there), and 18 came with ModelKit's provider settings — the choice and the endpoint and CLI settings,
+        // each unreadable value its default (`ProviderSettingsTests`, 10) — and `RemoteDisclosureTests` (8): what is on
+        // this Mac, every host trick refused with a control beside it, both CLIs remote, and the constant's flip.
+        "XiaolaiDictCoreTests": 483,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
@@ -197,6 +201,13 @@ struct TestInventoryTests {
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
         "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,
+        // Added 2026-10-09 with the target (ADR-0053, the providers' P1), at the count it shipped with: the answer
+        // parser the 270-case measurement scored with, the failures' mapping to the ladders' vocabulary, the Keychain
+        // store, the OpenAI-compatible provider against a stub — request, answer, every status, transport error and
+        // shape, the token budget's name retried once, cancellation, nothing secret in a failure — and against a
+        // loopback server: one kept connection, a redirect that carries nothing to another origin, the timeout, and
+        // no sense text sent to a host that is not loopback.
+        "LLMProvidersTests": 40,
         // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each
         // round adding regression tests. **It had no floor at all before that**, which
         // `everyTestTargetHasAFloor` existed to catch and did: the target shipped with the module and

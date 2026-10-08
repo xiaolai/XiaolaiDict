@@ -1,5 +1,8 @@
 import DictionaryModel
 import Foundation
+// Linked ahead of its composition: the providers' P1 lands the target and every registration the app's edge needs,
+// and P3 composes `ProviderClient` here (plan-language-model-providers §8, ADR-0053).
+import LLMProviders
 import ModelKit
 import Observation
 import XiaolaiDictBase

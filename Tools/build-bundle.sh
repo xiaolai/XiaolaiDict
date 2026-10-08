@@ -581,6 +581,10 @@ verify_release_timestamps() {
 # and a subject that arrived in a module the list did not know. `ModuleBoundaryTests.neverInAService` is
 # the same list for the sources.
 #
+# `LLMProviders` likewise, from the day it was made (ADR-0053, 2026-10-09): the language-model providers run in the
+# app alone — the reader's API key is the app's Keychain item, and a CLI child must die with the app — so neither
+# service may carry them — the model service least of all, which links `ModelKit`, the module they depend on.
+#
 # **A module is matched as the root of a qualified name, a type as a word.** `XiaolaiDictCore.Ledger`,
 # `(extension in Capture):…` and `… in ReviewKit` name a module; `RegexBuilder.Capture` names a type of
 # another module, which the model service's tokenizer uses. Matched as a bare word, `Capture` refused the
@@ -591,8 +595,8 @@ verify_service_boundaries() {
     local bundle=$1 binary problem=0
     # service path | frameworks it must not link ! modules it must not carry ! types it must not carry
     local checks=(
-        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|ModelKit!Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply|ReminderDelivery"
-        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|DictionaryModel!Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy|ReminderDelivery"
+        "$XPC_PATH/Contents/MacOS/$SERVICE|libsqlite3|FoundationModels|Carbon|CoreGraphics|CoreServices|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|LLMProviders|ModelKit!Ledger|ModelStore|ModelDownloader|RangeWriter|HoverPolicy|DrawerGeometry|ModelRequest|ModelReply|ReminderDelivery"
+        "$MODEL_XPC_PATH/Contents/MacOS/$MODEL_SERVICE|libsqlite3|UserNotifications!XiaolaiDictCore|ReviewKit|StudyKit|Capture|CaptureModel|StudyPresentation|StudyModels|MacCapture|LLMProviders|DictionaryModel!Ledger|DictionaryEntry|EntryDocument|LookupReply|HoverPolicy|ReminderDelivery"
     )
     local spec path frameworks modules types found name links linked raw demangled raw_count demangled_count
     for spec in "${checks[@]}"; do
