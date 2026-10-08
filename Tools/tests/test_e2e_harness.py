@@ -145,6 +145,35 @@ def stage_launches_outside_a_function(text: str) -> list[str]:
     return found
 
 
+# A positional parameter — `$1`, `${2}`, `$@`, `$*`, `$#` — but not an array's or a string's length, `${#name}`.
+POSITIONAL = re.compile(r"\$[1-9@*]|\$\{[1-9@*]|\$#(?![A-Za-z_])|\$\{#\}")
+
+
+def positional_parameters_in_stage_functions(text: str) -> list[str]:
+    """A stage's own function reading `$1` and its kind. The stages were top-level code, where `$1` is the script's
+    argument — the installed directory — and the same line inside `learning_stage()` reads the function's argument,
+    unset under `set -u`: the full run of 2026-10-08 died at the learning stage's first line. A function a stage defines
+    inside itself has arguments of its own, and may read them."""
+    found, opened = [], []
+    for number, line in remote_lines(text):
+        function_opened = OPENS.match(line)
+        if function_opened:
+            opened.append(function_opened.group(1))
+            continue
+        if not line[:1].isspace() and re.search(r"\{\s*$", line):
+            opened.append(None)
+            continue
+        if line == "}":
+            if opened:
+                opened.pop()
+            continue
+        # Nested definitions are indented; their frames are tracked by the indented `name() {` line and `}` at its depth.
+        innermost = next((name for name in reversed(opened) if name is not None), None)
+        if innermost and innermost.endswith("_stage") and POSITIONAL.search(line):
+            found.append(f"line {number}: {line.strip()}")
+    return found
+
+
 def unchecked_launches(text: str) -> list[str]:
     """`launch_app` or `restart_app` called where a failure is not acted on — anything but a call whose own line
     carries `||` and a `return`, or the assignment the stage wrappers make."""
@@ -214,6 +243,14 @@ class TheScriptsShape(unittest.TestCase):
         self.assertEqual(stage_launches_outside_a_function(self.text), [])
         planted = self.plant("if want launch; then\n", "launch_or_end_stage || return 0\n")
         self.assertEqual(len(stage_launches_outside_a_function(planted)), 1)
+
+    def test_a_stage_function_reads_no_argument_of_the_script(self):
+        self.assertEqual(positional_parameters_in_stage_functions(self.text), [])
+        for bad in ('    evidence="$HOME/$1/x"\n', '    for a in "$@"; do :; done\n', '    echo "${1:-}"\n'):
+            self.assertEqual(len(positional_parameters_in_stage_functions(self.plant("launch_stage() {\n", bad))), 1, bad)
+        # An array's length is not an argument.
+        self.assertEqual(positional_parameters_in_stage_functions(
+            self.plant("launch_stage() {\n", '    [ "${#PIDS[@]}" -eq 0 ]\n')), [])
 
     def test_a_launch_outside_a_stage_is_acted_on(self):
         self.assertEqual(unchecked_launches(self.text), [])
@@ -515,15 +552,40 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
                       done.stdout)
         self.assertFalse(alive(hung), "the hung process was not ended")
 
-    def test_a_textedit_still_unusable_after_a_reset_is_named(self):
+    def test_a_sheet_on_the_fixture_is_cleared_once_and_named_if_it_comes_back(self):
         blocked = unrelated_process()
         self.addCleanup(lambda: alive(blocked) and os.kill(blocked, 9))
-        self.health([{"state": "blocked", "detail": "a sheet: Revert · Keep", "pid": blocked}])
+        self.health([{"state": "blocked", "detail": "a sheet: Revert · Keep", "pid": blocked, "onFixture": True}])
         done = self.preflight("shortcut")
         said = "\n".join(self.failures(done))
         self.assertIn("TextEdit cannot hold the fixture", said)
         self.assertIn("blocked — a sheet: Revert · Keep (after it was ended and opened again)", said)
         self.assertEqual(len(self.failures(done)), 1, said)
+        self.assertFalse(alive(blocked), "the TextEdit holding a sheet over the fixture was not ended")
+
+    def test_a_sheet_anywhere_else_is_a_persons_and_nothing_is_ended(self):
+        """A dialog for the whole app, or a sheet on a document that is not the fixture: on a Mac that may be the
+        owner's, answering it — or ending the app under it — is not the harness's decision."""
+        for blocking in ({"onFixture": False}, {}):
+            with self.subTest(blocking=blocking):
+                someone = unrelated_process()
+                self.addCleanup(lambda pid=someone: alive(pid) and os.kill(pid, 9))
+                self.health([{"state": "blocked", "detail": "“Letter” holds a sheet: Save · Don’t Save", "pid": someone,
+                              **blocking}])
+                said = "\n".join(self.failures(self.preflight("selection")))
+                self.assertIn("only a person can answer", said)
+                self.assertIn("Save · Don’t Save", said)
+                self.assertTrue(alive(someone), "an app was ended under a sheet that was not the harness's")
+
+    def test_a_textedit_without_the_fixture_is_opened_again_without_ending_it(self):
+        running = unrelated_process()
+        self.addCleanup(lambda: alive(running) and os.kill(running, 9))
+        self.health([{"state": "noFixture", "detail": "no window holds the fixture", "pid": running}] * 20
+                    + [{"state": "ok", "detail": "“notes.txt” holds the fixture"}])
+        done = self.preflight("model")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("it is opened again on the fixture", done.stdout)
+        self.assertTrue(alive(running), "TextEdit was ended where opening the fixture again was enough")
 
     def test_a_textedit_not_running_is_opened_again_without_ending_anything(self):
         # Not running for longer than the poll waits — an `open` that started nothing — and then opened again.
@@ -552,6 +614,35 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         self.fake.opens(refuse=REFUSED)
         said = "\n".join(self.failures(self.preflight("lookup")))
         self.assertIn("XiaolaiDict could not be started: LaunchServices would not start it: open exited 1", said)
+
+
+class EveryRunReportsItsCleanups(unittest.TestCase):
+    """A `cleanup` row filed as failed by one run stood after every later run that put everything back: `on_exit` wrote
+    a `cleanup` result only when a cleanup failed. It writes one every run now; `e2e-status.sh record` takes a stage as
+    failed when any of its lines failed, so the pass cannot cover a failure printed beside it."""
+
+    def run_exit(self, cleanup_status: int) -> subprocess.CompletedProcess:
+        fake = Fake(self)
+        body = textwrap.dedent(f"""\
+            put_back() {{ return {cleanup_status}; }}
+            cleanups=(put_back); finished=true; died_at=""
+            on_exit
+            """)
+        return fake.run(body, function("on_exit"))
+
+    def test_cleanups_that_finished_record_a_pass(self):
+        done = self.run_exit(0)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("RESULT\tcleanup\tpass", done.stdout)
+        self.assertNotIn("RESULT\tcleanup\tfail", done.stdout)
+
+    def test_a_cleanup_that_failed_is_still_recorded_failed(self):
+        done = self.run_exit(1)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("RESULT\tcleanup\tfail", done.stdout)
+        # The record's own rule, from the script that files it: a fail anywhere wins over a pass.
+        record = (REPO / "Tools" / "e2e-status.sh").read_text()
+        self.assertIn('if ($3 == "fail") seen[$2] = "fail"; else if (!($2 in seen)) seen[$2] = "pass"', record)
 
 
 class TheHoverStagesChromeIsItsOwn(unittest.TestCase):

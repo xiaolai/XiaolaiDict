@@ -409,6 +409,11 @@ on_exit() {
             printf 'RESULT\tcleanup\tfail\n'
         }
     done
+    # **And every run reports its cleanups**, so a `cleanup fail` filed by an earlier run of this build does not stand
+    # after a run that put everything back — it did, on 2026-10-08, because a result was written only on a failure.
+    # `e2e-status.sh record` takes a stage as failed when any of its lines failed, so this pass cannot cover a failure
+    # printed above, or by `restore_default`.
+    printf 'RESULT\tcleanup\tpass\n'
     if [ "$finished" != true ]; then
         echo "FAIL  $STAGE: the script stopped at line ${died_at:-?} before the stage finished"
         printf "RESULT\t%s\tfail\n" "$STAGE"
@@ -1027,31 +1032,37 @@ fixture_health() {
 }
 
 # fixture_ready: TextEdit open on the fixture, answering, nothing covering it, and the fixture's word selectable from
-# this session — what `select-text` needs in every stage that drives a lookup. **TextEdit is ended and opened again,
-# once,** when it is hung, blocked or holding no fixture: the window is the harness's own fixture, and a person is not
-# there to answer a sheet on it. Says on stdout what it did, prints why not on stderr, and returns 1.
+# this session — what `select-text` needs in every stage that drives a lookup. Once, it is put right where the harness
+# may: opened again on the fixture when TextEdit is not running or holds no fixture, and **ended first only where
+# nobody could answer it** — hung — **or where what covers it is a sheet on the fixture's own window**, which is the
+# harness's. A sheet on any other document, or a dialog for the whole app, is a person's to answer, on a Mac that may
+# be theirs, and is named instead. Says on stdout what it did, prints why not on stderr, and returns 1.
 fixture_ready() {
-    local attempt health state detail pid why again=""
+    local attempt health state detail pid why on_fixture again=""
     for attempt in 1 2; do
         open -a TextEdit "$helpers/notes.txt" 2>/dev/null || true
         health=$(fixture_health)
         state=$(printf '%s' "$health" | json_field state)
         [ "$state" = ok ] && break
         detail=$(printf '%s' "$health" | json_field detail)
+        on_fixture=$(printf '%s' "$health" | json_field onFixture)
+        if [ "$state" = blocked ] && [ "$on_fixture" != yes ]; then
+            echo "TextEdit shows something only a person can answer — $detail; answer it at the Mac, since the stages that select in the fixture cannot get past it" >&2
+            return 1
+        fi
         if [ "$attempt" = 2 ] || [ "$state" = noAccessibility ]; then
             echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning and model stages select in: $state — $detail$again" >&2
             return 1
         fi
         pid=$(printf '%s' "$health" | json_field pid)
-        case $pid in
-            ''|absent|unreadable)
-                echo "NOTE  preflight: TextEdit was $state — $detail; it is opened again on the fixture"
-                again=" (after it was opened again)" ;;
-            *)
-                echo "NOTE  preflight: TextEdit was $state — $detail; it is ended and opened again on the fixture"
-                again=" (after it was ended and opened again)"
-                end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; } ;;
-        esac
+        if { [ "$state" = hung ] || [ "$state" = blocked ]; } && [ -n "${pid##*[!0-9]*}" ]; then
+            echo "NOTE  preflight: TextEdit was $state — $detail; it is ended and opened again on the fixture"
+            again=" (after it was ended and opened again)"
+            end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; }
+        else
+            echo "NOTE  preflight: TextEdit was $state — $detail; it is opened again on the fixture"
+            again=" (after it was opened again)"
+        fi
     done
     why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1) \
         || { echo "the fixture's word could not be selected in TextEdit from this session: $why" >&2; return 1; }
@@ -2457,7 +2468,7 @@ if want learning; then
 # LaunchServices refused went on to "restored encounter lost after relaunch", which reads as data loss. The reader's
 # ledger and settings are put back after the call, however the stage ended.
 learning_stage() {
-learning_evidence="$HOME/$1/learning-evidence"
+learning_evidence="$e2e_home/learning-evidence"
 mkdir -p "$learning_evidence"
 chmod 700 "$learning_evidence"
 rm -f "$learning_evidence"/*.png "$learning_evidence"/*.json "$learning_evidence"/*capture.err
@@ -2735,7 +2746,7 @@ if want review; then
 #     **A function, so a launch that failed ends the stage at once** (`launch_or_end_stage`); Dictionary, the ledger and
 #     the settings are put back after the call, however the stage ended.
 review_stage() {
-review_evidence="$HOME/$1/review-evidence"
+review_evidence="$e2e_home/review-evidence"
 mkdir -p "$review_evidence"
 chmod 700 "$review_evidence"
 rm -f "$review_evidence"/*.json "$review_evidence"/*.png "$review_evidence"/*.txt
@@ -2931,7 +2942,7 @@ if want reminder; then
 #     **A function, so a launch that failed ends the stage at once** (`launch_or_end_stage`); what only a person can do
 #     is said, and the ledger, the settings and the reader's reminders are put back, after the call.
 reminder_stage() {
-reminder_evidence="$HOME/$1/reminder-evidence"
+reminder_evidence="$e2e_home/reminder-evidence"
 mkdir -p "$reminder_evidence"
 chmod 700 "$reminder_evidence"
 rm -f "$reminder_evidence"/*.json "$reminder_evidence"/*.txt

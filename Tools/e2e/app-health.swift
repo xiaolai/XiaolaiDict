@@ -1,17 +1,20 @@
 // app-health <bundle-id> <sentence>: can a stage use the window of that app whose text holds <sentence>? One JSON
 // object, and exit 0 only for `ok`:
 //
-//   {"state": "ok" | "notRunning" | "noAccessibility" | "hung" | "blocked" | "noFixture", "detail": "…", "pid": 123}
+//   {"state": "ok" | "notRunning" | "noAccessibility" | "hung" | "blocked" | "noFixture", "detail": "…", "pid": 123,
+//    "onFixture": true}
 //
-// **Why it exists** (2026-10-08). A TextEdit left on the E2E Mac answering nothing — hung, or with a sheet over the
-// fixture — made `select-text` report "no focused element" in four stages, each failure reading as a defect of its
-// own stage. Asked once, before any stage, the cause has one name and the harness one remedy.
+// **Why it exists** (2026-10-08). A TextEdit no helper could use — reported to `select-text` under a pid of -1 (see
+// `shared/running-app.swift`), or left hung, or with a sheet over its window — made `select-text` report "no focused
+// element" in four stages, each failure reading as a defect of its own stage. Asked once, before any stage, the cause
+// has one name and the harness one remedy.
 //
 // - `hung`: an Accessibility request to the app did not complete within two seconds (`kAXErrorCannotComplete`).
 //   A responsive app answers in milliseconds; the system default of six seconds would be paid again by every
 //   request a stage makes.
-// - `blocked`: a window holds a sheet, or the app shows a dialog — a stage's keys and clicks would go to it. The
-//   detail carries what it says.
+// - `blocked`: a window holds a sheet, or the app shows a dialog — a stage's keys and clicks would go to it. The detail
+//   carries what it says, and `onFixture` whether the fixture's own window holds it: a sheet there is the harness's to
+//   clear, and one on any other document, or an app-wide dialog, is a person's to answer.
 // - `noFixture`: no text area of the app holds <sentence>, so `select-text` would select in something else.
 // - `noAccessibility`: this session may not ask (`kAXErrorAPIDisabled`) — a fact about the session, not the app.
 import AppKit
@@ -23,9 +26,10 @@ guard arguments.count == 3 else {
 }
 let bundleID = arguments[1], sentence = arguments[2]
 
-func emit(_ state: String, _ detail: String, pid: pid_t? = nil) -> Never {
+func emit(_ state: String, _ detail: String, pid: pid_t? = nil, onFixture: Bool? = nil) -> Never {
     var report: [String: Any] = ["state": state, "detail": detail]
     if let pid { report["pid"] = Int(pid) }
+    if let onFixture { report["onFixture"] = onFixture }
     let data = (try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])) ?? Data()
     print(String(decoding: data, as: UTF8.self))
     exit(state == "ok" ? 0 : 1)
@@ -53,6 +57,19 @@ func words(under element: AXUIElement, limit: Int = 200) -> String {
     return found.prefix(8).joined(separator: " · ")
 }
 
+/// Whether a text area under `window` holds the sentence, breadth first and bounded.
+func holdsFixture(_ window: AXUIElement) -> Bool {
+    var queue = [window], head = 0
+    while head < queue.count, head < 600 {
+        let node = queue[head]; head += 1
+        if string(node, kAXRoleAttribute) == kAXTextAreaRole, string(node, kAXValueAttribute)?.contains(sentence) == true {
+            return true
+        }
+        queue += children(node)
+    }
+    return false
+}
+
 // The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
 guard let app = runningApp(bundleID) else { emit("notRunning", "\(bundleID) is not running") }
 let pid = app.pid
@@ -76,25 +93,14 @@ for window in windows {
     let title = string(window, kAXTitleAttribute) ?? "untitled"
     let subrole = string(window, kAXSubroleAttribute) ?? ""
     if subrole == kAXDialogSubrole || subrole == kAXSystemDialogSubrole {
-        emit("blocked", "\(bundleID) shows a dialog, “\(title)”: \(words(under: window))", pid: pid)
+        emit("blocked", "\(bundleID) shows a dialog, “\(title)”: \(words(under: window))", pid: pid, onFixture: false)
     }
     for child in children(window) where string(child, kAXRoleAttribute) == kAXSheetRole {
-        emit("blocked", "\(bundleID)'s window “\(title)” holds a sheet: \(words(under: child))", pid: pid)
+        emit("blocked", "\(bundleID)'s window “\(title)” holds a sheet: \(words(under: child))", pid: pid,
+             onFixture: holdsFixture(window))
     }
 }
 
-/// Whether a text area under `window` holds the sentence, breadth first and bounded.
-func holdsFixture(_ window: AXUIElement) -> Bool {
-    var queue = [window], head = 0
-    while head < queue.count, head < 600 {
-        let node = queue[head]; head += 1
-        if string(node, kAXRoleAttribute) == kAXTextAreaRole, string(node, kAXValueAttribute)?.contains(sentence) == true {
-            return true
-        }
-        queue += children(node)
-    }
-    return false
-}
 guard let holding = windows.first(where: holdsFixture).map({ string($0, kAXTitleAttribute) ?? "untitled" }) else {
     emit("noFixture", "no window of \(bundleID) holds “\(sentence)” (\(windows.count) window(s): "
          + windows.compactMap { string($0, kAXTitleAttribute) }.joined(separator: ", ") + ")", pid: pid)
