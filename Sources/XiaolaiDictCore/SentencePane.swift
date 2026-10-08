@@ -77,7 +77,19 @@ public struct LadderSentenceExplainer: SentenceExplaining {
         // Not installed, out of memory, declined, blank, or no service: the rung below answers, and
         // says for itself why it could not where it cannot either.
         guard !Task.isCancelled else { return .unavailable("The explanation was stopped.") }
-        return await apple.explain(question)
+        let fallback = await apple.explain(question)
+        // **Where neither answers, the reason is the reader's own model's.** A downloaded 9B that does not
+        // fit in what is free fell through to Apple, and Apple's "not available here" was shown — about a
+        // model the reader never chose, over the one they had. Only an answer is Apple's to give.
+        if case .unavailable = fallback, case .failure(.insufficientMemory(let needed, let available))? = reply {
+            return .unavailable("The downloaded model needs about \(Self.size(needed)) free, and this Mac has "
+                + "\(Self.size(available)) free now. Quit some apps and try again.")
+        }
+        return fallback
+    }
+
+    private static func size(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
     }
 }
 

@@ -111,6 +111,31 @@ struct LadderSentenceExplainerTests {
         #expect(await explainer.explain(Self.question) == .unavailable("Apple could not either."))
     }
 
+    /// **When nothing answers, the pane names the rung the reader chose.** A 9B that does not fit in what is
+    /// free fell to Apple, whose own "not available here" was then shown — about a model the reader never
+    /// downloaded, over one they had. The memory figures are the service's own, said in the reader's units.
+    @Test func aDownloadedModelThatDoesNotFitIsNamedWhereAppleCannotAnswerEither() async {
+        let gigabyte: UInt64 = 1_000_000_000
+        let explainer = LadderSentenceExplainer(
+            local: { _ in .failure(.insufficientMemory(needed: 27 * gigabyte, available: 5 * gigabyte)) },
+            apple: ScriptedApple(answer: .unavailable("The on-device model is not available here.")))
+        guard case .unavailable(let said) = await explainer.explain(Self.question) else {
+            Issue.record("an explanation arrived from nowhere")
+            return
+        }
+        #expect(said.contains("27 GB"), "\(said)")
+        #expect(said.contains("5 GB"), "\(said)")
+        #expect(!said.contains("on-device"), "still blames the engine the reader never chose: \(said)")
+    }
+
+    /// And only then: Apple's answer, where it has one, is still the answer.
+    @Test func appleStillAnswersWhereTheDownloadedModelDoesNotFit() async {
+        let explainer = LadderSentenceExplainer(
+            local: { _ in .failure(.insufficientMemory(needed: 27, available: 5)) },
+            apple: ScriptedApple(answer: .explained("Apple's words", tier: .onDevice)))
+        #expect(await explainer.explain(Self.question) == .explained("Apple's words", tier: .onDevice))
+    }
+
     // The licence boundary is checked in `SentenceTierTests`, where it belongs: it is a property of
     // `SentenceQuestion.prompt(for:)`, which is the one place the dropping happens, and the test
     // that lived here built neither a ladder nor a local model to exercise it.
