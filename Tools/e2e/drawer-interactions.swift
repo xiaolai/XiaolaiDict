@@ -17,9 +17,9 @@ guard CommandLine.arguments.count >= 2, CommandLine.arguments.count <= 3 else {
 let mode = CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : "all"
 guard ["all", "exclusion", "repeated", "lifecycle"].contains(mode) else { failSetup("unknown mode") }
 guard AXIsProcessTrusted() else { failSetup("Accessibility is not granted to this helper") }
-guard let app = NSRunningApplication.runningApplications(
-    withBundleIdentifier: CommandLine.arguments[1]).first else { failSetup("app is not running") }
-let ax = AXUIElementCreateApplication(app.processIdentifier)
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp(CommandLine.arguments[1]) else { failSetup("app is not running") }
+let ax = AXUIElementCreateApplication(app.pid)
 AXUIElementSetMessagingTimeout(ax, 0.3)
 let overallDeadline = Date().addingTimeInterval(90)
 var failures = 0
@@ -79,7 +79,7 @@ func snapshot() -> DrawerSnapshot? {
         [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     else { failSetup("compositor did not answer") }
     for item in listed {
-        guard item[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier,
+        guard item[kCGWindowOwnerPID as String] as? pid_t == app.pid,
               let bounds = item[kCGWindowBounds as String] as? [String: Any],
               let drawn = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               closeFrame(rect, drawn), let number = item[kCGWindowNumber as String] as? Int
@@ -193,7 +193,7 @@ func menuIsOpen() -> Bool {
             else { return false }
             // AppKit retains the AX menu children after tracking ends. They are not visibility.
             return windows.contains { window in
-                guard window[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier,
+                guard window[kCGWindowOwnerPID as String] as? pid_t == app.pid,
                       let bounds = window[kCGWindowBounds as String] as? [String: Any],
                       let drawn = CGRect(dictionaryRepresentation: bounds as CFDictionary)
                 else { return false }
@@ -209,9 +209,10 @@ func menuIsOpen() -> Bool {
 func run() {
     releaseControl()
     defer { releaseControl(); key(53); _ = waitForVisibility(false) }
-    let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    // By bundle identifier: the front app's reported pid can be -1 too (`shared/running-app.swift`).
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     let initial = openDrawer()
-    check(NSWorkspace.shared.frontmostApplication?.processIdentifier == front,
+    check(NSWorkspace.shared.frontmostApplication?.bundleIdentifier == front,
           "initial tray opening preserves focus")
     if mode == "all" || mode == "exclusion" {
         let point = itemPoint()
@@ -232,7 +233,7 @@ func run() {
         let rapid = openDrawer()
         for _ in 0..<7 { click(itemPoint()) }
         check(remainsOpen(rapid, for: 0.55), "rapid repeated tray clicks preserve the open drawer (criterion 1)")
-        check(NSWorkspace.shared.frontmostApplication?.processIdentifier == front,
+        check(NSWorkspace.shared.frontmostApplication?.bundleIdentifier == front,
               "repeated tray opening preserves focus")
     }
     if mode == "all" || mode == "lifecycle" {
@@ -271,5 +272,5 @@ func run() {
 }
 
 run()
-print("drawer-interactions: \(assertions) assertions, \(failures) failures, pid \(app.processIdentifier), mode \(mode)")
+print("drawer-interactions: \(assertions) assertions, \(failures) failures, pid \(app.pid), mode \(mode)")
 exit(failures == 0 ? 0 : 1)

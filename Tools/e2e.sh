@@ -280,11 +280,23 @@ SH
 
 stage "install"
 # The selection helpers, built here for the same macOS and architecture, and the files they select in.
-rm -rf .build/e2e && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen; do
-    swiftc -O "Tools/e2e/$helper.swift" -o ".build/e2e/$helper" || fail "could not build $helper"
+#
+# **Each is built with the one resolver every helper shares**, `Tools/e2e/shared/running-app.swift`: macOS 27 reports
+# some running apps' process as -1, and a helper that trusted it answered "no focused element" about an app that was
+# fine — every Accessibility request to pid -1 fails (measured 2026-10-08, TextEdit). A file compiled beside another
+# holds top-level code only as `main.swift`, so each helper is copied to that name in a directory of its own; a
+# compile error names `.build/e2e-src/<helper>/main.swift`. `Tools/tests/test_e2e_harness.py` compiles them all the
+# same way on every `make test`, so a helper that does not build is found before a run rather than at its start.
+rm -rf .build/e2e .build/e2e-src && mkdir -p .build/e2e
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions; do
+    mkdir -p ".build/e2e-src/$helper" && cp "Tools/e2e/$helper.swift" ".build/e2e-src/$helper/main.swift" \
+        && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift -o ".build/e2e/$helper" \
+        || fail "could not build $helper"
 done
-cp Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py .build/e2e/
+# **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,
+# and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
+# document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
+cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -497,6 +509,10 @@ select_then_read() {
 # Shared by several stages, so it is defined once and before any of them. Written inside the
 # stage that first needed it, selecting stages turned this into an unbound variable.
 helpers="$HOME/$1/e2e"
+# Where this run keeps what a person may want to look at afterwards: the installed bundle's own directory.
+e2e_home="$HOME/$1"
+# The browser the hover stage reads through the bounds-scan dialect, asked for by the preflight and the stage alike.
+chrome_app="/Applications/Google Chrome.app"
 ledger="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
 
 # Where this run's reports are written. **Its own directory, made fresh and readable only by this
@@ -590,11 +606,14 @@ now_seconds() { python3 -c 'import time; print(f"{time.monotonic():.6f}")'; }
 # front; a TextEdit that was running behind Finder — which is what a relaunch of XiaolaiDict leaves
 # when nothing else has activated it — answered "Nothing to look up" three presses in a row and the
 # stage called the fixture uncreatable (E2E Mac, 2026-10-02). `open -a` on a running app activates it.
+# **Which app is in front is read from `on-screen`, never by scripting System Events** (2026-10-08): an Apple event from
+# this SSH session needs an Automation grant of its own, and asked for the first time it raises an Allow prompt on the
+# test Mac's screen with nobody there to answer it.
 ensure_fixture_open() {
     local front=""
     open -a TextEdit "$helpers/notes.txt"
     for _ in $(seq 1 40); do
-        front=$(osascript -e 'tell application "System Events" to get bundle identifier of first process whose frontmost is true' 2>/dev/null || true)
+        front=$("$helpers/on-screen" com.apple.TextEdit 2>/dev/null | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p' || true)
         [ "$front" = com.apple.TextEdit ] && return 0
         sleep 0.25
     done
@@ -858,57 +877,9 @@ at_exit restore_settings_pane
 defaults delete com.xiaolaidict SettingsPane 2>/dev/null || true
 defaults delete com.xiaolaidict SettingsSetupUnfinished 2>/dev/null || true
 
-# Nearly every stage needs the app running, so having it running is *setup*. Stage 1 is what
-# asserts that it starts and stays up, which is a different claim and stays a stage of its own.
-# Without this, selecting a later stage failed for want of something an earlier one happened to do.
-if ! is_running "$exe"; then
-    open "$app"
-    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
-fi
-
-# **A locked screen voids every stage that looks at it or types into it — so it is checked, not
-# assumed.** The test Mac locks itself when idle, whatever its screen-lock setting reports, and a
-# lock does not stop XiaolaiDict's windows being drawn: the window list still has them, so every "is it
-# on screen" check passes. It covers them. Measured on 2026-09-21: a capture of the drawer came
-# back as the lock screen's aerial image and read as "the glass does not work", and keystrokes for
-# the shortcut recorder went to the password field with `loginwindow` in front. A run against a
-# locked screen is refused here, in one line, rather than reported as a list of XiaolaiDict's defects.
-if ! lock_state=$("$helpers/screen-state" 2>&1); then
-    echo "FAIL  setup: the screen is ${lock_state:-locked} — unlock the test Mac and run again; nothing below would be testing XiaolaiDict"
-    exit 1
-fi
-
-# **And a system alert nobody answered voids every click the same way.** `click-element` refuses a
-# control something is covering, which is right — a click posted through an alert goes to the
-# alert — but the refusal then reads as the control not existing. Measured 2026-09-23: an
-# unanswered "Allow …to find devices on local networks?" had been sitting at (734, 222) since
-# 2026-09-20, over the settings window's tab strip, and two stages failed as though the app were at
-# fault. Refused here, in one line, with what the alert says, because answering it is a decision
-# for whoever owns the machine.
-alert_windows=$("$helpers/on-screen" com.apple.UserNotificationCenter 2>/dev/null || true)
-if printf '%s' "$alert_windows" | grep -q '"windows":\[{'; then
-    alert_text=$("$helpers/panel" com.apple.UserNotificationCenter 2>/dev/null | head -c 300 || true)
-    echo "FAIL  setup: a system alert is on the test Mac's screen and would swallow the clicks below — answer it and run again: $alert_text"
-    exit 1
-fi
-
-# **And wait for the menu, which is not the same as waiting for the process.** Install quits the
-# running copy, so every run starts cold; immediately after the pid appears the menu-bar item is
-# not in the Accessibility tree yet — measured deterministically, 3 restarts out of 3. Waiting on
-# the pid and then driving the menu made whichever menu-driven assertion ran first fail, and which
-# one that was moved between runs. That reads like a flaky app; it was the harness using a surface
-# it had never established was there.
-menu_ready=""
-for _ in $(seq 1 200); do
-    if "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1; then menu_ready=yes; break; fi
-    sleep 0.1
-done
-if [ -z "$menu_ready" ]; then
-    # Through `flunk`, so it is *recorded* and not only printed. Counted into `failures` alone, the
-    # run ended non-zero while the table `make e2e-status` reads still showed every stage's previous
-    # pass, with nothing in it to say this had happened.
-    flunk "setup: the menu-bar item never appeared — every menu-driven stage below is void"
-fi
+# ---------------------------------------------------------------------------------------------
+# **Stopping and starting the app, written once**, for the preflight below and for every stage that quits XiaolaiDict
+# and starts it again.
 
 # stop_app: asks XiaolaiDict to quit and waits up to 10 s; fails unless it is gone. The process
 # that already exited between `ps` and `kill` is the reason `kill` alone is not the verdict — the
@@ -920,31 +891,264 @@ stop_app() {
     return 1
 }
 
-restart_app() {  # restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item
-    local before pid fresh=""
+# launch_app: start the bundle through LaunchServices, then wait for its process and for its menu-bar item. Prints why
+# not on stderr and returns 1; it records nothing, because what a launch that failed means is its caller's to say.
+#
+# **`open`'s own answer is the first evidence, and it was thrown away.** A restart LaunchServices refused on the E2E
+# Mac (reported 2026-10-08: `LSOpenURLsWithRole() failed with error -600` on the terminal) waited ten seconds and said
+# only "no new XiaolaiDict process appeared after open" — and the stage went on to report "restored encounter lost
+# after relaunch", which reads as data loss. `open`'s status and its words are kept and said. Refused for an app that
+# is already running, where `open` would only bring it forward and a launch could not be told from no launch.
+launch_app() {
+    local said status=0
     find_pids "$exe"
-    before=" ${PIDS[*]+${PIDS[*]}} "
-    if ! stop_app; then
-        echo "restart_app: XiaolaiDict would not quit (pids$before), so nothing was restarted" >&2
+    if [ "${#PIDS[@]}" -gt 0 ]; then
+        echo "XiaolaiDict is already running (pid ${PIDS[*]}), so starting it would start nothing" >&2
         return 1
     fi
-    open "$app"
-    for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
-    find_pids "$exe"
-    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
-        case $before in *" $pid "*) ;; *) fresh=$pid ;; esac
-    done
-    if [ -z "$fresh" ]; then
-        echo "restart_app: no new XiaolaiDict process appeared after open (before:$before)" >&2
+    said=$(open "$app" 2>&1) || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "LaunchServices would not start it: open exited $status${said:+ — $said}" >&2
         return 1
     fi
+    for _ in $(seq 1 100); do is_running "$exe" && break; sleep 0.1; done
+    find_pids "$exe"
+    if [ "${#PIDS[@]}" -eq 0 ]; then
+        echo "open exited 0 and no XiaolaiDict process appeared within 10 s${said:+ (open said: $said)}" >&2
+        return 1
+    fi
+    # **And wait for the menu, which is not the same as waiting for the process.** Immediately after the pid
+    # appears the menu-bar item is not in the Accessibility tree yet — measured deterministically, 3 restarts out of
+    # 3 — and a menu-driven check that ran first then failed, a different one each run.
     for _ in $(seq 1 100); do
         "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && return 0
         sleep 0.2
     done
-    echo "restart_app: pid $fresh started but its menu-bar item never appeared" >&2
+    echo "pid ${PIDS[*]} started but its menu-bar item never appeared within 20 s" >&2
     return 1
 }
+
+# restart_app: quit XiaolaiDict, start it again, wait for its menu-bar item. Prints why not, and returns 1.
+restart_app() {
+    local before
+    find_pids "$exe"
+    before="${PIDS[*]+${PIDS[*]}}"
+    if ! stop_app; then
+        echo "XiaolaiDict would not quit (pid ${before:-none}), so nothing was restarted" >&2
+        return 1
+    fi
+    launch_app
+}
+
+# **In a stage, a launch that failed ends the stage at once, with its own sentence.** Every check after it would read
+# an app that is not there, and each would fail with a sentence about the product. Called from inside the stage's
+# own function, always as `launch_or_end_stage || return 0` — the failure is already recorded, and a non-zero return
+# from a stage's function would end the whole run under `set -e`. `Tools/tests/test_e2e_harness.py` holds every call
+# to that spelling, and runs both against an `open` that refuses.
+launch_or_end_stage() {
+    local why
+    why=$(launch_app 2>&1) && return 0
+    flunk "$STAGE: XiaolaiDict could not be started — $why. The rest of this stage did not run: every check after it would read an app that is not there"
+    return 1
+}
+relaunch_or_end_stage() {
+    local why
+    why=$(restart_app 2>&1) && return 0
+    flunk "$STAGE: XiaolaiDict could not be restarted — $why. The rest of this stage did not run: every check after it would read an app that is not there"
+    return 1
+}
+
+# ---------------------------------------------------------------------------------------------
+# **The preflight: what the stages asked for need, proved before any of them runs — and each thing missing named, with
+# where it is granted or what to do.** Added 2026-10-08, after hours went to failures whose cause was no stage's
+# subject. Commands run from this SSH session are judged by TCC as the session — the process macOS holds responsible
+# for it, `sshd-keygen-wrapper` — and not as XiaolaiDict, so they need grants of their own that the app's setup board,
+# all green, cannot show: the learning stage's `screencapture` and hover's directly run `--read-point` failed that way.
+# A TextEdit no helper could use took four stages with "no focused element". A refused launch read as lost data. Every
+# check runs, so one run names everything missing; then, if anything is, the run stops before any stage.
+STAGE=preflight
+# wants_any <stage...>: is any of these asked for? Unlike `want`, it names nothing — the preflight is not a stage a
+# run selects, and it runs before every one.
+wants_any() {
+    local name w
+    [ ${#WANTED[@]} -eq 0 ] && return 0
+    for name in "$@"; do
+        for w in "${WANTED[@]}"; do [ "$w" = "$name" ] && return 0; done
+    done
+    return 1
+}
+# One sentence a line: what is missing, which stages need it, and what a person at the Mac does about it.
+missing=""
+lacks() { missing="$missing$1"$'\n'; }
+# The client a person grants, as macOS 27's lists name it: not XiaolaiDict, and not a terminal app.
+readonly session_client="sshd-keygen-wrapper (/usr/libexec/sshd-keygen-wrapper, which macOS holds responsible for an SSH session; add it with +)"
+
+json_field() {  # json_field <key> [<key>]: one field — or one field of one field — of the JSON object on stdin
+    python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read())
+    for key in sys.argv[1:]:
+        value = value.get(key) if isinstance(value, dict) else None
+except ValueError:
+    value = "unreadable"
+if value is True:
+    print("yes")
+elif value is False:
+    print("no")
+elif value is None:
+    print("absent")
+else:
+    print(value)' "$@"
+}
+
+# end_process <pid>: TERM, then KILL, each waited for; fails unless it is gone. For TextEdit when the preflight has found
+# it unusable, and nothing else.
+end_process() {
+    local pid=$1
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.1; done
+    kill -KILL "$pid" 2>/dev/null || true
+    for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.1; done
+    return 1
+}
+
+# fixture_health: `app-health`'s report on TextEdit and the fixture once it is `ok`, or the last one after 10 s — a
+# document opened a moment ago is still loading. Hung, blocked and no Accessibility are answers at once.
+fixture_health() {
+    local health="" state
+    for _ in $(seq 1 20); do
+        health=$("$helpers/app-health" com.apple.TextEdit "The meeting ended after we stopped meeting at noon." 2>&1) && break
+        state=$(printf '%s' "$health" | json_field state)
+        if [ "$state" = hung ] || [ "$state" = blocked ] || [ "$state" = noAccessibility ]; then break; fi
+        sleep 0.5
+    done
+    printf '%s' "$health"
+}
+
+# fixture_ready: TextEdit open on the fixture, answering, nothing covering it, and the fixture's word selectable from
+# this session — what `select-text` needs in every stage that drives a lookup. **TextEdit is ended and opened again,
+# once,** when it is hung, blocked or holding no fixture: the window is the harness's own fixture, and a person is not
+# there to answer a sheet on it. Says on stdout what it did, prints why not on stderr, and returns 1.
+fixture_ready() {
+    local attempt health state detail pid why again=""
+    for attempt in 1 2; do
+        open -a TextEdit "$helpers/notes.txt" 2>/dev/null || true
+        health=$(fixture_health)
+        state=$(printf '%s' "$health" | json_field state)
+        [ "$state" = ok ] && break
+        detail=$(printf '%s' "$health" | json_field detail)
+        if [ "$attempt" = 2 ] || [ "$state" = noAccessibility ]; then
+            echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning and model stages select in: $state — $detail$again" >&2
+            return 1
+        fi
+        pid=$(printf '%s' "$health" | json_field pid)
+        case $pid in
+            ''|absent|unreadable)
+                echo "NOTE  preflight: TextEdit was $state — $detail; it is opened again on the fixture"
+                again=" (after it was opened again)" ;;
+            *)
+                echo "NOTE  preflight: TextEdit was $state — $detail; it is ended and opened again on the fixture"
+                again=" (after it was ended and opened again)"
+                end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; } ;;
+        esac
+    done
+    why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1) \
+        || { echo "the fixture's word could not be selected in TextEdit from this session: $why" >&2; return 1; }
+}
+
+# 1. **The screen, unlocked.** The test Mac locks itself when idle, whatever its screen-lock setting reports, and a
+#    lock does not stop XiaolaiDict's windows being drawn: the window list still has them, so every "is it on screen"
+#    check passes. It covers them. Measured on 2026-09-21: a capture of the drawer came back as the lock screen's
+#    aerial image and read as "the glass does not work", and keystrokes for the shortcut recorder went to the password
+#    field with `loginwindow` in front.
+screen_ok=yes
+if ! lock_state=$("$helpers/screen-state" 2>&1); then
+    screen_ok=no
+    lacks "the screen is ${lock_state:-locked} — unlock the test Mac at its keyboard; every stage looks at the screen or types into it, and nothing that needs the screen was checked further"
+fi
+
+# 2. **No system alert nobody answered.** `click-element` refuses a control something is covering, which is right — a
+#    click posted through an alert goes to the alert — but the refusal then reads as the control not existing. Measured
+#    2026-09-23: an unanswered "Allow …to find devices on local networks?" had sat at (734, 222) since 2026-09-20, over
+#    the settings window's tab strip, and two stages failed as though the app were at fault. Answering it is a decision
+#    for whoever owns the machine, so it is named, never clicked.
+alert_windows=$("$helpers/on-screen" com.apple.UserNotificationCenter 2>/dev/null || true)
+if printf '%s' "$alert_windows" | grep -q '"windows":\[{'; then
+    alert_text=$("$helpers/panel" com.apple.UserNotificationCenter 2>/dev/null | head -c 300 || true)
+    lacks "a system alert is on the test Mac's screen and would swallow the stages' clicks — answer it at the Mac: $alert_text"
+fi
+
+# 3. **This session's own grants**, asked of APIs that never prompt (`session-access`).
+access=$("$helpers/session-access" com.apple.systemevents 2>&1) || access=""
+session_accessibility=$(printf '%s' "$access" | json_field accessibility)
+if [ "$session_accessibility" != yes ]; then
+    lacks "this SSH session may not use Accessibility ($session_accessibility), and every helper and instrument a stage runs here is judged as the session, not as XiaolaiDict — at the Mac, add $session_client in System Settings › Privacy & Security › Device Control and Data Access (macOS 27's name for the Accessibility list)"
+fi
+if wants_any learning hover; then
+    session_recording=$(printf '%s' "$access" | json_field screenRecording)
+    if [ "$session_recording" != yes ]; then
+        lacks "this SSH session may not record the screen ($session_recording), which the learning stage's screencapture and the hover stage's --read-point (run directly here, falling back to the pixels) need — at the Mac, add $session_client in System Settings › Privacy & Security › Screen & System Audio Recording; XiaolaiDict's own grant does not cover a command run over SSH"
+    elif ! screencapture -x "$reports/preflight-screen.png" 2>"$reports/preflight-screen.err" \
+         || [ ! -s "$reports/preflight-screen.png" ]; then
+        lacks "screencapture from this SSH session made no picture ($(head -c 200 "$reports/preflight-screen.err")) although the session reads as allowed to record — the learning stage's captures would fail the same way"
+    fi
+fi
+if wants_any learning; then
+    scripting=$(printf '%s' "$access" | json_field automation com.apple.systemevents)
+    if [ "$scripting" = notRunning ]; then
+        # Asked of a running System Events only; starting it is a LaunchServices launch, and sends no Apple event.
+        open -gb com.apple.systemevents 2>/dev/null || true
+        for _ in $(seq 1 25); do
+            scripting=$("$helpers/session-access" com.apple.systemevents 2>/dev/null | json_field automation com.apple.systemevents) \
+                || scripting=unreadable
+            [ "$scripting" != notRunning ] && break
+            sleep 0.2
+        done
+    fi
+    if [ "$scripting" != granted ]; then
+        lacks "this SSH session may not script System Events ($scripting), which the learning stage uses to switch the system's appearance — at the Mac, allow $session_client to control System Events in System Settings › Privacy & Security › Automation (notAsked means the first stage that scripts it would raise the Allow prompt on that screen, with nobody there to answer)"
+    fi
+fi
+
+# 4. **Google Chrome, for the hover stage's bounds-scan dialect.**
+if wants_any hover && [ ! -d "$chrome_app" ]; then
+    lacks "Google Chrome is not installed at $chrome_app, and the hover stage covers the bounds-scan dialect in it — install it there, or run the other stages without hover"
+fi
+
+# 5. **TextEdit, answering and holding the fixture**, where a stage selects in it — and only where this session can use
+#    Accessibility on an unlocked screen, or every answer here would be about that instead.
+if [ "$screen_ok" = yes ] && [ "$session_accessibility" = yes ] \
+   && wants_any selection shortcut deadline hover drawer learning model; then
+    fixture_ready 2>"$reports/fixture-ready.err" || lacks "$(cat "$reports/fixture-ready.err")"
+fi
+
+# 6. **XiaolaiDict, started and showing its menu-bar item.** Nearly every stage needs it running, so having it running
+#    is part of the preflight; the `launch` stage is what asserts a fresh start, and stays a stage of its own.
+if is_running "$exe"; then
+    menu_ready=""
+    for _ in $(seq 1 200); do
+        if "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1; then menu_ready=yes; break; fi
+        sleep 0.1
+    done
+    [ -n "$menu_ready" ] || lacks "XiaolaiDict is running but its menu-bar item never appeared within 20 s — every menu-driven stage would be void"
+elif ! why=$(launch_app 2>&1); then
+    lacks "XiaolaiDict could not be started: $why"
+fi
+
+# **Every missing thing recorded, then the run stops before any stage.** Through `flunk`, so each is filed against the
+# preflight rather than only printed, and `make e2e-status` shows it.
+if [ -n "$missing" ]; then
+    while IFS= read -r sentence; do
+        if [ -n "$sentence" ]; then flunk "preflight: $sentence"; fi
+    done <<<"$missing"
+    echo
+    echo "the preflight found something the stages need missing on this Mac, so no stage ran"
+    finished=true
+    exit 1
+fi
+pass "preflight: the screen, this session's grants, the fixtures and the app the stages asked for are in place"
+STAGE=setup
 
 # **The content fingerprint and the backup of a ledger, for the stages that set the reader's ledger
 # aside.** Used by `learning`, `review` and `reminder`, so they are defined before every stage: inside
@@ -1055,11 +1259,15 @@ reader_reminders_back() {
 }
 
 if want launch; then
-# 1. LaunchServices starts it, and it stays up.
-open "$app"
-for _ in $(seq 1 100); do ! is_running "$exe" || break; sleep 0.1; done
-sleep 1
-if is_running "$exe"; then pass "launch: running, and still running after 1 s"; else flunk "launch: not running"; fi
+# 1. LaunchServices starts it, and it stays up — **a process of its own, quit and started again**. The preflight has
+#    the app running already, so the `open` this stage used to make only brought that one forward, and the stage passed
+#    whether or not LaunchServices could start XiaolaiDict at all.
+launch_stage() {
+    relaunch_or_end_stage || return 0
+    sleep 1
+    if is_running "$exe"; then pass "launch: started by LaunchServices, and still running after 1 s"; else flunk "launch: not running 1 s after it started"; fi
+}
+launch_stage
 fi
 
 if want lookup; then
@@ -1411,44 +1619,81 @@ print(f"{r['text']!r} via {r['captureSource']} in {r['milliseconds']:.0f} ms")
 HOVERPY
 }
 
-hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-point flag]
-    local label=$1 app_id=$2 want=$3 flag=${4:-}
-    local point reading summary
-    if ! point=$("$helpers/word-point" "$app_id" $flag 2>&1); then
-        flunk "$label: could not find a word to point at ($point)"; return
+# **A failure names what it was pointed at, and keeps the screen it was read from.** "no word under the pointer
+# (at 458 117)" said where and nothing else. With these two, the first run of 2026-10-08 showed both causes at once:
+# Safari pointed at its tab's title, and Chrome at its page's text while the reader's restored "What's New" covered it.
+# `word-point` says on stderr which element it chose and where; a failed hover carries that, and a picture of the
+# screen goes to `hover-evidence` beside the bundle (the preflight has proved this session may record).
+hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-point option...]
+    local label=$1 app_id=$2 want=$3
+    shift 3
+    local point reading summary chose evidence="$e2e_home/hover-evidence"
+    if ! point=$("$helpers/word-point" "$app_id" "$@" 2>"$reports/word-point.err"); then
+        flunk "$label: could not find a word to point at ($(cat "$reports/word-point.err"))"; return
     fi
+    chose=$(cat "$reports/word-point.err")
     if ! reading=$("$exe" --read-point $point 2>&1); then
-        flunk "$label: $reading (at $point)"; return
+        mkdir -p "$evidence" && screencapture -x "$evidence/$app_id.png" 2>/dev/null || true
+        flunk "$label: $reading (at $point, on $chose; the screen is in $evidence/$app_id.png)"; return
     fi
     if summary=$(check_hover "$reading" "$want" 2>&1); then
         pass "$label: $summary"
     else
-        flunk "$label: $summary"
+        mkdir -p "$evidence" && screencapture -x "$evidence/$app_id.png" 2>/dev/null || true
+        flunk "$label: $summary (at $point, on $chose; the screen is in $evidence/$app_id.png)"
     fi
 }
 
 open -a TextEdit "$helpers/notes.txt"; sleep 2
 hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
 open -a Safari "$helpers/page.html"; sleep 3
-hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers
+# `--page`: the word comes from the page, never from the tab strip above it (`word-point`).
+hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers --page
 # **Chrome.** It builds no page tree for `AXManualAccessibility` — measured 2026-10-03, refused as
 # unsupported — only once told an assistive client is reading (`AXEnhancedUserInterface`), which the
 # reader asks after a hover that found nothing (`ChromiumEscalationTests` hold that). Told here first,
 # the hover reads Chrome's own text **through the bounds scan** — measured: Chrome lists the text-marker
 # attributes and answers them empty at the pointer, so the read falls through to the third dialect,
-# which is the one this check exists to cover. A Chrome the run had to start is quit again; one the
-# machine was already running is left.
-if [ -d "/Applications/Google Chrome.app" ]; then
-    chrome_was_running=no
-    pgrep -xq "Google Chrome" && chrome_was_running=yes
+# which is the one this check exists to cover.
+#
+# **A Chrome of the stage's own, on a profile made for the run and removed after it** (2026-10-08). The reader's Chrome,
+# started cold on the E2E Mac, restored their session and put "What's New" in front: `page.html` was not the page on
+# screen, `word-point` found its text in a tab nobody could see, and every read there — on `main` as on the branch —
+# was "no word under the pointer". A profile of its own has no session, no first-run page and no default-browser bar,
+# runs beside a Chrome the reader has open without touching it, and is ended by its own process. Quitting the reader's
+# Chrome took an Apple event, and this SSH session had never been allowed to send one (`notAsked`, measured there the
+# same day) — an event that asks the person at that screen, who is not there.
+# chrome_instance <profile>: the browser process of the Chrome started on this profile — its exact executable with the
+# profile on its command line; a helper process's executable is another, and the reader's Chrome has another profile.
+chrome_instance() {
+    ps -axww -o pid=,command= | awk -v exe=" $chrome_app/Contents/MacOS/Google Chrome --" -v profile="--user-data-dir=$1" '
+        !found && index($0, exe) && index($0, profile) { print $1; found = 1 }'
+}
+if [ -d "$chrome_app" ]; then
+    chrome_profile=$(mktemp -d /tmp/xiaolaidict-e2e-chrome.XXXXXX)
+    chrome_pid=""
     quit_chrome() {
-        [ "$chrome_was_running" = yes ] && return 0
-        osascript -e 'quit app id "com.google.Chrome"' >/dev/null 2>&1
+        if [ -n "$chrome_pid" ] && ! end_process "$chrome_pid"; then
+            echo "quit_chrome: the stage's own Chrome (pid $chrome_pid) would not end, so its profile is left at $chrome_profile" >&2
+            return 1
+        fi
+        rm -rf "$chrome_profile"
     }
     at_exit quit_chrome
-    open -a "Google Chrome" "$helpers/page.html"; sleep 4
-    hover_at "hover: Chrome, told an assistive client is reading, answers the bounds-scan dialect" \
-        com.google.Chrome accessibilityBoundsScan --assistive
+    open -na "$chrome_app" --args --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
+        --use-mock-keychain --new-window "file://$helpers/page.html"
+    for _ in $(seq 1 50); do
+        chrome_pid=$(chrome_instance "$chrome_profile") || chrome_pid=""
+        [ -n "$chrome_pid" ] && break
+        sleep 0.2
+    done
+    if [ -z "$chrome_pid" ]; then
+        flunk "hover: the stage's own Chrome did not start (profile $chrome_profile)"
+    else
+        sleep 4
+        hover_at "hover: Chrome, told an assistive client is reading, answers the bounds-scan dialect" \
+            com.google.Chrome accessibilityBoundsScan --assistive --pid "$chrome_pid"
+    fi
 else
     flunk "hover: Google Chrome is not installed on this machine, so the Chromium dialect is untested"
 fi
@@ -1572,6 +1817,20 @@ COUNTS
         flunk "drawer: does not let what is behind it through — $fraction of it changes with the backdrop (problem: $problem)"
     fi
 fi
+# **The drawer driven by real mouse events**, through `drawer-interactions`: written with the repeated-tray-click fix
+# (`9695fcb`, 2026-10-02) and run by nothing until 2026-10-08 — a check no stage runs is a check that cannot fail. A
+# press held on the menu-bar item, slow and rapid repeated clicks, a click inside, Escape, a click outside, and the
+# right- and control-click menus, each read back from the compositor. Its PASS and FAIL lines are filed here, and its
+# closing count must say every one of them ran and passed: a helper that stopped part-way prints neither.
+interactions=$("$helpers/drawer-interactions" com.xiaolaidict all 2>&1) || true
+while IFS= read -r line; do
+    case $line in
+        "PASS: "*) pass "drawer: ${line#PASS: }" ;;
+        "FAIL: "*) flunk "drawer: ${line#FAIL: }" ;;
+    esac
+done <<<"$interactions"
+printf '%s' "$interactions" | grep -q '^drawer-interactions: [0-9]* assertions, 0 failures' \
+    || flunk "drawer: the real-event checks did not all run and pass — $(printf '%s' "$interactions" | tail -3)"
 fi
 
 if want recogniser; then
@@ -1690,6 +1949,9 @@ fi
 fi
 
 if want setup; then
+# **The stage is a function so a launch that failed can end it at once** (`relaunch_or_end_stage`); what it must put
+# back — the model store, and no board left on screen — follows the call, and runs however the stage ended.
+setup_stage() {
 # **Settle before driving the menu after a launch.** A click that lands while the app's state changes
 # under an open menu is dropped: SwiftUI re-renders the menu and the click goes nowhere, while
 # `menu-click` still reports it. Measured 2026-09-22 — after a cold start with the board open, the
@@ -1955,8 +2217,8 @@ defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
 # model. Put back at the end of the stage, before anything that needs the weights. Idempotent: the
 # first call above has usually already done it, and this one clears the root the restart recreated.
 stash_models || true
-if ! restart_app; then
-    flunk "setup: XiaolaiDict did not come back after a restart, so the first-run open cannot be tested"
+if ! relaunch_or_end_stage; then
+    return 0
 else
     opened=""
     for _ in $(seq 1 50); do board_on_screen && { opened=yes; break; }; sleep 0.2; done
@@ -2158,8 +2420,8 @@ else
 fi
 
 "$helpers/close-window" "Setup" >/dev/null 2>&1 || true
-if ! restart_app; then
-    flunk "setup: XiaolaiDict did not come back after the second restart"
+if ! relaunch_or_end_stage; then
+    return 0
 else
     # **A negative, so it is given time to fail.** Asserting "not on screen" the instant the app
     # starts would pass against a board that appears a moment later.
@@ -2177,6 +2439,8 @@ else
     esac
 fi
 
+}
+setup_stage
 # Left as the reader found it. A board still on screen would be in front of whatever stage runs
 # next, and the scenes stage measures which app is frontmost. The flag itself is put back by
 # `restore_setup_shown`, registered before anything was launched.
@@ -2188,6 +2452,11 @@ fi
 
 if want learning; then
 # Real native actions; the exact freshly created encounter is the durable witness.
+#
+# **The stage is a function so a launch that failed ends it at once** (`launch_or_end_stage`): on 2026-10-08 a restart
+# LaunchServices refused went on to "restored encounter lost after relaunch", which reads as data loss. The reader's
+# ledger and settings are put back after the call, however the stage ended.
+learning_stage() {
 learning_evidence="$HOME/$1/learning-evidence"
 mkdir -p "$learning_evidence"
 chmod 700 "$learning_evidence"
@@ -2261,7 +2530,7 @@ restore_learning_fixture() {
         true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
     esac
     reader_reminders_back "$learning_evidence" || return 1
-    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    launch_app || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
     # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
     if [ "$learning_had_ledger" = yes ]; then
         rm -f "$learning_backup" "$learning_backup-wal" "$learning_backup-shm" || return 1
@@ -2275,8 +2544,7 @@ fi
 rm -f "$ledger" "$ledger-wal" "$ledger-shm"
 defaults write com.xiaolaidict lookupKeepPolicy automatic
 defaults write com.xiaolaidict libraryPane history
-open "$app"
-for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+launch_or_end_stage || return 0
 sw_vers > "$learning_evidence/host.txt"
 codesign -dv "$app" 2> "$learning_evidence/build.txt"
 learning_before=$(newest_row_id)
@@ -2345,7 +2613,8 @@ PYLIBRARY
         else
             flunk "learning: Discard control is unreachable or ambiguous"
         fi
-        if discard_selected && restart_app; then
+        if discard_selected; then
+            relaunch_or_end_stage || return 0
             reopened=""
             for _ in $(seq 1 40); do
                 if "$helpers/menu-click" com.xiaolaidict "Library" >/dev/null 2>&1; then reopened=yes; break; fi
@@ -2365,7 +2634,7 @@ PYLIBRARY
                 else flunk "learning: Discarded Restore control unreachable"; fi
                 "$helpers/click-element" com.xiaolaidict --row library-pane-history >/dev/null 2>&1 || flunk "learning: History return failed"
             else flunk "learning: Discarded recovery pane unreachable after relaunch"; fi
-        else flunk "learning: repeated discard/relaunch failed"; fi
+        else flunk "learning: the encounter could not be discarded a second time, so its survival across a relaunch was not tested"; fi
         for appearance in Light Dark; do
             wanted_dark=false; [ "$appearance" != Dark ] || wanted_dark=true
             if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
@@ -2373,13 +2642,12 @@ PYLIBRARY
                 continue
             fi
             defaults write com.xiaolaidict TextSize large
+            relaunch_or_end_stage || return 0
             restarted=""
-            if why=$(restart_app 2>&1); then
-                for _ in $(seq 1 40); do
-                    if why=$("$helpers/menu-click" com.xiaolaidict "Library" 2>&1); then restarted=yes; break; fi
-                    sleep 0.25
-                done
-            fi
+            for _ in $(seq 1 40); do
+                if why=$("$helpers/menu-click" com.xiaolaidict "Library" 2>&1); then restarted=yes; break; fi
+                sleep 0.25
+            done
             if [ -n "$restarted" ]; then
                 sleep 1
                 "$helpers/panel" com.xiaolaidict > "$learning_evidence/large-$appearance.json"
@@ -2408,7 +2676,7 @@ PYAPPEARANCE
                     then pass "learning: actual native large-text $appearance appearance is rendered"
                     else flunk "learning: rendered $appearance screenshot disagrees with requested appearance"; fi
                 else flunk "learning: native large-text $appearance screenshot denied"; fi
-            else flunk "learning: large-text $appearance relaunch failed: $why"; fi
+            else flunk "learning: the Library would not open after the large-text $appearance relaunch: $why"; fi
         done
         restored=$(sqlite3 "$ledger" "SELECT disposition FROM lookups WHERE id=$learning_id;")
         [ "$restored" = kept ] && pass "learning: restored encounter remains kept after relaunch" || flunk "learning: restored encounter lost after relaunch"
@@ -2421,8 +2689,7 @@ PYAPPEARANCE
             defaults delete com.xiaolaidict libraryLayout >/dev/null 2>&1 || true
             defaults write com.xiaolaidict TextSize standard
             defaults write com.xiaolaidict libraryPane history
-            open "$app"
-            for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+            launch_or_end_stage || return 0
             # Clicked until it takes, like the two relaunches above: one attempt straight after a
             # launch failed on the E2E Mac with the item present, and the reason went to /dev/null.
             expanded_open=""
@@ -2438,6 +2705,8 @@ PYAPPEARANCE
         else flunk "learning: expanded isolated fixture failed its positive controls"; fi
     fi
 fi
+}
+learning_stage
 # **Put back before the next stage, not when the script ends.** Registered with `at_exit` alone, the
 # restore waited for the whole run, so every stage after this one ran on this stage's fixture ledger
 # and settings: `model` asserted against rows the restore then threw away, and read as a product fault.
@@ -2462,6 +2731,10 @@ if want review; then
 #     nothing. Into the empty ledger the app creates go eight cards the reader wrote, overdue, whose
 #     answers are secrets no surface could produce by itself — so "no answer in the tree" is a search
 #     for a string that cannot be there by accident.
+#
+#     **A function, so a launch that failed ends the stage at once** (`launch_or_end_stage`); Dictionary, the ledger and
+#     the settings are put back after the call, however the stage ended.
+review_stage() {
 review_evidence="$HOME/$1/review-evidence"
 mkdir -p "$review_evidence"
 chmod 700 "$review_evidence"
@@ -2518,7 +2791,7 @@ restore_review_fixture() {
     defaults import com.xiaolaidict "$review_evidence/preferences.plist" \
         || { echo "restore: the preferences could not be imported; they are in $review_evidence" >&2; return 1; }
     reader_reminders_back "$review_evidence" || return 1
-    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    launch_app || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
     # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
     if [ "$review_had_ledger" = yes ]; then
         rm -f "$review_backup" "$review_backup-wal" "$review_backup-shm" || return 1
@@ -2550,8 +2823,7 @@ if ! reminders_set_aside; then
 fi
 rm -f "$ledger" "$ledger-wal" "$ledger-shm"
 defaults write com.xiaolaidict libraryPane review
-open "$app"
-for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+launch_or_end_stage || return 0
 review_tables=""
 for _ in $(seq 1 50); do
     review_tables=$(sqlite3 -readonly "$ledger" "select count(*) from sqlite_master where type = 'table' and name in ('study_cards', 'study_keep_metadata', 'review_events')" 2>/dev/null || true)
@@ -2613,13 +2885,14 @@ PYREVIEW
     consume_verdicts review-report "$verdicts"
 
     # **Then the window, from outside, as a reader.** `review.py` prints a verdict per claim and DONE.
-    open "$app"
-    for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+    launch_or_end_stage || return 0
     review_verdicts=$(python3 "$helpers/review.py" run "$helpers" "$ledger" "$review_evidence/fixture.json" \
         "$review_evidence" 2>&1 || true)
     printf '%s\n' "$review_verdicts" > "$review_evidence/run.txt"
     consume_verdicts review "$review_verdicts"
 fi
+}
+review_stage
 # **Put back before the next stage, not when the script ends**, as the learning stage learned to: a
 # stage after this one would otherwise measure the fixture ledger and read as a product fault.
 quit_review_dictionary || flunk "review: the Dictionary this stage opened would not quit"
@@ -2654,6 +2927,10 @@ if want reminder; then
 #
 #     The ledger and the preferences are set aside and put back by the review stage's mechanism, each
 #     step checked by hand.
+#
+#     **A function, so a launch that failed ends the stage at once** (`launch_or_end_stage`); what only a person can do
+#     is said, and the ledger, the settings and the reader's reminders are put back, after the call.
+reminder_stage() {
 reminder_evidence="$HOME/$1/reminder-evidence"
 mkdir -p "$reminder_evidence"
 chmod 700 "$reminder_evidence"
@@ -2719,7 +2996,7 @@ restore_reminder_fixture() {
         printf '%s' "$report" > "$reminder_evidence/restore-before.json"
         if [ "$(reminder_pending "$reminder_evidence/restore-before.json")" != 0 ]; then
             reminder_settings off || return 1
-            open "$app" || return 1
+            launch_app || return 1
             python3 "$helpers/reminder.py" wait "$reminder_first" withdrawn 30 >/dev/null || true
             stop_app || return 1
             report=$(run_report --reminder-report 60) || true
@@ -2753,7 +3030,7 @@ restore_reminder_fixture() {
     # each must be pending at the instant it had; one that is not fails the restore rather than being
     # planned again by the app at whatever instant it would choose now (#28).
     reader_reminders_back "$reminder_evidence" || return 1
-    open "$app" || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
+    launch_app || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
     # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
     if [ "$reminder_had_ledger" = yes ]; then
         rm -f "$reminder_backup" "$reminder_backup-wal" "$reminder_backup-shm" || return 1
@@ -2769,8 +3046,7 @@ if ! reminders_set_aside; then
     flunk "reminder: the reader's reminder settings could not be set aside, so no fixture was launched"; exit 1
 fi
 rm -f "$ledger" "$ledger-wal" "$ledger-shm"
-open "$app"
-for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+launch_or_end_stage || return 0
 reminder_tables=""
 for _ in $(seq 1 50); do
     reminder_tables=$(sqlite3 -readonly "$ledger" "select count(*) from sqlite_master where type = 'table' and name in ('study_cards', 'study_keep_metadata', 'review_events')" 2>/dev/null || true)
@@ -2805,8 +3081,7 @@ if [ "$reminder_seeded" = yes ]; then
         # Off at the start is off with no log at all, as a reader who never turned reminders on has.
         [ "$reminder_phase" = off ] && { defaults delete com.xiaolaidict reviewReminderLog >/dev/null 2>&1 || true; }
         if [ "$reminder_phase" != off ]; then
-            open "$app"
-            for _ in $(seq 1 100); do "$helpers/menu-click" com.xiaolaidict --ready >/dev/null 2>&1 && break; sleep 0.2; done
+            launch_or_end_stage || return 0
             if [ "$reminder_grant" = granted ]; then
                 # The log is written before the system is asked, so its state is the handshake.
                 case $reminder_phase in on) reminder_state=added ;; *) reminder_state=withdrawn ;; esac
@@ -2912,6 +3187,8 @@ PYREMINDER
         consume_verdicts reminder "$verdicts"
     done
 fi
+}
+reminder_stage
 # **What only a person at this Mac can do**, said rather than skipped in silence (review module plan
 # §10: "Only the second Mac can verify").
 echo "NOT RUN  reminder: the first Allow prompt — only a person can answer a system prompt, and nothing in this stage raises one"
@@ -3172,7 +3449,8 @@ for surface in "Reading History" "Settings…"; do
     # **A known app in front first**, so "did not take focus" is checked against something: the
     # drawer passed merely for XiaolaiDict not being frontmost afterwards, whatever had been before —
     # which a Settings window left open earlier could turn into a pass or a failure on its own.
-    osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
+    # By LaunchServices, which brings a running app forward without an Apple event — see `ensure_fixture_open`.
+    open -a Finder >/dev/null 2>&1 || true
     sleep 1
     before_front=$("$helpers/panel" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
     # **What the compositor already drew for this app**, so the window this menu item opens can

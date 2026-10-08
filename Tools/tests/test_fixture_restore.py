@@ -68,6 +68,8 @@ STUBS = r"""
 set -uo pipefail
 stop_app() { echo "stop_app" >> "$CALLS"; }
 open() { echo "open $*" >> "$CALLS"; }
+# The restores start the app through `launch_app`, which waits for its process and its menu-bar item (2026-10-08).
+launch_app() { echo "launch_app" >> "$CALLS"; }
 osascript() { echo "osascript $*" >> "$CALLS"; }
 plutil() { echo "plutil $*" >> "$CALLS"; }
 defaults() {
@@ -249,7 +251,7 @@ class ReadersRemindersAreCheckedTests(Scratch):
                 self.assertLess(next(i for i, c in enumerate(calls) if c.startswith("defaults import")),
                                 next(i for i, c in enumerate(calls) if c.startswith("run_report")))
                 self.assertLess(next(i for i, c in enumerate(calls) if c.startswith("run_report")),
-                                next(i for i, c in enumerate(calls) if c.startswith("open ")))
+                                next(i for i, c in enumerate(calls) if c == "launch_app"))
 
     def test_a_reader_with_nothing_pending_costs_no_report(self):
         for name in STAGES:
@@ -335,7 +337,8 @@ class RemindersSetAsideTests(Scratch):
         for name in STAGES:
             with self.subTest(stage=name):
                 block = stage(name)
-                launch = re.search(r'^open "\$app"$', block, re.MULTILINE)
+                # The fixture's first launch, which since 2026-10-08 ends the stage when it fails.
+                launch = re.search(r'^launch_or_end_stage \|\| return 0$', block, re.MULTILINE)
                 self.assertIsNotNone(launch, f"{name}: no fixture launch found")
                 before = block[:launch.start()]
                 aside = before.rfind("reminders_set_aside")

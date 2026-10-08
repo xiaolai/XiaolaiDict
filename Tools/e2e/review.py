@@ -364,7 +364,9 @@ class Drive:
         self.postpone(fifth)
 
     def comes_forward_on_a_card(self) -> str:
-        subprocess.run(["osascript", "-e", 'tell application "Finder" to activate'],
+        # Brought forward by LaunchServices, never by an Apple event: one from this SSH session needs an Automation
+        # grant of its own, and asked the first time it raises a prompt nobody is there to answer (2026-10-08).
+        subprocess.run(["open", "-a", "Finder"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20, check=False)
         before, _ = self.wait(5, lambda: self.frontmost() == FINDER)
         before = self.frontmost()

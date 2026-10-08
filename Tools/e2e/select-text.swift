@@ -13,10 +13,11 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
 }
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: arguments[1]).first else { fail("\(arguments[1]) is not running") }
-guard let focused = attribute(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute),
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp(arguments[1]) else { fail("\(arguments[1]) is not running") }
+guard let focused = attribute(AXUIElementCreateApplication(app.pid), kAXFocusedUIElementAttribute),
       CFGetTypeID(focused) == AXUIElementGetTypeID()
-else { fail("no focused element") }
+else { fail("no focused element in \(arguments[1]) (pid \(app.pid))") }
 let field = focused as! AXUIElement
 guard let text = attribute(field, kAXValueAttribute) as? NSString else { fail("the focused element has no text") }
 var found = NSRange(location: NSNotFound, length: 0)

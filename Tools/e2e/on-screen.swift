@@ -38,10 +38,12 @@ let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
 // An app that is not running draws nothing, which is the same answer as an app that is running and
 // draws nothing — and the same answer every caller wants. The alert gate asks this of
 // UserNotificationCenter on every run precisely because it is usually not running at all.
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`. A -1 here matched no
+// window the compositor lists, and read as an app drawing nothing.
+guard let app = runningApp(bundleID) else {
     emit(["frontmost": front, "matches": [], "windows": []])
 }
-let pid = app.processIdentifier
+let pid = app.pid
 
 guard let listed = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
     as? [[String: Any]]

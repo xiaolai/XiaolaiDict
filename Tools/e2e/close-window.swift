@@ -15,10 +15,11 @@ let title = CommandLine.arguments[1]
 guard AXIsProcessTrusted() else {
     print("this process is not trusted for Accessibility, so it cannot see or press anything"); exit(1)
 }
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.xiaolaidict").first else {
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp("com.xiaolaidict") else {
     print("XiaolaiDict is not running"); exit(1)
 }
-let ax = AXUIElementCreateApplication(app.processIdentifier)
+let ax = AXUIElementCreateApplication(app.pid)
 
 /// The attribute, or why not — `nil` with `.noValue` or `.attributeUnsupported` is an element that
 /// simply does not have it; anything else is a failure to report.

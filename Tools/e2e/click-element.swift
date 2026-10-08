@@ -43,10 +43,11 @@ for argument in arguments.dropFirst() {
     }
 }
 guard !wanted.isEmpty else { die("a click needs at least one target") }
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp(bundleID) else {
     die("\(bundleID) is not running")
 }
-let ax = AXUIElementCreateApplication(app.processIdentifier)
+let ax = AXUIElementCreateApplication(app.pid)
 let systemWide = AXUIElementCreateSystemWide()
 // A synchronous Accessibility call to a busy app otherwise waits as long as the system default.
 AXUIElementSetMessagingTimeout(ax, 2)
@@ -233,7 +234,7 @@ func click(_ point: CGPoint, on element: AXUIElement, called title: String) {
 func waitToBeFrontmost() {
     let deadline = Date().addingTimeInterval(targetDeadline)
     while Date() < deadline {
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier { return }
+        if isFrontmost(bundleID) { return }
         usleep(100_000)
     }
     let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"

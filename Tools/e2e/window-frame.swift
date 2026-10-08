@@ -8,10 +8,11 @@ import ApplicationServices
 // for, so the only way to aim at it is its window.
 let bundleID = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
 guard !bundleID.isEmpty else { FileHandle.standardError.write(Data("usage: window-frame <bundle-id>\n".utf8)); exit(2) }
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp(bundleID) else {
     FileHandle.standardError.write(Data("\(bundleID) is not running\n".utf8)); exit(1)
 }
-let ax = AXUIElementCreateApplication(app.processIdentifier)
+let ax = AXUIElementCreateApplication(app.pid)
 func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
     var found: AnyObject?
     return AXUIElementCopyAttributeValue(element, name as CFString, &found) == .success ? found : nil

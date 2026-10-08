@@ -30,12 +30,9 @@ func webArea(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
     for child in children { if let found = webArea(child, depth: depth + 1) { return found } }
     return nil
 }
-// Safari may report pid -1 through NSWorkspace; the window server knows the real process.
-func processID() -> pid_t? {
-    (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
-        .compactMap { $0[kCGWindowOwnerPID as String] as? pid_t }
-        .first { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier == arguments[1] }
-}
+// Safari may report pid -1 through NSWorkspace; the real process comes from `shared/running-app.swift`, which every
+// helper shares — this helper resolved it alone until 2026-10-08, and the others trusted the -1.
+func processID() -> pid_t? { runningApp(arguments[1])?.pid }
 
 /// The front window's page and its text, once the page has loaded far enough to hold the needle.
 func loadedPage() -> (page: AXUIElement, text: NSString)? {
@@ -86,25 +83,27 @@ guard let pageFrame = frame(page), pageFrame.width > 40, pageFrame.height > 40 e
 /// page" — which reads as a defect in the selection reader rather than as a window in the way.
 /// A stage measures the machine it is run on, and this machine accumulates apps; what it sets
 /// aside it puts back.
-if let pid = processID(), let app = NSRunningApplication(processIdentifier: pid) {
+// In front by bundle identifier, never by pid: the front app's reported pid can be the same -1.
+if let found = runningApp(arguments[1]) {
+    let app = found.app
     var front: NSRunningApplication?
     for attempt in 0..<3 {
         app.activate()
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { break }
+            if isFrontmost(arguments[1]) { break }
             usleep(100_000)
         }
         front = NSWorkspace.shared.frontmostApplication
-        if front?.processIdentifier == pid { break }
+        if front?.bundleIdentifier == arguments[1] { break }
         // Last resort, and only for something that has already refused twice: hiding is
         // reversible, and it is the only thing that stops an app raising itself again.
-        if attempt > 0, let other = front, other.processIdentifier != pid,
+        if attempt > 0, let other = front, other.bundleIdentifier != arguments[1],
            other.bundleIdentifier != Bundle.main.bundleIdentifier, other.hide() {
             hidden.append(other)
         }
     }
-    if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+    if !isFrontmost(arguments[1]) {
         let name = front?.bundleIdentifier ?? "nothing"
         fail("\(arguments[1]) would not come to the front (\(name) is there, and hiding it did not help)")
     }

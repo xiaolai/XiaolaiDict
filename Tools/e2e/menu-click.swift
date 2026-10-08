@@ -14,10 +14,11 @@ guard !bundleID.isEmpty, !wanted.isEmpty else {
         Data("usage: menu-click <bundle-id> <item title>|--ready|--describe|--left-click\n".utf8))
     exit(2)
 }
-guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+guard let app = runningApp(bundleID) else {
     FileHandle.standardError.write(Data("\(bundleID) is not running\n".utf8)); exit(1)
 }
-let ax = AXUIElementCreateApplication(app.processIdentifier)
+let ax = AXUIElementCreateApplication(app.pid)
 func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
     var found: AnyObject?
     return AXUIElementCopyAttributeValue(element, name as CFString, &found) == .success ? found : nil

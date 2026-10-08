@@ -128,8 +128,9 @@ var complete = AXIsProcessTrusted()
 // Why `complete` is false, in the walk's own words — a reader of the report cannot otherwise tell a
 // node cap from a deadline from an app that stopped answering, and each needs a different fix.
 var incomplete: [String] = complete ? [] : ["Accessibility is not granted to this helper"]
-if let app = NSRunningApplication.runningApplications(withBundleIdentifier: CommandLine.arguments[1]).first {
-    let element = AXUIElementCreateApplication(app.processIdentifier)
+// The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
+if let app = runningApp(CommandLine.arguments[1]) {
+    let element = AXUIElementCreateApplication(app.pid)
     // A synchronous Accessibility call to a busy app otherwise waits as long as the system
     // default, which is longer than any stage's patience.
     AXUIElementSetMessagingTimeout(element, 2)

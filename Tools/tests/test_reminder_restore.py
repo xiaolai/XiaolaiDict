@@ -111,6 +111,8 @@ class RestoreTests(unittest.TestCase):
             # The recorder: nothing reaches this Mac's app or its preferences.
             'stop_app() { echo "stop_app" >> "$CALLS"; }',
             'open() { echo "open $*" >> "$CALLS"; }',
+            # The restore starts the app through `launch_app`, which waits for its process and menu (2026-10-08).
+            'launch_app() { echo "launch_app" >> "$CALLS"; }',
             # A deleted domain exports as an empty dictionary, as the real one does (`domain_cleared`).
             'defaults() { echo "defaults $*" >> "$CALLS"; [ "$1" = export ] '
             '&& printf \'<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0"><dict/></plist>\\n\'; return 0; }',
@@ -155,7 +157,7 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr + "\n".join(calls))
         self.assertTrue(any(c.startswith("defaults write com.xiaolaidict reviewReminderSettings") for c in calls),
                         calls)
-        withdrawn = self.index(calls, "open ")
+        withdrawn = self.index(calls, "launch_app")
         self.assertLess(withdrawn, self.index(calls, "defaults import"),
                         "the stage's requests were not withdrawn by the app before the reader's settings came back")
         self.assertEqual(json.loads((self.evidence / "restore.json").read_text())["pending"], [])
@@ -175,14 +177,14 @@ class RestoreTests(unittest.TestCase):
         self.reports_answer()
         done = self.restore(activated=True)
         self.assertNotEqual(done.returncode, 0, "an unreadable report let the restore through")
-        self.assertTrue(any(c.startswith("open ") for c in self.recorded()), self.recorded())
+        self.assertTrue(any(c == "launch_app" for c in self.recorded()), self.recorded())
 
     def test_a_stage_that_never_turned_reminders_on_launches_nothing_to_withdraw(self):
         self.reader_had()
         done = self.restore(activated=False)
         calls = self.recorded()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual([c for c in calls if c.startswith(("open ", "run_report"))], [f"open {self.root}/XiaolaiDict.app"])
+        self.assertEqual([c for c in calls if c.startswith(("open ", "launch_app", "run_report"))], ["launch_app"])
 
     # --- #28: the reader's own pending requests are checked, never regenerated
 
@@ -195,7 +197,7 @@ class RestoreTests(unittest.TestCase):
         self.assertIn("no longer pending", done.stderr)
         calls = self.recorded()
         self.assertFalse(any("reviewReminderLog" in c for c in calls), calls)
-        self.assertFalse(any(c.startswith("open ") for c in calls),
+        self.assertFalse(any(c.startswith(("open ", "launch_app")) for c in calls),
                          "the app was opened to plan the reader's request again")
 
     def test_a_readers_request_still_pending_is_left_alone(self):
