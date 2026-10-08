@@ -3384,12 +3384,22 @@ else
                 # A bare key is refused with a hint rather than accepted — a shortcut with no
                 # modifier would fire while the reader was typing. The hint appearing is the proof
                 # the field has the keyboard at all.
+                # **Waited for, not slept for**, and the wait printed. A fixed second and one read failed this once
+                # in three full runs on the E2E Mac (2026-10-08) and passed alone twice: the line is set by the
+                # field's key monitor, drawn by SwiftUI and only then in the Accessibility tree, and how long that
+                # takes is load. Bounded, so a key that never arrives still fails — saying what the field showed.
                 "$helpers/keys" 40
-                sleep 1
-                if "$helpers/panel" com.xiaolaidict | grep -q "needs"; then
-                    pass "shortcut: the armed field takes the keyboard, and refuses a key with no modifier"
+                refused=""
+                coached=""
+                for tenth in $(seq 1 50); do
+                    coached=$("$helpers/panel" com.xiaolaidict || true)
+                    if printf '%s' "$coached" | grep -q "needs"; then refused=$tenth; break; fi
+                    sleep 0.1
+                done
+                if [ -n "$refused" ]; then
+                    pass "shortcut: the armed field takes the keyboard, and refuses a key with no modifier ($((refused / 10)).$((refused % 10))s)"
                 else
-                    flunk "shortcut: the field was armed and never saw the key press (front: $(printf '%s' "$armed" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p'))"
+                    flunk "shortcut: the field was armed and showed no refusal of a bare key within 5 s (front: $(printf '%s' "$coached" | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p'); still recording: $(printf '%s' "$coached" | grep -q "Recording" && echo yes || echo no))"
                 fi
                 # **Escape disarms it — read passively, before anything else moves focus.** Opening
                 # the menu to check the shortcut would itself end the recording (the window resigns
