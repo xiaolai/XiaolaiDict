@@ -45,6 +45,45 @@ public struct PanelView: View {
         case .lookup(let presentation):
             LookupPanelContent(presentation: presentation, waiting: content.waitingDescription)
                 .id(presentation.request)
+        case .translation(let request, let text):
+            SentenceTranslationView(text: text).id(request)
+        }
+    }
+}
+
+/// A direct translation of the selected passage, through the same engine and attribution used by
+/// the dictionary card. It creates no dictionary lookup or study-history entry.
+private struct SentenceTranslationView: View {
+    @Environment(\.scale) private var scale
+    @Environment(\.translation) private var actions
+    let text: String
+    @State private var pane: TranslationPane?
+    @State private var retryCount = 0
+
+    var body: some View {
+        PanelSurface(accent: nil) {
+            VStack(alignment: .leading, spacing: scale.space.stack) {
+                Text(verbatim: text)
+                    .font(.system(size: scale.text.body))
+                    .textSelection(.enabled)
+                if let pane {
+                    TranslationPaneView(pane: pane, retry: { retryCount += 1 })
+                } else {
+                    ProgressView(String(localized: "Translating selection…",
+                                        comment: "Direct selection translation while the engine is working"))
+                }
+            }
+            .padding(scale.space.pad)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } bar: {
+            EmptyView()
+        }
+        .task(id: retryCount) {
+            pane = nil
+            let target = actions.target
+            let outcome = await actions.translate(TranslationQuestion(sentence: text, target: target, met: nil))
+            guard !Task.isCancelled else { return }
+            pane = TranslationPane(outcome, of: .init(sentence: text, target: target, dictionary: "", sense: nil))
         }
     }
 }

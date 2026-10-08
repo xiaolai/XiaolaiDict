@@ -78,6 +78,7 @@ public struct LookupPresentation: Equatable {
 /// What the panel shows.
 public enum PanelContent {
     case lookup(LookupPresentation)
+    case translation(request: Int, text: String)
     /// Something the reader needs to know instead of an entry: no selection, no permission.
     case message(title: String, detail: String)
 
@@ -99,8 +100,11 @@ public enum PanelContent {
     }
 
     public var request: Int? {
-        guard case .lookup(let presentation) = self else { return nil }
-        return presentation.request
+        switch self {
+        case .lookup(let presentation): presentation.request
+        case .translation(let request, _): request
+        case .message: nil
+        }
     }
 
     /// What this panel is waiting for, in words, or nil when it is waiting for nothing.
@@ -149,6 +153,10 @@ public enum PanelContent {
             detail: reason)
     }
 
+    public static func nothingToTranslate(_ reason: String) -> PanelContent {
+        .message(title: String(localized: "Nothing to translate", comment: "Sentence translation panel"), detail: reason)
+    }
+
     public enum Kind: Hashable {
         case lookup
         case message
@@ -180,7 +188,7 @@ public enum PanelContent {
 
     public var kind: Kind {
         switch self {
-        case .lookup: .lookup
+        case .lookup, .translation: .lookup
         case .message: .message
         }
     }

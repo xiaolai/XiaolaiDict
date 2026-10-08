@@ -26,6 +26,9 @@ public struct Shortcut: Equatable, Codable, Sendable {
     /// which is one reason the shortcut is a setting and the setup pane names it.
     public static let defaultLookUp = Shortcut(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(controlKey | optionKey))
 
+    /// ⌃⌥T — translate the selected passage without looking it up as a dictionary term.
+    public static let defaultTranslate = Shortcut(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(controlKey | optionKey))
+
     /// ⌘, ⌃ or ⌥ is required: a shortcut of a bare key, or of ⇧ and a key, would fire while typing.
     public var isUsable: Bool {
         keyCode <= Self.highestKeyCode && modifiers & UInt32(cmdKey | controlKey | optionKey) != 0

@@ -23,6 +23,19 @@ app to Applications. It is signed and notarised, so Gatekeeper opens it without 
 is not a supported path: the app is signed with this project's own Developer ID, and an ad-hoc build
 is refused by its own dictionary service, which accepts only a caller signed by the same team.
 
+## Translate a selection
+
+Select a sentence or short passage and press **Control–Option–T** (⌃⌥T). XiaolaiDict shows the
+translation in its own panel, using the same on-device translator and source attribution as the
+"Translate This Sentence" control on a dictionary card. The selection is limited to 2,000
+characters and does not create a dictionary lookup or study-history entry. The existing ⌃⌥D
+shortcut still looks up a selected word or phrase.
+
+In Ghostty, XiaolaiDict asks Ghostty's scripting interface to copy the focused terminal's selection.
+macOS asks for permission to control Ghostty the first time; allow it for this feature. This copy
+updates the clipboard. If the terminal has no selection, the old clipboard text is never translated.
+Other apps continue to provide selected text through Accessibility.
+
 ## Compact lookup
 
 In **Settings → Reading → In the panel**, turn on **Use a compact lookup card** for a shorter
