@@ -212,7 +212,8 @@ let package = Package(
         .testTarget(name: "LocalModelTests", dependencies: ["ModelKit", "LocalModel", "XiaolaiDictTestSupport"]),
         // The providers against a URLProtocol stub and a loopback HTTP server of their own, in this process: no test
         // here reaches a network endpoint, and only one touches the real Keychain, under a service name of its own.
-        .testTarget(name: "LLMProvidersTests", dependencies: ["ModelKit", "LLMProviders"]),
+        // The CLI providers against fake CLIs — small scripts written into a `TemporaryDirectory` — never the reader's.
+        .testTarget(name: "LLMProvidersTests", dependencies: ["ModelKit", "LLMProviders", "XiaolaiDictTestSupport"]),
         // ReviewKit alone, and no fixture target: what passes here passes without the Mac's modules.
         .testTarget(name: "ReviewKitTests", dependencies: ["ReviewKit"]),
     ]

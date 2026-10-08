@@ -207,7 +207,13 @@ struct TestInventoryTests {
         // shape, the token budget's name retried once, cancellation, nothing secret in a failure — and against a
         // loopback server: one kept connection, a redirect that carries nothing to another origin, the timeout, and
         // no sense text sent to a host that is not loopback.
-        "LLMProvidersTests": 40,
+        // Raised 40 → 107 by the providers' P2 (ADR-0053, 2026-10-09), against fake CLIs: the LF-only framing and its
+        // bound, a write to a child that has gone, one resident process per session, a deadline or a cancellation
+        // that ends it, one turn at a time and a waiter that leaves, recycling with the replacement first, the idle
+        // end, the shutdown and the drop; Claude's lean flags and every error kind; Codex's isolated, warmed,
+        // reused thread, a refused approval and every turn failure; the locator's order; the preflight's verdicts;
+        // and no credential spelling in the providers' code.
+        "LLMProvidersTests": 107,
         // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each
         // round adding regression tests. **It had no floor at all before that**, which
         // `everyTestTargetHasAFloor` existed to catch and did: the target shipped with the module and
