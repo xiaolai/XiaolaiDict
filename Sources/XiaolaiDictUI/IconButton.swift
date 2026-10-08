@@ -82,20 +82,30 @@ struct IconButton: View {
     /// SwiftUI keeps calls through this, and every render puts its own action in it — ADR-0048.
     @State private var latest = LatestAction()
 
+    /// **The one place a button's parts are stored.** Each way in below decides only how its name,
+    /// symbol and role are spelled, so none can store the rest differently from another.
+    private init(
+        name: Text, symbol: String, role: ButtonRole?, help: Text?, hint: LocalizedStringKey?,
+        shortcut: KeyboardShortcut?, size: CGFloat?, isEnabled: Bool, action: @escaping () -> Void
+    ) {
+        self.name = name
+        self.symbol = symbol
+        self.role = role
+        self.help = help
+        self.hint = hint.map { Text($0) }
+        self.shortcut = shortcut
+        self.size = size
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+
     init(
         title: LocalizedStringKey, symbol: String, help: Text? = nil, hint: LocalizedStringKey? = nil,
         shortcut: KeyboardShortcut? = nil, size: CGFloat? = nil, role: ButtonRole? = nil,
         isEnabled: Bool = true, action: @escaping () -> Void
     ) {
-        name = Text(title)
-        self.symbol = symbol
-        self.help = help
-        self.hint = hint.map { Text($0) }
-        self.shortcut = shortcut
-        self.size = size
-        self.role = role
-        self.isEnabled = isEnabled
-        self.action = action
+        self.init(name: Text(title), symbol: symbol, role: role, help: help, hint: hint, shortcut: shortcut,
+                  size: size, isEnabled: isEnabled, action: action)
     }
 
     /// **The usual way in**: the action's own symbol, name and role, from the one table.
@@ -108,15 +118,8 @@ struct IconButton: View {
         hint: LocalizedStringKey? = nil, shortcut: KeyboardShortcut? = nil, size: CGFloat? = nil,
         isEnabled: Bool = true, action: @escaping () -> Void
     ) {
-        name = title.map { Text($0) } ?? Text(kind.title)
-        symbol = kind.symbol
-        self.help = help
-        self.hint = hint.map { Text($0) }
-        self.shortcut = shortcut
-        self.size = size
-        role = kind.role
-        self.isEnabled = isEnabled
-        self.action = action
+        self.init(name: title.map { Text($0) } ?? Text(kind.title), symbol: kind.symbol, role: kind.role, help: help,
+                  hint: hint, shortcut: shortcut, size: size, isEnabled: isEnabled, action: action)
     }
 
     /// The same, for a name handed over as a `LocalizedStringResource` — a value's own name from
@@ -129,12 +132,8 @@ struct IconButton: View {
         _ kind: ActionSymbol, title: LocalizedStringResource, shortcut: KeyboardShortcut? = nil, size: CGFloat? = nil,
         action: @escaping () -> Void
     ) {
-        name = Text(title)
-        symbol = kind.symbol
-        self.shortcut = shortcut
-        self.size = size
-        role = kind.role
-        self.action = action
+        self.init(name: Text(title), symbol: kind.symbol, role: kind.role, help: nil, hint: nil, shortcut: shortcut,
+                  size: size, isEnabled: true, action: action)
     }
 
     var body: some View {

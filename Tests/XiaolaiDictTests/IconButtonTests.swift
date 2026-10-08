@@ -88,6 +88,34 @@ struct IconButtonTests {
         #expect(try source("AccessibilityAdaptation.swift").contains("@Environment(\\.accessibilityShowBorders)"))
     }
 
+    /// **Every way in stores the action's parts, and the defaults for what it was not given** (audit
+    /// 2026-10-08). The three initialisers store through one, so the one taking a `LocalizedStringResource` —
+    /// the name `StudyPresentation` hands over — cannot drift from the `LocalizedStringKey` one beside it.
+    @MainActor @Test func everyWayInStoresTheSameParts() {
+        let key = KeyboardShortcut("z", modifiers: .command)
+        let keyed = IconButton(.deletePermanently, title: "Delete", shortcut: key, size: 11) {}
+        let resourced = IconButton(.deletePermanently, title: LocalizedStringResource("Delete"), shortcut: key, size: 11) {}
+        for button in [keyed, resourced] {
+            #expect(button.symbol == ActionSymbol.deletePermanently.symbol)
+            // Destructive, so a way in that dropped the action's role would be seen here.
+            #expect(button.role == .destructive)
+            #expect(button.shortcut == key)
+            #expect(button.size == 11)
+            #expect(button.help == nil)
+            #expect(button.hint == nil)
+            #expect(button.isEnabled)
+        }
+        let named = IconButton(title: "Copy", symbol: ActionSymbol.copy.symbol, hint: "Copies it", role: .destructive,
+                               isEnabled: false) {}
+        #expect(named.symbol == ActionSymbol.copy.symbol)
+        #expect(named.role == .destructive)
+        #expect(named.hint != nil)
+        #expect(named.help == nil)
+        #expect(named.shortcut == nil)
+        #expect(named.size == nil)
+        #expect(!named.isEnabled)
+    }
+
     /// Outside a menu it is an icon and nothing else: no worded mode was added.
     @Test func thereIsNoTitleAndIconModeOutsideAMenu() throws {
         let button = try source("IconButton.swift")

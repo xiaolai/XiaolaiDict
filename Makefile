@@ -96,7 +96,8 @@ portability:
 # `-warnings-as-errors` lets one kind through (a property's type inferred from a module its file does not
 # import), so after the tests the gate reads every source's diagnostics file in the configuration they
 # were built in. It reads files and not this log: a build that recompiles nothing prints nothing, and the
-# file a source's last compile wrote is still there.
+# file a source's last compile wrote is still there. The bundle's own build — release, and for a development
+# bundle the capture instruments' code this one never compiles — is read by `Tools/build-bundle.sh` after it.
 DIAGNOSTICS := .build/out/Intermediates.noindex/XiaolaiDict.build/Debug
 
 test-swift: metal-guard portability

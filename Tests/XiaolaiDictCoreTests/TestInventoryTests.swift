@@ -113,7 +113,9 @@ struct TestInventoryTests {
         // Raised 1,225 → 1,227 after the split's review in refute mode (2, `AppModulesTests`): the walks whose
         // subject is anywhere in the app read every module it links, each held to a named witness, and the controls
         // refusing a module with no witness, a witness for a module the app does not link, and an unread witness.
-        "XiaolaiDictTests": 1_227,
+        // Raised 1,227 → 1,228 by the branch's audit (1, `IconButtonTests.everyWayInStoresTheSameParts`): the three
+        // initialisers store through one, and what each stores is pinned.
+        "XiaolaiDictTests": 1_228,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1

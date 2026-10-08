@@ -42,6 +42,10 @@ readonly METAL_BUNDLE=mlx-swift_Cmlx.bundle
 # offline, always succeeds or fails on the first. Five, the same as release.sh's notarisation retry.
 readonly SIGN_TRIES=5
 readonly CONFIG=release
+# Where `swift build -c $CONFIG` writes each source's diagnostics: the same layout as `swift test`'s `Debug`, which
+# `make`'s gate reads (`DIAGNOSTICS` in the Makefile), measured 2026-10-08 on Swift 6.4. `Tools/compiler-warnings.py`
+# refuses a directory that is not there, so a layout that moves fails the bundle rather than passing it — ADR-0052.
+readonly RELEASE_DIAGNOSTICS=.build/out/Intermediates.noindex/XiaolaiDict.build/Release
 readonly APP=.build/$APP_NAME.app
 # Assembled here, and published by an atomic swap only when every check has passed: $APP is the
 # previous good bundle or this one — never a half-built mixture that looks up to date.
@@ -196,8 +200,9 @@ bundle_inputs_digest() {
         # The development build number is a property of each build, not an input: hashing it would
         # rebuild every time. A release number is an input.
         printf '%s\0' "$CONFIG" "$BUNDLE_ID" "$XIAOLAIDICT_SIGN_ID" "${XIAOLAIDICT_BUILD_NUMBER:-}"
+        # The warning gate too: a bundle passed by an older gate is not up to date with a stricter one.
         find Sources Strings "$RESOURCES" Package.swift Makefile Tools/build-bundle.sh \
-            Tools/third-party-notices.sh -type f -print0 | digest_files
+            Tools/third-party-notices.sh Tools/compiler-warnings.py -type f -print0 | digest_files
         [ ! -f Package.resolved ] || printf 'Package.resolved\0' | digest_files
     } | shasum -a 256 | cut -d' ' -f1
 }
@@ -762,6 +767,12 @@ assemble() {
 
     # One build for all three executable products: they share every module but their mains.
     swift_build
+    # **A warning the compiler wrote down fails the bundle, as it fails `make`'s tests** — ADR-0052. That gate
+    # reads the debug build `swift test` made; this one reads the build the bundle is made of, which for a
+    # development bundle compiles the capture instruments' code the debug build never sees. A release build
+    # compiles each module whole, and no test target.
+    Tools/compiler-warnings.py "$RELEASE_DIAGNOSTICS" --whole-module --no-test-targets \
+        || fail "the bundle's build has a warning the compiler did not fail it on, or its diagnostics could not be read (ADR-0052)"
     local products
     products=$(swift_build --show-bin-path)
     [ -x "$products/$APP_NAME" ] && [ -x "$products/$SERVICE" ] && [ -x "$products/$MODEL_SERVICE" ] \
