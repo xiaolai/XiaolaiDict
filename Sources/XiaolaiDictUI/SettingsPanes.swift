@@ -1,5 +1,6 @@
 import AppKit
 import Capture
+import Combine
 import DictionaryModel
 import AVFoundation
 import StudyPresentation

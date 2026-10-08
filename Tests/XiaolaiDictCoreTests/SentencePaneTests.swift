@@ -1,3 +1,4 @@
+import Foundation
 import ModelKit
 import XiaolaiDictCore
 import Testing

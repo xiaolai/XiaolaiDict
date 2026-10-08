@@ -1,5 +1,6 @@
 import Foundation
 import ModelKit
+import XiaolaiDictBase
 
 /// The in-bundle instruments for the local model. **Only meaningful inside the signed bundle**:
 /// the model service is found by the app's own bundle, admits only this signature, and runs MLX

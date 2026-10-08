@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import AppKit
 import Foundation
 import XiaolaiDictCore
 import XiaolaiDictUI

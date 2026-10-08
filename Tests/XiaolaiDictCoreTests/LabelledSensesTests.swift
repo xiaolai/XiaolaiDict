@@ -1,4 +1,5 @@
 import DictionaryModel
+import Foundation
 import Testing
 import XiaolaiDictCore
 

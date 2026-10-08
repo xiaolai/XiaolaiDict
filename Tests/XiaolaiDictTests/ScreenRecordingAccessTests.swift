@@ -1,4 +1,5 @@
 import Capture
+import CoreGraphics
 import Foundation
 @testable import MacCapture
 import Synchronization

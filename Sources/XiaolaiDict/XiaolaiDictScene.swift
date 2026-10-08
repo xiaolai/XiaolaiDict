@@ -1,4 +1,5 @@
 import AppKit
+import StudyKit
 import StudyModels
 import XiaolaiDictBase
 import XiaolaiDictUI

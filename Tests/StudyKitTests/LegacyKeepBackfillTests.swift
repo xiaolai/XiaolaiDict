@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import ReviewKit
 import Testing
 import XiaolaiDictTestSupport
 @testable import StudyKit

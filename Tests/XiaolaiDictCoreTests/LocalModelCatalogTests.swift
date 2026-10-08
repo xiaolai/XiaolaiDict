@@ -1,4 +1,5 @@
 @testable import ModelKit
+import Foundation
 import Testing
 
 /// **The pins themselves, checked mechanically.** These manifests are hand-transcribed from what

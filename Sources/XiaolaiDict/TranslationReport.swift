@@ -1,5 +1,6 @@
 import Foundation
 import ModelKit
+import XiaolaiDictBase
 #if canImport(Translation)
 import Translation
 #endif

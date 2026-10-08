@@ -178,7 +178,10 @@ struct TestInventoryTests {
         // Raised 459 → 461 after the split's review in refute mode (2): `Package.swift`'s graph held to
         // `permittedDependencies` in both directions, and its controls — the review's two planted edges each refused
         // in a copy of the manifest, and the other three disagreements on a map (`ModuleBoundaryTests`).
-        "XiaolaiDictCoreTests": 461,
+        // Raised 461 → 463 with `MemberImportVisibility` on every target (ADR-0052's addendum): every target SwiftPM
+        // evaluates carries it and warnings as errors, and its control — a target declared after the loop, and a loop
+        // without the feature, each named in a copy of the manifest (`ModuleBoundaryTests`).
+        "XiaolaiDictCoreTests": 463,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.

@@ -1,4 +1,5 @@
 import DictionaryModel
+import Foundation
 import StudyKit
 import Testing
 @testable import StudyModels

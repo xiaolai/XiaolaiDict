@@ -1122,6 +1122,19 @@ struct ModuleBoundaryTests {
     /// Every target of the package at `root` and its in-package dependencies, as `swift package dump-package`
     /// evaluates the manifest — a product of another package is not one.
     static func swiftPMTargets(of root: URL) throws -> [String: Set<String>] {
+        let targets = try dumpedTargets(of: root)
+        let names = Set(targets.keys)
+        return targets.mapValues { target in
+            let dependencies = (target["dependencies"] as? [[String: Any]] ?? []).compactMap { dependency in
+                ((dependency["byName"] ?? dependency["target"]) as? [Any])?.first as? String
+            }
+            return Set(dependencies).intersection(names)
+        }
+    }
+
+    /// Every target of the package at `root`, by name, as `swift package dump-package` writes it — with a scratch
+    /// path of its own, so nothing of `swift test`'s `.build` is waited on.
+    static func dumpedTargets(of root: URL) throws -> [String: [String: Any]] {
         let scratch = TemporaryDirectory(named: "xiaolaidict-dump-package")
         let arguments = ["swift", "package", "--package-path", root.path, "--scratch-path",
                          scratch.appending("build").path, "dump-package"]
@@ -1131,18 +1144,70 @@ struct ModuleBoundaryTests {
               let targets = dump["targets"] as? [[String: Any]] else {
             throw ScriptRefused(arguments: arguments, status: status, said: "no targets in the dump")
         }
-        let names = Set(targets.compactMap { $0["name"] as? String })
-        var map: [String: Set<String>] = [:]
+        var byName: [String: [String: Any]] = [:]
         for target in targets {
             guard let name = target["name"] as? String else {
                 throw ScriptRefused(arguments: arguments, status: status, said: "a target with no name")
             }
-            let dependencies = (target["dependencies"] as? [[String: Any]] ?? []).compactMap { dependency in
-                ((dependency["byName"] ?? dependency["target"]) as? [Any])?.first as? String
-            }
-            map[name] = Set(dependencies).intersection(names)
+            byName[name] = target
         }
-        return map
+        return byName
+    }
+
+    // MARK: - What every target is compiled with (ADR-0052, the MemberImportVisibility addendum)
+
+    /// The Swift settings every target of this package carries, each spelled as `dump-package` writes it: the
+    /// setting's kind, then its argument.
+    static let everyTargetIsCompiledWith: Set<String> = [
+        "treatAllWarnings error", "enableUpcomingFeature MemberImportVisibility",
+    ]
+
+    /// **Every target builds with `MemberImportVisibility` and with warnings as errors** — asked of SwiftPM's own
+    /// evaluation of the manifest rather than of its text, so a target appended after the loop that sets both, or a
+    /// loop that stopped setting one, is named. Without the feature a member is visible through *any* file's import:
+    /// a file that reaches a module only through its members compiles with no diagnostic at all, which neither the
+    /// compiler nor the warning gate can see. 26 such file and module pairs in 24 files had collected before it was
+    /// on (2026-10-08); with it on, a removed import is an error in debug, development and release builds alike.
+    @Test(.timeLimit(.minutes(1))) func everyTargetIsCompiledWithMemberImportVisibilityAndWarningsAsErrors() throws {
+        let unset = try Self.settingsMissing(from: Self.dumpedTargets(of: Self.repository))
+        #expect(unset.isEmpty, "\(unset)")
+    }
+
+    /// **The control: a target declared after the loop, and a loop without the feature** — the first named alone,
+    /// the second for every target, each in a copy of the manifest SwiftPM evaluated.
+    @Test(.timeLimit(.minutes(1))) func aTargetCompiledWithoutTheFeatureIsNamed() throws {
+        let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
+        let feature = #", .enableUpcomingFeature("MemberImportVisibility")"#
+        #expect(manifest.components(separatedBy: feature).count == 2, "premise: the loop sets the feature in one place")
+        let late = TemporaryDirectory(named: "xiaolaidict-planted-late-target")
+        try (manifest + "\npackage.targets.append(.target(name: \"Unsafe3\"))\n")
+            .write(to: late.appending("Package.swift"), atomically: true, encoding: .utf8)
+        #expect(try Self.settingsMissing(from: Self.dumpedTargets(of: late.url)) == [
+            "Unsafe3 is compiled without enableUpcomingFeature MemberImportVisibility",
+            "Unsafe3 is compiled without treatAllWarnings error",
+        ])
+        let dropped = TemporaryDirectory(named: "xiaolaidict-planted-no-feature")
+        try manifest.replacingOccurrences(of: feature, with: "")
+            .write(to: dropped.appending("Package.swift"), atomically: true, encoding: .utf8)
+        let targets = try Self.dumpedTargets(of: dropped.url)
+        #expect(targets.count > 20, "premise: SwiftPM read the planted manifest's targets")
+        #expect(Self.settingsMissing(from: targets)
+                == targets.keys.sorted().map { "\($0) is compiled without enableUpcomingFeature MemberImportVisibility" })
+    }
+
+    /// Each target that lacks a setting of `everyTargetIsCompiledWith`, as a sentence, in target then setting order.
+    /// A setting whose shape this cannot read is not one it found, so it reads as missing rather than as present.
+    static func settingsMissing(from targets: [String: [String: Any]]) -> [String] {
+        targets.keys.sorted().flatMap { name -> [String] in
+            let settings = (targets[name]?["settings"] as? [[String: Any]] ?? []).compactMap { setting -> String? in
+                guard setting["tool"] as? String == "swift", let kind = setting["kind"] as? [String: Any],
+                      kind.count == 1, let entry = kind.first,
+                      let argument = (entry.value as? [String: Any])?["_0"] as? String
+                else { return nil }
+                return "\(entry.key) \(argument)"
+            }
+            return everyTargetIsCompiledWith.subtracting(settings).sorted().map { "\(name) is compiled without \($0)" }
+        }
     }
 
     /// **A list that could not be made is never an empty one.** The script refuses a directory with no

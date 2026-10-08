@@ -5,6 +5,7 @@ import ReviewKit
 @testable import StudyKit
 @testable import StudyModels
 import StudyPresentation
+import SwiftUI
 import Testing
 @testable import XiaolaiDictUI
 @testable import XiaolaiDict

@@ -1,4 +1,6 @@
 import Capture
+import CoreGraphics
+import DictionaryModel
 import Foundation
 import Testing
 @testable import MacCapture

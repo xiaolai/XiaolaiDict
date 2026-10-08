@@ -1,6 +1,7 @@
 @testable import DictionaryBridge
 import DictionaryModel
 import Foundation
+import Synchronization
 import Testing
 
 /// Runs the private DictionaryServices API in-process, against the dictionaries installed on this

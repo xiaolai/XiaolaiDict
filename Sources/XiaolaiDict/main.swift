@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// A report that shows no window: run it, print it, exit with its status. `dispatchMain()` rather
 /// than AppKit's runloop is right for exactly these — nothing here captures the screen, which is

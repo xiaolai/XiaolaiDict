@@ -212,6 +212,11 @@ let package = Package(
 // **A warning is an error in every target of this package, and only this package.** Set here, after
 // the list, so a target added later is covered without anyone remembering to. Not
 // `-Xswiftc -warnings-as-errors`: that reaches the MLX dependencies too, whose warnings are not ours.
+//
+// **And a file imports every module whose members it uses** (`MemberImportVisibility`, 2026-10-08). Without it
+// a member is visible through any other file's import, so a missing import compiled with no diagnostic at all —
+// 26 of them had collected — and removing an import in use compiled too. With it, both are a compile error naming
+// the module. `ModuleBoundaryTests` holds every target to both settings — ADR-0052.
 for target in package.targets {
-    target.swiftSettings = (target.swiftSettings ?? []) + [.treatAllWarnings(as: .error)]
+    target.swiftSettings = (target.swiftSettings ?? []) + [.treatAllWarnings(as: .error), .enableUpcomingFeature("MemberImportVisibility")]
 }
