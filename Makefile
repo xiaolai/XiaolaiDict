@@ -92,9 +92,16 @@ metal-guard:
 portability:
 	@Tools/portability.sh --imports Foundation Sources/ReviewKit -DSWIFT_PACKAGE
 
+# **A warning the compiler wrote down fails the build, whatever the compiler exited with** — ADR-0052.
+# `-warnings-as-errors` lets one kind through (a property's type inferred from a module its file does not
+# import), so after the tests the gate reads every source's diagnostics file in the configuration they
+# were built in. It reads files and not this log: a build that recompiles nothing prints nothing, and the
+# file a source's last compile wrote is still there.
+DIAGNOSTICS := .build/out/Intermediates.noindex/XiaolaiDict.build/Debug
+
 test-swift: metal-guard portability
-	swift test; status=$$?; Tools/clean-test-defaults.sh || status=1; \
-	Tools/clean-test-scratch.sh || status=1; exit $$status
+	swift test; status=$$?; Tools/compiler-warnings.py $(DIAGNOSTICS) || status=1; \
+	Tools/clean-test-defaults.sh || status=1; Tools/clean-test-scratch.sh || status=1; exit $$status
 
 # Correctness rules only — `.swiftlint.yml` says which and why. `--strict` because a warning nobody
 # fails on is a warning nobody reads. The version is pinned: a new SwiftLint can add findings to a rule,
