@@ -1723,6 +1723,9 @@
     "Translated by Apple, which cannot be told which meaning you read and misreads some sentences." : {
       "comment" : "Under a translation of the reader's sentence when Apple's Translation framework produced it"
     },
+    "Translated by a remote model · may be wrong" : {
+      "comment" : "Under a translation of the reader's sentence when a language model off this Mac produced it"
+    },
     "Translated by the local model · may be wrong" : {
       "comment" : "Under a translation of the reader's sentence when the downloaded model produced it"
     },

@@ -132,8 +132,9 @@ BUNDLE_LIST=()
 # `open -n --args` gets a sentinel string out of TextEdit and an OCR read of a terminal. Every other
 # instrument reports on XiaolaiDict's own behaviour and ships unchanged — but for `--reminder-report`
 # (WI-7), which rides the same flag because it lists what this app asked the notification center for
-# and a reader has no use for it. So the difference between the artifact end-to-end tests run against
-# and the artifact a reader gets is these three commands.
+# and a reader has no use for it, and `--provider-status` (ADR-0053), which starts the reader's CLI or
+# asks their endpoint with their key and is likewise no use to a reader. So the difference between the
+# artifact end-to-end tests run against and the artifact a reader gets is these four commands.
 #
 # **The flag costs a full rebuild when it changes** — measured 2026-09-26: `-Xswiftc` applies to every
 # target, so switching recompiles MLX and everything else, about 22 minutes. That lands on releases,
@@ -667,8 +668,9 @@ verify_service_boundaries() {
 }
 
 # **A release must refuse the development instruments, and a development bundle must offer them** —
-# the two capture instruments, and `--reminder-report`, which reports what this app asked the
-# notification center for and is no use to a reader.
+# the two capture instruments, `--reminder-report`, which reports what this app asked the
+# notification center for and is no use to a reader, and `--provider-status`, which starts the
+# reader's CLI or sends their key to whatever endpoint the defaults name (ADR-0053).
 #
 # Both directions, because a gate only ever checked the safe way round is a gate that could be
 # inverted and still pass. The marker is the refusal sentence the `#if` compiles in, and the witness
@@ -679,7 +681,7 @@ verify_capture_instruments() {
     # b="$a"` expands `$a` before assigning it, so `binary` was built from whatever `bundle` the
     # caller happened to have in scope — it worked only because `verify_bundle` has one of the same
     # name with the same value, and broke the moment this was called on its own.
-    local bundle=$1 refusals live reminder_refusal reminder_live developer_pane binary
+    local bundle=$1 refusals live reminder_refusal reminder_live provider_refusal provider_live developer_pane binary
     binary="$bundle/Contents/MacOS/$APP_NAME"
     [ -f "$binary" ] || { echo "no app binary to check for the capture instruments"; return 1; }
     refusals=$(strings -a "$binary" 2>/dev/null | grep -c 'is a development instrument and is not built into a release' || true)
@@ -688,6 +690,9 @@ verify_capture_instruments() {
     # count shared with the other two would pass with one of the three gates missing.
     reminder_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--reminder-report is a development instrument' || true)
     reminder_live=$(strings -a "$binary" 2>/dev/null | grep -c "reading this app's requests from the notification center" || true)
+    # **`--provider-status` rides it too (ADR-0053), by its own two sentences** for the same reason.
+    provider_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--provider-status is a development instrument' || true)
+    provider_live=$(strings -a "$binary" 2>/dev/null | grep -c 'asking the chosen language-model source one trivial question' || true)
     # **The developer pane (clear all data, deploy test data) rides the same define**, and is witnessed by the
     # name of the copy it takes before a clear — a string only its own code holds.
     developer_pane=$(strings -a "$binary" 2>/dev/null | grep -c 'dev-before-clear' || true)
@@ -700,6 +705,10 @@ verify_capture_instruments() {
             || { echo "a release does not refuse --reminder-report: the gate did not compile in"; return 1; }
         [ "${reminder_live:-0}" -eq 0 ] \
             || { echo "a release still carries --reminder-report's own code"; return 1; }
+        [ "${provider_refusal:-0}" -ge 1 ] \
+            || { echo "a release does not refuse --provider-status: the gate did not compile in"; return 1; }
+        [ "${provider_live:-0}" -eq 0 ] \
+            || { echo "a release still carries --provider-status's own code"; return 1; }
         [ "${developer_pane:-0}" -eq 0 ] \
             || { echo "a release still carries the developer pane: clear-all-data must not ship"; return 1; }
     else
@@ -711,6 +720,10 @@ verify_capture_instruments() {
             || { echo "a development bundle has no --reminder-report — the reminder stage cannot run"; return 1; }
         [ "${reminder_refusal:-0}" -eq 0 ] \
             || { echo "a development bundle refuses --reminder-report: the gate is inverted"; return 1; }
+        [ "${provider_live:-0}" -ge 1 ] \
+            || { echo "a development bundle has no --provider-status — the provider stage cannot run"; return 1; }
+        [ "${provider_refusal:-0}" -eq 0 ] \
+            || { echo "a development bundle refuses --provider-status: the gate is inverted"; return 1; }
         [ "${developer_pane:-0}" -ge 1 ] \
             || { echo "a development bundle has no developer pane — the define did not reach it"; return 1; }
     fi

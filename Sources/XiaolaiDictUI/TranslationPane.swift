@@ -86,6 +86,11 @@ public struct TranslationPane: Equatable {
             caveat = nil
             attribution = Self.localModel
             offersDownload = false
+        case .translated(let text, by: .remoteModel):
+            body = .text(text)
+            caveat = nil
+            attribution = Self.remoteModel
+            offersDownload = false
         case .translated(let text, by: .appleTranslation):
             body = .text(text)
             caveat = Self.weakerEngine
@@ -120,6 +125,13 @@ public struct TranslationPane: Equatable {
     static var localModel: String {
         String(localized: "Translated by the local model · may be wrong",
                comment: "Under a translation of the reader's sentence when the downloaded model produced it")
+    }
+
+    /// **Where the reader's sentence went, said under what came back** — the explanation pane's remote wording, so a
+    /// sentence sent to the reader's own CLI or a hosted endpoint is never shown as one that stayed on this Mac.
+    static var remoteModel: String {
+        String(localized: "Translated by a remote model · may be wrong",
+               comment: "Under a translation of the reader's sentence when a language model off this Mac produced it")
     }
 }
 

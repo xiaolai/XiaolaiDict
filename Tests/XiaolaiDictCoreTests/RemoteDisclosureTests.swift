@@ -101,4 +101,65 @@ struct RemoteDisclosureTests {
         #expect(RemoteDisclosure.tier(of: .openAICompatible, endpoint: "https://api.openai.com/v1") == .remote)
         #expect(RemoteDisclosure.tier(of: .openAICompatible, endpoint: "http://localhost.evil.com/v1") == .remote)
     }
+
+    // MARK: - The send-time check: the publisher's text, in every form a prompt carries it
+
+    static let sentence = "She banked the fire before going to bed."
+    static let sense = "heap (a fire) with tightly packed fuel so that it burns slowly, through the long night"
+
+    /// **Each prompt a tier may carry the text in is caught, and each it may not is clear** — the explanation, the
+    /// translation and the sense list, each built by the builder the providers' client sends.
+    @Test func everyPromptCarryingTheTextIsCaughtAndNoneWithoutIt() {
+        let explained = SentenceQuestion(sentence: Self.sentence, term: "banked", senseText: Self.sense)
+        #expect(RemoteDisclosure.leaks(explained.prompt(for: .onDevice), of: .explain(explained)))
+        #expect(!RemoteDisclosure.leaks(explained.prompt(for: .remote), of: .explain(explained)))
+
+        let told = TranslationQuestion(sentence: Self.sentence, target: "zh-Hans", met: .init(term: "banked", sense: Self.sense))
+        let untold = TranslationQuestion(sentence: Self.sentence, target: "zh-Hans")
+        #expect(RemoteDisclosure.leaks(ModelPrompt.translation(told), of: .translate(told)))
+        #expect(!RemoteDisclosure.leaks(ModelPrompt.translation(untold), of: .translate(told)))
+
+        let listed = SenseQuestion(sentence: Self.sentence, partOfSpeech: nil,
+                                   senses: ["deposit (money or valuables) in a bank", Self.sense])
+        #expect(RemoteDisclosure.leaks(ModelPrompt.sense(listed), of: .pickSense(listed)))
+        #expect(!RemoteDisclosure.leaks("Sentence: \(Self.sentence)\nWhich number?", of: .pickSense(listed)))
+    }
+
+    /// **A cut, a flattened or a raw sense is caught alike**: a prompt cuts a long sense at 240 or 400 characters and
+    /// flattens it onto one line, so a whole-text search would miss exactly what a prompt sends.
+    @Test func aSenseIsCaughtCutFlattenedOrRaw() {
+        let long = String(repeating: "a definition that runs on and on, ", count: 30)
+        let question = SentenceQuestion(sentence: Self.sentence, term: "banked", senseText: "line one\nline two " + long)
+        #expect(RemoteDisclosure.leaks("…\(ModelPrompt.flattened(question.senseText ?? "", limit: 240))…", of: .explain(question)))
+        #expect(RemoteDisclosure.leaks("…\(question.senseText ?? "")…", of: .explain(question)), "the raw text was missed")
+        #expect(RemoteDisclosure.leaks("Dictionary sense: line one line two a definition that runs", of: .explain(question)))
+        #expect(!RemoteDisclosure.leaks("Dictionary sense: line one", of: .explain(question)),
+                "a fragment shorter than the probe was read as the sense")
+    }
+
+    /// **The reader's own words are not the publisher's**: a one-word sense that is the word they looked up, and a gloss
+    /// that is part of their own sentence, are not a leak. The control: the same text, when the reader's words do not
+    /// hold it, is.
+    @Test func theReadersOwnWordsAreNotALeak() {
+        let word = SentenceQuestion(sentence: "He sat on the river bank.", term: "riverbank", senseText: "riverbank")
+        #expect(!RemoteDisclosure.leaks(word.prompt(for: .remote), of: .explain(word)))
+        let other = SentenceQuestion(sentence: "He sat on the shore.", term: "shore", senseText: "riverbank")
+        #expect(RemoteDisclosure.leaks("Word: shore\nDictionary sense: riverbank", of: .explain(other)))
+
+        let quoted = SentenceQuestion(sentence: "The court imposed a sum of money as a penalty on him.", term: "fine",
+                                      senseText: "a sum of money as a penalty")
+        #expect(!RemoteDisclosure.leaks(quoted.prompt(for: .remote), of: .explain(quoted)))
+        let unquoted = SentenceQuestion(sentence: "He paid it.", term: "fine", senseText: "a sum of money as a penalty")
+        #expect(RemoteDisclosure.leaks("Sentence: He paid it.\nDictionary sense: a sum of money as a penalty",
+                                       of: .explain(unquoted)))
+    }
+
+    /// A text shorter than the minimum is not looked for — it cannot be told from an ordinary word — and a request
+    /// that holds no publisher's text never leaks.
+    @Test func whatHoldsNoPublishersTextNeverLeaks() {
+        let short = SentenceQuestion(sentence: "A ship.", term: "ship", senseText: "a boat")
+        #expect(!RemoteDisclosure.leaks("Explain a boat in a sentence about a boat.", of: .explain(short)))
+        #expect(!RemoteDisclosure.leaks("anything at all", of: .prewarm))
+        #expect(!RemoteDisclosure.leaks("anything", of: .explain(SentenceQuestion(sentence: "A.", term: "a"))))
+    }
 }

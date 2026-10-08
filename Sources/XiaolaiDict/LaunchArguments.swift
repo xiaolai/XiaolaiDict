@@ -57,6 +57,11 @@ enum LaunchMode: Equatable {
     /// what the reader's settings plan, and the reminder log — never a banner's words. **Writes
     /// nothing**, and is compiled out of a release.
     case reminderReport
+
+    /// `--provider-status`: the language-model source the reader chose, the tier it runs at, what it
+    /// may be sent, and what it said when asked one trivial question — never a sentence, an answer, a
+    /// path, a URL or a key. Compiled out of a release (ADR-0053).
+    case providerStatus
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -81,6 +86,7 @@ enum LaunchArguments {
                XiaolaiDict --panel-report
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
+               XiaolaiDict --provider-status
         """
 
     static let repeatRange = 1...1_000
@@ -105,6 +111,7 @@ enum LaunchArguments {
         case "--panel-report": alone(arguments, is: .panelReport)
         case "--review-report": alone(arguments, is: .reviewReport)
         case "--reminder-report": alone(arguments, is: .reminderReport)
+        case "--provider-status": alone(arguments, is: .providerStatus)
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }

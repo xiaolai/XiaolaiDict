@@ -133,6 +133,9 @@ actor ResidentSession<Wire: ResidentWire> {
     private var idle: Task<Void, Never>?
     /// The last process that ended unasked, kept until a diagnosis has read it.
     private var lastEnded: ChildProcess?
+    /// **Set by `shutDown`, and never cleared**: the session is over, and a question that arrives after it — one racing
+    /// the app's quit — starts nothing, because nothing would be left to end what it started.
+    private var isShutDown = false
 
     init(wire: Wire, configuration: ResidentConfiguration,
          events: @escaping @Sendable (ResidentEvent) -> Void = { _ in }) {
@@ -156,6 +159,7 @@ actor ResidentSession<Wire: ResidentWire> {
         defer { gate.leave() }
         // Admitted by a `leave()` that raced this caller's cancellation: holding the gate is not a reason to ask.
         guard !Task.isCancelled else { throw .cancelled }
+        guard !isShutDown else { throw .unreachable }
         activity += 1
         idle?.cancel()
         adoptReady()
@@ -184,8 +188,10 @@ actor ResidentSession<Wire: ResidentWire> {
         return try outcome.get()
     }
 
-    /// Puts every process away and waits for them to end — each within its grace, so this is bounded.
+    /// Puts every process away and waits for them to end — each within its grace, so this is bounded. **The end of the
+    /// session**: nothing is started after it.
     func shutDown() async {
+        isShutDown = true
         idle?.cancel()
         idle = nil
         for closing in retireAll(.shutDown) { await closing.value }
@@ -219,6 +225,11 @@ actor ResidentSession<Wire: ResidentWire> {
         }
         switch await Self.launch(wire, configuration, events) {
         case .success(let fresh):
+            // Shut down while it was starting: it is put away with the rest, never answered from.
+            guard !isShutDown else {
+                await retire(fresh, .shutDown).value
+                throw .unreachable
+            }
             current = fresh
             turnsOnCurrent = 0
             return fresh

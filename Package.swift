@@ -133,8 +133,8 @@ let package = Package(
         // becomes — written against any `LanguageModel`, so its tests run on an injected executor
         // and need no GPU. No MLX here: that is the executable's alone.
         .target(name: "LocalModel", dependencies: ["ModelKit"]),
-        // The language model as a service the reader already has (ADR-0053): an OpenAI-compatible endpoint now, the
-        // reader's own `claude` and `codex` next, the API key in the Keychain. **The app's alone, never a service's**:
+        // The language model as a service the reader already has (ADR-0053): an OpenAI-compatible endpoint, the reader's
+        // own `claude` and `codex`, the API key in the Keychain, and the router the app asks every question through. **The app's alone, never a service's**:
         // the Keychain item is the app's, and a CLI child must live and die with the app. Below the view layer, so no
         // display text — a provider fails in types, and the view layer words them. Foundation, Security and os; the
         // prompts, the wire types and what may leave the Mac come from ModelKit, the app's identifier from Base.
@@ -201,7 +201,9 @@ let package = Package(
         // tiles, and the watcher's pure helpers. A test that also drives the app, or shares hover's fakes with one that
         // does, stays there, as an integration test.
         .testTarget(name: "MacCaptureTests", dependencies: ["DictionaryModel", "CaptureModel", "Capture", "MacCapture"]),
-        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport"]),
+        // `LLMProviders` since the providers' P3 (ADR-0053): the app's composition of them is tested here, with a provider
+        // that answers in this process — never the reader's CLI, a network endpoint or the Keychain.
+        .testTarget(name: "XiaolaiDictTests", dependencies: ["XiaolaiDictBase", "DictionaryModel", "ModelKit", "ReviewKit", "CaptureModel", "StudyKit", "StudyPresentation", "StudyModels", "Capture", "MacCapture", "XiaolaiDictCore", "XiaolaiDict", "XiaolaiDictUI", "XiaolaiDictTestSupport", "LLMProviders"]),
         // Integration tests against the dictionaries actually installed on this Mac.
         // `AppleDictionaryFormat` here is the one place the two sense paths can be compared: the private
         // API on one side, the container reader on the other. No *product* target links both.

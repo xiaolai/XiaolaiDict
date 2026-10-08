@@ -77,15 +77,12 @@ public struct SentenceQuestion: Codable, Sendable, Equatable {
 
     /// Whether `text` could carry publisher's text to a remote service.
     ///
-    /// **Nothing sends remotely yet, so nothing calls this yet** — `.remote` is milestone 3's
-    /// frontier pane and no explainer claims that tier. The doc here used to say it was "cheap
-    /// enough to assert on every remote send", which read as a description of something happening
-    /// and was a plan. It stays because the tier it guards is a licence boundary rather than a
-    /// preference, and the assertion belongs at the send itself: whatever first builds a request for
-    /// `.remote` asserts this over the bytes it is about to put on the wire, not over the prompt it
-    /// meant to build.
+    /// **Asserted at the send** since the providers arrived (ADR-0053): the providers' client asks
+    /// `RemoteDisclosure.leaks(_:of:)` — this question, for every kind of request — over the bytes it is
+    /// about to hand a remote source, and sends nothing where the answer is yes. One rule for both, so this
+    /// looks for the sense in every form a prompt carries it — flattened, cut — and not only whole: a
+    /// prompt cuts a long sense, and a whole-text search would miss exactly the text a prompt sends.
     public func leaksDictionaryText(_ text: String) -> Bool {
-        guard let senseText, !senseText.isEmpty else { return false }
-        return text.contains(senseText)
+        RemoteDisclosure.leaks(text, of: .explain(self))
     }
 }

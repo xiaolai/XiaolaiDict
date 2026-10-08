@@ -73,6 +73,12 @@ public actor OpenAICompatibleProvider: TextGenerating {
 
     deinit { session.finishTasksAndInvalidate() }
 
+    /// Cancels every request in flight and closes the kept connection, for a source the reader has left — after which
+    /// a question fails as unreachable, and the router asks this instance nothing more.
+    func invalidate() {
+        session.invalidateAndCancel()
+    }
+
     public func generate(_ request: GenerationRequest) async throws(ProviderFailure) -> String {
         guard !Task.isCancelled else { throw .cancelled }
         let key = try readKey()

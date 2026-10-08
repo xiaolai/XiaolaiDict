@@ -13,6 +13,7 @@ struct TranslationPaneTests {
     @Test(arguments: [
         (TranslationOutcome.translated("船的船满了。", by: .appleTranslation), true),
         (.translated("这艘船的货舱装满了。", by: .localModel), false),
+        (.translated("这艘船的货舱装满了。", by: .remoteModel), false),
         (.needsLanguagePack(source: "en", target: "zh-Hans"), false),
         (.sameLanguage, false),
         (.unavailable, false),
@@ -27,6 +28,16 @@ struct TranslationPaneTests {
         let caveat = try #require(TranslationPane(.translated("x", by: .appleTranslation), of: Self.key).caveat)
         #expect(caveat.contains("which meaning"))
         #expect(caveat.contains("misreads"))
+    }
+
+    /// **A translation from a source off this Mac says so** (ADR-0053), and never as the local model's: the reader's
+    /// sentence went away, and a label claiming otherwise is the one thing the tiers exist to prevent.
+    @Test func aRemoteModelsTranslationIsSaidToBeRemote() throws {
+        let remote = try #require(TranslationPane(.translated("x", by: .remoteModel), of: Self.key).provenance)
+        #expect(remote == TranslationPane.remoteModel)
+        #expect(remote.contains("remote"))
+        #expect(remote != TranslationPane(.translated("x", by: .localModel), of: Self.key).provenance)
+        #expect(!TranslationPane(.translated("x", by: .remoteModel), of: Self.key).offersDownload)
     }
 
     /// The download sits beside Apple's answer — and nowhere near the model's, which is the model.

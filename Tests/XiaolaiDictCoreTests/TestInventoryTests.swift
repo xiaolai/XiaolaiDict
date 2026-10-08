@@ -115,7 +115,11 @@ struct TestInventoryTests {
         // refusing a module with no witness, a witness for a module the app does not link, and an unread witness.
         // Raised 1,227 → 1,228 by the branch's audit (1, `IconButtonTests.everyWayInStoresTheSameParts`): the three
         // initialisers store through one, and what each stores is pinned.
-        "XiaolaiDictTests": 1_228,
+        // Raised 1,228 → 1,245 by the language-model providers' P3 (ADR-0053, 2026-10-09): the providers composed as the
+        // app composes them (`ProviderCompositionTests`, 10) — a lookup answered through a chosen provider, the panes
+        // marked with where their question went, the source warmed once at launch and put away when left and at the
+        // quit — `--provider-status` (`ProviderReportTests`, 6), and the pane's remote translation label (1).
+        "XiaolaiDictTests": 1_245,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -185,7 +189,9 @@ struct TestInventoryTests {
         // were there), and 18 came with ModelKit's provider settings — the choice and the endpoint and CLI settings,
         // each unreadable value its default (`ProviderSettingsTests`, 10) — and `RemoteDisclosureTests` (8): what is on
         // this Mac, every host trick refused with a control beside it, both CLIs remote, and the constant's flip.
-        "XiaolaiDictCoreTests": 483,
+        // Raised 483 → 487 by P3 (2026-10-09): the send-time check for the dictionary's text — every prompt that carries
+        // it caught and none without it, a cut, flattened or raw sense alike, the reader's own words never a leak.
+        "XiaolaiDictCoreTests": 487,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
@@ -213,7 +219,12 @@ struct TestInventoryTests {
         // end, the shutdown and the drop; Claude's lean flags and every error kind; Codex's isolated, warmed,
         // reused thread, a refused approval and every turn failure; the locator's order; the preflight's verdicts;
         // and no credential spelling in the providers' code.
-        "LLMProvidersTests": 107,
+        // Raised 107 → 149 by P3 (ADR-0053, 2026-10-09): the client that asks a provider what the ladders ask — what each
+        // tier and origin is sent, the send-time assertion, the answer's reading, failures and deadlines — the router —
+        // which source, read at every question, made once, warmed once when chosen and never by a lookup, put away and seen
+        // to end when left and at the quit — the source and the factory, a shut-down session that starts nothing, and
+        // the gate: no dictionary text on the wire to a host that is not loopback, nor to a CLI.
+        "LLMProvidersTests": 149,
         // Added 2026-09-27 at 117, raised to 151 after three audit rounds and to 162 after a fourth, each
         // round adding regression tests. **It had no floor at all before that**, which
         // `everyTestTargetHasAFloor` existed to catch and did: the target shipped with the module and

@@ -1,7 +1,5 @@
 import DictionaryModel
 import Foundation
-// Linked ahead of its composition: the providers' P1 lands the target and every registration the app's edge needs,
-// and P3 composes `ProviderClient` here (plan-language-model-providers §8, ADR-0053).
 import LLMProviders
 import ModelKit
 import Observation
@@ -11,7 +9,8 @@ import XiaolaiDictUI
 import os
 
 /// The local model as the app holds it: **the store and the download on one side, the service on
-/// the other, and the lifecycle between them.**
+/// the other, and the lifecycle between them** — and, since ADR-0053, the router that sends each
+/// question to the local model or to the provider the reader chose.
 ///
 /// Its own type because the app delegate is not the place: model persistence, a multi-gigabyte
 /// download, an XPC service's lifetime, the sense ladder's composition and the translation pane's
@@ -23,18 +22,34 @@ final class LocalModelCoordinator {
     /// the client would answer questions without the unload-before-ready lifecycle around it.
     private let controller: LocalModelController
     @ObservationIgnored private let access: LocalModelAccess
+    /// **The one composition point** (ADR-0053, plan §2): every question the ladders ask goes through it, to the local
+    /// model or to the reader's provider, read from their settings at that question. Private for the controller's
+    /// reason: the panes are handed named operations below, never a way to ask around the router.
+    @ObservationIgnored private let router: ModelBackendRouter
+    /// The suite the reader's choice is kept in, watched so a change reaches the router when it is made.
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var settingsObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "model")
 
     init(
         defaults: UserDefaults, store: ModelStore = .standard(), client: ModelClient = ModelClient(),
         transport: any ModelFileTransport = URLSessionModelTransport(),
         probe: any ModelHostProbe = URLSessionModelHostProbe(),
-        physicalMemory: UInt64 = SystemMemory.physical
+        physicalMemory: UInt64 = SystemMemory.physical,
+        providers: ProviderFactory = .standard
     ) {
         controller = LocalModelController(
             defaults: defaults, store: store, physicalMemory: physicalMemory,
             transport: transport, probe: probe)
-        access = LocalModelAccess(client: client, store: store)
+        let access = LocalModelAccess(client: client, store: store)
+        self.access = access
+        // The local model is reached through its access, which answers "not installed" without starting the service
+        // where there is no model — so `none`, the reader's default, is exactly what it was before the providers.
+        router = ModelBackendRouter(
+            choices: ProviderChoiceStore(defaults: defaults), settings: ProviderSettingsStore(defaults: defaults),
+            local: .init(ask: { request in await access.ask(request) }, prewarm: { await access.prewarm() }),
+            factory: providers)
+        self.defaults = defaults
         // A new model is answered from only once the service holding the old one has gone.
         //
         // **Ready is still published if it will not go.** The model is on disk and is what the next
@@ -76,18 +91,65 @@ final class LocalModelCoordinator {
     /// caller holding only the coordinator can still wait for work `refresh()` does not await.
     var pruning: Task<Void, Never>? { controller.pruning }
 
-    /// The shipped sense ladder — the local model first, Apple's on-device model, `NLEmbedding`.
-    var senseLadder: LadderSenseSelector { access.senseLadder.ladder }
+    /// The shipped sense ladder — the source the reader chose first (the local model, or their provider), Apple's
+    /// on-device model, `NLEmbedding`. **Asked by every lookup**, so it asks for `.lookup`: a remote provider is never
+    /// asked a sense question a lookup fired (plan §6).
+    var senseLadder: LadderSenseSelector {
+        LocalModelAccess.senseLadder(topRung: LocalModelSenseSelector { [router] question in
+            await router.ask(.pickSense(question), origin: .lookup).reply
+        }).ladder
+    }
 
-    /// Loads the model beside a lookup, so the sense question after it does not pay for the load.
-    func prewarm() async { await access.prewarm() }
+    /// Loads the model beside a lookup, so the sense question after it does not pay for the load — the local model
+    /// only: a lookup that started a provider would spend the reader's subscription on a pane they may never open.
+    func prewarm() async { await router.prewarmForLookup() }
 
-    /// What the lookup panel's sentence pane is handed: the downloaded model first, Apple's
+    /// **At launch: the chosen source brought up — a CLI started and warmed — and kept to the reader's settings.** A
+    /// change made in this process (the settings pane writes the suite this coordinator was given) puts the source left
+    /// away and warms the one chosen at once; one made outside it is seen at the next question, which reads the
+    /// settings itself. Idempotent: a second call watches nothing twice.
+    func start() {
+        guard settingsObserver == nil else { return }
+        let router = router
+        Task { await router.reconcile() }
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+        ) { _ in
+            Task { await router.reconcile() }
+        }
+    }
+
+    /// The observer goes with the coordinator: `NotificationCenter` keeps it until it is removed. `isolated` so it can
+    /// reach the registration — a nonisolated `deinit` cannot touch a main-actor property.
+    isolated deinit {
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+    }
+
+    /// Puts every provider away — a CLI's process ended and seen to end — before the app quits.
+    func shutDown() async { await router.shutDown() }
+
+    /// What the lookup panel's sentence pane is handed: the source the reader chose first, Apple's
     /// on-device model **wherever that one does not answer** — not downloaded, not enough memory,
-    /// declined, a generation that failed, a reply of the wrong shape, or no service at all. Read
-    /// at the click, like the translator.
+    /// declined, a generation that failed, a reply of the wrong shape, a provider that is not there,
+    /// or no service at all. **Asked because the reader asked** (decision D4), and said to be remote
+    /// where a remote source answered (`ModelProvenance`). Read at the click, like the translator.
     var explanationActions: ExplanationActions {
-        ExplanationActions { [access] question in await access.explainer.explain(question) }
+        ExplanationActions { [router] question in
+            let answered = RoutedAnswer()
+            let explainer = LocalModelAccess.explainer { question in
+                answered.keep(await router.ask(.explain(question), origin: .reader))
+            }
+            return ModelProvenance.explanation(await explainer.explain(question), answeredBy: answered.last)
+        }
+    }
+
+    /// The translator for one question: the router asked because the reader asked, and where it sent the question
+    /// kept beside the answer for the pane's label.
+    private nonisolated static func translator(asking router: ModelBackendRouter,
+                                               keeping answered: RoutedAnswer) -> SentenceTranslator {
+        LocalModelAccess.translator { question in
+            answered.keep(await router.ask(.translate(question), origin: .reader))
+        }
     }
 
     /// What the lookup panel's translation pane is handed: the translator, the reader's language,
@@ -95,11 +157,17 @@ final class LocalModelCoordinator {
     var translationActions: TranslationActions {
         let choice = controller.choice
         return TranslationActions(
-            translate: { [access] question in await access.translator.translate(question) },
+            translate: { [router] question in
+                let answered = RoutedAnswer()
+                let outcome = await Self.translator(asking: router, keeping: answered).translate(question)
+                return ModelProvenance.translation(outcome, answeredBy: answered.last)
+            },
             target: ReaderLanguage.preferred,
             // The translator's own, so the control and the answer cannot disagree about whether this
             // sentence was worth asking about.
-            sourceLanguage: { [access] sentence in access.translator.sourceLanguage(of: sentence) },
+            sourceLanguage: { [router] sentence in
+                Self.translator(asking: router, keeping: RoutedAnswer()).sourceLanguage(of: sentence)
+            },
             canDownloadModel: choice.canDownload,
             // **What the row would download, read at the click** — which is the size a stopped
             // download was of, not the recommended one. Started from `recommended`, a stopped 9B

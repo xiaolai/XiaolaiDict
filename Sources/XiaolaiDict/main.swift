@@ -96,6 +96,11 @@ case .success(.reviewReport):
 case .success(.reminderReport):
     runHeadlessReport { await ReminderReport.run() }
 
+// The language-model source the reader chose, asked one trivial question. No window: it starts the reader's CLI or
+// asks their endpoint, as the app would, and ends what it started before it exits.
+case .success(.providerStatus):
+    runHeadlessReport { await ProviderReport.status() }
+
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.
 case .success(.app):

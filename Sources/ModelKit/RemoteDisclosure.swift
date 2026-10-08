@@ -29,10 +29,59 @@ public enum RemoteDisclosure {
         mayCarryDictionaryText(tier, dictionaryTextMayLeave: dictionaryTextMayLeave)
     }
 
-    /// The rule with the constant as an argument, so both arms of the flip are tested before anyone flips it.
-    static func mayCarryDictionaryText(_ tier: ProviderTier, dictionaryTextMayLeave: Bool) -> Bool {
+    /// The rule with the constant as an argument, so both arms of the flip are tested before anyone flips it. Public
+    /// for the providers' client, whose own tests pass both arms through it; the app reads the constant above.
+    public static func mayCarryDictionaryText(_ tier: ProviderTier, dictionaryTextMayLeave: Bool) -> Bool {
         tier == .onThisMac || dictionaryTextMayLeave
     }
+
+    /// **Whether `outgoing` carries any of the publisher's text `request` holds** — the check made at the send, over
+    /// the bytes about to go, not over the prompt someone meant to build (plan §3).
+    ///
+    /// The dictionary's texts are a sense list's senses, the sense a translation is told and the sense an explanation
+    /// is given. Each is looked for **in every form a prompt can carry it**: its first `probeLength` characters,
+    /// flattened onto one line as `ModelPrompt.flattened` does and as they are, which is a prefix of every cut a prompt
+    /// makes — so a builder that cuts at 240 or 400, or not at all, is caught alike.
+    ///
+    /// **The reader's own words are theirs**: a form their sentence or the word they looked up already holds — a
+    /// one-word sense that is the word itself, a gloss quoted in the sentence they are reading — is not looked for,
+    /// because sending it sends nothing of the publisher's. A text shorter than `minimumProbe` characters is not looked
+    /// for either: it cannot be told from an ordinary word, and it holds none of a publisher's expression.
+    public static func leaks(_ outgoing: String, of request: ModelRequest) -> Bool {
+        let (texts, own): ([String], [String]) = switch request {
+        case .pickSense(let question): (question.senses, [question.sentence])
+        case .translate(let question): (question.met.map { [$0.sense] } ?? [], [question.sentence, question.met?.term ?? ""])
+        case .explain(let question): (question.senseText.map { [$0] } ?? [], [question.sentence, question.term])
+        case .prewarm, .status, .unload: ([], [])
+        }
+        let readers = readersWords(own)
+        // **A probe the reader's own words hold is theirs too**, and sending it sends nothing of the publisher's. It is
+        // dropped rather than the reader's words cut out of `outgoing`: cutting a headword out would split a sense that
+        // uses it, and hide exactly the text this looks for.
+        let probes = texts.flatMap(probes(of:)).filter { probe in !readers.contains { $0.contains(probe) } }
+        return probes.contains { outgoing.contains($0) }
+    }
+
+    /// The forms of `text` that are looked for: its first `probeLength` characters flattened, as a prompt carries
+    /// them, and as written, as a builder that forgot to flatten would carry them. None for a text too short to tell.
+    private static func probes(of text: String) -> [String] {
+        let flattened = ModelPrompt.flattened(text, limit: probeLength).trimmingCharacters(in: .whitespaces)
+        guard flattened.count >= minimumProbe else { return [] }
+        let written = String(text.prefix(probeLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return written == flattened || written.isEmpty ? [flattened] : [flattened, written]
+    }
+
+    /// The reader's own words — their sentence and the word they looked up — as written and flattened onto one line,
+    /// the two ways a prompt carries them.
+    private static func readersWords(_ words: [String]) -> [String] {
+        words.flatMap { [$0, ModelPrompt.flattened($0, limit: $0.count)] }.filter { !$0.isEmpty }
+    }
+
+    /// How much of a publisher's text is looked for: long enough that it is the publisher's and nobody else's, short
+    /// enough to be a prefix of every cut a prompt makes (`ModelPrompt.senseCharacterLimit` is the shortest, 240).
+    static let probeLength = 32
+    /// Below this a text is not looked for — see `leaks(_:of:)`.
+    static let minimumProbe = 8
 
     /// The tier of the source `choice`, where its endpoint — read only for `.openAICompatible` — is `endpoint`.
     /// **Both CLIs are remote whatever is installed where**: a CLI is a client of its vendor's service. Nil for

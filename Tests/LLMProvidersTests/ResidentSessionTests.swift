@@ -55,18 +55,31 @@ struct ResidentSessionTests {
     @Test func aCLIThatNeverAnswersIsEndedAtTheDeadline() async throws {
         let fake = try FakeCLI.claude()
         let events = EventLog()
-        // Long enough for a first question under a parallel test run, which starts the process too.
+        // **The silent question is the first**, so the deadline is tested on a turn nothing can answer however fast the
+        // fake's interpreter starts. Asked second, it stood behind an ordinary first question that had the same 2 s for
+        // the interpreter's start as well as its answer — which a cold parallel run exceeded (2026-10-09, 145 tests,
+        // `.timedOut` on the first question), failing the test for a reason that is not the deadline.
         let provider = Self.provider(fake, Self.configuration(turnTimeout: .seconds(2)), events: events)
-        let first = try answeringPID(try await provider.generate(Self.question()))
         let silent = Settling { () async throws(ProviderFailure) in
             try await provider.generate(Self.question("[[silent]]"))
         }
         // Required, not expected: past a deadline that did not hold, the next question would wait behind this one.
         try #require(await silent.outcome(within: .seconds(8)) == .failure(.timedOut), "the deadline held")
+        let first = try #require(events.all.compactMap { record -> Int32? in
+            guard case .spawned(let pid) = record.event else { return nil }
+            return pid
+        }.first)
         #expect(await waitUntilGone(first))
         #expect(events.all.contains { $0.event == .abandoned(pid: first, .timedOut) })
-        let second = try answeringPID(try await provider.generate(Self.question()))
-        #expect(second != first)
+        // The next question starts another process — read off the session's own record, so it does not depend on that
+        // process answering within a turn's deadline either.
+        let next = Settling { () async throws(ProviderFailure) in try await provider.generate(Self.question()) }
+        #expect(await events.wait { event in
+            guard case .spawned(let pid) = event else { return false }
+            return pid != first
+        }, "the next question did not start another process")
+        // Settled before the shutdown, so the process it started is the one put away rather than one opened after.
+        _ = await next.outcome()
         await provider.shutDown()
     }
 
@@ -221,6 +234,19 @@ struct ResidentSessionTests {
         await provider.shutDown()
         #expect(!isAlive(first))
         #expect(events.all.contains { $0.event == .retired(pid: first, .shutDown) })
+    }
+
+    /// **A shutdown is the end of the session**: a question that arrives after it — one racing the app's quit — starts
+    /// no process, because nothing would be left to end it. The control is the same question before the shutdown,
+    /// which does start one.
+    @Test func aQuestionAfterTheShutdownStartsNothing() async throws {
+        let fake = try FakeCLI.claude()
+        let provider = Self.provider(fake)
+        _ = try await provider.generate(Self.question())
+        #expect(try fake.logged("argv", as: [String].self).count == 1)
+        await provider.shutDown()
+        await #expect(throws: ProviderFailure.unreachable) { try await provider.generate(Self.question()) }
+        #expect(try fake.logged("argv", as: [String].self).count == 1, "a process was started after the shutdown")
     }
 
     /// **Nothing outlives the provider**: dropped without a shutdown, its process is ended, and no orphan survives.

@@ -4,6 +4,7 @@ import Testing
 @testable import XiaolaiDict
 @testable import XiaolaiDictCore
 import XiaolaiDictTestSupport
+import XiaolaiDictUI
 
 /// The app's side of the model service: a dead or silent service is nil — "not here" — and the next
 /// question opens a fresh session, which is how launchd relaunches a service that ended itself.
@@ -163,21 +164,26 @@ struct ModelClientTests {
     }
 
     /// **The sentence pane asks this model to *explain*, and the request is what says so.** Nothing
-    /// else in the suite goes through `explainer`: the pane's only path to the service is this one
+    /// else in the suite goes through the pane's explainer: its only path to the service is this one
     /// closure, and `.explain` swapped for `.translate` there left every other check green while the
     /// reader got a translation in the explanation pane. So the assertion is on what the service
     /// received, not only on what came back — a fake that answered any request with prose would say
     /// nothing about which one was asked.
+    @MainActor
     @Test func theSentencePaneAsksTheModelToExplainTheReadersSentence() async throws {
         let service = Service()
         let (store, scratch) = try Self.storeWithAModel()
         scratches.withLock { $0.append(scratch) }
-        let access = LocalModelAccess(
-            client: ModelClient(connect: { service.connect($0) }), store: store,
+        // **Through the coordinator**, which composes the pane's explainer since the providers arrived (ADR-0053): the
+        // closure that names `.explain` is its own now, over the router, and the reader's choice is the default — no
+        // source — which asks the model on this Mac.
+        let models = LocalModelCoordinator(
+            defaults: TemporaryDefaults.suite(), store: store, client: ModelClient(connect: { service.connect($0) }),
+            transport: LocalModelControllerTests.Transport(fails: true), probe: LocalModelControllerTests.FixedProbe(),
             physicalMemory: 48 * 1_073_741_824)
         let question = SentenceQuestion(
             sentence: "The ship's hold was full.", term: "hold", senseText: "a cargo space in a ship")
-        #expect(await access.explainer.explain(question) == .explained(Service.explanation, tier: .onDevice))
+        #expect(await models.explanationActions.explain(question) == .explained(Service.explanation, tier: .onDevice))
         #expect(service.asked.withLock { $0 } == [.explain(question)],
                 "the pane's explainer asked the service something other than this sentence, explained")
     }

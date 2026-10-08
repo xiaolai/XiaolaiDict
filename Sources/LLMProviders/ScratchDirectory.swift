@@ -14,9 +14,13 @@ public final class ScratchDirectory: Sendable {
     private static var log: Logger { Logger(subsystem: XiaolaiDictIdentity.app, category: "providers") }
 
     /// A new directory, or nil where one could not be made.
-    public init?() {
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: "XiaolaiDict-cli-\(UUID().uuidString)", directoryHint: .isDirectory)
+    public convenience init?() {
+        self.init(in: FileManager.default.temporaryDirectory)
+    }
+
+    /// A new directory under `parent` — a test's own, so nothing it makes is left in the user's temporary directory.
+    init?(in parent: URL) {
+        let url = parent.appending(path: "XiaolaiDict-cli-\(UUID().uuidString)", directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])

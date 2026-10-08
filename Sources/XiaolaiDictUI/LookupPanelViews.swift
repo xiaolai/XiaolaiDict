@@ -424,12 +424,11 @@ struct SentencePaneView: View {
     /// downloaded one would be untrue for a reader who has not downloaded it. Both are models, and
     /// both ran here — which is what the tier says, and what "this stayed on my Mac" rests on.
     ///
-    /// **The remote arm draws nothing today, and stays.** Every `SentenceExplaining` declares
-    /// `tier = .onDevice`, so only the first line can currently be shown, and the second sits in
-    /// the catalog as a key nothing draws — a real but small cost. Dropping it costs more:
-    /// `ExplainerTier` is a *licence* boundary, Milestone 3's frontier model is what will set
-    /// `.remote`, and a pane with one label would then tell a reader their sentence stayed on this
-    /// Mac while it was being sent away. That is the one thing the tier split exists to prevent.
+    /// **The remote arm is drawn for a provider off this Mac** (ADR-0053): the reader's CLI or a
+    /// hosted endpoint answered, and the app marks the explanation `.remote` from where the question
+    /// was sent (`ModelProvenance`) — the ladder itself cannot tell where its first rung ran. A pane
+    /// with one label would tell a reader their sentence stayed on this Mac while it was being sent
+    /// away, which is the one thing the tier split exists to prevent.
     ///
     /// A `switch` rather than a ternary, so a third tier is a compile error here instead of
     /// silently taking the remote wording.

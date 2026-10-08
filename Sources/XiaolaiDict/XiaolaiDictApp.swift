@@ -325,6 +325,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // change and study-day start. Off by default, and then it touches nothing (R3). Not in an
         // instrument run, for the reason hover is not.
         if !Self.isInstrumented { reminders.start() }
+        // **The language-model source the reader chose is brought up at launch** (ADR-0053): a CLI is started and asked
+        // one trivial question, so the first pane they open is warm, and the choice is watched from here on. Not in an
+        // instrument run, which answers no reader and must not start their CLI.
+        if !Self.isInstrumented { models.start() }
         quitOnTerminationSignal()
         // One switch, so a fourth windowed instrument is a case the compiler demands rather than a
         // line somebody has to remember to add here as well as in three other places.
@@ -897,6 +901,34 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     }
 
     // MARK: - Quitting
+
+    /// **A provider's process ends before the app does** (ADR-0053): the reader's CLI is a child of this app and lives
+    /// and dies with it. Quitting is held while it is put away — closed, then signalled, then killed, each within its
+    /// grace — and then goes on. Never a quit refused or turned into something else: ⌘Q quits.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        endProvidersThenQuit { sender.reply(toApplicationShouldTerminate: true) }
+    }
+
+    /// **Not private: `ProviderCompositionTests` drives it**, with a `reply` of its own — AppKit's would end the test.
+    ///
+    /// Bounded twice over: each process is closed, then signalled, then killed within its own grace, and the whole is
+    /// given `providerShutdown` — past which the quit goes on regardless, because a quit held for ever is worse than
+    /// the last resort left: a child whose input closes with this process reads its end and ends itself.
+    func endProvidersThenQuit(_ reply: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
+        let models = models
+        Task { @MainActor in
+            do {
+                try await withDeadline(Self.providerShutdown) { await models.shutDown() }
+            } catch {
+                log.error("quit: the language-model providers were not put away within the bound; quitting anyway")
+            }
+            reply()
+        }
+        return .terminateLater
+    }
+
+    /// How long a quit waits for the providers: past a resident CLI's own close, signal and kill (a second each).
+    static let providerShutdown = Duration.seconds(10)
 
     /// SIGTERM — how `make run` asks a running copy to quit — goes through NSApplication's normal
     /// termination instead of ending the process mid-write.

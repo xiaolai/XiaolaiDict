@@ -5,8 +5,13 @@ import NaturalLanguage
 
 /// Which engine translated a sentence — the fact the pane must never hide.
 public enum TranslationEngine: String, Sendable, Codable, CaseIterable {
-    /// Qwen, on this Mac, told which sense the reader met.
+    /// Qwen, on this Mac, told which sense the reader met — or a provider the reader chose that runs on this Mac (a
+    /// loopback endpoint), which may be told it too.
     case localModel
+    /// **A provider that is not on this Mac** (ADR-0053): the reader's CLI or a hosted endpoint, sent the reader's
+    /// sentence and never the sense. `SentenceTranslator` cannot tell where its first engine ran, so the app sets this
+    /// from where the question was sent — a translation sent away must never be labelled as the local model's.
+    case remoteModel
     /// Apple's Translation framework: no download, and **measured to be the weaker engine** — it
     /// takes no instructions, so it cannot be told the sense, and on eight hard sentences it got
     /// four right, rendering *table … until next month* as 提交, the opposite.

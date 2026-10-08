@@ -22,7 +22,10 @@ public enum ProviderChoice: String, Sendable, Equatable, CaseIterable, Codable {
 /// Reads and writes the reader's choice of source. **Unreadable is `none`**, never a crash and never a source.
 ///
 /// It takes its defaults suite and has no default of its own: the app reads only the suite it was given.
-public struct ProviderChoiceStore {
+///
+/// `@unchecked Sendable` because `UserDefaults` is not marked `Sendable` and is documented thread-safe, and it is the
+/// only thing this holds: the providers' router, an actor, reads the reader's choice at every question (ADR-0053).
+public struct ProviderChoiceStore: @unchecked Sendable {
     public static let defaultsKey = "LanguageModelProvider"
 
     private let defaults: UserDefaults
@@ -82,7 +85,10 @@ public struct ProviderSettings: Sendable, Equatable {
 ///
 /// **A value equal to its default is not written, and one taken back is removed**: a later build that changes a
 /// default then reaches every reader who never chose one, instead of only the readers who never opened the pane.
-public struct ProviderSettingsStore {
+///
+/// `@unchecked Sendable` for `ProviderChoiceStore`'s reason: it holds a `UserDefaults`, documented thread-safe, and
+/// nothing else.
+public struct ProviderSettingsStore: @unchecked Sendable {
     /// The defaults keys, in the app's own domain. The end-to-end stages write them by name.
     public enum Key {
         public static let endpointURL = "ProviderEndpointURL"

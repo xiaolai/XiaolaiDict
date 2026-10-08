@@ -20,23 +20,9 @@ protocol ModelTransport: Sendable {
 actor ModelClient {
     typealias Connect = @Sendable (_ onCancel: @escaping @Sendable () -> Void) throws -> any ModelTransport
 
-    /// How long each kind of question may take. A sense answer measured 0.24–0.44 s warm and 1.6–
-    /// 2.5 s cold on an M4 Max, and a base chip is estimated at a quarter of its GPU: the deadline is
-    /// set well past a cold answer on a slow Mac, because the mark fills in when it arrives and
-    /// giving up early only hands the sentence to a weaker rung.
-    static func deadline(for request: ModelRequest) -> Duration {
-        switch request {
-        case .pickSense: .seconds(12)
-        case .translate: .seconds(30)
-        // Prose rather than a number, and a slow Mac writes it a token at a time.
-        case .explain: .seconds(45)
-        case .prewarm: .seconds(60)
-        case .status: .seconds(10)
-        // Longer than the service's own drain, because unloading *is* that wait: bounded shorter,
-        // a service doing exactly what it was asked times out and reads as one that failed.
-        case .unload: ModelShutdown.ask
-        }
-    }
+    /// How long each kind of question may take: `ModelDeadline`'s table, which the providers' client reads too, so a
+    /// question is given the same time whichever source answers it (ADR-0053).
+    static func deadline(for request: ModelRequest) -> Duration { ModelDeadline.of(request) }
 
     /// How long to wait for the service's process to go after it says it is unloading. A test
     /// hands in a shorter one; nothing else does.
@@ -224,28 +210,35 @@ struct LocalModelAccess: Sendable {
         LocalModelSenseSelector { question in await ask(.pickSense(question)) }
     }
 
-    /// **The shipped ladder, in one place.** `--sense-report` measures this very value, so the
-    /// measurement cannot drift from what readers get.
+    /// **The shipped ladder over this model alone** — what `--sense-report` measures.
     var senseLadder: (ladder: LadderSenseSelector, rungs: [(name: String, selector: any SenseSelecting)]) {
+        Self.senseLadder(topRung: senseSelector)
+    }
+
+    /// **The shipped ladder, in one place**, over the top rung the caller composes: the app's asks the router, which
+    /// asks the reader's provider or this model (ADR-0053); `--sense-report`'s asks this model directly. One builder,
+    /// so the order the report measures cannot drift from the order readers get.
+    static func senseLadder(topRung: LocalModelSenseSelector)
+        -> (ladder: LadderSenseSelector, rungs: [(name: String, selector: any SenseSelecting)]) {
         let rungs: [(name: String, selector: any SenseSelecting)] = [
-            ("localModel", senseSelector),
+            ("localModel", topRung),
             ("onDevice", FoundationModelsSenseSelector()),
             ("embedding", EmbeddingSenseSelector()),
         ]
         return (LadderSenseSelector(rungs: rungs.map(\.selector)), rungs)
     }
 
-    /// The sentence pane's engines: this model first, Apple's on-device model **wherever this one
-    /// does not answer** — not downloaded, not enough memory, declined, a generation that failed,
-    /// a reply of the wrong shape, or no service at all.
-    var explainer: LadderSentenceExplainer {
-        LadderSentenceExplainer(local: { question in await ask(.explain(question)) })
+    /// The sentence pane's engines: `asking` first, Apple's on-device model **wherever it does not
+    /// answer** — not downloaded, not enough memory, declined, a generation that failed, a reply of
+    /// the wrong shape, no service, or a provider that is not there.
+    static func explainer(asking: @escaping LadderSentenceExplainer.Local) -> LadderSentenceExplainer {
+        LadderSentenceExplainer(local: asking)
     }
 
-    /// The translation pane's engines: this model first, Apple's framework where it is not here.
-    var translator: SentenceTranslator {
+    /// The translation pane's engines: `asking` first, Apple's framework where it does not answer.
+    static func translator(asking: @escaping SentenceTranslator.Local) -> SentenceTranslator {
         SentenceTranslator(
-            local: { question in await ask(.translate(question)) },
+            local: asking,
             apple: { sentence, source, target in await AppleTranslation.translate(sentence, from: source, to: target) })
     }
 }
