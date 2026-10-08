@@ -218,6 +218,18 @@ class CompilerWarningsGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("Unused.swift", result.stderr)
 
+    def test_the_testable_copys_dependency_scan_is_not_called_stale(self) -> None:
+        """The testable copy's file list is named `App-<hash>-testable`, and its dependency scan's diagnostics
+        `App-dependency-scan.dia`, after the module — as this package's Debug intermediates lay out the app's
+        (measured 2026-10-09). Read against the list's name it was counted as a source the module no longer
+        compiles, and every `make` printed that one was left behind when none was."""
+        self.built("App", self.source("Main.swift", CLEAN), kind="p")
+        testable = self.built("App", self.source("Copied.swift", CLEAN), stem="App-5D5E93E10A397156-testable")
+        (testable / "App-dependency-scan.dia").write_bytes(b"")
+        result = self.gate("App")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no longer compiles", result.stdout)
+
     # MARK: - It reads only what the build compiles now
 
     def test_a_file_the_module_no_longer_compiles_is_not_read(self) -> None:

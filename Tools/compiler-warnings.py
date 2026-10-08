@@ -180,11 +180,14 @@ def read_module(library: ctypes.CDLL, directory: pathlib.Path, whole_module: boo
         reading.empty.append(listed.name)
     expected = expected_files(listed, stems, whole_module)
     reading.missing += [named for name, named in expected.items() if not (directory / name).is_file()]
+    # The dependency scan's file is named after the list — or, in a testable copy (`App-<hash>-testable`), after
+    # the module, which is the list's name up to its first hyphen: a module name holds none.
+    scans = {f"{listed.stem}-dependency-scan.dia", f"{listed.stem.split('-', 1)[0]}-dependency-scan.dia"}
     for dia in sorted(directory.glob("*.dia")):
         if dia.name not in expected:
             # A source the module no longer compiles, or the dependency scan's (which fails the build itself
             # when it finds anything).
-            reading.stale += dia.name != f"{listed.stem}-dependency-scan.dia"
+            reading.stale += dia.name not in scans
             continue
         reading.read += 1
         for warning in warnings_in(library, dia):
