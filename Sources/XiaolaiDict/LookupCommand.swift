@@ -1,8 +1,11 @@
+import AppKit
 import Capture
 import CaptureModel
 import DictionaryModel
 import Foundation
+import MacCapture
 import XiaolaiDictCore
+import XiaolaiDictUI
 
 /// How the command-line modes exit. From `<sysexits.h>` where one fits.
 enum CommandStatus: Int32 {
@@ -96,7 +99,8 @@ enum LookupCommand {
         // A generous deadline on purpose: this is the instrument, not the product. The shipped 5 s
         // protects a reader from a wedged capture; here it only hid how long the path actually
         // takes, reporting "deadline exceeded" for a read that was seconds from finishing.
-        let reader = HoverReader(policy: { .shipped }, captureDeadline: .seconds(30), accessibilityBudget: .seconds(30))
+        let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() }, captureDeadline: .seconds(30),
+                                 accessibilityBudget: .seconds(30))
         let outcome = await reader.read(
             at: CGPoint(x: x, y: y), modifiersHeld: [HoverPolicy.shipped.modifier],
             // The instrument measures the *hold* path, which is what `--read-point` has always
@@ -116,10 +120,18 @@ enum LookupCommand {
             writeError("nothing read: \(why)")
             return .failure
         case .needsScreenRecording:
-            writeError("nothing read: \(RecognitionError.screenRecordingDenied.localizedDescription)")
+            writeError("nothing read: \(screenRecordingDenied)")
             return .failure
         }
 #endif
+    }
+
+    /// What `--read-point` says when only the pixels could answer and Screen Recording is off, naming the list it is
+    /// allowed in. `RecognitionError.screenRecordingDenied` carried this sentence while the recogniser was the app's;
+    /// the list's name is the view layer's, so the instrument that prints it says it (2026-10-08, P5).
+    static var screenRecordingDenied: String {
+        "XiaolaiDict needs Screen Recording to read words off the screen. Allow it in "
+            + "\(PrivacySettings.screenRecordingLocation), then try again."
     }
 
     /// `XiaolaiDict --read-selection BUNDLE_ID`: what the reader would see from that app's selection. The
@@ -136,13 +148,16 @@ enum LookupCommand {
 #else
         let report: any Encodable
         let status: CommandStatus
-        if let front = FrontApp.running(bundleID) {
+        // A running app by bundle identifier, with a usable process ID — the instrument's own search, here behind the
+        // define since the reader left the app (2026-10-08, P5).
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        if let front = (apps.first { $0.processIdentifier > 0 } ?? apps.first).flatMap({ FrontApp($0) }) {
             switch await SelectionReader.read(from: front) {
             case .selected(let selection):
                 report = SelectionReport(selection)
                 status = .success
-            case .nothing(let reason):
-                report = ["nothing": reason]
+            case .nothing(let refusal):
+                report = ["nothing": refusal.message]
                 status = .failure
             }
         } else {
@@ -252,6 +267,13 @@ struct LookupReport: Encodable, Equatable {
             serviceFailure = failure
         }
     }
+}
+
+extension Selection {
+    /// The app a selection was read in, as the two capture reports name it — theirs, beside them, since `Selection`
+    /// left the app (2026-10-08, P5): nothing else asks, and public in `MacCapture` a release would have carried them.
+    var appName: String { place.name ?? "" }
+    var bundleID: String? { place.bundleID }
 }
 
 /// A word under a point, as `--read-point` reports it — with which path read it, and how far to

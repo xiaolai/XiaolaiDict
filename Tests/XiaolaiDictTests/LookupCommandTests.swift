@@ -1,6 +1,7 @@
 import CaptureModel
 import DictionaryModel
 import Foundation
+import MacCapture
 @testable import XiaolaiDict
 import XiaolaiDictBase
 import XiaolaiDictCore

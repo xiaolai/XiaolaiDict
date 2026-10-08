@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Capture
 import DictionaryModel
+@testable import MacCapture
 import Synchronization
 import Testing
 import XiaolaiDictTestSupport

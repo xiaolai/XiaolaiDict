@@ -2,7 +2,7 @@ import Capture
 import CoreGraphics
 import Foundation
 import Testing
-@testable import XiaolaiDict
+@testable import MacCapture
 
 /// **The band is the window's width, and Vision is given it in tiles no wider than it reads reliably.**
 ///

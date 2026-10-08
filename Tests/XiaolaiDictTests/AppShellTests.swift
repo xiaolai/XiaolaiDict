@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import MacCapture
 import Testing
 import XiaolaiDictTestSupport
 @testable import XiaolaiDictUI

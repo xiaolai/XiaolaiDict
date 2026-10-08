@@ -1,7 +1,7 @@
 import Capture
 import Foundation
 import Testing
-@testable import XiaolaiDict
+@testable import MacCapture
 
 /// **The quality signals must describe the sentence that is returned, and the CJK case is where
 /// the arithmetic for that broke.**

@@ -315,12 +315,8 @@ public enum Token {
         /// How often the settings window re-asks the system about a permission. macOS posts
         /// nothing when one changes, and the reader grants it in another app and comes back.
         static let permissionPoll: Duration = .seconds(1)
-        /// How long the screen-recording probe may take before it counts as having said nothing.
-        /// Generous against its measured ~70 ms, because this bounds a wedged capture service
-        /// rather than setting a performance target: anything resembling a stall is one. It exists
-        /// because that probe is awaited by the menu refresh, by the setup board's polling and by
-        /// `askForDictionaries()` — one unanswering call used to hold all three.
-        static let permissionProbe: Duration = .seconds(3)
+        // The screen-recording probe's deadline was here as `permissionProbe`; it is `Permission.probeDeadline`,
+        // beside the probe, since the probe left the view layer for `MacCapture` (2026-10-08, P5).
     }
 
     enum Motion {

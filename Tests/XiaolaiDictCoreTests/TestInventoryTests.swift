@@ -105,7 +105,12 @@ struct TestInventoryTests {
         // **1,370 → 1,295 the same day, a transfer and not a loss** (P4b): 76 `@Test` in 5 files left for
         // `StudyModelsTests` with the study models they test, and one came — the app handing the review model what
         // Done closes and what Explore opens, which were the model's own defaults until it left the app.
-        "XiaolaiDictTests": 1_295,
+        // **1,295 → 1,225 the same day, a transfer and not a loss** (P5): 71 `@Test` in 7 files left for
+        // `MacCaptureTests` with the Apple capture readers they test — the two of `SelectionTests` that read the
+        // refusals' wording stayed, since that wording is the view layer's — and one came: each refusal of the
+        // selection reader worded as its own case, which the reader's tests had checked inline until the words
+        // left it.
+        "XiaolaiDictTests": 1_225,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -163,7 +168,9 @@ struct TestInventoryTests {
         // policy — hover, geometry, the drawer's frame, recognised text and the sentence cut from it.
         // Raised 457 → 458 by P4a (1): the presentation layer binding no UI framework and not the view layer,
         // with its control (`ModuleBoundaryTests`).
-        "XiaolaiDictCoreTests": 458,
+        // Raised 458 → 459 by P5 (1): the platform adapter binding AppKit and no other UI framework, and none of
+        // the subjects it does not adapt, with its control (`ModuleBoundaryTests`).
+        "XiaolaiDictCoreTests": 459,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
         "StudyKitTests": 386,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
@@ -172,6 +179,10 @@ struct TestInventoryTests {
         // actor, the lookup recorder's races, the primary dictionary and its resolver, the sense-tap queue and the
         // study dictionary's derivation.
         "StudyModelsTests": 76,
+        // Added 2026-10-08 with the target, at the 71 that moved out of `XiaolaiDictTests` above: Accessibility's
+        // owner and its prompt key, the hover watcher's pure helpers, the recogniser's band, tiles, runs and scope,
+        // and the selection reader against a scripted tree, with the selection's term, window and sentence.
+        "MacCaptureTests": 71,
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
         "DictionaryBridgeTests": 83,
         "LocalModelTests": 48,

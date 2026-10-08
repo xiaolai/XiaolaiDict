@@ -1,5 +1,6 @@
 import DictionaryModel
 import Foundation
+import MacCapture
 import ModelKit
 import StudyKit
 import Testing

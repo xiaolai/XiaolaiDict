@@ -1,6 +1,5 @@
 import Capture
 import DictionaryModel
-import XiaolaiDictUI
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import Vision
 
@@ -43,9 +42,11 @@ enum RecognitionError: LocalizedError, Equatable {
         case .nothingUnderPointer: "no word under the pointer"
         case .excludedApp(let name): "words are not looked up in \(name)"
         case .unattributable: "no window under the pointer"
-        case .screenRecordingDenied:
-            "XiaolaiDict needs Screen Recording to read words off the screen. Allow it in "
-                + "\(PrivacySettings.screenRecordingLocation), then try again."
+        // **Never formatted here.** Hover turns it into `.needsScreenRecording`, which the app tells the reader
+        // about in a notice of its own, and the sentence `--read-point` prints for it names the System Settings list
+        // it is allowed in — which is the view layer's to word, so the instrument says it
+        // (`LookupCommand.screenRecordingDenied`, moved there verbatim when this file left the app, 2026-10-08, P5).
+        case .screenRecordingDenied: nil
         // Says nothing about consent, and names no settings pane, because the permission may well
         // be granted — sending the reader to a list where the switch is already on is how a
         // transient failure becomes a support question.

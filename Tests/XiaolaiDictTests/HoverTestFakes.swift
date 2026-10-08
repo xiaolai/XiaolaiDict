@@ -3,9 +3,9 @@ import ApplicationServices
 import Capture
 import CaptureModel
 import DictionaryModel
+@testable import MacCapture
 import Synchronization
 import Testing
-@testable import XiaolaiDict
 
 /// The stand-ins hover's behavioural tests share — **one spelling each**, for the reason
 /// `Wiring` gives: two copies of a fake drift, and then a test proves something about the copy.

@@ -2,6 +2,7 @@ import AppKit
 import Capture
 import CaptureModel
 import Foundation
+import MacCapture
 import Testing
 import XiaolaiDictTestSupport
 

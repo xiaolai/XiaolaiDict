@@ -2,6 +2,7 @@ import AppKit
 import Capture
 import CaptureModel
 import DictionaryModel
+import MacCapture
 import StudyKit
 import StudyModels
 import StudyPresentation
@@ -419,8 +420,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         }
         lookup = Task {
             switch await SelectionReader.read(from: app) {
-            case .nothing(let reason):
-                panel.show(.nothingToLookUp(reason), near: pointer, for: ticket)
+            case .nothing(let refusal):
+                panel.show(.nothingToLookUp(refusal.message), near: pointer, for: ticket)
             case .selected(let selection):
                 await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket)
             }

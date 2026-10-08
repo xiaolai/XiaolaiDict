@@ -2,6 +2,7 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import Foundation
+import MacCapture
 import StudyKit
 @testable import StudyModels
 import StudyPresentation

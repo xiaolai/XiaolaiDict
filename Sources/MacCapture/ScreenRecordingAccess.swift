@@ -1,5 +1,4 @@
 import Synchronization
-import XiaolaiDictUI
 
 /// Whether XiaolaiDict may record the screen — **asked, never requested.**
 ///

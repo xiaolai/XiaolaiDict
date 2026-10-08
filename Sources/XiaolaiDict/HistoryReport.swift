@@ -1,5 +1,6 @@
 import AppKit
 import Capture
+import MacCapture
 import XiaolaiDictBase
 import XiaolaiDictUI
 import ScreenCaptureKit

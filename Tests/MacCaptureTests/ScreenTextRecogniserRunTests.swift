@@ -1,7 +1,7 @@
 import Capture
 import Foundation
 import Testing
-@testable import XiaolaiDict
+@testable import MacCapture
 
 /// **Which token of a run the reader meant — the thing Vision cannot say and the pointer can.**
 ///

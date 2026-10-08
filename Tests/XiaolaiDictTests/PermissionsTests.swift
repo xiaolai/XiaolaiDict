@@ -1,4 +1,5 @@
 import ApplicationServices
+import MacCapture
 import ScreenCaptureKit
 import Testing
 

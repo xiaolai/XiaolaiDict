@@ -5,7 +5,7 @@ import os
 
 /// Why a selection could not be read. Kept apart, because each needs a different answer for the
 /// reader: "try again", "grant access" and "nothing is selected" are not the same message.
-enum CaptureError: Error, Equatable {
+public enum CaptureError: Error, Equatable {
     /// The app did not answer one request within the messaging timeout: busy or hung.
     case notResponding
     /// The read as a whole ran past its deadline, one slow answer after another.

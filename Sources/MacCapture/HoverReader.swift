@@ -28,7 +28,7 @@ protocol HoverReading: AnyObject {
 }
 
 /// Whether the one screen capture that may be in flight is answering.
-enum CaptureHealth: Sendable, Equatable {
+public enum CaptureHealth: Sendable, Equatable {
     case answering
     /// Held past the capture deadline, for this long when it was noticed. Until it finishes no
     /// other capture may start — two at once deadlock — so hover cannot read apps that expose no text.
@@ -41,7 +41,7 @@ enum CaptureHealth: Sendable, Equatable {
 /// simply reading never pays for Accessibility, a capture, or a clock read. Only once it says yes
 /// does anything touch another process.
 @MainActor
-final class HoverReader: HoverReading {
+public final class HoverReader: HoverReading {
     /// Two simultaneous `SCScreenshotManager` captures deadlock each other — 6 trials out of 6,
     /// display- and window-scoped alike, both callers hanging until the deadline. A single capture
     /// immediately afterwards succeeds, so it is contention, not corruption. **Any other
@@ -167,7 +167,19 @@ final class HoverReader: HoverReading {
         self.source = source
     }
 
-    enum Outcome: Sendable {
+    /// **The reader on the real screen, with deadlines of the caller's own** — the one public initialiser. The watcher
+    /// builds hover's reader through it with the shipped deadlines, and `--read-point` with its own: an instrument sets
+    /// its own deadline, because a measurement killed at the product's budget can only ever report "over budget". The
+    /// seams above are for tests. `source` is named only so this does not resolve to itself.
+    public convenience init(
+        policy: @escaping @MainActor () -> HoverPolicy, pause: @escaping @MainActor () -> HoverPause,
+        captureDeadline: Duration, accessibilityBudget: Duration
+    ) {
+        self.init(policy: policy, pause: pause, captureDeadline: captureDeadline,
+                  accessibilityBudget: accessibilityBudget, source: SystemScreenWords())
+    }
+
+    public enum Outcome: Sendable {
         /// A word, the panel request it was read for, and the key that suppresses it once shown.
         case selection(Selection, request: Int, key: String)
         /// The gate said no. Ordinary, and not worth showing.
@@ -181,7 +193,7 @@ final class HoverReader: HoverReading {
 
     /// `pointerStillFor` is how long the pointer has rested. Debouncing is the caller's clock;
     /// this only enforces it, so the policy stays pure and testable.
-    func read(
+    public func read(
         at point: CGPoint, modifiersHeld: Set<HoverModifier>, tappedTwice: Bool,
         pointerStillFor: Duration, begin: @MainActor () -> Int
     ) async -> Outcome {

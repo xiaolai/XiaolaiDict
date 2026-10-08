@@ -1,5 +1,6 @@
 import AppKit
 import DictionaryModel
+import MacCapture
 import OSLog
 import ModelKit
 import StudyKit

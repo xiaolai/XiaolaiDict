@@ -1,5 +1,6 @@
 import AppKit
 import Capture
+import MacCapture
 import StudyKit
 import Observation
 import StudyPresentation

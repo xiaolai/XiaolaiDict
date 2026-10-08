@@ -1,4 +1,5 @@
 import DictionaryModel
+import MacCapture
 import StudyKit
 import XiaolaiDictCore
 

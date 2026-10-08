@@ -3,8 +3,7 @@ import Foundation
 import Synchronization
 import Testing
 
-@testable import XiaolaiDict
-@testable import XiaolaiDictUI
+@testable import MacCapture
 
 /// One owner for the Accessibility grant, the way `ScreenRecordingAccess` is one owner for the
 /// other. Three call sites asked three different ways before this.

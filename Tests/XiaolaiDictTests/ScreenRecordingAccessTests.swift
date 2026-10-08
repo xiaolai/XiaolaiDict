@@ -1,5 +1,6 @@
 import Capture
 import Foundation
+@testable import MacCapture
 import Synchronization
 import Testing
 import XiaolaiDictTestSupport
@@ -151,9 +152,10 @@ struct ScreenRecordingLocationTests {
                 == "System Settings → Privacy & Security → Screen Recording")
     }
 
-    /// The refusal has to say where to go, because after the first prompt there is no second one.
+    /// The refusal has to say where to go, because after the first prompt there is no second one. Said by the
+    /// instrument that prints it since the recogniser left the app (2026-10-08, P5): the list's name is the view layer's.
     @Test func theRefusalNamesTheList() {
-        let message = RecognitionError.screenRecordingDenied.errorDescription ?? ""
+        let message = LookupCommand.screenRecordingDenied
         // The whole location, not two words that happen to appear in it. "Screen: open System
         // Settings" satisfied the old pair while naming neither the permission nor the path.
         #expect(message.contains(PrivacySettings.screenRecordingLocation))
@@ -197,9 +199,10 @@ struct ScreenRecordingProbeTests {
         // 100 means a subtree went unread. `SourceScan` throws on a traversal error, which is the
         // other half — this used to skip an unreadable directory in silence.
         #expect(scanned > 100, "scanned only \(scanned) files — the source walk is broken")
-        // Named, not counted: the probe's owner, its access wrapper and the capture it must agree with.
+        // Named, not counted: the probe's owner, its access wrapper and the capture it must agree with — all three in
+        // `MacCapture` since 2026-10-08 (P5), where the probe is `Permission.swift`.
         let unread = SourceScan.unread(
-            ["Permissions.swift", "ScreenRecordingAccess.swift", "ScreenTextRecogniser.swift"], in: read)
+            ["Permission.swift", "ScreenRecordingAccess.swift", "ScreenTextRecogniser.swift"], in: read)
         #expect(unread.isEmpty, "the scan no longer reads \(unread)")
         #expect(
             offenders.isEmpty,

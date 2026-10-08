@@ -2,10 +2,12 @@ import Synchronization
 
 /// One continuation, resumed by whichever answer comes first — the work's or the cancellation's.
 /// Either may arrive before the continuation is installed.
-final class FirstAnswer<T: Sendable>: Sendable {
+public final class FirstAnswer<T: Sendable>: Sendable {
     private let state = Mutex<(continuation: CheckedContinuation<T, Never>?, answer: T?, resumed: Bool)>((nil, nil, false))
 
-    func install(_ continuation: CheckedContinuation<T, Never>) {
+    public init() {}
+
+    public func install(_ continuation: CheckedContinuation<T, Never>) {
         let early = state.withLock { state -> T? in
             guard let answer = state.answer, !state.resumed else { state.continuation = continuation; return nil }
             state.resumed = true
@@ -14,7 +16,7 @@ final class FirstAnswer<T: Sendable>: Sendable {
         if let early { continuation.resume(returning: early) }
     }
 
-    func give(_ value: T) {
+    public func give(_ value: T) {
         let waiting = state.withLock { state -> CheckedContinuation<T, Never>? in
             guard !state.resumed, state.answer == nil else { return nil }
             guard let continuation = state.continuation else { state.answer = value; return nil }
@@ -32,7 +34,7 @@ final class FirstAnswer<T: Sendable>: Sendable {
 ///
 /// `watching` runs once the cancellation handler is in place — the moment from which a cancellation is
 /// certain to reach `fallback`. Work that must not start before then waits for it.
-func value<T: Sendable>(
+public func value<T: Sendable>(
     of task: Task<T, Never>, orOnCancel fallback: @escaping @Sendable () -> T,
     watching: @Sendable () -> Void = {}
 ) async -> T {

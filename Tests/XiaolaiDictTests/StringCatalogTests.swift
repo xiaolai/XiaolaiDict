@@ -352,6 +352,10 @@ struct StringCatalogTests {
         "Sources/StudyKit",
         // Added 2026-10-08 with the target: the capture policy, out of the core (P3).
         "Sources/Capture",
+        // Added 2026-10-08 with the target: the Apple capture readers, out of the app (P5). A platform adapter, not a
+        // target below the view layer (`ModuleBoundaryTests.platformAdapters`), but held to the same rule here: what a
+        // refusal is shown in is the view layer's, so a sentence written there could be shown and never extracted.
+        "Sources/MacCapture",
     ]
 
     /// Every presentation target: pure values a surface draws, **where reader-facing text is allowed** — so it

@@ -1,5 +1,4 @@
 import ApplicationServices
-import XiaolaiDictUI
 
 /// Whether XiaolaiDict may read another app's selection, and asking for it if not.
 ///
@@ -20,11 +19,11 @@ import XiaolaiDictUI
 /// `AXIsProcessTrusted()` answers in-process and cannot fail, where `SCShareableContent` is a call
 /// into another process that needs a deadline. So `lookUpSelection` still answers the reader before
 /// its first await, which is what puts "Accessibility is off" on screen instead of an empty panel.
-struct AccessibilityAccess: Sendable {
+public struct AccessibilityAccess: Sendable {
     var probe: @Sendable () -> PermissionProbe
     var request: @Sendable () -> Bool
 
-    static let system = AccessibilityAccess(
+    public static let system = AccessibilityAccess(
         probe: { Permission.accessibilityTrust },
         request: { Permission.accessibility.request() })
 
@@ -36,7 +35,7 @@ struct AccessibilityAccess: Sendable {
     /// The same question for a reader who has just pressed the shortcut, **and it asks where they
     /// have never been asked.** macOS prompts once per permission ever, so on every press after the
     /// first this is a check; the press it is not a check on is the one that matters.
-    func ensure() -> PermissionProbe {
+    public func ensure() -> PermissionProbe {
         switch probe() {
         case .granted: .granted
         case .declined: request() ? .granted : .declined

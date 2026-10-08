@@ -20,7 +20,7 @@ protocol HoverEventSource: AnyObject {
 /// What the watcher hands a word to, and where a request's number comes from — the app, which owns
 /// the panel.
 @MainActor
-protocol HoverDelivering: AnyObject {
+public protocol HoverDelivering: AnyObject {
     /// A number for a request that will claim the panel later. See `RequestSequence`.
     func beginRequest() -> Int
     /// Claims the panel for `request` and looks the word up. **False when the claim was refused** —
@@ -49,7 +49,7 @@ protocol HoverDelivering: AnyObject {
 /// order, so a reader who is simply reading pays a set comparison and a clock read rather than an
 /// Accessibility round trip.
 @MainActor
-final class HoverWatcher {
+public final class HoverWatcher {
     /// Cancels a scheduled piece of work.
     typealias Cancel = @MainActor () -> Void
     /// Runs `work` after `delay`, on the main actor, and returns how to cancel it.
@@ -86,9 +86,9 @@ final class HoverWatcher {
     private var handling = false
 
     /// Where a delivered word goes. Weak: the app owns the watcher through `HoverControl`.
-    weak var delivery: (any HoverDelivering)?
+    public weak var delivery: (any HoverDelivering)?
     /// Whether reading the screen is answering — forwarded from the reader for `HoverControl`.
-    var onCaptureHealth: (@MainActor (CaptureHealth) -> Void)?
+    public var onCaptureHealth: (@MainActor (CaptureHealth) -> Void)?
 
     init(
         policy: @escaping @MainActor () -> HoverPolicy = { .shipped },
@@ -111,7 +111,9 @@ final class HoverWatcher {
         // **Forwarded, not defaulted.** This built `HoverReader(policy:)` and left the reader's
         // pause on its own default — `{ HoverPause() }`, a fresh never-paused value per call — so
         // `.paused` could not fire however long the reader paused for.
-        self.reader = reader ?? HoverReader(policy: policy, pause: pause)
+        self.reader = reader ?? HoverReader(
+            policy: policy, pause: pause, captureDeadline: HoverReader.captureDeadline,
+            accessibilityBudget: ScreenWordReader.budget)
         session = HoverSession(now: now())
         self.reader.onCaptureHealth = { [weak self] health in self?.onCaptureHealth?(health) }
         self.reader.onCaptureReleased = { [weak self] in
@@ -121,9 +123,16 @@ final class HoverWatcher {
         }
     }
 
-    var isWatching: Bool { watching }
+    /// **The watcher the app runs**: the system's events, pointer, screens, timer and clocks, and a reader on the same
+    /// policy and pause. The one public initialiser — every seam above is for the tests that drive this by event
+    /// sequence, and stays internal. `events` is named only so this does not resolve to itself.
+    public convenience init(policy: @escaping @MainActor () -> HoverPolicy, pause: @escaping @MainActor () -> HoverPause) {
+        self.init(policy: policy, pause: pause, events: SystemHoverEvents())
+    }
 
-    func start() {
+    public var isWatching: Bool { watching }
+
+    public func start() {
         guard !watching else { return }
         guard events.start({ [weak self] event in self?.handle(event) }) else {
             log.error("hover: could not watch the pointer and keys")
@@ -133,7 +142,7 @@ final class HoverWatcher {
         feed(.start)
     }
 
-    func stop() {
+    public func stop() {
         events.stop()
         watching = false
         // A key let go while stopped is never seen, so the suppression it would have lifted is

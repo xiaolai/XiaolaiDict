@@ -3,7 +3,7 @@ import Capture
 import CoreGraphics
 import Testing
 
-@testable import XiaolaiDict
+@testable import MacCapture
 
 /// The watcher's own decisions. The gate itself lives in `HoverPolicy` and the reading in
 /// `HoverReader`, both tested where they live; what is left here is what only the watcher does —

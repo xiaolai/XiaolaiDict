@@ -2,7 +2,7 @@ import ApplicationServices
 import CaptureModel
 import DictionaryModel
 import Foundation
-@testable import XiaolaiDict
+@testable import MacCapture
 import Synchronization
 import Testing
 
@@ -92,14 +92,14 @@ struct SelectionReaderTests {
             parent = child
         }
         guard case .nothing(let reason) = read(tree) else { Issue.record("expected nothing"); return }
-        #expect(reason.contains("too large to search"))
+        #expect(reason == .searchLimitReached(app: "Reader", limit: SelectionReader.webAreaSearchLimit))
     }
 
     @Test func aLockedScreenIsNotNothingSelected() {
         let tree = FakeAccessibility()
         tree.fail(tree.application, kAXFocusedUIElementAttribute, with: .accessibilityRefused)
         guard case .nothing(let reason) = read(tree) else { Issue.record("expected nothing"); return }
-        #expect(reason.contains("locked"))
+        #expect(reason == .failed(.accessibilityRefused, app: "Reader"))
     }
 
     /// Provenance is worth having, not worth the selection.
@@ -140,16 +140,16 @@ struct SelectionReaderTests {
             running.withLock { $0.now += 1; $0.most = max($0.most, $0.now) }
             Thread.sleep(forTimeInterval: 0.1)  // a request nothing can interrupt
             running.withLock { $0.now -= 1 }
-            return .nothing("read")
+            return .nothing(.nothingSelected(app: "read"))
         }
         let lane = AccessibilityLane { _ in }
         let superseded = (0..<3).map { _ in
-            Task { await lane.run(timeout: 1, slowRead, cancelled: { .nothing("cancelled") }) }
+            Task { await lane.run(timeout: 1, slowRead, cancelled: { .nothing(.nothingSelected(app: "cancelled")) }) }
         }
         superseded.forEach { $0.cancel() }
-        let last = await lane.run(timeout: 1, slowRead, cancelled: { .nothing("cancelled") })
+        let last = await lane.run(timeout: 1, slowRead, cancelled: { .nothing(.nothingSelected(app: "cancelled")) })
         for task in superseded { _ = await task.value }
-        #expect(last == .nothing("read"))
+        #expect(last == .nothing(.nothingSelected(app: "read")))
         #expect(running.withLock { $0.most } == 1, "reads ran side by side")
         #expect(started.withLock { $0 } < 4, "every superseded read ran in full")
     }

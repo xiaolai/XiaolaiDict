@@ -2,8 +2,7 @@ import ApplicationServices
 import CaptureModel
 import DictionaryModel
 import Foundation
-@testable import XiaolaiDict
-@testable import XiaolaiDictUI
+@testable import MacCapture
 import Testing
 
 /// The decisions the selection reader makes once Accessibility has answered: what the term is,
@@ -193,11 +192,12 @@ struct CaptureTests {
 
     @Test func aPassageIsRefused() {
         let passage = String(repeating: "word ", count: 20)
-        guard case .nothing(let reason) = SelectionReader.selection(from: capture(passage, context: nil), app: app, place: ReadingPlace()) else {
+        guard case .nothing(let refusal) = SelectionReader.selection(from: capture(passage, context: nil), app: app, place: ReadingPlace()) else {
             Issue.record("expected a refusal")
             return
         }
-        #expect(reason.contains("too long"))
+        // Typed since the words left the reader (2026-10-08, P5): `SelectionRefusalTests` holds this case to "too long".
+        #expect(refusal == .tooLong(app: "TextEdit", characters: 99))
     }
 
     /// Found by audit: every Accessibility error became "nothing selected". The ones that need a
@@ -222,21 +222,5 @@ struct CaptureTests {
     @Test func aRefusalByTheAppItselfIsReported() {
         #expect(AccessibilitySession.answer(for: .failure, ofApplication: true) == .failed(.accessibilityRefused))
         #expect(AccessibilitySession.answer(for: .failure) == .absent)
-    }
-
-    /// macOS 27 renamed the list the permission is granted in; the message must name the one the
-    /// reader will find. Found when a reader looked for "Accessibility" on macOS 27 and it was not there.
-    @Test func thePermissionMessageNamesTheListOnThisMacOS() {
-        #expect(PrivacySettings.accessibilityLocation(majorVersion: 26) == "System Settings → Privacy & Security → Accessibility")
-        #expect(PrivacySettings.accessibilityLocation(majorVersion: 27)
-            == "System Settings → Privacy & Security → Device Control and Data Access")
-        #expect(SelectionReader.message(for: .accessibilityDisabled, app: "Safari").contains(PrivacySettings.accessibilityLocation))
-    }
-
-    @Test(arguments: [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled])
-    func eachFailureHasItsOwnMessage(error: CaptureError) {
-        let others = [CaptureError.notResponding, .deadlineExceeded, .accessibilityDisabled, .appUnavailable, .accessibilityRefused, .cancelled]
-            .filter { $0 != error }.map { SelectionReader.message(for: $0, app: "Safari") }
-        #expect(!others.contains(SelectionReader.message(for: error, app: "Safari")))
     }
 }

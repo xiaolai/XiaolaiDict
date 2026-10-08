@@ -1,5 +1,6 @@
 import Capture
 import Foundation
+import MacCapture
 import Observation
 
 /// Everything the reader can do to hover, and the one place each of those values lives.

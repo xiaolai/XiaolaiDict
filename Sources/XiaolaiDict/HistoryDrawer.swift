@@ -1,5 +1,6 @@
 import AppKit
 import Capture
+import MacCapture
 import StudyKit
 import XiaolaiDictBase
 import XiaolaiDictUI
@@ -319,12 +320,5 @@ final class HistoryDrawerController {
     isolated deinit {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         removeClickAway()
-    }
-}
-
-extension ScreenMetrics {
-    /// The AppKit screen as the drawer's geometry needs it.
-    init(_ screen: NSScreen) {
-        self.init(frame: UpRect(screen.frame), visibleFrame: UpRect(screen.visibleFrame))
     }
 }

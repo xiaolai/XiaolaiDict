@@ -1,6 +1,7 @@
 import AppKit
 import Capture
 import Foundation
+@testable import MacCapture
 import Testing
 
 @testable import XiaolaiDict

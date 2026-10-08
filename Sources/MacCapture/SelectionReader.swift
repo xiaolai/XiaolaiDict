@@ -4,27 +4,19 @@ import Capture
 import CaptureModel
 import DictionaryModel
 import XiaolaiDictBase
-import XiaolaiDictUI
 import os
 
 /// The app a selection is read from, captured on the main actor before the Accessibility work
 /// moves off it.
-struct FrontApp: Sendable {
+public struct FrontApp: Sendable {
     let pid: pid_t
     let name: String
     let bundleID: String?
 
     /// The frontmost app, with a process ID Accessibility can use.
     @MainActor
-    static func frontmost() -> FrontApp? {
-        NSWorkspace.shared.frontmostApplication.flatMap(resolve)
-    }
-
-    /// A running app by bundle identifier, with a usable process ID.
-    @MainActor
-    static func running(_ bundleID: String) -> FrontApp? {
-        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        return (apps.first { $0.processIdentifier > 0 } ?? apps.first).flatMap(resolve)
+    public static func frontmost() -> FrontApp? {
+        NSWorkspace.shared.frontmostApplication.flatMap { FrontApp($0) }
     }
 
     /// macOS 27 reports some apps — Safari, launched from a system cryptex — with process ID -1.
@@ -46,21 +38,41 @@ struct FrontApp: Sendable {
     }
 }
 
+extension FrontApp {
+    /// `app`, with a process ID Accessibility can use — **the one public way to make a `FrontApp`**: `frontmost()` reads
+    /// the shortcut's app through it, and `--read-selection` an app it found by bundle identifier. That search is the
+    /// instrument's own and lives with it, in the app behind its define, since this module left the app (2026-10-08,
+    /// P5): a member only an instrument calls would ship in a release here, where no condition may compile it out.
+    @MainActor
+    public init?(_ app: NSRunningApplication) {
+        guard let resolved = Self.resolve(app) else { return nil }
+        self = resolved
+    }
+}
+
 /// What the reader had selected, where, and how far to trust it.
-struct Selection: Sendable, Equatable {
+public struct Selection: Sendable, Equatable {
     /// The term to look up (`SelectedTerm`): the selection without its wrapping punctuation.
-    let text: String
+    public let text: String
     /// The sentence around it, when the app exposes surrounding text consistent with the selection.
-    let sentence: String?
+    public let sentence: String?
     /// Where `text` sits in `sentence`, UTF-16, when the capture knows.
-    let rangeInSentence: NSRange?
-    let quality: CaptureQuality
+    public let rangeInSentence: NSRange?
+    public let quality: CaptureQuality
     /// Where it was read: the app always, and the page or the file where the app could say — never
     /// both in one field, which is the defect `where-a-word-was-read.md` §2 is about.
-    let place: ReadingPlace
+    public let place: ReadingPlace
 
-    var appName: String { place.name ?? "" }
-    var bundleID: String? { place.bundleID }
+    /// Written out, because a struct's own memberwise initialiser is never public: the app makes a selection of
+    /// its own for a word the reader named, a reading reopened and an instrument's panel.
+    public init(text: String, sentence: String?, rangeInSentence: NSRange?, quality: CaptureQuality, place: ReadingPlace) {
+        self.text = text
+        self.sentence = sentence
+        self.rangeInSentence = rangeInSentence
+        self.quality = quality
+        self.place = place
+    }
+
 }
 
 /// Reads an app's selection through Accessibility. Apps expose text in one of two dialects — the
@@ -68,16 +80,34 @@ struct Selection: Sendable, Equatable {
 ///
 /// - **text range**: `AXSelectedText` + `AXSelectedTextRange` — Cocoa text views, most native apps.
 /// - **text markers**: `AXSelectedTextMarkerRange` — WebKit (Safari, Mail) and Chromium.
-enum SelectionReader {
-    enum Outcome: Sendable, Equatable {
+public enum SelectionReader {
+    public enum Outcome: Sendable, Equatable {
         case selected(Selection)
         /// Nothing usable, and why — shown to the reader, never swallowed.
-        case nothing(String)
+        case nothing(Refusal)
+    }
+
+    /// Why nothing could be looked up, **typed rather than worded**: each case carries what its sentence names —
+    /// the app, a count — and the words are the view layer's (`SelectionReader.Refusal.message`), moved there verbatim
+    /// when the reader left the app (2026-10-08, plan-macos-modularisation P5). "Try again", "grant access" and
+    /// "nothing is selected" are still different answers; only who says them changed.
+    public enum Refusal: Sendable, Equatable {
+        /// Nothing is selected in the app, or it does not expose its selection to Accessibility.
+        case nothingSelected(app: String)
+        /// The focused element had nothing, and the window was too large to search for a page within `limit`
+        /// elements — not the same as knowing there is no selection.
+        case searchLimitReached(app: String, limit: Int)
+        /// The selection is only whitespace and punctuation.
+        case noWord(app: String)
+        /// The selection is `characters` long, past `maximumLength`.
+        case tooLong(app: String, characters: Int)
+        /// Reading it failed, and how — each failure needs a different answer for the reader.
+        case failed(CaptureError, app: String)
     }
 
     static let maximumLength = LookupRequest.maximumLength
     /// The whole read, however many requests it takes.
-    static let budget: Duration = .seconds(2)
+    public static let budget: Duration = .seconds(2)
     /// Nodes visited looking for a browser window's page, which sits a few levels under toolbars and
     /// tab groups. A tree this search cannot cross is reported, not treated as "no page".
     static let webAreaSearchLimit = 400
@@ -96,12 +126,12 @@ enum SelectionReader {
     /// the second instance of the class the compositor check in `ScreenWordReader.target(at:)` closes,
     /// whose first instance is crash report 2026-09-25. There is no hung app to be stalled by here and
     /// nothing to serialise against, so the two reasons `AccessibilityLane` exists do not apply.
-    static func read(from app: FrontApp) async -> Outcome {
+    public static func read(from app: FrontApp) async -> Outcome {
         guard app.pid != getpid() else { return await MainActor.run { readNow(app) } }
         return await AccessibilityLane.system.run(timeout: AccessibilitySession.messagingTimeout) {
             readNow(app)
         } cancelled: {
-            .nothing(message(for: .cancelled, app: app.name))
+            .nothing(.failed(.cancelled, app: app.name))
         }
     }
 
@@ -125,16 +155,12 @@ enum SelectionReader {
                     bundleID: app.bundleID, name: app.name)
                 return selection(from: capture, app: app, place: place)
             case .nothing:
-                return .nothing(String(localized: "Nothing is selected in \(app.name), or it does not expose its selection to Accessibility.",
-                                       comment: "Lookup panel; the placeholder is the app's name"))
+                return .nothing(.nothingSelected(app: app.name))
             case .searchLimitReached:
-                return .nothing(String(localized: """
-                    Nothing is selected in \(app.name)'s focused element, and its window is too large to search \
-                    for a page within \(webAreaSearchLimit) elements.
-                    """, comment: "Lookup panel; the placeholders are the app's name and a count of elements"))
+                return .nothing(.searchLimitReached(app: app.name, limit: webAreaSearchLimit))
             }
         } catch {
-            return .nothing(message(for: error, app: app.name))
+            return .nothing(.failed(error, app: app.name))
         }
     }
 
@@ -332,13 +358,9 @@ enum SelectionReader {
     // MARK: - The result
 
     static func selection(from capture: Capture, app: FrontApp, place: ReadingPlace) -> Outcome {
-        guard let term = SelectedTerm(from: capture.text) else {
-            return .nothing(String(localized: "The selection in \(app.name) has no word in it.",
-                                   comment: "Lookup panel; the placeholder is the app's name"))
-        }
+        guard let term = SelectedTerm(from: capture.text) else { return .nothing(.noWord(app: app.name)) }
         guard term.text.count <= maximumLength else {
-            return .nothing(String(localized: "The selection in \(app.name) is \(term.text.count) characters — too long to look up.",
-                                   comment: "Lookup panel; the placeholders are the app's name and a character count"))
+            return .nothing(.tooLong(app: app.name, characters: term.text.count))
         }
         let context = capture.context
         let rangeInSentence = context?.selection.map {
@@ -352,29 +374,6 @@ enum SelectionReader {
         return .selected(Selection(
             text: term.text, sentence: context?.text, rangeInSentence: rangeInSentence,
             quality: .accessibility(capture.source, context: quality), place: place))
-    }
-
-    static func message(for error: CaptureError, app: String) -> String {
-        switch error {
-        // **Localized where written** (ADR-0025): these reach the panel as its detail line.
-        case .notResponding:
-            String(localized: "\(app) did not answer Accessibility in time — it may be busy. Try again in a moment.",
-                   comment: "Lookup panel; the placeholder is the app's name")
-        case .deadlineExceeded:
-            String(localized: "Reading the selection from \(app) took longer than \(budget.components.seconds) seconds, so it was stopped.",
-                   comment: "Lookup panel; the placeholders are the app's name and a number of seconds")
-        case .accessibilityDisabled:
-            String(localized: "Accessibility access for XiaolaiDict is off. Allow it in \(PrivacySettings.accessibilityLocation).",
-                   comment: "Lookup panel; the placeholder is the System Settings list to grant it in")
-        case .appUnavailable:
-            String(localized: "\(app) quit, or stopped answering Accessibility requests.",
-                   comment: "Lookup panel; the placeholder is the app's name")
-        case .accessibilityRefused:
-            String(localized: "\(app) refused Accessibility requests — is the screen locked?",
-                   comment: "Lookup panel; the placeholder is the app's name")
-        case .cancelled:
-            String(localized: "A newer lookup replaced this one.", comment: "Lookup panel, when a lookup was superseded")
-        }
     }
 
     private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "selection")

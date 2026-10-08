@@ -54,7 +54,8 @@ struct ModuleBoundaryTests {
         // a lemma it stores is computed by `DictionaryModel`, never here.
         "StudyKit": ["Foundation", "SQLite3", "os"],
         // The capture policy as values and arithmetic: CoreGraphics for `CGRect` and `CGPoint`, never a window
-        // server; `os` is hover's log. Accessibility, ScreenCaptureKit and Vision are the app's.
+        // server; `os` is hover's log. Accessibility, ScreenCaptureKit and Vision are `MacCapture`'s, the platform
+        // adapter below (corrected 2026-10-08, P5: this said "the app's").
         "Capture": ["Foundation", "CoreGraphics", "os"],
         // What the model service *does* with a request, written against any `LanguageModel` so its
         // tests need no GPU.
@@ -120,6 +121,33 @@ struct ModuleBoundaryTests {
         "StudyModels": ["Foundation", "Observation", "os"],
     ]
 
+    /// **The platform adapter: the part of a subject that touches the platform, and a class of its own** (2026-10-08,
+    /// plan-macos-modularisation §3, P5) — the Apple capture readers: Accessibility and its lane, the screen capture
+    /// and Vision's reading of it, the AppKit events hover watches, and the two permission probes they ask through.
+    ///
+    /// Neither of the other two classes. **AppKit is allowed here**, which below the view layer it is not: an adapter
+    /// is where `NSEvent`, `NSWorkspace` and `NSScreen` are spoken. **No other UI framework, no display text and no
+    /// conditional compilation**, and **none of the subjects it does not adapt** — the study side, the model, the sense
+    /// ladder, the presentation layer and the view layer. An adapter that bound one would be the app again, and a
+    /// counterpart on another platform would have nothing named to match. Exact sets, as below the view layer; the words
+    /// a refusal is shown in are the view layer's, and `StringCatalogTests` refuses display text here as below it.
+    static let platformAdapters: [String: Set<String>] = [
+        // AppKit for hover's event monitors, the running apps and the screens; ApplicationServices for Accessibility;
+        // ScreenCaptureKit and Vision for the capture path; CoreGraphics for the window list and Screen Recording's
+        // request; CoreFoundation for the ranges Accessibility answers in; Synchronization for the lane, the guard and
+        // the memo; `os` is the readers' log.
+        "MacCapture": [
+            "AppKit", "ApplicationServices", "CoreFoundation", "CoreGraphics", "Foundation",
+            "ScreenCaptureKit", "Synchronization", "Vision", "os",
+        ],
+    ]
+
+    /// The subjects a platform adapter never binds, besides the view layer: what it would have to stop adapting to
+    /// bind — the study side and its presentation, the model, and the sense ladder.
+    static let adapterNeverBinds: Set<String> = [
+        "StudyKit", "StudyPresentation", "StudyModels", "ModelKit", "XiaolaiDictCore",
+    ]
+
     /// The view layer, which may bind AppKit and SwiftUI, and is excluded from the rule below.
     static let viewLayer: Set<String> = ["XiaolaiDictUI", "XiaolaiDict"]
 
@@ -181,6 +209,48 @@ struct ModuleBoundaryTests {
         }
     }
 
+    /// **A platform adapter binds AppKit and no other UI framework, and none of the subjects it does not adapt** —
+    /// §3's third class. The exact set below holds the frameworks; this names the file, and refuses a sibling the exact
+    /// set filters out with every other.
+    @Test func thePlatformAdapterBindsAppKitButNoOtherUIFrameworkAndNoSubjectItDoesNotAdapt() throws {
+        var problems: [String] = []
+        for target in Self.platformAdapters.keys.sorted() {
+            let files = try Self.imports(of: target)
+            // A walk that read nothing has nothing to refuse, and would pass for a target that is not there.
+            if files.isEmpty { problems.append("nothing scanned under Sources/\(target)") }
+            problems += Self.adapterProblems(of: target, files: files)
+        }
+        #expect(problems.isEmpty, "\(problems)")
+        // The control: each refusal, on a list no scan made, and nothing for what an adapter may bind.
+        #expect(Self.adapterProblems(of: "MacCapture", files: [
+            ("Clean.swift", ["AppKit", "ApplicationServices", "Capture"]), ("Drawn.swift", ["SwiftUI"]),
+            ("Studied.swift", ["StudyKit"]), ("Shown.swift", ["XiaolaiDictUI"]),
+            ("Both.swift", ["QuartzCore", "XiaolaiDictCore"]),
+        ]) == [
+            "MacCapture/Drawn.swift imports SwiftUI, a UI framework other than AppKit",
+            "MacCapture/Studied.swift imports StudyKit, a subject a platform adapter does not adapt",
+            "MacCapture/Shown.swift imports XiaolaiDictUI, the view layer",
+            "MacCapture/Both.swift imports QuartzCore, a UI framework other than AppKit",
+            "MacCapture/Both.swift imports XiaolaiDictCore, a subject a platform adapter does not adapt",
+        ])
+    }
+
+    /// What a platform adapter's imports break of its class's rule, in the words the check above uses.
+    static func adapterProblems(of target: String, files: [(file: String, modules: [String])]) -> [String] {
+        files.flatMap { file, modules in
+            modules.compactMap { module -> String? in
+                if module != "AppKit", viewFrameworks.contains(module) {
+                    return "\(target)/\(file) imports \(module), a UI framework other than AppKit"
+                }
+                if viewLayer.contains(module) { return "\(target)/\(file) imports \(module), the view layer" }
+                if adapterNeverBinds.contains(module) {
+                    return "\(target)/\(file) imports \(module), a subject a platform adapter does not adapt"
+                }
+                return nil
+            }
+        }
+    }
+
     /// **And the list of targets to check is read off `Package.swift`, not kept by hand.** A target
     /// added later and forgotten here is a target the rule above does not cover, and it would go on
     /// passing — the same shape as a source scan that names one directory.
@@ -188,20 +258,26 @@ struct ModuleBoundaryTests {
         let declared = try Self.targets()
         let accountedFor = Set(Self.allowed.keys)
             .union(Self.presentation.keys)
+            .union(Self.platformAdapters.keys)
             .union(Self.viewLayer)
             .union(["XiaolaiDictService", "XiaolaiDictModelService", "XiaolaiDictTestSupport"])
         #expect(Set(declared) == accountedFor, """
             declared in Package.swift: \(declared.sorted()); accounted for here: \
             \(accountedFor.sorted())
             """)
-        // One class each: a target in both tables would be held to whichever rule happened to be read first.
+        // One class each: a target in two tables would be held to whichever rule happened to be read first.
         #expect(Set(Self.allowed.keys).isDisjoint(with: Self.presentation.keys))
+        #expect(Set(Self.allowed.keys).isDisjoint(with: Self.platformAdapters.keys))
+        #expect(Set(Self.presentation.keys).isDisjoint(with: Self.platformAdapters.keys))
     }
 
     // MARK: - What each target binds
 
-    /// Every target held to an exact framework set: below the view layer, and the presentation layer.
-    static var exactSets: [String: Set<String>] { allowed.merging(presentation) { below, _ in below } }
+    /// Every target held to an exact framework set: below the view layer, the presentation layer and the platform
+    /// adapters.
+    static var exactSets: [String: Set<String>] {
+        allowed.merging(presentation) { below, _ in below }.merging(platformAdapters) { held, _ in held }
+    }
 
     @Test func eachTargetBindsOnlyWhatItIsAllowedTo() throws {
         var surprises: [String] = []
@@ -630,6 +706,17 @@ struct ModuleBoundaryTests {
                 "\(declaredView)")
         #expect(try Self.verdict(on: "StudyPresentation", compiled: presenting.union(["Foundation", "SwiftUI"]))
                 == ["StudyPresentation binds SwiftUI, which is not in its allowed set"])
+        // A platform adapter binding a subject it does not adapt is refused as that, declared or not; a UI framework
+        // other than AppKit is outside its exact set; and its whole set, with what it declares, passes.
+        let adapting = try #require(Self.dependencyMap()["MacCapture"], "MacCapture has no declaration")
+        let adapterSet = try #require(Self.platformAdapters["MacCapture"])
+        #expect(try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet)).isEmpty)
+        let studied = try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["StudyKit"]))
+        #expect(studied.contains("MacCapture binds StudyKit, which a platform adapter never may"), "\(studied)")
+        let shown = try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["XiaolaiDictUI"]))
+        #expect(shown.contains("MacCapture binds XiaolaiDictUI, which a platform adapter never may"), "\(shown)")
+        #expect(try Self.verdict(on: "MacCapture", compiled: adapting.union(adapterSet).union(["SwiftUI"]))
+                == ["MacCapture binds SwiftUI, which is not in its allowed set"])
         #expect(try Self.verdict(on: "Undeclared", compiled: ["Foundation"])
                 == ["Undeclared has no declaration this test could read"])
     }
@@ -721,6 +808,13 @@ struct ModuleBoundaryTests {
                 == [Plant.undecided("#if canImport(Translation)")])
         #expect(Self.conditionVerdict(on: "XiaolaiDict", listed: [])
                 == ["XiaolaiDict allows canImport(Translation), which no condition holds any more — drop it from the table"])
+        // A platform adapter refuses even a condition the configurations decide — the instruments' define first.
+        for decided in ["XIAOLAIDICT_CAPTURE_INSTRUMENTS", "DEBUG", "canImport(AppKit)"] {
+            #expect(Self.conditionVerdict(on: "MacCapture", listed: listed(decided))
+                    == ["MacCapture/Planted.swift: #if \(decided) — a platform adapter compiles one way, and no entry "
+                        + "in conditionsAllowed allows it"], "\(decided)")
+        }
+        #expect(Self.conditionVerdict(on: "MacCapture", listed: []).isEmpty)
     }
 
     /// **The flags are the configurations' defines, read off the script**, and the reader can fail.
@@ -754,17 +848,27 @@ struct ModuleBoundaryTests {
     }
 
     /// Every rule above, asked of one target's conditions: decided by the configurations, or allowed by name.
+    ///
+    /// **A platform adapter has no condition at all**, even one the configurations decide, unless it is allowed by name
+    /// with its reason (plan-macos-modularisation §3, P5): it compiles one way, and that one way is what a counterpart
+    /// on another platform matches. A development instrument that reads the screen stays in the app, behind its define.
     static func conditionVerdict(on target: String, listed: [ListedCondition]) -> [String] {
         let allowed = conditionsAllowed[target] ?? [:]
+        let adapter = platformAdapters[target] != nil
         var problems: [String] = [], used: Set<String> = []
         for condition in listed {
-            if decidedByTheConfigurations(condition.text) { continue }
+            if !adapter, decidedByTheConfigurations(condition.text) { continue }
             if allowed[condition.text] != nil {
                 used.insert(condition.text)
                 continue
             }
             let text = condition.text.isEmpty ? "(a condition the parser does not bound)" : condition.text
-            problems.append(Plant.undecided("\(condition.directive) \(text)", in: "\(target)/\(condition.file)"))
+            if adapter {
+                problems.append("\(target)/\(condition.file): \(condition.directive) \(text) — a platform adapter "
+                                + "compiles one way, and no entry in conditionsAllowed allows it")
+            } else {
+                problems.append(Plant.undecided("\(condition.directive) \(text)", in: "\(target)/\(condition.file)"))
+            }
         }
         for unused in Set(allowed.keys).subtracting(used).sorted() {
             problems.append("\(target) allows \(unused), which no condition holds any more — drop it from the table")
@@ -955,6 +1059,12 @@ struct ModuleBoundaryTests {
         if presentation[target] != nil {
             for module in compiled.intersection(viewLayer).sorted() {
                 problems.append("\(target) binds \(module), which a presentation target never may")
+            }
+        }
+        // The same hole for a platform adapter, which has more siblings it never binds: the subjects it does not adapt.
+        if platformAdapters[target] != nil {
+            for module in compiled.intersection(viewLayer.union(adapterNeverBinds)).sorted() {
+                problems.append("\(target) binds \(module), which a platform adapter never may")
             }
         }
         return problems

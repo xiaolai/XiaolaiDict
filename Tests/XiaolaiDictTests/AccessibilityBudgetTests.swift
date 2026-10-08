@@ -1,8 +1,8 @@
 import ApplicationServices
+@testable import MacCapture
 import Synchronization
 import Testing
 import XiaolaiDictBase
-@testable import XiaolaiDict
 
 /// **Hover's Accessibility read is bounded, and stops at the first failure.**
 ///

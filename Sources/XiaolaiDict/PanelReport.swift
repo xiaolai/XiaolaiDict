@@ -1,6 +1,7 @@
 import AppKit
 import Capture
 import CaptureModel
+import MacCapture
 import os
 import StudyModels
 import XiaolaiDictBase
