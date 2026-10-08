@@ -601,6 +601,8 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/ReviewReport.swift",
         // The reminder's grant, pending requests, plan and log (WI-7).
         "Sources/XiaolaiDict/ReminderReport.swift",
+        // The language-model source in force, its tier, what it may be sent and what its preflight said (ADR-0053).
+        "Sources/XiaolaiDict/ProviderReport.swift",
         // The lookup instruments answer through `Codable` types rather than dictionaries.
         "Sources/XiaolaiDict/LookupCommand.swift",
         // The helpers that answer the harness directly.

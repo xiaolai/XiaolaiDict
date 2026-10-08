@@ -17,17 +17,21 @@ struct SettingsPaneNamesTests {
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("Tools/e2e.sh"),
             encoding: .utf8)
-        let line = try #require(
-            script.split(separator: "\n").first { $0.hasPrefix("names = {") },
-            "e2e.sh no longer declares a `names` set, so this guard covers nothing")
-        // A name is letters and the spaces between words ("Language Model"); the punctuation between names is not one.
-        let listed = Set(line.split(separator: "\"")
-            .filter { $0.contains(where: \.isLetter) && $0.allSatisfy { $0.isLetter || $0 == " " } }
-            .map(String.init))
+        // **Every set spelled this way, not the first.** The settings stage's validator came to carry one of its own
+        // (2026-10-09, the Language Model pane), and a guard that read only the first would have let the second fall
+        // behind exactly as the first once did.
+        let lines = script.split(separator: "\n").filter { $0.hasPrefix("names = {") }
+        #expect(lines.count >= 2, "e2e.sh declares \(lines.count) `names` set(s); the close and the settings report each hold one")
         let panes = Set(SettingsPane.allCases.map(\.name))
-        #expect(listed == panes, """
-            e2e.sh knows \(listed.sorted()) and the app has \(panes.sorted()) — \
-            update the `names` set in Tools/e2e.sh
-            """)
+        for line in lines {
+            // A name is letters and the spaces between words ("Language Model"); the punctuation between names is not one.
+            let listed = Set(line.split(separator: "\"")
+                .filter { $0.contains(where: \.isLetter) && $0.allSatisfy { $0.isLetter || $0 == " " } }
+                .map(String.init))
+            #expect(listed == panes, """
+                e2e.sh knows \(listed.sorted()) and the app has \(panes.sorted()) — \
+                update the `names` set in Tools/e2e.sh: \(line)
+                """)
+        }
     }
 }

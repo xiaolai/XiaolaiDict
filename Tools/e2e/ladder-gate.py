@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""D6: does the labelled set back the order the shipped ladder actually runs?
+"""D6: does the labelled set back the order the local model's ladder actually runs?
 
 Given a `--sense-report` JSON, this answers one question — whether every rung earns the place the
-ladder gives it — and says why when it does not. It is a file rather than a heredoc inside `e2e.sh`
+ladder gives it — and says why when it does not.
+
+**Which ladder (ADR-0053, 2026-10-09).** The app builds one ladder (`LocalModelAccess.senseLadder`) over
+a top rung it composes: the source the reader chose, through the router. `--sense-report` builds the
+same ladder over the bundled model itself, so what this judges is the ladder of a reader whose source
+is the local model — chosen, or nothing chosen with a model on disk. The bundled model is hidden, not
+removed: no reader is asked to download it, and this gate still holds its ladder to the labelled set.
+A provider's place at the top is not this gate's: six cases cannot rank hosted models, and ADR-0053's
+270-case measurement is what put them there. The rung keeps its report name, `localModel`.
+
+It is a file rather than a heredoc inside `e2e.sh`
 because a judgement that decides a release has to be exercised before it ships, and the report it
 judges takes ten minutes to produce on the E2E Mac. `Tools/tests/test_ladder_gate.py` feeds it
 reports built by hand: the measured numbers pass, a middle rung no better than the one below fails,

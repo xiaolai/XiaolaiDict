@@ -218,6 +218,28 @@ struct ProviderCompositionTests {
         #expect(replied.withLock { $0 } == [1], "the app quit before its provider was put away")
     }
 
+    /// **A quit asked for from inside the main queue's drain still quits** — which is where SIGTERM asks for it. The
+    /// signal source's handler runs on the main queue and calls `NSApp.terminate` there; told `.terminateLater`, AppKit
+    /// spins the run loop *inside that callout* until it is replied to, and nothing else queued on the main queue runs
+    /// until the callout returns. A reply that needed the main actor therefore never came: measured on the E2E Mac
+    /// (2026-10-09), the app answered `NSTerminateLater` to the provider stage's SIGTERM and was still running minutes
+    /// later, its main thread in `-[NSApplication _shouldTerminate]` under the signal handler. Reproduced here: this
+    /// body resumes as a main-actor job — inside the drain — and spins the run loop the way AppKit does.
+    @Test func aQuitAskedForFromInsideTheMainQueueStillQuits() async throws {
+        let backend = FakeProvider()
+        let (models, suite) = Self.coordinator(choosing: .claudeCLI, backend: backend)
+        _ = await models.explanationActions.explain(Self.explanation)
+        let app = XiaolaiDictApp(defaults: suite, hotkeys: HotkeyCenter(backend: FakeBackend()), models: models)
+        let replied = Recorder<Bool>(false)
+        #expect(app.endProvidersThenQuit { replied.withLock { $0 = true } } == .terminateLater)
+        // `-[NSApplication _shouldTerminate]`'s wait, synchronously, bounded only so a hang is a failure and not a run
+        // that never ends: past the providers' own bound, which a quit is allowed to spend.
+        Self.spinTheRunLoop(until: { replied.withLock { $0 } },
+                            for: Double(XiaolaiDictApp.providerShutdown.components.seconds) + 5)
+        #expect(replied.withLock { $0 }, "a quit asked for from inside the main queue was never let go on")
+        #expect(backend.shutDowns == 1, "the app quit without putting its provider away")
+    }
+
     /// The lines no test can call: launching starts the providers, outside an instrument run, and AppKit's quit goes
     /// through the wait above.
     @Test func theRunningAppStartsTheProvidersAndEndsThemBeforeItQuits() throws {
@@ -228,6 +250,16 @@ struct ProviderCompositionTests {
         let terminate = try #require(app.range(of: "func applicationShouldTerminate("))
         #expect(app[terminate.lowerBound...].prefix(300).contains("endProvidersThenQuit"),
                 "AppKit's quit does not wait for the providers")
+    }
+
+    /// The run loop, turned on this thread until `done` or `seconds` have passed — synchronously, as AppKit turns it
+    /// while it waits for a reply to `.terminateLater`. Not `async`: suspending would leave the main queue's drain, and
+    /// staying inside it is the point.
+    static func spinTheRunLoop(until done: () -> Bool, for seconds: Double) {
+        let bound = Date.now.addingTimeInterval(seconds)
+        while !done(), Date.now < bound {
+            RunLoop.main.run(mode: .default, before: Date.now.addingTimeInterval(0.05))
+        }
     }
 
     static func source(_ path: String) throws -> String {

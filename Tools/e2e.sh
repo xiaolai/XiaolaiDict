@@ -296,7 +296,7 @@ done
 # **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,
 # and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
 # document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
-cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py .build/e2e/
+cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -328,7 +328,7 @@ WANTED=("${@:2}")
 # exited 0 — a green mark for a run that tested nothing, which is the one thing this file is written
 # to make impossible. This is the only list of the names; the header points at it rather than
 # naming them again, because two lists of one thing are one list nobody keeps.
-KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel model learning review reminder)
+KNOWN_STAGES=(launch lookup crash accessibility selection shortcut deadline hover drawer recogniser setup scenes panel provider model learning review reminder)
 for wanted in ${WANTED[@]+"${WANTED[@]}"}; do
     found=""
     for known in "${KNOWN_STAGES[@]}"; do [ "$wanted" = "$known" ] && { found=yes; break; }; done
@@ -788,7 +788,7 @@ end_instrument() {  # end_instrument <flag>: wait for this bundle's instrument t
     return 1
 }
 
-consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTRUN/FAIL lines, then DONE
+consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTRUN/SKIPPED/FAIL lines, then DONE
     # A here-string, never a pipe: `flunk` increments a counter, and a pipe would run it in a
     # subshell where the increment is thrown away — a stage that reported its failures and then
     # passed.
@@ -800,6 +800,10 @@ consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTR
             # A claim that could not be exercised here, with the reason: neither a pass nor a failure,
             # and never silent.
             NOTRUN) echo "NOT RUN  $text" ;;
+            # **A check whose prerequisite this Mac lacks and only a person can supply** — a CLI not installed, nobody
+            # signed in to it. Said by name, with what the app's own preflight answered, and recorded as nothing: the
+            # stage's other checks are what pass it, so a skip can never be the reason a stage is green.
+            SKIPPED) echo "SKIPPED  $text" ;;
             FAIL) flunk "$text" ;;
         esac
     done <<<"$verdicts"
@@ -842,6 +846,60 @@ run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdou
     fi
     cat "$out" 2>/dev/null || true
 }
+
+# provider_status_verdicts <stage> <source> <tier> <readiness: ready|none|cli> <report>: PASS/FAIL/SKIPPED lines and DONE
+# about one `--provider-status` report (ADR-0053) — where the language-model source runs, what it may be sent, and what
+# its trivial question came to. Defined before every stage: the provider stage asks it of every source, and the model
+# stage of the bundled model it selects.
+provider_status_verdicts() {
+    python3 - "$1" "$2" "$3" "$4" "$5" 2>&1 <<'PYSTATUS' || true
+import json, sys
+stage, source, tier, wanted = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+try:
+    r = json.loads(sys.argv[5])
+except ValueError:
+    r = None
+if not isinstance(r, dict):
+    say(False, "", f"{stage}: --provider-status for {source} wrote something that is not a report")
+else:
+    label = f"{stage}: {source}"
+    say(r.get("source") == source, f"{label} is the source in force",
+        f"{label} was chosen and the app reports {r.get('source')} as the source")
+    # **What it may be sent, read off the client itself** (ProviderReport asks a ProviderClient over a provider that
+    # only notes what it was handed). On this Mac: everything. Remote: neither the dictionary text nor a sense question
+    # — not on a lookup, and, while RemoteDisclosure.dictionaryTextMayLeave is false, not on a tap either.
+    on = tier == "onThisMac"
+    sent = (r.get("tier"), r.get("sendsDictionaryText"), r.get("asksSenseOnLookup"), r.get("asksSenseOnTap"))
+    say(sent == (tier, on, on, on),
+        f"{label} is {tier}, and " + ("may be sent the dictionary text and asked senses" if on
+                                       else "is sent no dictionary text and asked no sense question"),
+        f"{label}: tier, dictionary text, sense on lookup, sense on tap are {sent}; wanted {(tier, on, on, on)}")
+    readiness = r.get("readiness")
+    if wanted == "none":
+        say(readiness is None, f"{label} is asked nothing to be checked",
+            f"{label} was checked as though it were a provider: {readiness}")
+    elif wanted == "ready":
+        say(readiness == "ready",
+            f"{label} answered the app's preflight in {r.get('answeredInSeconds')} s",
+            f"{label} did not answer the app's preflight: {readiness} {r.get('failure') or ''}".rstrip())
+    elif readiness == "ready":
+        say(True, f"{label} answered the app's preflight in {r.get('answeredInSeconds')} s "
+                  f"(version {r.get('version')})", "")
+    elif readiness in ("notInstalled", "notSignedIn", "overrideUnusable") \
+            or (readiness == "unavailable" and r.get("failure") == "rateLimited"):
+        # A prerequisite only a person at this Mac can supply: install it, sign in to it, or wait out its quota.
+        print(f"SKIPPED\t{label} was not asked a question here: the app's preflight says {readiness}"
+              + (f" ({r.get('failure')})" if r.get("failure") else "")
+              + " — install it and sign in on this Mac to run this check")
+    else:
+        say(False, "", f"{label} is installed and its preflight says {readiness}"
+                       + (f" ({r.get('failure')})" if r.get("failure") else "")
+                       + (f", version {r.get('version')}" if r.get("version") else ""))
+print("DONE")
+PYSTATUS
+}
+
 # **The setup flag is captured before the app is launched, not inside the stage that uses it.**
 # Launching XiaolaiDict can open the setup board by itself and write this flag — that is the whole
 # behaviour — so a backup taken later records the value the app just wrote, and "restoring" it
@@ -1051,7 +1109,7 @@ fixture_ready() {
             return 1
         fi
         if [ "$attempt" = 2 ] || [ "$state" = noAccessibility ]; then
-            echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning and model stages select in: $state — $detail$again" >&2
+            echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning, model and provider stages select in: $state — $detail$again" >&2
             return 1
         fi
         pid=$(printf '%s' "$health" | json_field pid)
@@ -1130,7 +1188,7 @@ fi
 # 5. **TextEdit, answering and holding the fixture**, where a stage selects in it — and only where this session can use
 #    Accessibility on an unlocked screen, or every answer here would be about that instead.
 if [ "$screen_ok" = yes ] && [ "$session_accessibility" = yes ] \
-   && wants_any selection shortcut deadline hover drawer learning model; then
+   && wants_any selection shortcut deadline hover drawer learning model provider; then
     fixture_ready 2>"$reports/fixture-ready.err" || lacks "$(cat "$reports/fixture-ready.err")"
 fi
 
@@ -2222,12 +2280,36 @@ fi
 # the flag is what decides, so it is cleared, the app is restarted, and the board must appear with
 # nobody having asked for it. Then the flag is set, the app is restarted again, and it must not.
 
+# **The bundled model is hidden, not removed** (ADR-0053): its row is on the board only where `ShowLocalModelSetup` is
+# set or a model is already on disk, and the row that opens a language-model source — *Translation and Meanings* — is
+# optional, never Needed. A fresh reader is asserted first, with the flag and the reader's source both set aside; then
+# the flag is set and the bundled model's own row is asserted as it always was. Read before any launch below, and put
+# back however the run ends: the source decides that row's state word, and the flag decides whether the other is there.
+if local_setup_original=$(defaults read com.xiaolaidict ShowLocalModelSetup 2>/dev/null); then
+    local_setup_had=yes
+else
+    local_setup_had=no; local_setup_original=""
+fi
+if board_provider_original=$(defaults read com.xiaolaidict LanguageModelProvider 2>/dev/null); then
+    board_provider_had=yes
+else
+    board_provider_had=no; board_provider_original=""
+fi
+restore_local_model_setup() {
+    restore_default ShowLocalModelSetup "$local_setup_had" "$local_setup_original" -bool
+    restore_default LanguageModelProvider "$board_provider_had" "$board_provider_original"
+}
+at_exit restore_local_model_setup
+
 "$helpers/close-window" "Setup" >/dev/null 2>&1 || true
 defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
 # The store goes aside here, so this launch is a fresh reader's in both senses: no flag, and no
 # model. Put back at the end of the stage, before anything that needs the weights. Idempotent: the
 # first call above has usually already done it, and this one clears the root the restart recreated.
 stash_models || true
+# And no source chosen and no `ShowLocalModelSetup`, which is what a fresh reader has.
+defaults delete com.xiaolaidict ShowLocalModelSetup 2>/dev/null || true
+defaults delete com.xiaolaidict LanguageModelProvider 2>/dev/null || true
 if ! relaunch_or_end_stage; then
     return 0
 else
@@ -2239,23 +2321,156 @@ else
         flunk "setup: nothing opened the board on a first launch"
     fi
 
-    # Read from the board that just opened by itself, with no model in the store.
-    shown=$("$helpers/panel" com.xiaolaidict)
-    # **The model row, read through Accessibility, and the store asked separately.** What this can
-    # see is the row's text and which controls exist — not whether a button is wired to anything,
-    # which only clicking it would show, and which the `setup` stage's own click checks do below.
-    # What must be true on a Mac where the model is not downloaded: it is still needed, the weaker
-    # engine is named, both choices are offered. That **nothing has begun downloading** is asked of
-    # the store rather than of the row, because a row that is simply slow to redraw would otherwise
-    # read as proof.
+    # That **nothing has begun downloading** is asked of the store rather than of a row, because a row that is simply
+    # slow to redraw would otherwise read as proof — and with the bundled model hidden there is no row to ask at all.
     staging=~/Library/Application\ Support/XiaolaiDict/Models/.staging
     if [ -d "$staging" ] && [ -n "$(find "$staging" -name '*.partial' -mmin -5 2>/dev/null)" ]; then
         flunk "setup: something has been fetching model files in the last five minutes, unasked"
     else
         pass "setup: nothing had begun downloading a model"
     fi
-    if printf '%s' "$shown" | grep -q "Translation and Meanings"; then
-        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Translation and Meanings" || true)
+
+    # **Read once the board has settled**: its summary says "Checking…" and its dictionary row is still asking for a
+    # moment after it opens, and a count read then is a count of nothing yet.
+    for _ in $(seq 1 50); do
+        shown=$("$helpers/panel" com.xiaolaidict)
+        printf '%s' "$shown" | grep -q "Looking for your dictionaries" || printf '%s' "$shown" | grep -q '"Checking…"' || break
+        sleep 0.2
+    done
+    # Asked of the rows and controls, never of the text alone: the bundled model's row is gone, its buttons with it,
+    # and the optional row's state word is "Optional". **And the summary does not count the optional row** — it counts
+    # exactly the rows that say Needed — which is what "never Needed, never holds the board open" comes to on screen.
+    board_verdicts=$(python3 - "$shown" 2>&1 <<'PYBOARD' || true
+import json, re, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+try:
+    shown = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    shown = {"windows": []}
+boards = [w for w in shown.get("windows", []) if "Study Dictionary" in w.get("texts", [])]
+if not boards:
+    say(False, "", "setup: no window held the board rows, so the language model rows were not read "
+                   f"({[w.get('title') for w in shown.get('windows', [])]})")
+else:
+    texts, controls = boards[0].get("texts", []), boards[0].get("controls", [])
+    bundled = [name for name in ("Not Now", "Download") if name in controls]
+    say("Local Model" not in texts and not bundled,
+        "setup: the bundled model row is hidden on a Mac with no model and no ShowLocalModelSetup (ADR-0053)",
+        "setup: the bundled model row is on the board of a Mac with no model and no ShowLocalModelSetup "
+        f"(its title: {'Local Model' in texts}, its controls: {bundled})")
+    say("Translation and Meanings" in texts and "Optional" in texts and "Choose…" in controls,
+        "setup: Translation and Meanings is on the board, Optional, with Choose… to open its settings",
+        f"setup: the language model row is not an optional row (title: {'Translation and Meanings' in texts}, "
+        f"Optional: {'Optional' in texts}, Choose…: {'Choose…' in controls})")
+    summary = next((t for t in texts if "still needed" in t or "Nothing is waiting on you" in t or "is in place" in t),
+                   None)
+    needed = texts.count("Needed")
+    if summary is None:
+        say(False, "", f"setup: the board has no summary to count its rows against ({texts[:6]})")
+    else:
+        if "are still needed" in summary:
+            counted = int(re.search(r"\d+", summary).group(0))
+        elif "is still needed" in summary:
+            counted = 1
+        else:
+            counted = 0
+        say(counted == needed,
+            f"setup: the summary counts {counted} thing(s) still needed, the rows that say Needed and not the optional one",
+            f"setup: the summary counts {counted} while {needed} row(s) say Needed: {summary}")
+print("DONE")
+PYBOARD
+)
+    consume_verdicts setup "$board_verdicts"
+
+    # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
+    # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
+    # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
+    # app really did stay behind: when it came forward on its own, being remembered is correct.
+    launch_front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
+    if [ "$launch_front" != com.xiaolaidict ]; then
+        if [ -z "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" ]; then
+            pass "setup: a board opened behind $launch_front is not counted as seen"
+        else
+            flunk "setup: a board that stayed behind $launch_front was recorded as seen"
+        fi
+    fi
+    # Brought forward the way a reader would, which is the moment it counts. After a settle, for the
+    # same reason as above — and `menu-click` failing is reported, never swallowed: under `|| true`
+    # a click that never happened read as the app failing to remember one.
+    settle_after_launch
+    if ! reach=$("$helpers/menu-click" com.xiaolaidict "Settings…" 2>&1); then
+        flunk "setup: could not reach Settings… after the restart ($reach)"
+    fi
+    seen=""
+    for _ in $(seq 1 50); do
+        [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" = 1 ] && { seen=yes; break; }
+        sleep 0.2
+    done
+    if [ "$seen" = yes ]; then
+        pass "setup: seeing it once is remembered"
+    else
+        flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
+    fi
+
+    # **And the optional row is wired**: Choose… opens Language Model settings, the one place a source is chosen. A
+    # button read through Accessibility is not a button that works, so it is clicked — the board is in front now — and
+    # the pane it should bring up is asked of the compositor.
+    chose=no
+    why=""
+    for _ in $(seq 1 50); do
+        if why=$("$helpers/click-element" com.xiaolaidict "Choose…" 2>&1); then chose=yes; break; fi
+        sleep 0.2
+    done
+    if [ "$chose" != yes ]; then
+        flunk "setup: Choose… on the Translation and Meanings row could not be clicked — $why ($(board_state))"
+    else
+        pane_drawn=""
+        for _ in $(seq 1 30); do
+            pane_drawn=$("$helpers/on-screen" com.xiaolaidict "Language Model")
+            printf '%s' "$pane_drawn" | grep -q '"drawn":true' && break
+            sleep 0.2
+        done
+        if printf '%s' "$pane_drawn" | grep -q '"drawn":true'; then
+            pass "setup: Choose… on the optional row opens Language Model settings"
+        else
+            flunk "setup: Choose… did not bring Language Model settings up ($(printf '%s' "$pane_drawn" | head -c 240))"
+        fi
+        "$helpers/close-window" "Language Model" >/dev/null 2>&1 || true
+    fi
+fi
+
+# **And the flag shows the bundled model's row**, in every state it had before ADR-0053 hid it: the code, the row and
+# its consent controls all stayed, and `ShowLocalModelSetup` is how a reader — or this stage — reaches them. A fresh
+# reader again (no `SetupWindowShown`, no pane remembered, no model in the store) with the flag set.
+"$helpers/close-window" "Setup" >/dev/null 2>&1 || true
+"$helpers/close-window" "Language Model" >/dev/null 2>&1 || true
+defaults delete com.xiaolaidict SetupWindowShown 2>/dev/null || true
+defaults delete com.xiaolaidict SettingsPane 2>/dev/null || true
+defaults delete com.xiaolaidict SettingsSetupUnfinished 2>/dev/null || true
+stash_models || true
+defaults write com.xiaolaidict ShowLocalModelSetup -bool true
+if ! relaunch_or_end_stage; then
+    return 0
+else
+    opened=""
+    for _ in $(seq 1 50); do board_on_screen && { opened=yes; break; }; sleep 0.2; done
+    if [ "$opened" = yes ]; then
+        pass "setup: with ShowLocalModelSetup set, a fresh install opens the board without being asked"
+    else
+        flunk "setup: with ShowLocalModelSetup set, nothing opened the board on a first launch"
+    fi
+    for _ in $(seq 1 50); do
+        shown=$("$helpers/panel" com.xiaolaidict)
+        printf '%s' "$shown" | grep -q "Looking for your dictionaries" || printf '%s' "$shown" | grep -q '"Checking…"' || break
+        sleep 0.2
+    done
+    # **The model row, read through Accessibility, and the store asked separately.** What this can
+    # see is the row's text and which controls exist — not whether a button is wired to anything,
+    # which only clicking it would show, and which the `setup` stage's own click checks do below.
+    # What must be true on a Mac where the model is not downloaded: it is still needed, the weaker
+    # engine is named, both choices are offered.
+    if printf '%s' "$shown" | grep -q "Local Model"; then
+        model_row=$(printf '%s' "$shown" | tr ',' '\n' | grep -A14 "Local Model" || true)
         # Every state the row can be in, named — and **a download under way is a failure here**, not
         # a pass. Nothing in this stage asks for one, so a 3 GB download that has begun by the time
         # the board is first opened is the regression the rule exists to catch: it used to be one of
@@ -2305,38 +2520,19 @@ else
         # **A missing row is a failure, not a reason to check nothing.** Without this the branch
         # chain above was skipped whole whenever the row could not be found, and a board that had
         # lost its model row entirely reported no failures at all.
-        flunk "setup: the board has no model row, so none of its states were checked ($(printf '%s' "$shown" | head -c 200))"
+        flunk "setup: with ShowLocalModelSetup set, the board has no Local Model row, so none of its states were checked ($(printf '%s' "$shown" | head -c 200))"
     fi
 
-    # **Opened is not seen.** Launched with another app in front, the board is drawn behind it —
-    # macOS's cooperative activation refuses focus at launch — and it used to be recorded as shown
-    # anyway, so a reader who never saw it never had it open by itself again. Asserted only when the
-    # app really did stay behind: when it came forward on its own, being remembered is correct.
-    launch_front=$("$helpers/on-screen" com.xiaolaidict | sed -n 's/.*"frontmost":"\([^"]*\)".*/\1/p')
-    if [ "$launch_front" != com.xiaolaidict ]; then
-        if [ -z "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" ]; then
-            pass "setup: a board opened behind $launch_front is not counted as seen"
-        else
-            flunk "setup: a board that stayed behind $launch_front was recorded as seen"
-        fi
-    fi
-    # Brought forward the way a reader would, which is the moment it counts. After a settle, for the
-    # same reason as above — and `menu-click` failing is reported, never swallowed: under `|| true`
-    # a click that never happened read as the app failing to remember one.
+    # Brought forward the way a reader would, so the controls below can be clicked — `click-element` refuses a control
+    # in an app that is not frontmost — and so seeing it is remembered, which the last check of this stage needs.
     settle_after_launch
     if ! reach=$("$helpers/menu-click" com.xiaolaidict "Settings…" 2>&1); then
-        flunk "setup: could not reach Settings… after the restart ($reach)"
+        flunk "setup: could not reach Settings… with ShowLocalModelSetup set ($reach)"
     fi
-    seen=""
     for _ in $(seq 1 50); do
-        [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" = 1 ] && { seen=yes; break; }
+        [ "$(defaults read com.xiaolaidict SetupWindowShown 2>/dev/null || true)" = 1 ] && break
         sleep 0.2
     done
-    if [ "$seen" = yes ]; then
-        pass "setup: seeing it once is remembered"
-    else
-        flunk "setup: the board was brought forward and not remembered, so it would open again every launch ($(board_state))"
-    fi
 
     # **And Not now is pressed.** Everything the row check above does is read text, and a button
     # wired to nothing reads exactly like one that works. Pressed, the row must say the reader is no
@@ -2429,6 +2625,8 @@ else
         fi
     fi
 fi
+# The reader's flag and source back before the last launch, which is the reader's own.
+restore_local_model_setup
 
 "$helpers/close-window" "Setup" >/dev/null 2>&1 || true
 if ! relaunch_or_end_stage; then
@@ -2679,8 +2877,11 @@ im=Image.open(sys.argv[1]).convert('RGB')
 scale=im.width/round(w['width'])
 assert scale >= 1 and abs(im.height-round(w['height'])*scale) <= scale, f'capture {im.size} is not the window {region}'
 x,y=int(im.width*.8),int(im.height*.8)
-pixels=list(im.crop((x-5,y-5,x+5,y+5)).getdata())
-brightness=sum(sum(p) for p in pixels)/(len(pixels)*3)
+# The crop's raw RGB bytes, not getdata(): Pillow deprecates that and removes it in Pillow 14 (2027-10), and its
+# warning, on stderr, landed in the middle of another stage's line in the run log (E2E Mac, 2026-10-09). Every channel
+# of every pixel, averaged: the same number the per-pixel sum gave.
+channels=im.crop((x-5,y-5,x+5,y+5)).tobytes()
+brightness=sum(channels)/len(channels)
 assert (brightness < 120) if sys.argv[3]=='Dark' else (brightness > 150), f'appearance witness brightness {brightness}'
 print(f'{sys.argv[3]} rendered background brightness: {brightness:.1f}')
 PYAPPEARANCE
@@ -3246,12 +3447,21 @@ else
     # must not read as having found nothing wrong, so no DONE is itself a failure.
     verdicts=$(python3 - "$report" 2>&1 <<'PYCHECK' || true
 import json, sys
+# Every pane the reader has, by name: SettingsPaneNamesTests holds every set spelled this way to SettingsPane.allCases.
+names = {"Setup", "General", "Reading", "Lookup", "Dictionary", "Language Model", "About"}
 r = json.loads(sys.argv[1])
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
 if not r.get("appeared"):
     say(False, "", f"settings: the window never came up ({r.get('problem', '?')})")
 else:
     panes = r["panes"]
+    # **Every pane walked, the Language Model pane among them** (ADR-0053): each measurement below is over the panes
+    # the report visited, and a pane it skipped would be a pane none of them is about.
+    walked = {p["pane"] for p in panes}
+    say(walked == names,
+        f"settings: every pane was walked, Language Model among them ({len(walked)})",
+        f"settings: the panes walked are not the panes the reader has — missing {sorted(names - walked)}, "
+        f"unknown {sorted(walked - names)}")
     say(r["oneWidth"] and r["width"] == r["expectedWidth"],
         f"settings: every pane is drawn at the panes' width ({r['width']:g} pt)",
         f"settings: the window is {r['width']:g} pt wide against the panes' {r['expectedWidth']:g} (one width: {r['oneWidth']})")
@@ -3276,7 +3486,7 @@ else:
     # still deciding — the state this stage was written for, 420 x 320 for all five.
     say(r["distinctHeights"] >= 3,
         f"settings: the window fits each pane ({r['shortest']:g}–{r['tallest']:g} pt over {r['distinctHeights']} heights)",
-        f"settings: only {r['distinctHeights']} distinct heights across six panes — the window is not sizing to its content")
+        f"settings: only {r['distinctHeights']} distinct heights across {len(panes)} panes — the window is not sizing to its content")
     # And moves between them. Zero steps is a jump, however large the change.
     say(r["stepsInBiggestChange"] >= 3,
         f"settings: the {r['biggestChange']:g} pt change to {r['biggestChangePane']} took {r['stepsInBiggestChange']} steps",
@@ -3652,14 +3862,266 @@ PYCHECK
 fi
 fi
 
+if want provider; then
+# 14. **The language model is a service the reader already has** (ADR-0053): an OpenAI-compatible endpoint, or the
+#     reader's own `claude` or `codex`. What a source may be sent is decided by where it runs, and the app reads that
+#     from the endpoint's URL alone, failing closed (`RemoteDisclosure.tier(ofEndpoint:)`): on this Mac, the sentence
+#     and the dictionary's sense text; remote, **the reader's sentence only**.
+#
+#     So one stub endpoint on this Mac's loopback (`Tools/e2e/provider-stub.py`) is reached under two URLs — one the
+#     app reads as on this Mac, and one it must read as remote although it is loopback on the wire (see
+#     `provider_remote_url`) — and the stub logs what each was asked, by the model name each arm asks for. A real
+#     lookup through the shortcut and the panel's own Explain button are what send it; the stub's log is what is judged.
+#     **Not a second stub on a LAN address**, which the plan offered: a connection from the app to one raises macOS's
+#     Local Network prompt on a screen nobody is at, and the preflight would name that alert in every run after it.
+#
+#     And each subscription CLI, through the app's own preflight (`--provider-status`), never reading a credential:
+#     asked where it is installed and signed in, and **SKIPPED by name** otherwise — never a pass. The stub arms are
+#     what this stage passes on; a skipped CLI cannot make it green.
+#
+# **Every setting this stage writes is read first and put back however the run ends**, and put back at its end too, so
+# the model stage after it measures the reader's own source, not this stage's.
+if provider_choice_original=$(defaults read com.xiaolaidict LanguageModelProvider 2>/dev/null); then
+    provider_choice_had=yes
+else
+    provider_choice_had=no; provider_choice_original=""
+fi
+if provider_url_original=$(defaults read com.xiaolaidict ProviderEndpointURL 2>/dev/null); then
+    provider_url_had=yes
+else
+    provider_url_had=no; provider_url_original=""
+fi
+if provider_model_original=$(defaults read com.xiaolaidict ProviderEndpointModel 2>/dev/null); then
+    provider_model_had=yes
+else
+    provider_model_had=no; provider_model_original=""
+fi
+if provider_switch_original=$(defaults read com.xiaolaidict SubscriptionCLIsEnabled 2>/dev/null); then
+    provider_switch_had=yes
+else
+    provider_switch_had=no; provider_switch_original=""
+fi
+restore_provider_settings() {
+    restore_default LanguageModelProvider "$provider_choice_had" "$provider_choice_original"
+    restore_default ProviderEndpointURL "$provider_url_had" "$provider_url_original"
+    restore_default ProviderEndpointModel "$provider_model_had" "$provider_model_original"
+    restore_default SubscriptionCLIsEnabled "$provider_switch_had" "$provider_switch_original" -bool
+}
+at_exit restore_provider_settings
+
+# The stub, ended however the run ends. Its log is kept beside the bundle for a person to read after a failure: it
+# holds the fixture sentence and the sense list the on-this-Mac arm was sent — this Mac's own dictionary's words, which
+# never leave it — and whether a key came, never a key.
+provider_evidence="$e2e_home/provider-evidence"
+provider_stub_log="$provider_evidence/stub.jsonl"
+provider_stub_pid=""
+stop_provider_stub() {
+    [ -n "$provider_stub_pid" ] || return 0
+    end_process "$provider_stub_pid" || { echo "the provider stub (pid $provider_stub_pid) would not end" >&2; return 1; }
+    provider_stub_pid=""
+}
+at_exit stop_provider_stub
+
+# The model name each arm asks for: how the stub's log tells the two arms apart, since both reach one server.
+provider_on_model="xiaolaidict-e2e-onthismac"
+provider_remote_model="xiaolaidict-e2e-remote"
+# The fixture's sentence, as the lookup sends it: what each arm must have been sent.
+provider_sentence="The meeting ended after we stopped meeting at noon."
+
+# provider_cli_check <claudeCLI|codexCLI>: the reader's CLI, chosen behind the switch it sits behind, asked through the
+# app's own preflight. **Never** a credential file, a CLI's own Keychain item or a token: the preflight starts the
+# reader's unmodified CLI, which signs itself in or says nobody did (ADR-0053).
+provider_cli_check() {
+    local choice=$1 report verdicts
+    if ! defaults write com.xiaolaidict LanguageModelProvider -string "$choice" \
+       || ! defaults write com.xiaolaidict SubscriptionCLIsEnabled -bool YES; then
+        flunk "provider: the $choice settings could not be written, so its preflight was not asked"
+        return 0
+    fi
+    # 150 s: a cold Codex first turn is ~9 s and a cold claude ~5 s (plan §1); the bound is for a CLI that hangs.
+    report=$(run_report --provider-status 150) || true
+    if [ -z "$report" ]; then
+        flunk "provider: --provider-status printed nothing for $choice ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
+        return 0
+    fi
+    verdicts=$(provider_status_verdicts provider "$choice" remote cli "$report")
+    consume_verdicts provider "$verdicts"
+}
+
+# provider_endpoint <tier> <url> <model>: the endpoint chosen as a reader chooses it — the three settings the pane
+# writes — and the app's preflight asked about it.
+provider_endpoint() {
+    local tier=$1 url=$2 model=$3 report
+    if ! defaults write com.xiaolaidict LanguageModelProvider -string openAICompatible \
+       || ! defaults write com.xiaolaidict ProviderEndpointURL -string "$url" \
+       || ! defaults write com.xiaolaidict ProviderEndpointModel -string "$model"; then
+        flunk "provider: the $tier endpoint settings could not be written"
+        return 0
+    fi
+    report=$(run_report --provider-status 60) || true
+    if [ -z "$report" ]; then
+        flunk "provider: --provider-status printed nothing for the $tier endpoint ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
+        return 0
+    fi
+    consume_verdicts provider "$(provider_status_verdicts provider endpoint "$tier" ready "$report")"
+}
+
+# provider_reading <tier>: one lookup of the fixture word through the shortcut, with the panel's Explain This Sentence
+# pressed while it shows, and the explanation it draws read off the panel — labelled for where <tier> runs.
+provider_reading() {
+    local tier=$1 baseline why waited lookup_id grant shown explained=""
+    if ! ensure_fixture_open; then
+        flunk "provider: the TextEdit fixture would not come to the front, so the $tier arm drove no lookup"
+        return 0
+    fi
+    baseline=$(newest_row_id)
+    assert_default_shortcut || true
+    if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
+        flunk "provider: could not select the fixture word for the $tier arm ($why)"
+        return 0
+    fi
+    "$helpers/keys" 2 control option
+    waited=$(row_after "$baseline" meeting com.apple.TextEdit)
+    lookup_id=$(row_id_of "$baseline" meeting com.apple.TextEdit)
+    if [ "${lookup_id:-0}" -eq 0 ]; then
+        grant=$(missing_grant)
+        flunk "provider: the $tier arm lookup wrote no ledger row in ${waited}s${grant:+ — the app says \"$grant\"}"
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    # **The sense is written on a later await than the row**, and on this Mac it is the endpoint's own answer.
+    sense_after "$lookup_id"
+    if [ -n "$sense_chosen$sense_abstained" ]; then
+        pass "provider: the $tier arm lookup reached the ledger with its sense (chosen_by=${sense_chosen:-none}, abstention=${sense_abstained:-none}, ${sense_waited}s after its row)"
+    else
+        flunk "provider: the $tier arm lookup recorded neither a sense nor an abstention in ${sense_waited}s"
+    fi
+    # Pressed through Accessibility: the panel never activates the app, so the frontmost rule a real click needs can
+    # never be met for it (`click-element --press`).
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Explain This Sentence" 2>&1); then
+        flunk "provider: Explain This Sentence could not be pressed on the $tier arm panel ($why)"
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    for _ in $(seq 1 60); do
+        shown=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null || true)
+        printf '%s' "$shown" | grep -q xiaolaidict-e2e-stub-explanation && { explained=yes; break; }
+        sleep 0.5
+    done
+    if [ "$explained" != yes ]; then
+        flunk "provider: the $tier arm panel never drew the endpoint explanation in 30 s ($(printf '%s' "$shown" | head -c 300))"
+    else
+        consume_verdicts provider "$(python3 - "$tier" "$shown" 2>&1 <<'PYPANE' || true
+import json, sys
+tier = sys.argv[1]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+texts = [t for w in json.loads(sys.argv[2], strict=False).get("windows", []) for t in w.get("texts", [])]
+labels = [t for t in texts if "Explained by" in t]
+# The label is read from where the question was sent (ModelProvenance): a remote answer labelled as made on this Mac
+# would tell a reader their sentence stayed here while it was being sent away.
+if tier == "remote":
+    say(any("Explained by a remote model" in t for t in texts),
+        "provider: the remote arm explanation is drawn and labelled as made by a remote model",
+        f"provider: the remote arm explanation is not labelled remote: {labels}")
+else:
+    say(any("Explained by a model on this Mac" in t for t in texts),
+        "provider: the on-this-Mac arm explanation is drawn and labelled as made on this Mac",
+        f"provider: the on-this-Mac arm explanation is not labelled as made on this Mac: {labels}")
+print("DONE")
+PYPANE
+)"
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    sleep 1
+}
+
+# **The URL the remote arm reaches the stub under**: `http://e2e@localhost:<port>/v1` — the stub's own loopback, with a
+# userinfo. The connection goes to `localhost`, and `RemoteDisclosure` reads any URL with a userinfo as remote, because
+# `http://localhost@evil.com` connects to `evil.com` and the text alone cannot be trusted: so the app must send it
+# exactly what it would send a hosted endpoint. Nothing leaves this Mac, and no Local Network prompt can be raised.
+# **Not `localhost.`**, which the resolver also answers with loopback: ATS refuses it — measured on the E2E Mac
+# 2026-10-09, URLError -1022, "does not conform to ATS policy" — since `NSAllowsLocalNetworking` exempts the bare name
+# and IP addresses, not a name written absolute.
+provider_remote_url() { printf 'http://e2e@localhost:%s/v1' "$1"; }
+
+provider_stage() {
+    local port="" verdicts
+    mkdir -p "$provider_evidence" && chmod 700 "$provider_evidence"
+    rm -f "$provider_evidence/stub.port"
+    python3 "$helpers/provider-stub.py" serve "$provider_stub_log" "$provider_evidence/stub.port" \
+        2>"$provider_evidence/stub.err" &
+    provider_stub_pid=$!
+    for _ in $(seq 1 50); do
+        port=$(cat "$provider_evidence/stub.port" 2>/dev/null || true)
+        [ -n "$port" ] && break
+        sleep 0.2
+    done
+    if [ -z "$port" ]; then
+        flunk "provider: the stub endpoint never started listening ($(head -c 200 "$provider_evidence/stub.err" 2>/dev/null)), so no arm ran"
+        return 0
+    fi
+    echo "NOTE  provider: the stub endpoint listens on 127.0.0.1:$port; its log is $provider_stub_log"
+
+    # On this Mac: the endpoint may see the sentence and the dictionary's sense text, and is asked the sense on every
+    # lookup, as the bundled model always was.
+    provider_endpoint onThisMac "http://127.0.0.1:$port/v1" "$provider_on_model"
+    relaunch_or_end_stage || return 0
+    provider_reading onThisMac
+
+    # Remote: the reader's sentence only.
+    provider_endpoint remote "$(provider_remote_url "$port")" "$provider_remote_model"
+    relaunch_or_end_stage || return 0
+    provider_reading remote
+
+    # **What the stub was sent, judged against the arms**: on this Mac it was asked the sense and told it, and the remote
+    # arm was sent none of those senses, no sense question and no Dictionary sense line — while still the sentence.
+    verdicts=$(python3 "$helpers/provider-stub.py" judge "$provider_stub_log" onThisMac "$provider_on_model" "$provider_sentence" 2>&1 || true)
+    consume_verdicts provider "$verdicts"
+    verdicts=$(python3 "$helpers/provider-stub.py" judge "$provider_stub_log" remote "$provider_remote_model" "$provider_sentence" "$provider_on_model" 2>&1 || true)
+    consume_verdicts provider "$verdicts"
+
+    # The CLIs, with the app stopped: a running app that wrote any default of its own — a window frame — would
+    # reconcile its source and warm the CLI chosen here, spending a question of the reader's subscription unasked.
+    if ! stop_app; then
+        flunk "provider: XiaolaiDict would not quit, so the CLI checks did not run"
+        return 0
+    fi
+    # **The switch is the reader's consent to this app starting their CLI**, and without it a CLI chosen is no source.
+    if defaults write com.xiaolaidict LanguageModelProvider -string claudeCLI \
+       && { defaults delete com.xiaolaidict SubscriptionCLIsEnabled 2>/dev/null || true; }; then
+        report=$(run_report --provider-status 60) || true
+        if [ -z "$report" ]; then
+            flunk "provider: --provider-status printed nothing with the CLI switch off ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
+        else
+            consume_verdicts provider "$(provider_status_verdicts provider local onThisMac none "$report")"
+        fi
+    else
+        flunk "provider: claudeCLI could not be chosen, so the CLI switch was not checked"
+    fi
+    provider_cli_check claudeCLI
+    provider_cli_check codexCLI
+
+    restore_provider_settings
+    stop_provider_stub || flunk "provider: the stub endpoint would not end"
+    launch_or_end_stage || return 0
+}
+provider_stage
+fi
+
 if want model; then
-# 14. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
+# 15. The local model, end to end, in the signed bundle: downloaded from ModelScope by the app's own
 #     downloader, a sense answer and a translation through the model service, the service's
 #     footprint, and the service ending itself when idle — which is how the model unloads.
 #
 #     Run directly rather than through LaunchServices: nothing here captures the screen, so TCC's
 #     refusal of processes launched over SSH does not apply, and a report that runs for minutes
 #     while a download finishes is simpler to bound from here.
+#
+#     **Hidden, not removed** (ADR-0053): no reader is asked to download it now, and its code, service and tests all
+#     still run — this stage among them. Its instruments (`--model-report`, `--sense-report`) reach the model service
+#     directly and download through the app's own downloader whatever the setup board shows; the reader's own lookup
+#     below reaches it through the router, which asks it only where it is the source. So the stage selects it, as a
+#     reader who has it selects it, and asserts the selection took before anything is measured.
 model_service="$app/Contents/XPCServices/XiaolaiDictModelService.xpc/Contents/MacOS/XiaolaiDictModelService"
 # launchd starts the service with no arguments, so its idle interval comes from the app's defaults.
 # Shortened for the run so the unload is seen inside it, and put back however the run ends.
@@ -3667,6 +4129,19 @@ if idle_original=$(defaults read com.xiaolaidict ModelIdleSeconds 2>/dev/null); 
 restore_idle() { restore_default ModelIdleSeconds "$idle_had" "$idle_original" -int; }
 at_exit restore_idle
 defaults write com.xiaolaidict ModelIdleSeconds -int 20
+if model_source_original=$(defaults read com.xiaolaidict LanguageModelProvider 2>/dev/null); then
+    model_source_had=yes
+else
+    model_source_had=no; model_source_original=""
+fi
+restore_model_source() {
+    restore_default LanguageModelProvider "$model_source_had" "$model_source_original"
+}
+at_exit restore_model_source
+defaults write com.xiaolaidict LanguageModelProvider -string localModel
+# Read back through the app's own report, run directly: no window, no network, and for the local model no question.
+source_report=$("$exe" --provider-status 2>/dev/null || true)
+consume_verdicts model "$(provider_status_verdicts model local onThisMac none "$source_report")"
 # A service already running read the old interval; this run's must start fresh. Asserted, not
 # assumed: everything after this would otherwise be measuring the old process — its old interval,
 # and a model it had already loaded.
@@ -3918,9 +4393,9 @@ echo "sense report: $senses"
 # report it reads takes ten minutes to produce — so it is exercised against reports built by hand
 # (`Tools/tests/test_ladder_gate.py`, run by `make test-tools`) rather than only by the run it gates.
 if verdict=$(python3 "$helpers/ladder-gate.py" "$sense_out" 2>&1); then
-    pass "model: the shipped ladder runs the local model first, and the labelled set backs it ($verdict)"
+    pass "model: the local model ladder runs it first, and the labelled set backs it ($verdict)"
 else
-    flunk "model: the labelled set does not back the shipped ladder — $verdict"
+    flunk "model: the labelled set does not back the local model ladder — $verdict"
 fi
 
 # **Which model answered.** The report used to name none, so a 2B run and a 4B run produced

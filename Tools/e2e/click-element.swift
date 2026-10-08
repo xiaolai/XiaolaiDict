@@ -16,6 +16,13 @@ import ApplicationServices
 // share is refused rather than guessed; the point is hit-tested before it is clicked, so a covered
 // control is refused rather than clicked through; and each target is waited for until its frame is
 // still, rather than assumed ready after a fixed pause.
+//
+// **`--press` is the one exception, and it is for the lookup panel.** The panel never activates the app (ADR-0018), so
+// the frontmost precondition a real click needs can never be met for it, by design. Pressed through Accessibility —
+// `AXPress`, as VoiceOver presses it — its button runs its action with the reader's app still in front, which is the
+// panel's whole point. What a real click on the panel costs the reader is the `panel` stage's measurement
+// (`--panel-report`), not this option's; a press posts no mouse event, so it carries no modifier and clicks nothing
+// through.
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard arguments.count >= 2 else {
     FileHandle.standardError.write(Data("usage: click-element <bundle-id> <title>…\n".utf8)); exit(2)
@@ -28,6 +35,7 @@ let bundleID = arguments[0]
 var flags = CGEventFlags()
 var secondary = false
 var rowTarget = false
+var press = false
 var wanted: [String] = []
 for argument in arguments.dropFirst() {
     switch argument {
@@ -37,12 +45,15 @@ for argument in arguments.dropFirst() {
     case "--control": flags.insert(.maskControl)
     case "--secondary": secondary = true
     case "--row": rowTarget = true
+    case "--press": press = true
     default:
         guard !argument.hasPrefix("--") else { die("unknown click option \(argument)") }
         wanted.append(argument)
     }
 }
 guard !wanted.isEmpty else { die("a click needs at least one target") }
+// A press is not a click: no pointer, no button, no modifier. Asking for one with it is a caller that meant a click.
+guard !press || (flags.isEmpty && !secondary) else { die("--press posts no mouse event, so it takes no modifier and no button") }
 // The real process, never the -1 macOS 27 reports for some apps — `shared/running-app.swift`.
 guard let app = runningApp(bundleID) else {
     die("\(bundleID) is not running")
@@ -275,7 +286,19 @@ func scrollIntoView(_ element: AXUIElement, _ rect: CGRect, called title: String
     return current
 }
 
-for title in wanted {
+/// `--press`: the one enabled control called `title`, come to rest, pressed through Accessibility — and refused, by
+/// name, where the press did not take.
+func pressThroughAccessibility(_ title: String) {
+    let (element, _) = target(title)
+    let pressed = AXUIElementPerformAction(element, kAXPressAction as CFString)
+    guard pressed == .success else { die("\"\(title)\" would not take a press (AXError \(pressed.rawValue))") }
+    print("pressed \(title)")
+}
+
+for title in wanted where press {
+    pressThroughAccessibility(title)
+}
+for title in wanted where !press {
     waitToBeFrontmost()
     var (element, rect) = target(title)
     rect = scrollIntoView(element, rect, called: title)

@@ -615,6 +615,15 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         said = "\n".join(self.failures(self.preflight("lookup")))
         self.assertIn("XiaolaiDict could not be started: LaunchServices would not start it: open exited 1", said)
 
+    def test_the_provider_stage_needs_the_fixture_it_looks_up_in(self):
+        """The provider stage drives two real lookups in TextEdit, so the preflight proves the fixture for it — and only
+        where a stage that selects in it is asked for."""
+        self.health([{"state": "notRunning", "detail": "com.apple.TextEdit is not running"}])
+        self.assertEqual(self.preflight("lookup").returncode, 0)
+        said = "\n".join(self.failures(self.preflight("provider")))
+        self.assertIn("TextEdit cannot hold the fixture", said)
+        self.assertIn("provider", said)
+
 
 class EveryRunReportsItsCleanups(unittest.TestCase):
     """A `cleanup` row filed as failed by one run stood after every later run that put everything back: `on_exit` wrote
@@ -696,6 +705,152 @@ class TheHoverStagesChromeIsItsOwn(unittest.TestCase):
         self.assertRegex(body, r'open -na "\$chrome_app" --args --user-data-dir="\$chrome_profile" --no-first-run')
         self.assertIn('--assistive --pid "$chrome_pid"', body)
         self.assertNotIn("quit app", body)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The language model is a service the reader already has (ADR-0053, plan §8 P5).
+
+def stage_block(name: str) -> str:
+    """One stage's block in the remote script: from `if want <name>; then` to the next stage's, or the run's end."""
+    found = re.search(rf"^if want {name}; then\n(.*?)(?=^if want |^finished=true)", SCRIPT.read_text(),
+                      re.MULTILINE | re.DOTALL)
+    assert found, f"e2e.sh has no {name} stage"
+    return found.group(1)
+
+
+def set_aside_before_written(block: str, restorer: str, key: str) -> bool:
+    """Whether `at_exit <restorer>` comes before the first `defaults write` of `key` — the order the run takes them in,
+    since nothing here is called before the line that registers it."""
+    registered = block.find(f"at_exit {restorer}")
+    written = block.find(f"defaults write com.xiaolaidict {key}")
+    return registered != -1 and written != -1 and registered < written
+
+
+class EveryVerdictKindIsSaid(unittest.TestCase):
+    def test_a_skipped_check_says_so_and_records_nothing(self):
+        """A check that could not run here — a CLI not installed, nobody signed in — is neither a pass nor a failure,
+        and it is never silent."""
+        done = Fake(self).run(textwrap.dedent("""\
+            STAGE=provider
+            consume_verdicts provider "$(printf 'PASS\\tprovider: a\\nSKIPPED\\tprovider: claudeCLI is not installed\\nDONE')"
+            """), function("consume_verdicts"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("SKIPPED  provider: claudeCLI is not installed", done.stdout)
+        self.assertIn("PASS  provider: a", done.stdout)
+        self.assertNotIn("fail", done.stdout)
+
+
+class TheProviderStage(unittest.TestCase):
+    """The stage that points the app at a stub endpoint on the E2E Mac, under a URL it reads as on this Mac and one it
+    must read as remote, and asks each installed CLI through the app's own preflight."""
+
+    KEYS = ("LanguageModelProvider", "ProviderEndpointURL", "ProviderEndpointModel", "SubscriptionCLIsEnabled")
+
+    def setUp(self):
+        self.text = SCRIPT.read_text()
+        self.block = stage_block("provider")
+
+    def test_it_is_a_registered_stage_run_as_a_function(self):
+        self.assertRegex(self.text, r"KNOWN_STAGES=\([a-z ]*\bprovider\b[a-z ]*\)")
+        self.assertRegex(self.block, r"(?m)^provider_stage\(\) \{")
+        self.assertRegex(self.block, r"(?m)^provider_stage$")
+
+    def test_the_readers_settings_are_set_aside_before_any_is_written_and_all_put_back(self):
+        for key in self.KEYS:
+            self.assertTrue(set_aside_before_written(self.block, "restore_provider_settings", key), key)
+        restore = function("restore_provider_settings")
+        for key in self.KEYS:
+            self.assertIn(f"restore_default {key} ", restore, key)
+        self.assertRegex(restore, r"restore_default SubscriptionCLIsEnabled .* -bool")
+
+    def test_the_stub_ships_with_the_helpers_and_listens_only_on_loopback(self):
+        install = re.search(r"^cp -p Tools/e2e/notes\.txt .*$", self.text, re.MULTILINE)
+        self.assertIsNotNone(install, "the install step's fixture copy has moved")
+        self.assertIn("Tools/e2e/provider-stub.py", install.group(0))
+        self.assertIn('"$helpers/provider-stub.py" serve', self.block)
+
+    def test_both_tiers_are_driven_and_judged(self):
+        self.assertIn('provider-stub.py" judge', self.block)
+        self.assertRegex(self.block, r"judge [^\n]*onThisMac")
+        self.assertRegex(self.block, r"judge [^\n]*remote")
+
+    # The CLI check, run in bash 3.2 against a `run_report` that answers what the app's preflight would.
+
+    def cli_check(self, report: dict | str) -> tuple[subprocess.CompletedProcess, str]:
+        fake = Fake(self)
+        written = fake.root / "defaults-calls"
+        Fake.script(fake.bin / "defaults", f'echo "$*" >> "{written}"')
+        answer = fake.root / "report.json"
+        answer.write_text(report if isinstance(report, str) else json.dumps(report))
+        done = fake.run(textwrap.dedent(f"""\
+            STAGE=provider
+            run_report() {{ cat "{answer}"; }}
+            provider_cli_check claudeCLI
+            echo "failures=$failures"
+            """), function("consume_verdicts"), function("provider_status_verdicts"), function("provider_cli_check"))
+        return done, written.read_text() if written.exists() else ""
+
+    @staticmethod
+    def cli_report(**readiness) -> dict:
+        return {"source": "claudeCLI", "tier": "remote", "sendsDictionaryText": False, "asksSenseOnLookup": False,
+                "asksSenseOnTap": False, **readiness}
+
+    def test_the_cli_is_chosen_with_its_switch_through_the_readers_own_defaults(self):
+        _, written = self.cli_check(self.cli_report(readiness="notInstalled"))
+        self.assertIn("write com.xiaolaidict LanguageModelProvider -string claudeCLI", written)
+        self.assertIn("write com.xiaolaidict SubscriptionCLIsEnabled -bool YES", written)
+
+    def test_a_cli_that_is_not_there_is_skipped_by_name_and_its_disclosure_still_checked(self):
+        for readiness in ({"readiness": "notInstalled"}, {"readiness": "notSignedIn"},
+                          {"readiness": "overrideUnusable"}, {"readiness": "unavailable", "failure": "rateLimited"}):
+            with self.subTest(readiness=readiness):
+                done, _ = self.cli_check(self.cli_report(**readiness))
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertRegex(done.stdout, rf"SKIPPED  provider: claudeCLI[^\n]*{readiness['readiness']}")
+                self.assertIn("failures=0", done.stdout)
+                # Skipped is not passed: the round trip is not claimed, while what it may be sent still is.
+                self.assertNotIn("answered", done.stdout)
+                self.assertRegex(done.stdout, r"PASS  provider: claudeCLI[^\n]*remote")
+
+    def test_a_cli_that_answered_passes_with_its_time(self):
+        done, _ = self.cli_check(self.cli_report(readiness="ready", version="2.1.294", answeredInSeconds=0.9))
+        self.assertIn("failures=0", done.stdout)
+        self.assertRegex(done.stdout, r"PASS  provider: claudeCLI answered the app.s preflight in 0\.9 s")
+        self.assertNotIn("SKIPPED", done.stdout)
+
+    def test_a_cli_that_is_installed_and_will_not_answer_fails(self):
+        for readiness in ({"readiness": "unavailable", "failure": "timedOut"}, {"readiness": "tooOld", "version": "1"}):
+            with self.subTest(readiness=readiness):
+                done, _ = self.cli_check(self.cli_report(**readiness))
+                self.assertIn("failures=1", done.stdout)
+                self.assertIn("FAIL  provider: claudeCLI", done.stdout)
+
+    def test_a_cli_read_as_on_this_mac_fails(self):
+        done, _ = self.cli_check({**self.cli_report(readiness="ready", answeredInSeconds=1.0), "tier": "onThisMac",
+                                  "sendsDictionaryText": True})
+        self.assertNotIn("failures=0", done.stdout)
+        self.assertIn("FAIL  provider: claudeCLI", done.stdout)
+
+    def test_a_preflight_that_printed_nothing_fails(self):
+        done, _ = self.cli_check("")
+        self.assertIn("failures=1", done.stdout)
+        self.assertIn("--provider-status printed nothing for claudeCLI", done.stdout)
+
+
+class TheBundledModelIsHiddenNotRemoved(unittest.TestCase):
+    def test_the_setup_stage_sets_the_flag_aside_before_it_shows_the_row(self):
+        block = stage_block("setup")
+        self.assertTrue(set_aside_before_written(block, "restore_local_model_setup", "ShowLocalModelSetup"))
+        self.assertRegex(function("restore_local_model_setup"), r"restore_default ShowLocalModelSetup .* -bool")
+        # And the row is asserted hidden before the flag is written: the default is what a fresh reader sees.
+        self.assertLess(block.find("is hidden on a Mac with no model"),
+                        block.find("defaults write com.xiaolaidict ShowLocalModelSetup"))
+
+    def test_the_model_stage_runs_with_the_local_model_selected(self):
+        block = stage_block("model")
+        self.assertTrue(set_aside_before_written(block, "restore_model_source", "LanguageModelProvider"))
+        self.assertIn("defaults write com.xiaolaidict LanguageModelProvider -string localModel", block)
+        self.assertIn("restore_default LanguageModelProvider ", function("restore_model_source"))
 
 
 if __name__ == "__main__":

@@ -914,15 +914,25 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// Bounded twice over: each process is closed, then signalled, then killed within its own grace, and the whole is
     /// given `providerShutdown` — past which the quit goes on regardless, because a quit held for ever is worse than
     /// the last resort left: a child whose input closes with this process reads its end and ends itself.
+    ///
+    /// **Waited for off the main actor, and replied to through the main run loop, never the main queue.** A quit can be
+    /// asked for from inside the main queue's drain — SIGTERM's handler runs there and calls `NSApp.terminate` — and
+    /// AppKit, told `.terminateLater`, turns the run loop *inside that callout* until it is replied to. Nothing queued
+    /// on the main queue runs until the callout returns, so a wait or a reply that needed the main actor never came:
+    /// measured on the E2E Mac (2026-10-09), the app answered `NSTerminateLater` to a SIGTERM and was still running
+    /// minutes later. A block performed on the main run loop in its common modes runs in AppKit's wait wherever the quit
+    /// was asked from — `aQuitAskedForFromInsideTheMainQueueStillQuits` holds it.
     func endProvidersThenQuit(_ reply: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
-        let models = models
-        Task { @MainActor in
+        let models = models, log = log, bound = Self.providerShutdown
+        Task.detached {
             do {
-                try await withDeadline(Self.providerShutdown) { await models.shutDown() }
+                try await withDeadline(bound) { await models.shutDown() }
             } catch {
                 log.error("quit: the language-model providers were not put away within the bound; quitting anyway")
             }
-            reply()
+            let main = CFRunLoopGetMain()
+            CFRunLoopPerformBlock(main, CFRunLoopMode.commonModes.rawValue) { MainActor.assumeIsolated { reply() } }
+            CFRunLoopWakeUp(main)
         }
         return .terminateLater
     }

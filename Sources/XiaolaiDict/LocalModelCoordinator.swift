@@ -142,7 +142,11 @@ final class LocalModelCoordinator {
     }
 
     /// Puts every provider away — a CLI's process ended and seen to end — before the app quits.
-    func shutDown() async { await router.shutDown() }
+    ///
+    /// **`nonisolated`, so it never waits for the main actor**: the router is an actor of its own, and a quit can be
+    /// asked for from inside the main queue's drain — SIGTERM's handler is — where nothing that needs the main actor
+    /// runs until the quit itself returns (`XiaolaiDictApp.endProvidersThenQuit`).
+    nonisolated func shutDown() async { await router.shutDown() }
 
     /// What the lookup panel's sentence pane is handed: the source the reader chose first, Apple's
     /// on-device model **wherever that one does not answer** — not downloaded, not enough memory,
