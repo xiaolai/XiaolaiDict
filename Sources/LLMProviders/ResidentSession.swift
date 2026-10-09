@@ -100,6 +100,9 @@ enum ResidentTurn {
 ///   answers, then swapped in, and only then is the old one put away. A replacement that cannot start leaves the old
 ///   one answering, and is tried again after the next turn.
 /// - **Ended when idle**, when shut down, and when nothing holds the session any more — so no process outlives it.
+///   **A shutdown reaches every process the session started** (`ChildRegistry`): the one answering, a replacement, one
+///   being put away, and one still being opened — whose handshake can take the opening's whole deadline — and returns
+///   once each has gone. A second shutdown waits for the first.
 actor ResidentSession<Wire: ResidentWire> {
     private struct Resident: Sendable {
         let child: ChildProcess
@@ -118,6 +121,7 @@ actor ResidentSession<Wire: ResidentWire> {
     private let configuration: ResidentConfiguration
     private let events: @Sendable (ResidentEvent) -> Void
     private let gate = TurnGate()
+    private let children = ChildRegistry()
 
     private var current: Resident?
     private var turnsOnCurrent = 0
@@ -136,6 +140,8 @@ actor ResidentSession<Wire: ResidentWire> {
     /// **Set by `shutDown`, and never cleared**: the session is over, and a question that arrives after it — one racing
     /// the app's quit — starts nothing, because nothing would be left to end what it started.
     private var isShutDown = false
+    /// The shutdown, once one has begun — what a second caller waits for.
+    private var shuttingDown: Task<Void, Never>?
 
     init(wire: Wire, configuration: ResidentConfiguration,
          events: @escaping @Sendable (ResidentEvent) -> Void = { _ in }) {
@@ -188,13 +194,28 @@ actor ResidentSession<Wire: ResidentWire> {
         return try outcome.get()
     }
 
-    /// Puts every process away and waits for them to end — each within its grace, so this is bounded. **The end of the
-    /// session**: nothing is started after it.
+    /// Puts every process away and waits for them to end — each within its grace, side by side, so this is bounded.
+    /// **The end of the session**: nothing is started after it, and a process being started now is ended as it starts.
     func shutDown() async {
+        if let shuttingDown { return await shuttingDown.value }
         isShutDown = true
         idle?.cancel()
         idle = nil
-        for closing in retireAll(.shutDown) { await closing.value }
+        let replacement = replacing?.task
+        let retiring = retireAll(.shutDown)
+        // Every process started and not seen to go — the one being opened for a question too, which nothing else here
+        // holds — and nothing started after this.
+        let started = children.seal()
+        let grace = configuration.closeGrace
+        let shutdown = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for child in started { group.addTask { await child.close(grace: grace) } }
+            }
+            for retirement in retiring { await retirement.value }
+            await replacement?.value
+        }
+        shuttingDown = shutdown
+        await shutdown.value
     }
 
     /// How each process is started.
@@ -223,7 +244,7 @@ actor ResidentSession<Wire: ResidentWire> {
             self.current = nil
             events(.retired(pid: current.child.pid, .exited))
         }
-        switch await Self.launch(wire, configuration, events) {
+        switch await Self.launch(wire, configuration, events, children) {
         case .success(let fresh):
             // Shut down while it was starting: it is put away with the rest, never answered from.
             guard !isShutDown else {
@@ -239,9 +260,11 @@ actor ResidentSession<Wire: ResidentWire> {
         }
     }
 
-    /// Starts a process and opens it, within the opening's deadline.
+    /// Starts a process, registered in `children` as it starts, and opens it within the opening's deadline. A process
+    /// started once the session has been shut down is ended at once: the shutdown has already been through `children`.
     private static func launch(_ wire: Wire, _ configuration: ResidentConfiguration,
-                               _ events: @Sendable (ResidentEvent) -> Void) async -> Result<Resident, LaunchFailure> {
+                               _ events: @Sendable (ResidentEvent) -> Void,
+                               _ children: ChildRegistry) async -> Result<Resident, LaunchFailure> {
         let child: ChildProcess
         do {
             child = try ChildProcess.start(wire.launch)
@@ -249,6 +272,11 @@ actor ResidentSession<Wire: ResidentWire> {
             return .failure(LaunchFailure(failure: error, child: nil))
         }
         events(.spawned(pid: child.pid))
+        guard children.admit(child) else {
+            child.end(.retired)
+            events(.abandoned(pid: child.pid, .unreachable))
+            return .failure(LaunchFailure(failure: .unreachable, child: child))
+        }
         log.info("started a resident CLI, pid \(child.pid, privacy: .public)")
         do {
             let conversation = try await bounded(child, within: configuration.openTimeout) {
@@ -288,9 +316,9 @@ actor ResidentSession<Wire: ResidentWire> {
         guard replacing == nil, ready == nil else { return }
         replacements += 1
         let id = replacements
-        let wire = wire, configuration = configuration, events = events
+        let wire = wire, configuration = configuration, events = events, children = children
         let task = Task { [weak self] in
-            let launched = await Self.launch(wire, configuration, events)
+            let launched = await Self.launch(wire, configuration, events, children)
             // With the session gone, `launched` is dropped here, and a process it started is killed with it.
             await self?.replacementLaunched(launched, id: id)
         }
@@ -368,19 +396,92 @@ actor ResidentSession<Wire: ResidentWire> {
 
     /// Runs `body` against `child` within `limit`. **The deadline and a cancellation end the child**, which ends the
     /// read `body` is waiting on — with `.timedOut` or `.cancelled`, which the child's ending names.
+    ///
+    /// **One of the three settles the turn, and only one** (`TurnRace`): `body` finishing, the deadline, the caller
+    /// giving up. An answer `body` returns after the child was ended for either of the others is that ending's failure,
+    /// never an answer — and a deadline or a cancellation after `body` finished ends nothing.
     private static func bounded<T: Sendable>(
         _ child: ChildProcess, within limit: Duration,
         _ body: @Sendable () async throws(ProviderFailure) -> T
     ) async throws(ProviderFailure) -> T {
+        let race = TurnRace()
         let timer = Task {
             do { try await Task.sleep(for: limit) } catch { return }
-            child.end(.deadline)
+            if race.end() { child.end(.deadline) }
         }
         defer { timer.cancel() }
-        return try await withTaskCancellationHandler { () async throws(ProviderFailure) -> T in
+        let value = try await withTaskCancellationHandler { () async throws(ProviderFailure) -> T in
             try await body()
         } onCancel: {
-            child.end(.cancelled)
+            if race.end() { child.end(.cancelled) }
+        }
+        guard race.settle() else { throw child.failureAtEnd }
+        return value
+    }
+}
+
+/// **Which came first to a turn**: its answer, or what ended it — the deadline, or the caller giving up. Whichever asks
+/// first wins, under a lock, so an answer and an ending cannot both be taken for one turn.
+final class TurnRace: Sendable {
+    private enum State: Sendable {
+        case running
+        case settled
+        case ended
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State.running)
+
+    /// The turn is to be ended: true where nothing has settled it yet, and then nothing else will.
+    func end() -> Bool {
+        state.withLock { state in
+            guard case .running = state else { return false }
+            state = .ended
+            return true
+        }
+    }
+
+    /// The turn has its answer: true where nothing has ended it first.
+    func settle() -> Bool {
+        state.withLock { state in
+            switch state {
+            case .running:
+                state = .settled
+                return true
+            case .settled:
+                return true
+            case .ended:
+                return false
+            }
+        }
+    }
+}
+
+/// **Every process a session started and has not seen go** — the one answering, a replacement, one being put away, one
+/// still being opened — so a shutdown reaches all of them. Sealed by the shutdown: a process started after it is not
+/// admitted, and its starter ends it. Processes that have gone are dropped as new ones come, so it holds a handful.
+final class ChildRegistry: Sendable {
+    private struct State: Sendable {
+        var children: [ObjectIdentifier: ChildProcess] = [:]
+        var sealed = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    /// Holds `child` until the shutdown, unless the session has been shut down already.
+    func admit(_ child: ChildProcess) -> Bool {
+        state.withLock { state in
+            guard !state.sealed else { return false }
+            state.children = state.children.filter { $0.value.isRunning }
+            state.children[ObjectIdentifier(child)] = child
+            return true
+        }
+    }
+
+    /// Every process still held, and none admitted after.
+    func seal() -> [ChildProcess] {
+        state.withLock { state in
+            state.sealed = true
+            return Array(state.children.values)
         }
     }
 }

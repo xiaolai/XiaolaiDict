@@ -1,5 +1,6 @@
 import Foundation
 @testable import LLMProviders
+import Synchronization
 import Testing
 import XiaolaiDictTestSupport
 
@@ -141,6 +142,40 @@ struct ResidentSessionTests {
         }.first)
         #expect(await waitUntilGone(spawned))
         await provider.shutDown()
+    }
+
+    /// **A turn ended by its deadline or its caller is not answered, even where the wire had its answer in hand.** The
+    /// child is ended the moment either comes, and an answer the wire returns after that is the answer of a turn that
+    /// was abandoned — handed out, it would reach a caller who had gone, or be counted after the process it came from
+    /// had been killed. The wire here holds its answer until the test lets it go, reading nothing of the child.
+    @Test func anAnswerReturnedAfterTheCallerGaveUpIsNotHandedOut() async throws {
+        let fake = try FakeCLI.claude()
+        let held = HeldWire(launch: ChildLaunch(executable: fake.executable, arguments: [],
+                                                workingDirectory: fake.workingDirectory))
+        let session = ResidentSession(wire: held, configuration: Self.configuration())
+        let asking = Settling { () async throws(ProviderFailure) in try await session.ask(Self.question()) }
+        await held.gate.waitUntilEntered()
+        asking.task.cancel()
+        held.gate.open()
+        #expect(await asking.outcome() == .failure(.cancelled))
+        await session.shutDown()
+    }
+
+    @Test func anAnswerReturnedAfterTheDeadlineIsNotHandedOut() async throws {
+        let fake = try FakeCLI.claude()
+        let events = EventLog()
+        let held = HeldWire(launch: ChildLaunch(executable: fake.executable, arguments: [],
+                                                workingDirectory: fake.workingDirectory))
+        let session = ResidentSession(wire: held, configuration: Self.configuration(turnTimeout: .milliseconds(200)),
+                                      events: fake.holding(events.sink))
+        let asking = Settling { () async throws(ProviderFailure) in try await session.ask(Self.question()) }
+        await held.gate.waitUntilEntered()
+        let child = try #require(CodexCLIProviderTests.spawned(events).first)
+        // The deadline ends the child: once it has gone, the deadline has come.
+        #expect(await waitUntilGone(child))
+        held.gate.open()
+        #expect(await asking.outcome() == .failure(.timedOut))
+        await session.shutDown()
     }
 
     /// **One question at a time, each with its own answer.** Two asked together must not share a turn: a second
@@ -288,5 +323,69 @@ struct ResidentSessionTests {
         let request = GenerationRequest(instructions: "", prompt: "Reply with OK.", maxTokens: 4, temperature: 0)
         #expect(ResidentTurn.text(for: request) == "\(ResidentTurn.preface)\n\nReply with OK.")
         #expect(!ResidentTurn.preface.isEmpty && !ResidentTurn.systemPrompt.isEmpty)
+    }
+}
+
+/// **A wire whose answer waits for the test**, reading nothing of the child it was started with: the shape of a turn
+/// whose answer was in hand when its deadline came or its caller gave up.
+struct HeldWire: ResidentWire {
+    struct Conversation: Sendable {}
+
+    let launch: ChildLaunch
+    let gate = TestGate()
+
+    func open(_ child: ChildProcess) async throws(ProviderFailure) -> Conversation { Conversation() }
+
+    func ask(_ request: GenerationRequest, in conversation: Conversation, over child: ChildProcess)
+        async throws(ProviderFailure) -> Result<String, ProviderFailure> {
+        await gate.pass()
+        return .success("an answer the wire had in hand")
+    }
+}
+
+/// **A point a task waits at until the test opens it**, deaf to cancellation, which says when someone has reached it.
+final class TestGate: Sendable {
+    private struct State {
+        var open = false
+        var entered = 0
+        var waiting: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    /// Waits here until the gate is opened.
+    func pass() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let through = state.withLock { state -> Bool in
+                state.entered += 1
+                if state.open { return true }
+                state.waiting.append(continuation)
+                return false
+            }
+            if through { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let waiting = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.open = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    var entered: Int { state.withLock { $0.entered } }
+
+    /// Waits until someone has reached the gate — bounded, so a defect that never reaches it fails the test.
+    func waitUntilEntered(_ count: Int = 1, within bound: Duration = .seconds(10)) async {
+        let deadline = ContinuousClock.now.advanced(by: bound)
+        while entered < count {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("nothing reached the gate")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 }

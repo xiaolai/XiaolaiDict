@@ -183,17 +183,42 @@ enum CodexAppServer {
         let id: String
     }
 
+    /// A piece of one agent message's text. **Keyed by its item**: a turn can write more than one message — a
+    /// `commentary` before its `final_answer` — and their deltas interleave with nothing else to tell them apart.
     struct AgentMessageDelta: Decodable {
         let threadId: String
         let turnId: String
+        /// Nil where a server leaves it out; such deltas are read as one message.
+        let itemId: String?
         let delta: String
+    }
+
+    /// An item the turn finished writing — for an agent message, its whole text and its phase.
+    struct ItemCompleted: Decodable {
+        let item: TurnCompleted.Turn.Item
+        let threadId: String
+        let turnId: String
     }
 
     struct TurnCompleted: Decodable {
         struct Turn: Decodable {
+            /// A thread item, of which only an agent message is read: its id, its text, and its `phase` —
+            /// `commentary` or `final_answer`, or absent where the model does not say (the schema's own caveat).
             struct Item: Decodable {
                 let type: String
+                let id: String?
                 let text: String?
+                let phase: String?
+
+                enum CodingKeys: String, CodingKey { case type, id, text, phase }
+
+                init(from decoder: any Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    type = try container.decode(String.self, forKey: .type)
+                    id = try? container.decodeIfPresent(String.self, forKey: .id)
+                    text = try? container.decodeIfPresent(String.self, forKey: .text)
+                    phase = try? container.decodeIfPresent(String.self, forKey: .phase)
+                }
             }
 
             let id: String

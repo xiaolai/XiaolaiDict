@@ -17,7 +17,8 @@ struct OpenAICompatibleProviderTests {
                          model: String = "gpt-test", endpointURL: URL? = nil,
                          limit: Int = OpenAICompatibleProvider.responseByteLimit) -> OpenAICompatibleProvider {
         let base = endpointURL ?? endpoint.baseURL
-        return OpenAICompatibleProvider(endpoint: base, model: model,
+        // A stub's base is https, an address the app sends to.
+        return OpenAICompatibleProvider(endpoint: EndpointAddress(url: base).unsafelyUnwrapped, model: model,
                                         credentials: credentials ?? InMemoryCredentials(key: "sk-test", for: base),
                                         timeout: .seconds(10), sessionConfiguration: StubEndpoint.configuration(),
                                         responseByteLimit: limit)
@@ -319,6 +320,39 @@ struct OpenAICompatibleProviderTests {
             """#, status: 400))
         #expect(await Self.failure(of: Self.provider(echoing)) == .badShape("HTTP 400"))
         #expect(echoing.requests.count == 1)
+    }
+
+    /// **A 400 that names another parameter is about that one**, whatever its message also mentions: OpenAI's says which
+    /// parameter it refused in `param`, and a message that only echoes the budget's name beside it is not a refusal of
+    /// the name. The control is the same message with no `param`, which is read from the message alone.
+    @Test func a400NamingAnotherParameterIsNotRetriedWhateverItsMessageSays() async throws {
+        let message = "Unsupported value: 'temperature' does not support 0 with this model; max_completion_tokens is fine."
+        let other = StubEndpoint(always: .error(status: 400, message: message, param: "temperature"))
+        #expect(await Self.failure(of: Self.provider(other)) == .badShape("HTTP 400"))
+        #expect(other.requests.count == 1, "a refusal of another parameter was retried under the other budget name")
+        let named = StubEndpoint { _, earlier in
+            earlier == 0 ? .error(status: 400, message: "Unrecognized request argument: max_completion_tokens")
+                : .completion("3")
+        }
+        #expect(try await Self.provider(named).generate(Self.request) == "3")
+        #expect(named.requests.count == 2)
+    }
+
+    // MARK: - An answer cut off
+
+    /// **An answer the endpoint cut off at its token budget is not an answer** where its end is the point — a
+    /// translation or an explanation stopped mid-sentence would be shown as whole. Where its beginning is the answer —
+    /// a sense's number, which comes first — it is still read (`GenerationRequest.usableWhenCut`).
+    @Test func anAnswerCutOffAtItsBudgetIsRefusedWhereItsEndIsThePoint() async throws {
+        let endpoint = StubEndpoint(always: .completion("Elle a couvert le feu pour qu", finishReason: "length"))
+        let prose = GenerationRequest(instructions: "Translate the user's sentence.", prompt: "Sentence: …",
+                                      maxTokens: 64, temperature: 0)
+        #expect(await Self.failure(of: Self.provider(endpoint), prose)
+                == .badShape("an answer cut off at its token budget"))
+        let numbered = StubEndpoint(always: .completion("3. The sense of piling fuel", finishReason: "length"))
+        let sense = GenerationRequest(instructions: "Answer with the number.", prompt: "Which number?", maxTokens: 16,
+                                      temperature: 0, usableWhenCut: true)
+        #expect(try await Self.provider(numbered).generate(sense) == "3. The sense of piling fuel")
     }
 
     // MARK: - Cancellation

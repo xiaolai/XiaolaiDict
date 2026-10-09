@@ -1,8 +1,8 @@
 """The provider stage's stand-in endpoint, and its judgement of what it was sent (ADR-0053, plan §8 P5).
 
-The `provider` stage points the app at `Tools/e2e/provider-stub.py` — an OpenAI-compatible server on 127.0.0.1 — once
-under a URL the app reads as **on this Mac** and once under one it must read as **remote**, then asks the stub what
-arrived. Whether the remote arm carried the dictionary's text is the stage's whole point, and that judgement is made
+The `provider` stage points the app at `Tools/e2e/provider-stub.py` — an OpenAI-compatible server on 127.0.0.1 under a
+URL the app reads as **on this Mac**, under one it must **refuse**, and as the reader's own `claude`, which is
+**remote** — then asks the stub what arrived. Whether the remote arm carried the dictionary's text is the stage's whole point, and that judgement is made
 here, in Python the E2E Mac runs, ten minutes into a run. So it is held on this Mac first: the stub's answers against
 the rules the app reads them by, its wire against a real socket, and every verdict against a log built by hand — the
 honest arms pass, and each way a remote request could carry a publisher's text is refused by name.
@@ -287,6 +287,82 @@ class TheJudgementOfWhatArrived(unittest.TestCase):
         self.assertEqual(done.stdout.strip().splitlines()[-1], "DONE")
         self.assertTrue(done.stdout.startswith("PASS\t"), done.stdout)
 
+
+class TheStandInClaude(unittest.TestCase):
+    """`claude`: the stage installs the stub as the reader's `claude`, the remote tier's transport. It must speak what
+    `ClaudeCLIWire` reads — a `result` that says it did not fail, carrying the answer — and log each turn as `serve`
+    logs a request, its model the one the app passed and its kind read from the instructions inside the turn."""
+
+    PREFACE = "This is an unrelated question; ignore earlier messages."
+
+    def turn(self, instructions: str, prompt: str) -> str:
+        """A turn as `ResidentTurn.text` writes one."""
+        return "\n\n".join(part for part in (self.PREFACE, instructions, prompt) if part)
+
+    def run_claude(self, turns: list[str], *arguments: str) -> tuple[list[dict], list[dict]]:
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-stub-claude-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        log = scratch / "stub.jsonl"
+        lines = "".join(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
+                        for text in turns)
+        done = subprocess.run([sys.executable, str(STUB), "claude", str(log), *arguments], input=lines,
+                              capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        written = [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+        entries = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        return written, entries
+
+    def test_each_turn_ends_in_a_result_that_says_it_did_not_fail(self):
+        explain = self.turn(swift_literal("explanationInstructions"), explanation_prompt())
+        written, _ = self.run_claude(["Reply with the single word: ready", explain], "-p", "--model", "m")
+        results = [line for line in written if line.get("type") == "result"]
+        self.assertEqual(len(results), 2)
+        # `ClaudeCLIWire` reads success only where `is_error` says so.
+        self.assertTrue(all(line.get("is_error") is False for line in results), results)
+        self.assertEqual(results[0]["result"], "ready")
+        self.assertIn(stub.MARKER, results[1]["result"])
+        self.assertEqual(sum(line.get("type") == "system" for line in written), 1, "an init line on the first turn")
+
+    def test_each_turn_is_logged_as_a_request_with_the_apps_model_and_its_kind(self):
+        sense = self.turn(swift_literal("senseInstructions"), sense_prompt())
+        explain = self.turn(swift_literal("explanationInstructions"), explanation_prompt())
+        _, entries = self.run_claude([sense, explain], "-p", "--verbose", "--model", "xiaolaidict-e2e-remote")
+        self.assertEqual([entry["model"] for entry in entries], ["xiaolaidict-e2e-remote"] * 2)
+        self.assertEqual([entry["kind"] for entry in entries], ["sense", "explanation"])
+        self.assertEqual(entries[1]["user"], explain, "the whole turn, instructions and all, is what is judged")
+
+    def test_its_turns_are_judged_as_the_remote_arm(self):
+        explain = self.turn(swift_literal("explanationInstructions"), explanation_prompt())
+        _, entries = self.run_claude(["Reply with the single word: ready", explain], "--model", "remote-cli")
+        on = TheJudgementOfWhatArrived().on_this_mac()
+        verdicts = stub.judge(on + entries, "remote", "remote-cli", SENTENCE, TheJudgementOfWhatArrived.ON)
+        self.assertEqual(lines_of(verdicts, "FAIL"), [])
+        planted = self.turn(swift_literal("explanationInstructions"), explanation_prompt(sense=SENSES[0]))
+        _, leaky = self.run_claude([planted], "--model", "remote-cli")
+        failed = lines_of(stub.judge(on + leaky, "remote", "remote-cli", SENTENCE, TheJudgementOfWhatArrived.ON), "FAIL")
+        self.assertTrue(any("Dictionary sense" in line or "sense 1" in line for line in failed), failed)
+
+    def test_its_version_is_one_the_app_reads(self):
+        done = subprocess.run([sys.executable, str(STUB), "claude", "/dev/null", "--version"], capture_output=True,
+                              text=True, timeout=30, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stdout, r"^\d+\.\d+")
+
+
+class TheRefusedArm(unittest.TestCase):
+    """`judge … refused`: the endpoint the app must refuse to send to was sent nothing."""
+
+    def test_nothing_arrived_passes(self):
+        entries = TheJudgementOfWhatArrived().on_this_mac()
+        verdicts = stub.judge(entries, "refused", "xiaolaidict-e2e-refused", SENTENCE)
+        self.assertEqual(verdicts[-1], "DONE")
+        self.assertEqual(lines_of(verdicts, "FAIL"), [])
+        self.assertEqual(len(lines_of(verdicts, "PASS")), 1)
+
+    def test_anything_arriving_fails(self):
+        entries = [logged("xiaolaidict-e2e-refused", "question", "Reply with the single word: ready")]
+        failed = lines_of(stub.judge(entries, "refused", "xiaolaidict-e2e-refused", SENTENCE), "FAIL")
+        self.assertTrue(any("was sent 1 request" in line for line in failed), failed)
 
 if __name__ == "__main__":
     unittest.main()

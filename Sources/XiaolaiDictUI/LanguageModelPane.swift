@@ -148,10 +148,11 @@ struct LanguageModelPane: View {
                     .focused($focused, equals: .endpointURL)
                     .onSubmit { model.commitDrafts() }
                     .accessibilityIdentifier("language-model-endpoint-url")
-                if model.addressIsUnusable {
-                    Text("Not usable: an address starts with https:// or http:// and names a server.")
+                if let refusal = model.addressRefusal {
+                    Self.addressRefusal(refusal)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 TextField("Model", text: $model.drafts.endpointModel, prompt: Text("Required — the service's name for it"))
                     .focused($focused, equals: .endpointModel)
@@ -187,6 +188,21 @@ struct LanguageModelPane: View {
 
         private func saveKey() {
             if model.saveKey(keyDraft) { keyDraft = "" }
+        }
+
+        /// Why the address in the field is not kept, in the reader's terms.
+        @ViewBuilder static func addressRefusal(_ refusal: EndpointAddress.Refusal) -> some View {
+            switch refusal {
+            case .notAnAddress:
+                Text("Not used: an address starts with https:// and names a server — or http:// for a server on this Mac.")
+            case .carriesCredentials:
+                Text("Not used: an address cannot hold a name or a password. Save the key below instead.")
+            case .unencrypted:
+                Text("""
+                     Not used: a server that is not on this Mac needs an address starting with https://, so the key and \
+                     your sentence are encrypted on their way to it.
+                     """)
+            }
         }
 
         /// Whether a key is filed, and why one cannot be saved — the second only once something is typed, or where the

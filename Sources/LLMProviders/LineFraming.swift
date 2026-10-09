@@ -7,7 +7,9 @@ import Foundation
 /// that is not JSON. A trailing CR is dropped, so a CRLF line reads as its LF one.
 ///
 /// **Bounded**: a line that grows past `limit` without ending is refused, so a CLI that writes without stopping
-/// cannot grow this process's memory without bound.
+/// cannot grow this process's memory without bound. A CR at the end of what has arrived is not counted against the line
+/// yet — it may be the first half of the line's own CRLF, and whether a line of exactly `limit` is refused must not
+/// depend on where a chunk happened to end.
 struct LineFraming: Sendable {
     /// A line grew past the bound.
     struct Overflow: Error, Equatable {}
@@ -32,7 +34,9 @@ struct LineFraming: Sendable {
             start = pending.index(after: end)
         }
         pending = Data(pending[start...])
-        guard pending.count <= limit else { throw Overflow() }
+        // One trailing CR is provisional: the LF that would make it the line's ending has not arrived yet.
+        let counted = pending.last == Self.carriageReturn ? pending.count - 1 : pending.count
+        guard counted <= limit else { throw Overflow() }
         return lines
     }
 

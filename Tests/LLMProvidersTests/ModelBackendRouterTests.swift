@@ -12,12 +12,91 @@ struct ModelBackendRouterTests {
     static let explanation = SentenceQuestion(sentence: "He paid the fine.", term: "fine",
                                               senseText: "a sum of money exacted as a penalty by a court of law")
 
-    /// The reader's settings, as a test changes them between questions.
+    /// The reader's settings, as a test changes them between questions — and how often the router has read them.
     final class Settings: Sendable {
-        private let source: Mutex<ProviderSource>
-        init(_ source: ProviderSource) { self.source = Mutex(source) }
-        var current: ProviderSource { source.withLock { $0 } }
-        func choose(_ next: ProviderSource) { source.withLock { $0 = next } }
+        private let source: Mutex<(source: ProviderSource, reads: Int)>
+        init(_ source: ProviderSource) { self.source = Mutex((source, 0)) }
+        var current: ProviderSource {
+            source.withLock { state in
+                state.reads += 1
+                return state.source
+            }
+        }
+        var reads: Int { source.withLock { $0.reads } }
+        func choose(_ next: ProviderSource) { source.withLock { $0.source = next } }
+
+        /// Waits until the settings have been read `count` times in all — bounded, so a defect fails rather than hangs.
+        func waitUntilRead(_ count: Int) async {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while reads < count {
+                guard ContinuousClock.now < deadline else {
+                    Issue.record("the settings were not read")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+    }
+
+    /// What happened, in the order it happened, from whichever task said it.
+    final class Order: Sendable {
+        private let entries = Mutex<[String]>([])
+        func note(_ entry: String) { entries.withLock { $0.append(entry) } }
+        var all: [String] { entries.withLock { $0 } }
+        func index(_ entry: String) -> Int? { all.firstIndex(of: entry) }
+    }
+
+    /// The router's own record of what it did.
+    final class RouterLog: Sendable {
+        private let events = Mutex<[RouterEvent]>([])
+        var sink: @Sendable (RouterEvent) -> Void { { [self] event in events.withLock { $0.append(event) } } }
+        var all: [RouterEvent] { events.withLock { $0 } }
+
+        func wait(for event: RouterEvent) async {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while !all.contains(event) {
+                guard ContinuousClock.now < deadline else {
+                    Issue.record("the router never reported \(event)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+    }
+
+    /// **A source whose putting away waits for the test**, and which notes in `order` when it is asked, and when its
+    /// putting away begins and ends.
+    final class HeldProvider: ProviderBackend {
+        let name: String
+        let order: Order
+        let away = TestGate()
+        private let asked = Mutex(0)
+
+        init(_ name: String, _ order: Order) {
+            self.name = name
+            self.order = order
+        }
+
+        var questions: Int { asked.withLock { $0 } }
+        var warmsByAsking: Bool { false }
+
+        func generate(_ request: GenerationRequest) async throws(ProviderFailure) -> String {
+            asked.withLock { $0 += 1 }
+            order.note("\(name) asked")
+            return "From \(name)."
+        }
+
+        func readiness() async -> ProviderReadiness {
+            asked.withLock { $0 += 1 }
+            order.note("\(name) checked")
+            return .endpointReady(answeredIn: .milliseconds(1))
+        }
+
+        func shutDown() async {
+            order.note("\(name) going")
+            await away.pass()
+            order.note("\(name) gone")
+        }
     }
 
     /// The bundled model, as a test sees it asked.
@@ -135,6 +214,163 @@ struct ModelBackendRouterTests {
         #expect(again.reply == .explanation("From the second."))
         #expect(first.requests.isEmpty, "a question was sent to a source after it had been put away")
         #expect(first.shutDowns == 1)
+    }
+
+    // MARK: - One source at a time, and every caller waits for the change
+
+    /// Two sources, A and B — the hosted endpoint and the loopback one — each a `HeldProvider`, made by a factory that
+    /// notes each making in `order`.
+    /// Only A's putting away is held; B goes when asked.
+    static func twoSources(_ order: Order) -> (a: HeldProvider, b: HeldProvider, factory: ProviderFactory) {
+        let a = HeldProvider("A", order), b = HeldProvider("B", order)
+        b.away.open()
+        let factory = ProviderFactory { source in
+            let made = source == Self.hosted ? a : b
+            order.note("make \(made.name)")
+            return ProviderBuild(backend: made)
+        }
+        return (a, b, factory)
+    }
+
+    /// **The source chosen next is made, and asked, only once the one left has gone** — by the question that saw the
+    /// change and by one that arrived while A was still being put away. Before, the replacement was made beside the
+    /// putting away and handed to the second question at once, so the reader's next CLI could start while the last
+    /// was still running.
+    @Test func theSourceChosenNextIsMadeOnlyOnceTheOneLeftHasGone() async throws {
+        let order = Order()
+        let (a, b, factory) = Self.twoSources(order)
+        let settings = Settings(Self.hosted)
+        let router = Self.router(settings, LocalModel(), factory)
+        #expect(await router.ask(.explain(Self.explanation), origin: .reader).reply == .explanation("From A."))
+
+        settings.choose(Self.loopback)
+        let reads = settings.reads
+        let first = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await a.away.waitUntilEntered()
+        let second = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await settings.waitUntilRead(reads + 2)
+        // The actor has taken the second question as far as it can go.
+        _ = await router.currentSource
+        #expect(order.index("make B") == nil && b.questions == 0, "B was made or asked while A was going: \(order.all)")
+
+        a.away.open()
+        #expect(await first.value.reply == .explanation("From B."))
+        #expect(await second.value.reply == .explanation("From B."))
+        let gone = try #require(order.index("A gone"))
+        #expect(try #require(order.index("make B")) > gone, "\(order.all)")
+        #expect(try #require(order.index("B asked")) > gone, "\(order.all)")
+        await router.shutDown()
+    }
+
+    /// **The quit waits for a source still being put away** by a question that saw the reader leave it — the app must
+    /// not end with the reader's CLI still running. Before, it found nothing to put away and returned at once.
+    @Test func theQuitWaitsForASourceStillBeingPutAway() async throws {
+        let order = Order(), log = RouterLog()
+        let (a, _, factory) = Self.twoSources(order)
+        let settings = Settings(Self.hosted)
+        let router = ModelBackendRouter(source: { settings.current }, local: LocalModel().access, factory: factory,
+                                        dictionaryTextMayLeave: false, events: log.sink)
+        _ = await router.ask(.explain(Self.explanation), origin: .reader)
+
+        settings.choose(.local)
+        let leaving = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await a.away.waitUntilEntered()
+        let quitting = Task { await router.shutDown() }
+        await log.wait(for: .closing)
+        // The actor has taken the quit as far as it can go.
+        _ = await router.currentSource
+        #expect(!log.all.contains(.closed), "the quit returned while A was still being put away: \(log.all)")
+
+        a.away.open()
+        await quitting.value
+        _ = await leaving.value
+        let events = log.all
+        #expect(try #require(events.firstIndex(of: .left(Self.hosted))) < (try #require(events.firstIndex(of: .closed))))
+    }
+
+    /// **And so does a question to the local model**: one source at a time, so nothing is asked while the one the reader
+    /// left is still going.
+    @Test func aQuestionToTheLocalModelWaitsForASourceStillBeingPutAway() async throws {
+        let order = Order()
+        let (a, _, factory) = Self.twoSources(order)
+        let settings = Settings(Self.hosted), local = LocalModel()
+        let router = Self.router(settings, local, factory)
+        _ = await router.ask(.explain(Self.explanation), origin: .reader)
+
+        settings.choose(.local)
+        let reads = settings.reads
+        let leaving = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await a.away.waitUntilEntered()
+        let asking = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await settings.waitUntilRead(reads + 2)
+        _ = await router.currentSource
+        #expect(local.asked.isEmpty, "the local model was asked while A was still going")
+
+        a.away.open()
+        _ = await (leaving.value, asking.value)
+        #expect(local.asked.count == 2)
+        await router.shutDown()
+    }
+
+    /// **And so does a lookup's prewarm of the local model**, which also puts away a provider the reader left that
+    /// nothing has put away yet — the bundled model is not loaded beside a CLI still running.
+    @Test func aLookupsPrewarmPutsAwayTheSourceLeftFirst() async throws {
+        let order = Order()
+        let (a, _, factory) = Self.twoSources(order)
+        a.away.open()
+        let settings = Settings(Self.hosted), local = LocalModel()
+        let router = Self.router(settings, local, factory)
+        _ = await router.ask(.explain(Self.explanation), origin: .reader)
+        settings.choose(.local)
+        await router.prewarmForLookup()
+        #expect(order.index("A gone") != nil, "the local model was loaded with A still held: \(order.all)")
+        #expect(local.prewarms == 1)
+        await router.shutDown()
+    }
+
+    /// **A source the reader left while it was being made is not asked** — when nothing else saw the change: no
+    /// reconcile, no other question, a change made outside this process. The question goes to the source chosen now.
+    @Test func aQuestionIsNotSentToASourceLeftWhileItWasBeingMade() async throws {
+        let order = Order(), making = TestGate()
+        let a = HeldProvider("A", order), b = HeldProvider("B", order)
+        a.away.open()
+        b.away.open()
+        let factory = ProviderFactory { source in
+            guard source == Self.hosted else { return ProviderBuild(backend: b) }
+            await making.pass()
+            return ProviderBuild(backend: a)
+        }
+        let settings = Settings(Self.hosted)
+        let router = Self.router(settings, LocalModel(), factory)
+        let asking = Task { await router.ask(.explain(Self.explanation), origin: .reader) }
+        await making.waitUntilEntered()
+        settings.choose(Self.loopback)
+        making.open()
+        #expect(await asking.value.reply == .explanation("From B."))
+        #expect(a.questions == 0, "the question went to the source the reader had left: \(order.all)")
+        await router.shutDown()
+    }
+
+    /// The same for the reader's *Check connection*: the source checked is the one chosen now.
+    @Test func aCheckIsNotSentToASourceLeftWhileItWasBeingMade() async throws {
+        let order = Order(), making = TestGate()
+        let a = HeldProvider("A", order), b = HeldProvider("B", order)
+        a.away.open()
+        b.away.open()
+        let factory = ProviderFactory { source in
+            guard source == Self.hosted else { return ProviderBuild(backend: b) }
+            await making.pass()
+            return ProviderBuild(backend: a)
+        }
+        let settings = Settings(Self.hosted)
+        let router = Self.router(settings, LocalModel(), factory)
+        let checking = Task { await router.check() }
+        await making.waitUntilEntered()
+        settings.choose(Self.loopback)
+        making.open()
+        #expect(await checking.value?.source == Self.loopback)
+        #expect(a.questions == 0, "the check went to the source the reader had left: \(order.all)")
+        await router.shutDown()
     }
 
     /// A source that could not be made answers nothing, so the ladder falls through — and says why when checked.
@@ -388,6 +624,50 @@ struct ProviderFactoryTests {
         build = nil
         #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.url.path).isEmpty,
                 "the CLI's directory outlived it")
+    }
+
+    /// **A CLI run by an interpreter installed beside it is started, and answers** — `claude` under nvm or Homebrew is
+    /// `#!/usr/bin/env node` with `node` in its own directory, which is not on the `PATH` an app opened from the Dock
+    /// has. Reached by the reader's own path, with nothing else searched, so its directory is the only way to `node`.
+    /// Its version is read the same way.
+    @Test func aCLIRunByAnInterpreterBesideItIsStartedAndAnswers() async throws {
+        let fake = try FakeCLI.claude(runBy: "xiaolaidict-fake-interpreter")
+        let factory = ProviderFactory(
+            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
+            credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
+            endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
+            events: fake.holding { _ in })
+        let router = ModelBackendRouter(
+            source: { .claudeCLI(path: fake.executable.path, model: "haiku") },
+            local: .init(ask: { _ in nil }, prewarm: {}), factory: factory, dictionaryTextMayLeave: false)
+        let answer = try #require(await ModelBackendRouterTests.answer(router), "the CLI was not started")
+        #expect(answer.hasPrefix("pid="))
+        guard case .cli(.ready(let version, _))? = await router.check()?.readiness else {
+            Issue.record("the CLI's preflight did not answer")
+            await router.shutDown()
+            return
+        }
+        #expect(version == "9.9.9")
+        await router.shutDown()
+    }
+
+    /// **And one whose interpreter is only on the reader's login shell's `PATH`** — the shell that found it says where.
+    @Test func aCLIRunByAnInterpreterOnTheLoginShellsPathIsStarted() async throws {
+        let elsewhere = TemporaryDirectory(named: "xiaolaidict-interpreter")
+        let fake = try FakeCLI.claude(runBy: "xiaolaidict-fake-interpreter", in: elsewhere.url)
+        let shell = try FakeCLI.shell(printing: [fake.executable.path,
+                                                 "\(LoginShell.searchPathMarker)\(elsewhere.url.path):/usr/bin:/bin"])
+        let factory = ProviderFactory(
+            locator: CLILocator(searchDirectories: [], loginShell: LoginShell(accountShell: shell.executable.path),
+                                shellTimeout: .seconds(5)),
+            credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
+            endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
+            events: fake.holding { _ in })
+        let router = ModelBackendRouter(source: { .claudeCLI(path: nil, model: "haiku") },
+                                        local: .init(ask: { _ in nil }, prewarm: {}), factory: factory,
+                                        dictionaryTextMayLeave: false)
+        #expect(await ModelBackendRouterTests.answer(router)?.hasPrefix("pid=") == true, "the CLI was not started")
+        await router.shutDown()
     }
 
     /// The local source is not a provider: nothing is made, and nothing is refused.

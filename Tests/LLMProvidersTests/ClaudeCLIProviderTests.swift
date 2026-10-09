@@ -83,6 +83,25 @@ struct ClaudeCLIProviderTests {
         await provider.shutDown()
     }
 
+    /// **A result says whether it failed, or it is not an answer.** `is_error` is how the CLI says so, and one that is
+    /// missing or not a boolean — a later CLI that renamed it, a line of another shape — cannot be read as success:
+    /// the text beside it may be an error message, and it would be shown to the reader as the model's answer.
+    @Test func aResultThatDoesNotSayWhetherItFailedIsNotAnAnswer() throws {
+        let unclear = [#"{"type":"result","subtype":"success","result":"3"}"#,
+                       #"{"type":"result","is_error":"false","result":"3"}"#,
+                       #"{"type":"result","is_error":0,"result":"3"}"#,
+                       #"{"type":"result","is_error":null,"result":"3"}"#]
+        for line in unclear {
+            let event = try JSONDecoder().decode(ClaudeCLIWire.StreamEvent.self, from: Data(line.utf8))
+            #expect(ClaudeCLIWire.outcome(of: event, reported: nil)
+                    == .failure(.badShape("a result that does not say whether it failed")), "\(line)")
+        }
+        // The control: the same line saying it did not fail is the answer.
+        let answered = try JSONDecoder().decode(ClaudeCLIWire.StreamEvent.self,
+                                                from: Data(#"{"type":"result","is_error":false,"result":" 3 "}"#.utf8))
+        #expect(ClaudeCLIWire.outcome(of: answered, reported: nil) == .success("3"))
+    }
+
     /// **A failure the CLI reported is a turn that ended**: the process is intact, and the next question is its.
     @Test func aReportedFailureKeepsTheProcess() async throws {
         let fake = try FakeCLI.claude()

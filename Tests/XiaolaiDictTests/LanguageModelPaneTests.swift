@@ -145,15 +145,56 @@ struct LanguageModelPaneTests {
         #expect(pane.pathRefusal("/opt/homebrew/bin/claude") == nil && pane.pathRefusal("") == nil)
     }
 
-    /// An address that names no server is said to be unusable; one that does is not, and an empty field is the default.
-    @Test func anUnusableAddressIsSaidToBeOne() {
+    /// **Why an address is not used is said, each reason by name** — `EndpointAddress.parse`, the one rule: one that names
+    /// no server, one carrying a name or a password, and plain HTTP to a server off this Mac. An address the app sends to
+    /// is not refused, and an empty field is the default address.
+    @Test func whyAnAddressIsNotUsedIsSaid() {
         let pane = Self.pane()
-        pane.drafts.endpointURL = "api.openai.com/v1"
-        #expect(pane.addressIsUnusable)
-        pane.drafts.endpointURL = Self.openAI
-        #expect(!pane.addressIsUnusable)
-        pane.drafts.endpointURL = ""
-        #expect(!pane.addressIsUnusable, "an empty field is the default address, not an unusable one")
+        let cases: [(String, EndpointAddress.Refusal?)] = [
+            ("api.openai.com/v1", .notAnAddress), ("ftp://api.openai.com/v1", .notAnAddress),
+            ("https://reader:secret@api.openai.com/v1", .carriesCredentials),
+            ("http://e2e@localhost:8080/v1", .carriesCredentials),
+            ("http://192.168.1.5:11434/v1", .unencrypted), ("http://another-mac.local:1234/v1", .unencrypted),
+            (Self.openAI, nil), (Self.local, nil), ("https://192.168.1.5:11434/v1", nil), ("", nil),
+        ]
+        for (typed, refusal) in cases {
+            pane.drafts.endpointURL = typed
+            #expect(pane.addressRefusal == refusal, "\(typed)")
+        }
+    }
+
+    /// **An address that carries a password never reaches the defaults** — where it would sit in plain text — and the
+    /// reader's text stays in the field, said to be refused; no key is filed for it either.
+    @Test func anAddressCarryingAPasswordIsNeverKept() {
+        let suite = TemporaryDefaults.suite()
+        let credentials = Credentials()
+        let pane = Self.pane(suite, credentials: credentials)
+        let typed = "https://reader:hunter2-PANE@api.example.com/v1"
+        pane.drafts.endpointURL = typed
+        pane.commitDrafts()
+        #expect(ProviderSettingsStore(defaults: suite).load().endpointURL == ProviderSettings.defaultEndpointURL)
+        #expect(!String(describing: suite.dictionaryRepresentation()).contains("hunter2"),
+                "a password in the address reached the defaults")
+        #expect(pane.drafts.endpointURL == typed, "the reader's text was taken out of the field")
+        #expect(pane.keyRefusal("sk-x") == .noAddress)
+        #expect(!pane.saveKey("sk-x"))
+        #expect(credentials.all.isEmpty)
+    }
+
+    /// **A key is not filed for a plain-HTTP address off this Mac**, nor the address kept — it would go unencrypted. The
+    /// control: the same on this Mac's loopback is kept, and takes a key.
+    @Test func aPlainHTTPAddressOffThisMacTakesNoKeyAndIsNotKept() {
+        let suite = TemporaryDefaults.suite()
+        let credentials = Credentials()
+        let pane = Self.pane(suite, credentials: credentials)
+        pane.drafts.endpointURL = "http://192.168.1.5:11434/v1"
+        #expect(pane.keyRefusal("sk-lan") == .noAddress)
+        #expect(!pane.saveKey("sk-lan"))
+        #expect(credentials.all.isEmpty, "a key was filed for an address that would send it unencrypted")
+        #expect(ProviderSettingsStore(defaults: suite).load().endpointURL == ProviderSettings.defaultEndpointURL)
+        pane.drafts.endpointURL = Self.local
+        #expect(pane.saveKey("sk-local"))
+        #expect(credentials.all == [Self.account(Self.local): "sk-local"])
     }
 
     // MARK: - The key, filed for the origin

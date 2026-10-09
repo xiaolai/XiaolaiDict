@@ -741,10 +741,12 @@ class EveryVerdictKindIsSaid(unittest.TestCase):
 
 
 class TheProviderStage(unittest.TestCase):
-    """The stage that points the app at a stub endpoint on the E2E Mac, under a URL it reads as on this Mac and one it
-    must read as remote, and asks each installed CLI through the app's own preflight."""
+    """The stage that points the app at a stub on the E2E Mac — an endpoint under a URL it reads as on this Mac and
+    under one it must refuse, and the reader's own `claude`, which is remote — and asks each installed CLI through the
+    app's own preflight."""
 
-    KEYS = ("LanguageModelProvider", "ProviderEndpointURL", "ProviderEndpointModel", "SubscriptionCLIsEnabled")
+    KEYS = ("LanguageModelProvider", "ProviderEndpointURL", "ProviderEndpointModel", "SubscriptionCLIsEnabled",
+            "ClaudeCLIPath", "ClaudeCLIModel")
 
     def setUp(self):
         self.text = SCRIPT.read_text()
@@ -758,7 +760,8 @@ class TheProviderStage(unittest.TestCase):
     def test_the_readers_settings_are_set_aside_before_any_is_written_and_all_put_back(self):
         for key in self.KEYS:
             self.assertTrue(set_aside_before_written(self.block, "restore_provider_settings", key), key)
-        restore = function("restore_provider_settings")
+        restore = function("restore_provider_settings") + function("restore_provider_claude")
+        self.assertIn("restore_provider_claude", function("restore_provider_settings"))
         for key in self.KEYS:
             self.assertIn(f"restore_default {key} ", restore, key)
         self.assertRegex(restore, r"restore_default SubscriptionCLIsEnabled .* -bool")
@@ -773,6 +776,65 @@ class TheProviderStage(unittest.TestCase):
         self.assertIn('provider-stub.py" judge', self.block)
         self.assertRegex(self.block, r"judge [^\n]*onThisMac")
         self.assertRegex(self.block, r"judge [^\n]*remote")
+
+    def test_an_address_the_app_must_refuse_is_refused_by_its_preflight_and_sent_nothing(self):
+        """Plain HTTP off this Mac, or a name or password in the address, is not sent to (`EndpointAddress`): the app's
+        own preflight must say so, and the stub must hear nothing under that arm's model."""
+        self.assertRegex(self.block, r'provider_endpoint remote "\$\(provider_refused_url "\$port"\)" [^\n]* endpointUnusable')
+        self.assertRegex(self.block, r"judge [^\n]*refused")
+        self.assertIn("@localhost", one_line("provider_refused_url"))
+
+    def test_the_remote_tier_is_the_stub_installed_as_the_readers_claude_and_the_real_one_is_checked_after(self):
+        arm = function("provider_claude_arm")
+        self.assertIn('claude %q "$@"', arm, "the launcher does not run the stub as claude")
+        self.assertIn("defaults write com.xiaolaidict ClaudeCLIPath", arm)
+        self.assertIn('ClaudeCLIModel -string "$provider_remote_model"', arm)
+        self.assertLess(self.block.index("provider_claude_arm\n    relaunch_or_end_stage"),
+                        self.block.index("provider_reading remote"))
+        # The reader's own `claude` is found where their settings say, not the stand-in.
+        self.assertLess(self.block.index("restore_provider_claude\n"), self.block.index("provider_cli_check claudeCLI"))
+
+    def test_the_stand_in_claude_is_written_as_data_and_chosen_behind_its_switch(self):
+        fake = Fake(self)
+        written = fake.root / "defaults-calls"
+        Fake.script(fake.bin / "defaults", f'echo "$*" >> "{written}"')
+        report = fake.root / "report.json"
+        report.write_text(json.dumps({"source": "claudeCLI", "tier": "remote", "sendsDictionaryText": False,
+                                      "asksSenseOnLookup": False, "asksSenseOnTap": False, "readiness": "ready",
+                                      "answeredInSeconds": 0.4, "version": "9.9.9"}))
+        evidence = fake.root / "evidence with a space"
+        evidence.mkdir()
+        done = fake.run(textwrap.dedent(f"""\
+            STAGE=provider
+            provider_evidence="{evidence}"; provider_stub_log="{evidence}/stub.jsonl"
+            provider_remote_model=xiaolaidict-e2e-remote
+            run_report() {{ cat "{report}"; }}
+            provider_claude_arm
+            echo "failures=$failures"
+            """), function("consume_verdicts"), function("provider_status_verdicts"), function("provider_claude_arm"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("failures=0", done.stdout)
+        self.assertRegex(done.stdout, r"PASS  provider: claudeCLI answered the app.s preflight")
+        calls = written.read_text()
+        self.assertIn("write com.xiaolaidict SubscriptionCLIsEnabled -bool YES", calls)
+        self.assertIn(f"write com.xiaolaidict ClaudeCLIPath -string {evidence}/claude", calls)
+        launcher = (evidence / "claude").read_text()
+        self.assertTrue(launcher.startswith("#!/bin/sh\nexec "), launcher)
+        self.assertIn("provider-stub.py claude", launcher)
+        self.assertIn("evidence\\ with\\ a\\ space/stub.jsonl", launcher, "a path was spliced in unquoted")
+
+    def test_a_refused_endpoint_that_the_app_would_ask_fails(self):
+        for readiness, failures in (("endpointUnusable", 0), ("ready", 1), ("endpointFailed", 1)):
+            with self.subTest(readiness=readiness):
+                fake = Fake(self)
+                report = {"source": "endpoint", "tier": "remote", "sendsDictionaryText": False,
+                          "asksSenseOnLookup": False, "asksSenseOnTap": False, "readiness": readiness}
+                done = fake.run(textwrap.dedent(f"""\
+                    STAGE=provider
+                    consume_verdicts provider "$(provider_status_verdicts provider endpoint remote endpointUnusable '{json.dumps(report)}')"
+                    echo "failures=$failures"
+                    """), function("consume_verdicts"), function("provider_status_verdicts"))
+                self.assertIn(f"failures={failures}", done.stdout, done.stdout + done.stderr)
 
     # The CLI check, run in bash 3.2 against a `run_report` that answers what the app's preflight would.
 

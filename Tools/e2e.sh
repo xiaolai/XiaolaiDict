@@ -879,6 +879,10 @@ else:
     if wanted == "none":
         say(readiness is None, f"{label} is asked nothing to be checked",
             f"{label} was checked as though it were a provider: {readiness}")
+    elif wanted == "endpointUnusable":
+        # An address the app must not send to: plain HTTP off this Mac, or one carrying a name or a password.
+        say(readiness == "endpointUnusable", f"{label} is refused by the app's preflight, which sends it nothing",
+            f"{label} was not refused: its preflight says {readiness} {r.get('failure') or ''}".rstrip())
     elif wanted == "ready":
         say(readiness == "ready",
             f"{label} answered the app's preflight in {r.get('answeredInSeconds')} s",
@@ -3864,16 +3868,19 @@ fi
 
 if want provider; then
 # 14. **The language model is a service the reader already has** (ADR-0053): an OpenAI-compatible endpoint, or the
-#     reader's own `claude` or `codex`. What a source may be sent is decided by where it runs, and the app reads that
-#     from the endpoint's URL alone, failing closed (`RemoteDisclosure.tier(ofEndpoint:)`): on this Mac, the sentence
-#     and the dictionary's sense text; remote, **the reader's sentence only**.
+#     reader's own `claude` or `codex`. What a source may be sent is decided by where it runs, failing closed
+#     (`RemoteDisclosure`): on this Mac, the sentence and the dictionary's sense text; remote — a CLI wherever it is
+#     installed, an endpoint off this Mac — **the reader's sentence only**. And an endpoint off this Mac must be HTTPS:
+#     plain HTTP, or an address carrying a name or a password, is sent nothing (`EndpointAddress`).
 #
-#     So one stub endpoint on this Mac's loopback (`Tools/e2e/provider-stub.py`) is reached under two URLs — one the
-#     app reads as on this Mac, and one it must read as remote although it is loopback on the wire (see
-#     `provider_remote_url`) — and the stub logs what each was asked, by the model name each arm asks for. A real
-#     lookup through the shortcut and the panel's own Explain button are what send it; the stub's log is what is judged.
-#     **Not a second stub on a LAN address**, which the plan offered: a connection from the app to one raises macOS's
-#     Local Network prompt on a screen nobody is at, and the preflight would name that alert in every run after it.
+#     So one stub on this Mac's loopback (`Tools/e2e/provider-stub.py`) is reached three ways, and logs what each was
+#     asked by the model name each arm asks for: as an endpoint on `127.0.0.1` (**on this Mac**); as an endpoint under a
+#     URL the app must refuse (see `provider_refused_url`), which must reach it with nothing; and as the reader's own
+#     `claude`, the stub installed in its place (**remote**) — the remote tier's one transport that needs no TLS, for
+#     which this stub has no certificate the app would trust. A real lookup through the shortcut and the panel's own
+#     Explain button are what send it; the stub's log is what is judged. **Not a second stub on a LAN address**, which
+#     the plan offered: a connection from the app to one raises macOS's Local Network prompt on a screen nobody is at,
+#     and the preflight would name that alert in every run after it.
 #
 #     And each subscription CLI, through the app's own preflight (`--provider-status`), never reading a credential:
 #     asked where it is installed and signed in, and **SKIPPED by name** otherwise — never a pass. The stub arms are
@@ -3901,11 +3908,28 @@ if provider_switch_original=$(defaults read com.xiaolaidict SubscriptionCLIsEnab
 else
     provider_switch_had=no; provider_switch_original=""
 fi
+if provider_claude_path_original=$(defaults read com.xiaolaidict ClaudeCLIPath 2>/dev/null); then
+    provider_claude_path_had=yes
+else
+    provider_claude_path_had=no; provider_claude_path_original=""
+fi
+if provider_claude_model_original=$(defaults read com.xiaolaidict ClaudeCLIModel 2>/dev/null); then
+    provider_claude_model_had=yes
+else
+    provider_claude_model_had=no; provider_claude_model_original=""
+fi
+# The stand-in `claude`'s two settings, put back on their own as well: the reader's real `claude` is checked after
+# them, and must be found where the reader's own settings say.
+restore_provider_claude() {
+    restore_default ClaudeCLIPath "$provider_claude_path_had" "$provider_claude_path_original"
+    restore_default ClaudeCLIModel "$provider_claude_model_had" "$provider_claude_model_original"
+}
 restore_provider_settings() {
     restore_default LanguageModelProvider "$provider_choice_had" "$provider_choice_original"
     restore_default ProviderEndpointURL "$provider_url_had" "$provider_url_original"
     restore_default ProviderEndpointModel "$provider_model_had" "$provider_model_original"
     restore_default SubscriptionCLIsEnabled "$provider_switch_had" "$provider_switch_original" -bool
+    restore_provider_claude
 }
 at_exit restore_provider_settings
 
@@ -3922,9 +3946,10 @@ stop_provider_stub() {
 }
 at_exit stop_provider_stub
 
-# The model name each arm asks for: how the stub's log tells the two arms apart, since both reach one server.
+# The model name each arm asks for: how the stub's log tells the arms apart, since all reach one stub.
 provider_on_model="xiaolaidict-e2e-onthismac"
 provider_remote_model="xiaolaidict-e2e-remote"
+provider_refused_model="xiaolaidict-e2e-refused"
 # The fixture's sentence, as the lookup sends it: what each arm must have been sent.
 provider_sentence="The meeting ended after we stopped meeting at noon."
 
@@ -3963,7 +3988,34 @@ provider_endpoint() {
         flunk "provider: --provider-status printed nothing for the $tier endpoint ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
         return 0
     fi
-    consume_verdicts provider "$(provider_status_verdicts provider endpoint "$tier" ready "$report")"
+    consume_verdicts provider "$(provider_status_verdicts provider endpoint "$tier" "${4:-ready}" "$report")"
+}
+
+# provider_claude_arm: the stub installed as the reader's `claude` — a launcher in the evidence directory, chosen
+# through the settings the pane writes, behind the switch it sits behind — and the app's preflight asked about it. The
+# app starts it exactly as it starts the reader's; its turns land in the stub's log under `provider_remote_model`.
+provider_claude_arm() {
+    local launcher="$provider_evidence/claude" python report
+    python=$(command -v python3) || { flunk "provider: no python3 to run the stand-in claude"; return 0; }
+    # Arguments as data, quoted for the shell that runs the launcher: never a path spliced in as code.
+    if ! printf '#!/bin/sh\nexec %q %q claude %q "$@"\n' "$python" "$helpers/provider-stub.py" "$provider_stub_log" \
+            > "$launcher" || ! chmod 700 "$launcher"; then
+        flunk "provider: the stand-in claude could not be written"
+        return 0
+    fi
+    if ! defaults write com.xiaolaidict LanguageModelProvider -string claudeCLI \
+       || ! defaults write com.xiaolaidict SubscriptionCLIsEnabled -bool YES \
+       || ! defaults write com.xiaolaidict ClaudeCLIPath -string "$launcher" \
+       || ! defaults write com.xiaolaidict ClaudeCLIModel -string "$provider_remote_model"; then
+        flunk "provider: the stand-in claude's settings could not be written"
+        return 0
+    fi
+    report=$(run_report --provider-status 60) || true
+    if [ -z "$report" ]; then
+        flunk "provider: --provider-status printed nothing for the stand-in claude ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
+        return 0
+    fi
+    consume_verdicts provider "$(provider_status_verdicts provider claudeCLI remote ready "$report")"
 }
 
 # provider_reading <tier>: one lookup of the fixture word through the shortcut, with the panel's Explain This Sentence
@@ -4035,14 +4087,11 @@ PYPANE
     sleep 1
 }
 
-# **The URL the remote arm reaches the stub under**: `http://e2e@localhost:<port>/v1` — the stub's own loopback, with a
-# userinfo. The connection goes to `localhost`, and `RemoteDisclosure` reads any URL with a userinfo as remote, because
-# `http://localhost@evil.com` connects to `evil.com` and the text alone cannot be trusted: so the app must send it
-# exactly what it would send a hosted endpoint. Nothing leaves this Mac, and no Local Network prompt can be raised.
-# **Not `localhost.`**, which the resolver also answers with loopback: ATS refuses it — measured on the E2E Mac
-# 2026-10-09, URLError -1022, "does not conform to ATS policy" — since `NSAllowsLocalNetworking` exempts the bare name
-# and IP addresses, not a name written absolute.
-provider_remote_url() { printf 'http://e2e@localhost:%s/v1' "$1"; }
+# **The URL the app must refuse**: `http://e2e@localhost:<port>/v1` — the stub's own loopback, with a userinfo. An
+# address carrying a name or a password is not one the app sends to (`EndpointAddress`): it would keep a credential in
+# the defaults, and `http://localhost@evil.com` connects to `evil.com`, so the text alone cannot be trusted. If the app
+# sent it anything it would arrive here, on loopback: nothing leaves this Mac, and no Local Network prompt is raised.
+provider_refused_url() { printf 'http://e2e@localhost:%s/v1' "$1"; }
 
 provider_stage() {
     local port="" verdicts
@@ -4068,16 +4117,22 @@ provider_stage() {
     relaunch_or_end_stage || return 0
     provider_reading onThisMac
 
-    # Remote: the reader's sentence only.
-    provider_endpoint remote "$(provider_remote_url "$port")" "$provider_remote_model"
+    # Refused: an address the app must not send to is refused by its own preflight, and the stub hears nothing of it.
+    provider_endpoint remote "$(provider_refused_url "$port")" "$provider_refused_model" endpointUnusable
+
+    # Remote: the reader's sentence only, through the stand-in `claude`.
+    provider_claude_arm
     relaunch_or_end_stage || return 0
     provider_reading remote
 
-    # **What the stub was sent, judged against the arms**: on this Mac it was asked the sense and told it, and the remote
-    # arm was sent none of those senses, no sense question and no Dictionary sense line — while still the sentence.
+    # **What the stub was sent, judged against the arms**: on this Mac it was asked the sense and told it; the remote
+    # arm was sent none of those senses, no sense question and no Dictionary sense line — while still the sentence; and
+    # the refused address was sent nothing at all.
     verdicts=$(python3 "$helpers/provider-stub.py" judge "$provider_stub_log" onThisMac "$provider_on_model" "$provider_sentence" 2>&1 || true)
     consume_verdicts provider "$verdicts"
     verdicts=$(python3 "$helpers/provider-stub.py" judge "$provider_stub_log" remote "$provider_remote_model" "$provider_sentence" "$provider_on_model" 2>&1 || true)
+    consume_verdicts provider "$verdicts"
+    verdicts=$(python3 "$helpers/provider-stub.py" judge "$provider_stub_log" refused "$provider_refused_model" "$provider_sentence" 2>&1 || true)
     consume_verdicts provider "$verdicts"
 
     # The CLIs, with the app stopped: a running app that wrote any default of its own — a window frame — would
@@ -4098,6 +4153,8 @@ provider_stage() {
     else
         flunk "provider: claudeCLI could not be chosen, so the CLI switch was not checked"
     fi
+    # The reader's own `claude` is found where their settings say, not the stand-in.
+    restore_provider_claude
     provider_cli_check claudeCLI
     provider_cli_check codexCLI
 

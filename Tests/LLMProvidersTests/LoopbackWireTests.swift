@@ -12,7 +12,8 @@ struct LoopbackWireTests {
 
     static func provider(_ base: URL, key: String? = "sk-loopback",
                          timeout: Duration = .seconds(10)) -> OpenAICompatibleProvider {
-        OpenAICompatibleProvider(endpoint: base, model: "loopback-model",
+        // Every base here is this Mac's loopback, an address the app sends to.
+        OpenAICompatibleProvider(endpoint: EndpointAddress(url: base).unsafelyUnwrapped, model: "loopback-model",
                                  credentials: key.map { InMemoryCredentials(key: $0, for: base) } ?? InMemoryCredentials(),
                                  timeout: timeout)
     }

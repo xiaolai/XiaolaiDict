@@ -8,14 +8,14 @@ import XiaolaiDictTestSupport
 /// the wire, through the path the app takes: the reader's settings, the router, the client that decides what the tier
 /// may see, and the provider that sends it.
 ///
-/// **The remote host is real to the code and never reached.** The endpoint is `http://dictionary-host.example/v1` —
-/// `RemoteDisclosure` reads it as remote, as it reads every host that is not loopback — and the provider's session is
-/// sent through an HTTP proxy, which is the loopback server below: the request arrives on a socket of this process in
-/// proxy form, its target the remote host's own URL, so the server sees exactly what that host would have been sent.
-/// No name is resolved and nothing leaves this Mac (`.example` is reserved, RFC 2606, besides).
+/// **The remote host is real to the code and never reached.** A remote endpoint is HTTPS — plain HTTP off this Mac is
+/// not sent at all (`EndpointAddress`), which `aPlainHTTPEndpointOffThisMacIsSentNothing` asserts on a real socket — so
+/// it is a `StubEndpoint` at a host of its own, `RemoteDisclosure` reading it as remote as it reads every host that is
+/// not loopback: the request is read where `URLSession` hands it to the loading system, body and headers whole, which is
+/// what TLS would carry to that host. No name is resolved and nothing leaves this Mac.
 ///
-/// The control is the same question to an endpoint on 127.0.0.1, which is on this Mac and **is** sent the sense — so
-/// each check can fail, and fails for the reason it exists.
+/// The control is the same question to an endpoint on 127.0.0.1, which is on this Mac and **is** sent the sense — on a
+/// real socket — so each check can fail, and fails for the reason it exists.
 struct RemoteSendTests {
     static let sentence = "She banked the fire before going to bed."
     static let sense = "heap (a fire) with tightly packed fuel so that it burns slowly"
@@ -38,6 +38,17 @@ struct RemoteSendTests {
         }
     }
 
+    /// What the stub of a remote endpoint answers: as `endpoint()` does.
+    static func remote() -> StubEndpoint {
+        StubEndpoint { request, _ in
+            let messages = request.json?["messages"] as? [[String: String]] ?? []
+            let instructions = messages.first { $0["role"] == "system" }?["content"] ?? ""
+            if instructions.hasPrefix("Translate") { return .completion("她睡前把炉火封好了。") }
+            if instructions == ModelPrompt.senseInstructions { return .completion("1") }
+            return .completion("She covered the fire so that it would burn slowly through the night.")
+        }
+    }
+
     /// A session sent through `proxy`, a server on 127.0.0.1, for every plain-HTTP request.
     static func proxied(through proxy: LoopbackHTTPServer) -> @Sendable () -> URLSessionConfiguration {
         let port = Int(proxy.port)
@@ -52,13 +63,13 @@ struct RemoteSendTests {
         }
     }
 
-    /// The router the app builds, over `source`, its endpoint session `session`.
+    /// The router the app builds, over `source`, its endpoint session `session`, with a key filed for `keyFor`.
     static func router(_ source: ProviderSource,
-                       session: @escaping @Sendable () -> URLSessionConfiguration = { .ephemeral }) -> ModelBackendRouter {
+                       session: @escaping @Sendable () -> URLSessionConfiguration = { .ephemeral },
+                       keyFor: URL = URL(string: "http://\(remoteHost)/v1").unsafelyUnwrapped) -> ModelBackendRouter {
         let factory = ProviderFactory(
             locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
-            credentials: InMemoryCredentials(key: "sk-remote-send",
-                                             for: URL(string: "http://\(remoteHost)/v1").unsafelyUnwrapped),
+            credentials: InMemoryCredentials(key: "sk-remote-send", for: keyFor),
             configuration: ResidentSessionTests.configuration(),
             endpointSession: session, scratch: { nil }, events: { _ in })
         return ModelBackendRouter(
@@ -75,9 +86,9 @@ struct RemoteSendTests {
     /// **The remote host is sent the reader's sentence, and none of the dictionary's text** — an explanation and a
     /// translation each reach it, and a sense question does not reach it at all, whether a lookup or a tap asked.
     @Test func aRemoteEndpointIsSentTheSentenceAndNothingOfTheDictionarys() async throws {
-        let server = try Self.endpoint()
-        let router = Self.router(.endpoint(url: "http://\(Self.remoteHost)/v1", model: "m"),
-                                 session: Self.proxied(through: server))
+        let server = Self.remote()
+        let router = Self.router(.endpoint(url: server.baseURL.absoluteString, model: "m"),
+                                 session: { StubEndpoint.configuration() }, keyFor: server.baseURL)
 
         let explained = await router.ask(.explain(Self.explanation), origin: .reader)
         #expect(explained.tier == .remote)
@@ -91,15 +102,29 @@ struct RemoteSendTests {
         let requests = server.requests
         #expect(requests.count == 2, "\(requests.count) requests reached the wire; a sense question must send none")
         for request in requests {
-            // Proxy form, to the remote host: what that host would have been sent, byte for byte.
-            #expect(request.target == "http://\(Self.remoteHost)/v1/chat/completions")
-            #expect(request.headers["host"] == Self.remoteHost)
-            let body = Self.body(request)
+            // What the loading system was handed for the remote host: what TLS would carry there, byte for byte.
+            #expect(request.url.absoluteString == "https://\(server.host)/v1/chat/completions")
+            #expect(request.header("Authorization") == "Bearer sk-remote-send", "the control: the key went with it")
+            let body = String(decoding: request.body, as: UTF8.self)
             #expect(body.contains(Self.sentence), "the reader's sentence did not go")
             #expect(!body.contains("tightly packed fuel"), "the dictionary's sense reached a remote host: \(body)")
             #expect(!RemoteDisclosure.leaks(body, of: .explain(Self.explanation)))
             #expect(!RemoteDisclosure.leaks(body, of: .translate(Self.translation)))
         }
+        await router.shutDown()
+    }
+
+    /// **A plain-HTTP endpoint off this Mac is sent nothing** — not the sentence, and not the key filed for it — since it
+    /// would cross the network unencrypted. Asserted on the proxy's socket, where the request would have arrived; and
+    /// the reader's check says the address cannot be used.
+    @Test func aPlainHTTPEndpointOffThisMacIsSentNothing() async throws {
+        let server = try Self.endpoint()
+        let router = Self.router(.endpoint(url: "http://\(Self.remoteHost)/v1", model: "m"),
+                                 session: Self.proxied(through: server))
+        #expect(await router.ask(.explain(Self.explanation), origin: .reader).reply == nil)
+        #expect(await router.ask(.translate(Self.translation), origin: .reader).reply == nil)
+        #expect(server.requests.isEmpty, "\(server.requests.count) requests went out unencrypted")
+        #expect(await router.check()?.readiness == .endpointUnusable)
         await router.shutDown()
     }
 

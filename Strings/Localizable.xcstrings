@@ -1023,10 +1023,16 @@
     "Not signed in. In Terminal, run %@ and sign in, then choose Check Again." : {
 
     },
-    "Not usable: an address starts with https:// or http:// and names a server." : {
+    "Not used: a location is a full path, starting with /." : {
 
     },
-    "Not used: a location is a full path, starting with /." : {
+    "Not used: a server that is not on this Mac needs an address starting with https://, so the key and your sentence are encrypted on their way to it." : {
+
+    },
+    "Not used: an address cannot hold a name or a password. Save the key below instead." : {
+
+    },
+    "Not used: an address starts with https:// and names a server — or http:// for a server on this Mac." : {
 
     },
     "Nothing Can Be Reviewed Yet" : {

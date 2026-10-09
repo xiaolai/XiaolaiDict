@@ -44,6 +44,11 @@ struct FakeCLI: Sendable {
         case signedOut = "signed-out"
         /// Has no `thread/start`.
         case noThreadStart = "no-thread-start"
+        /// Never answers its handshake: a server that hangs while it is being opened.
+        case stall
+        /// Opens the first time it is started, and every later process stalls in its handshake: a replacement that
+        /// hangs while the first still answers.
+        case stallAfterFirst = "stall-after-first"
     }
 
     static func claude(_ startup: ClaudeStartup = .normal) throws -> FakeCLI {
@@ -52,6 +57,21 @@ struct FakeCLI: Sendable {
 
     static func codex(_ startup: CodexStartup = .normal) throws -> FakeCLI {
         try make(name: "codex", script: codexScript, startup: startup.rawValue)
+    }
+
+    /// The fake `claude`, **run by an interpreter found on the `PATH`** — `#!/usr/bin/env <interpreter>` — as a CLI a
+    /// package manager installs is (`#!/usr/bin/env node`). The interpreter, a shim for Python named `interpreter`, is
+    /// written into `directory` — the fake's own where that is nil — which is on no `PATH` this process has.
+    static func claude(runBy interpreter: String, in directory: URL? = nil) throws -> FakeCLI {
+        let fake = try claude()
+        let shim = (directory ?? fake.directory.url).appending(path: interpreter)
+        try FileManager.default.createDirectory(at: shim.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexec /usr/bin/python3 -I \"$@\"\n".utf8).write(to: shim)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+        let script = try String(contentsOf: fake.executable, encoding: .utf8)
+        let body = script.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)[1]
+        try Data("#!/usr/bin/env \(interpreter)\n\(body)".utf8).write(to: fake.executable)
+        return fake
     }
 
     /// A login shell that ignores what it is asked, writes `lines` to standard output and exits — after sleeping
@@ -191,6 +211,12 @@ struct FakeCLI: Sendable {
     /// form) after an `error` notification that will not retry; `[[retrying]]` sends one that will, then answers;
     /// `[[approval]]` asks the client to approve a command first and logs the reply; `[[interrupt]]` ends the turn
     /// interrupted; `[[no-delta]]` answers in the completed turn's items alone.
+    ///
+    /// Each agent message is streamed as deltas carrying its `itemId` and then completed (`item/completed`) with its
+    /// `phase`, as 0.161.0's schema has them — the answer `final_answer`. `[[commentary]]` writes a `commentary` message
+    /// before the answer, as a model that narrates first does, and `[[commentary-after]]` one after it; `[[no-phase]]` completes the messages without a phase, as
+    /// an older model does; `[[no-item-completed]]` sends no `item/completed`, so only the deltas say what was written;
+    /// `[[flood]]` streams 320 KB of deltas into one message; `[[many-items]]` streams 300 messages of one word each.
     static let codexScript = #"""
         #!/usr/bin/python3 -I
         import json, os, re, sys, time
@@ -216,6 +242,13 @@ struct FakeCLI: Sendable {
         if STARTUP == "unexpected-argument":
             sys.stderr.write("error: unexpected argument '--listen' found\n")
             sys.exit(2)
+        if STARTUP == "stall-after-first":
+            try:
+                os.close(os.open(LOG + ".first", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            except FileExistsError:
+                STARTUP = "stall"
+        if STARTUP == "stall":
+            time.sleep(3600)
         threads, turns = 0, 0
         def read():
             line = sys.stdin.readline()
@@ -286,11 +319,30 @@ struct FakeCLI: Sendable {
                     note("error", {"error": {"message": "reconnecting", "codexErrorInfo": "serverOverloaded"},
                                    "willRetry": True, "threadId": thread, "turnId": turn})
                 answer = "pid=%d thread=%s turn=%d echo=%s" % (os.getpid(), thread, turns, marks.get("echo", ""))
+                def message(item, text, phase):
+                    for start in range(0, len(text), 5):
+                        note("item/agentMessage/delta", {"threadId": thread, "turnId": turn, "itemId": item,
+                                                         "delta": text[start:start + 5]})
+                    if "no-item-completed" not in marks:
+                        note("item/completed", {"threadId": thread, "turnId": turn, "completedAtMs": 0, "item": {
+                            "type": "agentMessage", "id": item, "text": text,
+                            "phase": None if "no-phase" in marks else phase}})
+                if "flood" in marks:
+                    for _ in range(5):
+                        note("item/agentMessage/delta", {"threadId": thread, "turnId": turn, "itemId": "m",
+                                                         "delta": "x" * 65536})
+                if "many-items" in marks:
+                    for n in range(300):
+                        note("item/agentMessage/delta", {"threadId": thread, "turnId": turn, "itemId": "i%d" % n,
+                                                         "delta": "word "})
                 if "no-delta" not in marks:
                     note("item/agentMessage/delta", {"threadId": "another-thread", "turnId": turn, "itemId": "x",
                                                      "delta": "not this thread's "})
-                    note("item/agentMessage/delta", {"threadId": thread, "turnId": turn, "itemId": "m", "delta": answer[:5]})
-                    note("item/agentMessage/delta", {"threadId": thread, "turnId": turn, "itemId": "m", "delta": answer[5:]})
+                    if "commentary" in marks:
+                        message("c", "Let me look at the sentence first. ", "commentary")
+                    message("m", answer, "final_answer")
+                    if "commentary-after" in marks:
+                        message("d", "That should settle it.", "commentary")
                 items = [{"type": "agentMessage", "id": "m", "text": answer}] if "no-delta" in marks else []
                 note("turn/completed", {"threadId": thread, "turn": {"id": turn, "status": "completed", "items": items,
                                                                     "error": None}})

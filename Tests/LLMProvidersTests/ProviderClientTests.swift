@@ -77,6 +77,19 @@ struct ProviderClientTests {
         #expect(asked(.remote, .reader, flipped: true))
     }
 
+    /// **Only a sense question takes an answer cut off at its budget**: its number comes first, while a translation's
+    /// or an explanation's end is part of what it says.
+    @Test func onlyASenseQuestionTakesAnAnswerCutOffAtItsBudget() {
+        func usableWhenCut(_ request: ModelRequest) -> Bool? {
+            guard case .ask(let generation, _) = ProviderClient.plan(request, tier: .onThisMac, origin: .reader,
+                                                                     dictionaryTextMayLeave: false) else { return nil }
+            return generation.usableWhenCut
+        }
+        #expect(usableWhenCut(.pickSense(Self.sense)) == true)
+        #expect(usableWhenCut(.translate(Self.translation)) == false)
+        #expect(usableWhenCut(.explain(Self.explanation)) == false)
+    }
+
     // MARK: - Translation and explanation: the remote tier is sent the reader's sentence only
 
     @Test func aRemoteTranslationIsToldNoSense() async throws {

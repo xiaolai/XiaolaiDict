@@ -6,17 +6,26 @@
         listens. Every request is one JSON line in <log>: the model asked for, what kind of question it was, the system
         and user messages, and **whether** a key came — never the key. Runs until it is ended.
 
+    provider-stub.py claude <log> [<claude's own arguments>…]
+        A stand-in for the reader's `claude`, started by the app exactly as it starts theirs: `stream-json` in and out,
+        one `result` a turn. Every turn is one JSON line in the same <log>, in the shape `serve` writes, its model the
+        one the app passed with `--model` and its `user` the whole turn — the instructions travel in the turn.
+
     provider-stub.py judge <log> <tier> <model> <sentence> [<senses-model>]
         PASS and FAIL lines, then DONE — the format `consume_verdicts` reads — about the requests asked for <model>:
         `onThisMac`, it was asked to pick a sense and told the sense with an explanation, each carrying <sentence>;
         `remote`, it was asked nothing that carries the dictionary's text — no sense question, no `Dictionary sense:`
-        line, and none of the senses the <senses-model> arm was sent — and its explanation carried <sentence>.
+        line, and none of the senses the <senses-model> arm was sent — and its explanation carried <sentence>;
+        `refused`, nothing at all arrived for it.
 
-**Why one server serves both tiers.** The app decides the tier from the endpoint's URL alone, failing closed
-(`RemoteDisclosure.tier(ofEndpoint:)`): `127.0.0.1` is on this Mac, and a URL it will not read as loopback beyond
-doubt — one carrying a userinfo, `http://e2e@localhost:<port>/v1` — is remote wherever it connects. So the stage reaches this one loopback server under two names and tells the arms
-apart by the model each asks for — what a remote endpoint would be sent is observed without a packet leaving the Mac,
-and without a connection to a LAN address, which would raise macOS's Local Network prompt on a screen nobody watches.
+**How the tiers are reached without a packet leaving the Mac.** The app decides the tier from the source alone, failing
+closed (`RemoteDisclosure`): an endpoint on `127.0.0.1` is on this Mac, and the reader's CLI is remote wherever it is
+installed. A remote *endpoint* must be HTTPS — plain HTTP off this Mac is never sent (`EndpointAddress`), and this stub
+has no certificate the app would trust — so the remote tier is observed through the CLI instead: the stage installs this
+script as the reader's `claude`, and its turns land in the same log, told apart by the model each arm asks for. A URL
+the app must refuse — one carrying a userinfo, `http://e2e@localhost:<port>/v1` — is the `refused` arm: it reaches this
+server if it is sent at all. No connection is made to a LAN address, which would raise macOS's Local Network prompt on a
+screen nobody watches.
 
 The publisher's text is looked for the way `RemoteDisclosure.leaks` looks for it: the first 32 characters of each sense
 as the sense prompt carried it, at least 8 of them, and not where the reader's own sentence already holds them. A
@@ -62,11 +71,20 @@ def classify(body: dict) -> str:
     """Which question a chat completion asks, by its system message — the app's own instructions."""
     system = next((message.get("content", "") for message in body.get("messages", [])
                    if isinstance(message, dict) and message.get("role") == "system"), "")
-    if system.startswith(SENSE_OPENING):
+    return kind_of(system, lambda text, opening: text.startswith(opening))
+
+
+def classify_turn(text: str) -> str:
+    """Which question a CLI's turn asks: its instructions travel in the turn, after a preface (`ResidentTurn.text`)."""
+    return kind_of(text, lambda turn, opening: any(line.startswith(opening) for line in turn.split("\n")))
+
+
+def kind_of(text: str, opens) -> str:
+    if opens(text, SENSE_OPENING):
         return "sense"
-    if system.startswith(EXPLANATION_OPENING):
+    if opens(text, EXPLANATION_OPENING):
         return "explanation"
-    if system.startswith(TRANSLATION_OPENING):
+    if opens(text, TRANSLATION_OPENING):
         return "translation"
     return "question"
 
@@ -151,6 +169,44 @@ def serve(log: str, port_file: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# claude
+
+def model_of(arguments: list) -> str:
+    """The model the app started `claude` with: the word after `--model`."""
+    for index, argument in enumerate(arguments[:-1]):
+        if argument == "--model":
+            return arguments[index + 1]
+    return ""
+
+
+def claude(log: str, arguments: list, stdin=sys.stdin, stdout=sys.stdout) -> int:
+    """`claude -p --input-format stream-json --output-format stream-json`, as `ClaudeCLIWire` reads it: an `init` line on
+    the first turn, an `assistant` line, and a `result` that says it did not fail."""
+    if arguments == ["--version"]:
+        stdout.write("9.9.9 (xiaolaidict e2e stub)\n")
+        return 0
+    model = model_of(arguments)
+    turns = 0
+    for line in stdin:
+        try:
+            text = str(json.loads(line)["message"]["content"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        turns += 1
+        kind = classify_turn(text)
+        entry = {"path": "claude", "model": model, "kind": kind, "system": "", "user": text, "authorized": False}
+        with open(log, "a") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        said = answer(kind)
+        if turns == 1:
+            stdout.write(json.dumps({"type": "system", "subtype": "init"}) + "\n")
+        stdout.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": said}]}}) + "\n")
+        stdout.write(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": said}) + "\n")
+        stdout.flush()
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # judge
 
 def read_log(path) -> list:
@@ -195,7 +251,11 @@ def judge(entries: list, tier: str, model: str, sentence: str, senses_model: str
         verdicts.append(("PASS\t" if ok else "FAIL\t") + (good if ok else bad))
 
     asked = [entry for entry in entries if entry.get("model") == model]
-    label = f"provider: the {'on-this-Mac' if tier == 'onThisMac' else 'remote'} endpoint"
+    if tier == "refused":
+        say(not asked, f"provider: the refused endpoint was sent nothing ({model})",
+            f"provider: the refused endpoint was sent {len(asked)} request(s) ({model})")
+        return verdicts + ["DONE"]
+    label = f"provider: the {'on-this-Mac endpoint' if tier == 'onThisMac' else 'remote source'}"
     if not asked:
         say(False, "", f"{label} was asked nothing ({model})")
         return verdicts + ["DONE"]
@@ -255,7 +315,9 @@ def judge(entries: list, tier: str, model: str, sentence: str, senses_model: str
 def main(argv: list) -> int:
     if len(argv) == 4 and argv[1] == "serve":
         return serve(argv[2], argv[3])
-    if len(argv) in (6, 7) and argv[1] == "judge" and argv[3] in ("onThisMac", "remote"):
+    if len(argv) >= 3 and argv[1] == "claude":
+        return claude(argv[2], argv[3:])
+    if len(argv) in (6, 7) and argv[1] == "judge" and argv[3] in ("onThisMac", "remote", "refused"):
         try:
             entries = read_log(argv[2])
         except (OSError, ValueError) as error:

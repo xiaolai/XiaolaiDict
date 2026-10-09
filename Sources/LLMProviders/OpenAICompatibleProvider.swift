@@ -19,6 +19,8 @@ import os
 /// - **The key read is the one filed for this endpoint's origin** (`EndpointAddress.keyAccount`), so an instance made
 ///   for another host — the reader's URL changed, or rewritten in the defaults by something else — finds no key and
 ///   sends none.
+/// - **Made only from an `EndpointAddress`**, so only for an address the app sends to: never plain HTTP off this Mac,
+///   never one carrying a name or a password.
 /// - **A redirect is followed only within the endpoint's own origin.** Following one elsewhere would send the body —
 ///   the reader's sentence, and for an endpoint on this Mac the dictionary's text — to a host `RemoteDisclosure` never
 ///   judged, and the key with it.
@@ -36,9 +38,8 @@ public actor OpenAICompatibleProvider: TextGenerating {
     private let completions: URL
     private let model: String
     private let credentials: any CredentialStore
-    /// The account this endpoint's key is filed under — its origin's — or nil where the URL names no origin, for which
-    /// no key is read at all.
-    private let keyAccount: String?
+    /// The account this endpoint's key is filed under — its origin's.
+    private let keyAccount: String
     private let session: URLSession
     private let responseByteLimit: Int
     /// The name the token budget goes under next. Starts with the newer name, which OpenAI's newer models require.
@@ -46,7 +47,7 @@ public actor OpenAICompatibleProvider: TextGenerating {
 
     /// A provider for the endpoint whose base URL is `endpoint` — `https://api.openai.com/v1`, say — asking for
     /// `model`, its key read from `credentials` on every call, under the account of `endpoint`'s origin.
-    public init(endpoint: URL, model: String, credentials: any CredentialStore,
+    public init(endpoint: EndpointAddress, model: String, credentials: any CredentialStore,
                 timeout: Duration = OpenAICompatibleProvider.defaultTimeout) {
         self.init(endpoint: endpoint, model: model, credentials: credentials, timeout: timeout,
                   sessionConfiguration: .ephemeral, responseByteLimit: Self.responseByteLimit)
@@ -54,12 +55,12 @@ public actor OpenAICompatibleProvider: TextGenerating {
 
     /// The same, over `sessionConfiguration` — which the provider takes over and sets up as its own — and with a
     /// bound of the caller's: how a test routes the session through a stub and reaches the bound with a small body.
-    init(endpoint: URL, model: String, credentials: any CredentialStore, timeout: Duration,
+    init(endpoint: EndpointAddress, model: String, credentials: any CredentialStore, timeout: Duration,
          sessionConfiguration: URLSessionConfiguration, responseByteLimit: Int) {
-        completions = endpoint.appending(path: "chat/completions")
+        completions = endpoint.url.appending(path: "chat/completions")
         self.model = model
         self.credentials = credentials
-        keyAccount = EndpointAddress(url: endpoint)?.keyAccount
+        keyAccount = endpoint.keyAccount
         self.responseByteLimit = responseByteLimit
         let seconds = Self.seconds(timeout)
         sessionConfiguration.timeoutIntervalForRequest = seconds
@@ -71,8 +72,8 @@ public actor OpenAICompatibleProvider: TextGenerating {
         sessionConfiguration.urlCache = nil
         sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
         sessionConfiguration.urlCredentialStorage = nil
-        session = URLSession(configuration: sessionConfiguration, delegate: SameOriginRedirects(endpoint: endpoint),
-                             delegateQueue: nil)
+        session = URLSession(configuration: sessionConfiguration,
+                             delegate: SameOriginRedirects(endpoint: endpoint.url), delegateQueue: nil)
     }
 
     deinit { session.finishTasksAndInvalidate() }
@@ -139,14 +140,13 @@ public actor OpenAICompatibleProvider: TextGenerating {
             throw .badShape("a request that would not encode")
         }
         let (status, body) = try await exchange(request)
-        return try Self.outcome(status: status, body: body, field: field)
+        return try Self.outcome(status: status, body: body, field: field, usableWhenCut: generation.usableWhenCut)
     }
 
     /// The key filed for this endpoint's origin, or nil where there is none — and none is legal: a local server takes
     /// no key. A key that is not a plain run of visible ASCII is never sent: a line break in it would end the header
     /// and start another.
     private func readKey() throws(ProviderFailure) -> String? {
-        guard let keyAccount else { return nil }
         let stored: String?
         do {
             stored = try credentials.read(account: keyAccount)
@@ -200,10 +200,10 @@ public actor OpenAICompatibleProvider: TextGenerating {
     // MARK: - Reading what came back
 
     /// What a response says, by its status first and then its body.
-    private static func outcome(status: Int, body: Data,
-                                field: ChatCompletionsWire.TokenField) throws(ProviderFailure) -> Outcome {
+    private static func outcome(status: Int, body: Data, field: ChatCompletionsWire.TokenField,
+                                usableWhenCut: Bool) throws(ProviderFailure) -> Outcome {
         switch status {
-        case 200..<300: return .answer(try answer(in: body))
+        case 200..<300: return .answer(try answer(in: body, usableWhenCut: usableWhenCut))
         // Only a redirect the session declined reaches here: one to another origin (`SameOriginRedirects`).
         case 300..<400: throw .badShape("a redirect not followed")
         default: break
@@ -221,14 +221,16 @@ public actor OpenAICompatibleProvider: TextGenerating {
         }
     }
 
-    /// The first choice's text, trimmed — or the failure that says why there is none.
-    private static func answer(in body: Data) throws(ProviderFailure) -> String {
+    /// The first choice's text, trimmed — or the failure that says why there is none. **An answer the endpoint cut off
+    /// at its token budget** (`finish_reason` `length`) is one only where the request says a cut answer is usable.
+    private static func answer(in body: Data, usableWhenCut: Bool) throws(ProviderFailure) -> String {
         guard let completion = try? JSONDecoder().decode(ChatCompletionsWire.Completion.self, from: body) else {
             throw .badShape("not a chat completion")
         }
         guard let choice = completion.choices.first else { throw .badShape("no choices") }
         if choice.finishReason == "content_filter" { throw .refused }
         if let refusal = choice.message?.refusal, !refusal.isEmpty { throw .refused }
+        if choice.finishReason == "length", !usableWhenCut { throw .badShape("an answer cut off at its token budget") }
         guard let content = choice.message?.content else { throw .badShape("no content") }
         let answer = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else { throw .badShape("an empty answer") }

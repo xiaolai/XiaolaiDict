@@ -153,9 +153,10 @@ enum ChatCompletionsWire {
 
         /// Whether this error is the server refusing the token budget's name `field` — by the parameter it names,
         /// or by a message that names it. A message naming the *other* name as the one to use still names this one
-        /// as refused: OpenAI's says "'max_tokens' is not supported … Use 'max_completion_tokens' instead."
+        /// as refused: OpenAI's says "'max_tokens' is not supported … Use 'max_completion_tokens' instead." **An error
+        /// that names another parameter is about that one**, whatever its message also mentions.
         func refuses(_ field: TokenField) -> Bool {
-            if parameter == field.rawValue { return true }
+            if let parameter, !parameter.isEmpty { return parameter == field.rawValue }
             guard let message else { return false }
             return message.contains(field.rawValue) && !message.contains("Use '\(field.rawValue)'")
         }

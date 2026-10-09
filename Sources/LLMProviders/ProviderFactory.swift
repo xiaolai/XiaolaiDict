@@ -53,14 +53,14 @@ public struct ProviderFactory: Sendable {
                 // Not a provider: the router asks the local model, and nothing is made or refused.
                 return ProviderBuild(backend: nil, refusal: nil, keeps: nil)
             case .claudeCLI(let path, let model):
-                return await Self.cli(.claude, at: path, locator: locator, scratch: scratch) { executable, directory in
-                    ClaudeCLIProvider(executable: executable, model: model, workingDirectory: directory,
-                                      configuration: configuration, events: events)
+                return await Self.cli(.claude, at: path, locator: locator, scratch: scratch) { found, directory in
+                    ClaudeCLIProvider(executable: found.executable, model: model, workingDirectory: directory,
+                                      searchPath: found.searchPath, configuration: configuration, events: events)
                 }
             case .codexCLI(let path, let model):
-                return await Self.cli(.codex, at: path, locator: locator, scratch: scratch) { executable, directory in
-                    CodexCLIProvider(executable: executable, model: model, workingDirectory: directory,
-                                     configuration: configuration, events: events)
+                return await Self.cli(.codex, at: path, locator: locator, scratch: scratch) { found, directory in
+                    CodexCLIProvider(executable: found.executable, model: model, workingDirectory: directory,
+                                     searchPath: found.searchPath, configuration: configuration, events: events)
                 }
             case .endpoint(let url, let model):
                 // The one parse of the reader's address — the one their key's account is read from too — and what is
@@ -69,26 +69,29 @@ public struct ProviderFactory: Sendable {
                     return ProviderBuild(refusal: .endpointUnusable)
                 }
                 return ProviderBuild(backend: OpenAICompatibleProvider(
-                    endpoint: address.url, model: model, credentials: credentials,
+                    endpoint: address, model: model, credentials: credentials,
                     timeout: OpenAICompatibleProvider.defaultTimeout, sessionConfiguration: endpointSession(),
                     responseByteLimit: OpenAICompatibleProvider.responseByteLimit))
             }
         }
     }
 
-    /// The reader's `tool`, found and started in an empty directory of its own — or what they must do where it is not
-    /// there. The directory is kept by the build, so it is removed when the provider it was made for is let go.
+    /// The reader's `tool`, found and started in an empty directory of its own with the `PATH` it was found with — or
+    /// what they must do where it is not there. The directory is kept by the build, so it is removed when the provider
+    /// it was made for is let go.
     private static func cli(_ tool: CLITool, at override: String?, locator: CLILocator,
                             scratch: @Sendable () -> ScratchDirectory?,
-                            start: (URL, URL) -> any ProviderBackend) async -> ProviderBuild {
-        let executable: URL
+                            start: ((executable: URL, searchPath: String), URL) -> any ProviderBackend) async
+        -> ProviderBuild {
+        let found: (executable: URL, searchPath: String)
         switch await locator.locate(tool, override: override) {
-        case .found(let found, _): executable = found
+        case .found(let executable, let source):
+            found = (executable, locator.searchPath(for: executable, source: source))
         case let missing: return ProviderBuild(refusal: .cli(CLIReadiness(missing) ?? .notInstalled))
         }
         // A directory that could not be made is a source that cannot be started, said as one that did not answer.
         guard let directory = scratch() else { return ProviderBuild(refusal: .cli(.unavailable(.unreachable))) }
-        return ProviderBuild(backend: start(executable, directory.url), refusal: nil, keeps: directory)
+        return ProviderBuild(backend: start(found, directory.url), refusal: nil, keeps: directory)
     }
 
     /// A factory that makes whatever `make` makes — a test's own backend, answering in-process.

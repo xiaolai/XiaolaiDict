@@ -132,8 +132,9 @@ public struct ProviderClient: Sendable {
             guard question.senses.count <= ModelPrompt.maximumSenses else {
                 return .invalid("\(question.senses.count) senses; the answer can name at most \(ModelPrompt.maximumSenses)")
             }
+            // The number comes first, so an answer cut off after it is still one.
             return .ask(GenerationRequest(instructions: ModelPrompt.senseInstructions, prompt: ModelPrompt.sense(question),
-                                          maxTokens: senseAnswerTokens, temperature: 0),
+                                          maxTokens: senseAnswerTokens, temperature: 0, usableWhenCut: true),
                         .sense(count: question.senses.count))
         case .translate(let question):
             guard !isBlank(question.sentence), !isBlank(question.target) else {

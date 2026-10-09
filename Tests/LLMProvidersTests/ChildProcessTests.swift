@@ -45,6 +45,123 @@ struct ChildProcessTests {
         #expect(throws: LineFraming.Overflow()) { try framing.append(Data("6789".utf8)) }
     }
 
+    /// **A CRLF line exactly at the bound is one line wherever the chunks fall** — a CR held at the end of a chunk may be
+    /// the start of the line's own ending, so it is not counted against the line until what follows says it is.
+    @Test func aCarriageReturnAtTheBoundIsHeldForTheLineFeedThatEndsIt() throws {
+        var framing = LineFraming(limit: 8)
+        #expect(try framing.append(Data("12345678\r".utf8)).isEmpty)
+        #expect(try framing.append(Data("\n".utf8)) == [Data("12345678".utf8)])
+        // The control: a CR that turns out to be text is the ninth character of a line of eight.
+        var text = LineFraming(limit: 8)
+        #expect(try text.append(Data("12345678\r".utf8)).isEmpty)
+        #expect(throws: LineFraming.Overflow()) { try text.append(Data("x".utf8)) }
+        var twoReturns = LineFraming(limit: 8)
+        #expect(throws: LineFraming.Overflow()) { try twoReturns.append(Data("12345678\r\r".utf8)) }
+    }
+
+    // MARK: - What the child writes, held
+
+    /// **Short lines nobody reads are bounded too**, not only long ones: a child that writes without stopping while no
+    /// question is being read is ended, and the next read says why — rather than this process's memory growing with it.
+    @Test func manyShortLinesPastTheQueuesBoundEndTheChild() async throws {
+        let fake = try FakeCLI.shell(printing: [])
+        try Data("#!/bin/sh\ni=0\nwhile [ $i -lt 40000 ]; do echo x; i=$((i+1)); done\nexec sleep 3600\n".utf8)
+            .write(to: fake.executable)
+        let child = try ChildProcess.start(ChildLaunch(executable: fake.executable, arguments: [],
+                                                       workingDirectory: fake.directory.url))
+        defer { child.end(.retired) }
+        #expect(await waitUntilGone(child.pid, within: .seconds(20)), "a child writing past the bound was not ended")
+        await #expect(throws: ProviderFailure.badShape("more output than the bound")) { try await child.nextLine() }
+    }
+
+    /// **A child ended by this process is ended mid-sentence**: what it wrote and nobody read yet is not read after —
+    /// an answer queued before a deadline or a cancellation is not handed out as though neither had happened. The
+    /// control is a child that ends by itself, whose last lines are still read (`theLastLineOfAChildThatDidNotEndItIsRead`).
+    @Test func aChildEndedByThisProcessHasNothingLeftToRead() async throws {
+        let fake = try FakeCLI.shell(printing: [])
+        // One write, well under PIPE_BUF, so both lines arrive in the chunk the first read is answered from.
+        try Data("#!/bin/sh\nprintf 'first\\nsecond\\n'\nexec sleep 3600\n".utf8).write(to: fake.executable)
+        let child = try ChildProcess.start(ChildLaunch(executable: fake.executable, arguments: [],
+                                                       workingDirectory: fake.directory.url))
+        #expect(try await child.nextLine() == Data("first".utf8))
+        child.end(.cancelled)
+        await #expect(throws: ProviderFailure.cancelled) { try await child.nextLine() }
+        #expect(await waitUntilGone(child.pid))
+    }
+
+    // MARK: - What the child started
+
+    /// A child that starts a process of its own, which keeps the child's standard input and sleeps: the shape of a CLI
+    /// that runs a helper. `escapes` puts that process in a session of its own, out of the child's process group.
+    static func parent(of descendant: TemporaryDirectory, escapes: Bool) throws -> URL {
+        let script = descendant.appending("parent")
+        try Data("""
+            #!/usr/bin/python3 -I
+            import os, sys, time
+            pid = os.fork()
+            if pid == 0:
+                if \(escapes ? "True" : "False"):
+                    os.setsid()
+                with open(sys.argv[1] + ".partial", "w") as f:
+                    f.write(str(os.getpid()))
+                os.rename(sys.argv[1] + ".partial", sys.argv[1])
+                time.sleep(3600)
+                os._exit(0)
+            time.sleep(3600)
+            """.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    /// The pid `parent(of:escapes:)`'s descendant wrote, once it has.
+    static func descendant(writtenTo file: URL) async throws -> Int32 {
+        for _ in 0..<500 {
+            if let text = try? String(contentsOf: file, encoding: .utf8),
+               let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return pid }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("the child's own process never started")
+        throw ProviderFailure.unreachable
+    }
+
+    /// **Ending a child ends what it started**: it runs in a process group of its own, and the group is what is
+    /// signalled — a helper left running would keep the child's pipes open and outlive the app's choice.
+    @Test func endingAChildEndsTheProcessesItStarted() async throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-child")
+        let file = scratch.appending("descendant.pid")
+        let child = try ChildProcess.start(ChildLaunch(
+            executable: try Self.parent(of: scratch, escapes: false), arguments: [file.path],
+            workingDirectory: scratch.url))
+        let descendant = try await Self.descendant(writtenTo: file)
+        defer { kill(descendant, SIGKILL) }
+        child.end(.abandoned)
+        #expect(await waitUntilGone(child.pid))
+        #expect(await waitUntilGone(descendant), "a process the child started outlived it")
+    }
+
+    /// **A write the child will never read is given up when the child is ended** — even where a process the child
+    /// started has left its group and still holds the pipe, so no signal reaches it and the write would otherwise wait
+    /// for ever, holding the turn — and the session's gate — with it.
+    @Test func aWriteNobodyWillReadIsGivenUpWhenTheChildIsEnded() async throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-child")
+        let file = scratch.appending("descendant.pid")
+        let child = try ChildProcess.start(ChildLaunch(
+            executable: try Self.parent(of: scratch, escapes: true), arguments: [file.path],
+            workingDirectory: scratch.url))
+        let descendant = try await Self.descendant(writtenTo: file)
+        defer { kill(descendant, SIGKILL) }
+        // Far past what a pipe holds, so the write is still waiting when the child is ended.
+        let writing = Settling { () async throws(ProviderFailure) in
+            try await child.send(Data(String(repeating: "x", count: 4 << 20).utf8))
+        }
+        child.end(.abandoned)
+        guard case .failure(let failure)? = await writing.outcome(within: .seconds(10)) else {
+            Issue.record("the write was still waiting after the child was ended")
+            return
+        }
+        #expect(failure == .unreachable)
+    }
+
     // MARK: - The child
 
     /// **A write to a child that has gone fails as a `ProviderFailure` and this process carries on.** Without

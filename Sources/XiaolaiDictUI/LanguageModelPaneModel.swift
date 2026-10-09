@@ -129,9 +129,12 @@ public final class LanguageModelPaneModel {
         return path.isEmpty || path.hasPrefix("/") ? nil : .notAbsolute
     }
 
-    /// Whether the address as typed is not one the app can ask anything. Empty is not: it is the default address.
-    public var addressIsUnusable: Bool {
-        !Self.trimmed(drafts.endpointURL).isEmpty && typedAddress == nil
+    /// **Why the address as typed is not one the app sends to** (`EndpointAddress.parse`, the one rule), or nil where
+    /// it is — or the field is empty, which is the default address. An address refused is never kept.
+    public var addressRefusal: EndpointAddress.Refusal? {
+        let typed = Self.trimmed(drafts.endpointURL)
+        guard !typed.isEmpty, case .failure(let refusal) = EndpointAddress.parse(typed) else { return nil }
+        return refusal
     }
 
     /// Why the source cannot be checked now, or nil where it can.
@@ -173,17 +176,20 @@ public final class LanguageModelPaneModel {
     }
 
     /// Keeps what is typed in the text fields — in the suite the router reads, and read back from it, so the fields
-    /// show what was kept. A location the store will not keep stays in its field, with `pathRefusal` saying why.
+    /// show what was kept. A location the store will not keep stays in its field, with `pathRefusal` saying why; **so
+    /// does an address the app would not send to** (`addressRefusal`) — one carrying a password above all, which must
+    /// never reach the defaults.
     public func commitDrafts() {
         var next = settings
-        next.endpointURL = drafts.endpointURL
+        let addressRefused = addressRefusal != nil
+        if !addressRefused { next.endpointURL = drafts.endpointURL }
         next.endpointModel = drafts.endpointModel
         next.claudeCLIModel = drafts.claudeCLIModel
         next.codexCLIModel = drafts.codexCLIModel
         next.claudeCLIPath = drafts.claudeCLIPath
         next.codexCLIPath = drafts.codexCLIPath
         save(next)
-        drafts.endpointURL = settings.endpointURL
+        if !addressRefused { drafts.endpointURL = settings.endpointURL }
         drafts.endpointModel = settings.endpointModel
         drafts.claudeCLIModel = settings.claudeCLIModel
         drafts.codexCLIModel = settings.codexCLIModel

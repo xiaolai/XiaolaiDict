@@ -40,7 +40,8 @@ enum CLIPreflight {
 
     static func readiness<Wire: ResidentWire>(of executable: URL, asking session: ResidentSession<Wire>) async
         -> CLIReadiness {
-        let version = await CLIVersion.read(executable, in: session.launch.workingDirectory)
+        let version = await CLIVersion.read(executable, in: session.launch.workingDirectory,
+                                             searchPath: session.launch.searchPath)
         let start = ContinuousClock.now
         do {
             _ = try await session.ask(question)
@@ -63,9 +64,13 @@ enum CLIPreflight {
 
 /// **A CLI's version, as its `--version` prints it**: `2.1.294 (Claude Code)`, `codex-cli 0.161.0`.
 enum CLIVersion {
-    static func read(_ executable: URL, in directory: URL, timeout: Duration = .seconds(5)) async -> String? {
+    /// The version `executable` prints, run in `directory` with `searchPath` — the `PATH` the CLI itself runs with, since
+    /// a script's interpreter is found on it — or nil where it prints none within `timeout`, or the caller gives up.
+    static func read(_ executable: URL, in directory: URL, searchPath: String?,
+                     timeout: Duration = .seconds(5)) async -> String? {
         guard let child = try? ChildProcess.start(ChildLaunch(executable: executable, arguments: ["--version"],
-                                                              workingDirectory: directory)) else { return nil }
+                                                              workingDirectory: directory, searchPath: searchPath))
+        else { return nil }
         let timer = Task {
             do { try await Task.sleep(for: timeout) } catch { return }
             child.end(.deadline)
@@ -74,9 +79,14 @@ enum CLIVersion {
             timer.cancel()
             child.end(.retired)
         }
-        var printed: [String] = []
-        while printed.count < Self.lineLimit, let line = try? await child.nextLine() {
-            printed.append(String(decoding: line, as: UTF8.self))
+        let printed = await withTaskCancellationHandler {
+            var printed: [String] = []
+            while printed.count < Self.lineLimit, let line = try? await child.nextLine() {
+                printed.append(String(decoding: line, as: UTF8.self))
+            }
+            return printed
+        } onCancel: {
+            child.end(.cancelled)
         }
         return parse(printed.joined(separator: "\n"))
     }

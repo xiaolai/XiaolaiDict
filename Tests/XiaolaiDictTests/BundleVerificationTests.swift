@@ -151,10 +151,11 @@ struct BundleVerificationTests {
         #expect(run.said.contains(says), "\(name): the refusal was \"\(run.said)\"")
     }
 
-    /// **App Transport Security is loosened for this Mac's own servers and for nothing else** (ADR-0053), checked in both
+    /// **App Transport Security is loosened as little as this Mac's own servers need** (ADR-0053), checked in both
     /// directions: without `NSAllowsLocalNetworking` an endpoint on loopback — Ollama, LM Studio, `mlx_lm.server`, which
     /// speak plain HTTP — is refused in the bundle while every unit test passes, and with any other exception beside it
-    /// a remote endpoint's key could travel in the clear.
+    /// a remote endpoint's key could travel in the clear. (The key also lets plain HTTP reach a LAN address or a `.local`
+    /// name; the app refuses those itself — `EndpointAddress`, HTTPS off this Mac.)
     @Test(.enabled(if: bundleIsCurrent, "the published bundle was not built from these inputs; run make"), arguments: [
         ("the local-networking key is missing", "Delete :NSAppTransportSecurity:NSAllowsLocalNetworking"),
         ("the whole dictionary is missing", "Delete :NSAppTransportSecurity"),

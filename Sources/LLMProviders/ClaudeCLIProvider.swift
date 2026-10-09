@@ -22,20 +22,21 @@ public final class ClaudeCLIProvider: TextGenerating {
     private let session: ResidentSession<ClaudeCLIWire>
 
     /// A provider for the `claude` at `executable`, started with `model` in `workingDirectory` — which must be empty and
-    /// the app's own (`ScratchDirectory`): the CLI reads instructions from the directory it runs in.
-    public convenience init(executable: URL, model: String, workingDirectory: URL,
+    /// the app's own (`ScratchDirectory`): the CLI reads instructions from the directory it runs in — with `searchPath`
+    /// as its `PATH` where the locator named one (`CLILocator.searchPath`).
+    public convenience init(executable: URL, model: String, workingDirectory: URL, searchPath: String? = nil,
                             configuration: ResidentConfiguration = .standard) {
-        self.init(executable: executable, model: model, workingDirectory: workingDirectory,
+        self.init(executable: executable, model: model, workingDirectory: workingDirectory, searchPath: searchPath,
                   configuration: configuration, events: { _ in })
     }
 
-    init(executable: URL, model: String, workingDirectory: URL, configuration: ResidentConfiguration,
-         events: @escaping @Sendable (ResidentEvent) -> Void) {
+    init(executable: URL, model: String, workingDirectory: URL, searchPath: String? = nil,
+         configuration: ResidentConfiguration, events: @escaping @Sendable (ResidentEvent) -> Void) {
         self.model = model
         self.executable = executable
         session = ResidentSession(
             wire: ClaudeCLIWire(launch: ChildLaunch(executable: executable, arguments: Self.arguments(model: model),
-                                                   workingDirectory: workingDirectory)),
+                                                   workingDirectory: workingDirectory, searchPath: searchPath)),
             configuration: configuration, events: events)
     }
 
@@ -121,11 +122,15 @@ struct ClaudeCLIWire: ResidentWire {
         }
     }
 
-    /// What a `result` line means, given what the turn's `assistant` line reported.
+    /// What a `result` line means, given what the turn's `assistant` line reported. **Success is said, never assumed**:
+    /// a result whose `is_error` is missing or not a boolean is not an answer, since the text beside it may be an error.
     static func outcome(of result: StreamEvent, reported: ProviderFailure?) -> Result<String, ProviderFailure> {
         if result.stopReason == "refusal" { return .failure(.refused) }
         if let reported { return .failure(reported) }
-        if result.isError == true { return .failure(failure(forStatus: result.apiErrorStatus)) }
+        guard let isError = result.isError else {
+            return .failure(.badShape("a result that does not say whether it failed"))
+        }
+        if isError { return .failure(failure(forStatus: result.apiErrorStatus)) }
         let answer = (result.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return answer.isEmpty ? .failure(.badShape("an empty answer")) : .success(answer)
     }

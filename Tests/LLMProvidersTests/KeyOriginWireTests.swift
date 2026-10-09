@@ -7,9 +7,11 @@ import XiaolaiDictTestSupport
 /// **A key saved for one endpoint is never sent to another, however the endpoint's URL comes to change** (plan §10 P4).
 ///
 /// The URL is a plain value in the app's defaults, and anything that can write them can point it somewhere else — not
-/// the reader, not through Settings. Asserted on the bytes that reach a socket, through the path the app takes: the
-/// reader's settings read from a suite, the router, the factory, the provider and the loading system. The key is filed
-/// the way Settings files it, under `EndpointAddress.keyAccount` for the address Settings shows.
+/// the reader, not through Settings. Asserted through the path the app takes: the reader's settings read from a suite,
+/// the router, the factory, the provider and the loading system — on a socket for another port of this Mac, and where
+/// `URLSession` hands the request over for another host, which is HTTPS (plain HTTP off this Mac is sent nothing,
+/// `RemoteSendTests`). The key is filed the way Settings files it, under `EndpointAddress.keyAccount` for the address
+/// Settings shows.
 ///
 /// Each test has its control on the same router: the origin the key was saved for **is** sent it, so the header's
 /// absence afterwards is the binding and not a wire that never carries one.
@@ -72,28 +74,27 @@ struct KeyOriginWireTests {
     }
 
     /// **And another host is another origin** — the case the binding is for: a URL rewritten to a host off this Mac.
-    /// Reached through an HTTP proxy that is a loopback server (as `RemoteSendTests` does), so the request arrives in
-    /// proxy form on a real socket, its target the rewritten host's own URL, and no name is resolved.
+    /// Both hosts are `StubEndpoint`s of their own, read where `URLSession` hands the request to the loading system, so
+    /// no name is resolved and nothing leaves this Mac.
     @Test func aURLRewrittenToAnotherHostSendsNoKeyThere() async throws {
-        let proxy = try Self.server()
-        let suite = Self.suite(endpoint: "http://key-owner.example/v1")
+        let owner = StubEndpoint(always: .completion(Self.answer)), elsewhere = StubEndpoint(always: .completion(Self.answer))
+        let suite = Self.suite(endpoint: owner.baseURL.absoluteString)
         let credentials = InMemoryCredentials()
         try Self.saveKey("sk-SAVED-FOR-KEY-OWNER", in: suite, to: credentials)
-        let router = Self.router(suite, credentials, session: RemoteSendTests.proxied(through: proxy))
+        let router = Self.router(suite, credentials, session: { StubEndpoint.configuration() })
 
         _ = await router.ask(.explain(Self.question), origin: .reader)
-        let control = try #require(proxy.requests.first)
-        #expect(control.target == "http://key-owner.example/v1/chat/completions")
-        #expect(control.headers["authorization"] == "Bearer sk-SAVED-FOR-KEY-OWNER",
-                "the control: the origin the key was saved for was not sent it through the proxy")
+        let control = try #require(owner.requests.first)
+        #expect(control.header("Authorization") == "Bearer sk-SAVED-FOR-KEY-OWNER",
+                "the control: the origin the key was saved for was not sent it")
 
-        suite.set("http://elsewhere.example/v1", forKey: ProviderSettingsStore.Key.endpointURL)
+        suite.set(elsewhere.baseURL.absoluteString, forKey: ProviderSettingsStore.Key.endpointURL)
         _ = await router.ask(.explain(Self.question), origin: .reader)
-        let request = try #require(proxy.requests.dropFirst().first, "the rewritten endpoint was never asked")
-        #expect(request.target == "http://elsewhere.example/v1/chat/completions")
-        #expect(request.headers["host"] == "elsewhere.example")
-        #expect(request.headers["authorization"] == nil, "the key saved for key-owner.example went to another host")
+        let request = try #require(elsewhere.requests.first, "the rewritten endpoint was never asked")
+        #expect(request.url.host() == elsewhere.host)
+        #expect(request.header("Authorization") == nil, "the key saved for one host went to another")
         #expect(!request.headers.values.contains { $0.contains("SAVED-FOR-KEY-OWNER") })
+        #expect(owner.requests.count == 1, "the host the reader left was asked again")
         await router.shutDown()
     }
 }

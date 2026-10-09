@@ -24,19 +24,20 @@ public final class CodexCLIProvider: TextGenerating {
     private let session: ResidentSession<CodexCLIWire>
 
     /// A provider for the `codex` at `executable`, asking `model` — empty for the server's default — in
-    /// `workingDirectory`, which must be empty and the app's own (`ScratchDirectory`).
-    public convenience init(executable: URL, model: String, workingDirectory: URL,
+    /// `workingDirectory`, which must be empty and the app's own (`ScratchDirectory`), with `searchPath` as its `PATH`
+    /// where the locator named one.
+    public convenience init(executable: URL, model: String, workingDirectory: URL, searchPath: String? = nil,
                             configuration: ResidentConfiguration = .standard) {
-        self.init(executable: executable, model: model, workingDirectory: workingDirectory,
+        self.init(executable: executable, model: model, workingDirectory: workingDirectory, searchPath: searchPath,
                   configuration: configuration, events: { _ in })
     }
 
-    init(executable: URL, model: String, workingDirectory: URL, configuration: ResidentConfiguration,
-         events: @escaping @Sendable (ResidentEvent) -> Void) {
+    init(executable: URL, model: String, workingDirectory: URL, searchPath: String? = nil,
+         configuration: ResidentConfiguration, events: @escaping @Sendable (ResidentEvent) -> Void) {
         self.executable = executable
         session = ResidentSession(
             wire: CodexCLIWire(launch: ChildLaunch(executable: executable, arguments: Self.arguments,
-                                                  workingDirectory: workingDirectory),
+                                                  workingDirectory: workingDirectory, searchPath: searchPath),
                                model: model.trimmingCharacters(in: .whitespacesAndNewlines)),
             configuration: configuration, events: events)
     }
@@ -80,8 +81,8 @@ public final class CodexCLIProvider: TextGenerating {
 /// Opening: `initialize` and `initialized`; `account/read` — nobody signed in is unauthorised, and no thread is
 /// started; `config/read` for the MCP servers' names; `model/list` where the reader named no model; `thread/start`,
 /// ephemeral, read-only, never asking for approval, the servers disabled; one warm-up turn. A question: `turn/start`,
-/// then the thread's `item/agentMessage/delta`s until its `turn/completed`. A request the server makes of this client is
-/// refused at once.
+/// then the thread's `item/agentMessage/delta`s and `item/completed`s until its `turn/completed` — read by message, and
+/// answered by the final one (`TurnTranscript`). A request the server makes of this client is refused at once.
 struct CodexCLIWire: ResidentWire {
     struct Conversation: Sendable {
         let thread: String
@@ -139,9 +140,7 @@ struct CodexCLIWire: ResidentWire {
         try await child.send(try Self.encode(RPC.Request(id: id, method: "turn/start", params: RPC.TurnStartParams(
             threadId: conversation.thread, input: [.init(text: ResidentTurn.text(for: request))]))))
         var turn: String?
-        var deltas: [String: String] = [:]
-        var reported: [String: ProviderFailure] = [:]
-        var completed: [String: RPC.TurnCompleted.Turn] = [:]
+        var transcripts = TurnTranscripts()
         while true {
             switch try await Self.read(over: child) {
             case .response(.number(id), let line, let error):
@@ -156,36 +155,45 @@ struct CodexCLIWire: ResidentWire {
             case .notification("item/agentMessage/delta", let line):
                 guard let delta = Self.decode(RPC.Incoming<RPC.AgentMessageDelta>.self, line)?.params,
                       delta.threadId == conversation.thread else { continue }
-                deltas[delta.turnId, default: ""] += delta.delta
+                try transcripts.update(delta.turnId) { transcript throws(ProviderFailure) in
+                    try transcript.add(delta.delta, to: delta.itemId ?? "")
+                }
+            case .notification("item/completed", let line):
+                guard let done = Self.decode(RPC.Incoming<RPC.ItemCompleted>.self, line)?.params,
+                      done.threadId == conversation.thread, done.item.type == "agentMessage" else { continue }
+                try transcripts.update(done.turnId) { transcript throws(ProviderFailure) in
+                    try transcript.complete(done.item)
+                }
             case .notification("error", let line):
                 guard let note = Self.decode(RPC.Incoming<RPC.ErrorNotification>.self, line)?.params,
                       note.threadId == conversation.thread, !note.willRetry else { continue }
-                reported[note.turnId] = reported[note.turnId] ?? Self.failure(for: note.error.codexErrorInfo)
+                try transcripts.update(note.turnId) { transcript throws(ProviderFailure) in
+                    transcript.reported = transcript.reported ?? Self.failure(for: note.error.codexErrorInfo)
+                }
             case .notification("turn/completed", let line):
                 guard let done = Self.decode(RPC.Incoming<RPC.TurnCompleted>.self, line)?.params,
                       done.threadId == conversation.thread else { continue }
-                completed[done.turn.id] = done.turn
+                try transcripts.update(done.turn.id) { transcript throws(ProviderFailure) in
+                    transcript.finished = done.turn
+                }
             case .notification:
                 continue
             }
             // The end is recognised once both are known, in whichever order they came.
-            if let turn, let done = completed[turn] {
-                return Self.outcome(of: done, deltas: deltas[turn] ?? "", reported: reported[turn])
+            if let turn, let transcript = transcripts[turn], let done = transcript.finished {
+                return Self.outcome(of: done, transcript: transcript)
             }
         }
     }
 
-    /// What a completed turn means: its last agent message — or its deltas, where it lists none — or the failure that
-    /// ended it.
-    static func outcome(of turn: RPC.TurnCompleted.Turn, deltas: String,
-                        reported: ProviderFailure?) -> Result<String, ProviderFailure> {
+    /// What a completed turn means: its answer (`TurnTranscript.answer`), or the failure that ended it.
+    static func outcome(of turn: RPC.TurnCompleted.Turn, transcript: TurnTranscript) -> Result<String, ProviderFailure> {
         switch turn.status {
         case "completed":
-            let listed = turn.items?.last { $0.type == "agentMessage" }?.text ?? ""
-            let answer = (listed.isEmpty ? deltas : listed).trimmingCharacters(in: .whitespacesAndNewlines)
+            let answer = transcript.answer.trimmingCharacters(in: .whitespacesAndNewlines)
             return answer.isEmpty ? .failure(.badShape("an empty answer")) : .success(answer)
         case "failed":
-            return .failure(reported ?? failure(for: turn.error?.codexErrorInfo))
+            return .failure(transcript.reported ?? failure(for: turn.error?.codexErrorInfo))
         default:
             // Interrupted, by nobody here: the server did not answer.
             return .failure(.unreachable)
@@ -280,5 +288,93 @@ struct CodexCLIWire: ResidentWire {
 
     private static func decode<T: Decodable>(_ type: T.Type, _ line: Data) -> T? {
         try? JSONDecoder().decode(type, from: line)
+    }
+}
+
+/// **What one turn has written, kept apart by message and bounded** (0.161.0's schema): each agent message's deltas under
+/// its item, in the order the messages began; what `item/completed` said each was in the end — its whole text and its
+/// `phase`; a failure the server reported; and the turn's own end.
+///
+/// **The answer is one message, never all of them run together**: the last that says it is the `final_answer`; where
+/// none says — a model that gives no phase — the last that is not `commentary`; and the last of all where every one
+/// is. A message's completed text where the server completed it, its deltas where it did not. Where nothing was
+/// streamed, the completed turn's own list, read the same way.
+///
+/// **Bounded like an endpoint's answer** (`OpenAICompatibleProvider.responseByteLimit`), the deltas and the completed
+/// texts each, and in the messages kept apart: past either a turn is not an answer, and the wire's throw ends the
+/// process — what it writes next could not be read as the start of anything.
+struct TurnTranscript {
+    struct Message {
+        var deltas = ""
+        var text: String?
+        var phase: String?
+    }
+
+    private(set) var order: [String] = []
+    private(set) var messages: [String: Message] = [:]
+    private var deltaBytes = 0
+    private var textBytes = 0
+    var reported: ProviderFailure?
+    var finished: CodexAppServer.TurnCompleted.Turn?
+
+    static let byteLimit = OpenAICompatibleProvider.responseByteLimit
+    /// Far more than a dictionary question's turn writes — a narration and an answer — and short of a stream of them.
+    static let messageLimit = 64
+
+    static let tooLarge = ProviderFailure.badShape("an answer larger than the bound")
+
+    mutating func add(_ delta: String, to item: String) throws(ProviderFailure) {
+        try admit(item)
+        deltaBytes += delta.utf8.count
+        guard deltaBytes <= Self.byteLimit else { throw Self.tooLarge }
+        messages[item, default: Message()].deltas += delta
+    }
+
+    mutating func complete(_ item: CodexAppServer.TurnCompleted.Turn.Item) throws(ProviderFailure) {
+        let id = item.id ?? ""
+        try admit(id)
+        textBytes += item.text?.utf8.count ?? 0
+        guard textBytes <= Self.byteLimit else { throw Self.tooLarge }
+        messages[id, default: Message()].text = item.text ?? ""
+        messages[id, default: Message()].phase = item.phase
+    }
+
+    private mutating func admit(_ item: String) throws(ProviderFailure) {
+        guard messages[item] == nil else { return }
+        guard order.count < Self.messageLimit else { throw Self.tooLarge }
+        order.append(item)
+        messages[item] = Message()
+    }
+
+    var answer: String {
+        let written = order.compactMap { messages[$0] }.map { (text: $0.text ?? $0.deltas, phase: $0.phase) }
+        if let chosen = Self.choose(written) { return chosen }
+        let listed = (finished?.items ?? []).filter { $0.type == "agentMessage" }
+        return Self.choose(listed.map { (text: $0.text ?? "", phase: $0.phase) }) ?? ""
+    }
+
+    private static func choose(_ messages: [(text: String, phase: String?)]) -> String? {
+        messages.last { $0.phase == "final_answer" }?.text
+            ?? messages.last { $0.phase != "commentary" }?.text
+            ?? messages.last?.text
+    }
+}
+
+/// A turn's transcript by its id, **bounded in turns too**: one turn is asked at a time, and notifications naming a
+/// handful of others are a server out of step, not a reason to keep everything it says.
+struct TurnTranscripts {
+    private var transcripts: [String: TurnTranscript] = [:]
+
+    static let turnLimit = 4
+
+    subscript(turn: String) -> TurnTranscript? { transcripts[turn] }
+
+    mutating func update(_ turn: String,
+                         _ change: (inout TurnTranscript) throws(ProviderFailure) -> Void) throws(ProviderFailure) {
+        if transcripts[turn] == nil {
+            guard transcripts.count < Self.turnLimit else { throw TurnTranscript.tooLarge }
+            transcripts[turn] = TurnTranscript()
+        }
+        try change(&transcripts[turn, default: TurnTranscript()])
     }
 }

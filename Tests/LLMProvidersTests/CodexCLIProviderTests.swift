@@ -109,6 +109,83 @@ struct CodexCLIProviderTests {
         await provider.shutDown()
     }
 
+    /// **The answer is the turn's final message, not everything it wrote.** A model that narrates writes `commentary`
+    /// messages beside its `final_answer`, each its own item; read by turn alone, they ran together and the narration was
+    /// shown as part of a translation. The phase decides, not the order: a narration can come after the answer.
+    @Test(arguments: ["[[commentary]]", "[[commentary-after]]", "[[commentary]] [[commentary-after]]"])
+    func aCommentaryIsNotPartOfTheAnswer(marks: String) async throws {
+        let fake = try FakeCLI.codex()
+        let provider = Self.provider(fake)
+        let answer = try await provider.generate(ResidentSessionTests.question("\(marks) [[echo:final]]"))
+        #expect(answer.hasPrefix("pid=") && answer.hasSuffix("echo=final"), "\(answer)")
+        #expect(!answer.contains("Let me look") && !answer.contains("settle it"))
+        await provider.shutDown()
+    }
+
+    /// **Where no message says its phase, the last one is the answer** — an older model's turn — and where the server
+    /// completes no item at all, the last message's own deltas are, never every message's run together.
+    @Test(arguments: ["[[no-phase]]", "[[no-item-completed]]"])
+    func withoutAPhaseTheLastMessageIsTheAnswer(mark: String) async throws {
+        let fake = try FakeCLI.codex()
+        let provider = Self.provider(fake)
+        let answer = try await provider.generate(ResidentSessionTests.question("[[commentary]] \(mark) [[echo:last]]"))
+        #expect(answer.hasPrefix("pid=") && answer.hasSuffix("echo=last"), "\(answer)")
+        await provider.shutDown()
+    }
+
+    /// **What a turn streams is bounded** — in bytes, and in the messages kept apart — so a server that writes without
+    /// stopping cannot grow this process: past either bound the turn is not an answer, and the process is ended.
+    @Test(arguments: ["[[flood]]", "[[many-items]]"])
+    func aTurnPastItsBoundIsRefusedAndItsProcessEnded(mark: String) async throws {
+        let fake = try FakeCLI.codex()
+        let events = EventLog()
+        let provider = Self.provider(fake, events: events)
+        let first = try answeringPID(try await provider.generate(ResidentSessionTests.question()))
+        await #expect(throws: ProviderFailure.badShape("an answer larger than the bound"), "\(mark)") {
+            try await provider.generate(ResidentSessionTests.question(mark))
+        }
+        #expect(await waitUntilGone(first))
+        await provider.shutDown()
+    }
+
+    /// The pid of every process the session reported spawning, in order.
+    static func spawned(_ events: EventLog) -> [Int32] {
+        events.all.compactMap { record -> Int32? in
+            if case .spawned(let pid) = record.event { pid } else { nil }
+        }
+    }
+
+    /// **Shutting down ends a process still being opened** — a server whose handshake has not answered — and returns
+    /// once it has gone, not once the opening's own deadline has passed; the question it was opened for fails.
+    @Test func shuttingDownEndsAProcessStillBeingOpened() async throws {
+        let fake = try FakeCLI.codex(.stall)
+        let events = EventLog()
+        let provider = Self.provider(fake, events: events)
+        let asking = Settling { () async throws(ProviderFailure) in
+            try await provider.generate(ResidentSessionTests.question())
+        }
+        #expect(await events.wait { if case .spawned = $0 { true } else { false } })
+        let opening = try #require(Self.spawned(events).first)
+        await provider.shutDown()
+        #expect(!isAlive(opening), "the shutdown returned with the process it was opening still running")
+        #expect(await asking.outcome() == .failure(.unreachable))
+    }
+
+    /// **And a replacement still being opened** — started while the first process answered, and hanging in its own
+    /// handshake.
+    @Test func shuttingDownEndsAReplacementStillBeingOpened() async throws {
+        let fake = try FakeCLI.codex(.stallAfterFirst)
+        let events = EventLog()
+        let provider = Self.provider(fake, configuration: ResidentSessionTests.configuration(recycleAfter: 1),
+                                     events: events)
+        let first = try answeringPID(try await provider.generate(ResidentSessionTests.question()))
+        #expect(await events.wait { if case .spawned(let pid) = $0 { pid != first } else { false } })
+        let replacement = try #require(Self.spawned(events).last)
+        await provider.shutDown()
+        #expect(!isAlive(replacement), "the shutdown returned with the replacement it was opening still running")
+        #expect(!isAlive(first))
+    }
+
     /// **A request for approval is refused, never left unanswered** — an unanswered one would hold the turn until the
     /// deadline — and the turn goes on to its answer.
     @Test func aRequestForApprovalIsRefusedAndTheTurnCompletes() async throws {

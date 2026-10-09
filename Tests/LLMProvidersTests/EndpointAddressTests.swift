@@ -20,16 +20,41 @@ struct EndpointAddressTests {
         #expect(account == "openAICompatible https://api.openai.com:443")
     }
 
-    /// **Every other origin is another account** — including every address written to look like the reader's:
-    /// a longer host, userinfo that names it (`http://a@b` connects to `b`), and the reader's host in a query.
+    /// **Every other origin is another account** — including every address written to look like the reader's: a
+    /// longer host, a trailing dot, and the reader's host in a query. (Userinfo naming it — `https://a@b` connects to
+    /// `b` — and plain HTTP to it are not addresses at all: `anAddressCarryingANameOrAPasswordIsNotOne`.)
     @Test(arguments: [
-        "http://api.openai.com/v1", "https://api.openai.com:8443/v1", "https://api.openai.com.evil.example/v1",
-        "https://api.openai.com@evil.example/v1", "https://evil.example/v1?next=https://api.openai.com/v1",
-        "https://openai.com/v1", "https://api.openai.com./v1",
+        "https://api.openai.com:8443/v1", "https://api.openai.com.evil.example/v1",
+        "https://evil.example/v1?next=https://api.openai.com/v1", "https://openai.com/v1", "https://api.openai.com./v1",
     ])
     func everyOtherOriginIsAnotherAccount(text: String) throws {
         let account = try #require(Self.account(text), "\(text) names no origin")
         #expect(account != Self.account(Self.openAI), "\(text) shares the key filed for \(Self.openAI)")
+    }
+
+    /// **Plain HTTP only to this Mac** — loopback beyond doubt, read as `RemoteDisclosure` reads it. Anywhere else the
+    /// key and the reader's sentence would cross the network unencrypted, and `NSAllowsLocalNetworking`, which loopback
+    /// needs, lets the system send it to a LAN address or a `.local` name without a word: so this app refuses to.
+    @Test(arguments: ["http://192.168.1.5:11434/v1", "http://10.0.0.2/v1", "http://another-mac.local:1234/v1",
+                      "http://api.openai.com/v1", "http://[fe80::1]/v1", "http://localhost./v1", "http://0127.0.0.1/v1",
+                      "HTTP://api.example.com/v1"])
+    func plainHTTPOffThisMacIsNotAnAddress(text: String) {
+        #expect(EndpointAddress(text) == nil, "\(text) would be sent unencrypted")
+    }
+
+    @Test(arguments: ["http://127.0.0.1:11434/v1", "http://localhost:1234/v1", "http://[::1]:8080/v1",
+                      "http://ollama.localhost:11434/v1", "https://192.168.1.5:11434/v1", "https://api.example.com/v1"])
+    func encryptedOrOnThisMacIsAnAddress(text: String) {
+        #expect(EndpointAddress(text) != nil, "\(text)")
+    }
+
+    /// **An address carrying a name or a password is not one** — it would keep a credential in the defaults in plain
+    /// text, and `https://a@b` connects to `b`, whatever it seems to name.
+    @Test(arguments: ["https://reader:hunter2@api.example.com/v1", "https://api.openai.com@evil.example/v1",
+                      "http://e2e@localhost:8080/v1", "https://:secret@api.example.com/v1",
+                      "https://reader@api.example.com/v1"])
+    func anAddressCarryingANameOrAPasswordIsNotOne(text: String) {
+        #expect(EndpointAddress(text) == nil, "\(text) carries a credential")
     }
 
     /// Two servers on one loopback address are two origins: a port is part of the origin, and of the account.
@@ -38,6 +63,25 @@ struct EndpointAddressTests {
         #expect(Self.account("http://127.0.0.1:11434/v1") != Self.account("http://127.0.0.1:1234/v1"))
         #expect(Self.account("http://localhost:11434/v1") != Self.account("http://127.0.0.1:11434/v1"),
                 "two names are two origins, as a browser counts them")
+        #expect(Self.account("http://localhost:8443/v1") != Self.account("https://localhost:8443/v1"),
+                "two schemes are two origins")
+    }
+
+    /// **Each refusal is named**, so the pane can say why — and an address the app sends to is no refusal.
+    @Test func eachRefusalIsNamed() {
+        let cases: [(String, EndpointAddress.Refusal?)] = [
+            ("not a url", .notAnAddress), ("ftp://api.openai.com/v1", .notAnAddress), ("https://", .notAnAddress),
+            ("https://reader:hunter2@api.example.com/v1", .carriesCredentials),
+            ("http://reader@127.0.0.1:11434/v1", .carriesCredentials),
+            ("http://192.168.1.5:11434/v1", .unencrypted), ("http://api.openai.com/v1", .unencrypted),
+            ("https://api.openai.com/v1", nil), ("http://127.0.0.1:11434/v1", nil), ("http://[::1]:8080/v1", nil),
+        ]
+        for (text, refusal) in cases {
+            switch EndpointAddress.parse(text) {
+            case .success: #expect(refusal == nil, "\(text) was taken as an address")
+            case .failure(let refused): #expect(refused == refusal, "\(text)")
+            }
+        }
     }
 
     /// An IPv6 host is written in its brackets, so the port after it cannot be read as one of its groups.

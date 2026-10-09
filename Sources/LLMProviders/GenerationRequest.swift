@@ -15,12 +15,18 @@ public struct GenerationRequest: Sendable, Equatable {
     public let maxTokens: Int
     /// 0 for a sense choice, which must not vary run to run; sampled for prose.
     public let temperature: Double
+    /// **Whether an answer cut off at `maxTokens` is still an answer** — a sense's number, which comes first — or not
+    /// one — a translation or an explanation, whose end is part of what it says. A provider that can tell an answer was
+    /// cut off refuses it where this is false.
+    public let usableWhenCut: Bool
 
-    public init(instructions: String, prompt: String, maxTokens: Int, temperature: Double) {
+    public init(instructions: String, prompt: String, maxTokens: Int, temperature: Double,
+                usableWhenCut: Bool = false) {
         self.instructions = instructions
         self.prompt = prompt
         self.maxTokens = maxTokens
         self.temperature = temperature
+        self.usableWhenCut = usableWhenCut
     }
 }
 
