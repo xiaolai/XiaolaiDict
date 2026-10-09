@@ -17,6 +17,7 @@ import Testing
 struct PanelWordProtectionTests {
     private let screen = UpRect(x: 0, y: 0, width: 1_440, height: 900)
     private let card = NSSize(width: 396, height: 200)
+    private let chrome = CardChrome(textSize: .standard)
 
     private func word(_ x: CGFloat, _ y: CGFloat, quality: WordBounds.Quality = .exact) -> WordBounds {
         WordBounds(rect: UpRect(x: x, y: y, width: 80, height: 20), quality: quality)
@@ -29,10 +30,10 @@ struct PanelWordProtectionTests {
     /// **No rectangle, today's rule, bit for bit** — and the room is the whole screen, so later fits are unchanged.
     @Test func withoutARectangleThePlacementIsTodays() {
         for point in [UpPoint(x: 100, y: 700), UpPoint(x: 1_430, y: 10), UpPoint(x: 700, y: 890)] {
-            let placed = PanelPlacement.placed(for: card, near: point, protecting: nil, within: screen)
+            let placed = PanelPlacement.placed(for: card, near: point, protecting: nil, within: screen, chrome: chrome)
             #expect(placed.frame == PanelPlacement.frame(for: card, near: point, within: screen))
             #expect(placed.room == screen)
-            #expect(placed.lowestBottom == nil, "the fit's floor changed with no word to keep")
+            #expect(placed.growth == nil, "the fit's floor changed with no word to keep")
         }
     }
 
@@ -44,7 +45,7 @@ struct PanelWordProtectionTests {
     ])
     func theCardIsClearOfTheWordAtFirstShow(x: Double, y: Double) {
         let protected = word(x, y)
-        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen)
+        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen, chrome: chrome)
         #expect(!placed.frame.intersects(protected.rect.cg), "covers the word at (\(x), \(y)): \(placed.frame)")
         #expect(screen.cg.contains(placed.frame), "off the screen at (\(x), \(y)): \(placed.frame)")
     }
@@ -52,10 +53,12 @@ struct PanelWordProtectionTests {
     /// Below where the card fits below — the side today's rule already uses — and above only where it does not.
     @Test func theCardGoesBelowWhereItFitsAndAboveWhereItDoesNot() {
         let middle = word(600, 500)
-        #expect(PanelPlacement.placed(for: card, near: pointer(on: middle), protecting: middle, within: screen)
+        #expect(PanelPlacement.placed(for: card, near: pointer(on: middle), protecting: middle, within: screen,
+                                      chrome: chrome)
             .frame.maxY <= middle.rect.cg.minY)
         let low = word(600, 100)
-        #expect(PanelPlacement.placed(for: card, near: pointer(on: low), protecting: low, within: screen)
+        #expect(PanelPlacement.placed(for: card, near: pointer(on: low), protecting: low, within: screen,
+                                      chrome: chrome)
             .frame.minY >= low.rect.cg.maxY)
     }
 
@@ -64,7 +67,7 @@ struct PanelWordProtectionTests {
         let short = UpRect(x: 0, y: 0, width: 1_440, height: 300)
         let protected = word(600, 120)
         let placed = PanelPlacement.placed(
-            for: NSSize(width: 396, height: 600), near: pointer(on: protected), protecting: protected, within: short)
+            for: NSSize(width: 396, height: 600), near: pointer(on: protected), protecting: protected, within: short, chrome: chrome)
         #expect(!placed.frame.intersects(protected.rect.cg))
         #expect(placed.frame.height < 600 && placed.frame.height > 0)
         // Above has 300 − 8 − 140 − 4 = 148; below has 120 − 4 − 8 = 108.
@@ -72,20 +75,22 @@ struct PanelWordProtectionTests {
     }
 
     /// **The protection survives growth**, through the window fit's own arithmetic: each later fit — entry arrival,
-    /// sense expansion, a translation, the footer — moves the bottom edge down, bounded by the room's floor, and the
-    /// screen clamp then holds the frame to the room. Codex's reproduction is the second case.
+    /// sense expansion, a translation, the footer — grows the window away from the word, bounded by its room, and the
+    /// anchor then puts the card back on its word within the room (the owner's decision of 2026-10-09: a card above its
+    /// word grows up; WI-2's floor held it at its opening height). Codex's reproduction is the second case.
     @Test(arguments: [(600.0, 730.0), (600.0, 100.0), (600.0, 500.0), (1_400.0, 20.0)])
-    func theProtectionSurvivesEveryLaterFit(x: Double, y: Double) {
+    func theProtectionSurvivesEveryLaterFit(x: Double, y: Double) throws {
         let protected = word(x, y)
-        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen)
+        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen, chrome: chrome)
         let window = NSWindow(contentRect: placed.frame, styleMask: .borderless, backing: .buffered, defer: true)
         window.setFrame(placed.frame, display: false)
         for wanted in [260.0, 350.0, 520.0, 900.0, 2_000.0] {
             SettingsWindowFit.move(
                 window, by: wanted - window.frame.height, width: nil,
-                lowestBottom: placed.lowestBottom ?? screen.cg.minY,
+                lowestBottom: placed.growth?.lowestBottom, highestTop: placed.growth?.highestTop,
                 animated: false, recentres: false)
-            window.setFrame(PanelPlacement.fitted(window.frame, within: placed.room), display: false)
+            let anchor = try #require(placed.anchor)
+            window.setFrame(anchor.placed(window.frame).frame, display: false)
             #expect(!window.frame.intersects(protected.rect.cg),
                     "grown to \(wanted) over the word at (\(x), \(y)): \(window.frame)")
             #expect(screen.cg.contains(window.frame), "grown off the screen: \(window.frame)")
@@ -106,7 +111,7 @@ struct PanelWordProtectionTests {
     /// The room is the side the card was put on, with the word's gap and the screen's margin both kept.
     @Test func theRoomExcludesTheWordAndKeepsTheGap() {
         let protected = word(600, 500)
-        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen)
+        let placed = PanelPlacement.placed(for: card, near: pointer(on: protected), protecting: protected, within: screen, chrome: chrome)
         let fitted = PanelPlacement.fitted(
             NSRect(x: 600, y: 0, width: 396, height: 2_000), within: placed.room)
         #expect(fitted.maxY <= protected.rect.cg.minY - PanelPlacement.wordGap)

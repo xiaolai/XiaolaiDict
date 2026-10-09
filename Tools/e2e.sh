@@ -2111,6 +2111,28 @@ say(r.get("coversWordSettled") is False and r.get("onScreenSettled") is True,
     f"placement ({size}): grown, the panel covers the word or left the screen: {r}")
 say(r.get("grew") is True, f"placement ({size}): the entry grew the panel, so the growth was measured",
     f"placement ({size}): the panel never grew, so nothing about growth was measured: {r}")
+# **The card on its word** (the owner's decision of 2026-10-09): centred across it — or as near as the screen allows, held
+# at the screen's margin — with its tail at the word's middle, just off its nearer edge; a click on the tail is the card's,
+# and one in the transparent strip beside it reaches the app beneath and is a click away.
+scr, t, mid = r.get("screen") or {}, r.get("tail") or {}, r.get("cardMidX")
+wmid = w.get("x", 0) + w.get("width", 0) / 2
+pinned = bool(scr) and (abs(z.get("x", 0) - (scr["x"] + 8)) <= 1
+                        or abs((scr["x"] + scr["width"] - 8) - (z.get("x", 0) + z.get("width", 0))) <= 1)
+centred = mid is not None and abs(mid - wmid) <= 1
+say(centred or (mid is not None and pinned),
+    f"placement ({size}): the card is " + ("centred on the word" if centred else "held at the screen's edge, as near the word's middle as it allows")
+    + f" (its middle {mid if mid is None else round(mid, 1)} against the word's {wmid:.1f})",
+    f"placement ({size}): the card is neither centred on the word nor held at the screen's edge: middle {mid}, word {wmid:.1f}, window {box(z)}")
+gap = (t.get("y", 0) - (w.get("y", 0) + w.get("height", 0))) if t.get("edge") == "top" else (w.get("y", 0) - t.get("y", 0))
+say(t.get("edge") in ("top", "bottom") and abs(t.get("x", -1e9) - wmid) <= 1 and 0 < gap <= 12,
+    f"placement ({size}): its tail points at the middle of the word from {t.get('edge')} edge, {gap:.1f} pt off it",
+    f"placement ({size}): the tail does not point at the word: {t} against {box(w)}")
+say(r.get("clickOnTheTail") == "panel" and r.get("openAfterTheClickOnTheTail") is True,
+    f"placement ({size}): a click on the tail is the card's, and leaves it open",
+    f"placement ({size}): a click on the tail was not the card's: {r.get('clickOnTheTail')}, open {r.get('openAfterTheClickOnTheTail')}")
+say(r.get("clickBesideTheTail") == "elsewhere" and r.get("openAfterTheClickBeside") is False,
+    f"placement ({size}): a click in the transparent strip beside the tail reaches the app beneath, and closes the card",
+    f"placement ({size}): a click beside the tail went to {r.get('clickBesideTheTail')}, card open {r.get('openAfterTheClickBeside')}")
 print("DONE")
 PYPLACE
 )"

@@ -71,15 +71,20 @@ enum SettingsWindowFit {
     /// plus the shadow padding, which is a number to keep in step for no gain.
     /// **`reduceMotion` is read here rather than at each call site**, so no caller can forget it;
     /// it is a parameter only so a test can say which way it is set.
+    /// **`highestTop` grows the window up instead**, its bottom edge kept and its top stopping there: a lookup card above
+    /// its word, whose tail is at the bottom — grown down, it could not grow at all without covering the word (the
+    /// owner's decision of 2026-10-09). Shrinking keeps the bottom too.
     static func move(
-        _ window: NSWindow, by delta: CGFloat, width: CGFloat?, lowestBottom: CGFloat?,
+        _ window: NSWindow, by delta: CGFloat, width: CGFloat?, lowestBottom: CGFloat?, highestTop: CGFloat? = nil,
         animated: Bool, recentres: Bool = true,
         reduceMotion: Bool = MotionPreference.systemReduceMotion
     ) {
         let current = window.frame
         let width = width ?? current.width
         var height = current.height + delta
-        if let lowestBottom, delta > 0 {
+        if let highestTop, delta > 0 {
+            height = max(current.height, min(height, highestTop - current.minY))
+        } else if let lowestBottom, delta > 0 {
             height = max(current.height, min(height, current.maxY - lowestBottom))
         }
         let widthChange = width - current.width
@@ -90,7 +95,7 @@ enum SettingsWindowFit {
         guard abs(height - current.height) > rounding || abs(widthChange) > rounding else { return }
         var frame = current
         frame.size = CGSize(width: width, height: height)
-        frame.origin.y = current.maxY - height
+        frame.origin.y = highestTop == nil ? current.maxY - height : current.minY
         // **Reduce Motion is a jump, not a shorter glide.** The resize is the window travelling,
         // which is the kind of movement the setting exists to remove; the pane's content is
         // swapped by the system either way, so nothing is lost by arriving at once.
@@ -156,9 +161,10 @@ private struct FitsItsContent: ViewModifier {
     ///
     /// A reference type because it must outlive a body evaluation and be read at application time.
     @State private var fit = PendingFit()
-    /// The lowest a growing window's bottom edge may go: the screen's where nothing narrows it, the protected room's on
-    /// a lookup panel keeping its word clear (plan-card-refinements WI-2).
-    @Environment(\.panelLowestBottom) private var lowestBottom
+    /// Which way, and how far, the window may grow: down to the screen's bottom where nothing says otherwise, and on a
+    /// lookup panel anchored on its word, away from the word within the room on its side (plan-card-refinements WI-2,
+    /// the owner's decision of 2026-10-09).
+    @Environment(\.panelGrowth) private var growth
 
     func body(content: Content) -> some View {
         content
@@ -208,7 +214,8 @@ private struct FitsItsContent: ViewModifier {
                 wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
             SettingsWindowFit.move(
                 live, by: delta, width: width,
-                lowestBottom: lowestBottom ?? live.screen?.visibleFrame.minY,
+                lowestBottom: growth == nil ? live.screen?.visibleFrame.minY : growth?.lowestBottom,
+                highestTop: growth?.highestTop,
                 animated: animates && live.isVisible, recentres: recentres)
         }
     }
@@ -284,15 +291,27 @@ extension View {
     }
 }
 
-private struct PanelLowestBottomKey: EnvironmentKey {
-    static let defaultValue: CGFloat? = nil
+/// **Which way a lookup panel may grow, and how far** — away from the word its card keeps clear: down from a word above
+/// it, up from a word below it (plan-card-refinements WI-2; up as well as down by the owner's decision of 2026-10-09).
+public enum PanelGrowth: Equatable, Sendable {
+    /// The top edge stays; the bottom grows down no further than `lowestBottom`.
+    case down(lowestBottom: CGFloat)
+    /// The bottom edge — a tail's — stays; the top grows up no further than `highestTop`.
+    case up(highestTop: CGFloat)
+
+    public var lowestBottom: CGFloat? {
+        guard case .down(let bottom) = self else { return nil }
+        return bottom
+    }
+
+    public var highestTop: CGFloat? {
+        guard case .up(let top) = self else { return nil }
+        return top
+    }
 }
 
 extension EnvironmentValues {
-    /// **Where a growing window's bottom edge must stop, in place of the screen's** — set by the lookup panel while
-    /// its card keeps the looked-up word clear (plan-card-refinements WI-2). Nil everywhere else.
-    public var panelLowestBottom: CGFloat? {
-        get { self[PanelLowestBottomKey.self] }
-        set { self[PanelLowestBottomKey.self] = newValue }
-    }
+    /// **How a growing window may grow, in place of down to the screen's bottom** — set by the lookup panel while its
+    /// card keeps the looked-up word clear. Nil everywhere else.
+    @Entry public var panelGrowth: PanelGrowth?
 }

@@ -76,6 +76,9 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.reportPanelFit) private var reportPanelFit
+    /// The tail the panel gave the card, pointing at its word — nil for a card placed by the pointer, which is drawn as
+    /// every card was before (the owner's decision of 2026-10-09).
+    @Environment(\.panelTail) private var tail
     /// The word's own colour, which the card's second shadow is thrown in. Nil for a message,
     /// which is about no word.
     let accent: Color?
@@ -148,6 +151,10 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             idealWidth: compact ? scale.space.lookupWidth : scale.space.cardWidth,
             maxWidth: compact ? scale.space.lookupWidth : scale.space.cardMaxWidth,
             alignment: .leading)
+        // **The tail's strip is inside the card's outline**, so the content sits clear of it and the paper, the edge and
+        // the clip below take the tail in with the card.
+        .padding(.top, tail?.edge == .top ? scale.space.tailLength : 0)
+        .padding(.bottom, tail?.edge == .bottom ? scale.space.tailLength : 0)
         // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
         // the surface, the edge and the lift are the card's own — and they live here, in the
         // layer that has the tokens, rather than as literals in the scene that hosts it.
@@ -166,11 +173,9 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             x: scale.shadow.panelOffset, y: scale.shadow.panelOffset)
         .modifier(AccentGlow(accent: accent))
         // Asymmetric, because the shadows are. Uniform padding would leave dead space above and
-        // to the left of a window that is exactly the size of its content.
-        .padding(.top, scale.shadow.glowBefore)
-        .padding(.leading, scale.shadow.glowBefore)
-        .padding(.bottom, scale.shadow.glowAfter)
-        .padding(.trailing, scale.shadow.glowAfter)
+        // to the left of a window that is exactly the size of its content. **`CardChrome` says how much** — the
+        // placement reads the same numbers to put the card, and its tail, where they are drawn.
+        .padding(CardChrome(scale).insets(tail: tail))
     }
 
     /// **How tall the scrolling region may grow: the card's cap, less the row pinned under it.**
@@ -202,8 +207,10 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         max(0, scrollCap - barHeight)
     }
 
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: compact ? scale.radius.lookup : scale.radius.panel, style: .continuous)
+    /// The card's outline: its rounded rectangle, and its tail where the panel gave it one.
+    private var shape: CardShape {
+        CardShape(cornerRadius: compact ? scale.radius.lookup : scale.radius.panel, tail: tail,
+                  tailLength: scale.space.tailLength, tailHalfWidth: scale.space.tailHalfWidth)
     }
 }
 
