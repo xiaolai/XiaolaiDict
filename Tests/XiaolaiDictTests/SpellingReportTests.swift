@@ -17,9 +17,11 @@ struct SpellingReportTests {
         }
     }
 
-    /// Dictionaries that have `receive` and `ephemeral`, and could not be asked about `crash`.
+    /// Dictionaries that have `receive` and `ephemeral`, and could not be asked about `crash` — nor about `fallback`, whose
+    /// public fallback answered in prose.
     nonisolated private static func lookUp(_ term: String) throws(CancellationError) -> LookupOutcome {
         if term == "crash" { return .notFound(serviceFailure: "the dictionary service crashed") }
+        if term == "fallback" { return .plainText("an answer in prose", serviceFailure: "the dictionary service crashed") }
         guard ["receive", "ephemeral"].contains(term) else { return .notFound(serviceFailure: nil) }
         let entry = DictionaryEntry(dictionary: DictionaryIdentity(name: "NOAD", identifier: "noad"),
                                     headword: term, lookedUp: term, html: "<p>a definition nobody may print</p>",
@@ -76,6 +78,16 @@ struct SpellingReportTests {
         #expect(lines.count == 2, "a failed term stopped the report")
         #expect(lines.last?["offer"] as? String == "refused")
         #expect(lines.last?["refusal"] as? String == "serviceUnanswered")
+    }
+
+    /// **Prose from the public fallback is still a service that could not be asked** (audit round 2, 2026-10-09): the
+    /// term is not a miss, so it is offered nothing — and the run fails, as it does for a miss the service could not
+    /// answer. Judged from the outcome's own service failure, never from the offer.
+    @Test func aTermAnsweredOnlyByTheFallbackFailsTheRun() async {
+        let (status, lines, _) = await report(["recieve", "fallback"])
+        #expect(lines.last?["outcome"] as? String == "plainText")
+        #expect(lines.last?["refusal"] as? String == "notAMiss")
+        #expect(status == .failure, "a run whose dictionary service failed exited \(status)")
     }
 
     /// **A line that could not be written is not a report**, and the run says so rather than succeeding.

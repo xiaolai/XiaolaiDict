@@ -2,6 +2,7 @@ import DictionaryModel
 import Foundation
 import XiaolaiDictBase
 import XiaolaiDictCore
+import XiaolaiDictUI
 
 /// `--spelling-report TERM…`: **what each term's miss would be offered** — "Did you mean …?" — through the checker and
 /// the dictionaries the card is offered it by, one JSON line a term (plan-spelling-suggestion §3).
@@ -30,8 +31,10 @@ enum SpellingReport {
     }
 
     /// The report for `terms`, through `lookUp` and `checker`, written through `write`. **`.failure` where the service
-    /// could not answer a term**: that miss was not the dictionaries' answer, so what it was offered says nothing about
-    /// them — the line is still written, and the exit says so.
+    /// could not answer a term** — a miss it could not answer, or prose from the public fallback: neither was the
+    /// dictionaries' answer, so what it was offered says nothing about them. The line is still written, and the exit
+    /// says so. Judged from the outcome by the rule the card's caveat uses (`PanelCaveats.serviceUnanswered`), never
+    /// from the offer, which calls the fallback's prose "not a miss" (audit round 2, 2026-10-09).
     static func run(
         terms: [String], lookUp: @escaping SpellingSuggester.LookUp, checker: any SpellingSuggesting,
         language: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) },
@@ -53,7 +56,7 @@ enum SpellingReport {
             } catch {
                 return .interrupted
             }
-            if case .refused(.serviceUnanswered) = offer { status = .failure }
+            if PanelCaveats.serviceUnanswered(outcome) { status = .failure }
         }
         return status
     }
