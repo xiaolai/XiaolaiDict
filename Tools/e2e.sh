@@ -533,6 +533,19 @@ chmod 700 "$reports"
 drop_reports() { rm -rf "$reports"; }
 at_exit drop_reports
 
+# ledger_left <label> <baseline>: **an instrument that looks a word up through the reader's door takes its reading out
+# again** (2026-10-10: the panel and placement reports left removal to a task the process exit outran, and each run left
+# a reading of *fine* behind). The ledger's newest row must be the one it was before the instrument ran.
+ledger_left() {
+    local label=$1 baseline=$2 now
+    now=$(newest_row_id)
+    if [ "$now" = "$baseline" ]; then
+        pass "$label left the reader's ledger as it found it (newest row $now)"
+    else
+        flunk "$label left readings in the ledger: newest row $baseline before, $now after"
+    fi
+}
+
 # **A query that failed is not a ledger with no rows.** Falling back to 0 made every historical
 # lookup count as evidence of the one the stage had just driven — the baseline is what tells this
 # run's row from every earlier run's, so a baseline nobody could read has to stop the stage.
@@ -2250,8 +2263,11 @@ placement_at() {  # placement_at <reading> <text size>
     box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
         || { flunk "placement: no word box to place against"; return; }
     defaults write com.xiaolaidict TextSize "$2"
+    local ledger_before
+    ledger_before=$(newest_row_id)
     # shellcheck disable=SC2086
     report=$(run_report_with --placement-report 90 $box) || true
+    ledger_left "placement ($2): --placement-report" "$ledger_before"
     if [ -z "$report" ]; then
         flunk "placement ($2): --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
         return
@@ -4393,7 +4409,9 @@ if want panel; then
 #     stage's colour. A probe that failed on a discovery would be a stage that fails for telling us
 #     something.
 # 90 s: a cold process pays for the XPC service starting before the first lookup answers.
+panel_ledger_before=$(newest_row_id)
 report=$(run_report --panel-report 90) || true
+ledger_left "panel: --panel-report" "$panel_ledger_before"
 if [ -z "$report" ]; then
     flunk "panel: --panel-report printed nothing ($(head -c 160 $reports/panel-report.err 2>/dev/null))"
 else

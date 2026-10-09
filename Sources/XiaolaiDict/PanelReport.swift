@@ -117,7 +117,6 @@ enum PanelReport {
         // that door records. An instrument that leaves fabricated TextEdit reading behind
         // changes the drawer, the suggestion ranking and every later measurement on this Mac.
         let ledgerBefore = await Self.newestLookup(in: app)
-        defer { Task { await Self.removeLookups(after: ledgerBefore, in: app) } }
 
         app.lookUpHovered(selection, at: UpPoint(NSEvent.mouseLocation))
 
@@ -129,7 +128,7 @@ enum PanelReport {
                 "appeared": false,
                 "problem": "the lookup panel was never listed by the compositor",
             ])
-            return .failure
+            return await Self.leaving(.failure, after: ledgerBefore, in: app)
         }
 
         // **Read after the panel behaviour has had a chance to land, not the moment the compositor
@@ -165,11 +164,11 @@ enum PanelReport {
             "afterClick": afterClick,
             "menu": menu,
         ]
-        guard Instrument.write(report) else { return .failure }
+        guard Instrument.write(report) else { return await Self.leaving(.failure, after: ledgerBefore, in: app) }
         // Whether the *panel* behaved is the harness's assertion to make, not this process's exit
         // status — the same division `--history-report` makes for the backdrop. A non-zero exit here
         // means the measurement failed, never that the app did.
-        return .success
+        return await Self.leaving(.success, after: ledgerBefore, in: app)
     }
 
     /// **What this window is.** The whole first question, and it is one read.
@@ -492,6 +491,15 @@ enum PanelReport {
     /// Removes whatever this measurement added, and only that. **Not a general clean-up**: it
     /// deletes by id above a baseline this instrument took itself, so a lookup the reader made
     /// while it ran is out of range by construction.
+    /// **`status`, once the lookups this run made are gone — awaited, never left to a task.** The app exits with the status
+    /// the moment a windowed instrument returns, and a removal left in `defer { Task { … } }` lost that race: measured on
+    /// the E2E Mac 2026-10-10, one placement report left its reading of *fine* in the ledger (36 rows → 37), and the
+    /// card's history count shows every one of them.
+    static func leaving(_ status: CommandStatus, after baseline: Int?, in app: XiaolaiDictApp) async -> CommandStatus {
+        await removeLookups(after: baseline, in: app)
+        return status
+    }
+
     static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
         guard let baseline, let opening = app.recorder.store,
               let store = try? await opening.value else { return }

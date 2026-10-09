@@ -55,14 +55,13 @@ enum PlacementReport {
 
         // **Leaves the reader's ledger as it found it** — the same discipline as `PanelReport`.
         let before = await PanelReport.newestLookup(in: app)
-        defer { Task { await PanelReport.removeLookups(after: before, in: app) } }
 
         app.lookUpHovered(selection, at: pointer, protecting: protected)
         guard await Instrument.settle(until: PanelReport.appearance, {
             Instrument.isOnScreen(app.panelController.window)
         }), let window = app.panelController.window, let first = listedFrame(of: window) else {
             _ = Instrument.write(["appeared": false, "problem": "the lookup panel was never listed by the compositor"])
-            return .failure
+            return await PanelReport.leaving(.failure, after: before, in: app)
         }
         // Settled: the same compositor frame for `steady`, within the budget.
         var settled = first
@@ -111,8 +110,9 @@ enum PlacementReport {
             report["openAfterTheClickBeside"] = window.isVisible
         }
         app.panelController.close()
-        guard Instrument.write(report) else { return .internalError }
-        return (first.intersects(given) || settled.intersects(given)) ? .failure : .success
+        guard Instrument.write(report) else { return await PanelReport.leaving(.internalError, after: before, in: app) }
+        return await PanelReport.leaving((first.intersects(given) || settled.intersects(given)) ? .failure : .success,
+                                         after: before, in: app)
     }
 
     /// The window's frame as the compositor lists it — global, y down. Nil while it is not listed.
