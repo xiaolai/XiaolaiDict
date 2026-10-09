@@ -19,9 +19,13 @@ final class SystemSpellChecker: SpellingSuggesting {
     /// told the checker to ignore in some other document is that document's business, and a lookup's questions are not
     /// theirs. Read by a test.
     let tag: Int
+    /// The languages the checker can be asked in — its own list, unless a test names one, so the fallback a missing
+    /// variant takes is tested on every Mac rather than only on one that lacks it.
+    private let languages: @MainActor () -> [String]
 
-    init(checker: NSSpellChecker = .shared) {
+    init(checker: NSSpellChecker = .shared, languages: (@MainActor () -> [String])? = nil) {
         self.checker = checker
+        self.languages = languages ?? { checker.availableLanguages }
         tag = NSSpellChecker.uniqueSpellDocumentTag()
     }
 
@@ -31,7 +35,7 @@ final class SystemSpellChecker: SpellingSuggesting {
     /// In the reader's English where the checker has it, plain English otherwise, and **nothing where it has no
     /// English at all** — `SpellingLanguage.checker` decides, against the languages this checker lists.
     func suggestion(for term: String, language: String?) async -> String? {
-        let available = checker.availableLanguages
+        let available = languages()
         guard let asked = SpellingLanguage.checker(for: language, available: available) else {
             log.notice("spelling: the checker has no English among \(available.count, privacy: .public) languages")
             return nil

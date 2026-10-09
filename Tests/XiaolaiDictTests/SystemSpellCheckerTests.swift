@@ -15,9 +15,14 @@ import Testing
 /// E2E Mac's checker said of it, failing if the report has no line for it. `rn`, `qqqq`, `arid` and `cabbages` answer
 /// nothing on both Macs, and they are what refuses a checker that reached for the guess list: its first guesses are
 /// `Ron`, `acid` and `cabbage`.
+///
+/// **Each assertion is gated on the languages it asks** (audit round 2, 2026-10-09). A question with no variant is asked
+/// in plain `en` — the table was measured there, and `tbe` and `aboud` answer nothing under `en_GB` — so the suite needs
+/// `en` itself, not any English; the British assertion needs `en_GB` as well; and the fallback a missing variant takes is
+/// tested with the checker's list of languages given, rather than hoped for on a Mac that happens to lack one.
 @MainActor
-@Suite(.enabled("this Mac's spell checker has no English, so there is nothing to measure") {
-    await MainActor.run { NSSpellChecker.shared.availableLanguages.contains { $0 == "en" || $0.hasPrefix("en_") } }
+@Suite(.enabled("this Mac's spell checker has no plain English (en), which every question here without a variant is asked in") {
+    await MainActor.run { NSSpellChecker.shared.availableLanguages.contains("en") }
 })
 struct SystemSpellCheckerTests {
     nonisolated private static let typos = [
@@ -41,12 +46,28 @@ struct SystemSpellCheckerTests {
         #expect(await SystemSpellChecker().suggestion(for: word, language: nil) == nil)
     }
 
-    /// **The reader's English reaches the checker**: `modernisation` is a typo in plain English and a word in British.
-    @Test func theReadersEnglishIsTheLanguageAsked() async {
+    /// **Plain English is American**: `modernisation` is a typo there, asked with no variant and as `en-US` alike.
+    @Test func plainEnglishCorrectsABritishSpelling() async {
         let checker = SystemSpellChecker()
         #expect(await checker.suggestion(for: "modernisation", language: nil) == "modernization")
         #expect(await checker.suggestion(for: "modernisation", language: "en-US") == "modernization")
-        #expect(await checker.suggestion(for: "modernisation", language: "en-GB") == nil)
+    }
+
+    /// **A British reader is asked in British English**, where the checker has it — and there `modernisation` is a word.
+    @Test(.enabled("this Mac's spell checker has no British English (en_GB)") {
+        await MainActor.run { NSSpellChecker.shared.availableLanguages.contains("en_GB") }
+    })
+    func aBritishReaderIsAskedInBritishEnglish() async {
+        #expect(await SystemSpellChecker().suggestion(for: "modernisation", language: "en-GB") == nil)
+    }
+
+    /// **A variant the checker lacks is asked in plain English** — the supported fallback: a checker that lists only `en`
+    /// asks a British reader's question in `en`, where `modernisation` is a typo. Given the list, so this holds on every
+    /// Mac with plain English, whatever variants it also has.
+    @Test func aVariantTheCheckerLacksIsAskedInPlainEnglish() async {
+        let checker = SystemSpellChecker(languages: { ["en"] })
+        #expect(await checker.suggestion(for: "modernisation", language: "en-GB") == "modernization")
+        #expect(await checker.suggestion(for: "teh", language: "en-GB") == "the")
     }
 
     /// **A spell document of its own**, never the shared default of 0: what a reader told the checker to ignore in some
