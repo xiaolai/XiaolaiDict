@@ -1083,10 +1083,11 @@ end_process() {
 # fixture_health: `app-health`'s report on TextEdit and the fixture once it is `ok`, or the last one after 10 s — a
 # document opened a moment ago is still loading. Hung, blocked and no Accessibility are answers at once.
 #
-# **Every sentence a stage selects in, each asked for** (2026-10-09). Asking for one alone passes a TextEdit holding an
-# **older copy** of the fixture — `open` brings a document already open forward and never reads it again — and a stage
-# then finds no word to select, as one did on the E2E Mac the first run after the fixture gained a line.
-fixture_sentences=("The meeting ended after we stopped meeting at noon.")
+# **Every sentence a stage selects in, each asked for** (2026-10-09): the meeting line, and the typo line the `lookup`
+# stage looks up (plan-spelling-suggestion). Asking for the first alone passed a TextEdit holding an **older copy** of
+# the fixture — `open` brings a document already open forward and never reads it again — and `select-text` then found
+# no typo to select, on the E2E Mac, the first run after the fixture gained its line.
+fixture_sentences=("The meeting ended after we stopped meeting at noon." "We will recieve the parcel tomorrow.")
 fixture_health() {
     local health="" state sentence
     for _ in $(seq 1 20); do
@@ -1121,7 +1122,7 @@ fixture_ready() {
             return 1
         fi
         if [ "$attempt" = 2 ] || [ "$state" = noAccessibility ]; then
-            echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning, model and provider stages select in: $state — $detail$again" >&2
+            echo "TextEdit cannot hold the fixture the lookup, selection, shortcut, deadline, hover, drawer, learning, model and provider stages select in: $state — $detail$again" >&2
             return 1
         fi
         pid=$(printf '%s' "$health" | json_field pid)
@@ -1206,7 +1207,7 @@ fi
 # 5. **TextEdit, answering and holding the fixture**, where a stage selects in it — and only where this session can use
 #    Accessibility on an unlocked screen, or every answer here would be about that instead.
 if [ "$screen_ok" = yes ] && [ "$session_accessibility" = yes ] \
-   && wants_any selection shortcut deadline hover drawer learning model provider; then
+   && wants_any lookup selection shortcut deadline hover drawer learning model provider; then
     fixture_ready 2>"$reports/fixture-ready.err" || lacks "$(cat "$reports/fixture-ready.err")"
 fi
 
@@ -1364,6 +1365,134 @@ if lookup=$("$exe" --lookup ephemeral 2>&1) && [ "$(printf '%s\n' "$lookup" | ou
 else
     flunk "lookup: $lookup"
 fi
+
+# 2b. **"Did you mean …?" (plan-spelling-suggestion), through the instrument and then as the reader meets it.**
+#
+#     The instrument needs no grant: the fixture's typo, through this bundle's spell checker and dictionary service, is
+#     offered its correction — the same `SpellingSuggester` the card asks. The rare real word is reported, not asserted:
+#     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on mbp16,
+#     the same macOS build — plan §7, 2026-10-09).
+spelling_status=0
+spelling=$("$exe" --spelling-report recieve ambages 2>"$reports/spelling-report.err") || spelling_status=$?
+if [ "$spelling_status" -ne 0 ]; then
+    flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
+fi
+consume_verdicts lookup "$(python3 - "$spelling" 2>&1 <<'PYSPELLING' || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+# The terms the report is asked about, read back by name — terms, not report keys.
+typo_term, rare_term = "recieve", "ambages"
+lines = {}
+for raw in sys.argv[1].splitlines():
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        continue
+    lines[line.get("term")] = line
+typo = lines.get(typo_term) or {}
+say(typo.get("outcome") == "notFound" and typo.get("offer") == "offered" and typo.get("correction") == "receive",
+    f"lookup: --spelling-report offers “receive” for the fixture typo “recieve”, {typo.get('suggestionMilliseconds')} ms "
+    f"after its {typo.get('lookupMilliseconds')} ms miss",
+    f"lookup: --spelling-report did not offer “receive” for “recieve”: {typo or sys.argv[1][:300]}")
+rare = lines.get(rare_term)
+if rare is None:
+    say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")
+else:
+    print(f"NOTE\tlookup: this Mac’s checker on the rare real word “ambages”: {rare.get('offer')} "
+          f"{rare.get('correction') or ''}".rstrip())
+print("DONE")
+PYSPELLING
+)"
+
+#     **And as the reader meets it**: the typo selected in the fixture and ⌃⌥D pressed — the miss card first, then the
+#     line under it, then the line pressed and the corrected word's card in the same panel, and both readings in the
+#     ledger. Timed by polling from the keypress, so each figure is within a poll of the truth: the line's own time is
+#     the instrument's above.
+#     spelling_state <panel report>: `miss`, `line` and `card`, each where the lookup panel shows it — the typo's miss,
+#     the suggestion as a control that can be pressed, the corrected word's card.
+spelling_state() {
+    python3 - "$1" <<'PYSTATE' 2>/dev/null || true
+import json, sys
+try:
+    windows = json.loads(sys.argv[1], strict=False).get("windows", [])
+except ValueError:
+    windows = []
+texts = [t for w in windows for t in w.get("texts", [])]
+controls = [c for w in windows for c in w.get("controls", [])]
+state = []
+if any("No entry for" in t and "recieve" in t for t in texts): state.append("miss")
+if any("Did you mean" in c and "receive" in c for c in controls): state.append("line")
+if any("receive" in t for t in texts) and not any("No entry for" in t or "Looking up" in t for t in texts): state.append("card")
+print(" ".join(state))
+PYSTATE
+}
+spelling_panel() {
+    local baseline why started missed="" offered="" shown="" view="" state grant result
+    if ! ensure_fixture_open; then
+        flunk "lookup: the TextEdit fixture would not come to the front, so the typo was never looked up"
+        return 0
+    fi
+    baseline=$(newest_row_id)
+    assert_default_shortcut || true
+    if ! why=$("$helpers/select-text" com.apple.TextEdit recieve 1 2>&1); then
+        flunk "lookup: could not select the fixture typo “recieve” ($why)"
+        return 0
+    fi
+    started=$(now_seconds)
+    "$helpers/keys" 2 control option
+    for _ in $(seq 1 150); do
+        view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
+        state=$(spelling_state "$view")
+        if [ -z "$missed" ] && [[ " $state " == *" miss "* ]]; then missed=$(now_seconds); fi
+        if [ -n "$missed" ] && [[ " $state " == *" line "* ]]; then offered=$(now_seconds); break; fi
+        sleep 0.1
+    done
+    if [ -z "$missed" ]; then
+        grant=$(missing_grant)
+        flunk "lookup: the typo “recieve” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$view" | head -c 300))"
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    if [ -z "$offered" ]; then
+        flunk "lookup: the miss card for “recieve” never offered “Did you mean “receive”?” in 15 s ($(printf '%s' "$view" | head -c 300))"
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    pass "lookup: the typo “recieve” drew its miss card $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, and “Did you mean “receive”?” under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
+    # Pressed through Accessibility: the panel never activates the app, so the frontmost rule a real click needs can
+    # never be met for it (`click-element --press`).
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Did you mean “receive”?" 2>&1); then
+        flunk "lookup: “Did you mean “receive”?” could not be pressed ($why)"
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    for _ in $(seq 1 100); do
+        view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
+        if [[ " $(spelling_state "$view") " == *" card "* ]]; then shown=yes; break; fi
+        sleep 0.1
+    done
+    if [ "$shown" = yes ] && [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
+        pass "lookup: pressing the line showed the card for “receive”, in the one panel"
+    else
+        flunk "lookup: pressing the line never showed the card for “receive” ($(printf '%s' "$view" | head -c 300))"
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    # **The miss stays a miss, and the word is a reading of its own** — each waited for by its own row, in the app the
+    # typo was read in, since the corrected lookup keeps the reading's place.
+    row_after "$baseline" recieve com.apple.TextEdit >/dev/null
+    row_after "$baseline" receive com.apple.TextEdit >/dev/null
+    result=""
+    for _ in $(seq 1 80); do
+        result="$(sqlite3 -readonly "$ledger" "select group_concat(surface || '=' || result, ' ') from (select surface, result from lookups where id > $baseline and source_app = 'com.apple.TextEdit' and surface in ('recieve', 'receive') order by id)" 2>/dev/null || true)"
+        case "$result" in *pending*|"") sleep 0.25 ;; *) break ;; esac
+    done
+    if [ "$result" = "recieve=notFound receive=found" ]; then
+        pass "lookup: the ledger holds the miss as a miss and the suggested word as a reading of its own ($result)"
+    else
+        flunk "lookup: expected the miss and then the suggested word in the ledger, got: ${result:-nothing}"
+    fi
+}
+spelling_panel
 fi
 
 if want crash; then

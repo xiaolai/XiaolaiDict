@@ -591,12 +591,15 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         self.assertTrue(alive(running), "TextEdit was ended where opening the fixture again was enough")
 
     def test_every_sentence_a_stage_selects_in_is_asked_for(self):
-        """Each sentence of `fixture_sentences`, every one of them in the fixture: asking for one alone passed a TextEdit
-        holding an older copy of the fixture — measured on the E2E Mac, where a stage then found no word to select."""
-        done = self.preflight("selection")
+        """The meeting line every lookup-driving stage selects in, **and the typo line `lookup` selects since
+        2026-10-09** (plan-spelling-suggestion): a TextEdit holding an older copy of the fixture shows the first and not
+        the second, and asking only the first passed it — measured on the E2E Mac, where `select-text` then found no
+        typo to select."""
+        done = self.preflight("lookup")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         asked = (self.fake.root / "health-asked").read_text().splitlines()
         self.assertIn("The meeting ended after we stopped meeting at noon.", asked)
+        self.assertIn("We will recieve the parcel tomorrow.", asked)
         fixture = (REPO / "Tools" / "e2e" / "notes.txt").read_text()
         for sentence in set(asked):
             self.assertIn(sentence, fixture, "the preflight asks for a sentence the fixture does not hold")
@@ -649,12 +652,14 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
 
     def test_the_provider_stage_needs_the_fixture_it_looks_up_in(self):
         """The provider stage drives two real lookups in TextEdit, so the preflight proves the fixture for it — and only
-        where a stage that selects in it is asked for."""
+        where a stage that selects in it is asked for: `crash` drives the dictionary service alone. **`lookup` selects
+        the fixture's typo since 2026-10-09** (plan-spelling-suggestion), so it needs the fixture too."""
         self.health([{"state": "notRunning", "detail": "com.apple.TextEdit is not running"}])
-        self.assertEqual(self.preflight("lookup").returncode, 0)
-        said = "\n".join(self.failures(self.preflight("provider")))
-        self.assertIn("TextEdit cannot hold the fixture", said)
-        self.assertIn("provider", said)
+        self.assertEqual(self.preflight("crash").returncode, 0)
+        for stage in ("provider", "lookup"):
+            said = "\n".join(self.failures(self.preflight(stage)))
+            self.assertIn("TextEdit cannot hold the fixture", said, stage)
+            self.assertIn(stage, said)
 
 
 class EveryRunReportsItsCleanups(unittest.TestCase):
