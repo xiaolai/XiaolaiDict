@@ -197,16 +197,11 @@ def unchecked_launches(text: str) -> list[str]:
 # What may script another app from the SSH session, and why: an Apple event from there needs an Automation grant of
 # the session's own, and asked for the first time it raises a prompt nobody is there to answer. Each is guarded.
 APPLE_EVENTS = {
-    # The learning stage's appearance switch: no LaunchServices equivalent. The preflight requires System Events
-    # granted whenever the learning stage is asked for.
-    "learning_dark_before=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'",
-    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $learning_dark_before\"",
-    "if ! osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $wanted_dark\"",
-    # The hover stage's, since 2026-10-10: the card above its word is seen in the dark appearance too (plan-card-
-    # refinements D3). The preflight requires System Events granted whenever the hover stage is asked for, too.
-    "placement_dark_was=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'",
-    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $placement_dark_was\"",
-    "if ! osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $wanted\"",
+    # The system's appearance, read and set in one place (`dark_mode_now`, `set_dark_mode`): the learning stage's switch
+    # and the hover stage's look at the card above its word in the dark (plan-card-refinements D3) have no LaunchServices
+    # equivalent. The preflight requires System Events granted whenever either stage is asked for.
+    "answer=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode' 2>&1)",
+    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $1\" >/dev/null ;;",
 }
 
 
@@ -1179,3 +1174,78 @@ class ThePunctuatedSelectionIsBoxedByItsWord(unittest.TestCase):
 
     def test_another_word_read_fails(self):
         self.assertIn("FAIL", self.verdicts(self.WORD, text="Q…"))
+
+
+class TheAppearanceIsChangedOnlyWhenItCanBePutBack(unittest.TestCase):
+    """`placement_above`, the hover stage's look at the card above its word in the light and the dark appearance, run as
+    `e2e.sh` writes it against a stand-in `osascript` (audit of 2026-10-10). It read the appearance with its failure
+    suppressed, changed it anyway, and put back only a value that was `true` or `false` — so a read that failed left the
+    E2E Mac dark, and a restoration that failed said nothing. Each of those is a control here."""
+
+    OSASCRIPT = textwrap.dedent("""\
+        #!/bin/bash
+        case "$*" in
+            *"get dark mode"*)
+                [ "$STUB_GET" = fail ] && { echo "execution error: Not authorised (-1743)" >&2; exit 1; }
+                echo "$STUB_GET" ;;
+            *"set dark mode to "*)
+                all="$*"; value=${all##*set dark mode to }
+                echo "$value" >> "$STUB_LOG"
+                [ "${STUB_SET_FAILS_TO:-}" = "$value" ] && [ "$(grep -c . "$STUB_LOG")" -gt 2 ] && exit 1
+                exit 0 ;;
+        esac
+        """)
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.scratch.name)
+        (root / "bin").mkdir()
+        tool = root / "bin" / "osascript"
+        tool.write_text(self.OSASCRIPT)
+        tool.chmod(0o755)
+        self.path = f"{root / 'bin'}:{os.environ['PATH']}"
+        self.log = root / "sets"
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def run_stage(self, get: str, set_fails_to: str = "") -> tuple[list[str], list[str]]:
+        """The verdicts, and every appearance set, in order — the cleanup `at_exit` registered run last, as `on_exit`
+        runs it."""
+        self.log.write_text("")
+        names = [name for name in ("dark_mode_now", "set_dark_mode") if f"\n{name}() {{" in SCRIPT.read_text()]
+        source = "\n".join([
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            "cleanups=(); at_exit() { cleanups+=(\"$1\"); }",
+            'placement_at() { :; }', 'placement_evidence=/tmp',
+            'last_placement=\'{"screen": {"x": 0, "y": 0, "width": 1512, "height": 982}}\'',
+            *[function(name) for name in names], function("placement_above"),
+            "placement_above",
+            'for cleanup in "${cleanups[@]}"; do "$cleanup" || echo "FAIL cleanup $cleanup"; done',
+        ])
+        env = {**os.environ, "PATH": self.path, "STUB_GET": get, "STUB_LOG": str(self.log),
+               "STUB_SET_FAILS_TO": set_fails_to}
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False, env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        verdicts = [line.split(" ")[0] for line in done.stdout.splitlines() if line.startswith(("PASS", "FAIL"))]
+        return verdicts, self.log.read_text().split()
+
+    def test_an_appearance_read_is_put_back_after_both_are_seen(self):
+        for was in ("true", "false"):
+            with self.subTest(was=was):
+                verdicts, sets = self.run_stage(was)
+                self.assertNotIn("FAIL", verdicts)
+                self.assertEqual(sets[:2], ["false", "true"])
+                self.assertEqual(sets[-1], was, "the appearance was not put back")
+
+    def test_an_appearance_that_could_not_be_read_is_never_changed(self):
+        for get in ("fail", "missing value", ""):
+            with self.subTest(get=get):
+                verdicts, sets = self.run_stage(get)
+                self.assertEqual(sets, [], "the appearance was changed with nothing to put back")
+                self.assertIn("FAIL", verdicts)
+
+    def test_a_restoration_that_failed_is_reported(self):
+        verdicts, sets = self.run_stage("false", set_fails_to="false")
+        self.assertEqual(sets[-1], "false")
+        self.assertIn("FAIL", verdicts, "the appearance was left dark and nothing said so")

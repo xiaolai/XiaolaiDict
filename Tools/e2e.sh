@@ -1304,6 +1304,27 @@ ledger_backup() {  # ledger_backup <ledger> <copy>: SQLite's own backup of the l
     sqlite3 -readonly "$(ledger_source "$1")" ".backup '$2'"
 }
 
+# **The system's appearance, read and set in one place** — the learning and hover stages switch it, and each must put
+# back what it found. `dark_mode_now` prints `true` or `false` and fails on anything else: a read that failed, or
+# answered neither, is no value to put back, and a stage that cannot put the appearance back must not change it (audit
+# of 2026-10-10: both stages read it with the failure suppressed, changed it anyway, and restored only a `true` or
+# `false` — so a failed read left the Mac dark). `set_dark_mode` refuses anything but the two.
+dark_mode_now() {  # dark_mode_now: `true` or `false`, or the reason on stderr and a failure
+    local answer
+    answer=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2>&1) \
+        || { echo "the appearance could not be read: $answer" >&2; return 1; }
+    case $answer in
+        true|false) printf '%s' "$answer" ;;
+        *) echo "the appearance read as '$answer', which is neither dark nor light" >&2; return 1 ;;
+    esac
+}
+set_dark_mode() {  # set_dark_mode <true|false>
+    case ${1:-} in
+        true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" >/dev/null ;;
+        *) echo "set_dark_mode: '${1:-}' is not an appearance" >&2; return 1 ;;
+    esac
+}
+
 # **The reader's review reminders, around a stage that launches the app on a ledger that is not theirs.**
 #
 # The app re-plans its reminders at every launch, from the ledger it opens and the settings and log in
@@ -2482,25 +2503,25 @@ s = json.loads(sys.argv[1]).get("screen") or {}
 if not s: sys.exit("no screen")
 print(json.dumps({"bounds": {"x": s["x"] + s["width"] / 2 - 40, "y": s["y"] + s["height"] - 60, "width": 80, "height": 18}}))' \
         "$last_placement" 2>&1) || { flunk "placement: no screen to put a word at its foot ($reading)"; return; }
-    # Global, not local: `at_exit` runs after this function has returned, and puts back what it read.
-    placement_dark_was=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2>/dev/null || true)
-    restore_dark() {
-        case $placement_dark_was in
-            true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $placement_dark_was" ;;
-        esac
-    }
+    # Global, not local: `at_exit` runs after this function has returned, and puts back what it read. **Read, or not
+    # changed**: an appearance that could not be read cannot be put back (`dark_mode_now`).
+    if ! placement_dark_was=$(dark_mode_now 2>&1); then
+        flunk "placement: $placement_dark_was — so it was not changed, and the card above its word was seen in neither"
+        return
+    fi
+    restore_dark() { set_dark_mode "$placement_dark_was"; }
     at_exit restore_dark
     for appearance in light dark; do
         local wanted=false
         [ "$appearance" = dark ] && wanted=true
-        if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted" 2>/dev/null; then
+        if ! set_dark_mode "$wanted" 2>/dev/null; then
             flunk "placement: the $appearance appearance could not be set, so the card above its word was not seen in it"
             continue
         fi
         sleep 1
         placement_at "$reading" huge "$evidence/above-huge-$appearance.png" above
     done
-    restore_dark || true
+    restore_dark || flunk "placement: the appearance could not be put back to dark mode $placement_dark_was"
 }
 if [ -n "$last_reading" ]; then
     text_size_had=no; text_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && text_size_had=yes
@@ -3519,7 +3540,12 @@ rm -f "$learning_evidence"/*.png "$learning_evidence"/*.json "$learning_evidence
 if ! defaults export com.xiaolaidict "$learning_evidence/preferences.plist"; then
     flunk "learning: the preferences could not be exported, so they could not be put back"; exit 1
 fi
-learning_dark_before=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2> "$learning_evidence/theme.err" || true)
+# **Read, or not changed** (`dark_mode_now`): empty where it could not be read, and then the Light and Dark checks below
+# are not run and there is nothing to put back.
+if ! learning_dark_before=$(dark_mode_now 2> "$learning_evidence/theme.err"); then
+    flunk "learning: $(head -c 200 "$learning_evidence/theme.err") — so it is not changed, and the large-text Light and Dark checks are not run"
+    learning_dark_before=""
+fi
 if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; exit 1; fi
 if ! reader_reminders "$learning_evidence"; then
     flunk "learning: the reader's own pending reminders could not be read, so nothing was set aside"; exit 1
@@ -3581,9 +3607,8 @@ restore_learning_fixture() {
     domain_cleared || return 1
     defaults import com.xiaolaidict "$learning_evidence/preferences.plist" \
         || { echo "restore: the preferences could not be imported; they are in $learning_evidence" >&2; return 1; }
-    case $learning_dark_before in
-        true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
-    esac
+    [ -z "$learning_dark_before" ] || set_dark_mode "$learning_dark_before" \
+        || { echo "restore: the appearance could not be put back to dark mode $learning_dark_before" >&2; return 1; }
     reader_reminders_back "$learning_evidence" || return 1
     launch_app || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
     # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
@@ -3691,8 +3716,10 @@ PYLIBRARY
             else flunk "learning: Discarded recovery pane unreachable after relaunch"; fi
         else flunk "learning: the encounter could not be discarded a second time, so its survival across a relaunch was not tested"; fi
         for appearance in Light Dark; do
+            # Not changed where it could not be read, and so could not be put back; already a failure above.
+            [ -n "$learning_dark_before" ] || break
             wanted_dark=false; [ "$appearance" != Dark ] || wanted_dark=true
-            if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
+            if ! set_dark_mode "$wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
                 flunk "learning: cannot set actual system $appearance appearance"
                 continue
             fi
