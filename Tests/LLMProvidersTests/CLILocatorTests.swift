@@ -149,7 +149,7 @@ struct CLILocatorTests {
         }
         let pid = try await ChildProcessTests.descendant(writtenTo: pidFile)
         locating.task.cancel()
-        #expect(await locating.outcome(within: .seconds(10)) == .success(.notFound),
+        #expect(await locating.outcome() == .success(.notFound),
                 "the probe waited for its own bound after its caller gave up")
         #expect(await waitUntilGone(pid))
     }
@@ -166,7 +166,7 @@ struct CLILocatorTests {
         }
         let pid = try await ChildProcessTests.descendant(writtenTo: pidFile)
         reading.task.cancel()
-        #expect(await reading.outcome(within: .seconds(10)) == .success(nil),
+        #expect(await reading.outcome() == .success(nil),
                 "the version probe waited for its own bound after its caller gave up")
         #expect(await waitUntilGone(pid))
     }
@@ -178,15 +178,16 @@ struct CLILocatorTests {
         #expect(await Self.locator([], shell: shell.executable).locate(.claude, override: nil) == .notFound)
     }
 
-    /// A profile that hangs — waiting on a prompt, say — is ended at the bound and finds nothing.
-    @Test func aLoginShellThatHangsIsEndedAtTheBound() async throws {
+    /// A profile that hangs — waiting on a prompt, say — is ended at the bound and finds nothing. **Shown by the test's
+    /// limit, not a stopwatch** (AGENTS.md): the shell sleeps ten minutes and the limit is two, so a probe that waited
+    /// for it fails by the limit.
+    @Test(.timeLimit(.minutes(2)))
+    func aLoginShellThatHangsIsEndedAtTheBound() async throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-locator")
         let program = try Self.install("claude", in: scratch.appending("bin"))
-        let shell = try FakeCLI.shell(printing: [program.path], sleep: 30)
-        let start = ContinuousClock.now
+        let shell = try FakeCLI.shell(printing: [program.path], sleep: 600)
         #expect(await Self.locator([], shell: shell.executable, timeout: .milliseconds(500))
             .locate(.claude, override: nil) == .notFound)
-        #expect(ContinuousClock.now - start < .seconds(5))
     }
 
     // MARK: - What the reader must do

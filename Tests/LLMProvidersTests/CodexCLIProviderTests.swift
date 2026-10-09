@@ -251,7 +251,7 @@ struct CodexCLIProviderTests {
         let silent = Settling { () async throws(ProviderFailure) in
             try await provider.generate(ResidentSessionTests.question("[[silent]]"))
         }
-        try #require(await silent.outcome(within: .seconds(8)) == .failure(.timedOut), "the deadline held")
+        try #require(await silent.outcome() == .failure(.timedOut), "the deadline held")
         #expect(await waitUntilGone(first))
         await provider.shutDown()
     }

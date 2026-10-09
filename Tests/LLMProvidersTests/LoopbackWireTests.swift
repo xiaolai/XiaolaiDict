@@ -97,6 +97,9 @@ struct LoopbackWireTests {
     @Test func aServerThatNeverAnswersTimesOut() async throws {
         let server = try LoopbackHTTPServer { _ in .hang }
         #expect(await Self.failure(of: Self.provider(server.url("/v1"), timeout: .milliseconds(500))) == .timedOut)
+        // **Waited for, not looked at once**: the request is in the socket when the client gives up, and on a loaded
+        // Mac the server's thread reads it afterwards (2026-10-09: none recorded at the instant the call ended).
+        #expect(await server.waitForRequests(1), "the server never read the request")
         #expect(server.requests.count == 1)
     }
 

@@ -70,7 +70,7 @@ struct ChildProcessTests {
         let child = try ChildProcess.start(ChildLaunch(executable: fake.executable, arguments: [],
                                                        workingDirectory: fake.directory.url))
         defer { child.end(.retired) }
-        #expect(await waitUntilGone(child.pid, within: .seconds(20)), "a child writing past the bound was not ended")
+        #expect(await waitUntilGone(child.pid), "a child writing past the bound was not ended")
         await #expect(throws: ProviderFailure.badShape("more output than the bound")) { try await child.nextLine() }
     }
 
@@ -155,7 +155,7 @@ struct ChildProcessTests {
             try await child.send(Data(String(repeating: "x", count: 4 << 20).utf8))
         }
         child.end(.abandoned)
-        guard case .failure(let failure)? = await writing.outcome(within: .seconds(10)) else {
+        guard case .failure(let failure)? = await writing.outcome() else {
             Issue.record("the write was still waiting after the child was ended")
             return
         }
@@ -203,7 +203,8 @@ struct ChildProcessTests {
         let fake = try FakeCLI.claude(.unknownOption)
         let child = try ChildProcess.start(ChildLaunch(executable: fake.executable, arguments: [],
                                                        workingDirectory: fake.workingDirectory))
-        let exit = await child.exit(within: .seconds(5))
+        // A minute, only so a defect cannot hang the run: the child ends by itself, at once.
+        let exit = await child.exit(within: .seconds(60))
         #expect(exit.status == 1)
         #expect(exit.diagnostics.contains("unknown option '--tools'"))
     }

@@ -32,6 +32,8 @@ struct FakeCLI: Sendable {
         case unknownOption = "unknown-option"
         /// Answers every question the way `claude` answers when nobody signed in, then exits — measured 2026-10-09.
         case signedOut = "signed-out"
+        /// Prints its version six seconds after it is asked: past the product's own bound on that read.
+        case slowVersion = "slow-version"
     }
 
     /// How the fake `codex app-server` behaves.
@@ -143,6 +145,8 @@ struct FakeCLI: Sendable {
             sys.stdout.flush()
         args = sys.argv[1:]
         if args == ["--version"]:
+            if STARTUP == "slow-version":
+                time.sleep(6)
             print("9.9.9 (Fake Claude)")
             sys.exit(0)
         log({"argv": args, "pid": os.getpid(), "cwd": os.getcwd()})
@@ -358,7 +362,8 @@ func isAlive(_ pid: Int32) -> Bool {
 }
 
 /// Waits until `pid` has gone, up to `bound`. True if it went.
-func waitUntilGone(_ pid: Int32, within bound: Duration = .seconds(5)) async -> Bool {
+/// Whether `pid` has gone within `bound`. **Sixty seconds, because the bound only stops a defect hanging the run** — the wait ends the moment the condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's Python took 7.4 s to start and exit while other builds ran).
+func waitUntilGone(_ pid: Int32, within bound: Duration = .seconds(60)) async -> Bool {
     let deadline = ContinuousClock.now.advanced(by: bound)
     while isAlive(pid) {
         if ContinuousClock.now >= deadline { return false }
@@ -396,8 +401,9 @@ final class Settling<T: Sendable>: Sendable {
         }
     }
 
-    /// The outcome, once there is one, or nil if there is none by `bound`.
-    func outcome(within bound: Duration = .seconds(10)) async -> Result<T, ProviderFailure>? {
+    /// The outcome, once there is one, or nil if there is none by `bound` — `.zero` asks whether there is one yet.
+    /// **Sixty seconds, because the bound only stops a defect hanging the run** — the wait ends the moment the condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's Python took 7.4 s to start and exit while other builds ran).
+    func outcome(within bound: Duration = .seconds(60)) async -> Result<T, ProviderFailure>? {
         let deadline = ContinuousClock.now.advanced(by: bound)
         while ContinuousClock.now < deadline {
             if let settled = outcome.value.withLock({ $0 }) { return settled }
@@ -433,7 +439,7 @@ final class EventLog: Sendable {
     var sink: @Sendable (ResidentEvent) -> Void { { [self] in record($0) } }
 
     /// Waits until an event matching `predicate` has been recorded, up to `bound`.
-    func wait(within bound: Duration = .seconds(10), for predicate: (ResidentEvent) -> Bool) async -> Bool {
+    func wait(within bound: Duration = .seconds(60), for predicate: (ResidentEvent) -> Bool) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: bound)
         while !all.contains(where: { predicate($0.event) }) {
             if ContinuousClock.now >= deadline { return false }

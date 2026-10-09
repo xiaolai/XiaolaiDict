@@ -132,6 +132,16 @@ final class LoopbackHTTPServer: Sendable {
     var acceptedConnections: Int { core.state.withLock { $0.accepted } }
     var requests: [Request] { core.state.withLock { $0.requests } }
 
+    /// Whether `count` requests have been read within `bound` — a minute, only so a defect fails rather than hangs.
+    func waitForRequests(_ count: Int, within bound: Duration = .seconds(60)) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: bound)
+        while requests.count < count {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
+    }
+
     /// Stops listening and ends every connection. The threads see it within one poll interval.
     func stop() { core.stop() }
 

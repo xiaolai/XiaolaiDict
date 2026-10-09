@@ -364,7 +364,8 @@ struct OpenAICompatibleProviderTests {
         let provider = Self.provider(endpoint)
         let call = Task { await Self.failure(of: provider) }
         // Wait for the request to be in flight — the work, not the call that started it.
-        for _ in 0..<500 where endpoint.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        // Up to a minute, only so a defect fails rather than hangs: it ends when the request arrives.
+        for _ in 0..<6_000 where endpoint.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         try #require(!endpoint.requests.isEmpty, "the request never reached the stub")
         call.cancel()
         #expect(await call.value == .cancelled)
