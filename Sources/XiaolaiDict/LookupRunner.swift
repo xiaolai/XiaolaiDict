@@ -84,10 +84,19 @@ final class LookupRunner {
     ///
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
+    ///
+    /// `placement` is where the word sits in the selection's sentence, nil for where the capture put it. A followed
+    /// correction is `.notInSentence`: its sentence is the one the misspelling was read in, the word itself is in no
+    /// position of it, and the card and the tagger must not go looking for it there.
     func run(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
-        seen reportSeen: @MainActor (Bool) -> Void = { _ in }
+        placement given: TermPlacement? = nil, seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
+        let placement = given ?? selection.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
+        // **The sentence the word is tagged in, and none for a word in no position of it.** Given the reader's sentence
+        // and no range, the tagger binds the word to any other occurrence of it — the verb *record* in "They record it,
+        // and the recrod shows." — and lemmatises and tags that one (audit, 2026-10-09). Alone, it is the word.
+        let taggedIn = placement == .notInSentence ? nil : selection.sentence
         let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
         // **A `stat`, and only to notice that the service finished a build** since this process last read the
         // table; the read itself is off this path, and a lookup meanwhile uses the table in force.
@@ -95,8 +104,8 @@ final class LookupRunner {
         // Provisional: the card must not wait for the table, so the first lookup of a session shows the lemma the
         // tagger gave; the lemma that keys the ledger is settled below, once the panel is up.
         let tableAtFirst = FormAuthority.shared.revision
-        var lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
-        var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
+        var lemma = Lemmatizer.lemma(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
+        var presentation = Self.presentation(of: selection, placement: placement, lemma: lemma, request: ticket.number)
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
         // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
         // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
@@ -126,7 +135,7 @@ final class LookupRunner {
         // **Decided again if the table changed since the first reading**, however it got there: a load can finish
         // before the wait begins, which the wait reports as idle.
         if FormAuthority.shared.revision != tableAtFirst {
-            lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+            lemma = Lemmatizer.lemma(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
         }
         let chosenPrimary = primary()
         // **What every recording of this lookup shares, worked out once** — the pending row, the
@@ -234,8 +243,7 @@ final class LookupRunner {
             outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
             phraseOfEncounter: Self.phrase(owning: early, in: resolved.phrase)), ticket.number)
         let resolver = SenseResolver(primary: pinned, selector: selector)
-        let partOfSpeech = Lemmatizer.partOfSpeech(
-            of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+        let partOfSpeech = Lemmatizer.partOfSpeech(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
 
         // **Each arrives when it is ready, and neither waits for the other.** Both were already
         // started side by side, and then awaited in a fixed order — so a sense the selector had
@@ -361,7 +369,9 @@ final class LookupRunner {
     }
 
     /// The card a lookup opens with, before anything has answered.
-    private static func presentation(of selection: Selection, lemma: Lemma, request: Int) -> LookupPresentation {
+    private static func presentation(
+        of selection: Selection, placement: TermPlacement, lemma: Lemma, request: Int
+    ) -> LookupPresentation {
         // The app, and then the most precise thing the app could say about where inside it — which
         // for 12 of the 17 apps measured is nothing at all.
         let source = [selection.place.name, selection.place.label]
@@ -370,9 +380,9 @@ final class LookupRunner {
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
             sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
         // Kept beside the sentence it indexes: without it the card has to search, and a search
-        // finds the wrong occurrence of a word that appears twice.
-        presentation.sentenceRange =
-            selection.quality.context == .complete ? selection.rangeInSentence : nil
+        // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
+        // the sentence, another occurrence of it.
+        presentation.termPlacement = selection.quality.context == .complete ? placement : .unrecorded
         return presentation
     }
 

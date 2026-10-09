@@ -475,12 +475,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// of getting the ticket, which is where they differ.
     private func launch(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
-        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
+        seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         lookup?.cancel()
         lookup = Task {
             await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt,
-                         ticket: ticket, existingLookup: existingLookup, seen: seen)
+                         ticket: ticket, existingLookup: existingLookup, placement: placement, seen: seen)
         }
     }
 
@@ -496,7 +497,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
             log.fault("spelling: a suggestion was followed from a card the runner did not offer it on")
             return
         }
-        launch(selection, near: panel.lastPointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest())
+        // **As a word in no position of the sentence**: the sentence is the one the misspelling was read in, and a card
+        // or a tagger that looked for the word there would find another occurrence of it (audit, 2026-10-09).
+        launch(selection, near: panel.lastPointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest(),
+               placement: .notInSentence)
     }
 
     /// A word a hover read, for the request it was given when the gesture was accepted.
@@ -555,14 +559,15 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// time spent reading the word is in the figures, as `captured`.
     private func lookUp(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
-        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
+        seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
         timings.begin(request: ticket.number, at: askedAt, source: selection.quality.source.rawValue)
         timings.mark(.captured, request: ticket.number)
         // Whether the compositor ever drew this panel, heard on the way to whoever delivered the word.
         var drawn = false
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket,
-                                         existingLookup: existingLookup,
+                                         existingLookup: existingLookup, placement: placement,
                                          seen: { shown in drawn = shown; seen(shown) }) else {
             // **Ended with no row to finish, and still said.** A lookup dropped after its pending row
             // was written has that row in the ledger, so the write is waited for and counted; one

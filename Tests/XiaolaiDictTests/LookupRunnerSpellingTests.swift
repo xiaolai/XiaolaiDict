@@ -65,19 +65,43 @@ struct LookupRunnerSpellingTests {
     /// asked about, which is how a verification lookup that should not have happened is seen.
     final class Service: DictionaryTransport {
         let words: Set<String>
+        /// Whether each entry has two senses — the least that makes the sense selector be asked at all.
+        let twoSenses: Bool
         private let asked = Mutex<[String]>([])
-        init(_ words: Set<String>) { self.words = words }
+        init(_ words: Set<String>, twoSenses: Bool = false) {
+            self.words = words
+            self.twoSenses = twoSenses
+        }
         var questions: [String] { asked.withLock { $0 } }
         func send(_ request: ServiceRequest) async throws -> ServiceReply {
             guard case .lookup(let lookup) = request else { return .dictionaries([]) }
             asked.withLock { $0.append(lookup.term) }
             guard words.contains(lookup.term) else { return .lookup(LookupAnswer(word: .notFound)) }
+            let document = twoSenses ? EntryDocument(
+                isStyled: true, entryID: "m1", homograph: nil,
+                blocks: [SenseBlock(number: 1, partOfSpeech: "noun", senses: [1, 2].map {
+                    DictionarySense(path: SensePath(block: 1, ordinal: $0), key: "m1.00\($0)", keyKind: .publisher,
+                                    definition: "meaning \($0)", text: "meaning \($0)")
+                })]) : nil
             let entry = DictionaryEntry(
                 dictionary: DictionaryIdentity(name: "NOAD", identifier: "com.apple.dictionary.NOAD"),
-                headword: lookup.term, lookedUp: lookup.term, html: "<p/>", document: nil)
+                headword: lookup.term, lookedUp: lookup.term, html: "<p/>", document: document)
             return .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: [])))
         }
         func cancel(reason: String) {}
+    }
+
+    /// A selector that abstains, and remembers the part of speech each question came with.
+    final class PartOfSpeechSelector: SenseSelecting {
+        private let given = Mutex<[String?]>([])
+        var partsOfSpeech: [String?] { given.withLock { $0 } }
+        func choose(
+            from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+            partOfSpeech: String?
+        ) async -> SenseSelection {
+            given.withLock { $0.append(partOfSpeech) }
+            return .abstained(.tooClose)
+        }
     }
 
     private func runner(_ panel: RecordingPanel, _ service: Service, _ checker: Checker) -> LookupRunner {
@@ -193,6 +217,36 @@ struct LookupRunnerSpellingTests {
         #expect(checker.questions == ["teh"], "the checker was not asked, so nothing was tested")
         #expect(Self.lookups(panel.updates).allSatisfy { $0.suggestion == nil })
         #expect(service.questions == ["teh"], "the term itself was looked up again as its own correction")
+    }
+
+    /// **A followed correction is not in the reader's sentence, and nothing may look for it there** (audit, 2026-10-09).
+    /// "They record it, and the recrod shows." holds *record* once — the verb, not the noun the reader misspelt — so a
+    /// search for the word binds the correction to it: the card marked it, and the selector was told "verb". The
+    /// follow-up's placement says it is in no position of the sentence, the card is told so, and the word is tagged
+    /// alone.
+    @Test func aFollowedCorrectionIsNeverBoundToAnotherOccurrenceOfIt() async throws {
+        let sentence = "They record it, and the recrod shows."
+        let bound = Lemmatizer.partOfSpeech(of: "record", in: sentence, at: nil)
+        let alone = Lemmatizer.partOfSpeech(of: "record", in: nil, at: nil)
+        try #require(bound != alone, "the fixture no longer tells the other occurrence from the word: \(String(describing: bound))")
+        let typo = Selection(
+            text: "recrod", sentence: sentence, rangeInSentence: (sentence as NSString).range(of: "recrod"),
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
+        let panel = RecordingPanel(), selector = PartOfSpeechSelector()
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in Service(["record"], twoSenses: true) }, fallback: { _ in nil }),
+            panel: panel, selector: selector, spelling: Checker(["recrod": "record"]), readerEnglish: { nil })
+        let missed = panel.newRequest()
+        _ = await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed)
+        let followed = try #require(runner.followUp(SpellingSuggestion(term: "recrod", word: "record"), from: missed.number))
+
+        _ = await runner.run(followed, near: .zero, requestedAt: .now, ticket: panel.newRequest(), placement: .notInSentence)
+        let shown = try #require(Self.lookups(panel.updates).last)
+        #expect(shown.term == "record")
+        #expect(shown.sentence == sentence, "the reader's sentence did not go with the word")
+        #expect(shown.termPlacement == .notInSentence, "the card was not told the word is not in the sentence")
+        #expect(selector.partsOfSpeech == [alone], "the word was tagged as the sentence's other occurrence")
     }
 
     /// **Following the line looks the word up in the sentence and place it was read in** — a new reading of its own,

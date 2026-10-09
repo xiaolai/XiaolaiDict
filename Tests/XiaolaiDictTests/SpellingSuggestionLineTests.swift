@@ -113,6 +113,9 @@ struct SpellingSuggestionLineTests {
         let app = try source("Sources/XiaolaiDict/XiaolaiDictApp.swift")
         #expect(app.contains("panel.onFollowSuggestion = "), "the app never sets the panel's hook")
         #expect(app.contains("runner.followUp("), "the app does not ask the runner what the press looks up")
+        // **The follow-up is launched as a word in no position of the sentence** (audit, 2026-10-09), or the card and
+        // the tagger look for it there and find another occurrence.
+        #expect(app.contains("placement: .notInSentence"), "the follow-up is launched as though the word were in the sentence")
     }
 
     /// **The hook is set by the app itself**, not left for a test to wire: a press on a panel with no hook is a

@@ -67,8 +67,41 @@ public struct LookupCard: Equatable {
     /// Falls back to the surface where no lemma was worked out, which is what the ledger stores
     /// too.
     public let lemma: String
-    /// Where `term` sits in `sentence`, from the capture rather than from a search of it.
-    public let sentenceRange: NSRange?
+    /// Where `term` sits in `sentence`: recorded by the capture, not recorded, or in no position of it at all.
+    public let placement: TermPlacement
+
+    /// The range the capture recorded, where it recorded one.
+    public var sentenceRange: NSRange? {
+        guard case .at(let range) = placement else { return nil }
+        return range
+    }
+
+    /// **The span of `sentence` the card marks as the word, or nil where it marks none** — asked here, where a test can
+    /// ask it, rather than inside the view that draws it.
+    ///
+    /// The recorded range where it holds the word; a search only where the range was not recorded, or does not land
+    /// on the word — a search takes the first case-insensitive match, which is why it is the last resort. **Never a
+    /// search for a word in no position of the sentence**: a followed correction would find another occurrence and
+    /// mark it, the opening "The" of "The cat saw teh dog." for *the*.
+    public var markedRange: NSRange? {
+        guard let sentence, !sentence.isEmpty else { return nil }
+        let text = sentence as NSString
+        func search() -> NSRange? {
+            let found = text.range(of: term, options: .caseInsensitive)
+            return found.location == NSNotFound ? nil : found
+        }
+        switch placement {
+        case .notInSentence:
+            return nil
+        case .unrecorded:
+            return search()
+        case .at(let range):
+            guard range.location >= 0, NSMaxRange(range) <= text.length,
+                  text.substring(with: range).compare(term, options: .caseInsensitive) == .orderedSame
+            else { return search() }
+            return range
+        }
+    }
     public let heading: String
     public let partOfSpeech: String?
     public let pronunciation: String?
@@ -229,7 +262,7 @@ public struct LookupCard: Equatable {
     }
 
     public init(
-        term: String, lemma: String? = nil, sentenceRange: NSRange? = nil,
+        term: String, lemma: String? = nil, placement: TermPlacement = .unrecorded,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil
@@ -238,7 +271,7 @@ public struct LookupCard: Equatable {
         self.lemma = lemma ?? term
         self.phrase = phrase
         self.suggestion = suggestion
-        self.sentenceRange = sentenceRange
+        self.placement = placement
         self.heading = heading
         self.partOfSpeech = partOfSpeech
         self.pronunciation = pronunciation
@@ -257,7 +290,7 @@ public extension LookupCard {
     /// a card that led with one of them would be picking from a pile nobody can check.
     init(
         presentation: EntryPresentation, term: String, lemma: String? = nil,
-        sentenceRange: NSRange? = nil, sentence: String?, mark: SenseMark?,
+        placement: TermPlacement = .unrecorded, sentence: String?, mark: SenseMark?,
         memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
     ) {
         let chosen = presentation.senses.first { sense in
@@ -307,7 +340,7 @@ public extension LookupCard {
         self.init(
             term: term,
             lemma: lemma,
-            sentenceRange: sentenceRange,
+            placement: placement,
             heading: presentation.heading,
             // The chosen sense's own part of speech where there is one: an entry's list of every
             // part of speech it covers says less than the one the reader is actually in.

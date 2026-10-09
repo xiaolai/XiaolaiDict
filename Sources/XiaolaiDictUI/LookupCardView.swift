@@ -349,23 +349,13 @@ public struct LookupCardView: View {
     /// used to ignore, hardcoding semibold in `.primary` while the drawer honoured the preference
     /// and coloured by the word's own accent.
     private func marked(_ sentence: String) -> AttributedString {
-        // **The captured range, and a search only where there is none.** Searching took the first
-        // case-insensitive substring, so looking up *he* in "The man said he was fine" marked the
-        // *he* inside "The", and a word appearing twice in its own sentence marked whichever came
-        // first. The range is checked against the sentence before it is trusted: one from another
-        // sentence would otherwise bracket whatever sits at that offset.
-        let text = sentence as NSString
-        let captured = card.sentenceRange.flatMap { range -> NSRange? in
-            guard range.location >= 0, NSMaxRange(range) <= text.length,
-                  text.substring(with: range).compare(card.term, options: .caseInsensitive) == .orderedSame
-            else { return nil }
-            return range
-        }
-        return MarkedSentence.text(
+        // **The captured range, and a search only where there is none — and never for a word in no position of the
+        // sentence.** Searching took the first case-insensitive substring, so looking up *he* in "The man said he was
+        // fine" marked the *he* inside "The", and a followed correction marked another occurrence of itself. The
+        // decision is `LookupCard.markedRange`, where a test can ask it.
+        MarkedSentence.text(
             sentence,
-            marking: Lemmatizer.parts(
-                of: card.term, surface: card.term, in: sentence,
-                at: captured ?? text.range(of: card.term, options: .caseInsensitive)),
+            marking: Lemmatizer.parts(of: card.term, surface: card.term, in: sentence, at: card.markedRange),
             phrase: card.phrase,
             size: scale.text.body, emphasis: options.emphasis, accent: accent)
     }
@@ -893,7 +883,7 @@ public struct LookupPanelContent: View {
         return LookupCard(
             presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
             term: presentation.term, lemma: presentation.lemma.text,
-            sentenceRange: presentation.sentenceRange,
+            placement: presentation.termPlacement,
             sentence: presentation.sentence, mark: mark,
             memory: presentation.memory, phrase: presentation.phrase)
     }
@@ -904,7 +894,7 @@ public struct LookupPanelContent: View {
     /// card and not the other.
     private func cardWithoutAnEntry(_ answer: LookupCard.Answer) -> LookupCard {
         LookupCard(
-            term: presentation.term, lemma: presentation.lemma.text,
+            term: presentation.term, lemma: presentation.lemma.text, placement: presentation.termPlacement,
             heading: presentation.term, partOfSpeech: nil,
             pronunciation: nil, answer: answer,
             // **Shown on the no-entry card too**, and this is where it matters most: a reader whose
