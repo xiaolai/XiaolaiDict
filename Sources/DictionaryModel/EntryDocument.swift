@@ -398,7 +398,8 @@ final class EntryReader: NSObject, XMLParserDelegate {
             // where it sits, and `textHash` is what notices a content update moving it.
             key: publisherKey ?? "\(path.block).\(path.ordinal)",
             keyKind: publisherKey == nil ? .position : .publisher,
-            definition: definition, text: text, display: pending.flatMap(Self.display)))
+            definition: definition, text: text,
+            display: pending.flatMap { Self.display($0, beside: DictionarySense.label(definition: definition, text: text)) }))
         pendingBlock = block
     }
 
@@ -454,12 +455,12 @@ final class EntryReader: NSObject, XMLParserDelegate {
     /// The sense's display data, or nil where it holds nothing the label does not already say. **Bilingual senses
     /// only** — a sense with no translation is a monolingual's, whose subsense `df` and `gg` the card already reads
     /// in its own way (measured: 849 of NOAD's 4,417 first senses would otherwise have carried it).
-    private static func display(_ pending: PendingDisplay) -> SenseDisplay? {
+    private static func display(_ pending: PendingDisplay, beside label: String) -> SenseDisplay? {
         guard !pending.translations.isEmpty else { return nil }
         let display = SenseDisplay(
             translations: pending.translations, indicators: pending.indicators,
             englishDefinition: pending.englishDefinition, notes: pending.notes)
-        return display.isEmpty ? nil : display
+        return display.saysNothingBeyond(label) ? nil : display
     }
 
     private func finishBlock() {

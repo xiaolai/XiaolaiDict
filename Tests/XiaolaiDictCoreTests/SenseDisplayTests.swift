@@ -84,6 +84,25 @@ struct SenseDisplayTests {
                                                   definition: sense.definition, text: sense.text).textHash)
     }
 
+    /// **A lone translation the label cuts short says the rest** (audit of 2026-10-10). The label stops at 64 characters
+    /// with "…", and a sense whose one translation was longer kept no display data — taken for the label again — so the
+    /// ending was shown nowhere. Whether display data adds anything is decided against the label as it is drawn.
+    @Test func aLoneTranslationTheLabelCutsShortKeepsItsDisplayData() throws {
+        let long = String(repeating: "公平合理而不偏不倚的", count: 8)
+        let sense = try Self.sense(#"<span class="trg"><span class="trans" d:def="1">\#(long)</span></span>"#)
+        #expect(sense.label.hasSuffix("…") && sense.label.count <= 64, "the fixture is not cut by the label")
+        let display = try #require(sense.display, "the cut-off ending is shown nowhere")
+        #expect(display.translations == [SenseDisplay.Translation(text: long, indicator: nil)])
+        #expect(!display.saysNothingBeyond(sense.label))
+    }
+
+    /// **And the control: a lone translation the label shows whole says nothing more**, so it keeps none.
+    @Test func aLoneTranslationTheLabelShowsWholeHasNoDisplayData() throws {
+        let sense = try Self.sense(#"<span class="trg"><span class="trans" d:def="1">公平的</span></span>"#)
+        #expect(sense.label == "公平的")
+        #expect(sense.display == nil)
+    }
+
     /// A monolingual sense has nothing beyond its label to show: no display data, so the card is today's.
     @Test func aMonolingualSenseHasNoDisplayData() throws {
         let sense = try Self.sense(#"<span class="df" d:def="1">a meaning</span>"#)

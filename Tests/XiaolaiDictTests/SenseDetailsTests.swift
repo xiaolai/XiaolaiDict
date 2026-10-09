@@ -38,6 +38,18 @@ struct SenseDetailsTests {
                    sentence: "It was a fair price.", mark: mark)
     }
 
+    /// **A lone translation the label cuts short is in the details**, its whole text (audit of 2026-10-10) — while one the
+    /// label shows whole is not.
+    @Test func aLoneTranslationTheLabelCutsShortIsInTheDetails() {
+        let long = String(repeating: "公平合理而不偏不倚的", count: 8)
+        let lone = SenseDisplay(translations: [.init(text: long, indicator: nil)], indicators: [], englishDefinition: nil,
+                                notes: [])
+        let entry = Self.entry([("adjective", [Self.sense(1, 1, long, display: lone), Self.sense(1, 2, "美好的", display: Self.bare)])])
+        let details = Self.card(entry).details
+        #expect(details.groups.flatMap(\.rows).map(\.ordinal) == [1])
+        #expect(details.groups.first?.rows.first?.lines == SenseDisplayLines.of(lone))
+    }
+
     /// **Every sense with something beyond its label, the leading one included, in the entry's order and blocks** —
     /// and nothing for a sense with no display data or with only its label again.
     @Test func theDetailsHoldEverySenseWithSomethingBeyondItsLabel() {

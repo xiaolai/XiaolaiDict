@@ -44,7 +44,7 @@ public struct SenseDetails: Equatable, Sendable {
     public init(senses: [SensePresentation]) {
         var groups: [Group] = []
         for sense in senses {
-            guard let display = sense.display, !display.isEmpty else { continue }
+            guard let display = sense.display, !display.saysNothingBeyond(sense.label) else { continue }
             let row = Row(id: sense.id, ordinal: sense.ordinal, lines: SenseDisplayLines.of(display))
             if let last = groups.last, last.block == sense.block {
                 groups[groups.count - 1] = Group(block: last.block, partOfSpeech: last.partOfSpeech, rows: last.rows + [row])

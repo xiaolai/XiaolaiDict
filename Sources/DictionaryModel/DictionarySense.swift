@@ -89,7 +89,11 @@ public struct DictionarySense: Codable, Sendable, Equatable {
 
     /// What the reader sees in the sidebar: the definition where there is one, else the start of
     /// the sense's own text. Never empty, and never a promise the sense cannot keep.
-    public var label: String {
+    public var label: String { Self.label(definition: definition, text: text) }
+
+    /// The label a sense with this definition and text is drawn with — cut at 64 characters with "…". One spelling, so
+    /// what decides whether display data says more than the label (`EntryDocument`) reads the label as it is drawn.
+    public static func label(definition: String?, text: String) -> String {
         let source = definition ?? text
         guard source.count > 64 else { return source }
         return source.prefix(63).trimmingCharacters(in: .whitespaces) + "…"
@@ -167,9 +171,11 @@ public struct SenseDisplay: Codable, Sendable, Equatable {
         self.notes = notes
     }
 
-    /// Nothing to show beyond the label.
-    public var isEmpty: Bool {
-        translations.count <= 1 && translations.allSatisfy { $0.indicator == nil }
+    /// **Nothing to show beyond `label`, as it is drawn** — at most one translation, with no indicator, that the label
+    /// shows whole, and nothing else. Against the label as drawn, cut short included (audit of 2026-10-10): a lone
+    /// translation longer than the label's 64 characters was taken for the label again, and its ending shown nowhere.
+    public func saysNothingBeyond(_ label: String) -> Bool {
+        translations.count <= 1 && translations.allSatisfy { $0.indicator == nil && label.contains($0.text) }
             && indicators.isEmpty && englishDefinition == nil && notes.isEmpty
     }
 }
