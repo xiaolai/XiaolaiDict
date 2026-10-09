@@ -1773,6 +1773,9 @@ if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "shortcut: could not select ($why)"
 else
     assert_default_shortcut || true
+    # Where the selected word is, as the shortcut's own reader finds it — held to a hover's box of the same word by the
+    # selection stage — for the anchoring check below (the owner's decision of 2026-10-09).
+    selected_box=$("$exe" --read-selection com.apple.TextEdit 2>/dev/null) || selected_box=""
     "$helpers/keys" 2 control option
     # Waits for the lemma *and* the rendered page, rather than polling for the first and sleeping
     # a fixed second for the second. The page is laid out by WebKit after the panel shows, and on
@@ -1834,6 +1837,41 @@ if not any("stopped meeting at noon" in t for t in panels[0]["texts"]):
 sys.exit("; ".join(problems) if problems else 0)
 PY
     ); then pass "shortcut: the card answers with the reader's sentence, and TextEdit keeps focus"; else flunk "shortcut: $why"; fi
+    # **Anchored on the selected word** (the owner's decision of 2026-10-09): the panel's frame as the compositor draws it,
+    # against the word's box read before the shortcut — clear of the word, a gap's width from it, and its middle across
+    # within the room the card keeps for its shadows of the word's middle, unless the screen's edge held it. Placed by
+    # the pointer as before, its left edge sat 12 pt right of the mouse, wherever the mouse was.
+    drawn_panel=$("$helpers/on-screen" com.xiaolaidict Lookup) || drawn_panel=""
+    consume_verdicts shortcut "$(python3 - "$selected_box" "$drawn_panel" <<'PYANCHOR' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def first_json(text):
+    line = next((l for l in text.splitlines() if l.startswith("{")), "{}")
+    try:
+        return json.loads(line)
+    except ValueError:
+        return {}
+word = first_json(sys.argv[1]).get("bounds") or {}
+panel = next((m for m in first_json(sys.argv[2]).get("matches", []) if m.get("drawn")), {})
+if not word or not panel:
+    say(False, "", f"shortcut: no word box ({word}) or no drawn lookup panel ({sys.argv[2][:200]}) to measure by")
+else:
+    wx, wy, ww, wh = word["x"], word["y"], word["width"], word["height"]
+    px, py, pw, ph = panel["x"], panel["y"], panel["width"], panel["height"]
+    below = py >= wy + wh
+    clear = px + pw <= wx or wx + ww <= px or py + ph <= wy or wy + wh <= py
+    gap = (py - (wy + wh)) if below else (wy - (py + ph))
+    say(clear and 0 <= gap <= 6,
+        f"shortcut: the panel ({px},{py} {pw}×{ph}) is {gap:.0f} pt {'below' if below else 'above'} the selected word "
+        f"({wx:.0f},{wy:.0f} {ww:.0f}×{wh:.0f}), anchored on it and clear of it",
+        f"shortcut: the panel is not anchored on the selected word: panel {px},{py} {pw}×{ph}, word {wx},{wy} {ww}×{wh}")
+    off = (px + pw / 2) - (wx + ww / 2)
+    held = px <= 10  # at the left screen edge, where the word is too near it to centre on
+    say(abs(off) <= 15 or held, f"shortcut: across, its middle is {off:+.1f} pt from the word's — the shadows' room, centred",
+        f"shortcut: the panel is not centred on the selected word: its middle is {off:+.1f} pt from the word's")
+print("DONE")
+PYANCHOR
+)"
 
     held=$("$helpers/claim-escape" || true)
     "$helpers/keys" 53

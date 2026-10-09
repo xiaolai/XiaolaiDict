@@ -443,10 +443,26 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
             switch await SelectionReader.read(from: app) {
             case .nothing(let refusal):
                 panel.show(.nothingToLookUp(refusal.message), near: pointer, for: ticket)
-            case .selected(let selection, _):
-                await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket)
+            case .selected(let selection, let bounds):
+                // **Anchored on the selected word where the app said where it is** (the owner's decision of 2026-10-09):
+                // placed by the word, on the display it is on; the mouse, which may be anywhere, places the card only
+                // where no box came back.
+                let word = Self.screenWord(bounds, screens: NSScreen.screens.map(\.frame))
+                await lookUp(selection, near: word.map { UpPoint(x: $0.rect.cg.midX, y: $0.rect.cg.midY) } ?? pointer,
+                             requestedAt: requestedAt, askedAt: askedAt, ticket: ticket, protecting: word)
             }
         }
+    }
+
+    /// **The selected word's box in the panel's space** — flipped about the primary display's height, as a hover's box
+    /// is beside its pointer — or nil where it lies on no display (a selection scrolled out of view), or there is no
+    /// display to flip about: the card then goes by the pointer, as it always did.
+    nonisolated static func screenWord(_ bounds: ReadBounds?, screens: [CGRect]) -> WordBounds? {
+        guard let bounds, let primary = screens.first(where: { $0.contains(CGPoint.zero) }) ?? screens.first
+        else { return nil }
+        let word = bounds.flipped(aboutPrimaryHeight: primary.height)
+        let middle = CGPoint(x: word.rect.cg.midX, y: word.rect.cg.midY)
+        return screens.contains { $0.contains(middle) } ? word : nil
     }
 
     /// A word the reader named rather than met — **Study** on a suggestion in the library.

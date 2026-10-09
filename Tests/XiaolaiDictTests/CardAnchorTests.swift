@@ -287,3 +287,35 @@ struct UpwardGrowthTests {
         #expect(window.frame == NSRect(x: 100, y: 200, width: 396, height: 300), "a shrink moved the tail's edge")
     }
 }
+
+/// **The selection shortcut anchors its card on the selected word** where the app said where the word is (measured
+/// exact in TextEdit and Safari, plan-card-refinements §6): flipped about the primary display, as a hover's box is, and
+/// placed by the word — on the display it is on — rather than by the mouse, which may be anywhere.
+@MainActor
+struct SelectionShortcutAnchorTests {
+    private let primary = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+    private let left = CGRect(x: -1_920, y: 0, width: 1_920, height: 1_080)
+
+    @Test func theSelectedWordsBoxIsFlippedAboutThePrimaryDisplay() {
+        let read = ReadBounds(rect: DownRect(x: 427, y: 128, width: 46, height: 13), quality: .exact)
+        #expect(XiaolaiDictApp.screenWord(read, screens: [primary, left])
+                == WordBounds(rect: UpRect(x: 427, y: 759, width: 46, height: 13), quality: .exact))
+    }
+
+    /// A box on no display — a selection scrolled out of view — places nothing: the card goes by the pointer.
+    @Test func aBoxOnNoDisplayLeavesThePointerRule() {
+        let away = ReadBounds(rect: DownRect(x: 5_000, y: 128, width: 46, height: 13), quality: .exact)
+        #expect(XiaolaiDictApp.screenWord(away, screens: [primary]) == nil)
+        #expect(XiaolaiDictApp.screenWord(nil, screens: [primary]) == nil)
+        let read = ReadBounds(rect: DownRect(x: 427, y: 128, width: 46, height: 13), quality: .exact)
+        #expect(XiaolaiDictApp.screenWord(read, screens: []) == nil, "no display to flip about")
+    }
+
+    /// Read from the source, as the panel's other app wiring is: the shortcut cannot be pressed in a test process.
+    @Test func theShortcutHandsItsWordToThePanel() throws {
+        let app = try String(contentsOf: AppModules.repository.appending(path: "Sources/XiaolaiDict/XiaolaiDictApp.swift"),
+                             encoding: .utf8)
+        #expect(app.contains("case .selected(let selection, let bounds):"), "the shortcut drops the selection's box")
+        #expect(app.contains("ticket: ticket, protecting: word)"), "the shortcut's lookup is not placed against its word")
+    }
+}
