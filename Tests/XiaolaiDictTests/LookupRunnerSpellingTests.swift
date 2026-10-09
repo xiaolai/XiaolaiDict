@@ -9,6 +9,7 @@ import Synchronization
 import Testing
 import XiaolaiDictBase
 import XiaolaiDictCore
+import XiaolaiDictTestSupport
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
@@ -247,6 +248,50 @@ struct LookupRunnerSpellingTests {
         #expect(shown.sentence == sentence, "the reader's sentence did not go with the word")
         #expect(shown.termPlacement == .notInSentence, "the card was not told the word is not in the sentence")
         #expect(selector.partsOfSpeech == [alone], "the word was tagged as the sentence's other occurrence")
+    }
+
+    /// **A followed correction is recorded as a word the reader named, without the sentence it is not in** (audit round
+    /// 2, 2026-10-09). The ledger keeps where `surface` sits in `context` and nothing that says a word is in no position
+    /// of it, so a correction recorded with the reader's sentence and no range came back as an unrecorded range — and
+    /// reopened, the card searched again and marked another occurrence. Recorded the way a named word already is —
+    /// itself as its context, the context `missing` ("none consistent with the selection"), source and confidence kept
+    /// — it reopens with no sentence to search. The miss it came from keeps its sentence: that word was in it.
+    @Test func aFollowedCorrectionIsRecordedAndReopenedWithoutTheSentenceItIsNotIn() async throws {
+        let sentence = "They record it, and the recrod shows."
+        let typo = Selection(
+            text: "recrod", sentence: sentence, rangeInSentence: (sentence as NSString).range(of: "recrod"),
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
+        let panel = RecordingPanel()
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in Service(["record"]) }, fallback: { _ in nil }),
+            panel: panel, spelling: Checker(["recrod": "record"]), readerEnglish: { nil })
+        let missed = panel.newRequest()
+        let miss = try #require(await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed))
+        #expect(miss.record.context == sentence, "the miss lost the sentence its word was read in")
+        let followed = try #require(runner.followUp(SpellingSuggestion(term: "recrod", word: "record"), from: missed.number))
+        let word = try #require(await runner.run(followed, near: .zero, requestedAt: .now, ticket: panel.newRequest(),
+                                                 placement: .notInSentence))
+        #expect(word.record.surface == "record")
+        #expect(word.record.context == "record", "the correction was recorded with a sentence it is not in")
+        #expect(word.record.contextRange == nil)
+        #expect(word.record.quality?.context == .missing)
+        #expect(word.record.quality?.source == .accessibilityTextRange, "how the reading was captured was not kept")
+
+        // **And reopened through the ledger**, the way History and the Library reopen a reading.
+        let path = ScratchFile.path("spelling-reopen")
+        defer { ScratchFile.remove(path) }
+        let recorder = LookupRecorder()
+        recorder.start { try LedgerStore(path: path) }
+        await recorder.record(miss, request: 1)
+        await recorder.record(word, request: 2)
+        let entries = try Ledger(path: path).recentLookups(
+            since: .distantPast, limit: 10, studying: Set(ProbeScript.allCases))
+        let reopened = XiaolaiDictApp.selection(reopening: try #require(entries.first { $0.surface == "record" }))
+        #expect(reopened.text == "record")
+        #expect(reopened.sentence == nil, "reopened, the correction is looked for in a sentence it is not in")
+        let reopenedMiss = XiaolaiDictApp.selection(reopening: try #require(entries.first { $0.surface == "recrod" }))
+        #expect(reopenedMiss.sentence == sentence, "the positive control: a reading of a word in its sentence keeps it")
     }
 
     /// **Following the line looks the word up in the sentence and place it was read in** — a new reading of its own,

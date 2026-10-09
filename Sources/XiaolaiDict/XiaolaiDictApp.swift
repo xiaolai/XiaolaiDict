@@ -541,13 +541,17 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     }
 
     func reopenReading(_ row: ReadingEntry) {
-        let selection = Selection(text: row.surface, sentence: row.cue == .none ? nil : row.sentence,
-            rangeInSentence: row.sentenceRange,
-            quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place)
         // Dated for the timings from now: `row.at` is when it was first read, and the figures would
         // otherwise carry the reading's whole age.
-        launch(selection, near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at, askedAt: .now,
+        launch(Self.selection(reopening: row), near: UpPoint(NSEvent.mouseLocation), requestedAt: row.at, askedAt: .now,
                ticket: panel.newRequest(), existingLookup: row.identity)
+    }
+
+    /// **What a reading reopens as**: its word, in its sentence only where the reading was recorded with one (its cue),
+    /// at the range recorded. Not private: a reading recorded one way and reopened another is the defect a test reads.
+    static func selection(reopening row: ReadingEntry) -> Selection {
+        Selection(text: row.surface, sentence: row.cue == .none ? nil : row.sentence, rangeInSentence: row.sentenceRange,
+                  quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place)
     }
 
     // MARK: - Hover

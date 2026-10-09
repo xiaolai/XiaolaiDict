@@ -142,7 +142,7 @@ final class LookupRunner {
         // answered one and the final one differ only in what they add to it (audit round 3, #29).
         let basis = RecordingBasis(
             selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
-            lookup: existingLookup, keepPolicy: frozenKeepPolicy)
+            lookup: existingLookup, keepPolicy: frozenKeepPolicy, placement: placement)
         let pending = basis.pending(primaryDictionary: chosenPrimary.chosen ?? chosenPrimary.automatic)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
@@ -490,16 +490,33 @@ private struct RecordingBasis {
     /// file it under Latin and show it to a reader who asked not to see it. Nil where nothing classifies
     /// — a number, punctuation — which the drawer draws rather than hides.
     let script: ProbeScript?
+    /// **A word in no position of the sentence is recorded as a word the reader named** (audit round 2, 2026-10-09):
+    /// itself as its context, no range, the capture's context `missing` — "none consistent with the selection" — with
+    /// its source and confidence kept. The ledger records where `surface` sits in `context` and nothing that says it
+    /// sits nowhere, so a followed correction kept with the reader's sentence and no range reopened as an unrecorded
+    /// range, and the card searched again and marked another occurrence. Keeping that sentence would take a column of
+    /// its own (schema 14); this is the state a named word is already recorded and reopened in.
+    let named: Bool
 
     init(selection: Selection, lemma: Lemma, language: String?, requestedAt: Date,
-         lookup: LookupIdentity?, keepPolicy: LookupKeepPolicy) {
+         lookup: LookupIdentity?, keepPolicy: LookupKeepPolicy, placement: TermPlacement) {
         self.selection = selection
         self.lemma = lemma
         self.language = language
         self.requestedAt = requestedAt
         self.lookup = lookup
         self.keepPolicy = keepPolicy
+        named = placement == .notInSentence
         script = ProbeScript.dominant(in: selection.text)
+    }
+
+    /// How the reading was captured, as the ledger keeps it: the capture's own, but for a named word, whose context is
+    /// the word itself.
+    private var quality: CaptureQuality {
+        let captured = selection.quality
+        guard named else { return captured }
+        return CaptureQuality(source: captured.source, confidence: captured.confidence, context: .missing)
+            ?? .accessibility(captured.source, context: .missing)
     }
 
     /// The row a lookup starts with, before the dictionaries answer.
@@ -520,16 +537,16 @@ private struct RecordingBasis {
     /// marked where none was.
     private func record(outcome: LookupOutcome, abstention: Abstention?) -> LookupRecord {
         LookupRecord(
-            surface: selection.text, lemma: lemma.text, context: selection.sentence ?? selection.text,
+            surface: selection.text, lemma: lemma.text, context: named ? selection.text : selection.sentence ?? selection.text,
             // All four were computed at every lookup and thrown away at the ledger before schema 4.
             // **The language is passed in, not recognised again.** `run` already built an
             // `NLLanguageRecognizer` for the ledger read; a second one per lookup answered the same
             // question twice, and two recognisers could in principle disagree — the row and the
             // history query would then be keyed on different languages for one word.
             lemmaBasis: lemma.basis, language: language,
-            contextRange: selection.rangeInSentence, place: selection.place,
+            contextRange: named ? nil : selection.rangeInSentence, place: selection.place,
             lookedUpAt: requestedAt, result: outcome.result, answeredBy: outcome.answeredBy,
-            quality: selection.quality,
+            quality: quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
             senseAbstention: abstention, script: script)
