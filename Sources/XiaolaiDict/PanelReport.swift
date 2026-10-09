@@ -534,19 +534,11 @@ enum PanelReport {
 
     /// The press and the release, and nothing else — no AppKit, so it can be called from the thread
     /// that has to click while the main one is inside menu tracking.
+    /// Both through `Instrument.postMouse`, the one door an instrument posts by, which a release does not build.
     nonisolated private static func postClick(atFlipped point: CGPoint) -> Bool {
-        let button = CGMouseButton.ClickKind.leftMouse
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(
-                mouseEventSource: source, mouseType: button.down,
-                mouseCursorPosition: point, mouseButton: button.button),
-              let up = CGEvent(
-                mouseEventSource: source, mouseType: button.up,
-                mouseCursorPosition: point, mouseButton: button.button)
-        else { return false }
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-        return true
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
+        return Instrument.postMouse(.leftMouseDown, at: point, source: source)
+            && Instrument.postMouse(.leftMouseUp, at: point, source: source)
     }
 }
 
@@ -576,17 +568,5 @@ private final class MenuBail: NSObject {
     @objc func cancel() {
         didFire = true
         menu.cancelTracking()
-    }
-}
-
-extension CGMouseButton {
-    /// The three events one click is made of, named together so a caller cannot pair a left-button
-    /// down with a right-button up.
-    enum ClickKind {
-        case leftMouse
-
-        var down: CGEventType { .leftMouseDown }
-        var up: CGEventType { .leftMouseUp }
-        var button: CGMouseButton { .left }
     }
 }

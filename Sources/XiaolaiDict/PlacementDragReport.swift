@@ -119,16 +119,10 @@ extension PlacementReport {
     /// The longest step a posted drag takes, in points — what the window may lag the pointer by at the end.
     static let dragStep: CGFloat = 2
 
-    /// **A real drag**: the button down at `start` (global, y down), moved there by `delta` in steps, and up. Every event
-    /// states its modifiers — none — rather than inheriting the session's. False where an event could not be made.
+    /// **A real drag**: the button down at `start` (global, y down), moved there by `delta` in steps, and up — each event
+    /// through `Instrument.postMouse`, which states its modifiers. False where an event could not be made.
     static func drag(from start: CGPoint, by delta: CGVector) async -> Bool {
-        func post(_ type: CGEventType, _ point: CGPoint) -> Bool {
-            guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point,
-                                      mouseButton: .left) else { return false }
-            event.flags = []
-            event.post(tap: .cghidEventTap)
-            return true
-        }
+        func post(_ type: CGEventType, _ point: CGPoint) -> Bool { Instrument.postMouse(type, at: point) }
         guard post(.leftMouseDown, start) else { return false }
         try? await Task.sleep(for: .milliseconds(120))
         // **Steps of at most `dragStep`, as a hand's are**: a drag begins on its first move, so the window follows from

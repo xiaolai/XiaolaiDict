@@ -25,13 +25,38 @@ enum Instruments {
         case panel
         /// `--placement-report`; its word rectangle is `PlacementReport.word`.
         case placement
+
+        /// **What a release answers instead of running it**, or nil for one that ships (ADR-0010, addendum of
+        /// 2026-10-10). An instrument that captures the screen or posts an input event is a deputy for whoever runs it,
+        /// with the reader's grants — `--history-report` captures, `--panel-report` clicks, `--placement-report` does both
+        /// where its command line aims — so it is compiled out of a release as `--read-point` is. `--settings-report`
+        /// reads only this app's own window and ships. One literal sentence each, so `verify_bundle` finds each gate by
+        /// its own words: a sentence they shared would be found while any one of them stood.
+        var refusalInARelease: String? {
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+            nil
+#else
+            switch self {
+            case .settings: nil
+            case .history: "--history-report is a development instrument and is not built into a release"
+            case .panel: "--panel-report is a development instrument and is not built into a release"
+            case .placement: "--placement-report is a development instrument and is not built into a release"
+            }
+#endif
+        }
     }
 
     private static let chosen = Mutex<Windowed?>(nil)
 
-    /// Set once, from `main.swift`, before `XiaolaiDictScene.main()`.
-    static func run(_ instrument: Windowed) {
+    /// Set once, from `main.swift`, before `XiaolaiDictScene.main()` — **or refused, with its sentence, where a release
+    /// does not build it**: false, and nothing is set, so no scene is started for it.
+    static func run(_ instrument: Windowed) -> Bool {
+        if let refusal = instrument.refusalInARelease {
+            LookupCommand.writeError(refusal)
+            return false
+        }
         chosen.withLock { $0 = instrument }
+        return true
     }
 
     /// Which instrument this process is, or nil for the reader's app.

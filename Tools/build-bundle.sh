@@ -135,8 +135,10 @@ BUNDLE_LIST=()
 # and a reader has no use for it, `--provider-status` (ADR-0053), which starts the reader's CLI or
 # asks their endpoint with their key and is likewise no use to a reader, and `--spelling-report`
 # (plan-spelling-suggestion), which asks the spell checker on demand — a reader has the card's line instead.
-# So the difference between the artifact end-to-end tests run against and the artifact a reader gets is
-# these five commands.
+# **And, since 2026-10-10, every instrument that captures the screen or posts an input event** (ADR-0010
+# addendum): `--history-report`, `--panel-report` and `--placement-report`, each a deputy with the
+# reader's grants for whoever runs it. So the difference between the artifact end-to-end tests run
+# against and the artifact a reader gets is these eight commands, and the two capabilities under them.
 #
 # **The flag costs a full rebuild when it changes** — measured 2026-09-26: `-Xswiftc` applies to every
 # target, so switching recompiles MLX and everything else, about 22 minutes. That lands on releases,
@@ -689,75 +691,78 @@ verify_service_boundaries() {
 # **A release must refuse the development instruments, and a development bundle must offer them** —
 # the two capture instruments, `--reminder-report`, which reports what this app asked the
 # notification center for and is no use to a reader, `--provider-status`, which starts the
-# reader's CLI or sends their key to whatever endpoint the defaults name (ADR-0053), and
-# `--spelling-report`, which asks the spell checker on demand (plan-spelling-suggestion).
+# reader's CLI or sends their key to whatever endpoint the defaults name (ADR-0053),
+# `--spelling-report`, which asks the spell checker on demand (plan-spelling-suggestion), and the
+# three windowed instruments that capture the screen or click: `--history-report`, `--panel-report`
+# and `--placement-report`.
 #
 # Both directions, because a gate only ever checked the safe way round is a gate that could be
-# inverted and still pass. The marker is the refusal sentence the `#if` compiles in, and the witness
-# for the live path is a message only its body contains — `nm` cannot tell them apart, because the
-# gate keeps each function's signature and replaces its body.
+# inverted and still pass. The marker is the refusal sentence the `#if` compiles in — **one per
+# instrument, each found by its own flag**: until 2026-10-10 the two capture instruments were found
+# by the words every refusal shares, so any one gate standing passed all of them. The witness for a
+# live path is a message only its body contains — `nm` cannot tell them apart, because the gate keeps
+# each function's signature and replaces its body.
+#
+# **And the two capabilities themselves, read off the binary** (ADR-0010, addendum of 2026-10-10): an
+# instrument that captures the screen or posts an input event is a deputy for whoever runs it, with
+# the reader's grants, and `--placement-report` did both in a release. A release imports no
+# mouse-event call at all — only instruments post one — and holds no capture of a whole display,
+# which hover never makes (it captures one window). The import list is shown to have been read
+# before an absence in it is believed: a scan that read nothing finds nothing.
 verify_capture_instruments() {
     # **Two statements, because one would read the caller's `bundle`, not this one's.** `local a=$1
     # b="$a"` expands `$a` before assigning it, so `binary` was built from whatever `bundle` the
     # caller happened to have in scope — it worked only because `verify_bundle` has one of the same
     # name with the same value, and broke the moment this was called on its own.
-    local bundle=$1 refusals live reminder_refusal reminder_live provider_refusal provider_live spelling_refusal spelling_live developer_pane binary
+    local bundle=$1 binary listing imports flag entry what sentence count symbol
     binary="$bundle/Contents/MacOS/$APP_NAME"
     [ -f "$binary" ] || { echo "no app binary to check for the capture instruments"; return 1; }
-    refusals=$(strings -a "$binary" 2>/dev/null | grep -c 'is a development instrument and is not built into a release' || true)
-    live=$(strings -a "$binary" 2>/dev/null | grep -c 'has no window to find its process by' || true)
-    # **`--reminder-report` rides the same gate (WI-7), and is checked by its own two sentences**: a
-    # count shared with the other two would pass with one of the three gates missing.
-    reminder_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--reminder-report is a development instrument' || true)
-    reminder_live=$(strings -a "$binary" 2>/dev/null | grep -c "reading this app's requests from the notification center" || true)
-    # **`--provider-status` rides it too (ADR-0053), by its own two sentences** for the same reason.
-    provider_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--provider-status is a development instrument' || true)
-    provider_live=$(strings -a "$binary" 2>/dev/null | grep -c 'asking the chosen language-model source one trivial question' || true)
-    # **`--spelling-report` too (plan-spelling-suggestion), by its own two sentences**, for the same reason.
-    spelling_refusal=$(strings -a "$binary" 2>/dev/null | grep -c '^--spelling-report is a development instrument' || true)
-    spelling_live=$(strings -a "$binary" 2>/dev/null | grep -c 'asking the spell checker about each term the dictionaries miss' || true)
-    # **The developer pane (clear all data, deploy test data) rides the same define**, and is witnessed by the
-    # name of the copy it takes before a clear — a string only its own code holds.
-    developer_pane=$(strings -a "$binary" 2>/dev/null | grep -c 'dev-before-clear' || true)
-    if is_release; then
-        [ "${refusals:-0}" -ge 1 ] \
-            || { echo "a release does not refuse --read-point/--read-selection: the gate did not compile in"; return 1; }
-        [ "${live:-0}" -eq 0 ] \
-            || { echo "a release still carries the capture instruments' own code"; return 1; }
-        [ "${reminder_refusal:-0}" -ge 1 ] \
-            || { echo "a release does not refuse --reminder-report: the gate did not compile in"; return 1; }
-        [ "${reminder_live:-0}" -eq 0 ] \
-            || { echo "a release still carries --reminder-report's own code"; return 1; }
-        [ "${provider_refusal:-0}" -ge 1 ] \
-            || { echo "a release does not refuse --provider-status: the gate did not compile in"; return 1; }
-        [ "${provider_live:-0}" -eq 0 ] \
-            || { echo "a release still carries --provider-status's own code"; return 1; }
-        [ "${spelling_refusal:-0}" -ge 1 ] \
-            || { echo "a release does not refuse --spelling-report: the gate did not compile in"; return 1; }
-        [ "${spelling_live:-0}" -eq 0 ] \
-            || { echo "a release still carries --spelling-report's own code"; return 1; }
-        [ "${developer_pane:-0}" -eq 0 ] \
-            || { echo "a release still carries the developer pane: clear-all-data must not ship"; return 1; }
-    else
-        [ "${live:-0}" -ge 1 ] \
-            || { echo "a development bundle has no capture instruments — the end-to-end hover and selection stages cannot run"; return 1; }
-        [ "${refusals:-0}" -eq 0 ] \
-            || { echo "a development bundle refuses its own instruments: the gate is inverted"; return 1; }
-        [ "${reminder_live:-0}" -ge 1 ] \
-            || { echo "a development bundle has no --reminder-report — the reminder stage cannot run"; return 1; }
-        [ "${reminder_refusal:-0}" -eq 0 ] \
-            || { echo "a development bundle refuses --reminder-report: the gate is inverted"; return 1; }
-        [ "${provider_live:-0}" -ge 1 ] \
-            || { echo "a development bundle has no --provider-status — the provider stage cannot run"; return 1; }
-        [ "${provider_refusal:-0}" -eq 0 ] \
-            || { echo "a development bundle refuses --provider-status: the gate is inverted"; return 1; }
-        [ "${spelling_live:-0}" -ge 1 ] \
-            || { echo "a development bundle has no --spelling-report — the lookup stage's spelling check cannot run"; return 1; }
-        [ "${spelling_refusal:-0}" -eq 0 ] \
-            || { echo "a development bundle refuses --spelling-report: the gate is inverted"; return 1; }
-        [ "${developer_pane:-0}" -ge 1 ] \
-            || { echo "a development bundle has no developer pane — the define did not reach it"; return 1; }
-    fi
+    listing=$(strings -a "$binary") || { echo "strings could not read $binary"; return 1; }
+    imports=$(nm -u "$binary" 2>&1) || { echo "nm could not list what $binary imports: $imports"; return 1; }
+    grep -qx '_swift_release' <<<"$imports" \
+        || { echo "nm listed none of what every Swift binary imports, so it read nothing of $binary"; return 1; }
+    # Every development instrument a release refuses, by the flag its sentence starts with.
+    local flags=(--read-point --read-selection --reminder-report --provider-status --spelling-report
+                 --history-report --panel-report --placement-report)
+    # What only live code holds: what it is, then the sentence.
+    local witnesses=(
+        "the capture instruments' own code|has no window to find its process by"
+        "--reminder-report's own code|reading this app's requests from the notification center"
+        "--provider-status's own code|asking the chosen language-model source one trivial question"
+        "--spelling-report's own code|asking the spell checker about each term the dictionaries miss"
+        # The developer pane (clear all data, deploy test data), by the copy it takes before a clear.
+        "the developer pane, whose clear-all-data must not ship|dev-before-clear"
+        # `--history-report`'s backdrops and `--placement-report --capture`, through `Instrument.screenImage`.
+        "a capture of a whole display|initWithDisplay:excludingWindows:"
+    )
+    for flag in "${flags[@]}"; do
+        count=$(grep -c -e "^$flag is a development instrument and is not built into a release" <<<"$listing" || true)
+        if is_release; then
+            [ "${count:-0}" -ge 1 ] || { echo "a release does not refuse $flag: the gate did not compile in"; return 1; }
+        else
+            [ "${count:-0}" -eq 0 ] || { echo "a development bundle refuses $flag: the gate is inverted"; return 1; }
+        fi
+    done
+    for entry in "${witnesses[@]}"; do
+        what=${entry%%|*}
+        sentence=${entry#*|}
+        count=$(grep -c -F -e "$sentence" <<<"$listing" || true)
+        if is_release; then
+            [ "${count:-0}" -eq 0 ] || { echo "a release still carries $what"; return 1; }
+        else
+            [ "${count:-0}" -ge 1 ] \
+                || { echo "a development bundle lacks $what — the define did not reach it, and the stages that use it cannot run"; return 1; }
+        fi
+    done
+    for symbol in _CGEventPost _CGEventCreateMouseEvent; do
+        if is_release; then
+            ! grep -qx -e "$symbol" <<<"$imports" \
+                || { echo "a release imports $symbol: something in it can post a mouse event, and only an instrument may"; return 1; }
+        else
+            grep -qx -e "$symbol" <<<"$imports" \
+                || { echo "a development bundle imports no $symbol: its instruments cannot click, and the panel and hover stages cannot run"; return 1; }
+        fi
+    done
 }
 
 verify_bundle() {

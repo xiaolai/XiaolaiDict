@@ -233,16 +233,9 @@ enum ClickProbe {
             if let local { NSEvent.removeMonitor(local) }
             if let global { NSEvent.removeMonitor(global) }
         }
-        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point,
-                                 mouseButton: .left),
-              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point,
-                               mouseButton: .left)
-        else { return "notPosted" }
-        // Stated, never inherited: a click with no modifiers.
-        down.flags = []
-        up.flags = []
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        guard Instrument.postMouse(.leftMouseDown, at: point), Instrument.postMouse(.leftMouseUp, at: point) else {
+            return "notPosted"
+        }
         let deadline = ContinuousClock.now + .seconds(1)
         while heard.by == nil, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }
         return heard.by ?? "nobody"

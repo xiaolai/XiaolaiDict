@@ -60,13 +60,14 @@ case .success(.translationReport):
 // Unlike the other reports this one shows a window, so it needs AppKit's runloop rather than
 // dispatchMain(). `.accessory` for the same reason the app uses it: no Dock icon, and nothing
 // here may activate XiaolaiDict.
+// **Not in a release**: it captures the screen (`Instruments.Windowed.refusalInARelease`).
 case .success(.historyReport):
-    Instruments.run(.history)
+    guard Instruments.run(.history) else { exit(CommandStatus.usage.rawValue) }
     XiaolaiDictScene.main()
 
 // Shows a window too, so the same rule applies: AppKit's runloop, and `.accessory`.
 case .success(.settingsReport):
-    Instruments.run(.settings)
+    guard Instruments.run(.settings) else { exit(CommandStatus.usage.rawValue) }
     XiaolaiDictScene.main()
 
 // The local model's instruments. No window, so no AppKit runloop: they talk to services.
@@ -81,15 +82,16 @@ case .success(.senseReport):
 
 // Shows the lookup panel, so AppKit's runloop and `.accessory` — the same two reasons
 // `--history-report` and `--settings-report` need them. It also posts mouse events, which need a
-// window-server connection for the same reason a capture does.
+// window-server connection for the same reason a capture does — and, posting them, it is not in a release.
 case .success(.panelReport):
-    Instruments.run(.panel)
+    guard Instruments.run(.panel) else { exit(CommandStatus.usage.rawValue) }
     XiaolaiDictScene.main()
 
-// Shows the lookup panel against a word rectangle the stage measured, so the same two reasons apply.
+// Shows the lookup panel against a word rectangle the stage measured, so the same two reasons apply. **Not in a release**:
+// it captures the screen and posts clicks and a drag, aimed from its command line.
 case .success(.placementReport(let x, let y, let width, let height, let capture, let drag)):
+    guard Instruments.run(.placement) else { exit(CommandStatus.usage.rawValue) }
     PlacementReport.aim(at: CGRect(x: x, y: y, width: width, height: height), capture: capture, drag: drag)
-    Instruments.run(.placement)
     XiaolaiDictScene.main()
 
 // Review's queue and its model's presentation, read from the reader's ledger. No window and nothing
