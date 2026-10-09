@@ -273,6 +273,14 @@ struct EndToEndTextTests {
              """,
          insteadRequire: ["Text(\"Downloading \\(size.displayName)", "\"Qwen3.5 \\(parameters)\""],
          fixture: nil),
+        (phrase: "Did you mean “receive”?",
+         because: """
+             it spans an interpolation: the line is written `Did you mean “\\(suggestion.word)”?`, and the word is the \
+             checker's correction of the fixture's typo. The `lookup` stage asserts the control by this exact name \
+             (audit, 2026-10-09), so the literal it is drawn from must still say it.
+             """,
+         insteadRequire: ["Text(\"Did you mean “\\(suggestion.word)”?\")"],
+         fixture: nil),
         (phrase: "stopped meeting at noon",
          because: """
              it is the harness's own sentence, read out of a fixture and expected back out of the \

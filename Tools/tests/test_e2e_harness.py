@@ -954,3 +954,45 @@ class TheBundledModelIsHiddenNotRemoved(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
+    """`spelling_state`, the `lookup` stage's reading of the panel for "Did you mean …?" (audit, 2026-10-09). It took
+    any text holding "receive" for the corrected word's card — a heading "receiver", a definition, the reader's sentence
+    — and any control holding "Did you mean" and "receive" for the line, and never asked whether the walk finished. Each
+    of those is a control here: the panel that should be called the card is, and every one that should not is not."""
+
+    TYPO_MISS = "No entry for “recieve” in your dictionaries."
+    LINE = "Did you mean “receive”?"
+
+    def state(self, texts: list[str], controls: list[str] | None = None, complete: bool = True) -> list[str]:
+        report = {"complete": complete, "frontmost": "com.apple.TextEdit", "incomplete": [] if complete else ["deadline"],
+                  "windows": [{"title": "Lookup", "texts": texts, "controls": controls or []}]}
+        source = function("spelling_state") + '\nspelling_state "$1"\n'
+        done = subprocess.run([BASH, "-c", source, "spelling_state", json.dumps(report, ensure_ascii=False)],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.split()
+
+    def test_the_corrected_words_card_is_headed_by_the_word_itself(self):
+        self.assertIn("card", self.state(["Lookup", "receive", "to be given something", "We will recieve the parcel."]))
+
+    def test_a_card_for_another_word_that_holds_the_word_is_not_its_card(self):
+        for texts in (["Lookup", "receiver", "A person appointed to receive money."],
+                      ["Lookup", "parcel", "They will receive it tomorrow."],
+                      ["Lookup", "receiving"]):
+            with self.subTest(texts=texts):
+                self.assertNotIn("card", self.state(texts))
+
+    def test_a_walk_that_did_not_finish_says_nothing_about_the_card(self):
+        self.assertNotIn("card", self.state(["Lookup", "receive", "to be given something"], complete=False))
+
+    def test_a_card_still_waiting_or_missing_is_not_the_words_card(self):
+        self.assertNotIn("card", self.state(["Lookup", "receive", "Looking up “receive” in your dictionaries…"]))
+        self.assertNotIn("card", self.state(["Lookup", "receive", "No entry for “receive” in your dictionaries."]))
+
+    def test_the_miss_and_the_line_are_read_by_their_own_words(self):
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE]), ["miss", "line"])
+        # A miss of another word, and a line naming another word, are neither.
+        self.assertEqual(self.state(["Lookup", "receiver", "No entry for “receiver” in your dictionaries."],
+                                    ["Did you mean “receiver”?", "Did you mean “receive” instead"]), [])

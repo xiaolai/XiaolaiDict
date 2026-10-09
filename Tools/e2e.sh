@@ -1408,21 +1408,26 @@ PYSPELLING
 #     line under it, then the line pressed and the corrected word's card in the same panel, and both readings in the
 #     ledger. Timed by polling from the keypress, so each figure is within a poll of the truth: the line's own time is
 #     the instrument's above.
-#     spelling_state <panel report>: `miss`, `line` and `card`, each where the lookup panel shows it — the typo's miss,
-#     the suggestion as a control that can be pressed, the corrected word's card.
+#     spelling_state <panel report>: `miss`, `line` and `card`, each where the lookup panel shows it, **read exactly**
+#     (audit, 2026-10-09): the typo's own miss, the control named for the suggestion, and the card headed by the corrected
+#     word itself — a definition or a sentence that holds the word, or a heading like "receiver", is not its card — and
+#     the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not there.
+#     `TheSpellingStepReadsThePanelExactly` holds each of those with a control.
 spelling_state() {
     python3 - "$1" <<'PYSTATE' 2>/dev/null || true
 import json, sys
 try:
-    windows = json.loads(sys.argv[1], strict=False).get("windows", [])
+    report = json.loads(sys.argv[1], strict=False)
 except ValueError:
-    windows = []
+    report = {}
+windows = report.get("windows", [])
 texts = [t for w in windows for t in w.get("texts", [])]
 controls = [c for w in windows for c in w.get("controls", [])]
 state = []
-if any("No entry for" in t and "recieve" in t for t in texts): state.append("miss")
-if any("Did you mean" in c and "receive" in c for c in controls): state.append("line")
-if any("receive" in t for t in texts) and not any("No entry for" in t or "Looking up" in t for t in texts): state.append("card")
+if any("No entry for" in t and "“recieve”" in t for t in texts): state.append("miss")
+if "Did you mean “receive”?" in controls: state.append("line")
+answered = not any("No entry for" in t or "Looking up" in t for t in texts)
+if report.get("complete") is True and "receive" in texts and answered: state.append("card")
 print(" ".join(state))
 PYSTATE
 }
