@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import XiaolaiDictTestSupport
+@testable import XiaolaiDictTestSupport
 
 /// **A directory a test makes is a directory a test removes.**
 ///
@@ -32,6 +32,40 @@ struct TemporaryDirectoryTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: inner.path)
         }
         #expect(!FileManager.default.fileExists(atPath: path))
+    }
+
+    /// **Even one something wrote into while it was being removed.** `removeItem` walks the tree and then removes the
+    /// root, so an entry added during the walk fails the last step "not empty" — and it was swallowed. A model-controller
+    /// test that reached `.ready` ends with its detached prune still running, the prune takes `.staging/store.lock`
+    /// mid-walk, and that one file was left behind: one directory in every few runs, each holding exactly the lock
+    /// (measured 2026-10-09, 1 in 6 runs of `LocalModelControllerTests`). The race is replayed here, not waited for.
+    @Test func itRemovesOneSomethingWroteIntoDuringTheRemoval() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-selftest")
+        let url = scratch.url
+        try Data("weights".utf8).write(to: scratch.appending("model.safetensors"))
+        var attempts = 0
+        TemporaryDirectory.remove(url) { url in
+            attempts += 1
+            guard attempts == 1 else { return try FileManager.default.removeItem(at: url) }
+            // What the race leaves: the walk took what it had listed, and a prune put its lock in behind it.
+            try FileManager.default.removeItem(at: url.appending(path: "model.safetensors"))
+            try FileManager.default.createDirectory(at: url.appending(path: ".staging"), withIntermediateDirectories: false)
+            try Data().write(to: url.appending(path: ".staging/store.lock"))
+            throw POSIXError(.ENOTEMPTY)
+        }
+        #expect(!FileManager.default.fileExists(atPath: url.path), "a lock written during the removal was left behind")
+        #expect(attempts == 2)
+    }
+
+    /// **One it cannot remove is named, never swallowed** — a writer that outlasts every pass leaves a directory the
+    /// sweep finds an hour later with nobody to blame, so the removal says which, and why, as it gives up.
+    @Test func oneThatCannotBeRemovedIsNamed() throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-selftest")
+        var reports: [String] = []
+        TemporaryDirectory.remove(scratch.url, removing: { _ in throw POSIXError(.ENOTEMPTY) },
+                                  report: { reports.append($0) })
+        #expect(FileManager.default.fileExists(atPath: scratch.url.path), "the premise: nothing was removed")
+        #expect(reports.count == 1 && reports.allSatisfy { $0.contains(scratch.url.path) }, "reported \(reports)")
     }
 
     /// **Nothing else may make one.** The leak was a dozen fixtures each writing the same three
