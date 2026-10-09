@@ -160,3 +160,34 @@ struct LocalModelSetupFlagTests {
         }
     }
 }
+
+
+/// **A read of the settings is one snapshot**: the router reads them on its own executor while the pane writes them on
+/// the main one, a key at a time, and a read between two of those writes combined the new address with the old model.
+struct ProviderSettingsSnapshotTests {
+    @Test func aReadNeverSeesHalfOfAWrite() async {
+        let suite = TemporaryDefaults.suite()
+        let store = ProviderSettingsStore(defaults: suite)
+        let pairs = [ProviderSettings(endpointURL: "https://one.example/v1", endpointModel: "model-one"),
+                     ProviderSettings(endpointURL: "https://two.example/v1", endpointModel: "model-two")]
+        store.save(pairs[0])
+        let halves = await withTaskGroup(of: Int.self) { group -> Int in
+            group.addTask {
+                for round in 0..<3_000 { store.save(pairs[round % 2]) }
+                return 0
+            }
+            group.addTask {
+                var halves = 0
+                for _ in 0..<3_000 {
+                    let read = store.load()
+                    if !pairs.contains(where: { $0.endpointURL == read.endpointURL && $0.endpointModel == read.endpointModel }) {
+                        halves += 1
+                    }
+                }
+                return halves
+            }
+            return await group.reduce(0, +)
+        }
+        #expect(halves == 0, "\(halves) reads combined one write's address with another's model")
+    }
+}

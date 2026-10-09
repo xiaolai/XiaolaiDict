@@ -458,6 +458,9 @@
     "Close Lookup" : {
 
     },
+    "Codex also sends your own instructions in ~/.codex/AGENTS.md with every question, which this app cannot leave out, and a short warm-up question each time it starts." : {
+      "comment" : "Under what leaves the Mac for the reader's Codex CLI: what Codex itself adds to each question"
+    },
     "Codex's own default" : {
 
     },
@@ -1793,8 +1796,8 @@
     "The source chosen in Language Model settings translates the sentence and explains how a word is used in it, when you ask." : {
 
     },
-    "The switch lets this app start the claude or codex program you installed and signed in to. Each question uses your subscription, whose limits are shared with everything else you use it for. Nothing here signs you in, and nothing those programs keep for their sign-in is read." : {
-
+    "The switch lets this app start the claude or codex program you installed and signed in to. Questions are charged to whatever account that program is set up with: a subscription, whose limits are shared with everything else you use it for, or an API key you gave it, billed as usual. Each is asked one short question when it is chosen or the app opens, to check it works, and Codex another each time it starts. Codex also sends your own instructions in ~/.codex/AGENTS.md with every question. Nothing here signs you in, and nothing those programs keep for their sign-in is read." : {
+      "comment" : "Under the switch that lets the app start the reader's own Claude Code or Codex CLI"
     },
     "The system would not register this shortcut (error %d)." : {
       "comment" : "Why a lookup shortcut was refused; the placeholder is a system error number"

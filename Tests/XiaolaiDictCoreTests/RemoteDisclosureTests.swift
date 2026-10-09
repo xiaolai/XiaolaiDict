@@ -137,6 +137,19 @@ struct RemoteDisclosureTests {
                 "a fragment shorter than the probe was read as the sense")
     }
 
+    /// **A sense whose opening the reader's sentence happens to hold is still looked for in the rest of it.** Only its
+    /// first 32 characters were probed, and a probe the reader's words hold is dropped — so a sentence quoting the start
+    /// of a definition exempted the whole definition, and sending all of it was not caught.
+    @Test func aSenseWhoseOpeningTheSentenceQuotesIsStillLookedForInTheRest() {
+        let sense = "a sum of money exacted as a penalty by a court of law or other authority for breaking a rule"
+        let sentence = "The notice said \"a sum of money exacted as a penalty\" and nothing more."
+        let question = SentenceQuestion(sentence: sentence, term: "fine", senseText: sense)
+        #expect(RemoteDisclosure.leaks("Sentence: \(sentence)\nWord: fine\nDictionary sense: \(sense)", of: .explain(question)),
+                "the rest of the definition went out unnoticed")
+        // The control: the reader's sentence alone carries nothing of the publisher's but what it quotes.
+        #expect(!RemoteDisclosure.leaks(question.prompt(for: .remote), of: .explain(question)))
+    }
+
     /// **The reader's own words are not the publisher's**: a one-word sense that is the word they looked up, and a gloss
     /// that is part of their own sentence, are not a leak. The control: the same text, when the reader's words do not
     /// hold it, is.

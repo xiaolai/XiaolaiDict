@@ -335,6 +335,25 @@ struct LanguageModelPaneTests {
 
     /// **Derived from `RemoteDisclosure`, both arms of the owner's constant**: nothing for no source, everything stays
     /// for a server on this Mac, the sentence only for a remote source — and the dictionary's text too once it may leave.
+    /// **The switch says what starting the reader's CLI means, before either can be chosen** (rows 19–20 of the
+    /// 2026-10-09 audit): a question is charged to whatever account the program is set up with — a subscription, or an
+    /// API key it was given, which is not a subscription at all — each program is asked a short question of this app's
+    /// own when it starts, and Codex also sends the reader's own `~/.codex/AGENTS.md`, which this app cannot leave out.
+    @Test func theSwitchSaysWhatStartingTheReadersCLIMeans() {
+        let footer = LanguageModelPane.subscriptionsFooter
+        #expect(!footer.contains("uses your subscription"), "said every question uses a subscription")
+        #expect(footer.contains("API key"))
+        #expect(footer.contains("~/.codex/AGENTS.md"))
+        #expect(footer.contains("short question"))
+    }
+
+    /// **And what leaves for Codex says it too**, beside the sentence: its own instructions file, and its warm-up.
+    @Test func whatLeavesForCodexNamesTheReadersInstructionsAndTheWarmUp() {
+        let also = LanguageModelPane.codexAlsoSends
+        #expect(also.contains("~/.codex/AGENTS.md"))
+        #expect(also.contains("warm-up"))
+    }
+
     @Test func whatLeavesIsDerivedFromRemoteDisclosure() {
         let claude = ProviderSource.claudeCLI(path: nil, model: "haiku")
         let codex = ProviderSource.codexCLI(path: nil, model: "")

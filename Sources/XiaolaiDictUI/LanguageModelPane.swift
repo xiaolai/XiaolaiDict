@@ -85,13 +85,9 @@ struct LanguageModelPane: View {
             } header: {
                 Text("Source")
             } footer: {
-                Text("""
-                     The switch lets this app start the claude or codex program you installed and signed in to. Each \
-                     question uses your subscription, whose limits are shared with everything else you use it for. \
-                     Nothing here signs you in, and nothing those programs keep for their sign-in is read.
-                     """)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(LanguageModelPane.subscriptionsFooter)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
 
@@ -302,9 +298,15 @@ struct LanguageModelPane: View {
 
         private var disclosureSection: some View {
             Section {
-                disclosure(LanguageModelDisclosure.of(model.source))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("language-model-disclosure")
+                VStack(alignment: .leading, spacing: scale.space.line) {
+                    let said = LanguageModelDisclosure.of(model.source)
+                    disclosure(said)
+                    // What Codex sends besides, whatever this app sends it.
+                    if said.destination == .codex { Text(LanguageModelPane.codexAlsoSends) }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("language-model-disclosure")
             } header: {
                 Text("What Leaves This Mac")
             }
@@ -345,5 +347,31 @@ struct LanguageModelPane: View {
                                         comment: "Where a question goes: an endpoint whose address names no server")
             }
         }
+    }
+}
+
+extension LanguageModelPane {
+    /// **What turning on the switch means, said before either CLI can be chosen.** Usage follows the account and billing
+    /// the program is set up with — a subscription, or an API key it was given, which is billed as any — and never one
+    /// of this app's. Each is asked one short question of this app's own to check it works, and Codex another each time
+    /// it starts (`CodexCLIWire.warmUp`); and Codex reads the reader's own global instructions with every question,
+    /// which this app cannot keep out (plan §10, measured on 0.161.0).
+    static var subscriptionsFooter: String {
+        String(localized: """
+               The switch lets this app start the claude or codex program you installed and signed in to. Questions \
+               are charged to whatever account that program is set up with: a subscription, whose limits are shared \
+               with everything else you use it for, or an API key you gave it, billed as usual. Each is asked one \
+               short question when it is chosen or the app opens, to check it works, and Codex another each time it \
+               starts. Codex also sends your own instructions in ~/.codex/AGENTS.md with every question. Nothing here \
+               signs you in, and nothing those programs keep for their sign-in is read.
+               """, comment: "Under the switch that lets the app start the reader's own Claude Code or Codex CLI")
+    }
+
+    /// What Codex sends besides what this app sends it — said where the pane says what leaves this Mac for Codex.
+    static var codexAlsoSends: String {
+        String(localized: """
+               Codex also sends your own instructions in ~/.codex/AGENTS.md with every question, which this app \
+               cannot leave out, and a short warm-up question each time it starts.
+               """, comment: "Under what leaves the Mac for the reader's Codex CLI: what Codex itself adds to each question")
     }
 }

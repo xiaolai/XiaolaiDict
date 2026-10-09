@@ -92,8 +92,13 @@ public struct ProviderSettings: Sendable, Equatable {
 /// **A value equal to its default is not written, and one taken back is removed**: a later build that changes a
 /// default then reaches every reader who never chose one, instead of only the readers who never opened the pane.
 ///
+/// **A read is one snapshot of a write** — never the new address beside the old model. The router reads on its own
+/// executor while the pane writes on the main one, a key at a time, so every store in this process takes one lock for
+/// the whole of a load and the whole of a save. Recursive, so an observer told of a change in the middle of a save and
+/// reading on the same thread waits for nothing; what it sees there is the writer's own, unfinished.
+///
 /// `@unchecked Sendable` for `ProviderChoiceStore`'s reason: it holds a `UserDefaults`, documented thread-safe, and
-/// nothing else.
+/// the process-wide lock.
 public struct ProviderSettingsStore: @unchecked Sendable {
     /// The defaults keys, in the app's own domain. The end-to-end stages write them by name.
     public enum Key {
@@ -108,9 +113,20 @@ public struct ProviderSettingsStore: @unchecked Sendable {
 
     private let defaults: UserDefaults
 
+    /// One for every store in the process: two stores over one suite — the router's and the pane's — are one record.
+    private static let snapshot = NSRecursiveLock()
+
     public init(defaults: UserDefaults) { self.defaults = defaults }
 
     public func load() -> ProviderSettings {
+        Self.snapshot.withLock { read() }
+    }
+
+    public func save(_ settings: ProviderSettings) {
+        Self.snapshot.withLock { write(settings) }
+    }
+
+    private func read() -> ProviderSettings {
         let standard = ProviderSettings()
         return ProviderSettings(
             endpointURL: text(Key.endpointURL) ?? standard.endpointURL,
@@ -122,7 +138,7 @@ public struct ProviderSettingsStore: @unchecked Sendable {
             subscriptionCLIsEnabled: isOn(Key.subscriptionCLIsEnabled))
     }
 
-    public func save(_ settings: ProviderSettings) {
+    private func write(_ settings: ProviderSettings) {
         let standard = ProviderSettings()
         write(settings.endpointURL, Key.endpointURL, unless: standard.endpointURL)
         write(settings.endpointModel, Key.endpointModel, unless: standard.endpointModel)

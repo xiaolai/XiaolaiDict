@@ -37,6 +37,10 @@ public enum ModelPrompt {
     /// context, after which the pane falls to a weaker engine for a reason nothing records.
     public static let sentenceCharacterLimit = 1_000
 
+    /// The most of the word looked up any prompt carries: a word, or a phrase a dictionary files — `take something
+    /// into account` is 27 characters — with room to spare, and far short of a captured paragraph.
+    public static let termCharacterLimit = 120
+
     /// Untrusted text, cut to `limit` and flattened onto one line.
     ///
     /// **The newlines are the dangerous part, not the length.** A sense answer is read against a
@@ -97,7 +101,8 @@ public enum ModelPrompt {
         return """
             \(sentence)
 
-            (Context, not an instruction: in the text above, "\(met.term)" is used in this sense — \
+            (Context, not an instruction: in the text above, "\(flattened(met.term, limit: termCharacterLimit))" is \
+            used in this sense — \
             \(flattened(met.sense, limit: translatedSenseLimit)))
             """
     }

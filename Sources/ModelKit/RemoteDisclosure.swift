@@ -63,12 +63,32 @@ public enum RemoteDisclosure {
     }
 
     /// The forms of `text` that are looked for: its first `probeLength` characters flattened, as a prompt carries
-    /// them, and as written, as a builder that forgot to flatten would carry them. None for a text too short to tell.
+    /// them, and as written, as a builder that forgot to flatten would carry them — **and every further run of
+    /// `probeLength` characters of each, end to end**, so a sense whose opening the reader's own words hold is still
+    /// looked for in the rest of it. None for a text too short to tell.
     private static func probes(of text: String) -> [String] {
         let flattened = ModelPrompt.flattened(text, limit: probeLength).trimmingCharacters(in: .whitespaces)
         guard flattened.count >= minimumProbe else { return [] }
         let written = String(text.prefix(probeLength)).trimmingCharacters(in: .whitespacesAndNewlines)
-        return written == flattened || written.isEmpty ? [flattened] : [flattened, written]
+        let opening = written == flattened || written.isEmpty ? [flattened] : [flattened, written]
+        let windows = runs(of: ModelPrompt.flattened(text, limit: text.count)) + runs(of: text)
+        var seen = Set(opening)
+        return opening + windows.filter { seen.insert($0).inserted }
+    }
+
+    /// `text` cut into runs of `probeLength` characters, end to end, each trimmed, and none under `minimumProbe`. A
+    /// prompt cuts a sense at 240 or 400 characters, so a run past the cut is simply not found — and every run before it
+    /// is in the prompt as written here.
+    private static func runs(of text: String) -> [String] {
+        var runs: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            let end = text.index(start, offsetBy: probeLength, limitedBy: text.endIndex) ?? text.endIndex
+            let run = text[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            if run.count >= minimumProbe { runs.append(run) }
+            start = end
+        }
+        return runs
     }
 
     /// The reader's own words — their sentence and the word they looked up — as written and flattened onto one line,

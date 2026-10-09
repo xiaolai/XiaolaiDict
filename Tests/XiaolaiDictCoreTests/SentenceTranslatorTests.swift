@@ -152,6 +152,21 @@ struct AlreadyInTheReadersLanguageTests {
             local: { _ in nil }, apple: { _, _, _ in .failed }, language: { _ in language })
     }
 
+    /// **The sentence's language is detected once a translation**: the answer to "is it already the reader's?" and the
+    /// source handed to Apple's framework are one reading, never two of the same text. Counted at the detector.
+    @Test(arguments: ["en", "zh-Hans"])
+    func aTranslationDetectsTheLanguageOnce(target: String) async {
+        let detections = Recorder(0)
+        let translator = SentenceTranslator(
+            local: { _ in nil }, apple: { _, _, _ in .translated("货舱装满了。") },
+            language: { _ in
+                detections.withLock { $0 += 1 }
+                return "en"
+            })
+        _ = await translator.translate(TranslationQuestion(sentence: "The ship's hold was full.", target: target))
+        #expect(detections.withLock { $0 } == 1)
+    }
+
     /// **Through the translator's own detector, not a static one.** The recogniser is injected, so a
     /// view calling `SentenceTranslator.dominantLanguage` directly could disagree with the translator
     /// that is about to answer — in tests, and in any configuration that injects another.

@@ -78,10 +78,10 @@ public struct SentenceTranslator: Sendable {
     }
 
     public func translate(_ question: TranslationQuestion) async -> TranslationOutcome {
+        // **One reading of the sentence's language** for both questions below: whether it is already the reader's —
+        // the rule the control above reads, so the two cannot disagree — and which pair Apple's framework is asked for.
         let source = language(question.sentence)
-        // The same predicate the control above reads, so the two can never disagree about whether
-        // this sentence was worth asking about.
-        if isAlreadyInTheReadersLanguage(question.sentence, target: question.target) { return .sameLanguage }
+        if let source, SentenceLanguage.same(source, question.target) { return .sameLanguage }
         guard !Task.isCancelled else { return .unavailable }
         let answer = await local(question)
         // Checked after the await as well as before it: a reader who has moved on is not shown a

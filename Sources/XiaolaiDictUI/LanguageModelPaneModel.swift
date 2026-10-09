@@ -320,6 +320,14 @@ public enum LanguageModelDisclosure: Equatable, Sendable {
     /// A remote source, once the dictionary's text may leave: the sentence and the dictionary's text.
     case sentenceAndDictionaryText(to: Destination)
 
+    /// Where questions go, where they leave the Mac at all.
+    public var destination: Destination? {
+        switch self {
+        case .nothingLeaves, .staysOnThisMac: nil
+        case .sentenceOnly(let destination), .sentenceAndDictionaryText(let destination): destination
+        }
+    }
+
     /// Where a remote source's questions go.
     public enum Destination: Equatable, Sendable {
         case claude

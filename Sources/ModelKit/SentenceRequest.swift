@@ -66,7 +66,9 @@ public struct SentenceQuestion: Codable, Sendable, Equatable {
     public func prompt(for tier: ExplainerTier) -> String {
         var lines = [
             "Sentence: \(ModelPrompt.flattened(sentence, limit: ModelPrompt.sentenceCharacterLimit))",
-            "Word: \(term)",
+            // The word is captured from whatever the reader pointed at: a newline in it would write a line of its
+            // own — a `Dictionary sense:` line even here, in the remote prompt.
+            "Word: \(ModelPrompt.flattened(term, limit: ModelPrompt.termCharacterLimit))",
         ]
         if tier.maySeeDictionaryText, let senseText, !senseText.isEmpty {
             lines.append("Dictionary sense: \(ModelPrompt.flattened(senseText, limit: ModelPrompt.translatedSenseLimit))")
