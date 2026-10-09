@@ -316,7 +316,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel.onOpenDictionarySettings = { [weak self] in self?.showSettings(on: .dictionary) }
-        recorder.start()
+        // **The reader's ledger, except in an instrument that looks a word up**, which records into one of its own
+        // (`Instruments.ledgerSupport`): the reader's is never written by a measurement.
+        let instrument = Instruments.wanted
+        recorder.start { try await LedgerStore.openDefault(applicationSupport: try Instruments.ledgerSupport(for: instrument)) }
         Task { [weak self] in self?.permissions = await .probe() }
         hover.watcher.delivery = self
         // Watching the pointer is something the reader must be able to stop, so it is a setting
@@ -357,6 +360,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
                 case .panel: await PanelReport.run(in: self)
                 case .placement: await PlacementReport.run(in: self)
                 }
+                Instruments.finish()
                 exit(status.rawValue)
             }
         }

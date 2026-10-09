@@ -111,13 +111,10 @@ enum PanelReport {
         let wasAlreadyActive = activeBefore
 
         // The app's own hover path, so the panel is filled by `LookupRunner` exactly as it is for a
-        // reader — not by a presentation this file made up.
-        // **What the reader's ledger held before this.** The lookup below goes in by the door
-        // hover uses — deliberately, so the card measured is the card the product draws — and
-        // that door records. An instrument that leaves fabricated TextEdit reading behind
-        // changes the drawer, the suggestion ranking and every later measurement on this Mac.
-        let ledgerBefore = await Self.newestLookup(in: app)
-
+        // reader — not by a presentation this file made up. **That door records**, and records into
+        // this run's own scratch ledger (`Instruments.ledgerSupport`), never the reader's: a fabricated
+        // TextEdit reading left behind changes the drawer, the suggestion ranking and every later
+        // measurement on the Mac.
         app.lookUpHovered(selection, at: UpPoint(NSEvent.mouseLocation))
 
         let appeared = await Instrument.settle(until: appearance) {
@@ -128,7 +125,7 @@ enum PanelReport {
                 "appeared": false,
                 "problem": "the lookup panel was never listed by the compositor",
             ])
-            return await Self.leaving(.failure, after: ledgerBefore, in: app)
+            return .failure
         }
 
         // **Read after the panel behaviour has had a chance to land, not the moment the compositor
@@ -164,11 +161,11 @@ enum PanelReport {
             "afterClick": afterClick,
             "menu": menu,
         ]
-        guard Instrument.write(report) else { return await Self.leaving(.failure, after: ledgerBefore, in: app) }
+        guard Instrument.write(report) else { return .failure }
         // Whether the *panel* behaved is the harness's assertion to make, not this process's exit
         // status — the same division `--history-report` makes for the backdrop. A non-zero exit here
         // means the measurement failed, never that the app did.
-        return await Self.leaving(.success, after: ledgerBefore, in: app)
+        return .success
     }
 
     /// **What this window is.** The whole first question, and it is one read.
@@ -480,30 +477,6 @@ enum PanelReport {
         guard parts.count > head + tail else { return parts.joined(separator: separator) }
         return parts.prefix(head).joined(separator: separator)
             + " … " + parts.suffix(tail).joined(separator: separator)
-    }
-
-    /// The newest lookup id, or nil where the ledger cannot be reached.
-    static func newestLookup(in app: XiaolaiDictApp) async -> Int? {
-        guard let opening = app.recorder.store else { return nil }
-        return try? await opening.value.newestLookupID()
-    }
-
-    /// Removes whatever this measurement added, and only that. **Not a general clean-up**: it
-    /// deletes by id above a baseline this instrument took itself, so a lookup the reader made
-    /// while it ran is out of range by construction.
-    /// **`status`, once the lookups this run made are gone — awaited, never left to a task.** The app exits with the status
-    /// the moment a windowed instrument returns, and a removal left in `defer { Task { … } }` lost that race: measured on
-    /// the E2E Mac 2026-10-10, one placement report left its reading of *fine* in the ledger (36 rows → 37), and the
-    /// card's history count shows every one of them.
-    static func leaving(_ status: CommandStatus, after baseline: Int?, in app: XiaolaiDictApp) async -> CommandStatus {
-        await removeLookups(after: baseline, in: app)
-        return status
-    }
-
-    static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
-        guard let baseline, let opening = app.recorder.store,
-              let store = try? await opening.value else { return }
-        try? await store.deleteLookups(after: baseline)
     }
 
     /// The frontmost application's bundle identifier, or its name where it has none.

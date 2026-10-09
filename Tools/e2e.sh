@@ -533,16 +533,26 @@ chmod 700 "$reports"
 drop_reports() { rm -rf "$reports"; }
 at_exit drop_reports
 
-# ledger_left <label> <baseline>: **an instrument that looks a word up through the reader's door takes its reading out
-# again** (2026-10-10: the panel and placement reports left removal to a task the process exit outran, and each run left
-# a reading of *fine* behind). The ledger's newest row must be the one it was before the instrument ran.
+# ledger_left <label> <ledger_digest before>: **an instrument run leaves the reader's ledger exactly as it found it** —
+# every reading, every sense met, all study state and the schema, by `ledger_digest`'s fingerprint of the whole file. The
+# panel and placement reports look a word up through the reader's door, which records, into a scratch ledger of their
+# own since 2026-10-10. Before that they recorded into this one and deleted every lookup above the newest id they had
+# started from — and this compared that id alone, so it passed a run that deleted another process's reading below it or
+# left a study note behind (the audit of 2026-10-10). A digest that could not be read, before or after, is no evidence.
 ledger_left() {
     local label=$1 baseline=$2 now
-    now=$(newest_row_id)
+    if [ -z "$baseline" ]; then
+        flunk "$label: the reader's ledger could not be read before the run, so whether it was left alone is unknown"
+        return 0
+    fi
+    if ! now=$(ledger_digest "$ledger" 2>&1); then
+        flunk "$label: the reader's ledger could not be read after the run ($now)"
+        return 0
+    fi
     if [ "$now" = "$baseline" ]; then
-        pass "$label left the reader's ledger as it found it (newest row $now)"
+        pass "$label left the reader's ledger exactly as it found it"
     else
-        flunk "$label left readings in the ledger: newest row $baseline before, $now after"
+        flunk "$label changed the reader's ledger: its readings, the senses met or its study state differ from before the run"
     fi
 }
 
@@ -2316,7 +2326,7 @@ placement_at() {  # placement_at <reading> <text size> [capture] [side]
         || { flunk "placement: no word box to place against"; return; }
     defaults write com.xiaolaidict TextSize "$2"
     local ledger_before
-    ledger_before=$(newest_row_id)
+    ledger_before=$(ledger_digest "$ledger") || ledger_before=""
     # shellcheck disable=SC2086
     if [ -n "$capture" ]; then
         report=$(run_report_with --placement-report 90 $box --capture "$capture") || true
@@ -2389,12 +2399,14 @@ PYPLACE
 # dragged with real events, then its entry arriving and a disclosure opening — it must stay where the reader put it, its
 # tail pointing at nothing, and nothing jump at the release (`--placement-report … --drag`).
 placement_drag_at() {  # placement_drag_at <reading> <dx> <dy>
-    local box report
+    local box report ledger_before
     box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
         || { flunk "drag: no word box to place against"; return; }
     defaults write com.xiaolaidict TextSize standard
+    ledger_before=$(ledger_digest "$ledger") || ledger_before=""
     # shellcheck disable=SC2086
     report=$(run_report_with --placement-report 120 $box --drag "$2" "$3") || true
+    ledger_left "drag: --placement-report" "$ledger_before"
     if [ -z "$report" ]; then
         flunk "drag: --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
         return
@@ -4577,7 +4589,7 @@ if want panel; then
 #     stage's colour. A probe that failed on a discovery would be a stage that fails for telling us
 #     something.
 # 90 s: a cold process pays for the XPC service starting before the first lookup answers.
-panel_ledger_before=$(newest_row_id)
+panel_ledger_before=$(ledger_digest "$ledger") || panel_ledger_before=""
 report=$(run_report --panel-report 90) || true
 ledger_left "panel: --panel-report" "$panel_ledger_before"
 if [ -z "$report" ]; then

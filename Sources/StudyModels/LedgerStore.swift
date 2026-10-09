@@ -441,13 +441,6 @@ public actor LedgerStore {
     func eraseReadingData() throws -> Ledger.ErasureReport {
         try ledger.eraseReadingData(at: path)
     }
-
-    /// The newest lookup's id, for an instrument that has to put back exactly what it added.
-    public func newestLookupID() throws -> Int { try ledger.newestLookupID() }
-
-    /// Removes every lookup above `baseline`. **An instrument's own rows**, identified by an id
-    /// it took before it wrote any.
-    public func deleteLookups(after baseline: Int) throws { try ledger.deleteLookups(after: baseline) }
 }
 
 #if XIAOLAIDICT_CAPTURE_INSTRUMENTS

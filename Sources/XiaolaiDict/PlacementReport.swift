@@ -65,15 +65,13 @@ enum PlacementReport {
             return report["problem"] == nil ? .success : .failure
         }
 
-        // **Leaves the reader's ledger as it found it** — the same discipline as `PanelReport`.
-        let before = await PanelReport.newestLookup(in: app)
-
+        // **The reader's ledger is never written**: the lookup records into this run's own (`Instruments.ledgerSupport`).
         app.lookUpHovered(selection, at: pointer, protecting: protected)
         guard await Instrument.settle(until: PanelReport.appearance, {
             Instrument.isOnScreen(app.panelController.window)
         }), let window = app.panelController.window, let first = listedFrame(of: window) else {
             _ = Instrument.write(["appeared": false, "problem": "the lookup panel was never listed by the compositor"])
-            return await PanelReport.leaving(.failure, after: before, in: app)
+            return .failure
         }
         // Settled: the same compositor frame for `steady`, within the budget.
         let settled = await steadyFrame(of: window) ?? first
@@ -131,9 +129,8 @@ enum PlacementReport {
             report["openAfterTheClickBeside"] = window.isVisible
         }
         app.panelController.close()
-        guard Instrument.write(report) else { return await PanelReport.leaving(.internalError, after: before, in: app) }
-        return await PanelReport.leaving((first.intersects(given) || settled.intersects(given)) ? .failure : .success,
-                                         after: before, in: app)
+        guard Instrument.write(report) else { return .internalError }
+        return (first.intersects(given) || settled.intersects(given)) ? .failure : .success
     }
 
     /// The room kept round the card and its word in a capture, so the shadow's fall and what lies behind both show.

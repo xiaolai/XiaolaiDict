@@ -1,3 +1,4 @@
+import Foundation
 import Synchronization
 
 /// **Which instrument, if any, this process is.**
@@ -44,6 +45,9 @@ enum Instruments {
             }
 #endif
         }
+
+        /// Whether it looks a word up through the reader's own door — which records, so into a ledger of its own.
+        var looksWordsUp: Bool { self == .panel || self == .placement }
     }
 
     private static let chosen = Mutex<Windowed?>(nil)
@@ -61,6 +65,33 @@ enum Instruments {
 
     /// Which instrument this process is, or nil for the reader's app.
     static var wanted: Windowed? { chosen.withLock { $0 } }
+
+    /// The scratch directories this run's ledgers were made in, for `finish` to take away.
+    private static let scratch = Mutex<[URL]>([])
+
+    /// **Where this process's ledger is kept** — nil for the reader's own (`LedgerStore.openDefault`'s default), and a
+    /// fresh scratch directory under `parent` for an instrument that looks a word up (audit of 2026-10-10).
+    ///
+    /// `--panel-report` and `--placement-report` look a word up through the reader's door on purpose, and that door
+    /// records. They recorded into the reader's ledger and then deleted every lookup above the id they had started from
+    /// — a reading the reader's own app recorded meanwhile went too, and study state the recording made stayed, since a
+    /// note outlives its lookup. A ledger of their own has nothing to put back. **Never the reader's as a fallback**: a
+    /// directory that cannot be made throws, and the run records nothing anywhere.
+    static func ledgerSupport(for instrument: Windowed?,
+                              scratchIn parent: URL = FileManager.default.temporaryDirectory) throws -> URL? {
+        guard let instrument, instrument.looksWordsUp else { return nil }
+        let root = parent.appending(path: "xiaolaidict-\(instrument.rawValue)-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        scratch.withLock { $0.append(root) }
+        return root
+    }
+
+    /// Takes away every scratch ledger this run made — before the instrument's process exits with its status.
+    static func finish() {
+        for root in scratch.withLock({ made in defer { made = [] }; return made }) {
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
 
     /// **Whether this process is an instrument rather than the reader's app.**
     ///

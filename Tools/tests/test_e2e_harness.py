@@ -1057,3 +1057,56 @@ class CloseWindowFindsTheFixtureByItsDocument(unittest.TestCase):
         self.assertEqual(self.decide(self.fixture.as_uri(), self.fixture.as_uri()), "ambiguous 0,1")
         # A window whose document cannot be read could be the fixture, or could be the window the fixture is not.
         self.assertEqual(self.decide("unreadable", self.fixture.as_uri()), "unverifiable 0")
+
+
+class TheReadersLedgerIsLeftAsFound(unittest.TestCase):
+    """`ledger_digest` and `ledger_left`, the check that an instrument run left the E2E Mac's ledger exactly as it found it
+    (audit of 2026-10-10). It compared the newest lookup id, which a run passes while deleting another process's reading
+    below it, or leaving a study note behind — both of which the instruments' clean-up could do. The whole ledger is
+    compared now, and each of those is a control here."""
+
+    SCHEMA = """
+        CREATE TABLE lookups (id INTEGER PRIMARY KEY, surface TEXT NOT NULL);
+        CREATE TABLE sense_encounters (lookup_id INTEGER NOT NULL, sense TEXT NOT NULL);
+        CREATE TABLE study_notes (id TEXT PRIMARY KEY, created_at REAL NOT NULL);
+        INSERT INTO lookups (id, surface) VALUES (1, 'meeting'), (2, 'fine'), (3, 'receive');
+        INSERT INTO sense_encounters VALUES (2, 'fine.1');
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.ledger = pathlib.Path(self.scratch.name) / "ledger.sqlite"
+        subprocess.run(["sqlite3", str(self.ledger)], input=self.SCHEMA, text=True, check=True, timeout=30)
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def verdict(self, change: str | None, ledger: pathlib.Path | None = None) -> str:
+        """`ledger_left` after `change` is made to the ledger between the two readings, as the run would make it."""
+        source = "\n".join([
+            f"ledger={json.dumps(str(ledger or self.ledger))}",
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            function("ledger_source"), function("ledger_digest"), function("ledger_left"),
+            'before=$(ledger_digest "$ledger") || before=""',
+            f"sqlite3 {json.dumps(str(self.ledger))} {json.dumps(change)}" if change else ":",
+            'ledger_left "instrument" "$before"',
+        ])
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
+
+    def test_a_ledger_left_alone_passes(self):
+        self.assertTrue(self.verdict(None).startswith("PASS"), self.verdict(None))
+
+    def test_every_change_an_instrument_could_make_fails(self):
+        for change in ("INSERT INTO study_notes VALUES ('n1', 1.0)",  # a note left, the newest lookup unchanged
+                       "DELETE FROM lookups WHERE id = 2",  # another process's reading deleted below the newest
+                       "INSERT INTO lookups (id, surface) VALUES (4, 'fine')",  # a reading left
+                       "DELETE FROM sense_encounters",  # a sense met, gone
+                       "UPDATE lookups SET surface = 'fines' WHERE id = 1"):
+            with self.subTest(change=change):
+                self.assertTrue(self.verdict(change).startswith("FAIL"), self.verdict(change))
+
+    def test_a_ledger_that_could_not_be_read_is_not_one_left_alone(self):
+        missing = pathlib.Path(self.scratch.name) / "absent" / "ledger.sqlite"
+        self.assertTrue(self.verdict(None, ledger=missing).startswith("FAIL"))

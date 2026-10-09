@@ -21,7 +21,8 @@ struct EraseWiringTests {
         return (path, { ScratchFile.remove(path) })
     }
 
-    private func saved(_ path: String) throws -> Ledger {
+    @discardableResult
+    private func saved(_ path: String) throws -> (ledger: Ledger, lookup: Int) {
         let ledger = try Ledger(path: path)
         let lookup = try ledger.record(LookupRecord(
             surface: "fine", lemma: "fine", context: "He paid the fine.", lemmaBasis: .tagger,
@@ -32,14 +33,14 @@ struct EraseWiringTests {
             issuer: .live, language: "en", chosenBy: .reader,
             answer: StudyAnswer(origin: .dictionary, text: "a penalty"), lookupID: lookup, at: now)
         try ledger.backUp(to: path + ".schema7.backup")
-        return ledger
+        return (ledger, lookup)
     }
 
     /// **Nothing destructive on the first click**, and the preview is counted rather than guessed.
     @Test func thefirstClickOnlyCounts() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        let ledger = try saved(path)
+        let ledger = try saved(path).ledger
         let model = EraseModel(store: Wiring.store(path))
         #expect(model.presentation.stage == .idle)
 
@@ -59,7 +60,7 @@ struct EraseWiringTests {
     @Test func theeraseTakesTheHistoryAndTheCopiesAndKeepsTheCard() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        _ = try saved(path)
+        try saved(path)
         let model = EraseModel(store: Wiring.store(path))
         model.act(.preview)
         try await settle {
@@ -85,7 +86,7 @@ struct EraseWiringTests {
     @Test func cancellingLeavesEverything() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        let ledger = try saved(path)
+        let ledger = try saved(path).ledger
         let model = EraseModel(store: Wiring.store(path))
         model.act(.preview)
         try await settle {
@@ -103,7 +104,7 @@ struct EraseWiringTests {
     @Test func asecondClickWhileErasingIsRefusedAndTheFirstReportStands() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        _ = try saved(path)
+        try saved(path)
         let model = EraseModel(store: Wiring.store(path), changes: LedgerChanges())
         model.act(.preview)
         try await settle {
@@ -129,7 +130,7 @@ struct EraseWiringTests {
     @Test func theEraseIsAnnouncedToWhateverDrawsTheLedger() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        _ = try saved(path)
+        try saved(path)
         let changes = LedgerChanges()
         let model = EraseModel(store: Wiring.store(path), changes: changes)
         model.act(.preview)
@@ -152,8 +153,8 @@ struct EraseWiringTests {
     @Test func copiesLeftBehindStillOfferTheDelete() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        let ledger = try saved(path)
-        try ledger.deleteLookups(after: 0)
+        let (ledger, lookup) = try saved(path)
+        try ledger.delete(lookup: lookup)
         let model = EraseModel(store: Wiring.store(path), changes: LedgerChanges())
         model.act(.preview)
         try await settle {
@@ -179,7 +180,7 @@ struct EraseWiringTests {
     @Test func apreviewThatLandsAfterCancelOrDuringAnEraseSaysNothing() async throws {
         let (path, clean) = scratch()
         defer { clean() }
-        _ = try saved(path)
+        try saved(path)
         let opened = try LedgerStore(path: path)
         let previewGate = Gate(), eraseGate = Gate()
         let calls = Counter()
