@@ -1132,8 +1132,9 @@ fixture_ready() {
             end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; }
         # **A TextEdit holding an older copy of the fixture**: its window is the harness's own document, so it is closed —
         # an unedited document closes without asking — and the fixture opened again, from disk. TextEdit, and whatever
-        # else it has open, are left alone.
-        elif [ "$state" = noFixture ] && "$helpers/close-window" notes.txt com.apple.TextEdit >/dev/null 2>&1; then
+        # else it has open, are left alone. **Found by its file, never its title** (audit round 3): another document
+        # called notes.txt is someone else's, and a file no window, two windows or an unreadable one might hold is refused.
+        elif [ "$state" = noFixture ] && "$helpers/close-window" --document "$helpers/notes.txt" com.apple.TextEdit >/dev/null 2>&1; then
             echo "NOTE  preflight: TextEdit held an older copy of the fixture — $detail; its window is closed and the fixture opened again from disk"
             again=" (after its window was closed and the fixture opened again)"
         else

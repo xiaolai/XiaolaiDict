@@ -619,7 +619,8 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         done = self.preflight("selection")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("NOTE  preflight: TextEdit held an older copy of the fixture", done.stdout)
-        self.assertEqual(closed.read_text().splitlines(), ["notes.txt com.apple.TextEdit"])
+        # **By the fixture's own file, never its title** (audit round 3): another document called notes.txt is not ours.
+        self.assertEqual(closed.read_text().splitlines(), [f"--document {self.fake.helpers}/notes.txt com.apple.TextEdit"])
         self.assertTrue(alive(running), "TextEdit was ended where closing the fixture's window was enough")
 
     def test_a_textedit_not_running_is_opened_again_without_ending_anything(self):
@@ -996,3 +997,51 @@ class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
         # A miss of another word, and a line naming another word, are neither.
         self.assertEqual(self.state(["Lookup", "receiver", "No entry for “receiver” in your dictionaries."],
                                     ["Did you mean “receiver”?", "Did you mean “receive” instead"]), [])
+
+
+class CloseWindowFindsTheFixtureByItsDocument(unittest.TestCase):
+    """`close-window --document`, which the preflight uses to put away a TextEdit window holding an older copy of the
+    fixture (audit round 3, 2026-10-09). By title it closed the first window called notes.txt — another document of that
+    name, which an unedited close discards from view and an edited one answers with a Save sheet on a Mac that may be
+    someone's. The fixture is found by its canonical file URL, and a match that is missing, doubled or cannot be checked
+    is refused. Asked through `--decide`, the same choice without Accessibility, of the helper as it is compiled."""
+
+    binary: pathlib.Path
+
+    @classmethod
+    def setUpClass(cls):
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-close-window-"))
+        cls.addClassCleanup(shutil.rmtree, scratch, True)
+        (scratch / "src").mkdir()
+        shutil.copy(HELPERS / "close-window.swift", scratch / "src" / "main.swift")
+        cls.binary = scratch / "close-window"
+        built = subprocess.run(["xcrun", "swiftc", str(scratch / "src" / "main.swift"), str(RESOLVER), "-o", str(cls.binary)],
+                               capture_output=True, text=True, timeout=300, check=False)
+        assert built.returncode == 0, built.stderr
+        # A real fixture under /tmp, which macOS reaches through the /private/tmp symlink — the same file by two paths.
+        cls.home = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-fixture-", dir="/tmp"))
+        cls.addClassCleanup(shutil.rmtree, cls.home, True)
+        cls.fixture = cls.home / "notes.txt"
+        cls.fixture.write_text("Intro line.\n")
+
+    def decide(self, *documents: str) -> str:
+        done = subprocess.run([str(self.binary), "--decide", str(self.fixture), *documents],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout.strip()
+
+    def test_another_document_with_the_fixtures_title_is_never_the_fixture(self):
+        """Two windows titled notes.txt, the reader's first: the fixture is the second, by its file."""
+        theirs = "file:///Users/someone/Documents/notes.txt"
+        self.assertEqual(self.decide(theirs, self.fixture.as_uri()), "window 1")
+
+    def test_the_fixture_is_found_by_its_canonical_file(self):
+        private = "file:///private" + str(self.fixture)
+        self.assertTrue(str(self.fixture).startswith("/tmp/"), "the fixture must be reached through the symlink")
+        self.assertEqual(self.decide("none", private), "window 1")
+
+    def test_a_missing_doubled_or_unreadable_match_is_refused(self):
+        self.assertEqual(self.decide("file:///Users/someone/Documents/notes.txt", "none"), "no window")
+        self.assertEqual(self.decide(self.fixture.as_uri(), self.fixture.as_uri()), "ambiguous 0,1")
+        # A window whose document cannot be read could be the fixture, or could be the window the fixture is not.
+        self.assertEqual(self.decide("unreadable", self.fixture.as_uri()), "unverifiable 0")
