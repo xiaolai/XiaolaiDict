@@ -1514,6 +1514,107 @@ print(json.dumps({"dictionary": row.rsplit(", ", 1)[0] if row else None,
                   "texts": [t for w in windows for t in w.get("texts", [])]}, ensure_ascii=False))
 PYDETAILS
 }
+# **The details belong to the entry they were opened on** (plan-card-refinements D2, 2026-10-10): with them open on the
+# bilingual card, the reader switches to another dictionary's entry and back through the card's own list, and the card
+# comes back closed — while it was away the disclosure was not drawn, so a reset carried by it could not run.
+# `CardDisclosureTests` holds the rule with presses in the test process; this holds it on the real panel.
+#     footer_row <panel report>: the label of the card's dictionary row, "<dictionary>, N other dictionaries", or nothing.
+footer_row() {
+    python3 - "$1" <<'PYFOOTER' 2>/dev/null || true
+import json, re, sys
+try:
+    report = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    report = {}
+controls = [c for w in report.get("windows", []) for c in w.get("controls", [])]
+print(next((c for c in controls if re.search(r", \d+ other dictionar(y|ies)$", c)), ""))
+PYFOOTER
+}
+#     switch_dictionary <from-dictionary> <to: other|the name>: opens the list, presses a row of another dictionary (or
+#     of the one named), and waits until the card's own row names it. Says why where it could not.
+switch_dictionary() {
+    local from=$1 to=$2 view footer before after row why
+    view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
+    footer=$(footer_row "$view")
+    [ -n "$footer" ] || { echo "the card has no dictionary row"; return 1; }
+    before=$view
+    why=$("$helpers/click-element" com.xiaolaidict --press "$footer" 2>&1) || { echo "its row would not open ($why)"; return 1; }
+    for _ in $(seq 1 30); do
+        after=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || after=""
+        row=$(python3 - "$before" "$after" "$from" "$to" <<'PYROW' 2>/dev/null || true
+import json, sys
+def controls(raw):
+    try:
+        return [c for w in json.loads(raw, strict=False).get("windows", []) for c in w.get("controls", [])]
+    except ValueError:
+        return []
+was, now, source, target = set(controls(sys.argv[1])), controls(sys.argv[2]), sys.argv[3], sys.argv[4]
+rows = [c for c in now if c not in was]
+pick = [r for r in rows if not r.startswith(source)] if target == "other" else [r for r in rows if r.startswith(target)]
+print(pick[0] if pick else "")
+PYROW
+)
+        [ -n "$row" ] && break
+        sleep 0.1
+    done
+    [ -n "$row" ] || { echo "the list showed no row to switch to"; return 1; }
+    why=$("$helpers/click-element" com.xiaolaidict --press "$row" 2>&1) || { echo "“$row” could not be pressed ($why)"; return 1; }
+    for _ in $(seq 1 30); do
+        footer=$(footer_row "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+        if [ -n "$footer" ] && { { [ "$to" = other ] && [[ "$footer" != "$from"* ]]; } || [[ "$footer" == "$to"* ]]; }; then
+            printf '%s' "${footer%, *}"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "pressing “$row” never switched the card"; return 1
+}
+details_follow_the_entry() {  # details_follow_the_entry <details_state before the details were opened> <… once opened>
+    local before=$1 opened=$2 original other back after
+    original=$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["dictionary"] or "")' 2>/dev/null)
+    if ! other=$(switch_dictionary "$original" other); then
+        flunk "lookup: could not switch the card for “receive” to another dictionary: $other"
+        return 0
+    fi
+    if ! back=$(switch_dictionary "$other" "$original"); then
+        flunk "lookup: could not switch the card for “receive” back to $original: $back"
+        return 0
+    fi
+    after=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+    # **Read by pressing it once more**: a closed disclosure shows the lines it revealed again, an open one hides them.
+    # The card around it may change while it is away — the sense the selector proposes arrives late, and its label is new
+    # to the card — so which way the press moves the revealed lines is the reading, not whether any are shown.
+    local again="" why
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Translations and notes" 2>&1); then
+        flunk "lookup: back on $original, “Translations and notes” could not be pressed ($why)"
+        return 0
+    fi
+    for _ in $(seq 1 30); do
+        again=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+        [ "$again" != "$after" ] && break
+        sleep 0.1
+    done
+    consume_verdicts lookup "$(python3 - "$before" "$opened" "$after" "$again" "$other" <<'PYBACK' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def state(raw, empty): return json.loads(raw or empty)
+before, opened = state(sys.argv[1], "{}"), state(sys.argv[2], '{"texts": []}')
+back, again, other = state(sys.argv[3], '{"offered": null}'), state(sys.argv[4], '{"texts": []}'), sys.argv[5]
+revealed = set(opened.get("texts", [])) - set(before.get("texts", []))
+shown_back = revealed & set(back.get("texts", []))
+shown_again = revealed & set(again.get("texts", []))
+# `details_state`'s own key, read by subscript: it is this file's summary, not an instrument's report.
+say(back["offered"] is True and bool(revealed) and len(shown_again) > len(shown_back),
+    f"lookup: with its details open, the {before['dictionary']} card for “receive” switched to {other} and back comes up "
+    f"with “Translations and notes” closed — pressing it then shows {len(shown_again)} of the {len(revealed)} lines it "
+    f"had revealed, against {len(shown_back)} before the press",
+    f"lookup: the {before['dictionary']} card for “receive” came back from {other} with its details open, or without "
+    f"them: offered {back['offered']}, {len(shown_back)} of the {len(revealed)} revealed lines shown on return and "
+    f"{len(shown_again)} after a press, e.g. {sorted(shown_back)[:3]}")
+print("DONE")
+PYBACK
+)"
+}
 sense_details_on() {  # sense_details_on <panel report of the card for “receive”>
     local before after why
     before=$(details_state "$1")
@@ -1551,6 +1652,7 @@ say(bool(han), f"lookup: the {before['dictionary']} card for “receive” offer
 print("DONE")
 PYOPENED
 )"
+        details_follow_the_entry "$before" "$after"
         ;;
     monolingual)
         if [ "$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offered"])')" = True ]; then

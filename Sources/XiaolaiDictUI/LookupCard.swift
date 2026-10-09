@@ -61,6 +61,10 @@ public struct LookupCard: Equatable {
     }
 
     public let term: String
+    /// **The entry the card is drawn from** (`EntryPresentation.identity`), nil for a card with none — a miss, prose.
+    /// What the card's disclosures belong to: another entry is another card, however alike the two read (D2,
+    /// 2026-10-10).
+    public let entry: String?
     /// The word's dictionary form, and **what its colour is hashed from**. The drawer hashes
     /// `ReadingEntry.lemma`; this hashed `term`, the surface — so one encounter changed colour
     /// between the panel and the history: *tempered* lands on palette index 6 and *temper* on 5.
@@ -272,13 +276,14 @@ public struct LookupCard: Equatable {
     }
 
     public init(
-        term: String, lemma: String? = nil, placement: TermPlacement = .unrecorded,
+        term: String, lemma: String? = nil, placement: TermPlacement = .unrecorded, entry: String? = nil,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil,
         details: SenseDetails = .none
     ) {
         self.term = term
+        self.entry = entry
         self.details = details
         self.lemma = lemma ?? term
         self.phrase = phrase
@@ -353,6 +358,7 @@ public extension LookupCard {
             term: term,
             lemma: lemma,
             placement: placement,
+            entry: presentation.identity,
             heading: presentation.heading,
             // The chosen sense's own part of speech where there is one: an entry's list of every
             // part of speech it covers says less than the one the reader is actually in.

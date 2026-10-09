@@ -34,7 +34,7 @@ public struct LookupCardView: View {
     public var onConfirm: (() -> Void)?
     /// Expansion from the compact card reveals all meanings immediately.
     public var showsAllMeanings: Bool
-    @State private var showingAlternatives = false
+    @State private var showingAlternatives: Bool
     @State private var showingMemory = false
     /// Whether the details are open — **only ever by the reader's press**: nothing opens it on arrival, unlike the other
     /// meanings, which the card opens wherever it cannot name the meaning (D5).
@@ -48,7 +48,13 @@ public struct LookupCardView: View {
         self.onChoose = onChoose
         self.onConfirm = onConfirm
         self.showsAllMeanings = showsAllMeanings
-        _showingAlternatives = State(initialValue: showsAllMeanings)
+        _showingAlternatives = State(initialValue: Self.opensAlternatives(card, showsAllMeanings: showsAllMeanings))
+    }
+
+    /// Whether the other meanings are open when an entry's card arrives: all of them asked for, or a card that cannot
+    /// name the meaning (`LookupCard.opensAlternatives`).
+    private static func opensAlternatives(_ card: LookupCard, showsAllMeanings: Bool) -> Bool {
+        showsAllMeanings || card.opensAlternatives
     }
 
     public var body: some View {
@@ -71,6 +77,16 @@ public struct LookupCardView: View {
             maxWidth: scale.space.cardMaxWidth,
             alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+        // **Another entry is another card, reset by its identity** (D2, 2026-10-10). SwiftUI keeps this view's state when
+        // the reader switches dictionary, so whatever the last entry's disclosures were, the next one inherited. Keyed
+        // first by the heading, then by the details: two entries of one word share both — homographs, one word in two
+        // dictionaries — and the details' own reset sat inside the disclosure, absent while an entry with none was
+        // shown, so an entry left and come back to came back open. Here, on the card, it is always there. The same entry
+        // drawn again — its sense mark arriving — keeps what the reader opened. `CardDisclosureTests` presses both.
+        .onChange(of: card.entry) {
+            showingAlternatives = Self.opensAlternatives(card, showsAllMeanings: showsAllMeanings)
+            showingDetails = false
+        }
     }
 
     /// A disclosure opening or closing, as a fade — and through `MotionPreference`, so the one
@@ -409,24 +425,15 @@ public struct LookupCardView: View {
                     }
                 }
             }
-            // **Keyed to the entry, not to `onAppear`.** SwiftUI keeps this child's identity when
-            // the reader switches dictionary, so `openedOnce` stayed true and the alternatives
-            // stayed however the *previous* entry had left them: an entry the selector could not
-            // decide came up collapsed, against `opensAlternatives`, because a different entry's
-            // list had been closed by hand.
-            //
-            // `task(id:)` rather than `onChange`: it runs on first appearance too, so one rule
-            // covers both and there is no `openedOnce` to get out of step.
-            .task(id: card.heading) {
-                showingAlternatives = showsAllMeanings || card.opensAlternatives
-            }
+            // Open on arrival where the card cannot name the meaning, and reset for each entry — `init` and the body's
+            // `onChange(of: card.entry)`, which `details` shares.
         }
     }
 
     /// **What the dictionary says beyond each label, behind the card's own disclosure** (plan-card-refinements WI-4,
     /// the owner's decision of 2026-10-09). Its own, not "N other meanings": that list opens itself on every card that
     /// cannot name the meaning — every auxiliary dictionary's — and the text would then be shown unasked. Closed on
-    /// arrival and whenever the details change — another dictionary's card — so it is open only for the card the
+    /// arrival and for every other entry (the body's `onChange(of: card.entry)`), so it is open only for the entry the
     /// reader opened it on. Absent on the compact card's expansion, which draws the same text already.
     @ViewBuilder
     private var details: some View {
@@ -445,7 +452,6 @@ public struct LookupCardView: View {
                 .accessibilityValue(showingDetails ? Text("Expanded") : Text("Collapsed"))
                 if showingDetails { SenseDetailsView(details: details) }
             }
-            .onChange(of: details) { showingDetails = false }
         }
     }
 

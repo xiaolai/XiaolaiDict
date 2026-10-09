@@ -165,6 +165,9 @@ public struct EntryNode: Equatable {
 /// publisher's, not XiaolaiDict's (B7). This is the chrome XiaolaiDict draws around it.
 public struct EntryPresentation: Equatable {
     public let dictionary: DictionaryIdentity
+    /// **Which entry this is** — its dictionary and its entry key, `PanelSelection`'s identity — so what the card keeps
+    /// for an entry (an open disclosure, a tapped sense) is told apart from another entry's that shows the same words.
+    public let identity: String
     /// The headword with its homograph number raised: *fine²*.
     public let heading: String
     /// The parts of speech this entry has blocks for, in order, without repeats.
@@ -182,6 +185,7 @@ public struct EntryPresentation: Equatable {
 
     public init(entry: DictionaryEntry, mark: SenseMark?, met: Set<StudyItem>) {
         dictionary = entry.dictionary
+        identity = PanelSelection.identity(of: entry)
         heading = EntryNode(headword: entry.headword, homograph: entry.homograph).label
         var seen: Set<String> = []
         partsOfSpeech = entry.blocks.compactMap(\.partOfSpeech).filter { seen.insert($0).inserted }
