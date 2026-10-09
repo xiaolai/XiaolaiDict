@@ -602,6 +602,8 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/PanelReport.swift",
         // Where the panel goes against a word's rectangle, at first show and grown (plan-card-refinements WI-2).
         "Sources/XiaolaiDict/PlacementReport.swift",
+        // And what a reader's drag, the entry arriving and a disclosure do to it after (D3, 2026-10-10).
+        "Sources/XiaolaiDict/PlacementDragReport.swift",
         "Sources/XiaolaiDict/HistoryReport.swift",
         "Sources/XiaolaiDict/SettingsReport.swift",
         "Sources/XiaolaiDict/ModelReport.swift",

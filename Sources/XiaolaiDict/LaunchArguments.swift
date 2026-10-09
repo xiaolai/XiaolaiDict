@@ -47,10 +47,11 @@ enum LaunchMode: Equatable {
     /// reader clicks.
     case panelReport
 
-    /// `--placement-report X Y W H`: where the lookup panel goes for a word at that rectangle (y down, as
+    /// `--placement-report X Y W H [--drag DX DY]`: where the lookup panel goes for a word at that rectangle (y down, as
     /// Accessibility gives it), at first show and once its content has grown — and whether it covers the word
-    /// (plan-card-refinements WI-2). Shows the real panel, so it runs inside the bundle like `--panel-report`.
-    case placementReport(x: Double, y: Double, width: Double, height: Double)
+    /// (plan-card-refinements WI-2). Shows the real panel, so it runs inside the bundle like `--panel-report`. `--drag`
+    /// drags the card by DX DY with real events before its entry arrives and a disclosure opens (D3, 2026-10-10).
+    case placementReport(x: Double, y: Double, width: Double, height: Double, drag: PlacementDrag? = nil)
 
     /// `--review-report`: what Review will ask, and what its model holds before and after the reveal,
     /// read through the window's own `ReviewModel` against the reader's ledger. **Writes nothing**: it
@@ -94,7 +95,7 @@ enum LaunchArguments {
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
                XiaolaiDict --panel-report
-               XiaolaiDict --placement-report X Y WIDTH HEIGHT
+               XiaolaiDict --placement-report X Y WIDTH HEIGHT [--drag DX DY]
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
                XiaolaiDict --provider-status
@@ -179,11 +180,27 @@ enum LaunchArguments {
     }
 
     private static func placementReport(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
-        let numbers = arguments.compactMap(Double.init).filter(\.isFinite)
-        guard arguments.count == 4, numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else {
+        let box = Array(arguments.prefix(4))
+        let numbers = box.compactMap(Double.init).filter(\.isFinite)
+        guard box.count == 4, numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else {
             return fail("--placement-report needs X Y WIDTH HEIGHT, a box with area, not \(arguments.joined(separator: " "))")
         }
-        return .success(.placementReport(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]))
+        var drag: PlacementDrag?
+        var rest = arguments.dropFirst(4)
+        while let option = rest.first {
+            rest = rest.dropFirst()
+            switch option {
+            case "--drag":
+                guard drag == nil else { return fail("--drag given twice") }
+                let move = rest.prefix(2).compactMap(Double.init).filter(\.isFinite)
+                guard move.count == 2, move != [0, 0] else { return fail("--drag needs DX DY, a move, not nothing") }
+                drag = PlacementDrag(dx: move[0], dy: move[1])
+                rest = rest.dropFirst(2)
+            default:
+                return fail("unknown option \(option) after the box")
+            }
+        }
+        return .success(.placementReport(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3], drag: drag))
     }
 
     private static func readSelection(_ arguments: [String]) -> Result<LaunchMode, UsageError> {

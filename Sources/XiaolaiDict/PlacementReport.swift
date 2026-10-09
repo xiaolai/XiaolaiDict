@@ -25,17 +25,19 @@ enum PlacementReport {
     /// A point of rounding between the compositor's frame and the screen's, as the window fit allows.
     static let slack: CGFloat = 1
 
-    /// The rectangle `main.swift` was given, y down. Set once before the scene starts.
-    private nonisolated static let word = Mutex<CGRect?>(nil)
+    /// The rectangle `main.swift` was given, y down, and whether to drag the card. Set once before the scene starts.
+    private nonisolated static let word = Mutex<(rect: CGRect, drag: PlacementDrag?)?>(nil)
 
-    nonisolated static func aim(at rect: CGRect) { word.withLock { $0 = rect } }
+    nonisolated static func aim(at rect: CGRect, drag: PlacementDrag? = nil) {
+        word.withLock { $0 = (rect, drag) }
+    }
 
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
         guard await WindowActions.shared.ready() else {
             _ = Instrument.write(["problem": "the window actions never arrived, so nothing could open"])
             return .failure
         }
-        guard let given = word.withLock({ $0 }) else {
+        guard let (given, drag) = word.withLock({ $0 }) else {
             _ = Instrument.write(["problem": "no word rectangle was given"])
             return .usage
         }
@@ -53,6 +55,14 @@ enum PlacementReport {
             quality: .accessibility(.accessibilityTextRange, context: .complete),
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
 
+        if let drag {
+            let report = await dragged(by: drag, word: given, protecting: protected, at: pointer, selection: selection,
+                                       in: app)
+            app.panelController.close()
+            guard Instrument.write(report) else { return .internalError }
+            return report["problem"] == nil ? .success : .failure
+        }
+
         // **Leaves the reader's ledger as it found it** — the same discipline as `PanelReport`.
         let before = await PanelReport.newestLookup(in: app)
 
@@ -64,14 +74,7 @@ enum PlacementReport {
             return await PanelReport.leaving(.failure, after: before, in: app)
         }
         // Settled: the same compositor frame for `steady`, within the budget.
-        var settled = first
-        var since = ContinuousClock.now
-        let deadline = ContinuousClock.now + budget
-        while ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(100))
-            guard let now = listedFrame(of: window) else { continue }
-            if now != settled { settled = now; since = .now } else if ContinuousClock.now - since >= steady { break }
-        }
+        let settled = await steadyFrame(of: window) ?? first
         let visible = (window.screen ?? primary).visibleFrame
         let screenDown = UpRect(visible).flipped(aboutPrimaryHeight: height).cg
         var report: [String: Any] = [
@@ -116,7 +119,7 @@ enum PlacementReport {
     }
 
     /// The window's frame as the compositor lists it — global, y down. Nil while it is not listed.
-    private static func listedFrame(of window: NSWindow) -> CGRect? {
+    static func listedFrame(of window: NSWindow) -> CGRect? {
         let listed = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]]) ?? []
         guard let entry = listed.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == window.windowNumber }),
@@ -125,7 +128,7 @@ enum PlacementReport {
         return CGRect(dictionaryRepresentation: bounds)
     }
 
-    private static func box(_ rect: CGRect) -> [String: Double] {
+    static func box(_ rect: CGRect) -> [String: Double] {
         ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
     }
 }

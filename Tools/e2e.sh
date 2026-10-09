@@ -2361,12 +2361,71 @@ print("DONE")
 PYPLACE
 )"
 }
+# **A reader's drag lets go of the word** (plan-card-refinements D3, 2026-10-10): the card shown waiting on TextEdit's word,
+# dragged with real events, then its entry arriving and a disclosure opening — it must stay where the reader put it, its
+# tail pointing at nothing, and nothing jump at the release (`--placement-report … --drag`).
+placement_drag_at() {  # placement_drag_at <reading> <dx> <dy>
+    local box report
+    box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
+        || { flunk "drag: no word box to place against"; return; }
+    defaults write com.xiaolaidict TextSize standard
+    # shellcheck disable=SC2086
+    report=$(run_report_with --placement-report 120 $box --drag "$2" "$3") || true
+    if [ -z "$report" ]; then
+        flunk "drag: --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
+        return
+    fi
+    consume_verdicts hover "$(python3 - "$report" "$2" "$3" <<'PYDRAG' 2>&1 || true
+import json, sys
+r, dx, dy = json.loads(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}" if b else "nothing"
+def near(a, b): return abs(a - b) <= 1
+# A drag begins on its first move, so the window may lag the pointer by one of the instrument's 2-point steps.
+def followed(a, b): return abs(a - b) <= 3
+shown, dragged, released = r.get("shown") or {}, r.get("dragged") or {}, r.get("released") or {}
+arrived, expanded = r.get("arrived") or {}, r.get("expanded") or {}
+def points(t): return isinstance(t, dict) and t.get("tip") is not None
+def strip(t): return t.get("edge") if isinstance(t, dict) else None
+say(r.get("problem") is None and r.get("anchoredShown") is True and points(r.get("tailShown")),
+    f"drag: the waiting card was anchored on the word, its tail pointing at it ({box(shown)})",
+    f"drag: the card was not anchored to begin with: {r}")
+say(r.get("dragPosted") is True and bool(dragged) and followed(dragged.get("x", 0) - shown.get("x", 0), dx)
+    and followed(dragged.get("y", 0) - shown.get("y", 0), dy),
+    f"drag: a real drag by {dx:+.0f},{dy:+.0f} moved the card {dragged.get('x', 0) - shown.get('x', 0):+.0f},"
+    f"{dragged.get('y', 0) - shown.get('y', 0):+.0f} ({box(dragged)})",
+    f"drag: the card did not follow the drag {dx:+.0f},{dy:+.0f}: from {box(shown)} to {box(dragged)}")
+say(released == dragged and r.get("cardInsetsKept") is True,
+    f"drag: nothing jumped at the release — the frame as the button came up is where it stayed, and the card kept the "
+    f"tail's strip inside its window",
+    f"drag: the card moved after the release, or its strip went: {box(released)} then {box(dragged)}, "
+    f"strip kept {r.get('cardInsetsKept')}")
+say(r.get("anchoredDragged") is False and not points(r.get("tailDragged"))
+    and strip(r.get("tailDragged")) == strip(r.get("tailShown")),
+    "drag: the drag let go of the word — no tail points at it, the strip it left from kept",
+    f"drag: the dragged card still holds to its word: anchored {r.get('anchoredDragged')}, tail {r.get('tailDragged')}")
+say(bool(arrived) and near(arrived.get("x", 0), dragged.get("x", 0)) and near(arrived.get("y", 0), dragged.get("y", 0))
+    and arrived.get("height", 0) > dragged.get("height", 0) + 1 and not points(r.get("tailArrived")),
+    f"drag: the entry arriving grew the card from where the reader left it ({box(dragged)} → {box(arrived)}), no tail",
+    f"drag: the entry arriving moved the card or did not grow it: {box(dragged)} → {box(arrived)}, "
+    f"tail {r.get('tailArrived')}")
+say(r.get("disclosure") == "pressed" and bool(expanded) and near(expanded.get("x", 0), dragged.get("x", 0))
+    and near(expanded.get("y", 0), dragged.get("y", 0)) and expanded.get("height", 0) > arrived.get("height", 0) + 1
+    and not points(r.get("tailExpanded")) and r.get("anchoredExpanded") is False,
+    f"drag: opening the other meanings grew it again, still where the reader left it ({box(expanded)}), no tail",
+    f"drag: the disclosure ({r.get('disclosure')}) moved the card, did not grow it, or brought the tail back: "
+    f"{box(arrived)} → {box(expanded)}, tail {r.get('tailExpanded')}")
+print("DONE")
+PYDRAG
+)"
+}
 if [ -n "$last_reading" ]; then
     text_size_had=no; text_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && text_size_had=yes
     restore_text_size() { restore_default TextSize "$text_size_had" "$text_size_was"; }
     at_exit restore_text_size
     placement_at "$last_reading" standard
     placement_at "$last_reading" huge
+    placement_drag_at "$last_reading" 120 80
     restore_text_size
 fi
 open -a Safari "$helpers/page.html"; sleep 3

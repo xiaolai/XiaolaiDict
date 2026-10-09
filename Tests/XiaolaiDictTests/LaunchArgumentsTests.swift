@@ -206,6 +206,21 @@ struct CommandCoverageTests {
         }
     }
 
+    /// **And a drag of the card** (plan-card-refinements D3, 2026-10-10): a move with real events, once, and whole.
+    @Test func thePlacementReportTakesADrag() {
+        let box = ["--placement-report", "600", "690", "80", "20"]
+        #expect(LaunchArguments.parse(box + ["--drag", "-40", "120"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: -40, dy: 120))))
+        #expect(LaunchArguments.parse(box + ["--drag", "30", "0"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: 30, dy: 0))))
+        for wrong in [["--drag", "1"], ["--drag", "0", "0"], ["--drag", "a", "1"], ["--drag", "1", "1", "--drag", "2", "2"],
+                      ["--shake"]] {
+            if case .success(let parsed) = LaunchArguments.parse(box + wrong) {
+                Issue.record("\(wrong) parsed as \(parsed)")
+            }
+        }
+    }
+
     @Test func everyAcceptedCommandIsDocumented() throws {
         let source = try String(contentsOf: parserSource, encoding: .utf8)
         // The command switch alone. Scanning the whole file also found `--repeat` and `--interval`

@@ -159,6 +159,13 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         // the surface, the edge and the lift are the card's own — and they live here, in the
         // layer that has the tokens, rather than as literals in the scene that hosts it.
         .background(CardSurface.panel(for: scheme), in: shape)
+        // **The card is taken hold of by its paper** (plan-card-refinements D3, 2026-10-10). The window is movable by its
+        // background, and that was all that let a reader drag the card: measured on the E2E Mac, a posted drag moved a
+        // borderless window holding a plain view and did not move one holding SwiftUI content — `mouseDownCanMoveWindow`
+        // answers true at every point of the card and SwiftUI takes the mouse anyway. So no reader could ever drag it, and
+        // the anchor's release on a drag was unreachable. SwiftUI's own gesture moves the window; a control's own gesture
+        // is asked first, so a press on a button is still a press.
+        .gesture(WindowDragGesture())
         // Through `CardSurface`, so the hairline becomes a line when the reader has asked the
         // system for more contrast. At 12% of the label colour it was a hint either way.
         .overlay(shape.strokeBorder(

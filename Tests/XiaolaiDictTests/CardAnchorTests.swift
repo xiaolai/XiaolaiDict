@@ -319,3 +319,60 @@ struct SelectionShortcutAnchorTests {
         #expect(app.contains("ticket: ticket, protecting: word)"), "the shortcut's lookup is not placed against its word")
     }
 }
+
+/// **A drag lets go of the word, through the controller** (plan-card-refinements D3, 2026-10-10): what a reader's drag
+/// sets in motion, driven where a test process can drive it — the window moved with the button down, then grown as the
+/// entry arriving and a disclosure opening grow it. A window drag itself cannot be driven here (AppKit reads the window
+/// server's events for it); the real one is the E2E Mac's, `--placement-report … --drag`.
+@MainActor
+struct CardDragTests {
+    @Test func aDraggedCardKeepsTheReadersPlaceAndPointsAtNothingThroughItsLaterGrowth() throws {
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
+        let ticket = panel.newRequest()
+        let word = WordBounds(rect: UpRect(x: 500, y: 600, width: 80, height: 20), quality: .exact)
+        #expect(panel.show(.message(title: "waiting", detail: "the entry has not arrived"), near: UpPoint(x: 540, y: 610),
+                           protecting: word, for: ticket))
+        let tail = try #require(panel.model.tail)
+        #expect(panel.anchor != nil && tail.tip != nil, "the fixture must be a card anchored on its word")
+        let window = NSWindow(contentRect: panel.placement, styleMask: .borderless, backing: .buffered, defer: true)
+        window.setFrame(panel.placement, display: false)
+        panel.windowMoved(window, buttonDown: false)
+        #expect(panel.anchor != nil, "the controller's own placing released the card")
+
+        // The reader's drag: up and to the right, the button down. Read back, since a window rounds its origin to whole
+        // points.
+        window.setFrame(panel.placement.offsetBy(dx: 60, dy: 40), display: false)
+        let dragged = window.frame
+        panel.windowMoved(window, buttonDown: true)
+        #expect(panel.anchor == nil && panel.model.growth == nil, "the drag left the card held to its word")
+        #expect(panel.model.tail == tail.released, "the tail still points, or its strip went: \(String(describing: panel.model.tail))")
+        #expect(window.frame == dragged, "the release moved the card")
+
+        // The entry arrives, then a disclosure opens: the fit grows the window from its top, which stays where the reader
+        // left it, and nothing pulls the card back to its word or points it there again.
+        for wanted in [320.0, 400.0] {
+            SettingsWindowFit.move(window, by: wanted - window.frame.height, width: nil,
+                                   lowestBottom: panel.model.growth?.lowestBottom,
+                                   highestTop: panel.model.growth?.highestTop, animated: false, recentres: false)
+            panel.keepWhollyOnScreen(window)
+            #expect(abs(window.frame.height - wanted) < 1, "not grown to \(wanted): \(window.frame)")
+            #expect(abs(window.frame.minX - dragged.minX) < 1 && abs(window.frame.maxY - dragged.maxY) < 1,
+                    "grown to \(wanted), the card left the reader's place: \(window.frame) against \(dragged)")
+            #expect(panel.anchor == nil && panel.model.tail == tail.released)
+        }
+    }
+
+    /// The control: a move the controller made itself — no button down — keeps the card on its word.
+    @Test func aMoveOfTheControllersOwnKeepsTheAnchor() throws {
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
+        let word = WordBounds(rect: UpRect(x: 500, y: 600, width: 80, height: 20), quality: .exact)
+        #expect(panel.show(.message(title: "waiting", detail: "…"), near: UpPoint(x: 540, y: 610), protecting: word,
+                           for: panel.newRequest()))
+        let window = NSWindow(contentRect: panel.placement, styleMask: .borderless, backing: .buffered, defer: true)
+        window.setFrame(panel.placement, display: false)
+        panel.windowMoved(window, buttonDown: false)
+        window.setFrame(panel.placement.offsetBy(dx: 60, dy: 40), display: false)
+        panel.windowMoved(window, buttonDown: false)
+        #expect(panel.anchor != nil && panel.model.tail?.tip != nil)
+    }
+}
