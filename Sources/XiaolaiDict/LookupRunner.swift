@@ -334,10 +334,16 @@ final class LookupRunner {
     /// was read in, as a reading of its own — the miss stays recorded as the miss it was. Nil where the card `request`
     /// was not offered `suggestion`, so a press can only follow the line it pressed.
     ///
+    /// **Only from the card on screen, and only once** (audit, 2026-10-09). A card a newer lookup replaced, or the reader
+    /// put away, is gone, and a press arriving late from it would launch a lookup — which cancels the newer one. So the
+    /// offer's own request must still hold the panel when the press arrives, and the press that follows it spends it.
+    ///
     /// **No range.** The captured one is where the misspelling sits, and nothing may mark the corrected word there; the
-    /// lemmatiser and the card search a sentence for a word given no range, and find nothing, which is right.
+    /// app launches it as a word in no position of the sentence (`TermPlacement.notInSentence`).
     func followUp(_ suggestion: SpellingSuggestion, from request: Int) -> Selection? {
-        guard let offered, offered.request == request, offered.suggestion == suggestion else { return nil }
+        guard let offered, offered.request == request, offered.suggestion == suggestion,
+              panel.isCurrent(PanelTicket(number: request)) else { return nil }
+        self.offered = nil
         let read = offered.selection
         return Selection(text: suggestion.word, sentence: read.sentence, rangeInSentence: nil,
                          quality: read.quality, place: read.place)

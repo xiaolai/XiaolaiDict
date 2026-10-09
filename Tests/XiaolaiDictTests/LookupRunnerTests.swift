@@ -364,6 +364,9 @@ final class RecordingPanel: LookupPanelPresenting {
     func begin() -> Int { requests.begin() }
     func claim(_ request: Int) -> PanelTicket? { requests.claim(request) ? PanelTicket(number: request) : nil }
     func isCurrent(_ ticket: PanelTicket) -> Bool { requests.isCurrent(ticket.number) }
+    /// The reader dismissed the panel — Escape, a click away, its close button: every request it held is over, as the
+    /// controller's `closed()` makes it.
+    func close() { requests.close() }
 
     /// Whether the panel can be drawn at all. The real controller answers `false` when the window
     /// actions have not been captured; a test sets this to drive that branch.

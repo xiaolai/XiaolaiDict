@@ -257,6 +257,12 @@ struct LookupRunnerSpellingTests {
         let ticket = panel.newRequest()
         _ = await runner.run(Self.typo, near: .zero, requestedAt: .now, ticket: ticket)
 
+        // Refusals first: a press that is followed spends the offer, so a refusal checked after it would hold for
+        // that reason alone.
+        #expect(runner.followUp(Self.the, from: ticket.number + 1) == nil, "another card's press looked the word up")
+        #expect(runner.followUp(SpellingSuggestion(term: "teh", word: "ten"), from: ticket.number) == nil,
+                "a word that was never offered was looked up")
+
         let followed = try #require(runner.followUp(Self.the, from: ticket.number))
         #expect(followed.text == "the")
         #expect(followed.sentence == Self.typo.sentence, "the reader's sentence did not go with the word")
@@ -264,9 +270,31 @@ struct LookupRunnerSpellingTests {
         #expect(followed.quality == Self.typo.quality)
         // **No range**: the captured one is where *teh* sits, and nothing may mark *the* there.
         #expect(followed.rangeInSentence == nil)
+    }
 
-        #expect(runner.followUp(Self.the, from: ticket.number + 1) == nil, "another card's press looked the word up")
-        #expect(runner.followUp(SpellingSuggestion(term: "teh", word: "ten"), from: ticket.number) == nil,
-                "a word that was never offered was looked up")
+    /// **An offer is followed only from the card on screen** (audit, 2026-10-09). Published, then superseded by a newer
+    /// lookup or put away by the reader, its card is gone — and a press arriving late from it would launch a lookup,
+    /// which cancels the newer one. Both refused, each with the same offer that a current card would follow.
+    @Test(arguments: [false, true])
+    func anOfferIsNotFollowedOnceItsCardIsGone(closed: Bool) async throws {
+        let panel = RecordingPanel(), service = Service(["the"]), checker = Checker(["teh": "the"])
+        let runner = runner(panel, service, checker)
+        let ticket = panel.newRequest()
+        _ = await runner.run(Self.typo, near: .zero, requestedAt: .now, ticket: ticket)
+        try #require(Self.lookups(panel.updates).last?.suggestion == Self.the, "no offer was published, so nothing is tested")
+        if closed { panel.close() } else { _ = panel.newRequest() }
+        #expect(runner.followUp(Self.the, from: ticket.number) == nil,
+                "a press on a card \(closed ? "the reader closed" : "a newer lookup replaced") was followed")
+    }
+
+    /// **An offer is spent by the press that follows it**: a second press — a double click, a press landing while the
+    /// panel changes over — looks nothing up again.
+    @Test func anOfferIsFollowedOnce() async throws {
+        let panel = RecordingPanel(), service = Service(["the"]), checker = Checker(["teh": "the"])
+        let runner = runner(panel, service, checker)
+        let ticket = panel.newRequest()
+        _ = await runner.run(Self.typo, near: .zero, requestedAt: .now, ticket: ticket)
+        #expect(runner.followUp(Self.the, from: ticket.number) != nil, "the positive control: the first press is followed")
+        #expect(runner.followUp(Self.the, from: ticket.number) == nil, "a second press followed the same offer again")
     }
 }
