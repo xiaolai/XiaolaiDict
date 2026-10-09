@@ -459,6 +459,11 @@ verify_bundle_metadata() {
     ats=$(plutil -extract NSAppTransportSecurity json -o - "$bundle/Contents/Info.plist" 2>/dev/null || true)
     [ "$ats" = '{"NSAllowsLocalNetworking":true}' ] \
         || { echo "the app's NSAppTransportSecurity is not NSAllowsLocalNetworking alone: ${ats:-absent}"; return 1; }
+
+    # **The local-network prompt is explained.** macOS 15+ asks before an app reaches a LAN host and shows this string; with
+    # none, the first request to a model server on the reader's network can be refused before they have been asked.
+    [ -n "$(plist_value "$bundle/Contents/Info.plist" NSLocalNetworkUsageDescription)" ] \
+        || { echo "the app declares no NSLocalNetworkUsageDescription"; return 1; }
 }
 
 verify_signatures() {

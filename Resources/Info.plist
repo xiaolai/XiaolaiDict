@@ -31,5 +31,7 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 xiaolai</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Used to reach a language model server you set up on your local network.</string>
 </dict>
 </plist>

@@ -170,6 +170,17 @@ struct BundleVerificationTests {
         #expect(run.said.contains("NSAppTransportSecurity"), "\(name): the refusal was \"\(run.said)\"")
     }
 
+    /// **The local-network explanation is in the bundle.** macOS 15 and later gate a connection to a LAN host behind
+    /// a prompt that shows this string; without it the first request can be refused before the reader has been asked.
+    @Test(.enabled(if: bundleIsCurrent, "the published bundle was not built from these inputs; run make"))
+    func aMissingLocalNetworkExplanationIsRefused() throws {
+        let copy = try clone()
+        try plist(copy.appending(path: "Contents/Info.plist").path, "Delete :NSLocalNetworkUsageDescription")
+        let run = try verify(copy)
+        #expect(run.status != 0, "a bundle with no local-network explanation verified anyway")
+        #expect(run.said.contains("NSLocalNetworkUsageDescription"), "the refusal was \"\(run.said)\"")
+    }
+
     /// An ad-hoc signature verifies as a signature. It also keeps none of the permission grants
     /// macOS keys to a signing identity, so a reader would be asked for Accessibility again — and
     /// this is the check that says so rather than letting it ship.
@@ -207,5 +218,16 @@ struct AppTransportSecurityTests {
         #expect(Set(security.keys) == ["NSAllowsLocalNetworking"], "ATS is loosened beyond this Mac: \(security.keys)")
         let allows = try #require(security["NSAllowsLocalNetworking"] as? NSNumber)
         #expect(CFGetTypeID(allows) == CFBooleanGetTypeID() && allows.boolValue, "NSAllowsLocalNetworking is not true")
+    }
+
+    @Test func theAppExplainsTheLocalNetworkPrompt() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Resources/Info.plist")
+        let plist = try #require(
+            try PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+        let said = try #require(plist["NSLocalNetworkUsageDescription"] as? String,
+                                "no local-network explanation: the first LAN request can be refused unasked")
+        #expect(!said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
