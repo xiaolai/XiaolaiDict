@@ -248,8 +248,12 @@ extension View {
     /// controls. The system's edge effect softens the boundary; it is not what keeps a row of
     /// icons legible over a line of text. Applied by the bar itself, never by `PanelSurface` —
     /// which cannot tell an empty bar from a full one.
+    ///
+    /// **In a rectangle, said** (D3, 2026-10-10): a background given no shape fills the card's own outline here — measured
+    /// on the E2E Mac, the bar's paper was a rounded card inside the card and, on a card above its word, carried a second
+    /// tail at the bar's foot.
     func pinnedToTheCard(in scheme: ColorScheme) -> some View {
-        background(CardSurface.panel(for: scheme))
+        background(CardSurface.panel(for: scheme), in: Rectangle())
     }
 }
 
