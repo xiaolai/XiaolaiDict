@@ -130,8 +130,9 @@ enum WordClass: Sendable {
 /// the reader.
 ///
 /// The rules: *-es* after a sibilant, *-ies*/*-ied*/*-ier*/*-iest* after a consonant and *y*, a final *e* shared
-/// (*prided*, never *prideed*), *-ck-* after *c*, and a final consonant **doubled after one vowel in a word of one
-/// syllable** (*tipped*, *whinned*) and **never in a longer one** (*hollering*, *pretzeled*): whether a longer word
+/// (*prided*, never *prideed*), *-ck-* after *c* and never a bare *c* (*panicked*; *arced* only where printed), and a
+/// final consonant **doubled after one vowel in a word of one syllable** (*tipped*, *whinned*, *quizzes*; an *s* may or
+/// may not, *buses*, *busses*) and **never in a longer one** (*hollering*, *pretzeled*): whether a longer word
 /// doubles depends on stress, which spelling does not show, and Oxford prints the forms of every word that does
 /// (*unzipped*, *inspanned*), which `DictionaryForm.candidate` asks first.
 enum RegularSpelling {
@@ -186,8 +187,12 @@ enum RegularSpelling {
 
         var forms: [InflectionSlot: Set<String>] = [:]
         if ["s", "x", "z", "ch", "sh"].contains(where: word.hasSuffix) {
-            // *quizzes*, *busses*: a one-syllable word may double its sibilant as well.
-            forms[.s] = doubles && oneSyllable ? [word + "es", word + String(last) + "es"] : [word + "es"]
+            // A one-syllable word doubles a *z* (*quizzes*, never *quizes*) and may double an *s* (*buses*, *busses*).
+            if doubles && oneSyllable {
+                forms[.s] = last == "z" ? [word + "zes"] : [word + "es", word + String(last) + "es"]
+            } else {
+                forms[.s] = [word + "es"]
+            }
         } else if consonantY {
             forms[.s] = [stem + "ies"]
         } else if last == "o" {
@@ -201,7 +206,9 @@ enum RegularSpelling {
         } else if consonantY {
             forms[.ed] = [stem + "ied"]
         } else if last == "c" {
-            forms[.ed] = [word + "ked", word + "ed"]
+            // *-ck-* always (audit of 2026-10-10): *panicked*, never *paniced*. The words that keep a bare *c* — *arced*,
+            // *disced*, *synced* — are offered only where the dictionaries print them, which `candidate` asks first.
+            forms[.ed] = [word + "ked"]
         } else {
             forms[.ed] = regular("ed")
         }
@@ -214,7 +221,7 @@ enum RegularSpelling {
         } else if last == "e" {
             forms[.ing] = [stem + "ing"]
         } else if last == "c" {
-            forms[.ing] = [word + "king", word + "ing"]
+            forms[.ing] = [word + "king"]
         } else {
             forms[.ing] = regular("ing")
         }

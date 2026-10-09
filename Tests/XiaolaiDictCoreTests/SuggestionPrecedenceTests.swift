@@ -302,6 +302,42 @@ struct DictionaryFormGuardTests {
         #expect(offered == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
     }
 
+    /// **A word in *-c* takes *k* before *-ed* and *-ing***: *panicked*, *mimicking* (audit of 2026-10-10). The rule took
+    /// *paniced* and *panicing* too, so with no form table read, *panic*'s verb entry licensed both. The few words that
+    /// keep a bare *c* — *arced*, *disced*, *synced* — are offered only where the dictionaries print them.
+    @Test func aWordInCTakesKBeforeItsEndingsUnlessTheDictionaryPrintsOtherwise() async throws {
+        let lexicon: [String: [Headed]] = ["panic": [Headed("panic", ["noun", "verb"])], "arc": [Headed("arc", ["noun", "verb"])],
+                                           "panicked": [Headed("panicked")]]
+        for term in ["paniced", "panicing"] {
+            let checker = Checker(term == "paniced" ? [term: "panicked"] : [:])
+            let offered = try await offer(term, lemma: "panic", checker: checker, dictionaries: Dictionaries(entries: lexicon),
+                                          printed: nil)
+            #expect(offered.suggestion?.kind != .dictionaryForm, "\(term) was offered panic")
+            if term == "paniced" { #expect(offered == .offered(SpellingSuggestion(term: term, word: "panicked"))) }
+        }
+        for term in ["panicked", "panicking"] {
+            let offered = try await offer(term, lemma: "panic", dictionaries: Dictionaries(entries: lexicon), printed: nil)
+            #expect(offered == .offered(SpellingSuggestion(term: term, word: "panic", kind: .dictionaryForm)), "\(term)")
+        }
+        // A bare *c* where the dictionary prints it, and only there.
+        #expect(try await offer("arced", lemma: "arc", dictionaries: Dictionaries(entries: lexicon), printed: nil)
+            .suggestion?.kind != .dictionaryForm)
+        let printed = FormTable(sources: [], forms: ["arced": [.init(lemma: "arc", partOfSpeech: "verb")]], ownHeadwords: [])
+        #expect(try await offer("arced", lemma: "arc", dictionaries: Dictionaries(entries: lexicon), printed: printed)
+            == .offered(SpellingSuggestion(term: "arced", word: "arc", kind: .dictionaryForm)))
+    }
+
+    /// **The same class: a single *z* after one vowel doubles in a word of one syllable** — *quizzes*, *whizzed* —
+    /// where the rule took *quizes* as well. A single *s* may or may not (*buses*, *busses*): both stand.
+    @Test func aWordInOneVowelAndZDoublesIt() async throws {
+        let lexicon: [String: [Headed]] = ["quiz": [Headed("quiz", ["noun", "verb"])], "bus": [Headed("bus", ["noun", "verb"])]]
+        for (term, form, offered) in [("quizes", "quiz", false), ("quized", "quiz", false), ("quizzes", "quiz", true),
+                                      ("quizzed", "quiz", true), ("buses", "bus", true), ("busses", "bus", true)] {
+            let answer = try await offer(term, lemma: form, dictionaries: Dictionaries(entries: lexicon), printed: nil)
+            #expect((answer.suggestion?.kind == .dictionaryForm) == offered, "\(term): \(answer)")
+        }
+    }
+
     // MARK: - The regression table
 
     enum Verdict { case right, wrong, unclear }
