@@ -1865,6 +1865,52 @@ print("DONE")
 PYBOX
 )"
 }
+# punctuated_box <word> <the word with its punctuation>: **a short word selected inside asymmetric punctuation**
+# (plan-card-refinements D3, 2026-10-10). The card's tail points at the middle of the box the selection shortcut reports,
+# and WebKit's box for a selection holds its punctuation too — so its middle is off the word by half of what lies on one
+# side more than the other, onto the punctuation for a word as narrow as “Q” beside “…”. The word's own box is read
+# first, the word selected alone; then the selection with its punctuation, whose box the app must give as the word's, and
+# whose whole box `select-web` reads beside it, so where a card centred on the selection would point is measured too.
+punctuated_box() {
+    local word=$1 punctuated=$2 alone whole reading why
+    if ! why=$("$helpers/select-web" com.apple.Safari "$word" 2>&1 >/dev/null); then
+        flunk "selection: could not select “$word” alone ($why)"; return 0
+    fi
+    alone=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
+    if ! whole=$("$helpers/select-web" com.apple.Safari "$punctuated" 2>"$reports/select-web.err"); then
+        flunk "selection: could not select “$punctuated” ($(head -c 200 "$reports/select-web.err"))"; return 0
+    fi
+    reading=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
+    consume_verdicts selection "$(python3 - "$alone" "$whole" "$reading" "$word" "$punctuated" <<'PYPUNCT' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def first(raw):
+    for line in raw.splitlines():
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                pass
+    return {}
+alone, whole, reading, word, punctuated = first(sys.argv[1]), first(sys.argv[2]), first(sys.argv[3]), sys.argv[4], sys.argv[5]
+w, r = alone.get("bounds") or {}, reading.get("bounds") or {}
+# `select-web`'s own line, read by subscript: a helper's, not an instrument's report.
+s = whole["selected"] if "selected" in whole else {}
+def mid(b): return b.get("x", 0) + b.get("width", 0) / 2
+def box(b): return f"{b.get('x', 0):.1f},{b.get('y', 0):.1f} {b.get('width', 0):.1f}×{b.get('height', 0):.1f}"
+def on(x): return bool(w) and w.get("x", 0) <= x <= w.get("x", 0) + w.get("width", 0)
+if w and s:
+    print(f"NOTE\tselection: “{punctuated}” boxed whole is {box(s)}; a tail at its middle, {mid(s):.1f}, would be "
+          + ("on" if on(mid(s)) else "OFF") + f" “{word}” ({box(w)}, middle {mid(w):.1f})")
+say(reading.get("text") == word and bool(r) and on(mid(r)),
+    f"selection: “{punctuated}” is boxed by its word ({box(r)}, {r.get('quality')}) — a tail at its middle, "
+    f"{mid(r):.1f}, is on “{word}” ({box(w)})",
+    f"selection: the box for “{punctuated}” would put the tail off “{word}”: {r} against the word's {w} "
+    f"(read {reading.get('text')!r})")
+print("DONE")
+PYPUNCT
+)"
+}
 if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
 #    Automation prompt can block the screen. They need an unlocked screen — while it is locked,
@@ -1887,7 +1933,8 @@ select_then_read "Safari: a selection across a sentence end gets both sentences 
 select_then_read "Safari: wrapping punctuation is not part of the term" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "“ephemeral,”" -- \
     text=ephemeral lemma=ephemeral
-selection_box "selection: Safari's selection, trimmed of its punctuation" "$last_selection" ephemeral containing
+# `exact` since 2026-10-10 (D3): the term's own markers are boxed, no longer the selection's with its punctuation.
+selection_box "selection: Safari's selection, trimmed of its punctuation" "$last_selection" ephemeral exact
 # `likely`, not `inferred`: *saw* → *see* is the everyday reading of the shape, not something the
 # sentence established. This assertion said `inferred` and named itself "read from its grammar" until
 # 2026-09-29 — both were true before the basis was split, and the stage had not run since.
@@ -1896,6 +1943,8 @@ select_then_read "Safari: a past form NLTagger leaves alone is lemmatised from a
     "$helpers/select-web" com.apple.Safari saw -- \
     text=saw lemma=see lemmaBasis=likely
 selection_box "selection: Safari's selected word" "$last_selection" saw exact
+punctuated_box Q "“Q…”"
+punctuated_box ox "(“ox,"
 fi
 
 if want shortcut; then

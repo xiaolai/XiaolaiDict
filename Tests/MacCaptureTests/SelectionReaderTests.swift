@@ -221,6 +221,43 @@ struct SelectionReaderTests {
         }
     }
 
+    /// **The term's own box where punctuation was trimmed from it** (D3, 2026-10-10): WebKit counts the page's text in
+    /// UTF-16 from its start, so the term's markers are the selection's first index plus where the term sits in it — and
+    /// the box of those is the word's, read back and held to the term before it is believed: exact. A selection whose
+    /// whole box would centre the card's tail on punctuation (`“Q…”`, measured on the E2E Mac) is boxed by its word.
+    @Test func aTrimmedSelectionIsBoxedByItsTermWhereWebKitCanSayWhereItIs() {
+        let tree = FakeAccessibility()
+        let page = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+        tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        tree.scriptMarkers(on: page, selected: "“Q…”", sentence: "Then came “Q…” and more.")
+        tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 42, height: 18))
+        tree.scriptTermMarkers(on: page, selectionIndex: 10, at: 1, length: 1, text: "Q", CGRect(x: 87, y: 140, width: 12, height: 18))
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "Q")
+        #expect(bounds == ReadBounds(rect: DownRect(x: 87, y: 140, width: 12, height: 18), quality: .exact))
+    }
+
+    /// **And `containing` where WebKit cannot say** — no index for the selection's start, or markers whose text is not the
+    /// term: the selection's own box, as before, never a box guessed at.
+    @Test func aTrimmedSelectionKeepsTheSelectionsBoxWhereItsTermCannotBeLocated() {
+        for (index, text) in [(nil, "Q"), (10, "Q…")] as [(Int?, String)] {
+            let tree = FakeAccessibility()
+            let page = tree.element(1)
+            tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+            tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+            tree.scriptMarkers(on: page, selected: "“Q…”", sentence: "Then came “Q…” and more.")
+            tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 42, height: 18))
+            if let index {
+                tree.scriptTermMarkers(on: page, selectionIndex: index, at: 1, length: 1, text: text,
+                                       CGRect(x: 87, y: 140, width: 12, height: 18))
+            }
+            guard case .selected(_, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+            #expect(bounds == ReadBounds(rect: DownRect(x: 80, y: 140, width: 42, height: 18), quality: .containing),
+                    "index \(String(describing: index)), text \(text)")
+        }
+    }
+
     /// **Where the word is is worth having, not worth the selection**: an app that answers no box, or an empty one, still
     /// hands over what was selected — with no box, so the card keeps the pointer rule.
     @Test func noBoxOrAnEmptyOneKeepsTheSelectionAndLocatesNothing() {
@@ -283,6 +320,21 @@ private final class FakeAccessibility: AccessibilityReading {
         set(page, "AXStringForTextMarkerRange", argument: sentenceRange, sentence as CFString)
     }
 
+    /// WebKit's index dialect for a term inside the scripted selection: the selection's first index, a marker for each
+    /// of the term's two ends, the range they make, the text that range reads back as, and its box.
+    func scriptTermMarkers(on page: AXUIElement, selectionIndex: Int, at offset: Int, length: Int, text: String,
+                           _ rect: CGRect) {
+        set(page, "AXIndexForTextMarker", argument: marker(1), selectionIndex as CFNumber)
+        let first = marker(6), last = marker(7)
+        set(page, "AXTextMarkerForIndex", argument: (selectionIndex + offset) as CFNumber, first)
+        set(page, "AXTextMarkerForIndex", argument: (selectionIndex + offset + length) as CFNumber, last)
+        let range = AXTextMarkerRangeCreate(nil, first, last)
+        set(page, "AXTextMarkerRangeForUnorderedTextMarkers", argument: [first, last] as CFArray, range)
+        set(page, "AXStringForTextMarkerRange", argument: range, text as CFString)
+        var box = rect
+        set(page, "AXBoundsForTextMarkerRange", argument: range, AXValueCreate(.cgRect, &box)!)
+    }
+
     /// The box WebKit gives the scripted selection's own markers.
     func scriptSelectionBox(on page: AXUIElement, _ rect: CGRect) {
         var box = rect
@@ -311,6 +363,9 @@ private final class FakeAccessibility: AccessibilityReading {
             return "range \(range.location) \(range.length)"
         }
         if type == AXTextMarkerGetTypeID() { return "marker \(bytes(argument as! AXTextMarker))" }
+        if type == CFArrayGetTypeID(), let items = argument as? [CFTypeRef] {
+            return "array " + items.map(describe).joined(separator: " ")
+        }
         if type == AXTextMarkerRangeGetTypeID() {
             let range = argument as! AXTextMarkerRange
             return "markers \(bytes(AXTextMarkerRangeCopyStartMarker(range))) \(bytes(AXTextMarkerRangeCopyEndMarker(range)))"

@@ -367,9 +367,10 @@ public enum SelectionReader {
 
     /// **Where the term is on screen**, y down, or nil where the app cannot say (the owner's decision of 2026-10-09: the
     /// card anchored on the word). The text-range dialect is asked for **the term's own range** — the selection less the
-    /// punctuation it was trimmed of — so its box is the word's: exact. WebKit is asked for the selection's markers, whose
-    /// box holds the term and whatever was trimmed from it: exact where nothing was. A range that no longer spans the text
-    /// read is a selection that moved between the reads, and locates nothing.
+    /// punctuation it was trimmed of — so its box is the word's: exact. WebKit is asked for the term's own markers too
+    /// where punctuation was trimmed (`termBox`), and for the selection's where it cannot say where the term is: a box
+    /// that holds the term and whatever was trimmed from it, `containing`, never corrected by a guessed punctuation width.
+    /// A range that no longer spans the text read is a selection that moved between the reads, and locates nothing.
     static func bounds(of capture: Capture, term: SelectedTerm, _ ax: some AccessibilityReading) throws(CaptureError) -> ReadBounds? {
         let whole = term.range.location == 0 && term.range.length == (capture.text as NSString).length
         switch capture.source {
@@ -382,10 +383,42 @@ public enum SelectionReader {
             else { return nil }
             return ReadBounds.checked(box, quality: .exact)
         case .accessibilityTextMarkers:
-            guard let markers = capture.markers, let box = try ax.rect(capture.host, "AXBoundsForTextMarkerRange", markers)
-            else { return nil }
+            guard let markers = capture.markers else { return nil }
+            if !whole, let box = termBox(in: markers, term: term, host: capture.host, ax),
+               let exact = ReadBounds.checked(box, quality: .exact) {
+                return exact
+            }
+            guard let box = try ax.rect(capture.host, "AXBoundsForTextMarkerRange", markers) else { return nil }
             return ReadBounds.checked(box, quality: whole ? .exact : .containing)
         case .accessibilityBoundsScan, .opticalRecognition:
+            return nil
+        }
+    }
+
+    /// **The term's own box, inside a selection it was trimmed from** (D3, 2026-10-10). The selection's box centres the
+    /// card's tail on the selection, and with more punctuation on one side than the other that middle is off the word by
+    /// half the difference — measured on the E2E Mac, `“Q…”` boxed whole put it 8 pt right of *Q*'s middle, on the ellipsis.
+    /// WebKit counts a page's text in UTF-16 from its start
+    /// (`AXIndexForTextMarker`, the unit `select-web` and the sentence context use too), so the term's markers are the
+    /// selection's first index plus where the term sits in it; the range they make is **read back and held to the term**
+    /// before its box is believed. Nil where any step goes unanswered or reads back as something else — the selection's
+    /// own box then stands, `containing`. Indices come from another process, so the sums are checked, never trusted.
+    static func termBox(
+        in selection: AXTextMarkerRange, term: SelectedTerm, host: AXUIElement, _ ax: some AccessibilityReading
+    ) -> CGRect? {
+        do {
+            let start = AXTextMarkerRangeCopyStartMarker(selection)
+            guard let index = try ax.integer(host, "AXIndexForTextMarker", start), index >= 0 else { return nil }
+            let (first, overflowed) = index.addingReportingOverflow(term.range.location)
+            let (last, overflowedAgain) = first.addingReportingOverflow(term.range.length)
+            guard !overflowed, !overflowedAgain,
+                  let from = try ax.marker(host, "AXTextMarkerForIndex", first as CFNumber),
+                  let to = try ax.marker(host, "AXTextMarkerForIndex", last as CFNumber),
+                  let range = try ax.markerRange(host, "AXTextMarkerRangeForUnorderedTextMarkers", [from, to] as CFArray),
+                  try ax.string(host, "AXStringForTextMarkerRange", range) == term.text
+            else { return nil }
+            return try ax.rect(host, "AXBoundsForTextMarkerRange", range)
+        } catch {
             return nil
         }
     }

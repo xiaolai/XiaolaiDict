@@ -149,3 +149,12 @@ else { fail("no text markers for '\(arguments[2])'") }
 let status = AXUIElementSetAttributeValue(page, "AXSelectedTextMarkerRange" as CFString, selection)
 guard status == .success else { fail("setting the selection failed: AXError \(status.rawValue)") }
 restoreHidden()
+// **Where the selection is on screen, as WebKit boxes it**, read by this helper rather than by the app — the box a card
+// centred on the whole selection would point at (plan-card-refinements D3, 2026-10-10). Global and y down, one JSON line
+// on stdout; a caller that only wanted the selection reads nothing.
+var selected = CGRect.zero
+if let bounds = parameterized(page, "AXBoundsForTextMarkerRange", selection), CFGetTypeID(bounds) == AXValueGetTypeID(),
+   AXValueGetValue(bounds as! AXValue, .cgRect, &selected) {
+    print("{\"selected\": {\"x\": \(selected.minX), \"y\": \(selected.minY), \"width\": \(selected.width), "
+          + "\"height\": \(selected.height)}}")
+}
