@@ -203,7 +203,11 @@ struct TestInventoryTests {
         // (`SpellingSuggesterTests`).
         "XiaolaiDictCoreTests": 518,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
-        "StudyKitTests": 386,
+        // **Lowered 386 → 385 on 2026-10-10, a deletion**: `removingAninstrumentsRowsCannotReachTheReadersOwn` tested
+        // `Ledger.deleteLookups(after:)`, the instruments' baseline-and-delete clean-up, which the audit found deleting
+        // readings recorded meanwhile; an instrument records into a scratch ledger of its own now
+        // (`InstrumentLedgerTests`, 3, in `XiaolaiDictTests`), and the call and its test are gone.
+        "StudyKitTests": 385,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
         "CaptureTests": 229,
         // Added 2026-10-08 with the target, at the 76 that moved out of `XiaolaiDictTests` above: the ledger's
