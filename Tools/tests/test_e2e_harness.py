@@ -1110,3 +1110,72 @@ class TheReadersLedgerIsLeftAsFound(unittest.TestCase):
     def test_a_ledger_that_could_not_be_read_is_not_one_left_alone(self):
         missing = pathlib.Path(self.scratch.name) / "absent" / "ledger.sqlite"
         self.assertTrue(self.verdict(None, ledger=missing).startswith("FAIL"))
+
+
+class ThePunctuatedSelectionIsBoxedByItsWord(unittest.TestCase):
+    """`punctuated_box`, the selection stage's check that a short word selected inside asymmetric punctuation — “Q…”,
+    (“ox, — is boxed by the word itself, run as `e2e.sh` writes it against a stand-in browser helper and app (audit of
+    2026-10-10). It checked the text and that the box's middle across fell on the word, so a box on the wrong line, a
+    thousand points tall, or one the app only said *contains* the word passed. Each of those is a control here: the
+    box must be the word's own, `exact`, every edge within a point of the word selected alone."""
+
+    WORD = {"x": 162.0, "y": 207.0, "width": 14.0, "height": 18.0}
+    WHOLE = {"x": 155.0, "y": 207.0, "width": 44.0, "height": 18.0}
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.scratch.name)
+        (self.root / "helpers").mkdir()
+        self.count = self.root / "count"
+        self.count.write_text("0")
+        # The browser helper: selects, and for the punctuated selection prints the whole selection's box.
+        helper = self.root / "helpers" / "select-web"
+        helper.write_text("#!/bin/bash\n[ \"$2\" = Q ] && exit 0\nprintf '%s\\n' \"$STUB_WHOLE\"\n")
+        helper.chmod(0o755)
+        # The app: the word alone at the first read, the punctuated selection at the second.
+        app = self.root / "XiaolaiDict"
+        app.write_text(textwrap.dedent(f"""\
+            #!/bin/bash
+            n=$(cat {self.count}); echo $((n + 1)) > {self.count}
+            [ "$n" = 0 ] && printf '%s\\n' "$STUB_ALONE" || printf '%s\\n' "$STUB_READING"
+            """))
+        app.chmod(0o755)
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def verdicts(self, reading_bounds: dict | None, text: str = "Q", quality: str = "exact") -> list[str]:
+        self.count.write_text("0")  # each run reads the word alone first
+        alone = {"text": "Q", "bounds": {**self.WORD, "quality": "exact"}}
+        reading = {"text": text, "bounds": None if reading_bounds is None else {**reading_bounds, "quality": quality}}
+        source = "\n".join([
+            f"helpers={json.dumps(str(self.root / 'helpers'))}", f"exe={json.dumps(str(self.root / 'XiaolaiDict'))}",
+            f"reports={json.dumps(str(self.root))}",
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            "consume_verdicts() { printf '%s\\n' \"$2\" | grep -E '^(PASS|FAIL)'; }",
+            function("punctuated_verdicts"), function("punctuated_box"), 'punctuated_box Q "“Q…”"',
+        ])
+        env = {**os.environ, "STUB_ALONE": json.dumps(alone), "STUB_READING": json.dumps(reading),
+               "STUB_WHOLE": json.dumps({"selected": self.WHOLE})}
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False, env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return [line.split("\t")[0].split(" ")[0] for line in done.stdout.splitlines()]
+
+    def test_the_words_own_box_passes(self):
+        self.assertEqual(set(self.verdicts(self.WORD)), {"PASS"})
+
+    def test_a_box_within_a_point_of_the_words_passes(self):
+        self.assertEqual(set(self.verdicts({**self.WORD, "x": 162.6, "height": 18.8})), {"PASS"})
+
+    def test_every_box_that_is_not_the_words_fails(self):
+        for label, box in (("on another line", {**self.WORD, "y": 237.0}), ("a thousand points tall", {**self.WORD, "height": 1000.0}),
+                           ("the whole selection's", self.WHOLE), ("wider to the right", {**self.WORD, "width": 20.0}),
+                           ("none", None)):
+            with self.subTest(box=label):
+                self.assertIn("FAIL", self.verdicts(box))
+
+    def test_a_box_the_app_only_says_contains_the_word_fails(self):
+        self.assertIn("FAIL", self.verdicts(self.WORD, quality="containing"))
+
+    def test_another_word_read_fails(self):
+        self.assertIn("FAIL", self.verdicts(self.WORD, text="Q…"))

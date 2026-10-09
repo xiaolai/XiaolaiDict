@@ -1892,7 +1892,16 @@ punctuated_box() {
         flunk "selection: could not select “$punctuated” ($(head -c 200 "$reports/select-web.err"))"; return 0
     fi
     reading=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
-    consume_verdicts selection "$(python3 - "$alone" "$whole" "$reading" "$word" "$punctuated" <<'PYPUNCT' 2>&1 || true
+    consume_verdicts selection "$(punctuated_verdicts "$alone" "$whole" "$reading" "$word" "$punctuated")"
+}
+# punctuated_verdicts <word alone> <select-web's line> <the punctuated reading> <word> <punctuated>: **the box must be the
+# word's own** — read as the word's (`exact`), every edge within `slack` of the box the word selected alone was given.
+# It asked only for the text and that the box's middle across fell on the word (audit of 2026-10-10), so a box on another
+# line, a thousand points tall, wider than the word, or one the app only said *contains* it, passed. A point of slack is
+# rounding; measured on the E2E Mac 2026-10-10 the two boxes were the same to the point. Its own function, so the
+# heredoc is not inside a command substitution, and `test_e2e_harness.py` runs `punctuated_box` against wrong boxes.
+punctuated_verdicts() {
+    python3 - "$@" <<'PYPUNCT' 2>&1 || true
 import json, sys
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
 def first(raw):
@@ -1905,22 +1914,27 @@ def first(raw):
     return {}
 alone, whole, reading, word, punctuated = first(sys.argv[1]), first(sys.argv[2]), first(sys.argv[3]), sys.argv[4], sys.argv[5]
 w, r = alone.get("bounds") or {}, reading.get("bounds") or {}
+slack = 1.0
 # `select-web`'s own line, read by subscript: a helper's, not an instrument's report.
 s = whole["selected"] if "selected" in whole else {}
 def mid(b): return b.get("x", 0) + b.get("width", 0) / 2
 def box(b): return f"{b.get('x', 0):.1f},{b.get('y', 0):.1f} {b.get('width', 0):.1f}×{b.get('height', 0):.1f}"
+def edges(b): return [b.get("x", 0), b.get("y", 0), b.get("x", 0) + b.get("width", 0), b.get("y", 0) + b.get("height", 0)]
 def on(x): return bool(w) and w.get("x", 0) <= x <= w.get("x", 0) + w.get("width", 0)
 if w and s:
     print(f"NOTE\tselection: “{punctuated}” boxed whole is {box(s)}; a tail at its middle, {mid(s):.1f}, would be "
           + ("on" if on(mid(s)) else "OFF") + f" “{word}” ({box(w)}, middle {mid(w):.1f})")
-say(reading.get("text") == word and bool(r) and on(mid(r)),
-    f"selection: “{punctuated}” is boxed by its word ({box(r)}, {r.get('quality')}) — a tail at its middle, "
-    f"{mid(r):.1f}, is on “{word}” ({box(w)})",
-    f"selection: the box for “{punctuated}” would put the tail off “{word}”: {r} against the word's {w} "
-    f"(read {reading.get('text')!r})")
+say(alone.get("text") == word and w.get("quality") == "exact" and w.get("width", 0) > 0 and w.get("height", 0) > 0,
+    f"selection: “{word}” alone is boxed {box(w)}, exact",
+    f"selection: “{word}” selected alone has no exact box to hold the punctuated one to: {alone}")
+off = [abs(a - b) for a, b in zip(edges(r), edges(w))] if r and w else []
+say(reading.get("text") == word and r.get("quality") == "exact" and len(off) == 4 and max(off) <= slack,
+    f"selection: “{punctuated}” is boxed by its word ({box(r)}, exact) — every edge within {slack:g} pt of “{word}” "
+    f"alone ({box(w)}), so a tail at its middle, {mid(r):.1f}, is on it",
+    f"selection: the box for “{punctuated}” is not “{word}”'s own: {r} against the word's {w}, edges off by "
+    f"{', '.join(f'{d:.1f}' for d in off) or 'nothing to compare'} (left, top, right, bottom; read {reading.get('text')!r})")
 print("DONE")
 PYPUNCT
-)"
 }
 if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
