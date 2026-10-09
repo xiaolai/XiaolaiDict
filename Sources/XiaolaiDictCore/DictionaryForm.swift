@@ -56,10 +56,12 @@ public struct DictionaryForm: Equatable, Sendable {
         // this, which is the cheaper error: the checker is still asked.
         guard !asked.contains(where: \.isUppercase), RegularSpelling.hasVowel(form) else { return nil }
         // **A headword that prints its forms in a slot prints all of them**: *tip* prints *tipped*, so *tiped* is not
-        // its past whatever a rule would allow, and *pretzel* prints *pretzeled*, so *pretzelled* is not offered.
-        let printedSlots = Set((table?.printed(under: form) ?? []).compactMap {
-            RegularSpelling.slot(ofPrinted: $0.form, as: $0.partOfSpeech)
-        })
+        // its past whatever a rule would allow, and *pretzel* prints *pretzeled*, so *pretzelled* is not offered. A form
+        // whose slot cannot be told blocks every slot it could be: *many* prints *more* and *most*, so neither *manier*
+        // nor *maniest* is offered.
+        let printedSlots = (table?.printed(under: form) ?? []).reduce(into: Set<InflectionSlot>()) {
+            $0.formUnion(RegularSpelling.slots(ofPrinted: $1.form, as: $1.partOfSpeech))
+        }
         let slot = RegularSpelling.slots(of: written, from: form).first { !printedSlots.contains($0) }
         return slot.map { DictionaryForm(word: form, evidence: .regular($0)) }
     }
@@ -144,18 +146,28 @@ enum RegularSpelling {
         word.lowercased().contains { "aeiouy".contains($0) }
     }
 
-    /// The slot a form printed under a headword sits in — by its ending first, by the class it was printed under for
-    /// an irregular one (*dalesmen* is a noun's, so a plural). Nil for an irregular printed under no class.
-    static func slot(ofPrinted form: String, as partOfSpeech: String) -> InflectionSlot? {
+    /// **The slots a form printed under a headword may sit in** — one where it can be told, every one it could be where
+    /// it cannot, so evidence for neither in particular is evidence against both (audit of 2026-10-10: *more* and
+    /// *most* were both read as comparatives, and *maniest* stayed eligible).
+    ///
+    /// Printed under an adjective or adverb alone, it is a comparison: *-est* a superlative, *-er* a comparative, and an
+    /// irregular one — *more*, *most*, *less* — either. Otherwise by its ending first, then by the class it was printed
+    /// under for an irregular (*dalesmen* is a noun's, so a plural; *went* a verb's past). Empty for an irregular printed
+    /// under no class.
+    static func slots(ofPrinted form: String, as partOfSpeech: String) -> Set<InflectionSlot> {
+        let classes = WordClass.of(partOfSpeech)
+        if !classes.isEmpty, classes.isSubset(of: [.adjective, .adverb]) {
+            if form.hasSuffix("est") { return [.est] }
+            if form.hasSuffix("er") { return [.er] }
+            return [.er, .est]
+        }
         for (ending, slot) in [("ing", InflectionSlot.ing), ("est", .est), ("ed", .ed), ("er", .er), ("s", .s)]
         where form.hasSuffix(ending) {
-            return slot
+            return [slot]
         }
-        let classes = WordClass.of(partOfSpeech)
-        if classes.contains(.noun) { return .s }
-        if classes.contains(.verb) { return .ed }
-        if !classes.isDisjoint(with: [.adjective, .adverb]) { return .er }
-        return nil
+        if classes.contains(.noun) { return [.s] }
+        if classes.contains(.verb) { return [.ed] }
+        return []
     }
 
     /// Every regular inflection of `base`, by slot.

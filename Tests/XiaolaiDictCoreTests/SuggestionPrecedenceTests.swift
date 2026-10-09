@@ -275,6 +275,33 @@ struct DictionaryFormGuardTests {
         #expect(dictionaries.questions.isEmpty)
     }
 
+    /// **A comparative and a superlative are different slots, and evidence for neither in particular is evidence
+    /// against both** (audit of 2026-10-10). *many* prints *more* and *most* — irregular, no ending to tell them apart —
+    /// and both were read as comparatives, so *maniest* stayed eligible as *many*'s regular superlative, against what
+    /// the dictionary prints. A printed form whose slot cannot be told now blocks every slot it could be.
+    @Test func anIrregularComparisonBlocksBothSlotsItCouldBe() async throws {
+        let printed = FormTable(sources: [], forms: [
+            "more": [.init(lemma: "many", partOfSpeech: "adjective")],
+            "most": [.init(lemma: "many", partOfSpeech: "adjective")],
+        ], ownHeadwords: [])
+        let dictionaries = Dictionaries(entries: ["many": [Headed("many", ["determiner, pronoun, & adjective"])]])
+        for term in ["maniest", "manier"] {
+            let offered = try await offer(term, lemma: "many", dictionaries: dictionaries, printed: printed)
+            #expect(offered.suggestion?.kind != .dictionaryForm, "\(term) was offered many")
+        }
+        #expect(dictionaries.questions.isEmpty, "a form the dictionary contradicts was looked up")
+    }
+
+    /// **The positive control: a printed form whose ending names its slot blocks that slot alone** — *red* prints
+    /// *redder*, so *redderer* is nothing, and *reddest* is still *red*'s regular superlative.
+    @Test func aPrintedComparativeLeavesTheSuperlativeOpen() async throws {
+        let printed = FormTable(sources: [], forms: ["redder": [.init(lemma: "red", partOfSpeech: "adjective")]],
+                                ownHeadwords: [])
+        let dictionaries = Dictionaries(entries: ["red": [Headed("red", ["adjective", "noun"])]])
+        let offered = try await offer("reddest", lemma: "red", dictionaries: dictionaries, printed: printed)
+        #expect(offered == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
+    }
+
     // MARK: - The regression table
 
     enum Verdict { case right, wrong, unclear }
