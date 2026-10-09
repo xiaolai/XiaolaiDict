@@ -234,9 +234,14 @@ public struct LookupCardView: View {
                 // and truncation only hides a public-fallback definition's end.
                 .fixedSize(horizontal: false, vertical: true)
         case .absent:
-            Text("No entry for “\(card.term)” in your dictionaries.")
-                .font(.system(size: scale.text.body))
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Text("No entry for “\(card.term)” in your dictionaries.")
+                    .font(.system(size: scale.text.body))
+                    .fixedSize(horizontal: false, vertical: true)
+                // **The way out for a typo or a misread — under the miss, never instead of it** (plan-spelling-suggestion
+                // §3). The miss is the answer; the line fills in once the dictionaries have the word.
+                if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
+            }
         }
     }
 
@@ -906,7 +911,9 @@ public struct LookupPanelContent: View {
             // *take* found nothing is exactly the reader who needs to be told the sentence held
             // *take something into account*. A phrase answer does not depend on the word's.
             sentence: presentation.sentence, alternatives: [], memory: presentation.memory,
-            phrase: presentation.phrase)
+            phrase: presentation.phrase,
+            // Nil for prose: the rule draws a suggestion under the service's own miss and nowhere else.
+            suggestion: presentation.offeredSuggestion)
     }
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a

@@ -154,21 +154,25 @@ struct CompactLookupCardView: View {
                 }
             }
         } else {
-            Group {
-                switch card.answer {
-                case .prose(let text):
-                    Text(verbatim: text).lineLimit(Token.Panel.compactProseLines)
-                case .absent:
-                    Text("No entry for “\(card.term)” in your dictionaries.")
-                case .undecided:
-                    Text("Open details to read this dictionary entry")
-                default:
-                    Text("The sense you read could not be identified.")
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Group {
+                    switch card.answer {
+                    case .prose(let text):
+                        Text(verbatim: text).lineLimit(Token.Panel.compactProseLines)
+                    case .absent:
+                        Text("No entry for “\(card.term)” in your dictionaries.")
+                    case .undecided:
+                        Text("Open details to read this dictionary entry")
+                    default:
+                        Text("The sense you read could not be identified.")
+                    }
                 }
+                .font(.system(size: scale.text.body))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                // Under the miss on the quick card too, so the way out is not one click further away (§3).
+                if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
             }
-            .font(.system(size: scale.text.body))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

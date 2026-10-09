@@ -87,6 +87,9 @@ public struct LookupCard: Equatable {
     public let alternatives: [SensePresentation]
     /// The phrase the reader was standing inside, where there was one — shown under their sentence.
     public let phrase: PhrasePresentation?
+    /// **"Did you mean “X”?" under a miss**, where the panel's rule offers one (`LookupPresentation.offeredSuggestion`)
+    /// — nil on every card with an entry, and on a miss nobody has a suggestion for.
+    public let suggestion: SpellingSuggestion?
 
     /// How many senses the reader could turn to. Named rather than `alternatives.count` at the
     /// call site so the view cannot start counting something else.
@@ -229,11 +232,12 @@ public struct LookupCard: Equatable {
         term: String, lemma: String? = nil, sentenceRange: NSRange? = nil,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
-        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
+        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil
     ) {
         self.term = term
         self.lemma = lemma ?? term
         self.phrase = phrase
+        self.suggestion = suggestion
         self.sentenceRange = sentenceRange
         self.heading = heading
         self.partOfSpeech = partOfSpeech

@@ -41,6 +41,12 @@ final class LookupRunner {
     private let settle: () async -> Void
     /// Notes each stage this lookup reaches, under its request — `LookupTimeline`.
     private let mark: @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void
+    /// **"Did you mean …?"** — miss → the operating system's checker → verified through this runner's own `client` → the
+    /// card (plan-spelling-suggestion §3). Asked beside the sense and the memory strip, so it holds neither up.
+    private let suggester: SpellingSuggester
+    /// The suggestion the card on screen was offered, and the reading it was offered under — what a press on its line
+    /// looks up. **Only the latest**, because only the card on screen can be pressed.
+    private var offered: (request: Int, selection: Selection, suggestion: SpellingSuggestion)?
 
     init(
         client: DictionaryClient, panel: any LookupPanelPresenting,
@@ -51,9 +57,18 @@ final class LookupRunner {
         settle: @escaping () async -> Void = {},
         keepPolicy: @escaping @MainActor () -> LookupKeepPolicy = { .manual },
         initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in },
-        mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in }
+        mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in },
+        // **On by default, and the system's own checker**: a runner built without saying otherwise offers what the
+        // reader's runs offer. A test names a checker of its own.
+        spelling: any SpellingSuggesting = SystemSpellChecker(),
+        readerEnglish: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) }
     ) {
         self.mark = mark
+        // **The verification is an ordinary lookup through the client the reader's own goes through** — the same
+        // dictionaries, the same deadline, the same fallback that verifies nothing.
+        suggester = SpellingSuggester(
+            checker: spelling, lookUp: { [client] term throws(CancellationError) in try await client.lookup(term) },
+            language: readerEnglish)
         self.initialRecording = initialRecording
         self.keepPolicy = keepPolicy
         self.client = client
@@ -238,6 +253,8 @@ final class LookupRunner {
         enum Arrival: Sendable {
             case memory(PriorEncounters)
             case sense(SenseResolution)
+            /// Nil where the offer was cancelled — a newer lookup — and with how long it took.
+            case suggestion(SpellingOffer?, Duration)
         }
         var resolution = SenseResolution(mark: nil, encounter: nil)
         await withTaskGroup(of: Arrival.self) { group in
@@ -255,6 +272,15 @@ final class LookupRunner {
                     entries: entries, phrase: phraseEntries, sentence: selection.sentence,
                     context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
             }
+            // **"Did you mean …?", a third arrival, after the miss is already on the card** — so the card is final-looking
+            // the moment the dictionaries answer, and the line fills in once the checker and the dictionaries have spoken.
+            // Nothing is drawn while it is checked. A child of the group for the reason the sense is one: superseding the
+            // lookup cancels it, and the verification lookup a cancelled offer would have sent is never sent.
+            group.addTask { [suggester] in
+                let started = ContinuousClock.now
+                let offer = try? await suggester.offer(for: selection.text, outcome: outcome)
+                return .suggestion(offer, .now - started)
+            }
             for await arrival in group {
                 switch arrival {
                 case .memory(let prior):
@@ -268,6 +294,14 @@ final class LookupRunner {
                     guard answered.mark != nil, panel.isCurrent(ticket) else { continue }
                     Self.apply(answered, to: &presentation, phrase: resolved.phrase,
                                studyDictionary: effectivePrimary)
+                    panel.update(.lookup(presentation), for: ticket)
+                case .suggestion(let offer, let took):
+                    logSpelling(offer, took: took)
+                    // **Only on the card it was made for.** A hover's claim supersedes without cancelling, so the offer
+                    // can arrive for a card no longer shown: it is neither drawn nor kept to be followed.
+                    guard let suggestion = offer?.suggestion, panel.isCurrent(ticket) else { continue }
+                    presentation.suggestion = suggestion
+                    offered = (ticket.number, selection, suggestion)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -286,6 +320,34 @@ final class LookupRunner {
             abstention: Task.isCancelled ? nil : resolution.abstention,
             encounter: resolution.encounter, primaryDictionary: effectivePrimary,
             phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: resolved.phrase))
+    }
+
+    /// **What a press on the card's "Did you mean …?" looks up**: the offered word, in the sentence and the place the miss
+    /// was read in, as a reading of its own — the miss stays recorded as the miss it was. Nil where the card `request`
+    /// was not offered `suggestion`, so a press can only follow the line it pressed.
+    ///
+    /// **No range.** The captured one is where the misspelling sits, and nothing may mark the corrected word there; the
+    /// lemmatiser and the card search a sentence for a word given no range, and find nothing, which is right.
+    func followUp(_ suggestion: SpellingSuggestion, from request: Int) -> Selection? {
+        guard let offered, offered.request == request, offered.suggestion == suggestion else { return nil }
+        let read = offered.selection
+        return Selection(text: suggestion.word, sentence: read.sentence, rangeInSentence: nil,
+                         quality: read.quality, place: read.place)
+    }
+
+    /// One line about a miss's suggestion — **its kind and how long it took, never a word**: the term and the
+    /// correction are the reader's reading. Silent for a word that was found, which is nearly every lookup.
+    private func logSpelling(_ offer: SpellingOffer?, took: Duration) {
+        let kind: String
+        switch offer {
+        case nil: kind = "cancelled"
+        case .offered: kind = "offered"
+        case .noCorrection: kind = "the checker had no correction"
+        case .unverified: kind = "no dictionary has the correction"
+        case .refused(.notAMiss): return
+        case .refused(let refusal): kind = "not asked (\(refusal.rawValue))"
+        }
+        log.notice("spelling: \(kind, privacy: .public) after \(Int(took.milliseconds), privacy: .public) ms")
     }
 
     /// **The phrase whose own entry `encounter` is in**, by the inventory's spelling — the hit's, as *Save

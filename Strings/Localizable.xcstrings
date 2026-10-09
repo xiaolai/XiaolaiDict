@@ -548,6 +548,9 @@
     "Dictionary" : {
 
     },
+    "Did you mean “%@”?" : {
+
+    },
     "Discard" : {
 
     },
@@ -828,6 +831,9 @@
 
     },
     "Look up the selection" : {
+
+    },
+    "Look up “%@” in your dictionaries" : {
 
     },
     "Looked up on ^[%lld day](inflect: true), in ^[%lld place](inflect: true)" : {

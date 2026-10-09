@@ -3,6 +3,7 @@ import Capture
 import StudyKit
 import StudyModels
 import XiaolaiDictBase
+import XiaolaiDictCore
 import XiaolaiDictUI
 import SwiftUI
 import os
@@ -171,6 +172,10 @@ final class LookupPanelController: LookupPanelPresenting {
     var onCollectPhrase: (@MainActor (PhraseCollection, Int) -> Bool)?
     /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
     var onOpenDictionarySettings: (@MainActor () -> Void)?
+    /// The reader pressed "Did you mean …?" on the card `Int` drew (plan-spelling-suggestion §3). Set by the app, which
+    /// starts lookups — under the card's request, for the reason the study hooks carry one: the runner kept the
+    /// suggestion under it, and a press filed under another card follows nothing.
+    var onFollowSuggestion: (@MainActor (SpellingSuggestion, Int) -> Void)?
     /// The last two numbers the window fit was computed from: what the card's content wanted, and
     /// what its scroll view was given. Read by `--panel-report`, and by nothing else — the window's
     /// height can be seen from outside, but not what it was asked for.
@@ -557,6 +562,16 @@ private struct LookupCardWiring: ViewModifier {
                 return collect(phrase, request)
             }
             .environment(\.phraseCollectStatuses, request.flatMap { recorder?.phraseStates[$0] } ?? [:])
+            // **"Did you mean …?", under this card's request.** Unwired, it is loud: a press that reaches nothing is a
+            // broken switch.
+            .environment(\.followSuggestion) { [controller] suggestion in
+                guard let request, let follow = controller.onFollowSuggestion else {
+                    Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
+                        .fault("spelling: a suggestion was pressed on a panel with no request or no app hook")
+                    return
+                }
+                follow(suggestion, request)
+            }
             // The one window the panel may bring forward: a window the reader chose. The app's own
             // action, so the dictionary discovery that pane depends on is started by the same code
             // path every other route uses.

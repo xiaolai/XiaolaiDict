@@ -54,6 +54,20 @@ public struct LookupPresentation: Equatable {
     /// Nil covers three different facts on the wire — no sentence, no phrase, and an inventory still being
     /// read — and `PhrasePresentation.init(_:sentence:)` is where that collapse happens, once.
     public var phrase: PhrasePresentation?
+    /// A word the reader may have meant, under a miss — **a typed value, never display text**, and nil until the checker
+    /// has answered and the dictionaries have the word (plan-spelling-suggestion §3). The miss is final-looking before
+    /// this arrives, and nothing is drawn while it is being checked.
+    public var suggestion: SpellingSuggestion?
+
+    /// **The suggestion the card draws, and the rule for drawing one** — asked here, where a test can ask it, rather
+    /// than inside a view body. Only under the service's own miss: a miss it could not answer already says the
+    /// dictionaries could not all be asked, and a line under it would read as a confirmed absence. Only for this card's
+    /// own term: a suggestion made for another lookup is never drawn on this one. Nil while anything is still being
+    /// asked, so nothing is drawn while the suggestion is checked.
+    public var offeredSuggestion: SpellingSuggestion? {
+        guard let suggestion, suggestion.term == term, case .notFound(serviceFailure: nil)? = outcome else { return nil }
+        return suggestion
+    }
 
     /// **`request` has no default**, because a default is what makes two lookups share an identity.
     /// The panel resets a card's own state — a revealed gloss, a translation, an explanation — when
