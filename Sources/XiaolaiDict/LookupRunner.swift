@@ -289,9 +289,11 @@ final class LookupRunner {
             // the moment the dictionaries answer, and the line fills in once the checker and the dictionaries have spoken.
             // Nothing is drawn while it is checked. A child of the group for the reason the sense is one: superseding the
             // lookup cancels it, and the verification lookup a cancelled offer would have sent is never sent.
-            group.addTask { [suggester] in
+            // **And the dictionary form, where the checker has nothing** (plan-card-refinements WI-3): the lemma this
+            // lookup already settled, offered as a line and verified first — never looked up in the reader's place.
+            group.addTask { [suggester, lemma] in
                 let started = ContinuousClock.now
-                let offer = try? await suggester.offer(for: selection.text, outcome: outcome)
+                let offer = try? await suggester.offer(for: selection.text, outcome: outcome, lemma: lemma)
                 return .suggestion(offer, .now - started)
             }
             for await arrival in group {

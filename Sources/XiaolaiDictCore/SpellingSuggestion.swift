@@ -25,10 +25,19 @@ public struct SpellingSuggestion: Sendable, Hashable {
     /// What the checker offered instead, in its own spelling — a word the reader's dictionaries were asked about and
     /// have (`SpellingCorrection.isVerified`).
     public let word: String
+    /// What the word is to the term: the checker's correction of a typo, or the term's dictionary form — "ran" as
+    /// "run", where the dictionaries had no entry for the inflection (plan-card-refinements WI-3).
+    public let kind: Kind
 
-    public init(term: String, word: String) {
+    public enum Kind: String, Sendable, Hashable {
+        case spelling
+        case dictionaryForm
+    }
+
+    public init(term: String, word: String, kind: Kind = .spelling) {
         self.term = term
         self.word = word
+        self.kind = kind
     }
 }
 
@@ -135,16 +144,45 @@ public struct SpellingSuggester: Sendable {
     /// What `term`'s lookup is offered. Throws only when the caller is cancelled — a newer lookup — and then **after the
     /// checker and before the dictionaries**: the checker cannot be stopped mid-word, the verification lookup can, and a
     /// lookup nobody will see must not cost the service one.
-    public func offer(for term: String, outcome: LookupOutcome?) async throws(CancellationError) -> SpellingOffer {
+    ///
+    /// **And where the checker has nothing the dictionaries have, the term's dictionary form** — `lemma`, the one the
+    /// lookup already worked out — offered the same way, verified the same way (plan-card-refinements WI-3). Second,
+    /// because a typo's correction is the better answer, and a typo reaching the lemma path was most of the wrong
+    /// recoveries measured; and only a lemma the lemmatiser stands by — never `ambiguous`, never the word again.
+    public func offer(
+        for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil
+    ) async throws(CancellationError) -> SpellingOffer {
         if case .refused(let refusal) = SpellingEligibility.of(term: term, outcome: outcome) {
             return .refused(refusal)
         }
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
         let corrected = await checker.suggestion(for: asked, language: language())
-        guard let word = SpellingCorrection.candidate(corrected, for: asked) else { return .noCorrection }
+        let spelling: SpellingOffer
+        if let word = SpellingCorrection.candidate(corrected, for: asked) {
+            if Task.isCancelled { throw CancellationError() }
+            guard !SpellingCorrection.isVerified(try await lookUp(word)) else {
+                return .offered(SpellingSuggestion(term: term, word: word))
+            }
+            spelling = .unverified(word)
+        } else {
+            spelling = .noCorrection
+        }
+        guard let form = DictionaryForm.candidate(lemma, for: asked) else { return spelling }
         if Task.isCancelled { throw CancellationError() }
-        guard SpellingCorrection.isVerified(try await lookUp(word)) else { return .unverified(word) }
-        return .offered(SpellingSuggestion(term: term, word: word))
+        guard SpellingCorrection.isVerified(try await lookUp(form)) else { return spelling }
+        return .offered(SpellingSuggestion(term: term, word: form, kind: .dictionaryForm))
+    }
+}
+
+/// **The term's dictionary form worth asking the dictionaries about**, or nil (plan-card-refinements WI-3).
+public enum DictionaryForm {
+    /// A lemma the lemmatiser stands by — the tagger's, a rule's or the usual reading of an irregular, never one it
+    /// called `ambiguous` or none at all — that is not the term again up to case.
+    public static func candidate(_ lemma: Lemma?, for term: String) -> String? {
+        guard let lemma, lemma.basis <= .likely else { return nil }
+        let form = lemma.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !form.isEmpty, form.compare(term, options: .caseInsensitive) != .orderedSame else { return nil }
+        return form
     }
 }
 

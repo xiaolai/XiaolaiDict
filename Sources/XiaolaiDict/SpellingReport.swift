@@ -24,6 +24,9 @@ enum SpellingReport {
 #else
         // The witness `verify_bundle` looks for in a development bundle: a sentence only this branch has.
         LookupCommand.writeError("spelling-report: asking the spell checker about each term the dictionaries miss")
+        // **The reader's own form table, as the app reads it at launch** — the dictionary form the card is offered is
+        // decided with it (plan-card-refinements WI-3), and without it a term alone has only the tagger's lemma.
+        FormAuthority.shared.use(FormTableStore())
         let client = DictionaryClient()
         return await run(terms: terms, lookUp: { term throws(CancellationError) in try await client.lookup(term) },
                          checker: SystemSpellChecker(), write: LookupCommand.writeLine)
@@ -50,7 +53,10 @@ enum SpellingReport {
             do {
                 outcome = try await lookUp(term)
                 let looked = now()
-                offer = try await suggester.offer(for: term, outcome: outcome)
+                // The term's dictionary form as the card's lookup would work it out — alone, as a term on the command
+                // line has no sentence — so the instrument measures the offer the card is made.
+                offer = try await suggester.offer(
+                    for: term, outcome: outcome, lemma: Lemmatizer.lemma(of: term, in: nil, at: nil))
                 let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, readersEnglish: language(),
                                               lookup: looked - started, suggestion: now() - looked)
                 if let failed = LookupCommand.emit(line, through: write, writeError: writeError) { return failed }
@@ -74,6 +80,8 @@ struct SpellingReportLine: Encodable, Equatable {
     var refusal: String?
     /// The checker's word: the one offered, or the one no dictionary of the reader's has.
     var correction: String?
+    /// What an offered word is to the term: `spelling` | `dictionaryForm` (plan-card-refinements WI-3).
+    var correctionKind: String?
     /// The reader's English the checker was asked in, as they list it; absent where they list none (plain English).
     var readersEnglish: String?
     let lookupMilliseconds: Double
@@ -91,6 +99,7 @@ struct SpellingReportLine: Encodable, Equatable {
         case .offered(let suggestion):
             self.offer = "offered"
             correction = suggestion.word
+            correctionKind = suggestion.kind.rawValue
         case .refused(let why):
             self.offer = "refused"
             refusal = why.rawValue

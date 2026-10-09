@@ -836,6 +836,16 @@
     "Look up the selection" : {
 
     },
+    "Look up “%@” as “%@”?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Look up “%1$@” as “%2$@”?"
+          }
+        }
+      }
+    },
     "Look up “%@” in your dictionaries" : {
 
     },

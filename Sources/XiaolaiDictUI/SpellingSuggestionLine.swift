@@ -17,7 +17,12 @@ struct SpellingSuggestionLine: View {
 
     var body: some View {
         Button { follow(suggestion) } label: {
-            Text("Did you mean “\(suggestion.word)”?")
+            // **What the word is to the reader's**: a typo's correction, or the form the dictionaries file it under
+            // (plan-card-refinements WI-3) — "did you mean" would call a correct inflection a mistake.
+            switch suggestion.kind {
+            case .spelling: Text("Did you mean “\(suggestion.word)”?")
+            case .dictionaryForm: Text("Look up “\(suggestion.term)” as “\(suggestion.word)”?")
+            }
         }
         .buttonStyle(.bordered)
         .controlSize(.small)

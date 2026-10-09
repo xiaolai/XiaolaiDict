@@ -77,6 +77,10 @@ struct SpellingSuggestionLineTests {
         #expect(line.contains("Button { follow(suggestion) } label:"), "the line's press does not hand its suggestion over")
         #expect(line.contains("@Environment(\\.followSuggestion) private var follow"), "the line does not ask the app")
         #expect(line.contains("Text(\"Did you mean “\\(suggestion.word)”?\")"), "the line does not say what it offers")
+        // **A dictionary form says what it is** (plan-card-refinements WI-3): not "did you mean", which calls the
+        // reader's word a mistake, but the form the dictionaries file it under.
+        #expect(line.contains("case .dictionaryForm: Text(\"Look up “\\(suggestion.term)” as “\\(suggestion.word)”?\")"),
+                "the dictionary form's line does not say it is the word's dictionary form")
     }
 
     /// **The card grows by the line, and only where the rule offers it** — on the compact card and the detailed one. A
@@ -96,6 +100,15 @@ struct SpellingSuggestionLineTests {
             #expect(size(Self.presentation(outcome, term: term)) == size(Self.presentation(outcome, suggestion: nil, term: term)),
                     "a refused suggestion changed the card: \(outcome) / \(term)")
         }
+    }
+
+    /// **The dictionary form's line is drawn on both cards too** (plan-card-refinements WI-3).
+    @Test(arguments: [false, true])
+    func theDictionaryFormLineIsDrawnOnBothCards(compact: Bool) {
+        let form = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
+        let bare = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: nil), compact: compact).fittingSize
+        let offered = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: form), compact: compact).fittingSize
+        #expect(offered.height > bare.height, "the line added no height: \(bare.height) then \(offered.height)")
     }
 
     // MARK: - The app's wire

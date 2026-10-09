@@ -146,6 +146,23 @@ struct LookupRunnerSpellingTests {
         #expect(recording?.record.surface == "teh")
     }
 
+    /// **The dictionary form, where the checker has nothing** (plan-card-refinements WI-3): the lemma the lookup already
+    /// worked out, verified against the dictionaries, offered as a line of its own kind — and nothing looked up in the
+    /// reader's place.
+    @Test func aMissedInflectionIsOfferedItsVerifiedDictionaryForm() async {
+        let panel = RecordingPanel(), service = Service(["cat"]), checker = Checker([:])
+        let cats = Selection(
+            text: "cats", sentence: "The cats sat on the mat.", rangeInSentence: NSRange(location: 4, length: 4),
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
+        let recording = await runner(panel, service, checker).run(cats, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+        #expect(Self.lookups(panel.updates).last?.suggestion
+                == SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm))
+        #expect(service.questions == ["cats", "cat"], "the dictionary form was not verified before it was offered")
+        #expect(panel.contents.count == 1, "the dictionary form opened a panel of its own")
+        #expect(recording?.record.result == .notFound, "the miss stopped being a miss")
+    }
+
     /// **Verify before offering**: a correction no dictionary of the reader's has never reaches the card.
     @Test func aSuggestionNoDictionaryHasIsNeverShown() async {
         let panel = RecordingPanel(), service = Service([]), checker = Checker(["teh": "the"])

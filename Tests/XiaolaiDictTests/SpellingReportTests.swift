@@ -59,11 +59,22 @@ struct SpellingReportTests {
         }
     }
 
+    /// **The dictionary form too, as the card is offered it** (plan-card-refinements WI-3): a missed inflection whose
+    /// lemma the dictionaries have is reported offered, with the form and its kind; a checker's correction says its own.
+    @Test func aMissedInflectionIsReportedWithItsDictionaryForm() async {
+        let (_, lines, raw) = await report(["receives", "recieve"])
+        #expect(lines.count == 2, "\(raw)")
+        #expect(lines.first?["offer"] as? String == "offered")
+        #expect(lines.first?["correction"] as? String == "receive")
+        #expect(lines.first?["correctionKind"] as? String == "dictionaryForm")
+        #expect(lines.last?["correctionKind"] as? String == "spelling")
+    }
+
     /// **No dictionary text, ever** — the keys are exactly these, whatever the outcome: a definition, a headword or a
     /// dictionary's name would be licensed content printed from a shell.
     @Test func noLineCarriesDictionaryText() async {
         let (_, lines, raw) = await report(["recieve", "ephemeral", "crash"])
-        let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "readersEnglish",
+        let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "readersEnglish",
                                     "lookupMilliseconds", "suggestionMilliseconds"]
         for line in lines { #expect(Set(line.keys).isSubset(of: allowed), "\(line.keys.sorted())") }
         #expect(!raw.joined().contains("definition nobody may print"))

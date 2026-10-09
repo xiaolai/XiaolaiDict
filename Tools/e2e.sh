@@ -1378,7 +1378,7 @@ fi
 #     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on the E2E Mac,
 #     the same macOS build — plan §7, 2026-10-09).
 spelling_status=0
-spelling=$("$exe" --spelling-report recieve ambages 2>"$reports/spelling-report.err") || spelling_status=$?
+spelling=$("$exe" --spelling-report recieve ambages gazeboes 2>"$reports/spelling-report.err") || spelling_status=$?
 if [ "$spelling_status" -ne 0 ]; then
     flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
 fi
@@ -1399,6 +1399,14 @@ say(typo.get("outcome") == "notFound" and typo.get("offer") == "offered" and typ
     f"lookup: --spelling-report offers “receive” for the fixture typo “recieve”, {typo.get('suggestionMilliseconds')} ms "
     f"after its {typo.get('lookupMilliseconds')} ms miss",
     f"lookup: --spelling-report did not offer “receive” for “recieve”: {typo or sys.argv[1][:300]}")
+# **A missed inflection is offered its dictionary form** (plan-card-refinements WI-3): `gazeboes` is a plural the
+# dictionaries print and do not answer, and its lemma, from the reader's own form table, is offered — not substituted.
+form_term = "gazeboes"
+form = lines.get(form_term) or {}
+say(form.get("outcome") == "notFound" and form.get("offer") == "offered" and form.get("correction") == "gazebo"
+    and form.get("correctionKind") == "dictionaryForm",
+    "lookup: --spelling-report offers the dictionary form “gazebo” for the missed inflection “gazeboes”",
+    f"lookup: --spelling-report did not offer “gazebo” as the dictionary form of “gazeboes”: {form or sys.argv[1][:300]}")
 rare = lines.get(rare_term)
 if rare is None:
     say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")
