@@ -66,6 +66,8 @@ final class LookupPanelModel {
     /// **The tail the card carries, pointing at its word** — nil for a card placed by the pointer. Read by the card's
     /// surface through the environment, and moved by every later fit so it keeps pointing at the word.
     var tail: CardTail?
+    /// **Which outline the card drew** — written by its surface, read by the click-away test.
+    @ObservationIgnored let drawn = DrawnCard()
 
     /// Moved by every `show`, so the scene can say which showing it has drawn.
     private(set) var generation = 0
@@ -387,7 +389,8 @@ final class LookupPanelController: LookupPanelPresenting {
     private func closeIfClickWasAway(_ event: NSEvent) {
         guard let window, window.isVisible else { return }
         let point = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? event.locationInWindow
-        guard !CardChrome(textSize: textSize()).holds(point, inWindow: window.frame, tail: model.tail) else { return }
+        guard !CardChrome(textSize: textSize()).holds(point, inWindow: window.frame, tail: model.tail,
+                                                           compact: model.drawn.compact) else { return }
         close()
     }
 
@@ -568,6 +571,7 @@ struct LookupPanelSceneView: View {
                 PanelView(content: content)
                     .environment(\.panelGrowth, model.growth)
                     .environment(\.panelTail, model.tail)
+                    .environment(\.drawnCard, model.drawn)
                     .modifier(LookupCardWiring(
                         request: content.request, recorder: recorder, controller: controller,
                         translation: translation(), explainer: explainer()))

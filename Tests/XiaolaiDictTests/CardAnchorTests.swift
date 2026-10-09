@@ -201,11 +201,11 @@ struct CardAnchorTests {
         let onTheTail = CGPoint(x: point.x, y: point.y - chrome.tailLength * 0.25)
         let card = cardRect(anchored)
         let besideIt = CGPoint(x: card.minX + chrome.cornerRadius, y: point.y - chrome.tailLength * 0.25)
-        #expect(chrome.holds(onTheTail, inWindow: anchored.frame, tail: tail))
-        #expect(!chrome.holds(besideIt, inWindow: anchored.frame, tail: tail))
-        #expect(chrome.holds(CGPoint(x: card.midX, y: card.midY - chrome.tailLength), inWindow: anchored.frame, tail: tail))
-        #expect(chrome.holds(besideIt, inWindow: anchored.frame, tail: nil), "with no tail the window answers whole")
-        #expect(!chrome.holds(onTheTail, inWindow: anchored.frame, tail: tail.released),
+        #expect(chrome.holds(onTheTail, inWindow: anchored.frame, tail: tail, compact: false))
+        #expect(!chrome.holds(besideIt, inWindow: anchored.frame, tail: tail, compact: false))
+        #expect(chrome.holds(CGPoint(x: card.midX, y: card.midY - chrome.tailLength), inWindow: anchored.frame, tail: tail, compact: false))
+        #expect(chrome.holds(besideIt, inWindow: anchored.frame, tail: nil, compact: false), "with no tail the window answers whole")
+        #expect(!chrome.holds(onTheTail, inWindow: anchored.frame, tail: tail.released, compact: false),
                 "a released tail still answered for the place it used to point")
     }
 
@@ -418,5 +418,54 @@ struct SteadyFrameTests {
 
     @Test func aWindowNeverListedIsGone() async {
         #expect(await watch({ nil }) == .vanished)
+    }
+}
+
+/// **A click is judged against the outline the card drew** (audit of 2026-10-10). The click-away test used the compact
+/// card's rounder corner for every card, while the default card draws the panel's tighter one — so a click on the default
+/// card's own paper, in the sliver between the two corners, closed it as a click away. The rounder corner is kept for the
+/// tail's clearance alone.
+@MainActor
+struct CardOutlineHitTests {
+    @Test func aClickOnTheDefaultCardsCornerIsOnTheCardAndOneBesideTheCompactCardsIsNot() throws {
+        for size in TextSize.allCases {
+            let chrome = CardChrome(textSize: size)
+            let tail = CardTail(edge: .bottom, tip: 120)
+            let frame = CGRect(x: 400, y: 300, width: 420, height: 320)
+            let insets = chrome.insets(tail: tail)
+            // Along the diagonal in from the card's top-left corner, the first point the default card's outline holds.
+            func point(_ inward: CGFloat) -> CGPoint {
+                CGPoint(x: frame.minX + insets.leading + inward, y: frame.maxY - insets.top - inward)
+            }
+            let inward = try #require(stride(from: CGFloat(0), through: chrome.cornerRadius, by: 0.25).first {
+                chrome.holds(point($0), inWindow: frame, tail: tail, compact: false)
+            }, "\(size): the default card's corner holds nothing")
+            #expect(!chrome.holds(point(inward), inWindow: frame, tail: tail, compact: true),
+                    "\(size): a point on the default card's paper is outside the compact card's rounder corner too")
+            // And deep inside, both hold it: the difference is the corner, nothing else.
+            #expect(chrome.holds(point(chrome.cornerRadius), inWindow: frame, tail: tail, compact: true))
+        }
+    }
+
+    /// **The wire: the surface says which outline it drew**, to the `DrawnCard` the panel judges clicks by — the compact
+    /// preview, and the default card, each drawn in a window ordered in off every display.
+    @Test func theSurfaceSaysWhichOutlineItDrew() {
+        for compact in [true, false, true] {
+            let drawn = DrawnCard()
+            let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 400, height: 300), styleMask: [.titled],
+                                  backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.orderOut(nil) }
+            let host = NSHostingView(rootView: PanelSurface(accent: nil, compact: compact) { Text(verbatim: "fair") } bar: {
+                EmptyView()
+            }.environment(\.scale, Scale.standard).environment(\.drawnCard, drawn))
+            window.contentView = host
+            window.orderFrontRegardless()
+            for _ in 0..<3 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date())
+            }
+            #expect(drawn.compact == compact, "a \(compact ? "compact" : "default") card said it drew the other")
+        }
     }
 }

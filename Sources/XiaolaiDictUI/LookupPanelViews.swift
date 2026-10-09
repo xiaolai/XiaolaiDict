@@ -79,6 +79,7 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     /// The tail the panel gave the card, pointing at its word — nil for a card placed by the pointer, which is drawn as
     /// every card was before (the owner's decision of 2026-10-09).
     @Environment(\.panelTail) private var tail
+    @Environment(\.drawnCard) private var drawn
     /// The word's own colour, which the card's second shadow is thrown in. Nil for a message,
     /// which is about no word.
     let accent: Color?
@@ -184,6 +185,8 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         // placement reads the same numbers to put the card, and its tail, where they are drawn.
         .padding(CardChrome(scale).insets(tail: tail))
         .mask { shown }
+        // **Which outline was drawn, said to the panel**, whose click-away test judges a click by it.
+        .onChange(of: compact, initial: true) { _, compact in drawn?.drew(compact: compact) }
     }
 
     /// **What of the surface the window shows: the shadow fades to nothing at every edge of the window**, and the card and
@@ -243,9 +246,10 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         max(0, scrollCap - barHeight)
     }
 
-    /// The card's outline: its rounded rectangle, and its tail where the panel gave it one.
+    /// The card's outline: its rounded rectangle, and its tail where the panel gave it one — by `CardChrome`'s corner,
+    /// which the click-away test judges by too.
     private var shape: CardShape {
-        CardShape(cornerRadius: compact ? scale.radius.lookup : scale.radius.panel, tail: tail,
+        CardShape(cornerRadius: CardChrome(scale).radius(compact: compact), tail: tail,
                   tailLength: scale.space.tailLength, tailHalfWidth: scale.space.tailHalfWidth)
     }
 }

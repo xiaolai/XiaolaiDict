@@ -36,7 +36,11 @@ public struct CardChrome: Equatable, Sendable {
     /// The shadows' room right of the card, and below it, where they fall.
     public let after: CGFloat
     /// The rounder of the two cards' corners — the compact preview's — so a tail kept clear of it is clear of either.
+    /// **For the tail's clearance only**: a click is judged against the corner the card drew (`radius(compact:)`).
     public let cornerRadius: CGFloat
+    /// The default card's corner, and the compact preview's.
+    let panelRadius: CGFloat
+    let compactRadius: CGFloat
     /// How far the tail reaches out of the card, toward the word.
     public let tailLength: CGFloat
     /// Half the tail's width where it leaves the card.
@@ -47,7 +51,9 @@ public struct CardChrome: Equatable, Sendable {
     init(_ scale: Scale) {
         before = scale.shadow.glowBefore
         after = scale.shadow.glowAfter
-        cornerRadius = max(scale.radius.panel, scale.radius.lookup)
+        panelRadius = scale.radius.panel
+        compactRadius = scale.radius.lookup
+        cornerRadius = max(panelRadius, compactRadius)
         tailLength = scale.space.tailLength
         tailHalfWidth = scale.space.tailHalfWidth
     }
@@ -66,10 +72,16 @@ public struct CardChrome: Equatable, Sendable {
         return min(max(x, lowest), max(lowest, cardWidth - lowest))
     }
 
+    /// The corner a card draws with: the compact preview's rounder one, or the default card's. `PanelSurface` draws
+    /// with it and `holds` judges a click by it, so the two cannot disagree.
+    public func radius(compact: Bool) -> CGFloat { compact ? compactRadius : panelRadius }
+
     /// **Whether a click at `point` — screen points, y up — is on the card** in a window whose frame is `frame`: on the
     /// card's own outline, body and tail, where it carries a tail, so a click in the transparent strip beside the tail
-    /// is a click away; on the whole window where it carries none, as every card was before.
-    public func holds(_ point: CGPoint, inWindow frame: CGRect, tail: CardTail?) -> Bool {
+    /// is a click away; on the whole window where it carries none, as every card was before. **By the corner this card
+    /// drew** — `compact`, as its surface reported it (`DrawnCard`): judged by the compact card's rounder corner, a click
+    /// on the default card's own paper beside its corner closed it (audit of 2026-10-10).
+    public func holds(_ point: CGPoint, inWindow frame: CGRect, tail: CardTail?, compact: Bool) -> Bool {
         guard let tail else { return frame.contains(point) }
         let insets = insets(tail: tail)
         let card = CGRect(x: insets.leading, y: insets.top,
@@ -77,15 +89,32 @@ public struct CardChrome: Equatable, Sendable {
                           height: max(0, frame.height - insets.top - insets.bottom))
         // The shape is laid out y down, from the window's top-left.
         let local = CGPoint(x: point.x - frame.minX, y: frame.maxY - point.y)
-        return CardShape(cornerRadius: cornerRadius, tail: tail, tailLength: tailLength, tailHalfWidth: tailHalfWidth)
+        return CardShape(cornerRadius: radius(compact: compact), tail: tail, tailLength: tailLength,
+                         tailHalfWidth: tailHalfWidth)
             .path(in: card).contains(local)
     }
+}
+
+/// **What the card drew itself as**, written by its surface and read by the panel's click-away test, so a click is judged
+/// against the outline on screen rather than one the controller assumes (audit of 2026-10-10). Whether the card is the
+/// compact preview is the view's own state — it opens to the full card with its details — so only the view can say.
+/// A reference, held by the panel's model: its identity never changes, so handing it down redraws nothing.
+@MainActor
+public final class DrawnCard {
+    /// Whether the card on screen is the compact preview. The default card's until the surface has drawn.
+    public private(set) var compact = false
+
+    public init() {}
+
+    func drew(compact: Bool) { self.compact = compact }
 }
 
 extension EnvironmentValues {
     /// **The tail the lookup card carries**, set by the panel from its placement — nil for a card placed by the pointer,
     /// and for every surface that is not the lookup panel.
     @Entry public var panelTail: CardTail?
+    /// **Where the lookup card says which outline it drew** — nil for every surface that is not the lookup panel.
+    @Entry public var drawnCard: DrawnCard?
 }
 
 /// **The card with its tail, as one outline**: filled, edged and clipped as one shape, so the tail is the card's paper
