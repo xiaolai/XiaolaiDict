@@ -280,6 +280,25 @@ struct HistoryDrawerTests {
         #expect(!drawer.isEscapeClaimed)
     }
 
+    /// **The model's actions do not keep the drawer alive.** They are stored on its own model, so an action holding the
+    /// drawer is a cycle — drawer, model and every action kept for good. Wired as the app wires them
+    /// (`XiaolaiDictApp.wireActions`). The control: a drawer with nothing wired goes when let go, so what is measured is
+    /// the wiring and nothing else the drawer holds.
+    @Test func theDrawersOwnActionsDoNotKeepItAlive() {
+        weak var unwired: HistoryDrawerController?
+        weak var wired: HistoryDrawerController?
+        do {
+            let plain = HistoryDrawerController(hotkeys: HotkeyCenter(backend: FakeBackend()), load: { .entries([]) })
+            unwired = plain
+            let drawer = HistoryDrawerController(hotkeys: HotkeyCenter(backend: FakeBackend()), load: { .entries([]) })
+            XiaolaiDictApp.wireActions(of: drawer, ledger: { nil }, reopen: { _ in }, showInLibrary: { _ in })
+            wired = drawer
+            #expect(drawer.model.discard != nil && drawer.model.showInLibrary != nil, "nothing was wired")
+        }
+        #expect(unwired == nil, "the control: a drawer with nothing wired was kept anyway")
+        #expect(wired == nil, "the drawer's own actions kept it alive")
+    }
+
     @Test func hidingReleasesEscapeAndReopeningClaimsItAgain() {
         let displays = Displays()
         displays.screens = [wide]

@@ -64,6 +64,15 @@ public struct ModelChoiceStore {
         return LocalModelSize(rawValue: raw)
     }
 
+    /// **The reader's choice as another process reads it** — the model service, whose own defaults domain is not the
+    /// app's: the same key and spelling, read from the app's domain through `CFPreferences`.
+    public static func preferredSize(appDomain: String) -> LocalModelSize? {
+        CFPreferencesAppSynchronize(appDomain as CFString)
+        guard let raw = CFPreferencesCopyAppValue(defaultsKey as CFString, appDomain as CFString) as? String
+        else { return nil }
+        return LocalModelSize(rawValue: raw)
+    }
+
     public func save(_ size: LocalModelSize?) {
         guard let size else {
             defaults.removeObject(forKey: Self.defaultsKey)

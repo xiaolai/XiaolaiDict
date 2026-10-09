@@ -48,7 +48,8 @@ final class LocalModelCoordinator {
         controller = LocalModelController(
             defaults: defaults, store: store, physicalMemory: physicalMemory,
             transport: transport, probe: probe)
-        let access = LocalModelAccess(client: client, store: store)
+        // The memory this coordinator was given, so "installed" here means what it means on the setup row.
+        let access = LocalModelAccess(client: client, store: store, physicalMemory: physicalMemory)
         self.access = access
         // The local model is reached through its access, which answers "not installed" without starting the service
         // where there is no model — so `none`, the reader's default, is exactly what it was before the providers.
@@ -66,28 +67,32 @@ final class LocalModelCoordinator {
         // service loads; refusing to say so would leave the row unfinished for as long as a stuck
         // process lives, which is worse than a few answers from the model being replaced. The
         // failure is recorded rather than swallowed.
-        controller.onInstalled = { [access, log] in
-            // **Held for the length of the unload**, so nothing is asked of the old process while
-            // it is being ended — the window `refresh()` opens by publishing "ready" without
-            // awaiting this. Released only where the process was *seen* to go.
+        controller.onModelChanging = { [access, log] in
+            // **Held at once, in the caller's own turn** — before anything about the new model is published — and
+            // released only where the process holding the old one was *seen* to go.
             access.quarantine.hold()
-            if await access.client.unload() {
-                access.quarantine.lift()
-                log.notice("model: the service holding the previous model has ended")
-            } else {
-                // **Ready is still published — and the local rung is held back until that process
-                // goes.** Refusing to say ready would leave the row unfinished for as long as a
-                // stuck service lives; letting the rung answer would let the model the reader just
-                // replaced go on answering, with nothing on screen to say so. The quarantine lifts
-                // itself as soon as the process is seen to be gone, and meanwhile the ladder falls
-                // to Apple's model and the translator to Apple's framework, labelled as always.
-                // **Nothing is taken here**: the quarantine was taken above and only the branch
-                // that saw the process go lifts it, so this branch simply leaves it held. The
-                // second `hold()` that used to stand here set a flag that was already set.
-                log.error("model: the service did not confirm it had ended; the local model is held back until it has")
+            return Task {
+                if await access.client.unload() {
+                    access.quarantine.lift()
+                    log.notice("model: the service holding the previous model has ended")
+                } else {
+                    // **Ready is still published — and the local rung is held back until that process
+                    // goes.** Refusing to say ready would leave the row unfinished for as long as a
+                    // stuck service lives; letting the rung answer would let the model the reader just
+                    // replaced go on answering, with nothing on screen to say so. The quarantine lifts
+                    // itself as soon as the process is seen to be gone, and meanwhile the ladder falls
+                    // to Apple's model and the translator to Apple's framework, labelled as always.
+                    // **Nothing is taken here**: the quarantine was taken above and only the branch
+                    // that saw the process go lifts it, so this branch simply leaves it held. The
+                    // second `hold()` that used to stand here set a flag that was already set.
+                    log.error("model: the service did not confirm it had ended; the local model is held back until it has")
+                }
             }
         }
     }
+
+    /// Whether the local rung is held back now — what a test asks of the quarantine without asking the rung.
+    var localModelHeldBack: Bool { access.quarantine.isHeld }
 
     /// What the setup board's row reads and acts through.
     var choice: LocalModelChoice { controller.choice }
@@ -172,6 +177,13 @@ final class LocalModelCoordinator {
         }
     }
 
+    /// Whether the reader's settings send questions to the bundled model now — `none` or the local model — read from
+    /// the suite as the router reads it.
+    private var routesToLocalModel: Bool {
+        ProviderSource(choice: ProviderChoiceStore(defaults: defaults).load(),
+                       settings: ProviderSettingsStore(defaults: defaults).load()) == .local
+    }
+
     /// What the lookup panel's translation pane is handed: the translator, the reader's language,
     /// and the download to put beside Apple's answer.
     var translationActions: TranslationActions {
@@ -188,8 +200,10 @@ final class LocalModelCoordinator {
             sourceLanguage: { [router] sentence in
                 Self.translator(asking: router, keeping: RoutedAnswer()).sourceLanguage(of: sentence)
             },
-            // **Only where the bundled model's setup is shown** (ADR-0053): hidden, not removed.
-            canDownloadModel: choice.canDownload && choice.isShown,
+            // **Only where the bundled model's setup is shown** (ADR-0053): hidden, not removed — **and only where it
+            // would answer**: with another source chosen the router stays on it, and a model downloaded beside its
+            // failed answer would be asked nothing.
+            canDownloadModel: choice.canDownload && choice.isShown && routesToLocalModel,
             // **What the row would download, read at the click** — which is the size a stopped
             // download was of, not the recommended one. Started from `recommended`, a stopped 9B
             // download answered the reader's "download" by fetching 4B instead: another three

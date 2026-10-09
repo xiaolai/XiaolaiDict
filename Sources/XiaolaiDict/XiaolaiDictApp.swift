@@ -187,42 +187,55 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
                 return .unavailable("\(error)")
             }
         }
-        drawer.model.discard = { [weak self] entry in
-            guard let self, let opening = recorder.store else { throw LedgerError.corruptRow("ledger unavailable") }
-            let receipt = try await opening.value.changeDisposition(.discarded, lookups: entry.lookupIDs, operation: UUID())
-            LedgerChanges.shared.committed()
-            drawer.refresh()
-            return receipt
-        }
-        drawer.model.undoDiscard = { [weak self] operation in
-            guard let self, let opening = recorder.store else { throw LedgerError.corruptRow("ledger unavailable") }
-            let result = try await opening.value.undoDisposition(operation: operation)
-            LedgerChanges.shared.committed()
-            drawer.refresh()
-            return result
-        }
-        drawer.model.keepForLearning = { [weak self] entry in
-            guard let self, let opening = recorder.store else { return }
-            Task {
-                do {
-                    if try await opening.value.keepHistory(entry.id) == nil { self.reopenReading(entry) }
-                    LedgerChanges.shared.committed()
-                    drawer.refresh()
-                } catch { drawer.model.problem = error.localizedDescription }
-            }
-        }
-        drawer.model.showInLibrary = { [weak self] entry in
-            guard let self else { return }
-            libraryModel.show(.history, lookup: entry.id)
-            // **Put away first.** The drawer floats, so left open it sat on top of the window it
-            // had just opened — over the Library's own toolbar — and Escape in the Library's search
-            // field closed the drawer instead (audit D11).
-            drawer.hide()
-            showLibrary()
-        }
+        Self.wireActions(
+            of: drawer, ledger: { [weak self] in self?.recorder.store },
+            reopen: { [weak self] entry in self?.reopenReading(entry) },
+            showInLibrary: { [weak self] entry in
+                self?.libraryModel.show(.history, lookup: entry.id)
+                self?.showLibrary()
+            })
         // The icon shows whether its drawer is open — see `MenuBarItem.historyBecame(visible:)`.
         drawer.onVisibilityChange = { [weak self] visible in self?.menuBar?.historyBecame(visible: visible) }
         return drawer
+    }
+
+    /// **The drawer model's actions, wired to the ledger** — each holding the drawer weakly: they are stored on its own
+    /// model, so an action holding the drawer is a cycle that keeps drawer, model and every action for good.
+    static func wireActions(
+        of drawer: HistoryDrawerController, ledger: @escaping @MainActor () -> Task<LedgerStore, any Error>?,
+        reopen: @escaping @MainActor (ReadingEntry) -> Void, showInLibrary: @escaping @MainActor (ReadingEntry) -> Void
+    ) {
+        drawer.model.discard = { [weak drawer] entry in
+            guard let opening = ledger() else { throw LedgerError.corruptRow("ledger unavailable") }
+            let receipt = try await opening.value.changeDisposition(.discarded, lookups: entry.lookupIDs, operation: UUID())
+            LedgerChanges.shared.committed()
+            drawer?.refresh()
+            return receipt
+        }
+        drawer.model.undoDiscard = { [weak drawer] operation in
+            guard let opening = ledger() else { throw LedgerError.corruptRow("ledger unavailable") }
+            let result = try await opening.value.undoDisposition(operation: operation)
+            LedgerChanges.shared.committed()
+            drawer?.refresh()
+            return result
+        }
+        drawer.model.keepForLearning = { [weak drawer] entry in
+            guard let opening = ledger() else { return }
+            Task { [weak drawer] in
+                do {
+                    if try await opening.value.keepHistory(entry.id) == nil { reopen(entry) }
+                    LedgerChanges.shared.committed()
+                    drawer?.refresh()
+                } catch { drawer?.model.problem = error.localizedDescription }
+            }
+        }
+        drawer.model.showInLibrary = { [weak drawer] entry in
+            // **Put away first.** The drawer floats, so left open it sat on top of the window it
+            // had just opened — over the Library's own toolbar — and Escape in the Library's search
+            // field closed the drawer instead (audit D11).
+            drawer?.hide()
+            showInLibrary(entry)
+        }
     }
 
     let preferences: UserDefaults

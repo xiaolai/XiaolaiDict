@@ -67,6 +67,9 @@
         }
       }
     },
+    "%@ could not be removed from this Mac. Try again." : {
+
+    },
     "%@ could not be set up, so it will not look anything up. Choose another combination." : {
 
     },
@@ -1719,6 +1722,9 @@
 
     },
     "The key is kept in your keychain for this address alone. Change the address to another server and no key is sent there until you save one for it." : {
+
+    },
+    "The largest that fits at the time" : {
 
     },
     "The last reading was not recorded: %@" : {

@@ -30,6 +30,8 @@ actor ModelClient {
 
     private let connect: Connect
     private let servicePresence: @Sendable () -> ModelServiceProcess.Presence
+    /// Each question's deadline — `ModelDeadline`'s table, or a test's.
+    private let deadlineOf: @Sendable (ModelRequest) -> Duration
     private var sessions = ServiceSessions<any ModelTransport>()
     /// The session that has been prewarmed. **Once per session, which is once per service process
     /// in the ordinary case** — a session outlives nothing the service does, so a session dropped
@@ -47,8 +49,10 @@ actor ModelClient {
                 service: XiaolaiDictIdentity.modelService, onCancel: onCancel)
         },
         servicePresence: @escaping @Sendable () -> ModelServiceProcess.Presence = { ModelServiceProcess.presence },
-        shutdownLimit: Duration = ModelShutdown.processExit
+        shutdownLimit: Duration = ModelShutdown.processExit,
+        deadline: @escaping @Sendable (ModelRequest) -> Duration = ModelDeadline.of
     ) {
+        self.deadlineOf = deadline
         self.connect = connect
         self.servicePresence = servicePresence
         self.shutdownLimit = shutdownLimit
@@ -59,13 +63,15 @@ actor ModelClient {
     }
 
     func ask(_ request: ModelRequest) async -> ModelReply? {
-        // An unload can take as long as the service's drain. A caller that gave up while waiting is
-        // not then given a session: it would be opened for an answer nobody is waiting for, which
-        // on a launch-on-demand service means starting one.
-        if let unloading { _ = await unloading.value }
-        guard !Task.isCancelled, let current = try? openSession() else { return nil }
+        // An unload can take as long as the service's drain. **The question's deadline covers the wait as well as the
+        // answer**, and a caller that gives up while waiting stops waiting — and is not then given a session: it would
+        // be opened for an answer nobody is waiting for, which on a launch-on-demand service means starting one.
+        let deadline = ContinuousClock.now.advanced(by: deadlineOf(request))
+        guard await waitForUnload(until: deadline), !Task.isCancelled, let current = try? openSession() else { return nil }
+        let remaining = deadline - ContinuousClock.now
+        guard remaining > .zero else { return nil }
         do {
-            return try await withDeadline(Self.deadline(for: request)) {
+            return try await withDeadline(remaining) {
                 try await current.transport.send(request)
             }
         } catch is CancellationError where Task.isCancelled {
@@ -143,14 +149,29 @@ actor ModelClient {
         // **After any unload, never through one.** Opening a session here while the service is on
         // its way out starts the next one early — which makes the unload it is racing look as
         // though it timed out, and records a prewarm against a generation that is already gone.
-        if let unloading { _ = await unloading.value }
-        guard !Task.isCancelled, let current = try? openSession(), warmed != current.generation
+        // Waited for within the prewarm's own deadline, and given up with its caller.
+        guard await waitForUnload(until: ContinuousClock.now.advanced(by: deadlineOf(.prewarm))),
+              !Task.isCancelled, let current = try? openSession(), warmed != current.generation
         else { return }
         warmed = current.generation
         if case .prewarmed? = await ask(.prewarm) { return }
         // It did not take: let the next lookup try again.
         if warmed == current.generation { warmed = nil }
     }
+
+    /// **Waits for an unload in flight, and gives up when the caller does or `deadline` passes** — never with `await
+    /// task.value`, which is deaf to both, and never by cancelling the unload, which is shared with whoever asked for it.
+    /// True once none is in flight; false where the wait was given up.
+    private func waitForUnload(until deadline: ContinuousClock.Instant) async -> Bool {
+        while unloading != nil {
+            guard !Task.isCancelled, ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: Self.unloadPoll)
+        }
+        return true
+    }
+
+    /// How often a question waiting for an unload looks again.
+    private static let unloadPoll = Duration.milliseconds(20)
 
     private func openSession() throws -> ServiceSessions<any ModelTransport>.Open {
         try sessions.open { mine in

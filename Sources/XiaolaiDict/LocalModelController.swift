@@ -42,9 +42,14 @@ final class LocalModelController {
     /// has since finished — or been replaced — must not write over the one running now.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "model")
-    /// Called once a download is whole, **before** it is announced ready: the app ends the service,
-    /// so no question asked after "ready" reaches the model that was there before.
-    @ObservationIgnored var onInstalled: (@MainActor () async -> Void)?
+    /// **The model that answers is about to change** — a download finished, a model arrived without this app
+    /// downloading it, the reader chose another or removed one. **Called synchronously, before the change is
+    /// published**: the app holds the local rung back at once — so no question reaches the service holding the old
+    /// model in between — and ends that service, handing back the ending, which a caller that must wait for it awaits.
+    /// A service keeps the model it loaded, so without this the change reached an answer only when it idled out.
+    @ObservationIgnored var onModelChanging: (@MainActor () -> Task<Void, Never>)?
+    /// The model the last removal could not remove, where it could not — said on the row until the next attempt.
+    private(set) var removalFailed: LocalModelSize?
 
     init(
         defaults: UserDefaults, store: ModelStore = .standard(),
@@ -111,11 +116,12 @@ final class LocalModelController {
             // answering from the model *it* loaded. The download path ends that service before
             // saying ready; this asks it to end too, rather than leaving the row naming one model
             // and the answers coming from another until the service idles out ten minutes later.
-            // `onInstalled` is what holds the local rung back for the length of the unload — see
-            // the coordinator — so the window between publishing "ready" here and that unload
-            // finishing is one where nothing is asked of the process that still has the old model.
+            // `onModelChanging` holds the local rung back **in this same turn**, before "ready" is
+            // published below — so from that moment until the unload finishes nothing is asked of the
+            // process that still has the old model. It used to be taken on a task of its own, which
+            // ran after "ready" was already drawn.
             if case .ready(let size) = read, state.answering != size {
-                Task { [onInstalled] in await onInstalled?() }
+                _ = onModelChanging?()
             }
             state = read
         }
@@ -261,7 +267,7 @@ final class LocalModelController {
             log.error("model: could not remove \(left.joined(separator: ", "), privacy: .public)")
         }
         log.notice("model: installed \(wanted.identifier, privacy: .public)")
-        await onInstalled?()
+        await onModelChanging?().value
         finish(.ready(size))
     }
 
@@ -354,21 +360,39 @@ final class LocalModelController {
     /// Chooses which installed model answers. **Takes effect on the next question**, and is kept
     /// even where that model cannot be loaded right now: the reader's choice is a preference, not
     /// an assertion about this minute's free memory.
+    /// **And ends the service holding the model chosen before**, which keeps the model it loaded — so the next question
+    /// loads the one chosen now (ADR-0041: which model answers is the reader's).
     func choose(_ size: LocalModelSize?) {
         guard size != wanted else { return }
         wanted = size
         choices.save(size)
         log.notice("model: the reader chose \(size?.rawValue ?? "no model in particular", privacy: .public)")
+        _ = onModelChanging?()
         refresh()
     }
 
-    /// Removes a model the reader no longer wants, and forgets it as their choice if it was one.
-    func remove(_ size: LocalModelSize) {
-        let store = store
-        let manifest = manifest(size)
-        if wanted == size { choose(nil) }
-        Task.detached(priority: .utility) { try? store.remove(manifest) }
+    /// Removes a model the reader no longer wants, and forgets it as their choice if it was one — **once the service
+    /// that may hold it has been ended**, so nothing answers from files that are gone. The row is read again after the
+    /// files are, and a removal that failed is said (`removalFailed`), never dropped.
+    func remove(_ size: LocalModelSize) async {
+        removalFailed = nil
+        if wanted == size {
+            wanted = nil
+            choices.save(nil)
+        }
+        await onModelChanging?().value
+        let store = store, manifest = manifest(size), log = log
         log.notice("model: removing \(manifest.identifier, privacy: .public)")
+        let removed = await Task.detached(priority: .utility) { () -> Bool in
+            do {
+                try store.remove(manifest)
+                return true
+            } catch {
+                log.error("model: could not remove \(manifest.identifier, privacy: .public): \(modelFailureDescription(error), privacy: .public)")
+                return false
+            }
+        }.value
+        if !removed { removalFailed = size }
         refresh()
     }
 
@@ -398,8 +422,8 @@ final class LocalModelController {
             chosen: wanted,
             answering: answeringChoice,
             choose: { [weak self] in self?.choose($0) },
-            removeModel: { [weak self] in self?.remove($0) },
-            setupFlagged: setupFlag.isSet())
+            removeModel: { [weak self] size in Task { await self?.remove(size) } },
+            setupFlagged: setupFlag.isSet(), removalFailed: removalFailed)
     }
 }
 
@@ -428,7 +452,9 @@ final class ProgressOrder: @unchecked Sendable {
 }
 
 /// Progress arrives once per network chunk — tens of thousands of times for 3 GB — and the board
-/// needs a few hundred updates at most. Published when it has moved a quarter of a percent.
+/// needs a few hundred updates at most. Published when it has moved a quarter of a percent — **either
+/// way**: a file that restarts goes back, and a throttle that took only growth held the bar at its old
+/// figure through the whole re-download. A step back is published at once and is the new baseline.
 private final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var last: Int64 = -1
@@ -436,7 +462,9 @@ private final class ProgressThrottle: @unchecked Sendable {
     func shouldPublish(_ progress: ModelDownloadProgress) -> Bool {
         let step = max(progress.total / 400, 1)
         return lock.withLock {
-            guard progress.received >= progress.total || progress.received - last >= step else { return false }
+            let restarted = progress.received < last
+            guard restarted || progress.received >= progress.total || progress.received - last >= step
+            else { return false }
             last = progress.received
             return true
         }

@@ -123,7 +123,10 @@ struct LocalModelControllerTests {
     @Test func theServiceIsEndedBeforeReadyIsSaid() async {
         let (controller, _) = controller()
         let seen = Recorder<[LocalModelState]>([])
-        controller.onInstalled = { seen.withLock { $0.append(controller.state) } }
+        controller.onModelChanging = {
+            seen.withLock { $0.append(controller.state) }
+            return Task {}
+        }
         controller.startDownload(.standard)
         await settle(controller)
         #expect(controller.state == .ready(.standard))
@@ -475,7 +478,7 @@ struct LocalModelControllerTests {
         await settle(controller)
         controller.choose(.large)
 
-        controller.remove(.large)
+        await controller.remove(.large)
         for _ in 0..<200 where store.installed(Self.manifest(.large)) != nil {
             try? await Task.sleep(for: .milliseconds(10))
         }
@@ -565,5 +568,149 @@ struct LocalModelControllerTests {
         }
         try ModelStore.markerText(for: manifest).write(
             to: directory.appending(path: ModelStore.completionMarker), atomically: true, encoding: .utf8)
+    }
+
+    /// **One model on this Mac is still the reader's to remove**, though it is no switch: the picker needs two, Remove
+    /// needs one. Before, both were behind two, so a single model's gigabytes could not be given back from the app.
+    @Test func aSingleModelCanBeRemovedThoughThereIsNothingToSwitchTo() async {
+        let (controller, _) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        #expect(controller.choice.onDisk.map(\.size) == [.standard])
+        #expect(controller.choice.offersRemoval, "a lone model could not be removed")
+        #expect(!controller.choice.offersSwitch)
+        controller.startDownload(.large)
+        await settle(controller)
+        #expect(controller.choice.offersRemoval && controller.choice.offersSwitch)
+    }
+
+    /// **The switch can show the choice "none in particular"** — the largest that fits — which is what a reader who
+    /// never chose has: a radio group whose selection is in none of its options shows nothing chosen at all.
+    @Test func theSwitchListsAnAutomaticChoiceSoNoChoiceIsShown() async {
+        let (controller, _) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        let choice = controller.choice
+        #expect(choice.chosen == nil)
+        #expect(choice.switchOptions == [nil, .standard, .large])
+        #expect(choice.switchOptions.contains(choice.chosen), "the reader's choice is not among the options")
+    }
+
+    /// **Choosing another model ends the service holding the one before** — a service keeps the model it loaded, so
+    /// without this the model chosen answered only once the service idled out ten minutes later.
+    @Test func choosingAnotherModelEndsTheServiceHoldingTheOldOne() async {
+        let (controller, _) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        let changes = Recorder(0)
+        controller.onModelChanging = {
+            changes.withLock { $0 += 1 }
+            return Task {}
+        }
+        controller.choose(.standard)
+        #expect(changes.withLock { $0 } == 1, "the choice left the old model's service answering")
+        controller.choose(.standard)
+        #expect(changes.withLock { $0 } == 1, "choosing what was already chosen ended the service again")
+    }
+
+    /// **A model is removed once the service that may hold it has gone, and the row reads the store after the files
+    /// are**: before, the deletion ran detached while the row was re-read at once — still listing the model — and the
+    /// service went on answering from the model being removed.
+    @Test func aModelIsRemovedAfterItsServiceAndTheRowSeesItGone() async {
+        let (controller, store) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        controller.startDownload(.large)
+        await settle(controller)
+        // The first ending is the one before the removal; the row's re-read after it ends the service once more,
+        // for one a question may have started on the model in between.
+        let onDiskWhenEnded = Recorder<Bool?>(nil)
+        controller.onModelChanging = {
+            onDiskWhenEnded.withLock { if $0 == nil { $0 = store.installed(Self.manifest(.large)) != nil } }
+            return Task {}
+        }
+        await controller.remove(.large)
+        #expect(onDiskWhenEnded.withLock { $0 } == true, "the service was not ended before the model was removed")
+        #expect(controller.choice.onDisk.map(\.size) == [.standard], "the row was read before the model was gone")
+        #expect(controller.removalFailed == nil)
+    }
+
+    /// **A removal that failed is said, never swallowed** — and the model is still listed, because it is still there.
+    @Test func aModelThatCouldNotBeRemovedIsSaid() async throws {
+        let (controller, store) = controller(memory: 48 * Self.gigabyte)
+        controller.startDownload(.standard)
+        await settle(controller)
+        // Its files cannot be taken out of it, so the removal fails at the first and leaves the model whole.
+        let directory = try #require(store.installed(Self.manifest(.standard)))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+        await controller.remove(.standard)
+        #expect(controller.removalFailed == .standard, "a removal that failed was not said")
+        #expect(controller.choice.removalFailed == .standard, "the row was not told")
+        #expect(controller.choice.onDisk.map(\.size) == [.standard])
+    }
+
+    /// **A file that restarts is shown restarting**, through the controller's own publishing: a host that ignores the
+    /// range truncates what arrived, and the bar has to go back with it. Before, the throttle took only readings that
+    /// had grown, and the bar sat at its old figure through the whole re-download.
+    @Test func aRestartedFileIsShownGoingBack() async throws {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-controller")
+        scratches.withLock { $0.append(scratch) }
+        let restarted = TestHold()
+        let free = 24 * Self.gigabyte
+        let controller = LocalModelController(
+            defaults: TemporaryDefaults.suite(), store: ModelStore(root: scratch.url),
+            physicalMemory: 48 * Self.gigabyte, availableMemory: { free },
+            transport: RestartingTransport(hold: restarted), probe: FixedProbe(), manifest: Self.manifest)
+        controller.startDownload(.standard)
+        func received() -> Int64? {
+            if case .downloading(let progress, _, _) = controller.state { return progress.received }
+            return nil
+        }
+        for _ in 0..<500 where received() != RestartingTransport.before { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(received() == RestartingTransport.before, "the premise: the first reading was shown")
+        restarted.release()
+        for _ in 0..<500 where received() != RestartingTransport.after { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(received() == RestartingTransport.after, "the restart was not shown")
+        restarted.finish()
+        controller.cancelDownload()
+    }
+
+    /// Reports one file's bytes arriving, then — once the test says — a restart to fewer, then waits until it is let go.
+    struct RestartingTransport: ModelFileTransport {
+        static let before: Int64 = 12
+        static let after: Int64 = 3
+        let hold: TestHold
+
+        func fetch(
+            _ file: ModelFile, from offset: Int64, on host: ModelHost, appendingTo destination: URL,
+            progress: @escaping @Sendable (Int64) -> Void
+        ) async throws {
+            progress(Self.before)
+            await hold.waitForRelease()
+            progress(Self.after)
+            await hold.waitForFinish()
+            throw CancellationError()
+        }
+    }
+}
+
+/// Two points a transport waits at, each opened once by the test.
+final class TestHold: Sendable {
+    private let state = Recorder<(released: Bool, finished: Bool)>((false, false))
+
+    func release() { state.withLock { $0.released = true } }
+    func finish() { state.withLock { $0.finished = true } }
+
+    func waitForRelease() async {
+        for _ in 0..<2_000 where !state.withLock({ $0.released }) { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    func waitForFinish() async {
+        for _ in 0..<2_000 where !state.withLock({ $0.finished }) { try? await Task.sleep(for: .milliseconds(5)) }
     }
 }

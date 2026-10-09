@@ -22,6 +22,9 @@ public actor ModelService {
     private let makeModel: MakeModel
     private let gpu: @Sendable () -> String?
     private let footprint: @Sendable () -> UInt64?
+    /// **The reader's choice of model** (ADR-0041), read each time a model is about to be chosen: the app's own setting,
+    /// which the service reads from the app's domain (`ModelChoiceStore.preferredSize(appDomain:)`). Nil is none.
+    private let wanted: @Sendable () -> LocalModelSize?
 
     private var model: (size: LocalModelSize, model: any LanguageModel)?
     /// Whether the model has answered anything — which is when its weights are actually in memory.
@@ -61,8 +64,10 @@ public actor ModelService {
         makeModel: @escaping MakeModel,
         gpu: @escaping @Sendable () -> String? = { nil },
         footprint: @escaping @Sendable () -> UInt64? = SystemMemory.footprint,
-        prewarmWait: Duration = .seconds(45)
+        prewarmWait: Duration = .seconds(45),
+        wanted: @escaping @Sendable () -> LocalModelSize? = { nil }
     ) {
+        self.wanted = wanted
         self.store = store
         self.manifests = manifests
         self.physicalMemory = physicalMemory
@@ -294,15 +299,18 @@ public actor ModelService {
         }
     }
 
-    /// The largest installed size that may be loaded **now** — the one question both loading and
-    /// status ask, so they cannot answer it differently. Unknown free memory is not plenty: a kernel
-    /// that will not say how much is free gets no model.
+    /// The installed size that answers **now** — the one question both loading and status ask, so they cannot answer
+    /// it differently — by the rule the app's row shows (`ModelSizing.answering`, ADR-0041): the reader's choice where
+    /// it fits, else the largest smaller one that does, never a larger; the largest that fits where they chose none.
+    /// Unknown free memory is not plenty: a kernel that will not say how much is free gets no model.
     private func fitting(
         installed: [ModelManifest]? = nil, available: UInt64
     ) -> ModelManifest? {
-        (installed ?? store.installedManifests(among: manifests))
-            .filter { ModelSizing.mayLoad($0.size, physicalMemory: physicalMemory, availableMemory: available) }
-            .max(by: { $0.size < $1.size })
+        let installed = installed ?? store.installedManifests(among: manifests)
+        let answering = ModelSizing.answering(
+            wanted: wanted(), installed: installed.map(\.size), physicalMemory: physicalMemory,
+            availableMemory: available).answering
+        return installed.first { $0.size == answering }
     }
 
     /// The model, building it the first time — **after** deciding it fits. Sizing is asked before

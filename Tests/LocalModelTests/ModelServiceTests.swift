@@ -392,6 +392,32 @@ struct ModelServiceTests {
             needed: LocalModelSize.standard.peakMemory + ModelSizing.headroom, available: Self.gigabyte)))
     }
 
+    /// **The reader's choice is the model loaded** (ADR-0041): a choice of the smaller is kept even where the larger
+    /// fits, and a choice that does not fit now is stood in for by the largest smaller one that does — never a larger.
+    @Test func theReadersChoiceIsTheModelLoaded() async throws {
+        let (store, scratch) = try Self.installedStore([.standard, .large])
+        scratches.withLock { $0.append(scratch) }
+        let both = [Self.manifest(.standard), Self.manifest(.large)]
+        for (wanted, available, loaded) in [(LocalModelSize.standard, 40 * Self.gigabyte, LocalModelSize.standard),
+                                            (.large, 40 * Self.gigabyte, .large),
+                                            (.large, 6 * Self.gigabyte, .standard)] {
+            let chose = Recorder<[LocalModelSize]>([])
+            let service = ModelService(
+                store: store, manifests: both, physicalMemory: 48 * Self.gigabyte, availableMemory: { available },
+                makeModel: { _, size in
+                    chose.withLock { $0.append(size) }
+                    return ScriptedModel(.answer(#"{"senseNumber": 1}"#))
+                }, wanted: { wanted })
+            #expect(await service.reply(to: .pickSense(Self.question)) == .sense(1))
+            #expect(chose.withLock { $0 } == [loaded], "chose \(wanted) with \(available / Self.gigabyte) GB free")
+            guard case .status(let status) = await service.reply(to: .status) else {
+                Issue.record("no status")
+                continue
+            }
+            #expect(status.installed == loaded, "status named another model than the one loaded")
+        }
+    }
+
     /// **What the Mac *has*, not only what is free right now.** Both gates have to be consulted, and
     /// until this test every fixture here used 48 GB physical — where 4B and 9B both clear the
     /// quarter-of-RAM rule, so a service that dropped the physical check entirely would have passed

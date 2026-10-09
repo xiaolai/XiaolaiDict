@@ -61,14 +61,16 @@ enum ModelReport {
         let store = ModelStore.standard()
         let physical = SystemMemory.physical
         let available = SystemMemory.available() ?? 0
-        // **The model this Mac would actually load**, by the rule the service itself follows: the
-        // largest installed size that fits in memory *now*. Reading it as "the largest installed"
-        // alone reported a correctly chosen smaller model as a failure on a busy Mac; asking for the
-        // recommended size instead downloaded one the service would never load, beside a larger one.
-        let installed = store.installedManifests(among: ModelManifest.all)
-            .map(\.size)
-            .filter { ModelSizing.mayLoad($0, physicalMemory: physical, availableMemory: available) }
-            .max()
+        // **The model this Mac would actually load**, by the rule the service itself follows
+        // (`ModelSizing.answering`, ADR-0041): the reader's choice where it fits *now*, else the
+        // largest smaller one that does, and the largest that fits where they chose none. Reading it
+        // as "the largest installed" alone reported a correctly chosen smaller model as a failure on
+        // a busy Mac; asking for the recommended size instead downloaded one the service would never
+        // load, beside a larger one.
+        let installed = ModelSizing.answering(
+            wanted: ModelChoiceStore(defaults: .standard).load(),
+            installed: store.installedManifests(among: ModelManifest.all).map(\.size),
+            physicalMemory: physical, availableMemory: available).answering
         guard let size = installed ?? ModelSizing.recommended(physicalMemory: physical) else {
             report["error"] = "this Mac is offered no model"
             return false

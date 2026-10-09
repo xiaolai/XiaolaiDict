@@ -624,35 +624,44 @@ public struct SetupView: View {
         }
     }
 
-    /// **The models on this Mac, and which one answers.** Shown only where there is a choice to
-    /// make — one model is not a switch, it is a label — and each row says what it occupies, so
-    /// keeping it can be weighed against what it costs.
+    /// **The models on this Mac, and which one answers.** The switch only where there is a choice
+    /// to make — one model is not a switch, it is a label (`offersSwitch`) — and Remove wherever a
+    /// model is on this Mac, one alone included (`offersRemoval`). Each row says what it occupies,
+    /// so keeping it can be weighed against what it costs.
     ///
     /// **A radio group, which is what "one of these" is.** It was a column of plain buttons each
     /// drawing `largecircle.fill.circle` or `circle`: it looked like radio buttons and told
-    /// VoiceOver nothing about which was selected. Removing a model sat beside each as a plain
-    /// 10-point word that deleted gigabytes on one click; it is a menu now, and it asks.
+    /// VoiceOver nothing about which was selected. Its first option is no model in particular —
+    /// the largest that fits — which a reader who never chose has, so it never shows nothing
+    /// chosen. Removing a model sat beside each as a plain 10-point word that deleted gigabytes on
+    /// one click; it is a menu now, and it asks.
     @ViewBuilder private func modelSwitch(_ localModel: LocalModelChoice) -> some View {
-        if localModel.onDisk.count > 1 {
+        if localModel.offersRemoval {
             VStack(alignment: .leading, spacing: scale.space.inline) {
-                Picker(
-                    "Answer with",
-                    selection: Binding(get: { localModel.chosen }, set: { localModel.choose($0) })
-                ) {
-                    ForEach(localModel.onDisk) { model in
-                        // A name and a size, composed: neither is prose for a translator.
-                        Text(verbatim: "\(model.size.displayName) — \(Self.bytes(model.bytes))")
-                            .tag(LocalModelSize?.some(model.size))
+                if localModel.offersSwitch {
+                    Picker(
+                        "Answer with",
+                        selection: Binding(get: { localModel.chosen }, set: { localModel.choose($0) })
+                    ) {
+                        ForEach(localModel.switchOptions, id: \.self) { size in
+                            if let model = localModel.onDisk.first(where: { $0.size == size }) {
+                                // A name and a size, composed: neither is prose for a translator.
+                                Text(verbatim: "\(model.size.displayName) — \(Self.bytes(model.bytes))")
+                                    .tag(LocalModelSize?.some(model.size))
+                            } else {
+                                Text("The largest that fits at the time").tag(LocalModelSize?.none)
+                            }
+                        }
                     }
-                }
-                .pickerStyle(.radioGroup)
-                // **Said where it is true, and only then.** A reader comparing answers must know
-                // when the one in front of them is not from the model they chose.
-                if case .standingIn(let answering, let wanted) = localModel.answering {
-                    Text("\(wanted.displayName) needs more free memory than this Mac has right now, so \(answering.displayName) is answering.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .pickerStyle(.radioGroup)
+                    // **Said where it is true, and only then.** A reader comparing answers must know
+                    // when the one in front of them is not from the model they chose.
+                    if case .standingIn(let answering, let wanted) = localModel.answering {
+                        Text("\(wanted.displayName) needs more free memory than this Mac has right now, so \(answering.displayName) is answering.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Menu("Remove a Model") {
                     ForEach(localModel.onDisk) { model in
@@ -663,6 +672,12 @@ public struct SetupView: View {
                 }
                 .fixedSize()
                 .controlSize(.small)
+                if let failed = localModel.removalFailed {
+                    Text("\(failed.displayName) could not be removed from this Mac. Try again.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

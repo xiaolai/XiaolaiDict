@@ -115,6 +115,36 @@ struct ModelClientTests {
         #expect(await client.unload(), "a process that had gone was reported as still there")
     }
 
+    /// **A question waiting for an unload gives up when its caller does, or when its own deadline passes** — and the
+    /// unload it waited for, which is shared, goes on and finishes. Before, the wait was `await task.value`, deaf to
+    /// both, and outside the question's deadline: one wedged unload held every question for as long as it lasted.
+    @Test func aQuestionWaitingForAnUnloadGivesUpWhenItsCallerDoesOrItsDeadlinePasses() async throws {
+        let running = Recorder(true)
+        let service = Service()
+        let client = ModelClient(
+            connect: { service.connect($0) }, servicePresence: { running.withLock { $0 } ? .running : .gone },
+            shutdownLimit: .seconds(600), deadline: { _ in .milliseconds(100) })
+        let unloading = Task { await client.unload() }
+        for _ in 0..<400 where !service.asked.withLock({ $0.contains(.unload) }) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let given = Recorder<[String]>([])
+        let cancelled = Task {
+            _ = await client.ask(Self.question)
+            given.withLock { $0.append("cancelled") }
+        }
+        cancelled.cancel()
+        let timedOut = Task {
+            _ = await client.ask(Self.question)
+            given.withLock { $0.append("deadline") }
+        }
+        for _ in 0..<2_000 where given.withLock({ $0.count }) < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(Set(given.withLock { $0 }) == ["cancelled", "deadline"], "a question waited out the unload")
+        running.withLock { $0 = false }
+        #expect(await unloading.value, "giving up on the wait ended the unload")
+        _ = (await cancelled.value, await timedOut.value)
+    }
+
     /// **"Could not tell" is not "gone".** A kernel that will not enumerate processes says nothing
     /// about the old model's weights; read as gone, it became the app's proof that a replacement
     /// was answering.

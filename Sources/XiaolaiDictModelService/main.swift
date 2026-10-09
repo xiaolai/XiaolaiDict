@@ -57,7 +57,9 @@ func mlxModel(at directory: URL, size: LocalModelSize) -> any FoundationModels.L
         load: { _, _ in try await loadModelContainer(from: directory, using: #huggingFaceTokenizerLoader()) })
 }
 
-let service = ModelService(store: .standard(), makeModel: mlxModel, gpu: gpuCheck)
+// The reader's choice of model is the app's setting, read from the app's domain whenever a model is chosen.
+let service = ModelService(store: .standard(), makeModel: mlxModel, gpu: gpuCheck,
+                           wanted: { ModelChoiceStore.preferredSize(appDomain: XiaolaiDictIdentity.app) })
 
 let idle = IdleExit(after: IdleExit.interval(appDomain: XiaolaiDictIdentity.app)) {
     log.notice("idle; exiting so the model's memory goes with the process")

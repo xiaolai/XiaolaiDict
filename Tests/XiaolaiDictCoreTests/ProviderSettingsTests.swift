@@ -191,3 +191,21 @@ struct ProviderSettingsSnapshotTests {
         #expect(halves == 0, "\(halves) reads combined one write's address with another's model")
     }
 }
+
+/// **The model service reads the reader's model choice from the app's own domain** — the key and the spelling the app
+/// writes, through `CFPreferences`, since the service is another process with a domain of its own.
+struct ModelChoicePreferenceTests {
+    @Test func theServiceReadsWhatTheAppWrote() {
+        let name = TemporaryDefaults.name()
+        let app = UserDefaults(suiteName: name).unsafelyUnwrapped
+        #expect(ModelChoiceStore.preferredSize(appDomain: name) == nil, "nothing written reads as a choice")
+        for size in LocalModelSize.allCases {
+            ModelChoiceStore(defaults: app).save(size)
+            app.synchronize()
+            #expect(ModelChoiceStore.preferredSize(appDomain: name) == size)
+        }
+        ModelChoiceStore(defaults: app).save(nil)
+        app.synchronize()
+        #expect(ModelChoiceStore.preferredSize(appDomain: name) == nil, "a choice taken back was still read")
+    }
+}

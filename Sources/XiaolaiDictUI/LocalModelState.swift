@@ -73,6 +73,15 @@ public struct LocalModelChoice {
     public var removeModel: @MainActor (LocalModelSize) -> Void
     /// The reader set `ShowLocalModelSetup` (`LocalModelSetupFlag`). Read from the app's suite each time this is built.
     public var setupFlagged: Bool
+    /// The model the last removal could not remove, where it could not.
+    public var removalFailed: LocalModelSize?
+    /// **Whether there is a choice to make**: two models or more. One is not a switch, it is a label.
+    public var offersSwitch: Bool { onDisk.count > 1 }
+    /// **Whether a model can be removed**: any on this Mac — one alone is the reader's to remove too.
+    public var offersRemoval: Bool { !onDisk.isEmpty }
+    /// What the switch lists: no model in particular — the largest that fits, `nil` — then each model on disk, smallest
+    /// first. `chosen` is always one of them, so the switch never shows nothing chosen.
+    public var switchOptions: [LocalModelSize?] { [nil] + onDisk.map(\.size) }
 
     /// A model on this Mac, as the switch lists it.
     public struct InstalledModel: Sendable, Equatable, Identifiable {
@@ -97,9 +106,11 @@ public struct LocalModelChoice {
         answering: ModelChoice = .none(wanted: nil),
         choose: @escaping @MainActor (LocalModelSize?) -> Void = { _ in },
         removeModel: @escaping @MainActor (LocalModelSize) -> Void = { _ in },
-        setupFlagged: Bool = false
+        setupFlagged: Bool = false,
+        removalFailed: LocalModelSize? = nil
     ) {
         self.setupFlagged = setupFlagged
+        self.removalFailed = removalFailed
         self.source = source
         self.chooseSource = chooseSource
         self.onDisk = onDisk

@@ -181,4 +181,58 @@ struct LocalModelCoordinatorTests {
         #expect(coordinator.choice.isShown, "the flag set in the app's suite did not reach the choice")
         #expect(coordinator.translationActions.canDownloadModel)
     }
+
+    /// **The download is offered only where the model it brings would answer** — never beside the answer a source the
+    /// reader chose failed to give: the router stays on their source, and a model downloaded then would be asked
+    /// nothing. The control: the same pane with no source chosen offers it.
+    @Test func theTranslationPaneOffersNoDownloadWhileAnotherSourceIsChosen() {
+        let scratch = TemporaryDirectory(named: "xiaolaidict-coordinator")
+        scratches.withLock { $0.append(scratch) }
+        let suite = TemporaryDefaults.suite()
+        suite.set(true, forKey: LocalModelSetupFlag.defaultsKey)
+        ProviderChoiceStore(defaults: suite).save(.openAICompatible)
+        ProviderSettingsStore(defaults: suite).save(ProviderSettings(endpointURL: "https://api.example.com/v1",
+                                                                     endpointModel: "m"))
+        let coordinator = LocalModelCoordinator(
+            defaults: suite, store: ModelStore(root: scratch.url),
+            transport: LocalModelControllerTests.Transport(fails: true),
+            probe: LocalModelControllerTests.FixedProbe(), physicalMemory: 48 * Self.gigabyte)
+        #expect(coordinator.choice.canDownload && coordinator.choice.isShown, "the premise: a download is offered")
+        #expect(!coordinator.translationActions.canDownloadModel, "a download was offered that nothing would ask")
+        ProviderChoiceStore(defaults: suite).save(.none)
+        #expect(coordinator.translationActions.canDownloadModel, "the control: with no source chosen it is offered")
+    }
+
+    /// **A model that arrives holds the local rung back before it is announced** — the hold is taken in the same
+    /// turn as the store is read, not on a task that runs after "ready" is already drawn, in which window a question
+    /// still reached the service holding the model being replaced.
+    @Test func aModelThatArrivesHoldsTheLocalRungBackBeforeItIsAnnounced() throws {
+        let service = ModelClientTests.Service()
+        let (coordinator, store) = coordinatorOverAnEmptyStore(service: service, stillRunning: Recorder(true))
+        try ModelClientTests.installTheModel(into: store)
+        #expect(!coordinator.localModelHeldBack, "the premise: nothing is held before the model arrives")
+        coordinator.refresh()
+        #expect(coordinator.choice.state == .ready(.standard))
+        #expect(coordinator.localModelHeldBack, "ready was announced with the old service still free to answer")
+    }
+
+    /// **The local model is asked only where this Mac can hold it**, by the memory the coordinator was given — the
+    /// same figure the setup row reads — never the machine the test runs on. The control: the same model on a Mac with
+    /// room is asked.
+    @Test func theLocalModelIsAskedOnlyWhereThisMacCanHoldIt() async throws {
+        for (memory, sessions) in [(4 * Self.gigabyte, 0), (48 * Self.gigabyte, 1)] {
+            let scratch = TemporaryDirectory(named: "xiaolaidict-coordinator")
+            scratches.withLock { $0.append(scratch) }
+            let store = ModelStore(root: scratch.url)
+            try ModelClientTests.installTheModel(into: store)
+            let service = ModelClientTests.Service()
+            let coordinator = LocalModelCoordinator(
+                defaults: TemporaryDefaults.suite(), store: store,
+                client: ModelClient(connect: { service.connect($0) }, servicePresence: { .gone }),
+                transport: LocalModelControllerTests.Transport(fails: true),
+                probe: LocalModelControllerTests.FixedProbe(), physicalMemory: memory)
+            await coordinator.prewarm()
+            #expect(service.sessions.withLock { $0 } == sessions, "\(memory / Self.gigabyte) GB")
+        }
+    }
 }
