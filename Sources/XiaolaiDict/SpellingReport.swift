@@ -41,10 +41,11 @@ enum SpellingReport {
     static func run(
         terms: [String], lookUp: @escaping SpellingSuggester.LookUp, checker: any SpellingSuggesting,
         language: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) },
+        forms: @escaping @Sendable () -> FormTable? = { FormAuthority.shared.table },
         now: () -> ContinuousClock.Instant = { .now }, write: (String) -> Bool,
         writeError: (String) -> Void = LookupCommand.writeError
     ) async -> CommandStatus {
-        let suggester = SpellingSuggester(checker: checker, lookUp: lookUp, language: language)
+        let suggester = SpellingSuggester(checker: checker, lookUp: lookUp, language: language, forms: forms)
         var status = CommandStatus.success
         for term in terms {
             let started = now()
@@ -54,12 +55,14 @@ enum SpellingReport {
                 outcome = try await lookUp(term)
                 let looked = now()
                 // The term's dictionary form as the card's lookup would work it out — alone, as a term on the command
-                // line has no sentence — so the instrument measures the offer the card is made.
-                let lemma = Lemmatizer.lemma(of: term, in: nil, at: nil)
+                // line has no sentence, and with the table the suggester is given — so the instrument measures the
+                // offer the card is made.
+                let table = forms()
+                let lemma = Lemmatizer.lemma(of: term, in: nil, at: nil, using: table)
                 offer = try await suggester.offer(for: term, outcome: outcome, lemma: lemma)
                 // **The form the suggester tried, where it tried one** — none for a word it was not asked about.
-                let tried: String? = if case .refused = offer { nil } else {
-                    DictionaryForm.candidate(lemma, for: term.trimmingCharacters(in: .whitespacesAndNewlines))
+                let tried: DictionaryForm? = if case .refused = offer { nil } else {
+                    DictionaryForm.candidate(lemma, for: term, printed: table)
                 }
                 let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, dictionaryForm: tried,
                                               readersEnglish: language(), lookup: looked - started,
@@ -90,15 +93,23 @@ struct SpellingReportLine: Encodable, Equatable {
     /// The term's dictionary form the suggester tried first, offered or not — absent where it had none. What tells "this
     /// Mac's dictionaries give the term no form" from "the form could not be verified" (the owner's order, 2026-10-09).
     var dictionaryForm: String?
+    /// What makes that form the term's: `printed` | `regular` (`DictionaryForm.Evidence`, D1 of 2026-10-10) — the
+    /// provenance of a dictionary-form offer, which the card does not draw and a measurement of the guards needs.
+    var dictionaryFormEvidence: String?
     /// The reader's English the checker was asked in, as they list it; absent where they list none (plain English).
     var readersEnglish: String?
     let lookupMilliseconds: Double
     let suggestionMilliseconds: Double
 
-    init(term: String, outcome: LookupOutcome, offer: SpellingOffer, dictionaryForm: String? = nil,
+    init(term: String, outcome: LookupOutcome, offer: SpellingOffer, dictionaryForm: DictionaryForm? = nil,
          readersEnglish: String?, lookup: Duration, suggestion: Duration) {
         self.term = term
-        self.dictionaryForm = dictionaryForm
+        self.dictionaryForm = dictionaryForm?.word
+        dictionaryFormEvidence = switch dictionaryForm?.evidence {
+        case .printed?: "printed"
+        case .regular?: "regular"
+        case nil: nil
+        }
         switch outcome {
         case .entries: self.outcome = "entries"
         case .plainText: self.outcome = "plainText"

@@ -28,17 +28,43 @@ struct SpellingSuggesterTests {
     }
 
     /// Dictionaries that have the words they are given, and remember every word they were asked about.
+    ///
+    /// **An entry is headed as its dictionary heads it and carries its blocks' parts of speech** — what a regular
+    /// dictionary form's offer is judged by (`DictionaryForm.isSupported(by:)`): *France* is not *france*, and a noun
+    /// has no comparative. `init(_:)` gives each word a lowercase heading and no sense structure, a dictionary like the
+    /// sideloaded ones that marks no part of speech.
     final class Dictionaries: Sendable {
-        private let words: Set<String>
+        /// One entry: its headword as printed, and one block per part of speech — none for an unstructured entry.
+        struct Headed: Sendable {
+            let headword: String
+            let partsOfSpeech: [String]
+            init(_ headword: String, _ partsOfSpeech: [String] = []) {
+                self.headword = headword
+                self.partsOfSpeech = partsOfSpeech
+            }
+        }
+
+        private let entries: [String: [Headed]]
         private let asked = Mutex<[String]>([])
-        init(_ words: Set<String>) { self.words = words }
+        init(_ words: Set<String>) {
+            entries = Dictionary(uniqueKeysWithValues: words.map { ($0, [Headed($0)]) })
+        }
+        /// Each looked-up word with the entries it is answered with.
+        init(entries: [String: [Headed]]) { self.entries = entries }
         var questions: [String] { asked.withLock { $0 } }
         func lookUp(_ term: String) throws(CancellationError) -> LookupOutcome {
             asked.withLock { $0.append(term) }
-            guard words.contains(term) else { return .notFound(serviceFailure: nil) }
-            let entry = DictionaryEntry(dictionary: DictionaryIdentity(name: "NOAD", identifier: "noad"),
-                                        headword: term, lookedUp: term, html: "<p/>", document: nil)
-            return .entries(NonEmpty([entry])!, unreadable: [])
+            guard let headed = entries[term], !headed.isEmpty else { return .notFound(serviceFailure: nil) }
+            let found = headed.enumerated().map { index, entry in
+                let document = entry.partsOfSpeech.isEmpty ? nil : EntryDocument(
+                    isStyled: true, entryID: "e\(index)", homograph: nil,
+                    blocks: entry.partsOfSpeech.enumerated().map {
+                        SenseBlock(number: $0.offset + 1, partOfSpeech: $0.element, senses: [])
+                    })
+                return DictionaryEntry(dictionary: DictionaryIdentity(name: "NOAD", identifier: "noad"),
+                                       headword: entry.headword, lookedUp: term, html: "<p/>", document: document)
+            }
+            return .entries(NonEmpty(found)!, unreadable: [])
         }
     }
 

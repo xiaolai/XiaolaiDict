@@ -25,6 +25,17 @@ struct FormTableJudgementTests {
             ownHeadwords: ["found", "lay", "rose"])
     }
 
+    /// **What a headword prints, read back from it** (ADR-0054): every form printed under `axe`, with the class of its
+    /// block, sorted; a form printed under two headwords is each one's; asked in any case; nothing for a headword that
+    /// prints nothing.
+    @Test func aHeadwordsPrintedFormsAreReadBackFromIt() {
+        let table = Self.table()
+        #expect(table.printed(under: "axe").map(\.form) == ["axes"])
+        #expect(table.printed(under: "axis").map(\.form) == ["axes"])
+        #expect(table.printed(under: "Lie").map { "\($0.form):\($0.partOfSpeech)" } == ["lay:verb"])
+        #expect(table.printed(under: "leave").isEmpty)
+    }
+
     /// 1. The tagger agrees with a printed reading.
     @Test func aTaggerAnswerThePrintedReadingAgreesWithStands() {
         #expect(Self.table().judge("mice", tagged: "mouse", partOfSpeech: "noun") == .keep)

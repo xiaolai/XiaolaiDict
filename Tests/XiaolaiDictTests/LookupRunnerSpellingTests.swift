@@ -149,8 +149,11 @@ struct LookupRunnerSpellingTests {
     /// **The dictionary form, where the checker has nothing** (plan-card-refinements WI-3): the lemma the lookup already
     /// worked out, verified against the dictionaries, offered as a line of its own kind — and nothing looked up in the
     /// reader's place.
+    ///
+    /// *cat*'s entry is a noun's (`twoSenses` gives it a noun block), which is what licenses *cats* as its regular plural
+    /// (D1, 2026-10-10): a dictionary form is offered only where its own entry could inflect so.
     @Test func aMissedInflectionIsOfferedItsVerifiedDictionaryForm() async {
-        let panel = RecordingPanel(), service = Service(["cat"]), checker = Checker([:])
+        let panel = RecordingPanel(), service = Service(["cat"], twoSenses: true), checker = Checker([:])
         let cats = Selection(
             text: "cats", sentence: "The cats sat on the mat.", rangeInSentence: NSRange(location: 4, length: 4),
             quality: .accessibility(.accessibilityTextRange, context: .complete),

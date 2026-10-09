@@ -16,28 +16,44 @@ struct DictionaryFormOfferTests {
     private typealias Dictionaries = SpellingSuggesterTests.Dictionaries
     private static let miss = LookupOutcome.notFound(serviceFailure: nil)
 
-    private func suggester(_ checker: Checker, _ dictionaries: Dictionaries) -> SpellingSuggester {
+    private typealias Headed = Dictionaries.Headed
+
+    /// **No form table**, as a test process has (`FormAuthority` is never installed in one), unless a test names one.
+    private func suggester(_ checker: Checker, _ dictionaries: Dictionaries, printed: FormTable? = nil) -> SpellingSuggester {
         SpellingSuggester(checker: checker, lookUp: { term throws(CancellationError) in try dictionaries.lookUp(term) },
-                          language: { nil })
+                          language: { nil }, forms: { printed })
     }
 
     @Test func aVerifiedDictionaryFormIsOfferedWhereTheCheckerHasNothing() async throws {
-        let offer = try await suggester(Checker([:]), Dictionaries(["luncheon"]))
+        let offer = try await suggester(Checker([:]), Dictionaries(entries: ["luncheon": [Headed("luncheon", ["noun"])]]))
             .offer(for: "luncheoning", outcome: Self.miss, lemma: Lemma(text: "luncheon", basis: .tagger))
         #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", kind: .dictionaryForm)))
     }
 
-    /// **A verified dictionary form outranks the spelling line** (the owner's decision, 2026-10-09, reversing WI-3's
+    /// **A defensible dictionary form outranks the spelling line** (the owner's decision, 2026-10-09, reversing WI-3's
     /// order): both verify here, the form is offered, and the checker is not asked. `DictionaryFormPrecedenceTests`
     /// holds the four words that decided it; a typo with no dictionary form keeps its correction.
     @Test func aVerifiedDictionaryFormComesBeforeTheSpellingLine() async throws {
-        let dictionaries = Dictionaries(["concrete", "concret"])
+        let dictionaries = Dictionaries(entries: ["gazebo": [Headed("gazebo", ["noun"])], "gazebos": [Headed("gazebos")]])
+        let checker = Checker(["gazeboes": "gazebos"])
+        let offer = try await suggester(checker, dictionaries)
+            .offer(for: "gazeboes", outcome: Self.miss, lemma: Lemma(text: "gazebo", basis: .tagger))
+        #expect(offer == .offered(SpellingSuggestion(term: "gazeboes", word: "gazebo", kind: .dictionaryForm)))
+        #expect(dictionaries.questions == ["gazebo"], "the correction was looked up after the form was offered")
+        #expect(checker.questions.isEmpty)
+    }
+
+    /// **A lemma the term is no inflection of gives way to the checker** (D1, 2026-10-10): *concreti* is an OCR typo,
+    /// not *concret* or *concrete* inflected, so the checker's verified *concrete* is offered and the lemma is never
+    /// looked up. It was the broad rule's offer, and one of the spike's eight that both labels called wrong.
+    @Test func aLemmaTheTermIsNoInflectionOfGivesWayToTheChecker() async throws {
+        let dictionaries = Dictionaries(entries: ["concrete": [Headed("concrete", ["noun", "adjective", "verb"])],
+                                                  "concret": [Headed("concret", ["noun"])]])
         let checker = Checker(["concreti": "concrete"])
         let offer = try await suggester(checker, dictionaries)
             .offer(for: "concreti", outcome: Self.miss, lemma: Lemma(text: "concret", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concret", kind: .dictionaryForm)))
-        #expect(dictionaries.questions == ["concret"], "the correction was looked up after the form was offered")
-        #expect(checker.questions.isEmpty)
+        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concrete")))
+        #expect(dictionaries.questions == ["concrete"])
     }
 
     /// **Never a guess the lemmatiser itself does not stand by, the word again, or a form the dictionaries lack.**
@@ -56,11 +72,16 @@ struct DictionaryFormOfferTests {
     }
 
     /// The likely reading of an irregular — `saw` as `see` — is offered: it is a tap, and the usual reading is the
-    /// useful one.
+    /// useful one. **An irregular only where the dictionaries print it** (D1): it is no regular inflection.
     @Test func aLikelyLemmaIsOffered() async throws {
-        let offer = try await suggester(Checker([:]), Dictionaries(["see"]))
+        let printed = FormTable(sources: [], forms: ["sawz": [.init(lemma: "see", partOfSpeech: "verb")]], ownHeadwords: [])
+        let dictionaries = Dictionaries(entries: ["see": [Headed("see", ["verb"])]])
+        let offer = try await suggester(Checker([:]), dictionaries, printed: printed)
             .offer(for: "sawz", outcome: Self.miss, lemma: Lemma(text: "see", basis: .likely))
         #expect(offer.suggestion?.kind == .dictionaryForm)
+        let unprinted = try await suggester(Checker([:]), dictionaries)
+            .offer(for: "sawz", outcome: Self.miss, lemma: Lemma(text: "see", basis: .likely))
+        #expect(unprinted.suggestion == nil)
     }
 
     /// **Only under the service's own miss of one Latin word** — the same eligibility as the spelling line, so a found

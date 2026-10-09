@@ -82,6 +82,20 @@ public struct FormTable: Sendable, Equatable {
 
     public func entry(for form: String) -> Entry? { entries[Self.canonical(form)] }
 
+    /// **Every form printed under `lemma`**, with the class of the block each was printed in — what a headword's own
+    /// entry says its inflections are. A walk of the whole table, so for a question asked once in a while (a missed
+    /// word's dictionary form, ADR-0054), never once per lemma.
+    public func printed(under lemma: String) -> [(form: String, partOfSpeech: String)] {
+        let wanted = Self.canonical(lemma)
+        var found: [(form: String, partOfSpeech: String)] = []
+        for (form, entry) in entries {
+            for reading in entry.readings where reading.lemma == wanted {
+                found.append((form, reading.partOfSpeech))
+            }
+        }
+        return found.sorted { ($0.form, $0.partOfSpeech) < ($1.form, $1.partOfSpeech) }
+    }
+
     /// `words` and, for each one carrying a non-ASCII character, its folded spelling. **Only those**: folding 76,000
     /// titles costs a second on this Mac and 99% of them are ASCII, where folding is the identity.
     static func withFolded(_ words: some Sequence<String>) -> Set<String> {

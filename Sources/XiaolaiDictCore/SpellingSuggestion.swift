@@ -131,26 +131,32 @@ public struct SpellingSuggester: Sendable {
     private let checker: any SpellingSuggesting
     private let lookUp: LookUp
     private let language: @Sendable () -> String?
+    private let forms: @Sendable () -> FormTable?
 
     /// `language` is the reader's English, asked each time so a reader who changes their languages is asked in the new
-    /// one; by default the first English in their own list (`SpellingLanguage.readers`).
+    /// one; by default the first English in their own list (`SpellingLanguage.readers`). `forms` is what the reader's
+    /// dictionaries print as inflections, asked each time too: the table in force (`FormAuthority`) by default, which a
+    /// process that never read one — every test — does not have.
     public init(checker: any SpellingSuggesting, lookUp: @escaping LookUp,
-                language: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) }) {
+                language: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) },
+                forms: @escaping @Sendable () -> FormTable? = { FormAuthority.shared.table }) {
         self.checker = checker
         self.lookUp = lookUp
         self.language = language
+        self.forms = forms
     }
 
     /// What `term`'s lookup is offered. Throws only when the caller is cancelled — a newer lookup — and then **before
     /// a dictionary is asked**: the checker cannot be stopped mid-word, the verification lookup can, and a lookup nobody
     /// will see must not cost the service one.
     ///
-    /// Two suggestions, tried in the order `SuggestionPrecedence` decides, the first the dictionaries verify offered:
-    /// the term's dictionary form — `lemma`, the one the lookup already worked out (plan-card-refinements WI-3), only
-    /// one the lemmatiser stands by, never `ambiguous`, never the word again — and the checker's correction. **The
-    /// dictionary form first, where there is one** (the owner's decision, 2026-10-09): the checker's word for a real
-    /// inflection was wrong on the E2E Mac four times in four, and a typo with no dictionary form still gets its
-    /// correction. Where neither verifies, the checker's word is reported.
+    /// Two suggestions, tried in the order `SuggestionPrecedence` decides, the first the dictionaries bear out offered:
+    /// the term's dictionary form — from `lemma`, the one the lookup already worked out (plan-card-refinements WI-3) —
+    /// and the checker's correction. **The dictionary form first, where the term has a defensible one** (the owner's
+    /// decision of 2026-10-09, guarded by D1 of 2026-10-10): the checker's word for a real inflection was wrong on the
+    /// E2E Mac four times in four, and a lemma that is no inflection of the term — *prideed* as *pride* — is no form of
+    /// it (`DictionaryForm`). A typo with none still gets its correction; where neither is borne out, the checker's
+    /// word is reported.
     public func offer(
         for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil
     ) async throws(CancellationError) -> SpellingOffer {
@@ -158,21 +164,24 @@ public struct SpellingSuggester: Sendable {
             return .refused(refusal)
         }
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        let form = DictionaryForm.candidate(lemma, for: asked)
+        let form = DictionaryForm.candidate(lemma, for: asked, printed: forms())
         var unoffered = SpellingOffer.noCorrection
-        for kind in SuggestionPrecedence.of(dictionaryForm: form).order {
+        for kind in SuggestionPrecedence.of(dictionaryForm: form?.word).order {
             let word: String
+            let bearsOut: (LookupOutcome) -> Bool
             switch kind {
             case .spelling:
                 let corrected = await checker.suggestion(for: asked, language: language())
                 guard let candidate = SpellingCorrection.candidate(corrected, for: asked) else { continue }
                 word = candidate
+                bearsOut = SpellingCorrection.isVerified
             case .dictionaryForm:
                 guard let form else { continue }
-                word = form
+                word = form.word
+                bearsOut = form.isSupported(by:)
             }
             if Task.isCancelled { throw CancellationError() }
-            if SpellingCorrection.isVerified(try await lookUp(word)) {
+            if bearsOut(try await lookUp(word)) {
                 return .offered(SpellingSuggestion(term: term, word: word, kind: kind))
             }
             if kind == .spelling { unoffered = .unverified(word) }
@@ -192,11 +201,12 @@ public enum SuggestionPrecedence: Equatable, Sendable {
     /// *glasses*), each verified and offered as "Did you mean".
     case dictionaryFormFirst
 
-    /// **The dictionary form first wherever there is one** — `DictionaryForm.candidate`, WI-3's. What it costs was
-    /// measured before it was adopted: of the WI-3 spike's 1,221 recoveries, 53 had a verified correction from the
-    /// checker that is no longer offered first, 49 of them OCR-typo controls (`penetrateed` as *penetrate*, not
-    /// *penetrated*). Narrowing it to forms the dictionaries print was tried and refuted on the E2E Mac, whose
-    /// dictionaries print neither `heavied` nor `dalesmen` — the decision named the candidate, not the print.
+    /// **The dictionary form first wherever there is a defensible one** — `DictionaryForm.candidate`. What the bare
+    /// lemma cost was measured before it was adopted: of the WI-3 spike's 1,221 recoveries, 53 had a verified correction
+    /// from the checker that it displaced, 49 of them OCR-typo controls (`penetrateed` as *penetrate*, not
+    /// *penetrated*). Narrowing it to forms the dictionaries print was refuted on the E2E Mac, whose dictionaries print
+    /// neither `heavied` nor `dalesmen`; D1 (2026-10-10) keeps the broad rule and guards it instead — printed, or regular
+    /// by spelling and licensed by the form's own entry — so `penetrateed` has no form and is offered *penetrated*.
     public static func of(dictionaryForm: String?) -> SuggestionPrecedence {
         dictionaryForm == nil ? .spellingFirst : .dictionaryFormFirst
     }
@@ -207,18 +217,6 @@ public enum SuggestionPrecedence: Equatable, Sendable {
         case .spellingFirst: [.spelling, .dictionaryForm]
         case .dictionaryFormFirst: [.dictionaryForm, .spelling]
         }
-    }
-}
-
-/// **The term's dictionary form worth asking the dictionaries about**, or nil (plan-card-refinements WI-3).
-public enum DictionaryForm {
-    /// A lemma the lemmatiser stands by — the tagger's, a rule's or the usual reading of an irregular, never one it
-    /// called `ambiguous` or none at all — that is not the term again up to case.
-    public static func candidate(_ lemma: Lemma?, for term: String) -> String? {
-        guard let lemma, lemma.basis <= .likely else { return nil }
-        let form = lemma.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !form.isEmpty, form.compare(term, options: .caseInsensitive) != .orderedSame else { return nil }
-        return form
     }
 }
 

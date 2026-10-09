@@ -17,15 +17,20 @@ struct SpellingReportTests {
         }
     }
 
-    /// Dictionaries that have `receive` and `ephemeral`, and could not be asked about `crash` — nor about `fallback`, whose
-    /// public fallback answered in prose.
+    /// Dictionaries that have `receive`, `ephemeral` and `dalesman`, and could not be asked about `crash` — nor about `fallback`, whose
+    /// public fallback answered in prose. **Each entry with its part of speech**, which licenses a regular dictionary form
+    /// (D1, 2026-10-10): `receives` is offered `receive` because *receive* is a verb.
     nonisolated private static func lookUp(_ term: String) throws(CancellationError) -> LookupOutcome {
         if term == "crash" { return .notFound(serviceFailure: "the dictionary service crashed") }
         if term == "fallback" { return .plainText("an answer in prose", serviceFailure: "the dictionary service crashed") }
-        guard ["receive", "ephemeral"].contains(term) else { return .notFound(serviceFailure: nil) }
+        guard let partOfSpeech = ["receive": "verb", "ephemeral": "adjective", "dalesman": "noun"][term] else {
+            return .notFound(serviceFailure: nil)
+        }
+        let document = EntryDocument(isStyled: true, entryID: "e1", homograph: nil,
+                                     blocks: [SenseBlock(number: 1, partOfSpeech: partOfSpeech, senses: [])])
         let entry = DictionaryEntry(dictionary: DictionaryIdentity(name: "NOAD", identifier: "noad"),
                                     headword: term, lookedUp: term, html: "<p>a definition nobody may print</p>",
-                                    document: nil)
+                                    document: document)
         return .entries(NonEmpty([entry])!, unreadable: [])
     }
 
@@ -33,7 +38,7 @@ struct SpellingReportTests {
         let lines = Mutex<[String]>([])
         let status = await SpellingReport.run(
             terms: terms, lookUp: { term throws(CancellationError) in try Self.lookUp(term) }, checker: Checker(),
-            language: { "en-GB" }, write: { line in lines.withLock { $0.append(line) }; return true })
+            language: { "en-GB" }, forms: { nil }, write: { line in lines.withLock { $0.append(line) }; return true })
         let written = lines.withLock { $0 }
         let objects = written.compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
         return (status, objects, written)
@@ -84,12 +89,31 @@ struct SpellingReportTests {
         #expect(lines[3]["dictionaryForm"] == nil)
     }
 
+    /// **And what makes the form defensible** (D1, 2026-10-10): `printed` where the reader's dictionaries print the term
+    /// as its inflection, `regular` where English spelling makes it one — the provenance of the offer, which the card
+    /// does not draw and a measurement needs. Absent where no form was tried.
+    @Test func eachLineNamesWhatMakesItsFormDefensible() async {
+        let printed = FormTable(sources: [], forms: ["dalesmen": [.init(lemma: "dalesman", partOfSpeech: "noun")]],
+                                ownHeadwords: [])
+        let lines = Mutex<[String]>([])
+        _ = await SpellingReport.run(
+            terms: ["receives", "dalesmen", "recieve"], lookUp: { term throws(CancellationError) in try Self.lookUp(term) },
+            checker: Checker(), language: { nil }, forms: { printed },
+            write: { line in lines.withLock { $0.append(line) }; return true })
+        let objects = lines.withLock { $0 }.compactMap {
+            try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+        }
+        #expect(objects.count == 3)
+        #expect(objects.map { $0["dictionaryFormEvidence"] as? String } == ["regular", "printed", nil])
+    }
+
     /// **No dictionary text, ever** — the keys are exactly these, whatever the outcome: a definition, a headword or a
     /// dictionary's name would be licensed content printed from a shell.
     @Test func noLineCarriesDictionaryText() async {
         let (_, lines, raw) = await report(["recieve", "ephemeral", "crash", "receives"])
         let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "readersEnglish",
-                                    "dictionaryForm", "lookupMilliseconds", "suggestionMilliseconds"]
+                                    "dictionaryForm", "dictionaryFormEvidence", "lookupMilliseconds",
+                                    "suggestionMilliseconds"]
         for line in lines { #expect(Set(line.keys).isSubset(of: allowed), "\(line.keys.sorted())") }
         #expect(!raw.joined().contains("definition nobody may print"))
         #expect(!raw.joined().contains("NOAD"))
@@ -121,7 +145,7 @@ struct SpellingReportTests {
         var said: [String] = []
         let status = await SpellingReport.run(
             terms: ["recieve"], lookUp: { term throws(CancellationError) in try Self.lookUp(term) }, checker: Checker(),
-            language: { nil }, write: { _ in false }, writeError: { said.append($0) })
+            language: { nil }, forms: { nil }, write: { _ in false }, writeError: { said.append($0) })
         #expect(status == .internalError)
         #expect(said == ["could not write the report"], "the failed write said \(said)")
     }

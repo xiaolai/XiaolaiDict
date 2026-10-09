@@ -1380,7 +1380,8 @@ fi
 #     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on the E2E Mac,
 #     the same macOS build — plan §7, 2026-10-09).
 spelling_status=0
-spelling=$("$exe" --spelling-report recieve ambages gazeboes dalesmen droughtier heavied glacises 2>"$reports/spelling-report.err") || spelling_status=$?
+spelling=$("$exe" --spelling-report recieve ambages gazeboes dalesmen droughtier heavied glacises prideed Frances \
+    2>"$reports/spelling-report.err") || spelling_status=$?
 if [ "$spelling_status" -ne 0 ]; then
     flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
 fi
@@ -1432,6 +1433,24 @@ for inflected_term, inflected_form in (("dalesmen", "dalesman"), ("droughtier", 
         f"{got or sys.argv[1][:300]}")
 if with_form == 0:
     say(False, "", "lookup: none of the four inflections had a dictionary form here, so the order was not measured")
+# **The guards (D1, 2026-10-10, ADR-0054) must keep “heavied” here**, where NOAD prints no verb of “heavy”: it is kept as
+# the regular past of an adjective whose entry this Mac has, and the compromise fails if it is not — so this is a check,
+# never the note above.
+kept_term = "heavied"  # a term, read back by name, not a report key
+heavied = lines.get(kept_term) or {}
+say(heavied.get("outcome") == "notFound" and heavied.get("dictionaryForm") == "heavy"
+    and heavied.get("correction") == "heavy" and heavied.get("correctionKind") == "dictionaryForm",
+    f"lookup: the guards keep “heavy” for “heavied” on this Mac’s dictionaries "
+    f"({heavied.get('dictionaryFormEvidence')})",
+    f"lookup: the guards lost “heavy” for “heavied”: {heavied or sys.argv[1][:300]}")
+# **And refuse what they exist to refuse**: “prideed” is no form of “pride” and “Frances” no plural of “France”, so no
+# dictionary form is tried for either, and whatever the checker offers stands.
+for rejected_term, rejected_form in (("prideed", "pride"), ("Frances", "france")):
+    got = lines.get(rejected_term)
+    say(got is not None and got.get("dictionaryForm") is None and got.get("correction") != rejected_form,
+        f"lookup: the guards offer “{rejected_term}” no dictionary form; the checker’s "
+        f"“{(got or {}).get('correction') or 'nothing'}” stands",
+        f"lookup: the guards let “{rejected_term}” be offered “{rejected_form}”: {got or sys.argv[1][:300]}")
 rare = lines.get(rare_term)
 if rare is None:
     say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")
