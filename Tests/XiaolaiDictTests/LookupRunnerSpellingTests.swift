@@ -294,6 +294,56 @@ struct LookupRunnerSpellingTests {
         #expect(reopenedMiss.sentence == sentence, "the positive control: a reading of a word in its sentence keeps it")
     }
 
+    /// **A followed correction keeps one language, recorded and reopened, so saving it twice is one note** (audit round
+    /// 3, 2026-10-09). Recorded as a named word, it kept the language recognised from the sentence it is not recorded
+    /// with: "I saw teh cat." reads as Catalan, "the" alone as English — so reopened, the same reading was keyed under
+    /// another language, and a note's language is part of its identity (ADR-0029): Save made a second note and split the
+    /// word's progress. Judged from what is recorded, the word alone, it is the same both times.
+    @Test func aFollowedCorrectionSavedReopenedAndSavedAgainIsOneNote() async throws {
+        let sentence = try #require(Self.typo.sentence)
+        let fromSentence = Lemmatizer.language(of: "the", in: sentence)
+        let alone = Lemmatizer.language(of: "the", in: nil)
+        try #require(fromSentence != alone, "the fixture's sentence no longer reads as another language than its word")
+        let panel = RecordingPanel()
+        let runner = LookupRunner(
+            client: DictionaryClient(connect: { _ in Service(["the"], twoSenses: true) }, fallback: { _ in nil }),
+            panel: panel, selector: PartOfSpeechSelector(), spelling: Checker(["teh": "the"]), readerEnglish: { nil })
+        let missed = panel.newRequest()
+        _ = await runner.run(Self.typo, near: .zero, requestedAt: .now, ticket: missed)
+        let followed = try #require(runner.followUp(Self.the, from: missed.number))
+        let first = try #require(await runner.run(followed, near: .zero, requestedAt: .now, ticket: panel.newRequest(),
+                                                  placement: .notInSentence))
+        let answered = Self.lookups(panel.updates).compactMap { shown -> DictionaryEntry? in
+            guard case .entries(let found, _)? = shown.outcome else { return nil }
+            return Array(found).first
+        }
+        let entry = try #require(answered.last)
+        let encounter = try #require(SenseEncounter.of(entry, senseKey: "m1.001", chosenBy: .reader, at: .now))
+
+        let path = ScratchFile.path("spelling-language")
+        defer { ScratchFile.remove(path) }
+        let recorder = LookupRecorder()
+        recorder.start { try LedgerStore(path: path) }
+        await recorder.record(first, request: 1)
+        recorder.enrol(encounter, request: 1, language: recorder.language(of: 1))
+        await recorder.settled(request: 1)
+
+        let reading = try #require(try Ledger(path: path).recentLookups(
+            since: .distantPast, limit: 10, studying: Set(ProbeScript.allCases)).first { $0.surface == "the" })
+        let reopened = try #require(await runner.run(
+            XiaolaiDictApp.selection(reopening: reading), near: .zero, requestedAt: reading.at,
+            ticket: panel.newRequest(), existingLookup: reading.identity))
+        #expect(reopened.record.language == first.record.language, """
+            reopened under \(String(describing: reopened.record.language)), recorded under \(String(describing: first.record.language))
+            """)
+        await recorder.record(reopened, request: 2)
+        recorder.enrol(encounter, request: 2, language: recorder.language(of: 2))
+        await recorder.settled(request: 2)
+
+        let notes = try Ledger(path: path).notes()
+        #expect(notes.count == 1, "saving again after reopening made \(notes.count) notes, under \(notes.map(\.language))")
+    }
+
     /// **Following the line looks the word up in the sentence and place it was read in** — a new reading of its own,
     /// never the miss rewritten — and only from the card it was offered on, for the word it offered.
     @Test func followingTheSuggestionLooksUpTheWordWhereTheTypoWasRead() async throws {

@@ -121,7 +121,11 @@ final class LookupRunner {
         // **Dated when the compositor listed it**, so "panel" times what the reader saw, and a panel
         // that never drew is never timed as shown.
         let seen = Task { () -> ContinuousClock.Instant? in await panel.seenOnScreen(ticket) ? .now : nil }
-        let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
+        // **Judged from what is recorded, so a reopened reading is keyed the same.** A followed correction is recorded as
+        // a named word, without the sentence it is not in, and reopened the same way — so its language is the word's
+        // alone: "I saw teh cat." reads as Catalan and "the" as English, and a note's language is part of its identity
+        // (ADR-0029), so judged from the sentence, Save after a reopen made a second note (audit round 3, 2026-10-09).
+        let language = Lemmatizer.language(of: selection.text, in: taggedIn)
         // **The primary is frozen only now, after the panel is up and not before**: a reader whose language
         // has not been derived yet (first lookup after an upgrade or a language change) waits here, bounded,
         // rather than studying from whatever is first in Dictionary.app's order for this one lookup.
