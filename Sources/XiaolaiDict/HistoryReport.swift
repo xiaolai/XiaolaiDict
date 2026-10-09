@@ -3,7 +3,6 @@ import Capture
 import MacCapture
 import XiaolaiDictBase
 import XiaolaiDictUI
-import ScreenCaptureKit
 
 /// Whether the history drawer actually appears, docked where it asked to be, **without taking
 /// focus** — measured inside the running bundle rather than asserted from the source.
@@ -323,10 +322,10 @@ enum HistoryReport {
             // The instrument's own deadline, not the product's: the first capture after boot pays a
             // system-wide warm-up measured at nearly 15 s.
             let image = try await withDeadline(.seconds(30)) {
-                try await screenImage(of: source, size: pixels, onDisplay: displayID)
+                try await Instrument.screenImage(of: source, size: pixels, onDisplay: displayID)
             }
             guard let reading = Capture(image: image) else { throw BackdropError.unreadable }
-            return (reading, keep(image, as: evidence(name)))
+            return (reading, Instrument.keep(image, as: evidence(name)))
         }
 
         let black: (Capture, String?)
@@ -362,35 +361,7 @@ enum HistoryReport {
             stripes: stripes, evidenceProblem: problems.isEmpty ? nil : problems.joined(separator: "; "))
     }
 
-    /// The screen as composited — every window — over `source`.
-    private nonisolated static func screenImage(
-        of source: CGRect, size: CGSize, onDisplay displayID: CGDirectDisplayID
-    ) async throws -> CGImage {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
-            throw BackdropError.displayMissing
-        }
-        let config = SCStreamConfiguration()
-        config.sourceRect = source
-        config.width = Int(size.width)
-        config.height = Int(size.height)
-        config.showsCursor = false
-        return try await SCScreenshotManager.captureImage(
-            contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
-    }
-
-    /// Writes a capture as PNG, and answers why not when it could not be. **A measurement whose
-    /// evidence cannot be looked at can only be believed** — the first reading this produced was
-    /// implausible enough that it had to be looked at — so a failed write is reported, not dropped.
-    private static func keep(_ image: CGImage, as url: URL) -> String? {
-        guard let file = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-            return "could not create \(url.path)"
-        }
-        CGImageDestinationAddImage(file, image, nil)
-        return CGImageDestinationFinalize(file) ? nil : "could not write \(url.path)"
-    }
-
-    private enum BackdropError: Error { case displayMissing, unreadable }
+    private enum BackdropError: Error { case unreadable }
 
 }
 
