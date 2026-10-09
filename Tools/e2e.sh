@@ -1082,11 +1082,19 @@ end_process() {
 
 # fixture_health: `app-health`'s report on TextEdit and the fixture once it is `ok`, or the last one after 10 s — a
 # document opened a moment ago is still loading. Hung, blocked and no Accessibility are answers at once.
+#
+# **Every sentence a stage selects in, each asked for** (2026-10-09). Asking for one alone passes a TextEdit holding an
+# **older copy** of the fixture — `open` brings a document already open forward and never reads it again — and a stage
+# then finds no word to select, as one did on the E2E Mac the first run after the fixture gained a line.
+fixture_sentences=("The meeting ended after we stopped meeting at noon.")
 fixture_health() {
-    local health="" state
+    local health="" state sentence
     for _ in $(seq 1 20); do
-        health=$("$helpers/app-health" com.apple.TextEdit "The meeting ended after we stopped meeting at noon." 2>&1) && break
+        for sentence in "${fixture_sentences[@]}"; do
+            health=$("$helpers/app-health" com.apple.TextEdit "$sentence" 2>&1) || break
+        done
         state=$(printf '%s' "$health" | json_field state)
+        [ "$state" = ok ] && break
         if [ "$state" = hung ] || [ "$state" = blocked ] || [ "$state" = noAccessibility ]; then break; fi
         sleep 0.5
     done
@@ -1121,6 +1129,12 @@ fixture_ready() {
             echo "NOTE  preflight: TextEdit was $state — $detail; it is ended and opened again on the fixture"
             again=" (after it was ended and opened again)"
             end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; }
+        # **A TextEdit holding an older copy of the fixture**: its window is the harness's own document, so it is closed —
+        # an unedited document closes without asking — and the fixture opened again, from disk. TextEdit, and whatever
+        # else it has open, are left alone.
+        elif [ "$state" = noFixture ] && "$helpers/close-window" notes.txt com.apple.TextEdit >/dev/null 2>&1; then
+            echo "NOTE  preflight: TextEdit held an older copy of the fixture — $detail; its window is closed and the fixture opened again from disk"
+            again=" (after its window was closed and the fixture opened again)"
         else
             echo "NOTE  preflight: TextEdit was $state — $detail; it is opened again on the fixture"
             again=" (after it was opened again)"

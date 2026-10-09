@@ -480,13 +480,16 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         Fake.script(self.fake.helpers / "session-access", f"echo '{json.dumps(report)}'")
 
     def health(self, answers: list[dict]):
-        """`app-health` answering each of `answers` in turn, the last one for ever after."""
+        """`app-health` answering each of `answers` in turn, the last one for ever after — and noting every sentence it
+        was asked about, in `health-asked`."""
         counter = self.fake.root / "health-calls"
         counter.write_text("0")
+        asked = self.fake.root / "health-asked"
         cases = "\n".join(f'  {index}) echo \'{json.dumps(answer)}\'; exit {0 if answer["state"] == "ok" else 1} ;;'
                           for index, answer in enumerate(answers[:-1]))
         last = answers[-1]
         Fake.script(self.fake.helpers / "app-health", textwrap.dedent(f"""\
+            printf '%s\\n' "$2" >> "{asked}"
             n=$(cat "{counter}"); echo $((n + 1)) > "{counter}"
             case $n in
             {cases}
@@ -586,6 +589,35 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("it is opened again on the fixture", done.stdout)
         self.assertTrue(alive(running), "TextEdit was ended where opening the fixture again was enough")
+
+    def test_every_sentence_a_stage_selects_in_is_asked_for(self):
+        """Each sentence of `fixture_sentences`, every one of them in the fixture: asking for one alone passed a TextEdit
+        holding an older copy of the fixture — measured on the E2E Mac, where a stage then found no word to select."""
+        done = self.preflight("selection")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        asked = (self.fake.root / "health-asked").read_text().splitlines()
+        self.assertIn("The meeting ended after we stopped meeting at noon.", asked)
+        fixture = (REPO / "Tools" / "e2e" / "notes.txt").read_text()
+        for sentence in set(asked):
+            self.assertIn(sentence, fixture, "the preflight asks for a sentence the fixture does not hold")
+
+    def test_a_textedit_holding_an_older_fixture_has_its_window_closed_and_the_fixture_opened_again(self):
+        """**`open` brings a document already open forward and never reads it again from disk** — measured 2026-10-09:
+        the fixture gained a line, `rsync` replaced the file, and TextEdit on the E2E Mac went on showing the old one.
+        The fixture's window is the harness's own document, so it is closed and the fixture opened again; TextEdit and
+        whatever else it holds are left alone."""
+        closed = self.fake.root / "closed"
+        Fake.script(self.fake.helpers / "close-window", f'echo "$@" >> "{closed}"; exit 0')
+        running = unrelated_process()
+        self.addCleanup(lambda: alive(running) and os.kill(running, 9))
+        self.health([{"state": "noFixture", "pid": running,
+                      "detail": "no window of com.apple.TextEdit holds the sentence (1 window(s): notes.txt)"}] * 20
+                    + [{"state": "ok", "detail": "“notes.txt” holds the fixture"}])
+        done = self.preflight("selection")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("NOTE  preflight: TextEdit held an older copy of the fixture", done.stdout)
+        self.assertEqual(closed.read_text().splitlines(), ["notes.txt com.apple.TextEdit"])
+        self.assertTrue(alive(running), "TextEdit was ended where closing the fixture's window was enough")
 
     def test_a_textedit_not_running_is_opened_again_without_ending_anything(self):
         # Not running for longer than the poll waits — an `open` that started nothing — and then opened again.
