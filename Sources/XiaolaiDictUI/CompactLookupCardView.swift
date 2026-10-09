@@ -63,8 +63,11 @@ struct CompactLookupSummary: Equatable {
 struct CompactLookupCardView: View {
     @Environment(\.scale) private var scale
     @Environment(\.closeLookup) private var close
+    @Environment(\.openDictionarySettings) private var openDictionarySettings
     let card: LookupCard
     var incomplete = false
+    /// Whether "Dictionaries…" is drawn — `CardExits`' decision. This card pins no footer, so the way out is here.
+    var offersDictionaries = false
     let onMore: () -> Void
 
     private var summary: CompactLookupSummary { CompactLookupSummary(card: card) }
@@ -105,6 +108,10 @@ struct CompactLookupCardView: View {
             meanings
 
             HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                if offersDictionaries {
+                    IconButton(.dictionarySettings, action: openDictionarySettings)
+                        .foregroundStyle(.secondary)
+                }
                 if incomplete {
                     Label("Partial result", systemImage: ActionSymbol.warning.symbol)
                         .font(.system(size: scale.text.small))

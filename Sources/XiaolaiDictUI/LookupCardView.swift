@@ -714,7 +714,10 @@ public struct LookupPanelContent: View {
     }
 
     private func compactCard(_ card: LookupCard) -> some View {
-        CompactLookupCardView(card: card, incomplete: compactIsIncomplete) {
+        CompactLookupCardView(
+            card: card, incomplete: compactIsIncomplete,
+            offersDictionaries: CardExits.of(presentation.outcome, compact: isCompact).dictionaries == .compactCard
+        ) {
             showingDetails = true
         }
     }
@@ -808,16 +811,40 @@ public struct LookupPanelContent: View {
     /// needs a key window. Copy needs none. Copy alone, and no pin: prose is not a sense, so a note
     /// made from it would carry no standing — which is the one thing `PinnedNote.Standing` exists
     /// to prevent.
+    ///
+    /// **Every answered state carries "Dictionaries…"** (plan-card-refinements WI-1) — a miss too, which pinned nothing
+    /// and so had no way to the setting that decides which dictionaries were asked. `CardExits` decides, as a table.
     @ViewBuilder
     private var pinnedFooter: some View {
-        switch presentation.outcome {
-        case .entries:
+        switch CardExits.of(presentation.outcome, compact: isCompact).footer {
+        case .entry:
             if let entry { footer(entry) }
-        case .plainText(let text, _):
-            proseFooter(cardWithoutAnEntry(.prose(text)))
-        case .none, .notFound:
+        case .prose:
+            if case .plainText(let text, _) = presentation.outcome { proseFooter(cardWithoutAnEntry(.prose(text))) }
+        case .miss:
+            missFooter
+        case .none:
             EmptyView()
         }
+    }
+
+    /// **The way to Settings › Dictionary**, leading the pinned row on every answered card. An icon, as the row's other
+    /// actions are, so it fits beside them at the card's minimum width and grows with them at every text size.
+    private var dictionariesExit: some View {
+        IconButton(.dictionarySettings, action: openDictionarySettings)
+            .foregroundStyle(.secondary)
+    }
+
+    /// A miss has nothing to act on, and the way out is all its row holds.
+    private var missFooter: some View {
+        HStack(spacing: scale.space.stack) {
+            dictionariesExit
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.top, scale.space.inline)
+        .padding(.bottom, footerBottomPadding)
+        .pinnedToTheCard(in: scheme)
     }
 
     /// Shown wherever the dictionary service could not be asked. It says the answer is incomplete
@@ -1095,11 +1122,11 @@ public struct LookupPanelContent: View {
 
     /// The one action a prose answer has. Built from `LookupCard.copyableText` like the footer's copy
     /// button, so the two cannot put different things on the pasteboard for the same card.
-    @ViewBuilder
     private func proseFooter(_ card: LookupCard) -> some View {
-        if let copyable = card.copyableText {
-            HStack(spacing: scale.space.stack) {
-                Spacer(minLength: 0)
+        HStack(spacing: scale.space.stack) {
+            dictionariesExit
+            Spacer(minLength: 0)
+            if let copyable = card.copyableText {
                 IconButton(
                     title: "Copy This Definition",
                     symbol: (copied ? ActionSymbol.done : ActionSymbol.copy).symbol
@@ -1110,11 +1137,11 @@ public struct LookupPanelContent: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, scale.space.padAcross)
-            .padding(.top, scale.space.inline)
-            .padding(.bottom, footerBottomPadding)
-            .pinnedToTheCard(in: scheme)
         }
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.top, scale.space.inline)
+        .padding(.bottom, footerBottomPadding)
+        .pinnedToTheCard(in: scheme)
     }
 
     /// The actions, on their own row under the dictionary control.
@@ -1122,6 +1149,7 @@ public struct LookupPanelContent: View {
         // `stack` between the targets, for the reason the heading gives: at `inline` the glyphs
         // were 18 pt apart.
         HStack(spacing: scale.space.stack) {
+            dictionariesExit
             Spacer(minLength: 0)
             if presentation.sentence?.isEmpty == false {
                 // **Absent, not disabled, where translating could say nothing.** `translate` answers

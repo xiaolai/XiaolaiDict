@@ -1412,7 +1412,9 @@ PYSPELLING
 #     spelling_state <panel report>: `miss`, `line` and `card`, each where the lookup panel shows it, **read exactly**
 #     (audit, 2026-10-09): the typo's own miss, the control named for the suggestion, and the card headed by the corrected
 #     word itself — a definition or a sentence that holds the word, or a heading like "receiver", is not its card — and
-#     the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not there.
+#     the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not there. And
+#     `exit`, the "Dictionaries…" control every answered card carries (plan-card-refinements WI-1), read on the miss card
+#     and on the corrected word's card.
 #     `TheSpellingStepReadsThePanelExactly` holds each of those with a control.
 spelling_state() {
     python3 - "$1" <<'PYSTATE' 2>/dev/null || true
@@ -1427,6 +1429,8 @@ controls = [c for w in windows for c in w.get("controls", [])]
 state = []
 if any("No entry for" in t and "“recieve”" in t for t in texts): state.append("miss")
 if "Did you mean “receive”?" in controls: state.append("line")
+# The way to Settings › Dictionary, which every answered card carries (plan-card-refinements WI-1).
+if "Dictionaries…" in controls: state.append("exit")
 answered = not any("No entry for" in t or "Looking up" in t for t in texts)
 if report.get("complete") is True and "receive" in texts and answered: state.append("card")
 print(" ".join(state))
@@ -1464,6 +1468,11 @@ spelling_panel() {
         "$helpers/keys" 53 2>/dev/null || true
         return 0
     fi
+    if [[ " $state " == *" exit "* ]]; then
+        pass "lookup: the miss card for “recieve” offers “Dictionaries…”"
+    else
+        flunk "lookup: the miss card for “recieve” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
+    fi
     pass "lookup: the typo “recieve” drew its miss card $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, and “Did you mean “receive”?” under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
     # Pressed through Accessibility: the panel never activates the app, so the frontmost rule a real click needs can
     # never be met for it (`click-element --press`).
@@ -1474,9 +1483,17 @@ spelling_panel() {
     fi
     for _ in $(seq 1 100); do
         view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
-        if [[ " $(spelling_state "$view") " == *" card "* ]]; then shown=yes; break; fi
+        state=$(spelling_state "$view")
+        if [[ " $state " == *" card "* ]]; then shown=yes; break; fi
         sleep 0.1
     done
+    if [ "$shown" = yes ]; then
+        if [[ " $state " == *" exit "* ]]; then
+            pass "lookup: the card for “receive” offers “Dictionaries…”"
+        else
+            flunk "lookup: the card for “receive” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
+        fi
+    fi
     if [ "$shown" = yes ] && [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
         pass "lookup: pressing the line showed the card for “receive”, in the one panel"
     else

@@ -545,6 +545,9 @@
     "Device Control and Data Access" : {
       "comment" : "macOS 27's name for the Accessibility list — use the system's own wording"
     },
+    "Dictionaries…" : {
+
+    },
     "Dictionary" : {
 
     },

@@ -50,6 +50,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
     case listLayout, gridLayout, inspector
     // The lookup card and a history card.
     case sayAloud, openInDictionary, copy, pinNote, unpinNote, translate, explain
+    // The lookup card's way to Settings › Dictionary, on every card state (plan-card-refinements WI-1).
+    case dictionarySettings
     // The compact preview has no other way out: Escape and a click outside both close the panel, and a reader
     // who has neither to hand needs a button that does.
     case closeLookup, fewerDetails
@@ -124,6 +126,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .showAll: "chevron.down"
         case .showLess: "chevron.up"
         case .openInDictionary: "character.book.closed"
+        // The shelf of dictionaries the reader chooses from, beside the one book that is open.
+        case .dictionarySettings: "books.vertical"
         // The platform's Close. It is free for this now that the grade *Forgot* no longer borrows it.
         case .closeLookup: "xmark"
         // Back from the full card to the compact preview: a step back, not a disclosure.
@@ -217,6 +221,8 @@ public enum ActionSymbol: String, CaseIterable, Sendable {
         case .showAll: "Show All"
         case .showLess: "Show Less"
         case .openInDictionary: "Open in Dictionary"
+        // The ellipsis: it opens another window.
+        case .dictionarySettings: "Dictionaries…"
         case .closeLookup: "Close Lookup"
         case .fewerDetails: "Fewer Details"
         case .copy: "Copy"

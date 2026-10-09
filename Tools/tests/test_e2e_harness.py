@@ -998,6 +998,13 @@ class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
         self.assertEqual(self.state(["Lookup", "receiver", "No entry for “receiver” in your dictionaries."],
                                     ["Did you mean “receiver”?", "Did you mean “receive” instead"]), [])
 
+    def test_the_dictionaries_exit_is_read_by_its_exact_name(self):
+        """plan-card-refinements WI-1: every answered card carries "Dictionaries…"; a control merely holding the word,
+        or named without its ellipsis, is not it."""
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE, "Dictionaries…"]),
+                         ["miss", "line", "exit"])
+        self.assertNotIn("exit", self.state(["Lookup", "receive"], ["Dictionaries", "Choose Another Dictionary…"]))
+
 
 class CloseWindowFindsTheFixtureByItsDocument(unittest.TestCase):
     """`close-window --document`, which the preflight uses to put away a TextEdit window holding an older copy of the
