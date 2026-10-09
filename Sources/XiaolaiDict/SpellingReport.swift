@@ -38,7 +38,8 @@ enum SpellingReport {
     static func run(
         terms: [String], lookUp: @escaping SpellingSuggester.LookUp, checker: any SpellingSuggesting,
         language: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) },
-        now: () -> ContinuousClock.Instant = { .now }, write: (String) -> Bool
+        now: () -> ContinuousClock.Instant = { .now }, write: (String) -> Bool,
+        writeError: (String) -> Void = LookupCommand.writeError
     ) async -> CommandStatus {
         let suggester = SpellingSuggester(checker: checker, lookUp: lookUp, language: language)
         var status = CommandStatus.success
@@ -52,7 +53,7 @@ enum SpellingReport {
                 offer = try await suggester.offer(for: term, outcome: outcome)
                 let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, readersEnglish: language(),
                                               lookup: looked - started, suggestion: now() - looked)
-                if let failed = LookupCommand.emit(line, through: write) { return failed }
+                if let failed = LookupCommand.emit(line, through: write, writeError: writeError) { return failed }
             } catch {
                 return .interrupted
             }

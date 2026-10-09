@@ -90,12 +90,15 @@ struct SpellingReportTests {
         #expect(status == .failure, "a run whose dictionary service failed exited \(status)")
     }
 
-    /// **A line that could not be written is not a report**, and the run says so rather than succeeding.
+    /// **A line that could not be written is not a report**, and the run says so rather than succeeding — on the error
+    /// writer it is given, as `LookupCommand.run` takes one, so the test hears it and the suite's own log does not.
     @Test func aLineThatCouldNotBeWrittenFailsTheRun() async {
+        var said: [String] = []
         let status = await SpellingReport.run(
             terms: ["recieve"], lookUp: { term throws(CancellationError) in try Self.lookUp(term) }, checker: Checker(),
-            language: { nil }, write: { _ in false })
+            language: { nil }, write: { _ in false }, writeError: { said.append($0) })
         #expect(status == .internalError)
+        #expect(said == ["could not write the report"], "the failed write said \(said)")
     }
 
     /// **A test build is not a development bundle**: without the define the instrument refuses, as a release does.
