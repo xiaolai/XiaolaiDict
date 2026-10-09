@@ -75,4 +75,33 @@ struct TemporaryDirectoryTests {
         #expect(offenders.isEmpty,
                 "these reach the system's temporary directory themselves; use TemporaryDirectory or ScratchFile: \(offenders.joined(separator: ", "))")
     }
+
+    /// **A scratch file is removed by the file that made it.** `ScratchFile.path` hands out a path, not an owner, so
+    /// nothing removes its directory unless the caller does — and `DeveloperDataTests` never did: five ledgers left by
+    /// every run, which `Tools/clean-test-scratch.sh` swept an hour later as "left by earlier runs" (2026-10-09). Counted
+    /// per file, because a helper that makes the path usually hands back its removal beside it.
+    @Test func everyScratchFileIsRemovedInTheFileThatMadeIt() throws {
+        let tests = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let support = tests.appendingPathComponent("Support").standardizedFileURL.path
+        let files = try #require(FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" && !$0.standardizedFileURL.path.hasPrefix(support) }
+        // Built from parts so this file does not count its own search.
+        let made = "ScratchFile" + ".path(", removed = "ScratchFile" + ".remove("
+        var makers = 0
+        var offenders: [String] = []
+        for file in files {
+            let code = try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.hasPrefix("//") }
+            let paths = code.reduce(0) { $0 + $1.components(separatedBy: made).count - 1 }
+            let removals = code.reduce(0) { $0 + $1.components(separatedBy: removed).count - 1 }
+            if paths > 0 { makers += 1 }
+            if paths > removals { offenders.append("\(file.lastPathComponent) (\(paths) made, \(removals) removed)") }
+        }
+        // The positive control: the scan is reading files that use the fixture at all.
+        try #require(makers > 5, "only \(makers) files make a scratch file — the scan is not reading where they are")
+        #expect(offenders.isEmpty, "these make scratch files they never remove: \(offenders.joined(separator: ", "))")
+    }
 }
