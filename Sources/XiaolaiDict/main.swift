@@ -87,8 +87,8 @@ case .success(.panelReport):
     XiaolaiDictScene.main()
 
 // Shows the lookup panel against a word rectangle the stage measured, so the same two reasons apply.
-case .success(.placementReport(let x, let y, let width, let height, let drag)):
-    PlacementReport.aim(at: CGRect(x: x, y: y, width: width, height: height), drag: drag)
+case .success(.placementReport(let x, let y, let width, let height, let capture, let drag)):
+    PlacementReport.aim(at: CGRect(x: x, y: y, width: width, height: height), capture: capture, drag: drag)
     Instruments.run(.placement)
     XiaolaiDictScene.main()
 

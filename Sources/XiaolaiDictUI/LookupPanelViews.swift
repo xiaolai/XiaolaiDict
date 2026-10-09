@@ -183,6 +183,35 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         // to the left of a window that is exactly the size of its content. **`CardChrome` says how much** — the
         // placement reads the same numbers to put the card, and its tail, where they are drawn.
         .padding(CardChrome(scale).insets(tail: tail))
+        .mask { shown }
+    }
+
+    /// **What of the surface the window shows: the shadow fades to nothing at every edge of the window**, and the card and
+    /// its tail stay whole (plan-card-refinements D3, 2026-10-10). The window keeps only so much room round the card for
+    /// its shadows (`CardChrome.insets`), and the shadow reaches further, so each edge cut it in a straight line —
+    /// measured on the E2E Mac at Huge on a white page, steps of 6–8 grey levels in one pixel at the sides, and **15 in
+    /// the light appearance and 11 in the dark** below a card above its word, where the window ends just past the tip so
+    /// the tip is as near the word as a top tail's, and the shadow falls darkest. Each band of room now fades across its
+    /// width; below a tail pointing down the band is the tail's strip and the room past its tip.
+    private var shown: some View {
+        let insets = CardChrome(scale).insets(tail: tail)
+        let bottom = tail?.edge == .bottom ? scale.space.tailLength + insets.bottom : insets.bottom
+        return ZStack {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: insets.top)
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: insets.leading)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: insets.trailing)
+                }
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: bottom)
+            }
+            shape.padding(insets)
+        }
     }
 
     /// **How tall the scrolling region may grow: the card's cap, less the row pinned under it.**

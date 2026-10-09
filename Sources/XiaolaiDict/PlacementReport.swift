@@ -4,6 +4,7 @@ import CaptureModel
 import MacCapture
 import SwiftUI
 import Synchronization
+import XiaolaiDictBase
 import XiaolaiDictUI
 
 /// **Where the lookup panel goes for a word at a known rectangle, and whether it ever covers it** — the instrument
@@ -25,11 +26,12 @@ enum PlacementReport {
     /// A point of rounding between the compositor's frame and the screen's, as the window fit allows.
     static let slack: CGFloat = 1
 
-    /// The rectangle `main.swift` was given, y down, and whether to drag the card. Set once before the scene starts.
-    private nonisolated static let word = Mutex<(rect: CGRect, drag: PlacementDrag?)?>(nil)
+    /// The rectangle `main.swift` was given, y down, and what to do with the card: keep a PNG of it, drag it. Set once
+    /// before the scene starts.
+    private nonisolated static let word = Mutex<(rect: CGRect, capture: String?, drag: PlacementDrag?)?>(nil)
 
-    nonisolated static func aim(at rect: CGRect, drag: PlacementDrag? = nil) {
-        word.withLock { $0 = (rect, drag) }
+    nonisolated static func aim(at rect: CGRect, capture: String? = nil, drag: PlacementDrag? = nil) {
+        word.withLock { $0 = (rect, capture, drag) }
     }
 
     static func run(in app: XiaolaiDictApp) async -> CommandStatus {
@@ -37,7 +39,7 @@ enum PlacementReport {
             _ = Instrument.write(["problem": "the window actions never arrived, so nothing could open"])
             return .failure
         }
-        guard let (given, drag) = word.withLock({ $0 }) else {
+        guard let (given, capture, drag) = word.withLock({ $0 }) else {
             _ = Instrument.write(["problem": "no word rectangle was given"])
             return .usage
         }
@@ -97,6 +99,22 @@ enum PlacementReport {
         let cardLeft = settled.minX + insets.leading
         let cardWidth = settled.width - insets.leading - insets.trailing
         report["cardMidX"] = cardLeft + cardWidth / 2
+        // **The card on its word, kept for a person to look at** (D3, 2026-10-10: whether cutting the faint lower shadow
+        // under a card above its word leaves a conspicuous straight edge, and whether the tail's outline is whole) — before
+        // the clicks below, which close it. The window and the word with a margin round them, as composited.
+        if let capture {
+            let region = settled.union(given).insetBy(dx: -Self.captureMargin, dy: -Self.captureMargin)
+            let kept = await Self.capture(region, on: window.screen ?? primary, primaryHeight: height, to: capture,
+                                          window: settled)
+            report["capture"] = kept.problem ?? capture
+            for (key, step) in [("bottomEdgeStep", kept.steps.bottom), ("leftEdgeStep", kept.steps.left),
+                                ("rightEdgeStep", kept.steps.right)] {
+                if let step { report[key] = step }
+            }
+            report["appearance"] = NSApplication.shared.effectiveAppearance
+                .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? "dark" : "light"
+            report["textSize"] = app.panelController.textSize().rawValue
+        }
         if let tail, let tip = tail.tip {
             // y down: a tail on the card's top edge points up, at the word above it.
             let tipY = tail.edge == .top ? settled.minY + insets.top : settled.maxY - insets.bottom
@@ -117,6 +135,68 @@ enum PlacementReport {
         return await PanelReport.leaving((first.intersects(given) || settled.intersects(given)) ? .failure : .success,
                                          after: before, in: app)
     }
+
+    /// The room kept round the card and its word in a capture, so the shadow's fall and what lies behind both show.
+    static let captureMargin: CGFloat = 24
+
+    /// Writes the screen over `region` (global, y down) as a PNG at `path` — `problem` nil where it was written — and
+    /// measures **the step at the window's bottom, left and right edges** (`window`, y down): how many grey levels the
+    /// screen changes by from the pixel just inside the window to the one just outside, the median of four places along
+    /// each edge, clear of the corners and of a tail at the middle. A shadow cut by the window's edge is a step; one that
+    /// has faded out is none.
+    static func capture(
+        _ region: CGRect, on screen: NSScreen, primaryHeight: CGFloat, to path: String, window: CGRect
+    ) async -> (problem: String?, steps: (bottom: Double?, left: Double?, right: Double?)) {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return ("the display has no number", (nil, nil, nil))
+        }
+        // Display-local and top-left, which is what ScreenCaptureKit's `sourceRect` means.
+        let top = primaryHeight - screen.frame.maxY
+        let source = CGRect(x: region.minX - screen.frame.minX, y: region.minY - top, width: region.width, height: region.height)
+        let pixels = CGSize(width: region.width * screen.backingScaleFactor, height: region.height * screen.backingScaleFactor)
+        do {
+            // The instrument's own deadline, not the product's: the first capture after boot is slow.
+            let image = try await withDeadline(.seconds(30)) {
+                try await Instrument.screenImage(of: source, size: pixels, onDisplay: number.uint32Value)
+            }
+            let scale = screen.backingScaleFactor
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            func pixel(_ x: CGFloat, _ y: CGFloat) -> (x: Int, y: Int) {
+                (Int(((x - region.minX) * scale).rounded()), Int(((y - region.minY) * scale).rounded()))
+            }
+            func grey(_ at: (x: Int, y: Int)) -> Double? {
+                guard at.x >= 0, at.y >= 0, at.x < bitmap.pixelsWide, at.y < bitmap.pixelsHigh,
+                      let colour = bitmap.colorAt(x: at.x, y: at.y)?.usingColorSpace(.sRGB) else { return nil }
+                return (colour.redComponent + colour.greenComponent + colour.blueComponent) / 3 * 255
+            }
+            func median(_ steps: [Double]) -> Double? {
+                let sorted = steps.sorted()
+                return sorted.isEmpty ? nil : (sorted[(sorted.count - 1) / 2] + sorted[sorted.count / 2]) / 2
+            }
+            func step(_ inside: (x: Int, y: Int), _ outside: (x: Int, y: Int)) -> Double? {
+                guard let inside = grey(inside), let outside = grey(outside) else { return nil }
+                return abs(inside - outside)
+            }
+            let bottom = median(Self.edgeSamples.compactMap { fraction in
+                let edge = pixel(window.minX + window.width * fraction, window.maxY)
+                return step((edge.x, edge.y - 1), edge)
+            })
+            let left = median(Self.edgeSamples.compactMap { fraction in
+                let edge = pixel(window.minX, window.minY + window.height * fraction)
+                return step(edge, (edge.x - 1, edge.y))
+            })
+            let right = median(Self.edgeSamples.compactMap { fraction in
+                let edge = pixel(window.maxX, window.minY + window.height * fraction)
+                return step((edge.x - 1, edge.y), edge)
+            })
+            return (Instrument.keep(image, as: URL(fileURLWithPath: path)), (bottom, left, right))
+        } catch {
+            return ("\(error)", (nil, nil, nil))
+        }
+    }
+
+    /// Where along an edge it is read: clear of the corners, and of a tail at the middle.
+    static let edgeSamples: [CGFloat] = [0.2, 0.35, 0.65, 0.8]
 
     /// The window's frame as the compositor lists it — global, y down. Nil while it is not listed.
     static func listedFrame(of window: NSWindow) -> CGRect? {

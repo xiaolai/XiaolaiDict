@@ -202,6 +202,11 @@ APPLE_EVENTS = {
     "learning_dark_before=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'",
     "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $learning_dark_before\"",
     "if ! osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $wanted_dark\"",
+    # The hover stage's, since 2026-10-10: the card above its word is seen in the dark appearance too (plan-card-
+    # refinements D3). The preflight requires System Events granted whenever the hover stage is asked for, too.
+    "placement_dark_was=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'",
+    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $placement_dark_was\"",
+    "if ! osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $wanted\"",
 }
 
 

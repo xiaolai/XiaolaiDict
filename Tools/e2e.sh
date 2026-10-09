@@ -1202,7 +1202,8 @@ if wants_any learning hover; then
         lacks "screencapture from this SSH session made no picture ($(head -c 200 "$reports/preflight-screen.err")) although the session reads as allowed to record — the learning stage's captures would fail the same way"
     fi
 fi
-if wants_any learning; then
+# The hover stage too, since 2026-10-10: it sees the card above its word in the dark appearance (plan-card-refinements D3).
+if wants_any learning hover; then
     scripting=$(printf '%s' "$access" | json_field automation com.apple.systemevents)
     if [ "$scripting" = notRunning ]; then
         # Asked of a running System Events only; starting it is a LaunchServices launch, and sends no Apple event.
@@ -1215,7 +1216,7 @@ if wants_any learning; then
         done
     fi
     if [ "$scripting" != granted ]; then
-        lacks "this SSH session may not script System Events ($scripting), which the learning stage uses to switch the system's appearance — at the Mac, allow $session_client to control System Events in System Settings › Privacy & Security › Automation (notAsked means the first stage that scripts it would raise the Allow prompt on that screen, with nobody there to answer)"
+        lacks "this SSH session may not script System Events ($scripting), which the learning and hover stages use to switch the system's appearance — at the Mac, allow $session_client to control System Events in System Settings › Privacy & Security › Automation (notAsked means the first stage that scripts it would raise the Allow prompt on that screen, with nobody there to answer)"
     fi
 fi
 
@@ -2307,24 +2308,47 @@ hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit acc
 # **The card never covers the word** (plan-card-refinements WI-2): the box TextEdit's word was read at, handed to
 # `--placement-report`, which shows the real panel against it and reads the panel's frame from the compositor at first
 # listing and once the entry has grown it — at two text sizes, the reader's own put back afterwards.
-placement_at() {  # placement_at <reading> <text size>
-    local box report
+#     placement_at <reading> <text size> [capture PNG] [the side the card must take]: the PNG, where named, is the card on
+#     its word as composited, kept for a person to look at; the report is kept in `last_placement` for the checks after.
+placement_at() {  # placement_at <reading> <text size> [capture] [side]
+    local box report capture=${3:-} side=${4:-}
     box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
         || { flunk "placement: no word box to place against"; return; }
     defaults write com.xiaolaidict TextSize "$2"
     local ledger_before
     ledger_before=$(newest_row_id)
     # shellcheck disable=SC2086
-    report=$(run_report_with --placement-report 90 $box) || true
+    if [ -n "$capture" ]; then
+        report=$(run_report_with --placement-report 90 $box --capture "$capture") || true
+    else
+        report=$(run_report_with --placement-report 90 $box) || true
+    fi
+    last_placement=$report
     ledger_left "placement ($2): --placement-report" "$ledger_before"
     if [ -z "$report" ]; then
         flunk "placement ($2): --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
         return
     fi
-    consume_verdicts hover "$(python3 - "$report" "$2" <<'PYPLACE' 2>&1 || true
+    consume_verdicts hover "$(python3 - "$report" "$2" "$capture" "$side" <<'PYPLACE' 2>&1 || true
 import json, sys
-r, size = json.loads(sys.argv[1]), sys.argv[2]
+r, size, capture, side = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+if side:
+    size = f"{size}, {side} the word"
+    say(r.get("side") == side, f"placement ({size}): the card is {side} its word on this screen",
+        f"placement ({size}): the card went {r.get('side')}, not {side}: {r}")
+if capture:
+    say(r.get("capture") == capture, f"placement ({size}): the card on its word is kept in {capture}, "
+        f"{r.get('appearance')} appearance, text size {r.get('textSize')}",
+        f"placement ({size}): no picture of the card was kept: {r.get('capture')}")
+    # **No straight edge where the window ends** (D3): the shadow fades out inside it. Cut by the window's edge it was a
+    # step of 15 grey levels in light and 11 in dark below a card above its word, and 6–8 at the sides (2026-10-10); a
+    # fade leaves one or two.
+    steps = {edge: r.get(f"{edge}EdgeStep") for edge in ("bottom", "left", "right")}
+    say(all(v is not None and v <= 3 for v in steps.values()),
+        f"placement ({size}): the window's edges change the screen by "
+        + ", ".join(f"{v:.1f} ({k})" for k, v in steps.items() if v is not None) + " grey levels — no straight edge",
+        f"placement ({size}): the shadow is cut by the window's edge: {steps} grey levels")
 w, a, z = r.get("word", {}), r.get("initial", {}), r.get("settled", {})
 def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}"
 say(r.get("appeared") is True and r.get("coversWordInitially") is False,
@@ -2419,12 +2443,48 @@ print("DONE")
 PYDRAG
 )"
 }
+# **The card above its word, on this screen** (D3): a word box near the foot of the screen, at Huge, in the light and the
+# dark appearance — placed above it, its tail on its bottom edge at the word's middle, a click beside that tail (where the
+# card's shadow falls) reaching the app beneath, and a picture of each kept for a person to look at: whether cutting the
+# faint lower shadow there leaves a conspicuous straight edge, and whether the tail's outline is whole. The box is a place
+# on the screen, not a word drawn there; the screen behind the card is whatever is open.
+placement_above() {  # placement_above: after placement_at, whose report names the screen
+    local reading appearance evidence="$placement_evidence"
+    reading=$(python3 -c '
+import json, sys
+s = json.loads(sys.argv[1]).get("screen") or {}
+if not s: sys.exit("no screen")
+print(json.dumps({"bounds": {"x": s["x"] + s["width"] / 2 - 40, "y": s["y"] + s["height"] - 60, "width": 80, "height": 18}}))' \
+        "$last_placement" 2>&1) || { flunk "placement: no screen to put a word at its foot ($reading)"; return; }
+    # Global, not local: `at_exit` runs after this function has returned, and puts back what it read.
+    placement_dark_was=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2>/dev/null || true)
+    restore_dark() {
+        case $placement_dark_was in
+            true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $placement_dark_was" ;;
+        esac
+    }
+    at_exit restore_dark
+    for appearance in light dark; do
+        local wanted=false
+        [ "$appearance" = dark ] && wanted=true
+        if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted" 2>/dev/null; then
+            flunk "placement: the $appearance appearance could not be set, so the card above its word was not seen in it"
+            continue
+        fi
+        sleep 1
+        placement_at "$reading" huge "$evidence/above-huge-$appearance.png" above
+    done
+    restore_dark || true
+}
 if [ -n "$last_reading" ]; then
     text_size_had=no; text_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && text_size_had=yes
     restore_text_size() { restore_default TextSize "$text_size_had" "$text_size_was"; }
     at_exit restore_text_size
-    placement_at "$last_reading" standard
+    placement_evidence="$e2e_home/placement-evidence"
+    mkdir -p "$placement_evidence" && chmod 700 "$placement_evidence" && rm -f "$placement_evidence"/*.png
+    placement_at "$last_reading" standard "$placement_evidence/below-standard-light.png"
     placement_at "$last_reading" huge
+    placement_above
     placement_drag_at "$last_reading" 120 80
     restore_text_size
 fi
