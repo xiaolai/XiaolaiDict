@@ -1,4 +1,5 @@
 import ApplicationServices
+import Capture
 import CaptureModel
 import DictionaryModel
 import Foundation
@@ -32,7 +33,7 @@ struct SelectionReaderTests {
         tree.set(field, kAXWindowAttribute, window)
         tree.set(window, kAXDocumentAttribute, "file:///tmp/notes.txt" as CFString)
 
-        guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
+        guard case .selected(let selection, _) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.sentence == "The meeting ended after we stopped meeting at noon.")
         #expect(selection.quality == .accessibility(.accessibilityTextRange, context: .complete))
         #expect(selection.place.document == "file:///tmp/notes.txt")
@@ -57,7 +58,7 @@ struct SelectionReaderTests {
         tree.scriptMarkers(on: page, selected: "word", sentence: "A word here.")
         tree.set(page, kAXURLAttribute, URL(string: "https://example.com/a")! as CFURL)
 
-        guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
+        guard case .selected(let selection, _) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.quality.source == .accessibilityTextMarkers)
         #expect(selection.sentence == "A word here.")
         #expect(selection.rangeInSentence == NSRange(location: 2, length: 4))
@@ -75,7 +76,7 @@ struct SelectionReaderTests {
         tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
         tree.scriptMarkers(on: page, selected: "word", sentence: "Something else entirely.")
 
-        guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
+        guard case .selected(let selection, _) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.sentence == nil)
         #expect(selection.quality.context == .missing)
     }
@@ -109,7 +110,7 @@ struct SelectionReaderTests {
         tree.set(tree.application, kAXFocusedUIElementAttribute, field)
         tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
         tree.fail(field, kAXWindowAttribute, with: .notResponding)
-        guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
+        guard case .selected(let selection, _) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.text == "ephemeral")
         #expect(selection.place.document == nil)
         #expect(selection.place.precision == .appOnly)
@@ -125,7 +126,7 @@ struct SelectionReaderTests {
         tree.set(tree.application, kAXFocusedWindowAttribute, otherWindow)
         tree.set(otherWindow, kAXDocumentAttribute, "file:///tmp/other.txt" as CFString)
         tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
-        guard case .selected(let selection) = read(tree) else { Issue.record("expected a selection"); return }
+        guard case .selected(let selection, _) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.place.document == nil)
     }
 
@@ -163,7 +164,7 @@ struct SelectionReaderTests {
         tree.set(tree.application, kAXFocusedUIElementAttribute, field)
         tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
         tree.fail(field, kAXSelectedTextRangeAttribute, with: .deadlineExceeded)
-        guard case .selected(let selection) = read(tree) else {
+        guard case .selected(let selection, _) = read(tree) else {
             Issue.record("a failed context read lost the selection")
             return
         }
@@ -172,8 +173,77 @@ struct SelectionReaderTests {
         #expect(selection.quality.context == .missing)
     }
 
+    // MARK: - Where the selection is (the owner's decision of 2026-10-09: the card anchored on the word)
+
+    /// **The text-range dialect is asked for the term's own range** — the selection less the punctuation it was trimmed
+    /// of — so the box is the word's, exact.
+    @Test func theRangeDialectBoxesTheTermsOwnRange() {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "“meeting,”" as CFString)
+        tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(20, 10))
+        tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(21, 7),
+                 rectValue(CGRect(x: 300, y: 90, width: 56, height: 16)))
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "meeting")
+        #expect(bounds == ReadBounds(rect: DownRect(x: 300, y: 90, width: 56, height: 16), quality: .exact))
+    }
+
+    /// A selected range that no longer spans the text read is a selection that moved between the reads: no box, and the
+    /// selection itself is kept.
+    @Test func aRangeThatNoLongerSpansTheTextLocatesNothing() {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "meeting" as CFString)
+        tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(20, 9))
+        tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(20, 7),
+                 rectValue(CGRect(x: 300, y: 90, width: 56, height: 16)))
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "meeting")
+        #expect(bounds == nil)
+    }
+
+    /// **WebKit: the selection's own markers, boxed** — exact where the term is the whole selection, `containing` where
+    /// punctuation was trimmed from it, since the box then holds that too.
+    @Test func theMarkerDialectBoxesTheSelection() {
+        for (selected, quality) in [("word", WordBounds.Quality.exact), ("“word,”", .containing)] {
+            let tree = FakeAccessibility()
+            let page = tree.element(1)
+            tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+            tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+            tree.scriptMarkers(on: page, selected: selected, sentence: "A \(selected) here.")
+            tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 40, height: 18))
+            guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+            #expect(selection.text == "word")
+            #expect(bounds == ReadBounds(rect: DownRect(x: 80, y: 140, width: 40, height: 18), quality: quality), "\(selected)")
+        }
+    }
+
+    /// **Where the word is is worth having, not worth the selection**: an app that answers no box, or an empty one, still
+    /// hands over what was selected — with no box, so the card keeps the pointer rule.
+    @Test func noBoxOrAnEmptyOneKeepsTheSelectionAndLocatesNothing() {
+        for box in [nil, CGRect.zero] {
+            let tree = FakeAccessibility()
+            let field = tree.element(1)
+            tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+            tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
+            tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(0, 9))
+            if let box { tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(0, 9), rectValue(box)) }
+            guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+            #expect(selection.text == "ephemeral")
+            #expect(bounds == nil)
+        }
+    }
+
     private func rangeValue(_ location: Int, _ length: Int) -> AXValue {
         AccessibilitySession.rangeValue(CFRange(location: location, length: length))!
+    }
+
+    private func rectValue(_ rect: CGRect) -> AXValue {
+        var box = rect
+        return AXValueCreate(.cgRect, &box)!
     }
 }
 
@@ -211,6 +281,13 @@ private final class FakeAccessibility: AccessibilityReading {
         set(page, "AXSentenceTextMarkerRangeForTextMarker", argument: start, sentenceRange)
         set(page, "AXSentenceTextMarkerRangeForTextMarker", argument: last, sentenceRange)
         set(page, "AXStringForTextMarkerRange", argument: sentenceRange, sentence as CFString)
+    }
+
+    /// The box WebKit gives the scripted selection's own markers.
+    func scriptSelectionBox(on page: AXUIElement, _ rect: CGRect) {
+        var box = rect
+        set(page, "AXBoundsForTextMarkerRange", argument: AXTextMarkerRangeCreate(nil, marker(1), marker(2)),
+            AXValueCreate(.cgRect, &box)!)
     }
 
     func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {

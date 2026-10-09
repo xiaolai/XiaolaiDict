@@ -340,9 +340,10 @@ public final class HoverReader: HoverReading {
             let recognition = try await bounded {
                 try await source.recognise(at: point, window: window, policy: policy)
             }
-            // **No box from the pixels yet**: a recognised run's box holds the token only where the token is one run,
-            // which is unmeasured (plan-card-refinements §6, WI-2 spike) — so the panel keeps the pointer rule.
-            return accept(Self.selection(from: recognition), bounds: nil, request: request, policy: policy, point: point)
+            // **The run's box, which holds the word** (`containing`) — measured against a word whose box is known on the
+            // E2E Mac before it was carried (plan-card-refinements §6, the owner's decision of 2026-10-09).
+            return accept(Self.selection(from: recognition), bounds: recognition.bounds, request: request, policy: policy,
+                          point: point)
         } catch RecognitionError.screenRecordingDenied {
             // A reader who moved on is not told anything.
             return Task.isCancelled ? .quiet(.cancelled) : .needsScreenRecording(request: request)

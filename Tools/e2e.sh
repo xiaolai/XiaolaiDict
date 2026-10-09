@@ -288,7 +288,7 @@ stage "install"
 # compile error names `.build/e2e-src/<helper>/main.swift`. `Tools/tests/test_e2e_harness.py` compiles them all the
 # same way on every `make test`, so a helper that does not build is found before a run rather than at its start.
 rm -rf .build/e2e .build/e2e-src && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions element-frame; do
     mkdir -p ".build/e2e-src/$helper" && cp "Tools/e2e/$helper.swift" ".build/e2e-src/$helper/main.swift" \
         && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift -o ".build/e2e/$helper" \
         || fail "could not build $helper"
@@ -296,7 +296,7 @@ done
 # **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,
 # and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
 # document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
-cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
+cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/canvas.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -508,6 +508,8 @@ select_then_read() {
     local why reading
     if ! why=$("${selector[@]}" 2>&1); then flunk "$label: could not select ($why)"; return; fi
     reading=$("$exe" --read-selection "$app_id" 2>&1 || true)
+    # Kept for a check that asks more of the same reading (`selection_box`).
+    last_selection=$reading
     if why=$(expect "$reading" "$@" 2>&1); then pass "$label"; else flunk "$label: $why"; fi
 }
 
@@ -1687,6 +1689,48 @@ fi
 pass "accessibility: readable"
 fi
 
+# selection_box <label> <--read-selection report> <word> <quality>: **where the selection shortcut says the word is**
+# (plan-card-refinements §6, the owner's decision of 2026-10-09: the card anchored on the word), checked against a second,
+# different reading of the same place: `--read-point` at the middle of the box must read the same word, through the
+# hover's dialect, with its own box — and the two boxes are reported side by side, with how far apart each edge is.
+selection_box() {
+    local label=$1 reading=$2 word=$3 quality=$4 centre hovered
+    if ! centre=$(python3 -c '
+import json, sys
+line = next((l for l in sys.argv[1].splitlines() if l.startswith("{")), "{}")
+b = json.loads(line).get("bounds")
+if not b: sys.exit("no box")
+print("%.1f %.1f" % (b["x"] + b["width"] / 2, b["y"] + b["height"] / 2))' "$reading" 2>&1); then
+        flunk "$label: --read-selection reported no box ($(printf '%s' "$reading" | head -c 200))"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    hovered=$("$exe" --read-point $centre 2>/dev/null) || hovered=""
+    consume_verdicts selection "$(python3 - "$reading" "$hovered" "$word" "$quality" "$label" <<'PYBOX' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+selected = json.loads(next((l for l in sys.argv[1].splitlines() if l.startswith("{")), "{}"))
+word, quality, label = sys.argv[3], sys.argv[4], sys.argv[5]
+try:
+    hovered = json.loads(sys.argv[2])
+except ValueError:
+    hovered = {}
+s, h = selected["bounds"], hovered.get("bounds") or {}
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}"
+say(s.get("quality") == quality and 0 < s["height"] <= 80 and 0 < s["width"] <= 600,
+    f"{label}: the selection's box is {box(s)}, {s.get('quality')}",
+    f"{label}: the selection's box is not a word's: {s}")
+say(hovered.get("text") == word, f"{label}: a hover at the middle of that box reads “{word}” too",
+    f"{label}: a hover at the middle of that box reads {hovered.get('text')!r}, not “{word}”: {sys.argv[2][:200]}")
+if h:
+    edges = [h["x"] - s["x"], h["y"] - s["y"], (h["x"] + h["width"]) - (s["x"] + s["width"]),
+             (h["y"] + h["height"]) - (s["y"] + s["height"])]
+    print(f"NOTE\t{label}: the hover's {h.get('quality')} box {box(h)} against the selection's {box(s)}: edges differ by "
+          + ", ".join(f"{e:+.1f}" for e in edges) + " (left, top, right, bottom)")
+print("DONE")
+PYBOX
+)"
+}
 if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
 #    Automation prompt can block the screen. They need an unlocked screen — while it is locked,
@@ -1700,6 +1744,7 @@ select_then_read "TextEdit: the second of two words is the one read (range diale
     "$helpers/select-text" com.apple.TextEdit meeting 2 -- \
     text=meeting lemma=meet context=complete captureSource=accessibilityTextRange \
     "sentence=The meeting ended after we stopped meeting at noon."
+selection_box "selection: TextEdit's selected word" "$last_selection" meeting exact
 open -a Safari "$helpers/page.html"; sleep 3
 select_then_read "Safari: a selection across a sentence end gets both sentences (markers)" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "here. Second" -- \
@@ -1708,6 +1753,7 @@ select_then_read "Safari: a selection across a sentence end gets both sentences 
 select_then_read "Safari: wrapping punctuation is not part of the term" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "“ephemeral,”" -- \
     text=ephemeral lemma=ephemeral
+selection_box "selection: Safari's selection, trimmed of its punctuation" "$last_selection" ephemeral containing
 # `likely`, not `inferred`: *saw* → *see* is the everyday reading of the shape, not something the
 # sentence established. This assertion said `inferred` and named itself "read from its grammar" until
 # 2026-09-29 — both were true before the basis was split, and the stage had not run since.
@@ -1715,6 +1761,7 @@ select_then_read "Safari: a past form NLTagger leaves alone is lemmatised from a
     com.apple.Safari \
     "$helpers/select-web" com.apple.Safari saw -- \
     text=saw lemma=see lemmaBasis=likely
+selection_box "selection: Safari's selected word" "$last_selection" saw exact
 fi
 
 if want shortcut; then
@@ -2079,6 +2126,53 @@ fi
 open -a Safari "$helpers/page.html"; sleep 3
 # `--page`: the word comes from the page, never from the tab strip above it (`word-point`).
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers --page
+# **The pixel path's box, against a word whose box is known without asking it** (plan-card-refinements §6, the owner's
+# decision of 2026-10-09: whether the recogniser can say where a word is). `canvas.html` draws one word only in pixels —
+# a canvas has no text for Accessibility, so the hover reads it off the screen — at its ink box plus a fixed margin, so
+# the word's box on screen is the group's frame inset by the margin; `element-frame` reads that frame through
+# Accessibility's position and size, never through text. The recogniser's box must hold the word's; how much larger it
+# is on each side is reported, because that is what decides whether it is usable to centre a card on.
+open -a Safari "$helpers/canvas.html"; sleep 3
+if ! frame=$("$helpers/element-frame" com.apple.Safari pixel-word 2>&1); then
+    flunk "hover: the pixel fixture's word has no frame to measure against ($frame)"
+else
+    read -r gx gy gw gh <<<"$frame"
+    point=$(python3 -c 'import sys; x, y, w, h = map(float, sys.argv[1:]); print("%.0f %.0f" % (x + w / 2, y + h / 2))' \
+        "$gx" "$gy" "$gw" "$gh")
+    # shellcheck disable=SC2086
+    reading=$("$exe" --read-point $point 2>/dev/null) || reading=""
+    consume_verdicts hover "$(python3 - "$reading" "$frame" <<'PYPIXELS' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+margin = 12  # canvas.html's margin round the word's ink
+try:
+    r = json.loads(sys.argv[1])
+except ValueError:
+    r = {}
+gx, gy, gw, gh = map(float, sys.argv[2].split())
+truth = (gx + margin, gy + margin, gx + gw - margin, gy + gh - margin)
+b = r.get("bounds") or {}
+say(r.get("captureSource") == "opticalRecognition" and r.get("text") == "quixotic",
+    "hover: the word drawn only in pixels is read off the screen: “quixotic”",
+    f"hover: the pixel fixture was not read off the screen as “quixotic”: {sys.argv[1][:200]}")
+if b:
+    box = (b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"])
+    excess = (truth[0] - box[0], truth[1] - box[1], box[2] - truth[2], box[3] - truth[3])
+    # The tolerance every capture path shares: 3 pt across, 2 pt down — a box short of the ink by more is not holding it.
+    holds = excess[0] >= -3 and excess[2] >= -3 and excess[1] >= -2 and excess[3] >= -2
+    say(holds and b.get("quality") == "containing",
+        f"hover: the recogniser's box {b['x']:.0f},{b['y']:.0f} {b['width']:.0f}×{b['height']:.0f} holds the word's ink "
+        f"({truth[0]:.0f},{truth[1]:.0f} {truth[2] - truth[0]:.0f}×{truth[3] - truth[1]:.0f}), said to be {b.get('quality')}",
+        f"hover: the recogniser's box does not hold the word: box {box}, ink {truth}, quality {b.get('quality')}")
+    print("NOTE\thover: the recogniser's box exceeds the word's ink by " + ", ".join(f"{e:+.1f}" for e in excess)
+          + " pt (left, top, right, bottom); its middle is "
+          + f"{(box[0] + box[2]) / 2 - (truth[0] + truth[2]) / 2:+.1f} pt across from the word's")
+else:
+    say(False, "", f"hover: the pixel path reported no box for the word: {sys.argv[1][:200]}")
+print("DONE")
+PYPIXELS
+)"
+fi
 # **Chrome.** It builds no page tree for `AXManualAccessibility` — measured 2026-10-03, refused as
 # unsupported — only once told an assistive client is reading (`AXEnhancedUserInterface`), which the
 # reader asks after a hover that found nothing (`ChromiumEscalationTests` hold that). Told here first,

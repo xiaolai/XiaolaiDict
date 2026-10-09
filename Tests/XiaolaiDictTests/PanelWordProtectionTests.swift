@@ -147,4 +147,17 @@ struct PointReportBoundsTests {
         let line = try LookupCommand.jsonLine(PointReport(selection, bounds: nil, milliseconds: 3))
         #expect(!line.contains("\"bounds\""))
     }
+
+    /// **`--read-selection` says where the selected word is too** (the owner's decision of 2026-10-09), in the same
+    /// shape, so the `selection` stage can check it against a hover over the same place.
+    @Test func theSelectionReportCarriesItsBoxTheSameWay() throws {
+        let read = ReadBounds(rect: DownRect(x: 300, y: 90, width: 56, height: 16), quality: .exact)
+        let line = try LookupCommand.jsonLine(SelectionReport(selection, bounds: read))
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let bounds = try #require(json["bounds"] as? [String: Any])
+        #expect(bounds["x"] as? Double == 300 && bounds["y"] as? Double == 90)
+        #expect(bounds["width"] as? Double == 56 && bounds["height"] as? Double == 16)
+        #expect(bounds["quality"] as? String == "exact")
+        #expect(!(try LookupCommand.jsonLine(SelectionReport(selection, bounds: nil))).contains("\"bounds\""))
+    }
 }

@@ -50,6 +50,27 @@ struct WordBoundsTests {
         }
     }
 
+    /// **A selection's box has no pointer to be near** — the shortcut is pressed wherever the mouse happens to be — so
+    /// it is checked for being a box at all, and the same garbage is refused (the owner's decision of 2026-10-09).
+    @Test func aBoxWithNoPointerIsCheckedForBeingABox() {
+        #expect(ReadBounds.checked(CGRect(x: 100, y: 100, width: 80, height: 20), quality: .exact)
+                == ReadBounds(rect: DownRect(x: 100, y: 100, width: 80, height: 20), quality: .exact))
+        for box in [CGRect.zero, CGRect(x: 1, y: 1, width: 0, height: 9), .null, .infinite,
+                    CGRect(x: CGFloat.nan, y: 1, width: 9, height: 9)] {
+            #expect(ReadBounds.checked(box, quality: .exact) == nil, "\(box) was trusted")
+        }
+    }
+
+    /// **A box Vision gives, normalised to the capture with its origin top-left, back on the screen** — the inverse of
+    /// `CaptureGeometry.normalized`, so the pixel path's run can be handed on as a box in points.
+    @Test func aNormalisedBoxIsPlacedBackInTheRegion() {
+        let region = CGRect(x: 200, y: 300, width: 1_000, height: 140)
+        let box = CaptureGeometry.box(CGRect(x: 0.1, y: 0.25, width: 0.05, height: 0.5), in: region)
+        #expect(box == CGRect(x: 300, y: 335, width: 50, height: 70))
+        let corner = CaptureGeometry.normalized(CGPoint(x: box.minX, y: box.minY), in: region)
+        #expect(abs(corner.x - 0.1) < 1e-9 && abs(corner.y - 0.25) < 1e-9, "not the inverse of `normalized`: \(corner)")
+    }
+
     /// The flip keeps the quality, so the panel can tell an exact box from one that only contains the word.
     @Test func theQualityTravelsWithTheFlip() {
         let read = ReadBounds(rect: DownRect(x: 600, y: 690, width: 80, height: 20), quality: .containing)

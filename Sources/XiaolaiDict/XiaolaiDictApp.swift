@@ -443,7 +443,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
             switch await SelectionReader.read(from: app) {
             case .nothing(let refusal):
                 panel.show(.nothingToLookUp(refusal.message), near: pointer, for: ticket)
-            case .selected(let selection):
+            case .selected(let selection, _):
                 await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket)
             }
         }

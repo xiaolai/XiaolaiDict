@@ -61,10 +61,18 @@ public struct ReadBounds: Equatable, Sendable {
     /// the pointer rule. So the box must be finite, have area, and lie under the pointer within the tolerance every
     /// capture path shares.
     public static func checked(_ box: CGRect, quality: WordBounds.Quality, near point: CGPoint) -> ReadBounds? {
+        guard let bounds = checked(box, quality: quality), HitTolerance.distance(from: point, to: box) != nil else {
+            return nil
+        }
+        return bounds
+    }
+
+    /// **A box worth trusting where no pointer says where it should be** — the selection shortcut's, pressed wherever
+    /// the mouse happens to be (the owner's decision of 2026-10-09): finite, with area, and nothing more can be asked.
+    public static func checked(_ box: CGRect, quality: WordBounds.Quality) -> ReadBounds? {
         guard !box.isNull, !box.isInfinite,
               box.minX.isFinite, box.minY.isFinite, box.width.isFinite, box.height.isFinite,
-              box.width > 0, box.height > 0,
-              HitTolerance.distance(from: point, to: box) != nil
+              box.width > 0, box.height > 0
         else { return nil }
         return ReadBounds(rect: DownRect(box), quality: quality)
     }

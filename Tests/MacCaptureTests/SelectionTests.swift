@@ -156,7 +156,7 @@ struct CaptureTests {
 
     @Test func aCompleteSentenceIsReportedAsComplete() throws {
         let context = SentenceContext(text: "An ephemeral beauty.", mayBeCut: false, selection: NSRange(location: 3, length: 9))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, place: ReadingPlace()) else {
+        guard case .selected(let selection, _) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }
@@ -167,8 +167,8 @@ struct CaptureTests {
     /// Every capture says what its context amounts to: cut by the window, or missing altogether.
     @Test func aDegradedContextSaysSo() throws {
         let cut = SentenceContext(text: "rest of a long sentence", mayBeCut: true)
-        guard case .selected(let clipped) = SelectionReader.selection(from: capture("long", context: cut), app: app, place: ReadingPlace()),
-              case .selected(let bare) = SelectionReader.selection(from: capture("word", context: nil), app: app, place: ReadingPlace())
+        guard case .selected(let clipped, _) = SelectionReader.selection(from: capture("long", context: cut), app: app, place: ReadingPlace()),
+              case .selected(let bare, _) = SelectionReader.selection(from: capture("word", context: nil), app: app, place: ReadingPlace())
         else {
             Issue.record("expected selections")
             return
@@ -181,7 +181,7 @@ struct CaptureTests {
     /// The term's range in the sentence accounts for punctuation trimmed off the selection.
     @Test func theRangeFollowsTheTrimmedTerm() throws {
         let context = SentenceContext(text: "He said “ephemeral,” twice.", mayBeCut: false, selection: NSRange(location: 8, length: 12))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, place: ReadingPlace()) else {
+        guard case .selected(let selection, _) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }
