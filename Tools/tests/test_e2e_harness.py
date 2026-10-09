@@ -778,8 +778,8 @@ class TheProviderStage(unittest.TestCase):
         self.assertRegex(self.block, r"judge [^\n]*remote")
 
     def test_an_address_the_app_must_refuse_is_refused_by_its_preflight_and_sent_nothing(self):
-        """Plain HTTP off this Mac, or a name or password in the address, is not sent to (`EndpointAddress`): the app's
-        own preflight must say so, and the stub must hear nothing under that arm's model."""
+        """Plain HTTP to a public host, or a name or password in the address, is not sent to (`EndpointAddress`): the
+        app's own preflight must say so, and the stub must hear nothing under that arm's model."""
         self.assertRegex(self.block, r'provider_endpoint remote "\$\(provider_refused_url "\$port"\)" [^\n]* endpointUnusable')
         self.assertRegex(self.block, r"judge [^\n]*refused")
         self.assertIn("@localhost", one_line("provider_refused_url"))

@@ -8,11 +8,12 @@ import XiaolaiDictTestSupport
 /// the wire, through the path the app takes: the reader's settings, the router, the client that decides what the tier
 /// may see, and the provider that sends it.
 ///
-/// **The remote host is real to the code and never reached.** A remote endpoint is HTTPS — plain HTTP off this Mac is
-/// not sent at all (`EndpointAddress`), which `aPlainHTTPEndpointOffThisMacIsSentNothing` asserts on a real socket — so
-/// it is a `StubEndpoint` at a host of its own, `RemoteDisclosure` reading it as remote as it reads every host that is
-/// not loopback: the request is read where `URLSession` hands it to the loading system, body and headers whole, which is
-/// what TLS would carry to that host. No name is resolved and nothing leaves this Mac.
+/// **The remote host is real to the code and never reached.** A remote endpoint is HTTPS, or plain HTTP on the local
+/// network (the owner, 2026-10-09) — plain HTTP to a public host is not sent at all (`EndpointAddress`), which
+/// `aPlainHTTPEndpointOnAPublicHostIsSentNothing` asserts on a real socket — so it is a `StubEndpoint` at a host of its
+/// own, `RemoteDisclosure` reading it as remote as it reads every host that is not loopback: the request is read where
+/// `URLSession` hands it to the loading system, body and headers whole, which is what TLS — or, on the local network,
+/// the wire itself — would carry to that host. No name is resolved and nothing leaves this Mac.
 ///
 /// The control is the same question to an endpoint on 127.0.0.1, which is on this Mac and **is** sent the sense — on a
 /// real socket — so each check can fail, and fails for the reason it exists.
@@ -40,13 +41,20 @@ struct RemoteSendTests {
 
     /// What the stub of a remote endpoint answers: as `endpoint()` does.
     static func remote() -> StubEndpoint {
-        StubEndpoint { request, _ in
-            let messages = request.json?["messages"] as? [[String: String]] ?? []
-            let instructions = messages.first { $0["role"] == "system" }?["content"] ?? ""
-            if instructions.hasPrefix("Translate") { return .completion("她睡前把炉火封好了。") }
-            if instructions == ModelPrompt.senseInstructions { return .completion("1") }
-            return .completion("She covered the fire so that it would burn slowly through the night.")
-        }
+        StubEndpoint(Self.answer(_:_:))
+    }
+
+    /// The same stub at `host` — an address on the local network, say.
+    static func remote(at host: String) -> StubEndpoint {
+        StubEndpoint(host: host, Self.answer(_:_:))
+    }
+
+    private static func answer(_ request: HeardRequest, _: Int) -> StubAnswer {
+        let messages = request.json?["messages"] as? [[String: String]] ?? []
+        let instructions = messages.first { $0["role"] == "system" }?["content"] ?? ""
+        if instructions.hasPrefix("Translate") { return .completion("她睡前把炉火封好了。") }
+        if instructions == ModelPrompt.senseInstructions { return .completion("1") }
+        return .completion("She covered the fire so that it would burn slowly through the night.")
     }
 
     /// A session sent through `proxy`, a server on 127.0.0.1, for every plain-HTTP request.
@@ -114,10 +122,43 @@ struct RemoteSendTests {
         await router.shutDown()
     }
 
-    /// **A plain-HTTP endpoint off this Mac is sent nothing** — not the sentence, and not the key filed for it — since it
-    /// would cross the network unencrypted. Asserted on the proxy's socket, where the request would have arrived; and
-    /// the reader's check says the address cannot be used.
-    @Test func aPlainHTTPEndpointOffThisMacIsSentNothing() async throws {
+    /// **A plain-HTTP endpoint on the local network is sent the reader's sentence, and none of the dictionary's text**
+    /// (the owner, 2026-10-09): allowed, and still remote — another machine, however near. A `.local` name and a private
+    /// address, each read where `URLSession` hands the request to the loading system, so nothing is resolved and nothing
+    /// leaves this Mac. The key filed for that origin goes with it, in plain text: what the pane warns of before saving.
+    @Test(arguments: ["stub-\(UUID().uuidString.lowercased()).local", "192.168.83.17"])
+    func aPlainHTTPEndpointOnTheLocalNetworkIsSentTheSentenceAndNothingOfTheDictionarys(host: String) async throws {
+        let server = Self.remote(at: host)
+        let base = try #require(URL(string: "http://\(host)/v1"))
+        let router = Self.router(.endpoint(url: base.absoluteString, model: "m"),
+                                 session: { StubEndpoint.configuration() }, keyFor: base)
+
+        let explained = await router.ask(.explain(Self.explanation), origin: .reader)
+        #expect(explained.tier == .remote, "a server on the local network was read as this Mac")
+        #expect(explained.reply == .explanation("She covered the fire so that it would burn slowly through the night."))
+        #expect(await router.ask(.translate(Self.translation), origin: .reader).reply == .translation("她睡前把炉火封好了。"))
+        for origin in [QuestionOrigin.lookup, .reader] {
+            #expect(await router.ask(.pickSense(Self.senses), origin: origin).reply == nil)
+        }
+
+        let requests = server.requests
+        #expect(requests.count == 2, "\(requests.count) requests reached the wire; a sense question must send none")
+        for request in requests {
+            #expect(request.url.absoluteString == "http://\(host)/v1/chat/completions", "not sent as plain HTTP there")
+            #expect(request.header("Authorization") == "Bearer sk-remote-send", "the control: the key went with it")
+            let body = String(decoding: request.body, as: UTF8.self)
+            #expect(body.contains(Self.sentence), "the reader's sentence did not go")
+            #expect(!body.contains("tightly packed fuel"), "the dictionary's sense reached the local network: \(body)")
+            #expect(!RemoteDisclosure.leaks(body, of: .explain(Self.explanation)))
+            #expect(!RemoteDisclosure.leaks(body, of: .translate(Self.translation)))
+        }
+        await router.shutDown()
+    }
+
+    /// **A plain-HTTP endpoint on a public host is sent nothing** — not the sentence, and not the key filed for it —
+    /// since it would cross networks nobody here knows, unencrypted. Asserted on the proxy's socket, where the request
+    /// would have arrived; and the reader's check says the address cannot be used.
+    @Test func aPlainHTTPEndpointOnAPublicHostIsSentNothing() async throws {
         let server = try Self.endpoint()
         let router = Self.router(.endpoint(url: "http://\(Self.remoteHost)/v1", model: "m"),
                                  session: Self.proxied(through: server))

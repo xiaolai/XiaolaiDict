@@ -34,6 +34,8 @@ struct LanguageModelPane: View {
         /// The key as it is typed. **Held by this view and nowhere else**, and emptied once it is filed: the model never
         /// holds a key, and a key typed is not a key kept until the reader saves it.
         @State private var keyDraft = ""
+        /// The agreement a key save is waiting for — plain HTTP on the local network — while the reader is asked.
+        @State private var keyConsent: PlainTextKeyConsent?
         @FocusState private var focused: Field?
 
         /// **The form is this view's own**, so what follows is attached once: on a `Group` each modifier is applied to
@@ -57,6 +59,20 @@ struct LanguageModelPane: View {
                 if left != nil { model.commitDrafts() }
             }
             .onDisappear { model.commitDrafts() }
+            // **A key for plain HTTP on the local network is never saved silently, and never refused**: asked once.
+            .confirmationDialog(
+                "Save a key that is sent unencrypted?",
+                isPresented: Binding(get: { keyConsent != nil }, set: { if !$0 { keyConsent = nil } }),
+                presenting: keyConsent
+            ) { consent in
+                Button("Save Anyway") { saveKey(consent: consent) }
+                Button("Cancel", role: .cancel) {}
+            } message: { consent in
+                Text("""
+                     \(consent.host) is reached over plain http://, so the key goes with every question in plain text \
+                     and anyone on your network can read it. An https:// address keeps it private.
+                     """)
+            }
         }
 
         // MARK: - The source
@@ -150,15 +166,20 @@ struct LanguageModelPane: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let warning = model.plainTextWarning(keyDraft: keyDraft) {
+                    Self.plainTextWarning(warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("language-model-plain-text")
+                }
                 TextField("Model", text: $model.drafts.endpointModel, prompt: Text("Required — the service's name for it"))
                     .focused($focused, equals: .endpointModel)
                     .onSubmit { model.commitDrafts() }
                     .accessibilityIdentifier("language-model-endpoint-model")
                 SecureField("API Key", text: $keyDraft, prompt: Text("Not needed for a server on this Mac"))
-                    .onSubmit(saveKey)
+                    .onSubmit { saveKey() }
                     .accessibilityIdentifier("language-model-key")
                 HStack(spacing: scale.space.stack) {
-                    Button("Save Key", action: saveKey)
+                    Button("Save Key") { saveKey() }
                         .disabled(model.keyRefusal(keyDraft) != nil)
                         .accessibilityIdentifier("language-model-save-key")
                     if case .saved = model.key {
@@ -182,22 +203,47 @@ struct LanguageModelPane: View {
             }
         }
 
-        private func saveKey() {
-            if model.saveKey(keyDraft) { keyDraft = "" }
+        /// Saves the key typed — with the reader's agreement where the model asks for it, which is asked for here.
+        private func saveKey(consent: PlainTextKeyConsent? = nil) {
+            switch model.saveKey(keyDraft, consent: consent) {
+            case .saved: keyDraft = ""
+            case .needsConsent(let asked): keyConsent = asked
+            case .notSaved: break
+            }
         }
 
         /// Why the address in the field is not kept, in the reader's terms.
         @ViewBuilder static func addressRefusal(_ refusal: EndpointAddress.Refusal) -> some View {
             switch refusal {
             case .notAnAddress:
-                Text("Not used: an address starts with https:// and names a server — or http:// for a server on this Mac.")
+                Text("""
+                     Not used: an address starts with https:// and names a server — or http:// for a server on this \
+                     Mac or your local network.
+                     """)
             case .carriesCredentials:
                 Text("Not used: an address cannot hold a name or a password. Save the key below instead.")
             case .unencrypted:
                 Text("""
-                     Not used: a server that is not on this Mac needs an address starting with https://, so the key and \
-                     your sentence are encrypted on their way to it.
+                     Not used: http:// is for a server on this Mac, at a local network address or a .local name. Any \
+                     other server needs https://, so the key and your sentence are encrypted on their way to it.
                      """)
+            }
+        }
+
+        /// **Plain HTTP on the local network, said for as long as it is the address** (the owner, 2026-10-09): allowed,
+        /// and never silent — what is sent there can be read by anyone on that network.
+        @ViewBuilder static func plainTextWarning(_ warning: PlainTextWarning) -> some View {
+            switch warning {
+            case .sentence(let host):
+                StatusLabel(.caution, text: Text("""
+                     Not encrypted: this address is plain http://, so anyone on your network can read the sentences \
+                     sent to \(host).
+                     """), size: Token.Text.form)
+            case .sentenceAndKey(let host):
+                StatusLabel(.caution, text: Text("""
+                     Not encrypted: this address is plain http://, so anyone on your network can read the sentences \
+                     and the key sent to \(host).
+                     """), size: Token.Text.form)
             }
         }
 

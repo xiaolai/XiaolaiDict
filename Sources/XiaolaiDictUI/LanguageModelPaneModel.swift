@@ -200,20 +200,44 @@ public final class LanguageModelPaneModel {
 
     /// **Files `secret` as the key for the origin of the address in the field** — kept first, so the key goes with the
     /// address the reader sees — under `EndpointAddress.keyAccount`, the account a provider for that address reads and
-    /// no other does. Answers whether it was filed. Spaces around a pasted key are not part of it.
+    /// no other does. Spaces around a pasted key are not part of it.
+    ///
+    /// **Where that address is plain HTTP on the local network, only once the reader agrees, for that origin**
+    /// (`consent`, from the answer this gave without it): the key would cross that network readable by anyone on it,
+    /// so it is never filed silently — and never refused either, since the owner allows it (2026-10-09).
     @discardableResult
-    public func saveKey(_ secret: String) -> Bool {
+    public func saveKey(_ secret: String, consent: PlainTextKeyConsent? = nil) -> KeySave {
         commitDrafts()
         keyFailure = nil
-        guard keyRefusal(secret) == nil, let address = EndpointAddress(settings.endpointURL) else { return false }
+        guard keyRefusal(secret) == nil, let address = EndpointAddress(settings.endpointURL) else { return .notSaved }
+        if address.transport == .plainOnLocalNetwork, consent?.account != address.keyAccount {
+            return .needsConsent(PlainTextKeyConsent(host: address.displayHost, account: address.keyAccount))
+        }
         do {
             try credentials.write(Self.trimmed(secret), account: address.keyAccount)
         } catch {
             keyFailure = error
-            return false
+            return .notSaved
         }
         refreshKey()
-        return true
+        return .saved
+    }
+
+    /// **What crosses the local network unencrypted, for the address questions go to** (the owner, 2026-10-09): the
+    /// one typed where it is one — it is kept on Return or on leaving the field —, and the one kept while what is typed
+    /// is refused, since that one stays in force. The key is said where one is saved for that address, or `keyDraft`
+    /// is about to be. Nil where that address is encrypted, on this Mac, or none.
+    public func plainTextWarning(keyDraft: String) -> PlainTextWarning? {
+        let kept = EndpointAddress(settings.endpointURL)
+        guard let address = typedAddress ?? kept, address.transport == .plainOnLocalNetwork else { return nil }
+        let keyCrosses = (keyIsSaved && kept?.keyAccount == address.keyAccount) || !Self.trimmed(keyDraft).isEmpty
+        return keyCrosses ? .sentenceAndKey(host: address.displayHost) : .sentence(host: address.displayHost)
+    }
+
+    /// Whether the Keychain said a key is filed for the address kept now.
+    private var keyIsSaved: Bool {
+        if case .saved = key { return true }
+        return false
     }
 
     /// **Removes the key the pane says is saved** — the one filed for the address kept now, which is what the line
@@ -291,6 +315,34 @@ public enum KeyRefusal: Equatable, Sendable {
     /// It holds something a request header cannot carry — a space, a line break, a letter outside ASCII — so the
     /// provider would never send it.
     case notAHeaderValue
+}
+
+/// What became of a key the reader asked to save.
+public enum KeySave: Equatable, Sendable {
+    /// Filed in the Keychain for the address's origin.
+    case saved
+    /// Not filed: `keyRefusal` says why, or the Keychain refused (`keyFailure`).
+    case notSaved
+    /// Not filed yet: the address is plain HTTP on the local network, where anyone on it could read the key. Ask the
+    /// reader, and save again with this where they agree.
+    case needsConsent(PlainTextKeyConsent)
+}
+
+/// **The reader's agreement to send a key in plain text to one origin** — made only by `saveKey`, which names the host
+/// to ask about, and good for that origin alone.
+public struct PlainTextKeyConsent: Equatable, Sendable {
+    /// The host as the reader recognises it: what the question names.
+    public let host: String
+    /// The origin agreed to — the Keychain account the key would be filed under.
+    let account: String
+}
+
+/// What the pane says where questions cross the local network unencrypted.
+public enum PlainTextWarning: Equatable, Sendable {
+    /// Anyone on that network can read the sentences sent to `host`.
+    case sentence(host: String)
+    /// And the key: one is saved for `host`, or about to be.
+    case sentenceAndKey(host: String)
 }
 
 /// Why a CLI's location would not be used.

@@ -9,7 +9,7 @@ import XiaolaiDictTestSupport
 /// The URL is a plain value in the app's defaults, and anything that can write them can point it somewhere else — not
 /// the reader, not through Settings. Asserted through the path the app takes: the reader's settings read from a suite,
 /// the router, the factory, the provider and the loading system — on a socket for another port of this Mac, and where
-/// `URLSession` hands the request over for another host, which is HTTPS (plain HTTP off this Mac is sent nothing,
+/// `URLSession` hands the request over for another host, which is HTTPS (plain HTTP to a public host is sent nothing,
 /// `RemoteSendTests`). The key is filed the way Settings files it, under `EndpointAddress.keyAccount` for the address
 /// Settings shows.
 ///

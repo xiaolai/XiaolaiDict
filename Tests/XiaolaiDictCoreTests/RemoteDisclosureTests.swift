@@ -36,13 +36,16 @@ struct RemoteDisclosureTests {
         #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .onThisMac, "\(endpoint)")
     }
 
-    /// Every other host — a hosted API, a machine on the reader's own network, a `.local` name — is remote.
+    /// Every other host — a hosted API, a machine on the reader's own network, a `.local` name — is remote. **Plain HTTP
+    /// to the local network being allowed (`EndpointAddress`, the owner's decision of 2026-10-09) changes nothing here**:
+    /// every block that decision admits is another machine, and is listed.
     @Test(arguments: [
         "https://api.openai.com/v1", "https://api.deepseek.com/v1",
         "https://generativelanguage.googleapis.com/v1beta/openai",
         "http://192.168.1.20:11434/v1", "http://10.0.0.5/v1", "http://172.16.0.1/v1", "http://169.254.1.1/v1",
-        "http://another-mac.local:1234/v1", "http://[fe80::1]/v1", "http://[::2]/v1", "http://[::]/v1",
-        "http://0.0.0.0:8080/v1", "http://128.0.0.1/v1", "http://126.0.0.1/v1",
+        "http://172.31.255.255/v1", "http://100.64.0.1/v1", "http://100.127.255.255/v1", "http://[fd00::1]/v1",
+        "http://another-mac.local:1234/v1", "http://lab.studio.local/v1", "http://[fe80::1]/v1", "http://[::2]/v1",
+        "http://[::]/v1", "http://0.0.0.0:8080/v1", "http://128.0.0.1/v1", "http://126.0.0.1/v1",
     ])
     func everyOtherHostIsRemote(endpoint: String) {
         #expect(RemoteDisclosure.tier(ofEndpoint: endpoint) == .remote, "\(endpoint)")

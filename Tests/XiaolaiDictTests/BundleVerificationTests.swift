@@ -155,7 +155,7 @@ struct BundleVerificationTests {
     /// directions: without `NSAllowsLocalNetworking` an endpoint on loopback — Ollama, LM Studio, `mlx_lm.server`, which
     /// speak plain HTTP — is refused in the bundle while every unit test passes, and with any other exception beside it
     /// a remote endpoint's key could travel in the clear. (The key also lets plain HTTP reach a LAN address or a `.local`
-    /// name; the app refuses those itself — `EndpointAddress`, HTTPS off this Mac.)
+    /// name, which the app allows and warns of; plain HTTP to a public host it refuses itself — `EndpointAddress`.)
     @Test(.enabled(if: bundleIsCurrent, "the published bundle was not built from these inputs; run make"), arguments: [
         ("the local-networking key is missing", "Delete :NSAppTransportSecurity:NSAllowsLocalNetworking"),
         ("the whole dictionary is missing", "Delete :NSAppTransportSecurity"),

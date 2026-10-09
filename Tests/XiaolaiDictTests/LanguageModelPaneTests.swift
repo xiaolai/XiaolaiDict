@@ -58,7 +58,16 @@ struct LanguageModelPaneTests {
 
     static let openAI = "https://api.openai.com/v1"
     static let local = "http://127.0.0.1:11434/v1"
+    /// A server on the reader's own network, over plain HTTP.
+    static let lan = "http://192.168.1.5:11434/v1"
+    static let lanHost = "192.168.1.5:11434"
     static func account(_ address: String) -> String { EndpointAddress(address).map(\.keyAccount) ?? "none" }
+
+    /// The agreement a save asked for, or nil where it asked for none.
+    static func consent(_ saving: KeySave) -> PlainTextKeyConsent? {
+        if case .needsConsent(let consent) = saving { return consent }
+        return nil
+    }
 
     // MARK: - The source, and the one switch both CLIs sit behind
 
@@ -146,16 +155,18 @@ struct LanguageModelPaneTests {
     }
 
     /// **Why an address is not used is said, each reason by name** — `EndpointAddress.parse`, the one rule: one that names
-    /// no server, one carrying a name or a password, and plain HTTP to a server off this Mac. An address the app sends to
-    /// is not refused, and an empty field is the default address.
+    /// no server, one carrying a name or a password, and plain HTTP to a public host. An address the app sends to is not
+    /// refused — plain HTTP to the local network among them —, and an empty field is the default address.
     @Test func whyAnAddressIsNotUsedIsSaid() {
         let pane = Self.pane()
         let cases: [(String, EndpointAddress.Refusal?)] = [
             ("api.openai.com/v1", .notAnAddress), ("ftp://api.openai.com/v1", .notAnAddress),
             ("https://reader:secret@api.openai.com/v1", .carriesCredentials),
             ("http://e2e@localhost:8080/v1", .carriesCredentials),
-            ("http://192.168.1.5:11434/v1", .unencrypted), ("http://another-mac.local:1234/v1", .unencrypted),
+            ("http://api.openai.com/v1", .unencrypted), ("http://8.8.8.8/v1", .unencrypted),
+            ("http://another-mac.lan/v1", .unencrypted),
             (Self.openAI, nil), (Self.local, nil), ("https://192.168.1.5:11434/v1", nil), ("", nil),
+            (Self.lan, nil), ("http://another-mac.local:1234/v1", nil),
         ]
         for (typed, refusal) in cases {
             pane.drafts.endpointURL = typed
@@ -177,24 +188,112 @@ struct LanguageModelPaneTests {
                 "a password in the address reached the defaults")
         #expect(pane.drafts.endpointURL == typed, "the reader's text was taken out of the field")
         #expect(pane.keyRefusal("sk-x") == .noAddress)
-        #expect(!pane.saveKey("sk-x"))
+        #expect(pane.saveKey("sk-x") == .notSaved)
         #expect(credentials.all.isEmpty)
     }
 
-    /// **A key is not filed for a plain-HTTP address off this Mac**, nor the address kept — it would go unencrypted. The
-    /// control: the same on this Mac's loopback is kept, and takes a key.
-    @Test func aPlainHTTPAddressOffThisMacTakesNoKeyAndIsNotKept() {
+    /// **A key is not filed for a plain-HTTP address on a public host**, nor the address kept — it would go unencrypted
+    /// across networks nobody here knows. The control: the same on this Mac's loopback is kept, and takes a key without
+    /// asking — it never crosses a network.
+    @Test func aPlainHTTPAddressOnAPublicHostTakesNoKeyAndIsNotKept() {
         let suite = TemporaryDefaults.suite()
         let credentials = Credentials()
         let pane = Self.pane(suite, credentials: credentials)
-        pane.drafts.endpointURL = "http://192.168.1.5:11434/v1"
-        #expect(pane.keyRefusal("sk-lan") == .noAddress)
-        #expect(!pane.saveKey("sk-lan"))
+        pane.drafts.endpointURL = "http://api.example.com/v1"
+        #expect(pane.keyRefusal("sk-public") == .noAddress)
+        #expect(pane.saveKey("sk-public") == .notSaved)
         #expect(credentials.all.isEmpty, "a key was filed for an address that would send it unencrypted")
         #expect(ProviderSettingsStore(defaults: suite).load().endpointURL == ProviderSettings.defaultEndpointURL)
         pane.drafts.endpointURL = Self.local
-        #expect(pane.saveKey("sk-local"))
+        #expect(pane.saveKey("sk-local") == .saved)
         #expect(credentials.all == [Self.account(Self.local): "sk-local"])
+    }
+
+    // MARK: - Plain HTTP on the local network: allowed, and said (the owner, 2026-10-09)
+
+    /// **Plain HTTP to the local network is kept, and warned of while it is the address** — the sentence crosses that
+    /// network readable by anyone on it, and so does the key once one is saved or being typed. Said for the address as
+    /// typed, before it is kept. The control: nothing is warned of for an encrypted address, this Mac, the default, or the
+    /// local network over https.
+    @Test func aPlainHTTPAddressOnTheLocalNetworkIsKeptAndWarnedOf() {
+        let suite = TemporaryDefaults.suite()
+        let pane = Self.pane(suite)
+        pane.drafts.endpointURL = Self.lan
+        #expect(pane.addressRefusal == nil, "refused rather than warned of")
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentence(host: Self.lanHost), "not said until it was kept")
+        pane.commitDrafts()
+        #expect(ProviderSettingsStore(defaults: suite).load().endpointURL == Self.lan)
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentence(host: Self.lanHost))
+        #expect(pane.plainTextWarning(keyDraft: "sk-being-typed") == .sentenceAndKey(host: Self.lanHost),
+                "a key about to be saved for it was not said to cross the network")
+        #expect(pane.plainTextWarning(keyDraft: " \n") == .sentence(host: Self.lanHost), "a blank key was taken for one")
+        for address in [Self.openAI, Self.local, "https://192.168.1.5:11434/v1", "http://localhost:1234/v1", ""] {
+            pane.drafts.endpointURL = address
+            #expect(pane.plainTextWarning(keyDraft: "sk-x") == nil, "\(address) was warned of")
+        }
+    }
+
+    /// **The warning is about the address questions go to**: the one typed where it is one — it is kept on Return or on
+    /// leaving the field —, and the one kept while what is typed is refused, which stays in force. A key is said only
+    /// where it is that address's: one saved for the kept address is not another address's key.
+    @Test func theWarningIsAboutTheAddressQuestionsGoTo() throws {
+        let credentials = Credentials()
+        let pane = Self.pane(credentials: credentials)
+        pane.drafts.endpointURL = Self.lan
+        let consent = try #require(Self.consent(pane.saveKey("sk-lan")),
+                                   "a key for plain HTTP on the local network was saved without asking")
+        #expect(pane.saveKey("sk-lan", consent: consent) == .saved)
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentenceAndKey(host: Self.lanHost))
+
+        pane.drafts.endpointURL = "http://api.example.com/v1"
+        #expect(pane.addressRefusal == .unencrypted, "the premise: what is typed is refused")
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentenceAndKey(host: Self.lanHost),
+                "the address still in force was not warned of")
+
+        pane.drafts.endpointURL = "http://192.168.1.6:11434/v1"
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentence(host: "192.168.1.6:11434"),
+                "the key saved for another address was said to go to this one")
+        pane.drafts.endpointURL = Self.openAI
+        #expect(pane.plainTextWarning(keyDraft: "") == nil)
+    }
+
+    /// **A key for a plain-HTTP address on the local network is saved only once the reader agrees** — never silently,
+    /// and never refused: the first attempt files nothing and says where the key would go; the same key with that
+    /// agreement is filed, for that origin, and the warning then says the key crosses the network too.
+    @Test func aKeyForThePlainLocalNetworkIsSavedOnlyOnceTheReaderAgrees() throws {
+        let credentials = Credentials()
+        let pane = Self.pane(credentials: credentials)
+        pane.drafts.endpointURL = Self.lan
+        #expect(pane.keyRefusal("sk-lan") == nil, "refused rather than asked")
+        let consent = try #require(Self.consent(pane.saveKey("sk-lan")),
+                                   "a key for plain HTTP on the local network was saved without asking")
+        #expect(consent.host == Self.lanHost)
+        #expect(credentials.all.isEmpty, "the key was filed before the reader agreed")
+        #expect(pane.saveKey("sk-lan", consent: consent) == .saved)
+        #expect(credentials.all == [Self.account(Self.lan): "sk-lan"])
+        #expect(pane.key == .saved(host: Self.lanHost))
+        #expect(pane.plainTextWarning(keyDraft: "") == .sentenceAndKey(host: Self.lanHost),
+                "a saved key crossing the network was not said")
+    }
+
+    /// **Agreement is for the origin it was given for**: given for one address, it saves no key for another — the reader
+    /// agreed to send it there, not anywhere —, and the other address is asked about in its own name. An address that
+    /// sends nothing in plain text across a network never asks.
+    @Test func agreementIsForTheOriginItWasGivenFor() throws {
+        let credentials = Credentials()
+        let pane = Self.pane(credentials: credentials)
+        pane.drafts.endpointURL = Self.lan
+        let consent = try #require(Self.consent(pane.saveKey("sk-a")),
+                                   "a key for plain HTTP on the local network was saved without asking")
+        pane.drafts.endpointURL = "http://192.168.1.6:11434/v1"
+        let other = try #require(Self.consent(pane.saveKey("sk-a", consent: consent)),
+                                   "a key for plain HTTP on the local network was saved without asking")
+        #expect(other.host == "192.168.1.6:11434")
+        #expect(credentials.all.isEmpty, "a key was filed for an address the reader did not agree to")
+        for address in ["https://192.168.1.5:11434/v1", Self.local, Self.openAI] {
+            pane.drafts.endpointURL = address
+            #expect(pane.saveKey("sk-b") == .saved, "\(address) asked for agreement")
+        }
     }
 
     // MARK: - The key, filed for the origin
@@ -207,7 +306,7 @@ struct LanguageModelPaneTests {
         let pane = Self.pane(suite, credentials: credentials)
         pane.choose(.openAICompatible)
         pane.drafts.endpointURL = Self.local
-        #expect(pane.saveKey("  sk-PANE-SECRET-77  "))
+        #expect(pane.saveKey("  sk-PANE-SECRET-77  ") == .saved)
         #expect(credentials.all == [Self.account(Self.local): "sk-PANE-SECRET-77"], "\(credentials.all.keys)")
         #expect(ProviderSettingsStore(defaults: suite).load().endpointURL == Self.local)
         #expect(pane.key == .saved(host: "127.0.0.1:11434"))
@@ -253,7 +352,7 @@ struct LanguageModelPaneTests {
         let pane = Self.pane()
         pane.drafts.endpointURL = "not an address"
         #expect(pane.keyRefusal("sk-plain") == .noAddress)
-        #expect(!pane.saveKey("sk-plain"))
+        #expect(pane.saveKey("sk-plain") == .notSaved)
         pane.drafts.endpointURL = Self.openAI
         #expect(pane.keyRefusal("") == .blank)
         #expect(pane.keyRefusal("  \n") == .blank)
@@ -270,10 +369,10 @@ struct LanguageModelPaneTests {
         let pane = Self.pane(credentials: credentials)
         pane.drafts.endpointURL = Self.openAI
         credentials.failEveryCall(with: .keychain(status: -25_308))
-        #expect(!pane.saveKey("sk-x"))
+        #expect(pane.saveKey("sk-x") == .notSaved)
         #expect(pane.keyFailure == .keychain(status: -25_308))
         credentials.failEveryCall(with: nil)
-        #expect(pane.saveKey("sk-x"))
+        #expect(pane.saveKey("sk-x") == .saved)
         #expect(pane.keyFailure == nil)
     }
 

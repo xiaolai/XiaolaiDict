@@ -452,8 +452,9 @@ verify_bundle_metadata() {
     # loopback — Ollama, LM Studio, mlx_lm.server — speaks plain HTTP and is refused in the bundle without
     # `NSAllowsLocalNetworking`, while every unit test passes; and any exception beside it (`NSAllowsArbitraryLoads`,
     # a domain's) would let a remote endpoint's key travel in the clear. The key itself also lets the system send plain
-    # HTTP to a LAN address or a `.local` name; the app's own rule refuses those (`EndpointAddress`: HTTPS off this
-    # Mac). Compared whole, as plutil writes it: compact, keys sorted, so one more key or a `false` is a different string.
+    # HTTP to a LAN address or a `.local` name, which the app allows and warns of; plain HTTP to a public host its own
+    # rule refuses (`EndpointAddress`). Compared whole, as plutil writes it: compact, keys sorted, so one more key or a
+    # `false` is a different string.
     local ats
     ats=$(plutil -extract NSAppTransportSecurity json -o - "$bundle/Contents/Info.plist" 2>/dev/null || true)
     [ "$ats" = '{"NSAllowsLocalNetworking":true}' ] \

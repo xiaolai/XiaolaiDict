@@ -19,8 +19,8 @@ import os
 /// - **The key read is the one filed for this endpoint's origin** (`EndpointAddress.keyAccount`), so an instance made
 ///   for another host — the reader's URL changed, or rewritten in the defaults by something else — finds no key and
 ///   sends none.
-/// - **Made only from an `EndpointAddress`**, so only for an address the app sends to: never plain HTTP off this Mac,
-///   never one carrying a name or a password.
+/// - **Made only from an `EndpointAddress`**, so only for an address the app sends to: never plain HTTP to a public
+///   host, never one carrying a name or a password.
 /// - **A redirect is followed only within the endpoint's own origin.** Following one elsewhere would send the body —
 ///   the reader's sentence, and for an endpoint on this Mac the dictionary's text — to a host `RemoteDisclosure` never
 ///   judged, and the key with it.

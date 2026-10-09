@@ -60,9 +60,12 @@ final class StubEndpoint: Sendable {
     private let answer: @Sendable (HeardRequest, Int) -> StubAnswer
     private let heard = Mutex<[HeardRequest]>([])
 
-    /// `answer` is given each request and how many came before it.
-    init(_ answer: @escaping @Sendable (HeardRequest, Int) -> StubAnswer) {
-        host = "stub-\(UUID().uuidString.lowercased()).example.test"
+    /// `answer` is given each request and how many came before it. `host` is one of the stub's own unless a test needs
+    /// an address read a particular way — one on the local network, say — and then it must be that test's alone, or
+    /// tests running in parallel answer each other's requests.
+    init(host: String = "stub-\(UUID().uuidString.lowercased()).example.test",
+         _ answer: @escaping @Sendable (HeardRequest, Int) -> StubAnswer) {
+        self.host = host
         self.answer = answer
         StubURLProtocol.register(self)
     }

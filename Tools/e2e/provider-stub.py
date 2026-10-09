@@ -20,9 +20,10 @@
 
 **How the tiers are reached without a packet leaving the Mac.** The app decides the tier from the source alone, failing
 closed (`RemoteDisclosure`): an endpoint on `127.0.0.1` is on this Mac, and the reader's CLI is remote wherever it is
-installed. A remote *endpoint* must be HTTPS — plain HTTP off this Mac is never sent (`EndpointAddress`), and this stub
-has no certificate the app would trust — so the remote tier is observed through the CLI instead: the stage installs this
-script as the reader's `claude`, and its turns land in the same log, told apart by the model each arm asks for. A URL
+installed. A remote *endpoint* must be HTTPS, which this stub has no certificate the app would trust for, or plain HTTP
+to the local network, which needs a LAN address (`EndpointAddress`; plain HTTP to a public host is never sent) — so
+the remote tier is observed through the CLI instead: the stage installs this script as the reader's `claude`, and its
+turns land in the same log, told apart by the model each arm asks for. A URL
 the app must refuse — one carrying a userinfo, `http://e2e@localhost:<port>/v1` — is the `refused` arm: it reaches this
 server if it is sent at all. No connection is made to a LAN address, which would raise macOS's Local Network prompt on a
 screen nobody watches.

@@ -880,7 +880,7 @@ else:
         say(readiness is None, f"{label} is asked nothing to be checked",
             f"{label} was checked as though it were a provider: {readiness}")
     elif wanted == "endpointUnusable":
-        # An address the app must not send to: plain HTTP off this Mac, or one carrying a name or a password.
+        # An address the app must not send to: plain HTTP to a public host, or one carrying a name or a password.
         say(readiness == "endpointUnusable", f"{label} is refused by the app's preflight, which sends it nothing",
             f"{label} was not refused: its preflight says {readiness} {r.get('failure') or ''}".rstrip())
     elif wanted == "ready":
@@ -3870,17 +3870,18 @@ if want provider; then
 # 14. **The language model is a service the reader already has** (ADR-0053): an OpenAI-compatible endpoint, or the
 #     reader's own `claude` or `codex`. What a source may be sent is decided by where it runs, failing closed
 #     (`RemoteDisclosure`): on this Mac, the sentence and the dictionary's sense text; remote — a CLI wherever it is
-#     installed, an endpoint off this Mac — **the reader's sentence only**. And an endpoint off this Mac must be HTTPS:
-#     plain HTTP, or an address carrying a name or a password, is sent nothing (`EndpointAddress`).
+#     installed, an endpoint off this Mac — **the reader's sentence only**. And an endpoint off this Mac must be HTTPS,
+#     or plain HTTP to the local network, which the app allows and warns of; plain HTTP to a public host, or an address
+#     carrying a name or a password, is sent nothing (`EndpointAddress`).
 #
 #     So one stub on this Mac's loopback (`Tools/e2e/provider-stub.py`) is reached three ways, and logs what each was
 #     asked by the model name each arm asks for: as an endpoint on `127.0.0.1` (**on this Mac**); as an endpoint under a
 #     URL the app must refuse (see `provider_refused_url`), which must reach it with nothing; and as the reader's own
-#     `claude`, the stub installed in its place (**remote**) — the remote tier's one transport that needs no TLS, for
-#     which this stub has no certificate the app would trust. A real lookup through the shortcut and the panel's own
-#     Explain button are what send it; the stub's log is what is judged. **Not a second stub on a LAN address**, which
-#     the plan offered: a connection from the app to one raises macOS's Local Network prompt on a screen nobody is at,
-#     and the preflight would name that alert in every run after it.
+#     `claude`, the stub installed in its place (**remote**) — the remote tier's one transport that needs neither TLS,
+#     for which this stub has no certificate the app would trust, nor a LAN address. A real lookup through the shortcut
+#     and the panel's own Explain button are what send it; the stub's log is what is judged. **Not a second stub on a
+#     LAN address**, which the plan offered: a connection from the app to one raises macOS's Local Network prompt on a
+#     screen nobody is at, and the preflight would name that alert in every run after it.
 #
 #     And each subscription CLI, through the app's own preflight (`--provider-status`), never reading a credential:
 #     asked where it is installed and signed in, and **SKIPPED by name** otherwise — never a pass. The stub arms are
