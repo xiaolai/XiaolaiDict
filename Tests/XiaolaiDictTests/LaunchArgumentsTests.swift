@@ -191,6 +191,21 @@ struct CommandCoverageTests {
         }
     }
 
+    /// `--placement-report X Y W H`: the word's rectangle, y down, as Accessibility gives it (plan-card-refinements
+    /// WI-2). Four numbers, a box with area; anything else is refused.
+    @Test func thePlacementReportTakesAWordRectangle() {
+        #expect(LaunchArguments.parse(["--placement-report", "600", "690", "80", "20"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20)))
+        #expect(LaunchArguments.parse(["--placement-report", "-1200", "-400", "50.5", "18"])
+                == .success(.placementReport(x: -1200, y: -400, width: 50.5, height: 18)))
+        for wrong in [["600", "690", "80"], ["600", "690", "80", "0"], ["600", "690", "-80", "20"],
+                      ["a", "690", "80", "20"], ["600", "690", "80", "20", "1"], ["600", "690", "inf", "20"]] {
+            if case .success(let parsed) = LaunchArguments.parse(["--placement-report"] + wrong) {
+                Issue.record("\(wrong) parsed as \(parsed)")
+            }
+        }
+    }
+
     @Test func everyAcceptedCommandIsDocumented() throws {
         let source = try String(contentsOf: parserSource, encoding: .utf8)
         // The command switch alone. Scanning the whole file also found `--repeat` and `--interval`

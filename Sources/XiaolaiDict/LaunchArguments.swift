@@ -47,6 +47,11 @@ enum LaunchMode: Equatable {
     /// reader clicks.
     case panelReport
 
+    /// `--placement-report X Y W H`: where the lookup panel goes for a word at that rectangle (y down, as
+    /// Accessibility gives it), at first show and once its content has grown — and whether it covers the word
+    /// (plan-card-refinements WI-2). Shows the real panel, so it runs inside the bundle like `--panel-report`.
+    case placementReport(x: Double, y: Double, width: Double, height: Double)
+
     /// `--review-report`: what Review will ask, and what its model holds before and after the reveal,
     /// read through the window's own `ReviewModel` against the reader's ledger. **Writes nothing**: it
     /// draws a sitting and reveals one card, both reads, so the `review` stage can ask the app whether
@@ -89,6 +94,7 @@ enum LaunchArguments {
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
                XiaolaiDict --panel-report
+               XiaolaiDict --placement-report X Y WIDTH HEIGHT
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
                XiaolaiDict --provider-status
@@ -115,6 +121,7 @@ enum LaunchArguments {
         case "--model-report": alone(arguments, is: .modelReport)
         case "--sense-report": alone(arguments, is: .senseReport)
         case "--panel-report": alone(arguments, is: .panelReport)
+        case "--placement-report": placementReport(Array(arguments.dropFirst()))
         case "--review-report": alone(arguments, is: .reviewReport)
         case "--reminder-report": alone(arguments, is: .reminderReport)
         case "--provider-status": alone(arguments, is: .providerStatus)
@@ -169,6 +176,14 @@ enum LaunchArguments {
             return fail("--read-point needs two numbers, not \(arguments.joined(separator: " "))")
         }
         return .success(.readPoint(x: x, y: y))
+    }
+
+    private static func placementReport(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
+        let numbers = arguments.compactMap(Double.init).filter(\.isFinite)
+        guard arguments.count == 4, numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else {
+            return fail("--placement-report needs X Y WIDTH HEIGHT, a box with area, not \(arguments.joined(separator: " "))")
+        }
+        return .success(.placementReport(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]))
     }
 
     private static func readSelection(_ arguments: [String]) -> Result<LaunchMode, UsageError> {

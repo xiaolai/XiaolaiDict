@@ -484,7 +484,7 @@ enum PanelReport {
     }
 
     /// The newest lookup id, or nil where the ledger cannot be reached.
-    private static func newestLookup(in app: XiaolaiDictApp) async -> Int? {
+    static func newestLookup(in app: XiaolaiDictApp) async -> Int? {
         guard let opening = app.recorder.store else { return nil }
         return try? await opening.value.newestLookupID()
     }
@@ -492,7 +492,7 @@ enum PanelReport {
     /// Removes whatever this measurement added, and only that. **Not a general clean-up**: it
     /// deletes by id above a baseline this instrument took itself, so a lookup the reader made
     /// while it ran is out of range by construction.
-    private static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
+    static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
         guard let baseline, let opening = app.recorder.store,
               let store = try? await opening.value else { return }
         try? await store.deleteLookups(after: baseline)

@@ -86,6 +86,12 @@ case .success(.panelReport):
     Instruments.run(.panel)
     XiaolaiDictScene.main()
 
+// Shows the lookup panel against a word rectangle the stage measured, so the same two reasons apply.
+case .success(.placementReport(let x, let y, let width, let height)):
+    PlacementReport.aim(at: CGRect(x: x, y: y, width: width, height: height))
+    Instruments.run(.placement)
+    XiaolaiDictScene.main()
+
 // Review's queue and its model's presentation, read from the reader's ledger. No window and nothing
 // written: it draws a sitting and reveals one card, so `dispatchMain()` is enough.
 case .success(.reviewReport):

@@ -23,6 +23,8 @@ enum Instruments {
         case history
         case settings
         case panel
+        /// `--placement-report`; its word rectangle is `PlacementReport.word`.
+        case placement
     }
 
     private static let chosen = Mutex<Windowed?>(nil)

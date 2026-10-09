@@ -814,10 +814,14 @@ consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTR
 }
 
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
+    run_report_with "$@"
+}
+run_report_with() {  # run_report_with <flag> <budget-seconds> [argument...]: run_report, with the flag's own arguments
     local flag=$1 budget=$2 name=${1#--}
+    shift 2
     local out="$reports/$name.json" err="$reports/$name.err"
     rm -f "$out" "$err"
-    open -n --stdout "$out" --stderr "$err" "$app" --args "$flag"
+    open -n --stdout "$out" --stderr "$err" "$app" --args "$flag" "$@"
     local waited=0
     while [ ! -s "$out" ] && [ "$waited" -lt $((budget * 2)) ]; do sleep 0.5; waited=$((waited + 1)); done
     # Past its budget it is stopped; within it, it exits by itself once it has written. Waited for
@@ -1863,6 +1867,38 @@ HOVERPY
 # Safari pointed at its tab's title, and Chrome at its page's text while the reader's restored "What's New" covered it.
 # `word-point` says on stderr which element it chose and where; a failed hover carries that, and a picture of the
 # screen goes to `hover-evidence` beside the bundle (the preflight has proved this session may record).
+# check_bounds <reading> <point "X Y"> <word-point's stderr> <expected quality>: the word's box `--read-point` reported
+# (plan-card-refinements WI-2), against what the stage knows independently — the point it aimed at, and the text
+# element's own frame, which `word-point` read through the position and size attributes rather than any text range.
+check_bounds() {
+    python3 - "$@" <<'BOUNDSPY'
+import json, re, sys
+r = json.loads(sys.argv[1])
+x, y = (float(v) for v in sys.argv[2].split())
+want = sys.argv[4]
+b = r.get("bounds")
+if not b:
+    sys.exit("no word box reported")
+problems = []
+if b.get("quality") != want:
+    problems.append(f"quality {b.get('quality')}, wanted {want}")
+left, top, w, h = b["x"], b["y"], b["width"], b["height"]
+# The tolerance every capture path shares: 3 pt across, 2 pt down.
+if not (left - 3 <= x <= left + w + 3 and top - 2 <= y <= top + h + 2):
+    problems.append(f"the aimed point {x:.0f},{y:.0f} is not in the box")
+m = re.search(r"at (-?\d+),(-?\d+) (\d+)×(\d+)", sys.argv[3])
+if m:
+    ex, ey, ew, eh = (float(v) for v in m.groups())
+    if not (ex - 2 <= left and left + w <= ex + ew + 2 and ey - 2 <= top and top + h <= ey + eh + 2):
+        problems.append(f"the box is outside its own text element ({ex:.0f},{ey:.0f} {ew:.0f}×{eh:.0f})")
+if not (0 < h <= 80 and 0 < w <= 600):
+    problems.append(f"a box no word has: {w:.0f}×{h:.0f}")
+if problems:
+    sys.exit("; ".join(problems) + f" — box {left:.0f},{top:.0f} {w:.0f}×{h:.0f}")
+print(f"{want} box {left:.0f},{top:.0f} {w:.0f}×{h:.0f} around the aimed point, inside its text element")
+BOUNDSPY
+}
+
 hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-point option...]
     local label=$1 app_id=$2 want=$3
     shift 3
@@ -1877,6 +1913,16 @@ hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-poi
     fi
     if summary=$(check_hover "$reading" "$want" 2>&1); then
         pass "$label: $summary"
+        # The word's box, for the panel to keep clear of: exact from the text range and the bounds scan, a box holding
+        # the word from WebKit's markers.
+        local quality=exact
+        [ "$want" = accessibilityTextMarkers ] && quality=containing
+        if summary=$(check_bounds "$reading" "$point" "$chose" "$quality" 2>&1); then
+            pass "$label, and says where: $summary"
+        else
+            flunk "$label, but its word box is wrong: $summary"
+        fi
+        last_reading=$reading
     else
         mkdir -p "$evidence" && screencapture -x "$evidence/$app_id.png" 2>/dev/null || true
         flunk "$label: $summary (at $point, on $chose; the screen is in $evidence/$app_id.png)"
@@ -1884,7 +1930,48 @@ hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-poi
 }
 
 open -a TextEdit "$helpers/notes.txt"; sleep 2
+last_reading=""
 hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
+# **The card never covers the word** (plan-card-refinements WI-2): the box TextEdit's word was read at, handed to
+# `--placement-report`, which shows the real panel against it and reads the panel's frame from the compositor at first
+# listing and once the entry has grown it — at two text sizes, the reader's own put back afterwards.
+placement_at() {  # placement_at <reading> <text size>
+    local box report
+    box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
+        || { flunk "placement: no word box to place against"; return; }
+    defaults write com.xiaolaidict TextSize "$2"
+    # shellcheck disable=SC2086
+    report=$(run_report_with --placement-report 90 $box) || true
+    if [ -z "$report" ]; then
+        flunk "placement ($2): --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
+        return
+    fi
+    consume_verdicts hover "$(python3 - "$report" "$2" <<'PYPLACE' 2>&1 || true
+import json, sys
+r, size = json.loads(sys.argv[1]), sys.argv[2]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+w, a, z = r.get("word", {}), r.get("initial", {}), r.get("settled", {})
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}"
+say(r.get("appeared") is True and r.get("coversWordInitially") is False,
+    f"placement ({size}): the panel at first show ({box(a)}) is clear of the word ({box(w)}), {r.get('side')} it",
+    f"placement ({size}): the panel at first show covers the word: {r}")
+say(r.get("coversWordSettled") is False and r.get("onScreenSettled") is True,
+    f"placement ({size}): grown to {box(z)} it is still clear of the word and on the screen",
+    f"placement ({size}): grown, the panel covers the word or left the screen: {r}")
+say(r.get("grew") is True, f"placement ({size}): the entry grew the panel, so the growth was measured",
+    f"placement ({size}): the panel never grew, so nothing about growth was measured: {r}")
+print("DONE")
+PYPLACE
+)"
+}
+if [ -n "$last_reading" ]; then
+    text_size_had=no; text_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && text_size_had=yes
+    restore_text_size() { restore_default TextSize "$text_size_had" "$text_size_was"; }
+    at_exit restore_text_size
+    placement_at "$last_reading" standard
+    placement_at "$last_reading" huge
+    restore_text_size
+fi
 open -a Safari "$helpers/page.html"; sleep 3
 # `--page`: the word comes from the page, never from the tab strip above it (`word-point`).
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers --page

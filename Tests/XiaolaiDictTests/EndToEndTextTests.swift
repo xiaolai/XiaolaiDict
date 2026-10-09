@@ -600,6 +600,8 @@ struct EndToEndReportKeyTests {
     /// the disk**, because a rule that names files stops covering its subject the day one moves.
     private static let instruments = [
         "Sources/XiaolaiDict/PanelReport.swift",
+        // Where the panel goes against a word's rectangle, at first show and grown (plan-card-refinements WI-2).
+        "Sources/XiaolaiDict/PlacementReport.swift",
         "Sources/XiaolaiDict/HistoryReport.swift",
         "Sources/XiaolaiDict/SettingsReport.swift",
         "Sources/XiaolaiDict/ModelReport.swift",

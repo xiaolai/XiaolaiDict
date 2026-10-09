@@ -355,6 +355,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
                 case .history: await HistoryReport.run(in: self)
                 case .settings: await SettingsReport.run(in: self)
                 case .panel: await PanelReport.run(in: self)
+                case .placement: await PlacementReport.run(in: self)
                 }
                 exit(status.rawValue)
             }
@@ -467,8 +468,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// cost of clicking it, and a panel filled by a presentation the report made up would be a
     /// different card from the one the reader gets — the footer's controls exist only where a
     /// dictionary answered. So the instrument goes in by the same door hover does.
-    func lookUpHovered(_ selection: Selection, at pointer: UpPoint) {
-        launch(selection, near: pointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest())
+    func lookUpHovered(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds? = nil) {
+        launch(selection, near: pointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest(), protecting: word)
     }
 
     /// The one place a lookup is started on a ticket already in hand — each caller keeps its own way
@@ -476,12 +477,13 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     private func launch(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
         ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
-        seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        protecting word: WordBounds? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         lookup?.cancel()
         lookup = Task {
             await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt,
-                         ticket: ticket, existingLookup: existingLookup, placement: placement, seen: seen)
+                         ticket: ticket, existingLookup: existingLookup, placement: placement, protecting: word,
+                         seen: seen)
         }
     }
 
@@ -499,8 +501,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         }
         // **As a word in no position of the sentence**: the sentence is the one the misspelling was read in, and a card
         // or a tagger that looked for the word there would find another occurrence of it (audit, 2026-10-09).
+        // **And against the same word on screen**: the misspelling is still where it was, and the card for the
+        // correction replaces the miss's card in place (plan-card-refinements WI-2).
         launch(selection, near: panel.lastPointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest(),
-               placement: .notInSentence)
+               placement: .notInSentence, protecting: panel.lastWord)
     }
 
     /// A word a hover read, for the request it was given when the gesture was accepted.
@@ -509,10 +513,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// screen was read; if the reader pressed the shortcut, opened a reading or tapped again since,
     /// that request claimed the panel after it, the claim here is refused, and the late word is
     /// dropped instead of replacing what the reader asked for — and its lookup is not cancelled.
-    func deliver(_ selection: Selection, at pointer: UpPoint, request: Int, requestedAt: Date,
+    func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
                  askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
         guard let ticket = panel.claim(request) else { return false }
-        launch(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket, seen: seen)
+        launch(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket, protecting: word,
+               seen: seen)
         return true
     }
 
@@ -564,14 +569,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     private func lookUp(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
         ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
-        seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        protecting word: WordBounds? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
         timings.begin(request: ticket.number, at: askedAt, source: selection.quality.source.rawValue)
         timings.mark(.captured, request: ticket.number)
         // Whether the compositor ever drew this panel, heard on the way to whoever delivered the word.
         var drawn = false
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket,
-                                         existingLookup: existingLookup, placement: placement,
+                                         existingLookup: existingLookup, placement: placement, protecting: word,
                                          seen: { shown in drawn = shown; seen(shown) }) else {
             // **Ended with no row to finish, and still said.** A lookup dropped after its pending row
             // was written has that row in the ledger, so the write is waited for and counted; one

@@ -108,7 +108,8 @@ final class ScriptedHoverReader: HoverReading {
     /// Ends the oldest read in flight with a word, for the request it was given.
     func answerWord(_ text: String = "hold") {
         guard let ask = asks.last else { return }
-        answer(.selection(HoverFixtures.selection(text), request: ask.request, key: "key-\(text)-\(ask.request)"))
+        answer(.selection(HoverFixtures.selection(text), request: ask.request, key: "key-\(text)-\(ask.request)",
+                          bounds: nil))
     }
 
     func answer(_ outcome: HoverReader.Outcome) {
@@ -121,14 +122,14 @@ final class ScriptedHoverReader: HoverReading {
 @MainActor
 final class RecordingDelivery: HoverDelivering {
     var requests = RequestSequence()
-    private(set) var delivered: [(text: String, at: UpPoint, request: Int, requestedAt: Date)] = []
+    private(set) var delivered: [(text: String, at: UpPoint, request: Int, requestedAt: Date, bounds: WordBounds?)] = []
 
     func beginRequest() -> Int { requests.begin() }
 
-    func deliver(_ selection: Selection, at pointer: UpPoint, request: Int, requestedAt: Date,
+    func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
                  askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
         guard requests.claim(request) else { return false }
-        delivered.append((selection.text, pointer, request, requestedAt))
+        delivered.append((selection.text, pointer, request, requestedAt, word))
         seens.append(seen)
         return true
     }

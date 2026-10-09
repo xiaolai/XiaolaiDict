@@ -112,8 +112,8 @@ enum LookupCommand {
             begin: { 0 })
         let took = (ContinuousClock.now - started).milliseconds
         switch outcome {
-        case .selection(let selection, _, _):
-            return emit(PointReport(selection, milliseconds: took.rounded()), through: writeLine) ?? .success
+        case .selection(let selection, _, _, let bounds):
+            return emit(PointReport(selection, bounds: bounds, milliseconds: took.rounded()), through: writeLine) ?? .success
         case .quiet(let refusal):
             writeError("nothing read: \(refusal.reason)")
             return .failure
@@ -291,8 +291,23 @@ struct PointReport: Encodable, Equatable {
     let confidence: Double
     let context: String
     let milliseconds: Double
+    /// Where the word is, y down, and how well that is known — absent where the dialect could not say
+    /// (plan-card-refinements WI-2).
+    let bounds: Bounds?
 
-    init(_ selection: Selection, milliseconds: Double) {
+    struct Bounds: Encodable, Equatable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+        let quality: String
+    }
+
+    init(_ selection: Selection, bounds: ReadBounds?, milliseconds: Double) {
+        self.bounds = bounds.map {
+            Bounds(x: $0.rect.cg.minX, y: $0.rect.cg.minY, width: $0.rect.cg.width, height: $0.rect.cg.height,
+                   quality: $0.quality.rawValue)
+        }
         text = selection.text
         sentence = selection.sentence
         lemma = Lemmatizer.lemma(

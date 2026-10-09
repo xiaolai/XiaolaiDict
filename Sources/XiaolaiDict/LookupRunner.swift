@@ -90,7 +90,8 @@ final class LookupRunner {
     /// position of it, and the card and the tagger must not go looking for it there.
     func run(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
-        placement given: TermPlacement? = nil, seen reportSeen: @MainActor (Bool) -> Void = { _ in }
+        placement given: TermPlacement? = nil, protecting word: WordBounds? = nil,
+        seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
         let placement = given ?? selection.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
         // **The sentence the word is tagged in, and none for a word in no position of it.** Given the reader's sentence
@@ -111,7 +112,7 @@ final class LookupRunner {
         // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
         // never saw. The rule is "a lookup nobody saw is not recorded", and this is the only place
         // that can tell.
-        guard panel.show(.lookup(presentation), near: pointer, for: ticket) else {
+        guard panel.show(.lookup(presentation), near: pointer, protecting: word, for: ticket) else {
             reportSeen(false)
             return nil
         }

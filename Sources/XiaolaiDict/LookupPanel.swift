@@ -24,14 +24,25 @@ protocol LookupPanelPresenting: AnyObject {
     func isCurrent(_ ticket: PanelTicket) -> Bool
     /// Shows the panel; answers whether it is on screen. `LookupRunner` stops on `false`, so a
     /// panel that could not be drawn never becomes a ledger row.
+    ///
+    /// `word` is where the looked-up word is on screen, where a capture knew it: the card is kept clear of it, now and
+    /// as it grows (plan-card-refinements WI-2). Nil is today's pointer rule.
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool
     /// Replaces a shown panel's content without moving or resizing it. A panel the reader has
     /// dragged somewhere must not jump when its entry arrives.
     func update(_ content: PanelContent, for ticket: PanelTicket)
     /// Whether the compositor lists the panel as on screen for `ticket`, waiting a bounded moment
     /// for it to be drawn. **The only evidence the reader saw it** — `show` answers for the request.
     func seenOnScreen(_ ticket: PanelTicket) async -> Bool
+}
+
+extension LookupPanelPresenting {
+    /// A panel with no word to keep clear — every caller but a lookup a capture located.
+    @discardableResult
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+        show(content, near: pointer, protecting: nil, for: ticket)
+    }
 }
 
 /// A request for the panel. A newer request supersedes every older one, and closing the panel
@@ -48,6 +59,10 @@ final class LookupPanelModel {
     var content: PanelContent?
     /// Per kind, so a panel of one kind does not inherit the minimum of another.
     var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize(for: .standard)
+    /// **The floor the content fit may grow the window down to** — the protected room's where the card keeps a word
+    /// clear (plan-card-refinements WI-2), nil for the screen's, as before. Read by `fitsItsContent` through the
+    /// environment.
+    var lowestBottom: CGFloat?
 
     /// Moved by every `show`, so the scene can say which showing it has drawn.
     private(set) var generation = 0
@@ -128,6 +143,10 @@ final class LookupPanelController: LookupPanelPresenting {
     private(set) var lastPointer = UpPoint(.zero)
     /// Where the scene should be placed, worked out before it opens. A scene cannot be handed a
     /// frame, so `defaultWindowPlacement` reads this back.
+    /// The word the shown card keeps clear of, and the room it was given for that — nil where none was located. A
+    /// followed suggestion is the same word on screen, so it is placed against it again.
+    private(set) var lastWord: WordBounds?
+    private(set) var protectedRoom: PanelPlacement.Placed?
     private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize(for: .standard))
     /// The reader's text size, asked at each showing: the window opens as wide as the card is at
     /// that size. Set by the app once its appearance model exists; a test leaves it standard.
@@ -247,15 +266,21 @@ final class LookupPanelController: LookupPanelPresenting {
     /// action made this a silent no-op while `isCurrent(ticket)` went on answering true — the whole
     /// lookup ran, a sense was resolved, and a ledger row was written for nothing.
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool {
         guard isCurrent(ticket) else { return false }
         lastPointer = pointer
+        lastWord = word
         let kind = content.kind
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
         let size = textSize()
         let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize(for: size)))
-        placement = PanelPlacement.frame(
-            for: kind.defaultSize(for: size), near: pointer, within: visible)
+        let placed = PanelPlacement.placed(
+            for: kind.defaultSize(for: size), near: pointer, protecting: word, within: visible)
+        placement = placed.frame
+        // **Every later fit is held to the side the card was put on** — the content growing down, and the screen clamp
+        // after it. Without a word both are the screen, as they were.
+        protectedRoom = word == nil ? nil : placed
+        model.lowestBottom = protectedRoom?.lowestBottom
 
         model.minimumSize = kind.minimumSize(for: size)
         showing = (ticket.number, model.present(content))
@@ -426,7 +451,7 @@ final class LookupPanelController: LookupPanelPresenting {
                 ?? NSScreen.screens.first(where: { $0.frame.contains(lastPointer.cg) })
                 ?? NSScreen.main
         else { return }
-        let fitted = PanelPlacement.fitted(window.frame, within: UpRect(screen.visibleFrame))
+        let fitted = PanelPlacement.fitted(window.frame, within: protectedRoom?.room ?? UpRect(screen.visibleFrame))
         guard fitted != window.frame else { return }
         window.setFrame(fitted, display: true)
     }
@@ -477,6 +502,7 @@ struct LookupPanelSceneView: View {
                 // it now, inside its own surface; what it needs still arrives through the
                 // environment below.
                 PanelView(content: content)
+                    .environment(\.panelLowestBottom, model.lowestBottom)
                     .modifier(LookupCardWiring(
                         request: content.request, recorder: recorder, controller: controller,
                         translation: translation(), explainer: explainer()))
@@ -650,6 +676,50 @@ enum PanelPlacement {
                             y: pointer.y - pointerGap.height - size.height),
             size: size)
         return fitted(wanted, within: visible)
+    }
+
+    /// The gap kept between the card and the word it protects.
+    static let wordGap: CGFloat = 4
+
+    /// **Where the card goes, and the room every later fit is held to** (plan-card-refinements WI-2).
+    struct Placed: Equatable {
+        let frame: NSRect
+        /// The screen, or the side of the word the card was put on. `fitted(_:within:)` against it keeps the card
+        /// there: its margins land the card's edge exactly `wordGap` from the word.
+        let room: UpRect
+        /// The lowest the window's bottom edge may grow to — nil where no word is protected, which leaves the fit's
+        /// floor where it was (the screen's bottom).
+        let lowestBottom: CGFloat?
+    }
+
+    /// **With the word's rectangle, the card is put on the side of it that holds the card** — below, as today, where it
+    /// fits; above where it does not; and where neither does, the larger side, shrunk to it, so it scrolls rather than
+    /// covers. **No rectangle is today's rule, bit for bit.**
+    static func placed(for size: NSSize, near pointer: UpPoint, protecting word: WordBounds?, within visible: UpRect) -> Placed {
+        guard let word else {
+            return Placed(frame: frame(for: size, near: pointer, within: visible), room: visible, lowestBottom: nil)
+        }
+        let screen = visible.cg
+        let box = word.rect.cg
+        // The card's edge may come no nearer the word than the gap; the room's edge is one margin further, because
+        // `fitted` keeps a margin inside whatever room it is given.
+        let belowTop = min(screen.maxY, box.minY - wordGap + margin)
+        let aboveBottom = max(screen.minY, box.maxY + wordGap - margin)
+        let below = UpRect(x: screen.minX, y: screen.minY, width: screen.width, height: max(0, belowTop - screen.minY))
+        let above = UpRect(x: screen.minX, y: aboveBottom, width: screen.width, height: max(0, screen.maxY - aboveBottom))
+        let belowSpace = below.cg.height - margin - margin
+        let aboveSpace = above.cg.height - margin - margin
+        let goesBelow = belowSpace >= size.height || (aboveSpace < size.height && belowSpace >= aboveSpace)
+        let room = goesBelow ? below : above
+        let pointer = pointer.cg
+        let x = pointer.x + pointerGap.width
+        let wanted =
+            goesBelow
+            // Today's top edge where it already clears the word; the word's own gap where it would not.
+            ? NSRect(x: x, y: min(pointer.y - pointerGap.height, box.minY - wordGap) - size.height,
+                     width: size.width, height: size.height)
+            : NSRect(x: x, y: box.maxY + wordGap, width: size.width, height: size.height)
+        return Placed(frame: fitted(wanted, within: room), room: room, lowestBottom: room.cg.minY + margin)
     }
 
     /// The same shrink-then-clamp, applied to a frame that **already exists** — a window the

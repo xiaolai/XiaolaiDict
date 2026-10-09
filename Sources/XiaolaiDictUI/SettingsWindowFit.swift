@@ -156,6 +156,9 @@ private struct FitsItsContent: ViewModifier {
     ///
     /// A reference type because it must outlive a body evaluation and be read at application time.
     @State private var fit = PendingFit()
+    /// The lowest a growing window's bottom edge may go: the screen's where nothing narrows it, the protected room's on
+    /// a lookup panel keeping its word clear (plan-card-refinements WI-2).
+    @Environment(\.panelLowestBottom) private var lowestBottom
 
     func body(content: Content) -> some View {
         content
@@ -205,7 +208,7 @@ private struct FitsItsContent: ViewModifier {
                 wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
             SettingsWindowFit.move(
                 live, by: delta, width: width,
-                lowestBottom: live.screen?.visibleFrame.minY,
+                lowestBottom: lowestBottom ?? live.screen?.visibleFrame.minY,
                 animated: animates && live.isVisible, recentres: recentres)
         }
     }
@@ -278,5 +281,18 @@ extension View {
     ) -> some View {
         modifier(FitsItsContent(
             width: nil, ceiling: ceiling, animates: false, recentres: false, report: report))
+    }
+}
+
+private struct PanelLowestBottomKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    /// **Where a growing window's bottom edge must stop, in place of the screen's** — set by the lookup panel while
+    /// its card keeps the looked-up word clear (plan-card-refinements WI-2). Nil everywhere else.
+    public var panelLowestBottom: CGFloat? {
+        get { self[PanelLowestBottomKey.self] }
+        set { self[PanelLowestBottomKey.self] = newValue }
     }
 }

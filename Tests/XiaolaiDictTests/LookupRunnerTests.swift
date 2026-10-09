@@ -90,6 +90,20 @@ struct LookupRunnerTests {
 
     /// The local model is loaded while the dictionaries are asked, so the sense question after them
     /// does not pay for the load — and the lookup never waits on it.
+    /// **The word a hover located reaches the panel's placement** (plan-card-refinements WI-2), and a lookup with no
+    /// located word asks for none — today's pointer rule.
+    @Test func theLocatedWordReachesThePanel() async {
+        let word = WordBounds(rect: UpRect(x: 600, y: 730, width: 80, height: 20), quality: .exact)
+        for given in [word, nil] {
+            let panel = RecordingPanel()
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+                panel: panel)
+            _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest(), protecting: given)
+            #expect(panel.protected == [given])
+        }
+    }
+
     @Test func theModelIsPrewarmedBesideTheLookup() async throws {
         let prewarmed = Recorder(0)
         let panel = RecordingPanel()
@@ -376,9 +390,13 @@ final class RecordingPanel: LookupPanelPresenting {
     /// happens**, so a test need not race a deadline to see it.
     private(set) var updatesWhenFirstShown: Int?
 
+    /// The word each showing was asked to keep clear of, in order.
+    private(set) var protected: [WordBounds?] = []
+
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool {
         guard isCurrent(ticket), canShow else { return false }
+        protected.append(word)
         if updatesWhenFirstShown == nil { updatesWhenFirstShown = updates.count }
         contents.append(content)
         return true
