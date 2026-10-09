@@ -191,7 +191,7 @@ struct DictionaryDetailsView: View {
     let entry: DictionaryEntry
 
     private var extended: [DictionarySense] {
-        entry.senses.filter { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) != $0.label }
+        entry.senses.filter { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) != $0.label || $0.display != nil }
     }
 
     var body: some View {
@@ -200,6 +200,15 @@ struct DictionaryDetailsView: View {
                 Text("Examples and details")
                     .font(.system(size: scale.text.heading, weight: .semibold))
                 ForEach(extended, id: \.path) { sense in
+                    // **What the label left out, set out first** (plan-card-refinements WI-4): every translation with
+                    // the indicator that says which reading it is, the English definition, the notes — then the
+                    // publisher's whole sense, examples and all, as before.
+                    ForEach(Array(SenseDisplayLines.of(sense.display).enumerated()), id: \.offset) { _, line in
+                        Text(verbatim: line)
+                            .font(.system(size: scale.text.body, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     Text(verbatim: sense.text)
                         .font(.system(size: scale.text.body))
                         .lineSpacing(scale.text.leading)
@@ -212,5 +221,23 @@ struct DictionaryDetailsView: View {
             .padding(.horizontal, scale.space.padAcross)
             .padding(.bottom, scale.space.padDown)
         }
+    }
+}
+
+/// **A bilingual sense's display data, as the expand reads it** (plan-card-refinements WI-4): the translations joined —
+/// each after its own indicator — then the English definition, the sense's own indicators and its notes. Nothing for a
+/// sense with none, so a monolingual expand is what it was. Display only: nothing here keys, saves or hashes.
+enum SenseDisplayLines {
+    static func of(_ display: SenseDisplay?) -> [String] {
+        guard let display else { return [] }
+        let readings = display.translations.map { translation in
+            translation.indicator.map { "\($0) \(translation.text)" } ?? translation.text
+        }
+        let separator = display.translations.contains { LineJoiner.isCJKText($0.text) } ? "；" : "; "
+        var lines = readings.isEmpty ? [] : [readings.joined(separator: separator)]
+        if let definition = display.englishDefinition { lines.append(definition) }
+        lines += display.indicators
+        lines += display.notes
+        return lines
     }
 }
