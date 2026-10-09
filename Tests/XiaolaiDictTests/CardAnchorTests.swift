@@ -376,3 +376,47 @@ struct CardDragTests {
         #expect(panel.anchor != nil && panel.model.tail?.tip != nil)
     }
 }
+
+/// **A frame that never settled, or a window that went, is a failed measurement — never a settled frame** (audit of
+/// 2026-10-10). `steadyFrame` returned the last frame it had seen when its budget ran out, and kept watching past a window
+/// that was no longer listed, and the placement report put its first frame in for a missing one: a card still moving, or
+/// gone, read as a card that had settled where it was last seen.
+@MainActor
+struct SteadyFrameTests {
+    private static let frame = CGRect(x: 100, y: 200, width: 400, height: 300)
+
+    /// Frames read in turn, one a read, the last kept — nil where the window was not listed.
+    private final class Frames {
+        private var answers: [CGRect?]
+        init(_ answers: [CGRect?]) { self.answers = answers }
+        func next() -> CGRect? { answers.count > 1 ? answers.removeFirst() : answers.first ?? nil }
+    }
+
+    private func watch(_ read: @escaping () -> CGRect?, budget: Duration = .seconds(60)) async -> PlacementReport.Watched {
+        await PlacementReport.watch(read, steady: .milliseconds(20), budget: budget, every: .milliseconds(1))
+    }
+
+    @Test func aFrameThatHoldsStillIsSteady() async {
+        #expect(await watch({ Self.frame }) == .steady(Self.frame))
+    }
+
+    /// Moving at every read: it can never hold still, however long it is watched, so the budget is short.
+    @Test func aFrameThatNeverHoldsStillIsUnsettledNotSteady() async {
+        var height: CGFloat = 300
+        let watched = await watch({ height += 1; return CGRect(x: 100, y: 200, width: 400, height: height) },
+                                  budget: .milliseconds(200))
+        guard case .unsettled(let last) = watched else { Issue.record("a moving frame read as \(watched)"); return }
+        #expect(last.height > 300)
+    }
+
+    /// Gone at the read after it was first seen — before any second sighting could make it steady, however slowly the
+    /// reads come.
+    @Test func aWindowThatGoesIsGoneNotSteady() async {
+        let frames = Frames([Self.frame, nil])
+        #expect(await watch(frames.next) == .vanished)
+    }
+
+    @Test func aWindowNeverListedIsGone() async {
+        #expect(await watch({ nil }) == .vanished)
+    }
+}

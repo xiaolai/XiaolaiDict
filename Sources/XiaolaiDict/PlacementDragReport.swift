@@ -41,8 +41,10 @@ extension PlacementReport {
             return ["problem": "the lookup panel would not show"]
         }
         guard await Instrument.settle(until: PanelReport.appearance, { Instrument.isOnScreen(controller.window) }),
-              let window = controller.window, let shown = await steadyFrame(of: window)
+              let window = controller.window
         else { return ["problem": "the lookup panel was never listed by the compositor"] }
+        let watchedShown = await steadyFrame(of: window)
+        guard let shown = watchedShown.frame else { return ["problem": watchedShown.problem("once shown") ?? ""] }
         let chrome = CardChrome(textSize: controller.textSize())
         let tailShown = controller.model.tail
         var report: [String: Any] = [
@@ -57,7 +59,10 @@ extension PlacementReport {
         // Where the window is the moment the button comes up, and once it has stayed put: a jump at the release is the
         // difference between the two.
         report["released"] = listedFrame(of: window).map(box) ?? NSNull()
-        guard let dragged = await steadyFrame(of: window) else { return report.merging(["problem": "lost after the drag"]) { $1 } }
+        let watchedDragged = await steadyFrame(of: window)
+        guard let dragged = watchedDragged.frame else {
+            return report.merging(["problem": watchedDragged.problem("after the drag") ?? ""]) { $1 }
+        }
         report["dragged"] = box(dragged)
         report["tailDragged"] = describe(controller.model.tail)
         report["anchoredDragged"] = controller.anchor != nil
@@ -77,14 +82,18 @@ extension PlacementReport {
             presentation.senseOwner = owner
         }
         controller.update(.lookup(presentation), for: ticket)
-        guard let arrived = await steadyFrame(of: window) else { return report.merging(["problem": "lost after the entry"]) { $1 } }
+        let watchedArrived = await steadyFrame(of: window)
+        guard let arrived = watchedArrived.frame else {
+            return report.merging(["problem": watchedArrived.problem("after the entry arrived") ?? ""]) { $1 }
+        }
         report["arrived"] = box(arrived)
         report["tailArrived"] = describe(controller.model.tail)
 
         // A disclosure, pressed through Accessibility in this process, on the main actor (ADR-0042).
         report["disclosure"] = Self.press(endingWith: "other meanings", inWindowTitled: window.title)
-        guard let expanded = await steadyFrame(of: window) else {
-            return report.merging(["problem": "lost after the disclosure"]) { $1 }
+        let watchedExpanded = await steadyFrame(of: window)
+        guard let expanded = watchedExpanded.frame else {
+            return report.merging(["problem": watchedExpanded.problem("after the disclosure") ?? ""]) { $1 }
         }
         report["expanded"] = box(expanded)
         report["tailExpanded"] = describe(controller.model.tail)
@@ -92,22 +101,57 @@ extension PlacementReport {
         return report
     }
 
-    /// The window's compositor frame once it has held still for `steady`, within `budget`; nil if it was never listed.
-    static func steadyFrame(of window: NSWindow) async -> CGRect? {
-        guard var settled = listedFrame(of: window) else { return nil }
+    /// What a window's frame did while it was watched.
+    enum Watched: Equatable {
+        /// It held this frame for `steady`.
+        case steady(CGRect)
+        /// It was still moving when the budget ran out; the last frame seen.
+        case unsettled(last: CGRect)
+        /// It was not listed — before the watch began, or once it had.
+        case vanished
+
+        /// The frame, where it held still; nil otherwise.
+        var frame: CGRect? {
+            if case .steady(let frame) = self { return frame }
+            return nil
+        }
+
+        /// Why there is no settled frame, for a report to say — nil where there is one.
+        func problem(_ moment: String) -> String? {
+            switch self {
+            case .steady: nil
+            case .unsettled(let last):
+                "the lookup panel never held still \(moment), within the budget; last at \(last)"
+            case .vanished: "the lookup panel was no longer listed by the compositor \(moment)"
+            }
+        }
+    }
+
+    /// The window's compositor frame once it has held still for `steady`, within `budget` — or that it never did, or
+    /// that the window went.
+    static func steadyFrame(of window: NSWindow) async -> Watched {
+        await watch({ listedFrame(of: window) }, steady: steady, budget: budget, every: .milliseconds(100))
+    }
+
+    /// **`frame` read until it has held one value for `steady`** (audit of 2026-10-10). Never the last value seen when
+    /// the budget runs out — a card still moving then is `unsettled`, a measurement that failed — and never a frame
+    /// once the window is not listed: it is `vanished` at the first read that does not find it, where this used to keep
+    /// watching and answer with the frame from before it went.
+    static func watch(_ frame: () -> CGRect?, steady: Duration, budget: Duration, every interval: Duration) async -> Watched {
+        guard var settled = frame() else { return .vanished }
         var since = ContinuousClock.now
         let deadline = ContinuousClock.now + budget
         while ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(100))
-            guard let now = listedFrame(of: window) else { continue }
+            try? await Task.sleep(for: interval)
+            guard let now = frame() else { return .vanished }
             if now != settled {
                 settled = now
                 since = .now
             } else if ContinuousClock.now - since >= steady {
-                break
+                return .steady(settled)
             }
         }
-        return settled
+        return .unsettled(last: settled)
     }
 
     /// A tail as the report says it: its edge, and its tip across the card — `null` once nothing points.

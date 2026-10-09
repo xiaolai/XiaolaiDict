@@ -73,8 +73,15 @@ enum PlacementReport {
             _ = Instrument.write(["appeared": false, "problem": "the lookup panel was never listed by the compositor"])
             return .failure
         }
-        // Settled: the same compositor frame for `steady`, within the budget.
-        let settled = await steadyFrame(of: window) ?? first
+        // Settled: the same compositor frame for `steady`, within the budget — **or a failed measurement**, never the
+        // first frame standing in for one the card never settled at (audit of 2026-10-10).
+        let watched = await steadyFrame(of: window)
+        guard let settled = watched.frame else {
+            app.panelController.close()
+            _ = Instrument.write(["appeared": true, "word": box(given), "initial": box(first),
+                                  "problem": watched.problem("after it was shown") ?? ""])
+            return .failure
+        }
         let visible = (window.screen ?? primary).visibleFrame
         let screenDown = UpRect(visible).flipped(aboutPrimaryHeight: height).cg
         var report: [String: Any] = [
