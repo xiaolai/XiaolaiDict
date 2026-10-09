@@ -605,6 +605,8 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/ProviderReport.swift",
         // The lookup instruments answer through `Codable` types rather than dictionaries.
         "Sources/XiaolaiDict/LookupCommand.swift",
+        // What a miss is offered, and how long the offer took (plan-spelling-suggestion) — a `Codable` line too.
+        "Sources/XiaolaiDict/SpellingReport.swift",
         // The helpers that answer the harness directly.
         "Tools/e2e/panel.swift",
         "Tools/e2e/on-screen.swift",

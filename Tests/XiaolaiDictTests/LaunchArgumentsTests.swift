@@ -34,6 +34,16 @@ struct LaunchArgumentsTests {
         #expect(parse("--lookup", "ephemeral", "--interval", "1.5", "--repeat", "3") == .success(expected))
     }
 
+    /// **`--spelling-report TERM…`: every term, in order** (plan-spelling-suggestion §3) — and nothing that is not a term:
+    /// a report about no term at all, a blank one or an option in a term's place is a typo, refused rather than run.
+    @Test func aSpellingReportTakesOneOrMoreTerms() {
+        #expect(parse("--spelling-report", "recieve") == .success(.spellingReport(terms: ["recieve"])))
+        #expect(parse("--spelling-report", "recieve", "ambages") == .success(.spellingReport(terms: ["recieve", "ambages"])))
+        #expect(refused("--spelling-report"))
+        #expect(refused("--spelling-report", "  "))
+        #expect(refused("--spelling-report", "recieve", "--repeat"))
+    }
+
     @Test func readSelection() {
         #expect(parse("--read-selection", "com.apple.TextEdit") == .success(.readSelection(bundleID: "com.apple.TextEdit")))
     }

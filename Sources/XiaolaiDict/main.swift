@@ -101,6 +101,11 @@ case .success(.reminderReport):
 case .success(.providerStatus):
     runHeadlessReport { await ProviderReport.status() }
 
+// What each term's miss would be offered, through the spell checker and the dictionaries the card is offered it by. No
+// window: the checker answers on the main actor under `dispatchMain()`, measured over SSH on the E2E Mac (2026-10-09).
+case .success(.spellingReport(let terms)):
+    runHeadlessReport { await SpellingReport.run(terms: terms) }
+
 // Every window is a SwiftUI scene from here. `XiaolaiDictScene.main()` rather than `@main`, because the
 // modes above must be able to run without a scene at all.
 case .success(.app):

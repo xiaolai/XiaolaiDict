@@ -62,6 +62,11 @@ enum LaunchMode: Equatable {
     /// may be sent, and what it said when asked one trivial question — never a sentence, an answer, a
     /// path, a URL or a key. Compiled out of a release (ADR-0053).
     case providerStatus
+
+    /// `--spelling-report TERM…`: what each term's miss would be offered — "Did you mean …?" — through the
+    /// checker and the dictionaries the card is offered it by, and how long each took. Never dictionary
+    /// text. Compiled out of a release (plan-spelling-suggestion).
+    case spellingReport(terms: [String])
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -87,6 +92,7 @@ enum LaunchArguments {
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
                XiaolaiDict --provider-status
+               XiaolaiDict --spelling-report TERM [TERM...]
         """
 
     static let repeatRange = 1...1_000
@@ -112,6 +118,7 @@ enum LaunchArguments {
         case "--review-report": alone(arguments, is: .reviewReport)
         case "--reminder-report": alone(arguments, is: .reminderReport)
         case "--provider-status": alone(arguments, is: .providerStatus)
+        case "--spelling-report": spellingReport(Array(arguments.dropFirst()))
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }
@@ -143,6 +150,17 @@ enum LaunchArguments {
             }
         }
         return .success(.lookup(term: term, repeats: repeats ?? 1, interval: .seconds(interval ?? 0)))
+    }
+
+    /// Every term after the command, at least one, none blank and none an option: a report about a term nobody typed is
+    /// a report nobody asked for.
+    private static func spellingReport(_ terms: [String]) -> Result<LaunchMode, UsageError> {
+        guard !terms.isEmpty else { return fail("--spelling-report needs at least one TERM") }
+        if let option = terms.first(where: { $0.hasPrefix("--") }) { return fail("unexpected \(option) among the TERMs") }
+        guard terms.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            return fail("a TERM is blank")
+        }
+        return .success(.spellingReport(terms: terms))
     }
 
     private static func readPoint(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
