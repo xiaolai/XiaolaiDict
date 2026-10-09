@@ -180,6 +180,9 @@ public enum SelectionReader {
         let host: AXUIElement
         /// The selection's markers, in the marker dialect — what its box is asked for by.
         var markers: AXTextMarkerRange?
+        /// The selected range, in the text-range dialect, **as it was when `text` was read** — read once and kept, so
+        /// the sentence is found around it and its box asked for by it, never by a range read again later.
+        var range: CFRange?
     }
 
     private enum Search {
@@ -234,17 +237,20 @@ public enum SelectionReader {
         guard let selected = try ax.string(element, kAXSelectedTextAttribute),
               !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        let context = try contextOrNone { () throws(CaptureError) in try sentenceAroundSelectedRange(element, selected: selected, ax) }
-        return Capture(text: selected, context: context, source: .accessibilityTextRange, host: element)
+        let range = try orNone { () throws(CaptureError) in try ax.range(element, kAXSelectedTextRangeAttribute) }
+        let context = try orNone { () throws(CaptureError) -> SentenceContext? in
+            guard let range else { return nil }
+            return try sentenceAroundSelectedRange(element, selected: selected, range: range, ax)
+        }
+        return Capture(text: selected, context: context, source: .accessibilityTextRange, host: element, range: range)
     }
 
     /// The sentence from a window of text around the selection — widened while the sentence runs
     /// into the window's edge. Nil unless the window holds the selected text exactly where the
     /// range says: text, range and window are separate reads of state the reader can change.
     private static func sentenceAroundSelectedRange(
-        _ element: AXUIElement, selected: String, _ ax: some AccessibilityReading
+        _ element: AXUIElement, selected: String, range: CFRange, _ ax: some AccessibilityReading
     ) throws(CaptureError) -> SentenceContext? {
-        guard let range = try ax.range(element, kAXSelectedTextRangeAttribute) else { return nil }
         let count = try ax.integer(element, kAXNumberOfCharactersAttribute)
         var best: SentenceContext?
         for radius in contextRadii {
@@ -274,14 +280,14 @@ public enum SelectionReader {
               let text = try ax.string(host, "AXStringForTextMarkerRange", selection),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        let context = try contextOrNone { () throws(CaptureError) in try sentenceCovering(selection, selected: text, in: host, ax) }
+        let context = try orNone { () throws(CaptureError) in try sentenceCovering(selection, selected: text, in: host, ax) }
         return Capture(text: text, context: context, source: .accessibilityTextMarkers, host: host, markers: selection)
     }
 
-    /// The sentence around a selection already read — **or none, if reading it failed**. The
+    /// Something read around a selection already read — its range, its sentence — **or none, if reading it failed**. The
     /// selection is what the reader asked about; a slow app or a spent budget while reading the
     /// context used to throw the selection away with it. Only the reader moving on ends the read.
-    private static func contextOrNone(_ read: () throws(CaptureError) -> SentenceContext?) throws(CaptureError) -> SentenceContext? {
+    private static func orNone<Value>(_ read: () throws(CaptureError) -> Value?) throws(CaptureError) -> Value? {
         do throws(CaptureError) { return try read() } catch {
             if error == .cancelled { throw error }
             return nil
@@ -370,20 +376,28 @@ public enum SelectionReader {
     /// punctuation it was trimmed of — so its box is the word's: exact. WebKit is asked for the term's own markers too
     /// where punctuation was trimmed (`termBox`), and for the selection's where it cannot say where the term is: a box
     /// that holds the term and whatever was trimmed from it, `containing`, never corrected by a guessed punctuation width.
-    /// A range that no longer spans the text read is a selection that moved between the reads, and locates nothing.
+    ///
+    /// **The box is the captured text's, or there is none** (audit of 2026-10-10). The range boxed is the one captured with
+    /// the text, never one read again, and its text is **read back** first: a range of the same length was taken for the
+    /// same text, so *dog* edited in where *cat* was selected was boxed as *cat*. A selection that has moved since — even
+    /// onto the same word — locates nothing, and the card keeps the pointer rule. The markers are read back the same way.
     static func bounds(of capture: Capture, term: SelectedTerm, _ ax: some AccessibilityReading) throws(CaptureError) -> ReadBounds? {
         let whole = term.range.location == 0 && term.range.length == (capture.text as NSString).length
         switch capture.source {
         case .accessibilityTextRange:
-            guard let selected = try ax.range(capture.host, kAXSelectedTextRangeAttribute),
-                  selected.length == (capture.text as NSString).length,
-                  let range = termRange(term.range, within: selected),
+            guard let captured = capture.range, captured.length == (capture.text as NSString).length,
+                  let range = termRange(term.range, within: captured),
+                  try text(at: captured, in: capture.host, ax) == capture.text,
+                  let now = try ax.range(capture.host, kAXSelectedTextRangeAttribute),
+                  now.location == captured.location, now.length == captured.length,
                   let request = AccessibilitySession.rangeValue(range),
                   let box = try ax.rect(capture.host, kAXBoundsForRangeParameterizedAttribute, request)
             else { return nil }
             return ReadBounds.checked(box, quality: .exact)
         case .accessibilityTextMarkers:
-            guard let markers = capture.markers else { return nil }
+            guard let markers = capture.markers,
+                  try ax.string(capture.host, "AXStringForTextMarkerRange", markers) == capture.text
+            else { return nil }
             if !whole, let box = termBox(in: markers, term: term, host: capture.host, ax),
                let exact = ReadBounds.checked(box, quality: .exact) {
                 return exact
@@ -393,6 +407,19 @@ public enum SelectionReader {
         case .accessibilityBoundsScan, .opticalRecognition:
             return nil
         }
+    }
+
+    /// The text at `range` now: asked for that range, or — from a view that answers only with its whole value — cut from
+    /// that. Nil where neither answers, or the range is not inside the value.
+    private static func text(at range: CFRange, in host: AXUIElement, _ ax: some AccessibilityReading) throws(CaptureError) -> String? {
+        if let request = AccessibilitySession.rangeValue(range),
+           let text = try ax.string(host, kAXStringForRangeParameterizedAttribute, request) {
+            return text
+        }
+        guard let value = try ax.string(host, kAXValueAttribute),
+              let inside = Range(NSRange(location: range.location, length: range.length), in: value)
+        else { return nil }
+        return String(value[inside])
     }
 
     /// **Where the term is in the document**: `term`, which is where it sits in the selection, moved to where the

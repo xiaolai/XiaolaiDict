@@ -183,6 +183,7 @@ struct SelectionReaderTests {
         tree.set(tree.application, kAXFocusedUIElementAttribute, field)
         tree.set(field, kAXSelectedTextAttribute, "“meeting,”" as CFString)
         tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(20, 10))
+        tree.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(20, 10), "“meeting,”" as CFString)
         tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(21, 7),
                  rectValue(CGRect(x: 300, y: 90, width: 56, height: 16)))
         guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
@@ -203,6 +204,72 @@ struct SelectionReaderTests {
         guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
         #expect(selection.text == "meeting")
         #expect(bounds == nil)
+    }
+
+    /// **The box is the captured text's, or there is none** (audit of 2026-10-10). A selected range of the same length is
+    /// not the same text: *cat* captured, then *dog* at that range when the box is asked — an edit between the two reads —
+    /// was boxed as *cat*. The captured range is kept and its text read back before its box is believed.
+    @Test func aRangeWhoseTextChangedBetweenTheReadsLocatesNothing() {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "cat" as CFString)
+        tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(20, 3))
+        tree.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(20, 3), "dog" as CFString)
+        tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(20, 3),
+                 rectValue(CGRect(x: 300, y: 90, width: 30, height: 16)))
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "cat")
+        #expect(bounds == nil, "dog's box was given for cat")
+    }
+
+    /// **A view that answers only with its whole value is read back through that**, so it keeps its box — the same
+    /// fallback its sentence is found by.
+    @Test func aViewThatAnswersOnlyItsWholeValueIsReadBackThroughIt() {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "cat" as CFString)
+        tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(4, 3))
+        tree.set(field, kAXValueAttribute, "The cat sat." as CFString)
+        tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(4, 3),
+                 rectValue(CGRect(x: 140, y: 200, width: 30, height: 20)))
+        guard case .selected(_, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(bounds == ReadBounds(rect: DownRect(x: 140, y: 200, width: 30, height: 20), quality: .exact))
+        tree.set(field, kAXValueAttribute, "The dog sat." as CFString)
+        guard case .selected(_, let edited) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(edited == nil, "a value that no longer holds the selection was believed")
+    }
+
+    /// **And a selection that moved between the reads locates nothing**, even onto the same word: the range captured is
+    /// the one boxed, never one read again later — which was the box of wherever the reader had gone.
+    @Test func aSelectionThatMovedBetweenTheReadsLocatesNothing() {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "cat" as CFString)
+        tree.answer(field, kAXSelectedTextRangeAttribute, in: [rangeValue(20, 3), rangeValue(40, 3)])
+        for location in [20, 40] {
+            tree.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(location, 3), "cat" as CFString)
+            tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(location, 3),
+                     rectValue(CGRect(x: CGFloat(10 * location), y: 90, width: 30, height: 16)))
+        }
+        guard case .selected(_, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(bounds == nil, "the box of where the selection went was given for where it was: \(String(describing: bounds))")
+    }
+
+    /// **WebKit's markers too**: the box asked for is the captured markers', so its text is read back first — a page that
+    /// changed under them locates nothing.
+    @Test func markersWhoseTextChangedLocateNothing() {
+        let tree = FakeAccessibility()
+        let page = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+        tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        tree.scriptMarkers(on: page, selected: "word", sentence: "A word here.")
+        tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 40, height: 18))
+        tree.answerSelectionText(on: page, in: ["word", "ward"])
+        guard case .selected(_, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(bounds == nil, "the markers' box was believed over text that is no longer the selection's")
     }
 
     /// **WebKit: the selection's own markers, boxed** — exact where the term is the whole selection, `containing` where
@@ -289,6 +356,7 @@ struct SelectionReaderTests {
             tree.set(tree.application, kAXFocusedUIElementAttribute, field)
             tree.set(field, kAXSelectedTextAttribute, "ephemeral" as CFString)
             tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(0, 9))
+            tree.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(0, 9), "ephemeral" as CFString)
             if let box { tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(0, 9), rectValue(box)) }
             guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
             #expect(selection.text == "ephemeral")
@@ -318,11 +386,30 @@ private final class FakeAccessibility: AccessibilityReading {
     let application = AXUIElementCreateApplication(90_000)
     private var values: [Key: CFTypeRef] = [:]
     private var failures: [Key: CaptureError] = [:]
+    /// Answers that change between reads, as an app's do while the reader works: one per read, the last kept.
+    private var sequences: [Key: [CFTypeRef]] = [:]
 
     func element(_ number: Int32) -> AXUIElement { AXUIElementCreateApplication(90_000 + number) }
 
     func set(_ element: AXUIElement, _ name: String, argument: CFTypeRef? = nil, _ value: CFTypeRef) {
         values[Key(element: element, name: name, argument: argument.map(Self.describe))] = value
+    }
+
+    /// `name` answers each of `answers` in turn, one per read, and then the last one for good.
+    func answer(_ element: AXUIElement, _ name: String, argument: CFTypeRef? = nil, in answers: [CFTypeRef]) {
+        sequences[Key(element: element, name: name, argument: argument.map(Self.describe))] = answers
+    }
+
+    /// The scripted selection's text, read through its markers, answering each of `texts` in turn.
+    func answerSelectionText(on page: AXUIElement, in texts: [String]) {
+        answer(page, "AXStringForTextMarkerRange", argument: AXTextMarkerRangeCreate(nil, marker(1), marker(2)),
+               in: texts.map { $0 as CFString })
+    }
+
+    private func next(_ key: Key) -> CFTypeRef? {
+        guard var answers = sequences[key], let first = answers.first else { return values[key] }
+        if answers.count > 1 { answers.removeFirst(); sequences[key] = answers }
+        return first
     }
 
     func fail(_ element: AXUIElement, _ name: String, with error: CaptureError) {
@@ -367,11 +454,11 @@ private final class FakeAccessibility: AccessibilityReading {
     func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {
         let key = Key(element: element, name: name, argument: nil)
         if let failure = failures[key] { throw failure }
-        return values[key]
+        return next(key)
     }
 
     func parameterized(_ element: AXUIElement, _ name: String, _ argument: CFTypeRef) throws(CaptureError) -> CFTypeRef? {
-        values[Key(element: element, name: name, argument: Self.describe(argument))]
+        next(Key(element: element, name: name, argument: Self.describe(argument)))
     }
 
     private func marker(_ byte: UInt8) -> AXTextMarker { AXTextMarkerCreate(nil, [byte], 1) }
