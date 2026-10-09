@@ -36,6 +36,9 @@ public struct LookupCardView: View {
     public var showsAllMeanings: Bool
     @State private var showingAlternatives = false
     @State private var showingMemory = false
+    /// Whether the details are open — **only ever by the reader's press**: nothing opens it on arrival, unlike the other
+    /// meanings, which the card opens wherever it cannot name the meaning (D5).
+    @State private var showingDetails = false
 
     public init(
         card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil,
@@ -55,6 +58,7 @@ public struct LookupCardView: View {
             answer
             evidence
             wayOut
+            details
         }
         .padding(scale.space.pad)
         // **Sized by its content, bounded by legibility.** The card is as tall as what it has to
@@ -416,6 +420,32 @@ public struct LookupCardView: View {
             .task(id: card.heading) {
                 showingAlternatives = showsAllMeanings || card.opensAlternatives
             }
+        }
+    }
+
+    /// **What the dictionary says beyond each label, behind the card's own disclosure** (plan-card-refinements WI-4,
+    /// the owner's decision of 2026-10-09). Its own, not "N other meanings": that list opens itself on every card that
+    /// cannot name the meaning — every auxiliary dictionary's — and the text would then be shown unasked. Closed on
+    /// arrival and whenever the details change — another dictionary's card — so it is open only for the card the
+    /// reader opened it on. Absent on the compact card's expansion, which draws the same text already.
+    @ViewBuilder
+    private var details: some View {
+        if let details = card.detailsDisclosure(inCompactExpansion: options.usesCompactLookup) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(disclosure) { showingDetails.toggle() }
+                } label: {
+                    HStack(spacing: scale.space.line) {
+                        DisclosureChevron(isOpen: showingDetails)
+                        Text("Translations and notes")
+                            .font(.system(size: scale.text.label, weight: .medium))
+                    }
+                }
+                .buttonStyle(CardRowButtonStyle())
+                .accessibilityValue(showingDetails ? Text("Expanded") : Text("Collapsed"))
+                if showingDetails { SenseDetailsView(details: details) }
+            }
+            .onChange(of: details) { showingDetails = false }
         }
     }
 

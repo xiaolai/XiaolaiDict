@@ -1471,6 +1471,78 @@ if report.get("complete") is True and "receive" in texts and answered: state.app
 print(" ".join(state))
 PYSTATE
 }
+#     **What a bilingual sense's label leaves out, on the default card, behind its own disclosure** (plan-card-refinements
+#     WI-4, the owner's decision of 2026-10-09). Which dictionary the card is on is read off the card — the name its
+#     dictionary row carries — so the step follows this Mac's own choice of primary: a dictionary whose name is Chinese is
+#     a bilingual and must offer "Translations and notes", closed, and pressing it must add lines the card did not show
+#     before; a dictionary named in English is a monolingual and must not offer it. A card with no dictionary row (one
+#     dictionary answered) cannot say which it is, and is noted.
+#     details_state <panel report>: one JSON line — the card's dictionary, whether the disclosure is offered, the texts.
+details_state() {
+    python3 - "$1" <<'PYDETAILS' 2>/dev/null || true
+import json, re, sys
+try:
+    report = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    report = {}
+windows = report.get("windows", [])
+controls = [c for w in windows for c in w.get("controls", [])]
+row = next((c for c in controls if re.search(r", \d+ other dictionar(y|ies)$", c)), None)
+print(json.dumps({"dictionary": row.rsplit(", ", 1)[0] if row else None,
+                  "offered": "Translations and notes" in controls,
+                  "texts": [t for w in windows for t in w.get("texts", [])]}, ensure_ascii=False))
+PYDETAILS
+}
+sense_details_on() {  # sense_details_on <panel report of the card for “receive”>
+    local before after why
+    before=$(details_state "$1")
+    case "$(printf '%s' "$before" | python3 -c '
+import json, re, sys
+s = json.load(sys.stdin)
+name = s.get("dictionary")
+print("unknown" if not name else ("bilingual" if re.search(r"[㐀-鿿]", name) else "monolingual"))' 2>/dev/null)" in
+    bilingual)
+        if [ "$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offered"])')" != True ]; then
+            flunk "lookup: the bilingual card for “receive” does not offer “Translations and notes” ($(printf '%s' "$before" | head -c 300))"
+            return 0
+        fi
+        if ! why=$("$helpers/click-element" com.xiaolaidict --press "Translations and notes" 2>&1); then
+            flunk "lookup: “Translations and notes” could not be pressed ($why)"
+            return 0
+        fi
+        for _ in $(seq 1 30); do
+            after=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+            [ "$(printf '%s\n%s' "$before" "$after" | python3 -c '
+import json, sys
+a, b = (json.loads(line) for line in sys.stdin.read().splitlines())
+print(len(set(b["texts"]) - set(a["texts"])))' 2>/dev/null)" -gt 0 ] 2>/dev/null && break
+            sleep 0.1
+        done
+        consume_verdicts lookup "$(python3 - "$before" "$after" <<'PYOPENED' 2>&1 || true
+import json, re, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+before, after = json.loads(sys.argv[1]), json.loads(sys.argv[2] or "{}")
+new = [t for t in after.get("texts", []) if t not in set(before.get("texts", []))]
+han = [t for t in new if re.search(r"[㐀-鿿]", t)]
+say(bool(han), f"lookup: the {before['dictionary']} card for “receive” offers “Translations and notes”, closed, and "
+    f"opening it shows {len(new)} lines it did not show before, e.g. “{(han or [''])[0][:40]}”",
+    f"lookup: opening “Translations and notes” showed nothing new in Chinese: {new[:10]}")
+print("DONE")
+PYOPENED
+)"
+        ;;
+    monolingual)
+        if [ "$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offered"])')" = True ]; then
+            flunk "lookup: the monolingual card for “receive” offers “Translations and notes”"
+        else
+            pass "lookup: the monolingual card for “receive” offers no “Translations and notes”"
+        fi
+        ;;
+    *)
+        echo "NOTE  lookup: the card for “receive” names no dictionary, so whether it should offer “Translations and notes” is unknown"
+        ;;
+    esac
+}
 spelling_panel() {
     local baseline why started missed="" offered="" shown="" view="" state grant result
     if ! ensure_fixture_open; then
@@ -1531,6 +1603,7 @@ spelling_panel() {
     fi
     if [ "$shown" = yes ] && [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
         pass "lookup: pressing the line showed the card for “receive”, in the one panel"
+        sense_details_on "$view"
     else
         flunk "lookup: pressing the line never showed the card for “receive” ($(printf '%s' "$view" | head -c 300))"
     fi

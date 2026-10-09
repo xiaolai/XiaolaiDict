@@ -97,8 +97,26 @@ public struct SensePresentation: Equatable, Identifiable {
     /// The reader has been on this sense before (`feature-ledger-ux.md` C3) — which no surveyed
     /// dictionary shows. It is *whether*, never *what*: the earlier gloss is not carried here.
     public let metBefore: Bool
+    /// **What a bilingual sense says beyond its label** (plan-card-refinements WI-4), for the default card's details
+    /// disclosure. Display only — `label` and `key` are what they were, and nothing is keyed or saved from this.
+    public let display: SenseDisplay?
 
     public var id: String { key ?? "\(ordinal)" }
+
+    init(
+        key: String?, block: Int, ordinal: Int, partOfSpeech: String?, label: String, keyKind: SenseKeyKind,
+        standing: SenseStanding, metBefore: Bool, display: SenseDisplay? = nil
+    ) {
+        self.key = key
+        self.block = block
+        self.ordinal = ordinal
+        self.partOfSpeech = partOfSpeech
+        self.label = label
+        self.keyKind = keyKind
+        self.standing = standing
+        self.metBefore = metBefore
+        self.display = display
+    }
 }
 
 /// One entry's headword, printed the way its dictionary prints it.
@@ -181,7 +199,8 @@ public struct EntryPresentation: Equatable {
                         met.contains(StudyItem(
                             dictionary: entry.dictionary.key, entryID: $0, senseKey: sense.key,
                             senseKeyKind: sense.keyKind))
-                    } ?? false)
+                    } ?? false,
+                    display: sense.display)
             }
         }
     }

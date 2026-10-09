@@ -123,6 +123,16 @@ public struct LookupCard: Equatable {
     /// **"Did you mean “X”?" under a miss**, where the panel's rule offers one (`LookupPresentation.offeredSuggestion`)
     /// — nil on every card with an entry, and on a miss nobody has a suggestion for.
     public let suggestion: SpellingSuggestion?
+    /// **What the entry's senses say beyond their labels** (plan-card-refinements WI-4) — every sense's, the one the card
+    /// leads with included. Empty for a monolingual entry and for every card without one.
+    public let details: SenseDetails
+
+    /// **The details the card's own disclosure offers, or nil where it offers none** — nothing to show, or the compact
+    /// card's expansion, whose `DictionaryDetailsView` already draws the same text (the owner's decision of 2026-10-09:
+    /// on the default card as well, never twice and never by default).
+    public func detailsDisclosure(inCompactExpansion: Bool) -> SenseDetails? {
+        inCompactExpansion || details.isEmpty ? nil : details
+    }
 
     /// How many senses the reader could turn to. Named rather than `alternatives.count` at the
     /// call site so the view cannot start counting something else.
@@ -265,9 +275,11 @@ public struct LookupCard: Equatable {
         term: String, lemma: String? = nil, placement: TermPlacement = .unrecorded,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
-        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil
+        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil,
+        details: SenseDetails = .none
     ) {
         self.term = term
+        self.details = details
         self.lemma = lemma ?? term
         self.phrase = phrase
         self.suggestion = suggestion
@@ -363,6 +375,7 @@ public extension LookupCard {
             sentence: sentence,
             alternatives: presentation.senses.filter { ($0.key ?? "\($0.ordinal)") != shown },
             memory: memory,
-            phrase: phrase)
+            phrase: phrase,
+            details: SenseDetails(senses: presentation.senses))
     }
 }
