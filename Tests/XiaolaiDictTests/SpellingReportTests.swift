@@ -70,12 +70,26 @@ struct SpellingReportTests {
         #expect(lines.last?["correctionKind"] as? String == "spelling")
     }
 
+    /// **Which dictionary form was tried, offered or not** (the owner's order of 2026-10-09): a miss that had none is told
+    /// apart from one whose form the dictionaries could not verify — the difference between "this Mac's dictionaries
+    /// have no form for it" and "the form lost". Absent where the term has none, and on a found word.
+    @Test func eachLineNamesTheDictionaryFormItTried() async {
+        let (_, lines, raw) = await report(["receives", "runs", "recieve", "ephemeral"])
+        #expect(lines.count == 4, "\(raw)")
+        #expect(lines[0]["dictionaryForm"] as? String == "receive")
+        #expect(lines[0]["offer"] as? String == "offered")
+        #expect(lines[1]["dictionaryForm"] as? String == "run", "an unverified form was not named: \(raw)")
+        #expect(lines[1]["offer"] as? String == "noCorrection")
+        #expect(lines[2]["dictionaryForm"] == nil)
+        #expect(lines[3]["dictionaryForm"] == nil)
+    }
+
     /// **No dictionary text, ever** — the keys are exactly these, whatever the outcome: a definition, a headword or a
     /// dictionary's name would be licensed content printed from a shell.
     @Test func noLineCarriesDictionaryText() async {
-        let (_, lines, raw) = await report(["recieve", "ephemeral", "crash"])
+        let (_, lines, raw) = await report(["recieve", "ephemeral", "crash", "receives"])
         let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "readersEnglish",
-                                    "lookupMilliseconds", "suggestionMilliseconds"]
+                                    "dictionaryForm", "lookupMilliseconds", "suggestionMilliseconds"]
         for line in lines { #expect(Set(line.keys).isSubset(of: allowed), "\(line.keys.sorted())") }
         #expect(!raw.joined().contains("definition nobody may print"))
         #expect(!raw.joined().contains("NOAD"))

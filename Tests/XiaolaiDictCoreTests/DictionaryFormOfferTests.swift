@@ -8,8 +8,9 @@ import XiaolaiDictCore
 ///
 /// Measured first (§6): the dictionaries already answer most inflections, and of the forms that still miss, the app's
 /// own lemma recovered 1,221 of 6,228, wrong in at most 2.69% of the inflected ones at 95% — too many to swap in
-/// silently, and a line the reader may ignore. The spelling line comes first: the checker's correction is the better
-/// answer for a typo, and a typo reaching the lemma path was the larger part of the wrong recoveries.
+/// silently, and a line the reader may ignore. WI-3 put the spelling line first; the owner reversed that on
+/// 2026-10-09, after the checker's word for four real inflections was wrong on the E2E Mac — see
+/// `SuggestionPrecedenceTests`.
 struct DictionaryFormOfferTests {
     private typealias Checker = SpellingSuggesterTests.Checker
     private typealias Dictionaries = SpellingSuggesterTests.Dictionaries
@@ -26,13 +27,17 @@ struct DictionaryFormOfferTests {
         #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", kind: .dictionaryForm)))
     }
 
-    /// **The spelling line outranks it**: a correction the dictionaries have is offered, and the lemma is not asked.
-    @Test func aSpellingCorrectionComesFirst() async throws {
+    /// **A verified dictionary form outranks the spelling line** (the owner's decision, 2026-10-09, reversing WI-3's
+    /// order): both verify here, the form is offered, and the checker is not asked. `DictionaryFormPrecedenceTests`
+    /// holds the four words that decided it; a typo with no dictionary form keeps its correction.
+    @Test func aVerifiedDictionaryFormComesBeforeTheSpellingLine() async throws {
         let dictionaries = Dictionaries(["concrete", "concret"])
-        let offer = try await suggester(Checker(["concreti": "concrete"]), dictionaries)
+        let checker = Checker(["concreti": "concrete"])
+        let offer = try await suggester(checker, dictionaries)
             .offer(for: "concreti", outcome: Self.miss, lemma: Lemma(text: "concret", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concrete")))
-        #expect(dictionaries.questions == ["concrete"], "the lemma was asked after a correction was offered")
+        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concret", kind: .dictionaryForm)))
+        #expect(dictionaries.questions == ["concret"], "the correction was looked up after the form was offered")
+        #expect(checker.questions.isEmpty)
     }
 
     /// **Never a guess the lemmatiser itself does not stand by, the word again, or a form the dictionaries lack.**

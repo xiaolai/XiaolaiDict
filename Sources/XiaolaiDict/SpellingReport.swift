@@ -9,8 +9,8 @@ import XiaolaiDictUI
 ///
 /// Each term is looked up as `--lookup` looks it up, then asked of `SpellingSuggester` — the one the lookup runner asks
 /// — so the instrument measures what the card is offered, not a second implementation of it. **What it prints is the
-/// term, kinds, the checker's word and two durations**: never a definition, a headword or a dictionary's name, which
-/// are licensed text a shell has no business printing.
+/// term, kinds, the checker's word, the term's dictionary form and two durations**: never a definition, a headword or a
+/// dictionary's name, which are licensed text a shell has no business printing.
 ///
 /// **Compiled out of a release**, as `--reminder-report` and `--provider-status` are: a reader has the line on the card,
 /// and nothing in a reader's copy needs a command that asks the spell checker on demand. `verify_bundle` checks both
@@ -55,10 +55,15 @@ enum SpellingReport {
                 let looked = now()
                 // The term's dictionary form as the card's lookup would work it out — alone, as a term on the command
                 // line has no sentence — so the instrument measures the offer the card is made.
-                offer = try await suggester.offer(
-                    for: term, outcome: outcome, lemma: Lemmatizer.lemma(of: term, in: nil, at: nil))
-                let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, readersEnglish: language(),
-                                              lookup: looked - started, suggestion: now() - looked)
+                let lemma = Lemmatizer.lemma(of: term, in: nil, at: nil)
+                offer = try await suggester.offer(for: term, outcome: outcome, lemma: lemma)
+                // **The form the suggester tried, where it tried one** — none for a word it was not asked about.
+                let tried: String? = if case .refused = offer { nil } else {
+                    DictionaryForm.candidate(lemma, for: term.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, dictionaryForm: tried,
+                                              readersEnglish: language(), lookup: looked - started,
+                                              suggestion: now() - looked)
                 if let failed = LookupCommand.emit(line, through: write, writeError: writeError) { return failed }
             } catch {
                 return .interrupted
@@ -82,14 +87,18 @@ struct SpellingReportLine: Encodable, Equatable {
     var correction: String?
     /// What an offered word is to the term: `spelling` | `dictionaryForm` (plan-card-refinements WI-3).
     var correctionKind: String?
+    /// The term's dictionary form the suggester tried first, offered or not — absent where it had none. What tells "this
+    /// Mac's dictionaries give the term no form" from "the form could not be verified" (the owner's order, 2026-10-09).
+    var dictionaryForm: String?
     /// The reader's English the checker was asked in, as they list it; absent where they list none (plain English).
     var readersEnglish: String?
     let lookupMilliseconds: Double
     let suggestionMilliseconds: Double
 
-    init(term: String, outcome: LookupOutcome, offer: SpellingOffer, readersEnglish: String?,
-         lookup: Duration, suggestion: Duration) {
+    init(term: String, outcome: LookupOutcome, offer: SpellingOffer, dictionaryForm: String? = nil,
+         readersEnglish: String?, lookup: Duration, suggestion: Duration) {
         self.term = term
+        self.dictionaryForm = dictionaryForm
         switch outcome {
         case .entries: self.outcome = "entries"
         case .plainText: self.outcome = "plainText"

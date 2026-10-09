@@ -1378,7 +1378,7 @@ fi
 #     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on the E2E Mac,
 #     the same macOS build — plan §7, 2026-10-09).
 spelling_status=0
-spelling=$("$exe" --spelling-report recieve ambages gazeboes 2>"$reports/spelling-report.err") || spelling_status=$?
+spelling=$("$exe" --spelling-report recieve ambages gazeboes dalesmen droughtier heavied glacises 2>"$reports/spelling-report.err") || spelling_status=$?
 if [ "$spelling_status" -ne 0 ]; then
     flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
 fi
@@ -1407,6 +1407,29 @@ say(form.get("outcome") == "notFound" and form.get("offer") == "offered" and for
     and form.get("correctionKind") == "dictionaryForm",
     "lookup: --spelling-report offers the dictionary form “gazebo” for the missed inflection “gazeboes”",
     f"lookup: --spelling-report did not offer “gazebo” as the dictionary form of “gazeboes”: {form or sys.argv[1][:300]}")
+# **A verified dictionary form outranks the checker** (plan-card-refinements §6, the owner's decision of 2026-10-09): on
+# this Mac the checker made these four real inflections into salesmen, doughtier, heavier and glasses, and each verified.
+# Where this Mac's dictionaries give the term a dictionary form it must be the one offered; where they give none the
+# report says so (`dictionaryForm` absent) and that is a note — measured 2026-10-09, no dictionary in an English reader's
+# form table here lists dalesman. A step in which none of the four has a form measured nothing, and fails.
+with_form = 0
+for inflected_term, inflected_form in (("dalesmen", "dalesman"), ("droughtier", "droughty"), ("heavied", "heavy"),
+                                       ("glacises", "glacis")):
+    got = lines.get(inflected_term) or {}
+    if got and got.get("outcome") == "notFound" and "dictionaryForm" not in got:
+        print(f"NOTE\tlookup: this Mac’s dictionaries give “{inflected_term}” no dictionary form, so the checker’s "
+              f"“{got.get('correction') or 'nothing'}” stands")
+        continue
+    with_form += 1
+    say(got.get("outcome") == "notFound" and got.get("dictionaryForm") == inflected_form
+        and got.get("offer") == "offered" and got.get("correction") == inflected_form
+        and got.get("correctionKind") == "dictionaryForm",
+        f"lookup: --spelling-report offers the dictionary form “{inflected_form}” for “{inflected_term}”, not the "
+        f"checker’s word",
+        f"lookup: --spelling-report did not offer the dictionary form “{inflected_form}” for “{inflected_term}”: "
+        f"{got or sys.argv[1][:300]}")
+if with_form == 0:
+    say(False, "", "lookup: none of the four inflections had a dictionary form here, so the order was not measured")
 rare = lines.get(rare_term)
 if rare is None:
     say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")

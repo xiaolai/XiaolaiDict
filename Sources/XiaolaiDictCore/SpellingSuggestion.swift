@@ -141,14 +141,16 @@ public struct SpellingSuggester: Sendable {
         self.language = language
     }
 
-    /// What `term`'s lookup is offered. Throws only when the caller is cancelled — a newer lookup — and then **after the
-    /// checker and before the dictionaries**: the checker cannot be stopped mid-word, the verification lookup can, and a
-    /// lookup nobody will see must not cost the service one.
+    /// What `term`'s lookup is offered. Throws only when the caller is cancelled — a newer lookup — and then **before
+    /// a dictionary is asked**: the checker cannot be stopped mid-word, the verification lookup can, and a lookup nobody
+    /// will see must not cost the service one.
     ///
-    /// **And where the checker has nothing the dictionaries have, the term's dictionary form** — `lemma`, the one the
-    /// lookup already worked out — offered the same way, verified the same way (plan-card-refinements WI-3). Second,
-    /// because a typo's correction is the better answer, and a typo reaching the lemma path was most of the wrong
-    /// recoveries measured; and only a lemma the lemmatiser stands by — never `ambiguous`, never the word again.
+    /// Two suggestions, tried in the order `SuggestionPrecedence` decides, the first the dictionaries verify offered:
+    /// the term's dictionary form — `lemma`, the one the lookup already worked out (plan-card-refinements WI-3), only
+    /// one the lemmatiser stands by, never `ambiguous`, never the word again — and the checker's correction. **The
+    /// dictionary form first, where there is one** (the owner's decision, 2026-10-09): the checker's word for a real
+    /// inflection was wrong on the E2E Mac four times in four, and a typo with no dictionary form still gets its
+    /// correction. Where neither verifies, the checker's word is reported.
     public func offer(
         for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil
     ) async throws(CancellationError) -> SpellingOffer {
@@ -156,21 +158,55 @@ public struct SpellingSuggester: Sendable {
             return .refused(refusal)
         }
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        let corrected = await checker.suggestion(for: asked, language: language())
-        let spelling: SpellingOffer
-        if let word = SpellingCorrection.candidate(corrected, for: asked) {
-            if Task.isCancelled { throw CancellationError() }
-            guard !SpellingCorrection.isVerified(try await lookUp(word)) else {
-                return .offered(SpellingSuggestion(term: term, word: word))
+        let form = DictionaryForm.candidate(lemma, for: asked)
+        var unoffered = SpellingOffer.noCorrection
+        for kind in SuggestionPrecedence.of(dictionaryForm: form).order {
+            let word: String
+            switch kind {
+            case .spelling:
+                let corrected = await checker.suggestion(for: asked, language: language())
+                guard let candidate = SpellingCorrection.candidate(corrected, for: asked) else { continue }
+                word = candidate
+            case .dictionaryForm:
+                guard let form else { continue }
+                word = form
             }
-            spelling = .unverified(word)
-        } else {
-            spelling = .noCorrection
+            if Task.isCancelled { throw CancellationError() }
+            if SpellingCorrection.isVerified(try await lookUp(word)) {
+                return .offered(SpellingSuggestion(term: term, word: word, kind: kind))
+            }
+            if kind == .spelling { unoffered = .unverified(word) }
         }
-        guard let form = DictionaryForm.candidate(lemma, for: asked) else { return spelling }
-        if Task.isCancelled { throw CancellationError() }
-        guard SpellingCorrection.isVerified(try await lookUp(form)) else { return spelling }
-        return .offered(SpellingSuggestion(term: term, word: form, kind: .dictionaryForm))
+        return unoffered
+    }
+}
+
+/// **Which of a miss's two suggestions is tried first** — a value, so the order is decided where a test can ask it
+/// (plan-card-refinements §6, the owner's decision of 2026-10-09).
+public enum SuggestionPrecedence: Equatable, Sendable {
+    /// The checker's correction, then the dictionary form — only where the term has no dictionary form, so the second
+    /// is never tried: a typo.
+    case spellingFirst
+    /// The dictionary form, then the checker: the checker's word for a rare real inflection was wrong four times in four
+    /// on the E2E Mac (`dalesmen` → *salesmen*, `droughtier` → *doughtier*, `heavied` → *heavier*, `glacises` →
+    /// *glasses*), each verified and offered as "Did you mean".
+    case dictionaryFormFirst
+
+    /// **The dictionary form first wherever there is one** — `DictionaryForm.candidate`, WI-3's. What it costs was
+    /// measured before it was adopted: of the WI-3 spike's 1,221 recoveries, 53 had a verified correction from the
+    /// checker that is no longer offered first, 49 of them OCR-typo controls (`penetrateed` as *penetrate*, not
+    /// *penetrated*). Narrowing it to forms the dictionaries print was tried and refuted on the E2E Mac, whose
+    /// dictionaries print neither `heavied` nor `dalesmen` — the decision named the candidate, not the print.
+    public static func of(dictionaryForm: String?) -> SuggestionPrecedence {
+        dictionaryForm == nil ? .spellingFirst : .dictionaryFormFirst
+    }
+
+    /// The kinds of suggestion, in the order they are tried.
+    public var order: [SpellingSuggestion.Kind] {
+        switch self {
+        case .spellingFirst: [.spelling, .dictionaryForm]
+        case .dictionaryFormFirst: [.dictionaryForm, .spelling]
+        }
     }
 }
 
