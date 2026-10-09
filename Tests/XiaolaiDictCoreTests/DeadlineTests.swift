@@ -62,17 +62,24 @@ struct DeadlineTests {
     /// **The test waits for the work to say what happened, never for a duration.** It polled for
     /// one second (`for _ in 0..<100 … sleep(10 ms)`) and failed under load, the same defect as the
     /// stopwatch asserts above: a poll bound measures how busy the machine is. Now the work closes a
-    /// stream on every exit (cancelled, or finished after ten seconds if nobody cancelled it), and
-    /// the test reads the stream to its end, so it ends when the work has *answered* and the verdict
-    /// is only whether it was cancelled.
-    @Test(.timeLimit(.minutes(1)))
+    /// stream on every exit (cancelled, or finished if nobody cancelled it), and the test reads the
+    /// stream to its end, so it ends when the work has *answered* and the verdict is only whether it
+    /// was cancelled.
+    ///
+    /// **And the work runs for ten minutes under a two-minute limit, not for ten seconds.** Ten
+    /// seconds was itself a stopwatch: on 2026-10-10, in a full suite whose every test in this target
+    /// reported 13.7 s, the guard threw `DeadlineExceeded` as it should and yet the work ran out its
+    /// ten seconds uncancelled — which only a timer starved of its thread for that long explains
+    /// (inferred; nothing measured the timer). Now work nobody cancels outlives the test, and the
+    /// framework's limit is the failure.
+    @Test(.timeLimit(.minutes(2)))
     func workThatOverrunsIsCancelled() async throws {
         let stopped = Mutex(false)
         let (exits, exit) = AsyncStream<Void>.makeStream()
         await #expect(throws: DeadlineExceeded.self) {
             try await withDeadline(.milliseconds(100)) { () async throws -> Int in
                 do {
-                    try await Task.sleep(for: .seconds(10))
+                    try await Task.sleep(for: .seconds(600))
                 } catch {
                     stopped.withLock { $0 = true }
                     exit.finish()
