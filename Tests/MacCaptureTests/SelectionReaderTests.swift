@@ -258,6 +258,28 @@ struct SelectionReaderTests {
         }
     }
 
+    /// **A range from another process is checked before any sum of it** (audit of 2026-10-10): a selection at `Int.max`
+    /// with punctuation trimmed from its front made `location + offset` trap, ending the app; one at a negative location
+    /// asked for a box at a negative range, and believed it. Each locates nothing, and the selection itself stands.
+    @Test(arguments: [CFRange(location: .max, length: 5), CFRange(location: .max - 1, length: 5),
+                      CFRange(location: -5, length: 5), CFRange(location: -1, length: 5)])
+    func aSelectedRangeThatCannotBeTheTextsLocatesNothingAndNeverTraps(range: CFRange) {
+        let tree = FakeAccessibility()
+        let field = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, field)
+        tree.set(field, kAXSelectedTextAttribute, "“cat”" as CFString)
+        tree.set(field, kAXSelectedTextRangeAttribute, rangeValue(range.location, range.length))
+        // Answered, as a hostile or broken app would, for the range a sum that wrapped or went negative would ask for.
+        for location in [range.location &+ 1, range.location] {
+            tree.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(location, range.length), "“cat”" as CFString)
+            tree.set(field, kAXBoundsForRangeParameterizedAttribute, argument: rangeValue(location, 3),
+                     rectValue(CGRect(x: 300, y: 90, width: 30, height: 16)))
+        }
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "cat")
+        #expect(bounds == nil, "a range at \(range.location) was believed")
+    }
+
     /// **Where the word is is worth having, not worth the selection**: an app that answers no box, or an empty one, still
     /// hands over what was selected — with no box, so the card keeps the pointer rule.
     @Test func noBoxOrAnEmptyOneKeepsTheSelectionAndLocatesNothing() {

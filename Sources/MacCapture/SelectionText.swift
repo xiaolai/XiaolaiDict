@@ -118,7 +118,12 @@ struct SelectionWindow: Equatable {
     func clipping(returnedLength: Int) -> TextSegmenter.Clipping {
         var clipped: TextSegmenter.Clipping = []
         if location > 0 { clipped.insert(.start) }
-        let reachesEnd = documentLength.map { location + returnedLength >= $0 } ?? false
+        // Summed with a check: an answer longer than asked for, near `Int.max`, trapped (audit of 2026-10-10). Past the
+        // largest index is past the document's end too.
+        let reachesEnd = documentLength.map { length in
+            let (end, overflowed) = location.addingReportingOverflow(returnedLength)
+            return overflowed || end >= length
+        } ?? false
         if !reachesEnd { clipped.insert(.end) }
         return clipped
     }

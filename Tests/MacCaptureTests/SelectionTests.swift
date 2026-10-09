@@ -62,6 +62,13 @@ struct SelectionWindowTests {
         #expect(SelectionWindow(selection: range, documentLength: 100, radius: 400) == nil)
     }
 
+    /// **An answer longer than was asked for, near the end of an enormous document, is summed without trapping** (audit
+    /// of 2026-10-10): the window's start plus what came back is past `Int.max`, which is past the document's end too.
+    @Test func anAnswerPastTheLargestIndexReachesTheEndWithoutTrapping() throws {
+        let window = try #require(SelectionWindow(selection: CFRange(location: .max - 10, length: 0), documentLength: .max, radius: 400))
+        #expect(window.clipping(returnedLength: 1_000) == [.start])
+    }
+
     /// Without a reported length, a short answer cannot be told from a truncated one, so the end is
     /// never taken for the document's.
     @Test func anUnknownDocumentLengthStillMakesAWindow() throws {

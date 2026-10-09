@@ -377,8 +377,8 @@ public enum SelectionReader {
         case .accessibilityTextRange:
             guard let selected = try ax.range(capture.host, kAXSelectedTextRangeAttribute),
                   selected.length == (capture.text as NSString).length,
-                  let request = AccessibilitySession.rangeValue(CFRange(
-                      location: selected.location + term.range.location, length: term.range.length)),
+                  let range = termRange(term.range, within: selected),
+                  let request = AccessibilitySession.rangeValue(range),
                   let box = try ax.rect(capture.host, kAXBoundsForRangeParameterizedAttribute, request)
             else { return nil }
             return ReadBounds.checked(box, quality: .exact)
@@ -393,6 +393,19 @@ public enum SelectionReader {
         case .accessibilityBoundsScan, .opticalRecognition:
             return nil
         }
+    }
+
+    /// **Where the term is in the document**: `term`, which is where it sits in the selection, moved to where the
+    /// selection is. Nil for a selection no text can have — a negative location or length, an end past `Int.max` — and for
+    /// a term that is not inside it. **The range comes from another process**, so it is checked before it is summed, and
+    /// the sums are checked as they are made: `+` on it trapped at `Int.max`, which ends the app (audit of 2026-10-10).
+    static func termRange(_ term: NSRange, within selected: CFRange) -> CFRange? {
+        guard selected.location >= 0, selected.length >= 0, term.location >= 0, term.length >= 0,
+              !selected.location.addingReportingOverflow(selected.length).overflow,
+              term.location <= selected.length, term.length <= selected.length - term.location
+        else { return nil }
+        // Both sums are bounded by the selection's own end, which did not overflow.
+        return CFRange(location: selected.location + term.location, length: term.length)
     }
 
     /// **The term's own box, inside a selection it was trimmed from** (D3, 2026-10-10). The selection's box centres the

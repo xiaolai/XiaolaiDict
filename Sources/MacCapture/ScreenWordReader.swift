@@ -207,8 +207,10 @@ enum ScreenWordReader {
               let count = try ax.integer(element, kAXNumberOfCharactersAttribute),
               index >= 0, index < count
         else { return nil }
+        // `index` and `count` are another process's: `index + 300` trapped for an index within 300 of `Int.max`
+        // (audit of 2026-10-10). `count - index` is positive here, so neither line can overflow.
         let start = max(0, index - 300)
-        let end = min(count, index + 300)
+        let end = index + min(300, count - index)
         guard let text = try ax.string(
             element, kAXStringForRangeParameterizedAttribute, value(CFRange(location: start, length: end - start)))
         else { return nil }
