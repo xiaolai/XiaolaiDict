@@ -8,11 +8,13 @@ import Testing
 /// Skipped, with the reason shown, on a Mac whose spell checker has no English at all: there the adapter answers nil
 /// by design, and a table of English corrections has nothing to measure.
 ///
-/// **`ambages` is printed and not asserted, and that is a measurement, not a loosening.** The plan's table has it
-/// answering nothing, and it does on the development Mac; on `mbp16` — the same macOS build, 26A434 — the same call
-/// answered `ambles` (2026-10-09). The difference is the checker's state on that Mac, not this code, so asserting nil
-/// would test the machine the suite runs on. `rn`, `qqqq`, `arid` and `cabbages` answer nothing on both, and they are
-/// what refuses a checker that reached for the guess list: its first guesses are `Ron`, `acid` and `cabbage`.
+/// **`ambages` is measured by the instrument, not here.** The plan's table has it answering nothing, and it does on the
+/// development Mac; on the E2E Mac — the same macOS build, 26A434 — the same call answered `ambles` (2026-10-09). That is the
+/// checker's state on the Mac, not this code, so a unit test could only assert the Mac it ran on, and one that printed
+/// it could not fail (audit round 2). The `lookup` E2E stage asks `--spelling-report recieve ambages` and prints what the
+/// E2E Mac's checker said of it, failing if the report has no line for it. `rn`, `qqqq`, `arid` and `cabbages` answer
+/// nothing on both Macs, and they are what refuses a checker that reached for the guess list: its first guesses are
+/// `Ron`, `acid` and `cabbage`.
 @MainActor
 @Suite(.enabled("this Mac's spell checker has no English, so there is nothing to measure") {
     await MainActor.run { NSSpellChecker.shared.availableLanguages.contains { $0 == "en" || $0.hasPrefix("en_") } }
@@ -37,12 +39,6 @@ struct SystemSpellCheckerTests {
     @Test(arguments: ["rn", "qqqq", "arid", "cabbages"])
     func noConfidentCorrectionIsNone(word: String) async {
         #expect(await SystemSpellChecker().suggestion(for: word, language: nil) == nil)
-    }
-
-    /// Printed, never asserted — see the suite's own comment for why this one word depends on the Mac.
-    @Test func whatTheCheckerSaysOfARareRealWordIsPrinted() async {
-        let answer = await SystemSpellChecker().suggestion(for: "ambages", language: nil)
-        print("SystemSpellChecker: ambages → \(answer ?? "nothing") on this Mac (nothing on the development Mac, ambles on mbp16)")
     }
 
     /// **The reader's English reaches the checker**: `modernisation` is a typo in plain English and a word in British.

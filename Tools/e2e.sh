@@ -1370,7 +1370,7 @@ fi
 #
 #     The instrument needs no grant: the fixture's typo, through this bundle's spell checker and dictionary service, is
 #     offered its correction — the same `SpellingSuggester` the card asks. The rare real word is reported, not asserted:
-#     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on mbp16,
+#     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on the E2E Mac,
 #     the same macOS build — plan §7, 2026-10-09).
 spelling_status=0
 spelling=$("$exe" --spelling-report recieve ambages 2>"$reports/spelling-report.err") || spelling_status=$?
