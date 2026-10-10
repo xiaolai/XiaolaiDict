@@ -42,6 +42,9 @@ public struct LookupPresentation: Equatable {
     /// was captured and thrown away at this boundary; the history drawer never had that bug
     /// because the ledger stores the range.
     public var termPlacement: TermPlacement = .unrecorded
+    /// **The captured sentence carries signs of a misread** (`CaptureQuality.doubts(sentence:)`), so `sentence` is nil
+    /// and the card says why rather than drawing it as the reader's own — nor is it given to the sense picker or a model.
+    public var sentenceLooksMisread = false
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?

@@ -282,7 +282,9 @@ final class LookupRunner {
             // two answers to arrive in either order.
             group.addTask {
                 .sense(await resolver.resolve(
-                    entries: entries, phrase: phraseEntries, sentence: selection.sentence,
+                    entries: entries, phrase: phraseEntries,
+                    // A misread sentence is no evidence for a meaning: the picker abstains for want of one.
+                    sentence: selection.quality.doubts(sentence: selection.sentence) ? nil : selection.sentence,
                     context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
             }
             // **"Did you mean …?", a third arrival, after the miss is already on the card** — so the card is final-looking
@@ -389,13 +391,18 @@ final class LookupRunner {
         // for 12 of the 17 apps measured is nothing at all.
         let source = [selection.place.name, selection.place.label]
             .compactMap { $0 }.filter { !$0.isEmpty }.removingAdjacentDuplicates().joined(separator: " · ")
+        // **A sentence with signs of a misread is not the reader's sentence**, however whole: the card says so instead
+        // of drawing it, and nothing downstream — the sentence pane, translation, the phrase line — is given it.
+        let misread = selection.quality.doubts(sentence: selection.sentence)
+        let usable = selection.quality.context == .complete && !misread
         var presentation = LookupPresentation(
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
-            sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
+            sentence: usable ? selection.sentence : nil, outcome: nil)
+        presentation.sentenceLooksMisread = misread
         // Kept beside the sentence it indexes: without it the card has to search, and a search
         // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
         // the sentence, another occurrence of it.
-        presentation.termPlacement = selection.quality.context == .complete ? placement : .unrecorded
+        presentation.termPlacement = usable ? placement : .unrecorded
         return presentation
     }
 

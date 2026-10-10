@@ -1830,6 +1830,9 @@
     "The sense you read could not be identified." : {
 
     },
+    "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning." : {
+
+    },
     "The sentence may be cut short" : {
 
     },

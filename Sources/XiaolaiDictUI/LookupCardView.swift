@@ -760,7 +760,7 @@ public struct LookupPanelContent: View {
 
     /// Keep a short quality signal visible; expansion carries the precise explanation and remedy.
     private var compactIsIncomplete: Bool {
-        if PanelCaveats.serviceUnanswered(presentation.outcome)
+        if PanelCaveats.serviceUnanswered(presentation.outcome) || presentation.sentenceLooksMisread
             || PanelCaveats.readOffTheScreen(presentation.capture, warning: options.warnsAboutScreenReading) {
             return true
         }
@@ -899,6 +899,13 @@ public struct LookupPanelContent: View {
         if PanelCaveats.readOffTheScreen(
             presentation.capture, warning: options.warnsAboutScreenReading) {
             Notice(text: Text("This word was read off the screen, so it may not be exactly right."))
+        }
+        // **Not behind the reader's switch for the word's caveat**: that one fires on a quarter of optical reads, and
+        // this on a sentence that carries a misread's own signs, where the card has withheld the sentence and owes the
+        // reason — otherwise a missing sentence and an unpicked meaning are both unexplained.
+        if presentation.sentenceLooksMisread {
+            Notice(text: Text(
+                "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning."))
         }
     }
 

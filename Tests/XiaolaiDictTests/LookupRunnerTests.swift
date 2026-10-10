@@ -191,6 +191,30 @@ struct LookupRunnerTests {
         #expect(panel.updates.count == 1, "the mark was drawn into the newer panel")
     }
 
+    /// **A misread sentence is neither the reader's sentence on the card nor the sense picker's evidence.** The ledger's
+    /// `comfortable (1TÆ฿J)` came back from Vision at 1.0 and was drawn as the reader's sentence; the lookup still runs.
+    @Test func aMisreadSentenceIsNotShownAsTheReadersOrUsedToChoose() async throws {
+        for (sentence, misread) in [("comfortable (1TÆ฿J)", true), ("A comfortable chair.", false)] {
+            let panel = RecordingPanel()
+            let selector = SentenceRecordingSelector()
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) },
+                                         fallback: { _ in nil }),
+                panel: panel, selector: selector)
+            let selection = Selection(
+                text: "comfortable", sentence: sentence, rangeInSentence: nil,
+                quality: try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete)),
+                place: ReadingPlace())
+            let recording = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+            #expect(recording != nil, "the lookup must still run and be recorded")
+            guard case .lookup(let shown)? = panel.contents.first else { Issue.record("no lookup shown"); continue }
+            #expect(shown.sentenceLooksMisread == misread)
+            #expect((shown.sentence == nil) == misread, "a misread sentence was drawn as the reader's")
+            #expect(misread || !selector.sentences.isEmpty, "the picker was never asked, so this proves nothing")
+            #expect(selector.sentences.allSatisfy { ($0 == nil) == misread }, "the picker was given \(selector.sentences)")
+        }
+    }
+
     /// Each lookup's panel content carries its request, which is what gives it a view of its own.
     @Test func theShownLookupCarriesItsRequest() async throws {
         let panel = RecordingPanel()
@@ -350,6 +374,19 @@ private struct Abstains: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection { .abstained(.tooClose) }
+}
+
+/// A selector that remembers the sentence it was asked to choose by.
+private final class SentenceRecordingSelector: SenseSelecting, @unchecked Sendable {
+    private let lock = Mutex<[String?]>([])
+    var sentences: [String?] { lock.withLock { $0 } }
+    func choose(
+        from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?
+    ) async -> SenseSelection {
+        lock.withLock { $0.append(sentence) }
+        return .abstained(.noContext)
+    }
 }
 
 /// A selector during which the reader presses the shortcut again.
