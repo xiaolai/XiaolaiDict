@@ -288,7 +288,7 @@ stage "install"
 # compile error names `.build/e2e-src/<helper>/main.swift`. `Tools/tests/test_e2e_harness.py` compiles them all the
 # same way on every `make test`, so a helper that does not build is found before a run rather than at its start.
 rm -rf .build/e2e .build/e2e-src && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions element-frame; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions element-frame drag-card; do
     mkdir -p ".build/e2e-src/$helper" && cp "Tools/e2e/$helper.swift" ".build/e2e-src/$helper/main.swift" \
         && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift -o ".build/e2e/$helper" \
         || fail "could not build $helper"
@@ -1711,6 +1711,36 @@ PYOPENED
         ;;
     esac
 }
+# replaced_in_place <drag-card's line> <the panel's view once the word's card is up>: **the drag moved the miss card, and
+# the word's card is where the drag left it** (audit of 2026-10-10: a followed suggestion was placed afresh against the
+# misspelling, so a card the reader had dragged aside jumped back). The window's top-left is compared, within two points:
+# its height is the content's, growing down from a top the reader set.
+replaced_in_place() {
+    python3 - "$1" "$2" <<'PYINPLACE' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+try:
+    drag = json.loads(sys.argv[1])
+except ValueError:
+    drag = {}
+try:
+    view = json.loads(sys.argv[2], strict=False)
+except ValueError:
+    view = {}
+before, after = drag.get("before") or {}, drag.get("after") or {}
+nodes = ((view.get("windows") or [{}])[0].get("nodes") or [])
+now = next((n.get("frame") for n in nodes if n.get("role") == "AXWindow" and n.get("frame")), {}) or {}
+def at(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f}"
+moved = bool(before) and bool(after) and abs(after.get("x", 0) - before.get("x", 0) - 80) <= 3 \
+    and abs(after.get("y", 0) - before.get("y", 0) - 60) <= 3
+say(moved, f"lookup: the miss card was dragged aside, {at(before)} → {at(after)}",
+    f"lookup: a drag of +80,+60 did not move the miss card so: {before} → {after}")
+held = moved and bool(now) and abs(now.get("x", 0) - after.get("x", 0)) <= 2 and abs(now.get("y", 0) - after.get("y", 0)) <= 2
+say(held, f"lookup: the card for “receive” replaced it where the reader left it ({at(now)})",
+    f"lookup: the card for “receive” is at {at(now) if now else 'no frame'}, not where the reader left the miss card ({at(after)})")
+print("DONE")
+PYINPLACE
+}
 spelling_panel() {
     local baseline why started missed="" offered="" shown="" view="" state grant result
     if ! ensure_fixture_open; then
@@ -1749,6 +1779,13 @@ spelling_panel() {
         flunk "lookup: the miss card for “recieve” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
     fi
     pass "lookup: the typo “recieve” drew its miss card $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, and “Did you mean “receive”?” under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
+    # **The miss card dragged aside first, as a reader may** (audit of 2026-10-10): the card for the word must replace it
+    # where the reader left it, not jump back to the misspelling. By its text, never a control, with real events.
+    local drag
+    if ! drag=$("$helpers/drag-card" com.xiaolaidict Lookup "No entry for" 80 60 2>&1); then
+        flunk "lookup: the miss card could not be dragged aside, so where its replacement goes was not checked ($drag)"
+        drag=""
+    fi
     # Pressed through Accessibility: the panel never activates the app, so the frontmost rule a real click needs can
     # never be met for it (`click-element --press`).
     if ! why=$("$helpers/click-element" com.xiaolaidict --press "Did you mean “receive”?" 2>&1); then
@@ -1768,6 +1805,9 @@ spelling_panel() {
         else
             flunk "lookup: the card for “receive” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
         fi
+    fi
+    if [ -n "$drag" ] && [ "$shown" = yes ]; then
+        consume_verdicts lookup "$(replaced_in_place "$drag" "$view")"
     fi
     if [ "$shown" = yes ] && [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
         pass "lookup: pressing the line showed the card for “receive”, in the one panel"

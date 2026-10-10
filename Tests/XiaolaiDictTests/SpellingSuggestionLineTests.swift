@@ -129,6 +129,10 @@ struct SpellingSuggestionLineTests {
         // **The follow-up is launched as a word in no position of the sentence** (audit, 2026-10-09), or the card and
         // the tagger look for it there and find another occurrence.
         #expect(app.contains("placement: .notInSentence"), "the follow-up is launched as though the word were in the sentence")
+        // **And as a replacement in place** (audit of 2026-10-10), or a card the reader dragged aside jumps back to the
+        // misspelling — what the controller does with such a ticket is `CardDragTests`'.
+        #expect(app.contains("ticket: panel.newRequest(replacingInPlace: true)"),
+                "the follow-up is placed afresh instead of replacing the card where the reader has it")
     }
 
     /// **The hook is set by the app itself**, not left for a test to wire: a press on a panel with no hook is a

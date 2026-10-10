@@ -50,6 +50,9 @@ extension LookupPanelPresenting {
 /// reopened after the reader dismissed it.
 struct PanelTicket: Equatable {
     let number: Int
+    /// **A replacement of the card on screen, where it is** — a followed suggestion's (audit of 2026-10-10). Its showing
+    /// keeps the window where the reader has it, and a card the reader dragged off its word stays let go.
+    var inPlace = false
 }
 
 /// What the panel is showing. A scene's content reads this; nothing hands a window a view.
@@ -232,6 +235,11 @@ final class LookupPanelController: LookupPanelPresenting {
 
     func newRequest() -> PanelTicket { PanelTicket(number: requests.next()) }
 
+    /// A request whose card replaces the one on screen in place (`PanelTicket.inPlace`).
+    func newRequest(replacingInPlace: Bool) -> PanelTicket {
+        PanelTicket(number: requests.next(), inPlace: replacingInPlace)
+    }
+
     func begin() -> Int { requests.begin() }
 
     func claim(_ request: Int) -> PanelTicket? {
@@ -287,16 +295,27 @@ final class LookupPanelController: LookupPanelPresenting {
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
         let size = textSize()
         let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize(for: size)))
-        let placed = PanelPlacement.placed(
-            for: kind.defaultSize(for: size), near: pointer, protecting: word, within: visible,
-            chrome: CardChrome(textSize: size))
-        placement = placed.frame
-        // **Every later fit is held to the anchor** — the card centred on its word, on its side, growing away from it,
-        // its tail following the word. Without a word there is no anchor, and both are the screen, as they were.
-        anchor = placed.anchor
-        model.growth = placed.growth
-        model.tail = placed.tail
-        gaveFrame = placed.frame
+        // **A replacement in place keeps the reader's place** (audit of 2026-10-10): a followed suggestion replaces the
+        // card on screen, and where the reader has let that card go of its word — dragged it aside — placing afresh against
+        // the misspelling moved it back and pointed it again. Its frame and its let-go tail stay; an anchored card is
+        // placed on the same word again, which puts it where it was.
+        if ticket.inPlace, shownKind != nil, anchor == nil,
+           let current = (window?.isVisible == true ? window?.frame : nil) ?? sawFrame {
+            placement = current
+            model.growth = nil
+            gaveFrame = current
+        } else {
+            let placed = PanelPlacement.placed(
+                for: kind.defaultSize(for: size), near: pointer, protecting: word, within: visible,
+                chrome: CardChrome(textSize: size))
+            placement = placed.frame
+            // **Every later fit is held to the anchor** — the card centred on its word, on its side, growing away from
+            // it, its tail following the word. Without a word there is no anchor, and both are the screen, as they were.
+            anchor = placed.anchor
+            model.growth = placed.growth
+            model.tail = placed.tail
+            gaveFrame = placed.frame
+        }
 
         model.minimumSize = kind.minimumSize(for: size)
         showing = (ticket.number, model.present(content))

@@ -622,6 +622,8 @@ struct EndToEndReportKeyTests {
         // The helpers that answer the harness directly.
         "Tools/e2e/panel.swift",
         "Tools/e2e/on-screen.swift",
+        // Where a drag took the lookup card: the window's frame before and after (audit of 2026-10-10).
+        "Tools/e2e/drag-card.swift",
     ]
 
     @Test func everyInstrumentThisScanNamesIsOnDisk() {

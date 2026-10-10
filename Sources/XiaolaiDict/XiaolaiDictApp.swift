@@ -522,9 +522,10 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         // **As a word in no position of the sentence**: the sentence is the one the misspelling was read in, and a card
         // or a tagger that looked for the word there would find another occurrence of it (audit, 2026-10-09).
         // **And against the same word on screen**: the misspelling is still where it was, and the card for the
-        // correction replaces the miss's card in place (plan-card-refinements WI-2).
-        launch(selection, near: panel.lastPointer, requestedAt: .now, askedAt: .now, ticket: panel.newRequest(),
-               placement: .notInSentence, protecting: panel.lastWord)
+        // correction replaces the miss's card in place (plan-card-refinements WI-2) — **where the reader has it**, a card
+        // they dragged aside staying there and let go (audit of 2026-10-10).
+        launch(selection, near: panel.lastPointer, requestedAt: .now, askedAt: .now,
+               ticket: panel.newRequest(replacingInPlace: true), placement: .notInSentence, protecting: panel.lastWord)
     }
 
     /// A word a hover read, for the request it was given when the gesture was accepted.

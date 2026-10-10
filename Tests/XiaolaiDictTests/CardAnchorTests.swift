@@ -362,6 +362,49 @@ struct CardDragTests {
         }
     }
 
+    /// **A followed suggestion replaces the card where the reader has it** (audit of 2026-10-10). Pressing "Did you mean
+    /// …?" after dragging the miss card aside showed the word's card against the misspelling again — placed afresh,
+    /// tail and all — so the card jumped back from where the reader had put it. A replacement in place keeps the frame
+    /// and stays let go of its word.
+    @Test func aSuggestionFollowedAfterADragReplacesTheCardWhereTheReaderLeftIt() throws {
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
+        let word = WordBounds(rect: UpRect(x: 500, y: 600, width: 80, height: 20), quality: .exact)
+        #expect(panel.show(.message(title: "recieve", detail: "No entry"), near: UpPoint(x: 540, y: 610), protecting: word,
+                           for: panel.newRequest()))
+        let window = NSWindow(contentRect: panel.placement, styleMask: .borderless, backing: .buffered, defer: true)
+        window.setFrame(panel.placement, display: false)
+        panel.windowMoved(window, buttonDown: false)
+        window.setFrame(panel.placement.offsetBy(dx: 60, dy: 40), display: false)
+        let dragged = window.frame
+        panel.windowMoved(window, buttonDown: true)
+        let released = try #require(panel.model.tail)
+        #expect(panel.anchor == nil && released.tip == nil, "the fixture must be a card the reader dragged off its word")
+
+        #expect(panel.show(.message(title: "receive", detail: "the word's card"), near: panel.lastPointer,
+                           protecting: panel.lastWord, for: panel.newRequest(replacingInPlace: true)))
+        #expect(panel.placement == dragged, "the card moved back from where the reader left it: \(panel.placement)")
+        #expect(panel.anchor == nil, "the replacement took hold of the word again")
+        #expect(panel.model.tail == released, "the tail points again, or its strip went")
+        #expect(panel.model.growth == nil)
+    }
+
+    /// The control: a new lookup of the same word — not a replacement — is placed on its word afresh.
+    @Test func aNewLookupOfTheSameWordIsPlacedOnItAfresh() throws {
+        let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)
+        let word = WordBounds(rect: UpRect(x: 500, y: 600, width: 80, height: 20), quality: .exact)
+        #expect(panel.show(.message(title: "fine", detail: "…"), near: UpPoint(x: 540, y: 610), protecting: word,
+                           for: panel.newRequest()))
+        let placed = panel.placement
+        let window = NSWindow(contentRect: placed, styleMask: .borderless, backing: .buffered, defer: true)
+        window.setFrame(placed, display: false)
+        panel.windowMoved(window, buttonDown: false)
+        window.setFrame(placed.offsetBy(dx: 60, dy: 40), display: false)
+        panel.windowMoved(window, buttonDown: true)
+        #expect(panel.show(.message(title: "fine", detail: "again"), near: panel.lastPointer, protecting: panel.lastWord,
+                           for: panel.newRequest()))
+        #expect(panel.placement == placed && panel.anchor != nil && panel.model.tail?.tip != nil)
+    }
+
     /// The control: a move the controller made itself — no button down — keeps the card on its word.
     @Test func aMoveOfTheControllersOwnKeepsTheAnchor() throws {
         let panel = LookupPanelController(hotkeys: HotkeyCenter(backend: FakeBackend()), windows: .alwaysOpen)

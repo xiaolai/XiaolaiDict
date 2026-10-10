@@ -1249,3 +1249,34 @@ class TheAppearanceIsChangedOnlyWhenItCanBePutBack(unittest.TestCase):
         verdicts, sets = self.run_stage("false", set_fails_to="false")
         self.assertEqual(sets[-1], "false")
         self.assertIn("FAIL", verdicts, "the appearance was left dark and nothing said so")
+
+
+class TheFollowedCardStaysWhereTheReaderLeftIt(unittest.TestCase):
+    """`replaced_in_place`, the lookup stage's check that pressing "Did you mean …?" after dragging the miss card aside
+    replaces it where the reader left it (audit of 2026-10-10: the replacement was placed afresh against the
+    misspelling). The card held where the drag left it passes; one that jumped back, or a drag that never moved it, fails."""
+
+    BEFORE = {"x": 400.0, "y": 300.0, "width": 396.0, "height": 120.0}
+    AFTER = {"x": 480.0, "y": 360.0, "width": 396.0, "height": 120.0}
+
+    def verdicts(self, drag: dict, now: dict | None) -> list[str]:
+        nodes = [{"role": "AXWindow", "frame": now}] if now else []
+        view = {"windows": [{"title": "Lookup", "nodes": nodes, "texts": [], "controls": []}]}
+        source = function("replaced_in_place") + '\nreplaced_in_place "$1" "$2"\n'
+        done = subprocess.run([BASH, "-c", source, "replaced_in_place", json.dumps(drag), json.dumps(view)],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return [line.split("\t")[0] for line in done.stdout.splitlines()]
+
+    def test_a_card_left_where_the_drag_put_it_passes(self):
+        grown = {**self.AFTER, "height": 290.0}
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": self.AFTER}, grown), ["PASS", "PASS", "DONE"])
+
+    def test_a_card_that_jumped_back_fails(self):
+        self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, self.BEFORE))
+
+    def test_a_drag_that_moved_nothing_fails_both(self):
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": self.BEFORE}, self.BEFORE), ["FAIL", "FAIL", "DONE"])
+
+    def test_no_frame_for_the_card_fails(self):
+        self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, None))
