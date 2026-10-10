@@ -124,9 +124,14 @@ lint:
 # **Tracked, unlike the specification it belongs to.** It first went in under `dev-docs/`, which is
 # gitignored — so this line made `make test` pass here and fail on any fresh clone, discovery of a
 # missing directory being an `ImportError`. A gate that depends on an untracked file is not a gate.
+#
+# **On a Python of 3.10 or later, chosen by `Tools/python.sh`** (2026-10-10): `python3` alone was whichever came first on
+# PATH, and when a Homebrew upgrade left its own unlinked, macOS's 3.9.6 ran the suites and three tests failed on the
+# interpreter rather than the code. None found is a failure that says so.
 test-tools:
-	python3 -m unittest discover -s Tools/tests
-	python3 -m unittest discover -s Tools/fsrs
+	@python=$$(Tools/python.sh) && \
+		$$python -m unittest discover -s Tools/tests && \
+		$$python -m unittest discover -s Tools/fsrs
 
 # Re-extract every localizable string into Strings/Localizable.xcstrings, the file a
 # translator is given. Run it after adding or changing anything the reader reads.
