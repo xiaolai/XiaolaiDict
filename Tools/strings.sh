@@ -17,6 +17,12 @@
 # number is `Text(value, format: .number)`, which also gets the reader's own digits and grouping.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# **The tool Python, chosen by version** (`Tools/python.sh`), as `make test-tools` and `e2e.sh` choose it. It counts the catalog
+# before and after, and a count it could not make is a sync it cannot check.
+# shellcheck source=Tools/python.sh
+. Tools/python.sh
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "strings: no Python 3.12 or later on this Mac" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
 
 readonly CATALOG=Strings/Localizable.xcstrings
 # Absolute: the compiler resolves this path per target, from a working directory of its own, and a

@@ -101,7 +101,7 @@ portability:
 DIAGNOSTICS := .build/out/Intermediates.noindex/XiaolaiDict.build/Debug
 
 test-swift: metal-guard portability
-	swift test; status=$$?; Tools/compiler-warnings.py $(DIAGNOSTICS) || status=1; \
+	swift test; status=$$?; python=$$(Tools/python.sh) && "$$python" Tools/compiler-warnings.py $(DIAGNOSTICS) || status=1; \
 	Tools/clean-test-defaults.sh || status=1; Tools/clean-test-scratch.sh || status=1; exit $$status
 
 # Correctness rules only — `.swiftlint.yml` says which and why. `--strict` because a warning nobody

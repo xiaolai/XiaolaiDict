@@ -13,6 +13,7 @@ Run from the repository root:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -72,6 +73,49 @@ class ThePythonTheSuitesRunOn(unittest.TestCase):
         recipe = makefile[makefile.index("\ntest-tools:"):]
         recipe = recipe[:recipe.index("\n\n")]
         self.assertNotIn("\tpython3 ", recipe, "a suite still runs on whichever python3 comes first")
+
+
+# What runs a tool's Python by `python3`, and what runs a tool's own script by its `#!/usr/bin/env python3` line.
+PYTHON3 = re.compile(r"(^|[\s$(;|&])python3(\s|$)")
+DIRECT = re.compile(r"(^\s*|[;|&]\s*|\$\(\s*)(Tools/[\w-]+\.py)\b")
+CHOSEN = 'python3() { "$XIAOLAIDICT_PYTHON" "$@"; }'
+
+
+def code_lines(text: str) -> list[tuple[int, str]]:
+    return [(n, line) for n, line in enumerate(text.split("\n"), 1) if not line.lstrip().startswith("#")]
+
+
+class TheBuildRunsOnTheChosenPython(unittest.TestCase):
+    """**Every script that runs Python runs the chosen one**, and so does the Makefile — not only the suites' own recipe.
+
+    The choice was made for `make test-tools` and `e2e.sh` on 2026-10-10, and `build-bundle.sh` went on running the same
+    suite on whichever `python3` came first: in a fresh checkout, where the icon is regenerated and its tests run before
+    any bundle is built, `make` failed on macOS's 3.9.6 (`zip(strict=)`, the `sqlite3` module's WAL behaviour) — measured
+    the same day, in a second checkout of this branch, while `make test` in the first passed. A tool's own script started
+    by its `#!/usr/bin/env python3` line is the same `python3`, so it is started through the choice too."""
+
+    TOOLS = SCRIPT.parent
+
+    def test_every_script_that_runs_python3_defines_it_as_the_choice(self):
+        for script in sorted(self.TOOLS.glob("*.sh")):
+            if script.name == "python.sh":
+                continue
+            text = script.read_text()
+            runs = [n for n, line in code_lines(text) if PYTHON3.search(line) and CHOSEN not in line]
+            if not runs:
+                continue
+            with self.subTest(script=script.name):
+                self.assertTrue(CHOSEN in text, f"{script.name} runs python3 at lines {runs} and never chooses which")
+                self.assertTrue("python.sh" in text, f"{script.name} defines python3 without asking python.sh")
+
+    def test_no_tool_script_is_started_by_its_own_shebang(self):
+        sources = sorted(self.TOOLS.glob("*.sh")) + [self.TOOLS.parent / "Makefile"]
+        for source in sources:
+            for number, line in code_lines(source.read_text()):
+                found = DIRECT.search(line.replace("\t", " "))
+                with self.subTest(source=source.name, line=number):
+                    self.assertIsNone(found, f"{source.name}:{number} starts {found and found.group(2)} by its own #! "
+                                             f"line, on whichever python3 comes first: {line.strip()}")
 
 
 if __name__ == "__main__":

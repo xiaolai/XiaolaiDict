@@ -19,6 +19,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# **The tool Python, chosen by version** (`Tools/python.sh`), as `make test-tools` and `e2e.sh` choose it. The icon's
+# generator and the whole tool suite run here, before any bundle is built from regenerated art, and on macOS's own
+# 3.9.6 the suite failed on the interpreter rather than the code — measured 2026-10-10 in a fresh checkout of this
+# branch, where the icon is regenerated, while `make test` in a checkout that had it passed. Every `python3` below is
+# this one, and so is the warnings gate, started through it rather than by its own `#!` line.
+# shellcheck source=Tools/python.sh
+. Tools/python.sh
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "build-bundle: no Python 3.12 or later on this Mac" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
+
 readonly APP_NAME=XiaolaiDict
 readonly BUNDLE_ID=com.xiaolaidict
 # The platform floor, in one place: the three plists declare it, `verify_bundle_metadata` holds them
@@ -824,7 +834,7 @@ assemble() {
     # reads the debug build `swift test` made; this one reads the build the bundle is made of, which for a
     # development bundle compiles the capture instruments' code the debug build never sees. A release build
     # compiles each module whole, and no test target.
-    Tools/compiler-warnings.py "$RELEASE_DIAGNOSTICS" --whole-module --no-test-targets \
+    python3 Tools/compiler-warnings.py "$RELEASE_DIAGNOSTICS" --whole-module --no-test-targets \
         || fail "the bundle's build has a warning the compiler did not fail it on, or its diagnostics could not be read (ADR-0052)"
     local products
     products=$(swift_build --show-bin-path)

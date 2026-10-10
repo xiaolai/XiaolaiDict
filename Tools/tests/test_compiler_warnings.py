@@ -386,7 +386,7 @@ class CompilerWarningsGateTests(unittest.TestCase):
         assemble = re.search(r"^assemble\(\) \{\n(.*?)^\}", script, re.MULTILINE | re.DOTALL)
         self.assertIsNotNone(assemble, "build-bundle.sh defines no assemble()")
         body = assemble.group(1)
-        call = re.search(r'^    Tools/compiler-warnings\.py "\$RELEASE_DIAGNOSTICS" --whole-module --no-test-targets \\\n'
+        call = re.search(r'^    python3 Tools/compiler-warnings\.py "\$RELEASE_DIAGNOSTICS" --whole-module --no-test-targets \\\n'
                          r'        \|\| fail "', body, re.MULTILINE)
         self.assertIsNotNone(call, "the bundle's build is not gated, or a refusal does not fail it")
         # After the build it reads, and before anything is staged from it.
