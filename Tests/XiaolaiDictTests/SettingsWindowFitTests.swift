@@ -260,6 +260,15 @@ struct PanelFitTests {
         #expect(SettingsWindowFit.shortfall(wanted: 900, given: 384, ceiling: 384) == 0)
     }
 
+    /// **Nothing moves a window under the reader's hand.** A pinned note is fitted and resizable, and AppKit sizes a
+    /// window under a drag from the drag itself, so a fit applied meanwhile is undone by the next movement and applied
+    /// again by the next layout. The first expectation is the control: the same numbers, with no drag, do move it.
+    @Test func aFitWaitsForTheReadersDragToEnd() {
+        #expect(SettingsWindowFit.shortfall(wanted: 132, given: 200, ceiling: 384) == -68)
+        #expect(SettingsWindowFit.shortfall(wanted: 132, given: 200, ceiling: 384, whileResizing: true) == nil)
+        #expect(SettingsWindowFit.shortfall(wanted: 405, given: 240, ceiling: 384, whileResizing: true) == nil)
+    }
+
     /// **It settles.** The window is resized, which changes what the content is given, which is read
     /// again — so a fit that never reached zero would resize for ever. Applying it to its own answer
     /// twice must reach nothing left to do.

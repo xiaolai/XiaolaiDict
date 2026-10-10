@@ -47,8 +47,16 @@ enum SettingsWindowFit {
     ///
     /// Shrinking is never bounded by it. A ceiling is a limit on growth; applied to a shrink it
     /// would pad a two-line answer out to the cap, which is this same defect wearing the other sign.
-    static func shortfall(wanted: CGFloat, given: CGFloat, ceiling: CGFloat? = nil) -> CGFloat? {
-        guard given > 0 else { return nil }
+    ///
+    /// **Nil while the reader is resizing the window by hand.** AppKit sizes a window under a drag from
+    /// where the drag began and where the pointer is, so a fit applied meanwhile is undone by the next
+    /// movement and applied again by the next layout — the edge under the reader's hand jumps between
+    /// the two for as long as they hold it. A pinned note is the first surface this fits that a reader
+    /// can resize; the fit waits for the drag to end and then fits once (`FitsItsContent`).
+    static func shortfall(
+        wanted: CGFloat, given: CGFloat, ceiling: CGFloat? = nil, whileResizing: Bool = false
+    ) -> CGFloat? {
+        guard given > 0, !whileResizing else { return nil }
         return min(wanted, ceiling ?? wanted) - given
     }
 
@@ -181,12 +189,20 @@ private struct FitsItsContent: ViewModifier {
             // pane kept its default size until some later geometry change happened to arrive.
             .background(WindowReader { attached in
                 window = attached
+                // **And when a reader's drag ends, the fit is asked once more** — it stood down while
+                // they held the edge (`shortfall`), and a drag that ends brings no geometry change of
+                // its own to ask again with.
+                fit.refit(whenLiveResizeEnds: attached) { apply() }
                 if attached != nil { apply() }
             })
             .onAppear { apply() }
             // **And the window is let go when the view does.** Held past disappearance, a queued
             // move could resize a window this modifier no longer belongs to.
-            .onDisappear { window = nil; fit.scheduled = false }
+            .onDisappear {
+                window = nil
+                fit.scheduled = false
+                fit.refit(whenLiveResizeEnds: nil) {}
+            }
     }
 
     /// Moves the window to the newest fit, once per runloop turn.
@@ -211,7 +227,8 @@ private struct FitsItsContent: ViewModifier {
             // before the window was replaced — resized something this view no longer owns.
             guard let live = self.window, live === window else { return }
             guard let delta = SettingsWindowFit.shortfall(
-                wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
+                wanted: fit.wanted, given: fit.given, ceiling: ceiling, whileResizing: live.inLiveResize)
+            else { return }
             SettingsWindowFit.move(
                 live, by: delta, width: width,
                 lowestBottom: growth == nil ? live.screen?.visibleFrame.minY : growth?.lowestBottom,
@@ -263,6 +280,26 @@ private final class PendingFit {
     var wanted: CGFloat = 0
     var given: CGFloat = 0
     var scheduled = false
+    /// Told when a live resize of `watched` ends. **One at a time**, replaced rather than added to:
+    /// the view can be attached to a second window, and a token left on the first would refit a
+    /// window this modifier no longer belongs to.
+    private var resizeEnded: (any NSObjectProtocol)?
+    private weak var watched: NSWindow?
+
+    func refit(whenLiveResizeEnds window: NSWindow?, _ refit: @escaping @MainActor () -> Void) {
+        if let window, window === watched, resizeEnded != nil { return }
+        if let resizeEnded { NotificationCenter.default.removeObserver(resizeEnded) }
+        resizeEnded = nil
+        watched = window
+        guard let window else { return }
+        resizeEnded = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+        ) { _ in MainActor.assumeIsolated { refit() } }
+    }
+
+    isolated deinit {
+        if let resizeEnded { NotificationCenter.default.removeObserver(resizeEnded) }
+    }
 }
 
 extension View {
@@ -283,6 +320,10 @@ extension View {
     /// sets by hand — `show()` writes `Token.Panel.cardOpeningHeight` on open and on every reuse —
     /// so SwiftUI never revisits it however much the content wants. Measured 398 × 240 for every
     /// card, with the whole footer below the fold.
+    ///
+    /// **A pinned note is the fourth**, opened at a size SwiftUI was handed rather than one its words
+    /// asked for, and the first a reader can resize by hand: the width is theirs, and the height
+    /// returns to the words' when the drag ends.
     func fitsItsContent(
         upTo ceiling: CGFloat, report: ((CGFloat, CGFloat) -> Void)? = nil
     ) -> some View {

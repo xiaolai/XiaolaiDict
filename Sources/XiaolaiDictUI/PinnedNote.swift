@@ -164,13 +164,18 @@ public struct PinnedNoteView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, scale.space.padAcross)
-            // Symmetric with the bottom, because nothing floats over the top any more. This was a
-            // 28 pt structural offset dodging the traffic lights; they are gone, and so is it — the
-            // note was that offset's last reader in the whole project.
+            // Symmetric with the bottom, the card's own padding at both edges. This was a 28 pt
+            // structural offset dodging the traffic lights; they are gone, and so is it — and the
+            // title bar's inset that outlived them is the scene's to give up (`PinnedNoteSceneView`).
             .padding(.top, scale.space.padDown)
             .padding(.bottom, scale.space.padDown)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // **As tall as its words, as the card is** — by the card's own fit, up to the card's own cap,
+        // past which the words scroll. The window opened at a fixed 200 pt, and a note shorter than
+        // that stood in the difference (reported 2026-10-10; measured on the E2E Mac, “user” at 51.5 pt
+        // of white below its last line and 47 above it, against the card's 15).
+        .fitsItsContent(upTo: scale.space.cardMaxHeight)
         // On the scroll view, so it stays in the corner rather than scrolling away with the words.
         .overlay(alignment: .topTrailing) { unpinControl }
         // The same act from the pointer's other button, for a reader who looks there first.
