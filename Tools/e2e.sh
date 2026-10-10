@@ -290,7 +290,7 @@ stage "install"
 rm -rf .build/e2e .build/e2e-src && mkdir -p .build/e2e
 for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions element-frame drag-card; do
     mkdir -p ".build/e2e-src/$helper" && cp "Tools/e2e/$helper.swift" ".build/e2e-src/$helper/main.swift" \
-        && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift -o ".build/e2e/$helper" \
+        && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift Tools/e2e/shared/report.swift -o ".build/e2e/$helper" \
         || fail "could not build $helper"
 done
 # **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,

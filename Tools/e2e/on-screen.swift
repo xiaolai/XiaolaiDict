@@ -30,7 +30,11 @@ let bundleID = arguments[1]
 let fragment = arguments.count > 2 ? arguments[2] : ""
 
 func emit(_ report: [String: Any]) -> Never {
-    print(String(decoding: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+    // Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
+    guard let line = jsonLine(report) else {
+        FileHandle.standardError.write(Data("on-screen: the report holds a value JSON cannot\n".utf8)); exit(1)
+    }
+    print(line)
     exit(0)
 }
 

@@ -43,7 +43,8 @@ func frame(_ element: AXUIElement) -> CGRect? {
     AXValueGetValue(position as! AXValue, .cgPoint, &origin)
     // swiftlint:disable:next force_cast
     AXValueGetValue(size as! AXValue, .cgSize, &extent)
-    return CGRect(origin: origin, size: extent)
+    // Finite or none: a grip at NaN is nowhere to press, and a report JSON cannot hold (`shared/report.swift`).
+    return finite(CGRect(origin: origin, size: extent))
 }
 func box(_ rect: CGRect) -> [String: Double] {
     ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
@@ -97,5 +98,6 @@ guard post(.leftMouseUp, at) else { die("the button could not be released") }
 usleep(400_000)
 guard let after = frame(window) else { die("the window titled \(title) went during the drag") }
 let report: [String: Any] = ["before": box(before), "after": box(after)]
-guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else { die("no report") }
-print(String(decoding: data, as: UTF8.self))
+// Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
+guard let line = jsonLine(report) else { die("the report holds a value JSON cannot") }
+print(line)

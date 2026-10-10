@@ -43,7 +43,8 @@ func frame(_ element: AXUIElement) -> CGRect? {
     AXValueGetValue(position as! AXValue, .cgPoint, &origin)
     AXValueGetValue(extent as! AXValue, .cgSize, &size)
     guard size.width > 0, size.height > 0 else { return nil }
-    return CGRect(origin: origin, size: size)
+    // Finite or none: one NaN from an app is a frame nobody can act on, and a report JSON cannot hold.
+    return finite(CGRect(origin: origin, size: size))
 }
 
 /// Every name a control answers to. **Includes `kAXValueAttribute`**, which `click-element`
@@ -154,4 +155,8 @@ let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
 // cap or its deadline returns what it found, and a caller asserting something is absent needs to
 // know whether the walk actually finished looking.
 let report: [String: Any] = ["frontmost": front, "windows": windows, "complete": complete, "incomplete": incomplete]
-print(String(decoding: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+// Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
+guard let line = jsonLine(report) else {
+    FileHandle.standardError.write(Data("panel: the report holds a value JSON cannot\n".utf8)); exit(1)
+}
+print(line)

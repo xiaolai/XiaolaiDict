@@ -38,6 +38,8 @@ from ledger_schema import REPO
 SCRIPT = REPO / "Tools" / "e2e.sh"
 HELPERS = REPO / "Tools" / "e2e"
 RESOLVER = HELPERS / "shared" / "running-app.swift"
+# The one way a helper writes its report (`jsonLine`), compiled beside every helper as the resolver is.
+REPORTER = HELPERS / "shared" / "report.swift"
 # The shell the E2E Mac runs the remote script with: `#!/bin/bash` on macOS is 3.2.
 BASH = "/bin/bash"
 
@@ -277,6 +279,8 @@ class TheScriptsShape(unittest.TestCase):
         self.assertEqual(built - sources, set(), "the install step builds a helper that is not there")
         self.assertIn("Tools/e2e/shared/running-app.swift", self.text[loop.end():loop.end() + 400],
                       "the helpers are no longer built with the shared resolver")
+        self.assertIn("Tools/e2e/shared/report.swift", self.text[loop.end():loop.end() + 400],
+                      "the helpers are no longer built with the one way they write a report")
 
 
 class EveryHelperFindsTheRealProcess(unittest.TestCase):
@@ -303,7 +307,7 @@ class EveryHelperFindsTheRealProcess(unittest.TestCase):
             folder.mkdir()
             shutil.copy(path, folder / "main.swift")
             done = subprocess.run(["xcrun", "swiftc", "-typecheck", "-warnings-as-errors", str(folder / "main.swift"),
-                                   str(RESOLVER)], capture_output=True, text=True, timeout=300, check=False,
+                                   str(RESOLVER), str(REPORTER)], capture_output=True, text=True, timeout=300, check=False,
                                   env={**os.environ, "TMPDIR": str(scratch)})
             return path.name, done.returncode, done.stderr[-600:]
 
@@ -1344,7 +1348,7 @@ class TheDragHelperIsBoundedBeforeItPresses(unittest.TestCase):
         source = cls.scratch / "main.swift"
         shutil.copy(HELPERS / "drag-card.swift", source)
         cls.helper = cls.scratch / "drag-card"
-        subprocess.run(["xcrun", "swiftc", "-O", str(source), str(RESOLVER), "-o", str(cls.helper)], check=True,
+        subprocess.run(["xcrun", "swiftc", "-O", str(source), str(RESOLVER), str(REPORTER), "-o", str(cls.helper)], check=True,
                        capture_output=True, timeout=600, env={**os.environ, "TMPDIR": str(cls.scratch)})
 
     @classmethod
@@ -1365,3 +1369,41 @@ class TheDragHelperIsBoundedBeforeItPresses(unittest.TestCase):
     def test_a_bounded_distance_goes_on_to_the_next_check(self):
         done = self.run_helper("80", "-2000")
         self.assertNotEqual(done.returncode, 2, done.stderr)
+
+
+class EveryHelperWritesItsReportThroughOneCheckedDoor(unittest.TestCase):
+    """**No helper hands `JSONSerialization` a report it has not asked `isValidJSONObject` about** (third audit of
+    2026-10-10). On Darwin `JSONSerialization.data(withJSONObject:)` *raises* for NaN or infinity — an Objective-C exception
+    no `try` sees — so a helper whose report held one frame of NaN died instead of answering (AGENTS.md). Five helpers called
+    it directly; they write through `jsonLine` in `shared/report.swift` now, which asks first. A scan for the call, a plant
+    the scan refuses, and the door itself run on NaN."""
+
+    REPORT = HELPERS / "shared" / "report.swift"
+
+    @staticmethod
+    def direct_calls(sources: dict[str, str]) -> list[str]:
+        return [name for name, text in sources.items() if "JSONSerialization.data(" in text]
+
+    def test_no_helper_serialises_a_report_itself(self):
+        sources = {path.name: path.read_text() for path in HELPERS.glob("*.swift")}
+        self.assertGreaterEqual(len(sources), 15)
+        self.assertEqual(self.direct_calls(sources), [], "these serialise a report without asking whether it can be")
+        planted = {"plant.swift": 'print(try! JSONSerialization.data(withJSONObject: ["x": 1]))'}
+        self.assertEqual(self.direct_calls(planted), ["plant.swift"], "the scan cannot see a direct call")
+
+    def test_the_door_asks_before_it_serialises(self):
+        code = "\n".join(line for line in self.REPORT.read_text().split("\n") if not line.strip().startswith("//"))
+        self.assertLess(code.index("isValidJSONObject"), code.index("JSONSerialization.data("))
+
+    def test_the_door_answers_nothing_for_a_report_it_cannot_write_and_a_line_for_one_it_can(self):
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-report-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        main = scratch / "main.swift"
+        main.write_text('print(jsonLine(["x": Double.nan]) == nil ? "refused" : "written")\n'
+                        'print(jsonLine(["y": 1, "x": "a"]) ?? "nothing")\n')
+        binary = scratch / "door"
+        subprocess.run(["xcrun", "swiftc", str(main), str(self.REPORT), "-o", str(binary)], check=True,
+                       capture_output=True, timeout=600, env={**os.environ, "TMPDIR": str(scratch)})
+        done = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split("\n")[:2], ["refused", '{"x":"a","y":1}'])

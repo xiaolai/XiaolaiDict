@@ -45,7 +45,8 @@ let report: [String: Any] = [
     "screenRecording": CGPreflightScreenCaptureAccess(),
     "automation": asked,
 ]
-guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) else {
+// Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
+guard let line = jsonLine(report) else {
     FileHandle.standardError.write(Data("session-access: the report could not be written\n".utf8)); exit(1)
 }
-print(String(decoding: data, as: UTF8.self))
+print(line)

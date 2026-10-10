@@ -30,8 +30,11 @@ func emit(_ state: String, _ detail: String, pid: pid_t? = nil, onFixture: Bool?
     var report: [String: Any] = ["state": state, "detail": detail]
     if let pid { report["pid"] = Int(pid) }
     if let onFixture { report["onFixture"] = onFixture }
-    let data = (try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])) ?? Data()
-    print(String(decoding: data, as: UTF8.self))
+    // Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
+    guard let line = jsonLine(report) else {
+        FileHandle.standardError.write(Data("app-health: the report holds a value JSON cannot\n".utf8)); exit(1)
+    }
+    print(line)
     exit(state == "ok" ? 0 : 1)
 }
 
