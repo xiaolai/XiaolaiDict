@@ -353,6 +353,22 @@ struct DictionaryFormGuardTests {
             == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
         #expect(try await offer("commiting", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
             .suggestion?.kind != .dictionaryForm)
+        // **A title the dictionary lists and prints no doubled form under does not double** — Oxford prints the forms of
+        // every word that does (measured on this Mac's table, 2026-10-10: all 30 doublers asked, *commit* to *excel*), so
+        // its silence is evidence. A table that lists *holler* and prints nothing under it makes *hollering* regular.
+        let listing = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["holler", "commit"])
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: listing)
+            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
+        // A title it does not list says nothing, and the rule abstains as with no table at all.
+        let unlisted = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["commit"])
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: unlisted)
+            .suggestion?.kind != .dictionaryForm)
+        // Both spellings printed decide nothing: *travel* prints *traveled* and *travelled*, so neither is the rule's.
+        let both = FormTable(sources: [], forms: [
+            "traveled": [.init(lemma: "travel", partOfSpeech: "verb")], "travelled": [.init(lemma: "travel", partOfSpeech: "verb")],
+        ], ownHeadwords: [], words: ["travel"])
+        #expect(try await offer("traveling", lemma: "travel", dictionaries: Dictionaries(entries: ["travel": [Headed("travel", ["verb"])]]),
+                                printed: both).suggestion?.kind != .dictionaryForm)
         // A word of one syllable doubles by spelling alone, as before.
         #expect(try await offer("tipped", lemma: "tip", dictionaries: Dictionaries(entries: ["tip": [Headed("tip", ["verb"])]]),
                                 printed: nil) == .offered(SpellingSuggestion(term: "tipped", word: "tip", kind: .dictionaryForm)))

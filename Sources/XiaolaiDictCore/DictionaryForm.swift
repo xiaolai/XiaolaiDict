@@ -64,8 +64,10 @@ public struct DictionaryForm: Equatable, Sendable {
             $0.formUnion(RegularSpelling.slots(ofPrinted: $1.form, as: $1.partOfSpeech))
         }
         // **Whether a longer word doubles is the dictionary's to say** (second audit of 2026-10-10): what it prints in one
-        // slot — *committed*, *hollered* — decides the others, and with nothing printed the rule abstains.
-        let doubling = RegularSpelling.doubling(of: form, printed: printed.map(\.form))
+        // slot — *committed*, *hollered* — decides the others; a title it lists and prints no doubled form under does not
+        // double; with neither, the rule abstains.
+        let doubling = RegularSpelling.doubling(of: form, printed: printed.map(\.form),
+                                                listed: table?.wordList.contains(Lemmatizer.canonical(form)) ?? false)
         let slot = RegularSpelling.slots(of: written, from: form, doubling: doubling).first { !printedSlots.contains($0) }
         return slot.map { DictionaryForm(word: form, evidence: .regular($0)) }
     }
@@ -148,10 +150,13 @@ enum RegularSpelling {
         return InflectionSlot.allCases.filter { forms[$0]?.contains(term) == true }
     }
 
-    /// **Whether `base` doubles its last consonant before an ending, by the forms printed under it** — true where one
-    /// is the base, its last letter again and *-ed*, *-ing*, *-er* or *-est*; false where one is the base and the ending
-    /// alone; nil where none is either, or where they disagree (a dictionary printing both spellings has decided nothing).
-    static func doubling(of base: String, printed: [String]) -> Bool? {
+    /// **Whether `base` doubles its last consonant before an ending, by what the dictionary prints** — true where a form
+    /// printed under it is the base, its last letter again and *-ed*, *-ing*, *-er* or *-est*; false where one is the base
+    /// and the ending alone; nil where they disagree, since a dictionary printing both spellings has decided nothing.
+    /// Where none is either, **false for a title the table lists** (`listed`): Oxford prints the forms of every word that
+    /// doubles — measured on this Mac's table on 2026-10-10, all 30 doublers asked are printed doubled, *commit* to
+    /// *excel* — so its silence about one it lists is evidence; nil for one it does not list, and with no table at all.
+    static func doubling(of base: String, printed: [String], listed: Bool) -> Bool? {
         let word = base.lowercased()
         guard let last = word.last else { return nil }
         var seen: Set<Bool> = []
@@ -161,6 +166,7 @@ enum RegularSpelling {
                 if form == word + ending { seen.insert(false) }
             }
         }
+        if seen.isEmpty { return listed ? false : nil }
         return seen.count == 1 ? seen.first : nil
     }
 
