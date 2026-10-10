@@ -23,13 +23,27 @@ final class PinnedNoteController {
 
     func note(_ id: UUID) -> PinnedNote? { notes[id] }
 
+    /// The window each note is drawn in, as its scene reports it — **by the note's id, never by its
+    /// title**, which is the headword and two notes can share. Weak: a closed note's window is not
+    /// this controller's to keep.
+    private var windows: [UUID: Held] = [:]
+    private struct Held { weak var window: NSWindow? }
+
+    /// Reported by the note's scene once SwiftUI has made its window.
+    func attach(_ window: NSWindow, to id: UUID) { windows[id] = Held(window: window) }
+
+    func window(of id: UUID) -> NSWindow? { windows[id]?.window }
+
     /// How many notes are on screen. Read by the tests that hold "one sticky per sense", because the
     /// rule is about the size of this set and nothing else could see it.
     var count: Int { notes.count }
 
     /// The reader dismissed one. Reported by the scene's `onDisappear`, since SwiftUI owns the
     /// window and there is no `willClose` to observe.
-    func dismissed(_ id: UUID) { notes[id] = nil }
+    func dismissed(_ id: UUID) {
+        notes[id] = nil
+        windows[id] = nil
+    }
 
     /// Keeps a sense as a note, and answers with the id of the note now on screen.
     ///
@@ -109,7 +123,10 @@ struct PinnedNoteSceneView: View {
         }
         .frame(minWidth: PinnedNoteController.smallestNote.width,
                minHeight: PinnedNoteController.smallestNote.height)
-        .xiaolaiDictPanelBehaviour(transient: true) { PinnedNoteWindow.configure($0) }
+        .xiaolaiDictPanelBehaviour(transient: true) { window in
+            PinnedNoteWindow.configure(window)
+            controller.attach(window, to: id)
+        }
         .onDisappear { controller.dismissed(id) }
     }
 }

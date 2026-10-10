@@ -4807,6 +4807,145 @@ PYCHECK
 )
     consume_verdicts panel "$verdicts"
 fi
+
+# 13b. **A pinned note: the blank above and below its words, and what a click on it does to the reader's other windows.**
+#
+#      Both reported by the owner on 2026-10-10, inspecting a running build. A note for “user” stood in far more white
+#      above its heading and below its provenance than the card it was pinned from; and with Settings open behind
+#      another app, a click on a note's unpin control brought Settings to the front. `--note-report` pins two notes in
+#      the real scene, reads their blank through Accessibility, opens Settings, puts TextEdit in front of it, and clicks a
+#      note's words and then its unpin control with real events, reading the compositor's order after each. Run at the
+#      standard size and at Huge, because the blank is the card's padding, which grows with the text.
+#
+#      **The bounds are this stage's own**: the card's padding is 1.25 em, and each text size names its em — read from
+#      the design, never from the app's report, so a report that agreed with a wrong layout would still fail here.
+note_verdicts() {  # note_verdicts <report> <text size>: PASS/FAIL/NOTE lines about one --note-report, then DONE
+    python3 - "$1" "$2" <<'PYNOTE' 2>&1 || true
+import json, sys
+r, size = json.loads(sys.argv[1]), sys.argv[2]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def note(text): print("NOTE\t" + text)
+em = {"compact": 11, "standard": 12, "comfortable": 13.5, "large": 15, "extraLarge": 18, "huge": 24}[size]
+pad = 1.25 * em
+# A text frame lands on whole pixels, half a point on these displays, and the window fit leaves a change of a point or
+# less where it is, as rounding: 1.5 pt covers both and no real blank.
+tolerance = 1.5
+other = r.get("otherApp", "the other app")
+say(r.get("textSize") == size, f"note ({size}): the report ran at text size {size}",
+    f"note ({size}): the report ran at {r.get('textSize')}, so every blank below was measured at the wrong size")
+notes = r.get("notes") or []
+say(len(notes) == 2, f"note ({size}): both notes were pinned", f"note ({size}): {len(notes)} notes were pinned, not 2")
+for n in notes:
+    h = n.get("heading")
+    w, texts = n.get("window"), n.get("texts") or []
+    if not n.get("appeared"):
+        say(False, "", f"note ({size}): the note for {h} was never listed by the compositor")
+        continue
+    if not n.get("settled") or not w or not texts:
+        say(False, "", f"note ({size}): the note for {h} was not measured: {n.get('problem', 'no frame, or no text in it')}")
+        continue
+    top = min(t["frame"]["y"] for t in texts) - w["y"]
+    bottom = w["y"] + w["height"] - max(t["frame"]["y"] + t["frame"]["height"] for t in texts)
+    shape = (f"window {w['width']:.0f} x {w['height']:.0f} pt, title-bar inset {n.get('safeAreaTop')}, "
+             f"content area {n.get('contentLayoutHeight')} of {n.get('frameHeight')}")
+    say(abs(top - pad) <= tolerance,
+        f"note ({size}): “{h}” has {top:.1f} pt above its first line, the card's {pad:g}",
+        f"note ({size}): “{h}” has {top:.1f} pt above its first line where the card has {pad:g} ({shape})")
+    # **Unless its words outrun the room**: the fit stops at the card's cap, 32 em, and at the bottom of the screen's usable
+    # area, and past either the words scroll — so the last line is below the window's edge, and that is the design.
+    limit = n.get("visibleBottom")
+    held = (abs(w["height"] - 32 * em) <= tolerance
+            or (limit is not None and abs(w["y"] + w["height"] - limit) <= tolerance))
+    if bottom < 0 and held:
+        note(f"note ({size}): “{h}” is longer than the room it has, so it stops at the "
+             + ("card's cap" if abs(w["height"] - 32 * em) <= tolerance else "bottom of the screen")
+             + f" and scrolls ({shape})")
+    else:
+        say(abs(bottom - pad) <= tolerance,
+            f"note ({size}): “{h}” has {bottom:.1f} pt below its last line, the card's {pad:g}",
+            f"note ({size}): “{h}” has {bottom:.1f} pt below its last line where the card has {pad:g} ({shape})")
+    # Where each line of it sits, from the window's top, and how tall: a heading that wrapped is a heading too narrow.
+    note(f"note ({size}): “{h}” lines — " + ", ".join(
+        f"{t.get('text', '')[:16]} at {t['frame']['y'] - w['y']:.1f}, {t['frame']['height']:.1f} tall" for t in texts))
+    # **The unpin control is there for VoiceOver with no pointer over the note** — the rule its own comment states, and
+    # which a fade by opacity broke: no button in the note's tree at all (2026-10-10).
+    say(n.get("unpinListedAtRest") is True,
+        f"note ({size}): “{h}” lists its unpin control for VoiceOver with no pointer over it",
+        f"note ({size}): “{h}” lists no unpin control with no pointer over it; buttons: {n.get('buttonsAtRest')}")
+    note(f"note ({size}): “{h}” is a {n.get('class')}; isPanel={n.get('isPanel')}, "
+         f"nonactivatingPanel={n.get('nonactivatingPanel')}, canBecomeKey={n.get('canBecomeKey')}, "
+         f"canBecomeMain={n.get('canBecomeMain')}, resizableByHand={n.get('resizableByHand')}, "
+         f"styleMask={n.get('styleMask')}, level={n.get('level')}; {shape}")
+o = r.get("order") or {}
+if not o.get("measured"):
+    say(False, "", f"note ({size}): what a click on a note does to Settings was not measured: {o.get('problem')}")
+    for k in ("before", "bodyClick", "beforeUnpin", "buttonsUnderThePointer"):
+        if k in o:
+            note(f"note ({size}): {k} — {o[k]}")
+else:
+    before, body, again, unpin = o["before"], o["bodyClick"], o["beforeUnpin"], o["unpin"]
+    say(r.get("notesLeftForTheClicks") == 1, f"note ({size}): one note is on screen for the clicks, as a reader with one has",
+        f"note ({size}): {r.get('notesLeftForTheClicks')} notes are on screen for the clicks, not 1")
+    # The positive controls: Settings really was behind the other app, and each click really landed.
+    say(before.get("settingsInFront") is False and before.get("frontmost") == other,
+        f"note ({size}): Settings is open behind {other}, which is in front",
+        f"note ({size}): Settings was not behind {other} before the clicks: {before}")
+    say(body.get("posted") is True and body.get("noteStillShown") is True,
+        f"note ({size}): a click on a note's words was posted, and left the note open",
+        f"note ({size}): the click on the note's words was not posted, or closed the note: {body}")
+    say(body.get("settingsInFront") is False,
+        f"note ({size}): a click on a note left Settings behind {other}",
+        f"note ({size}): a click on a note brought Settings in front of {other}: {body}")
+    say(again.get("settingsInFront") is False,
+        f"note ({size}): Settings is still behind {other} when the unpin control is clicked",
+        f"note ({size}): Settings was already in front of {other} before the unpin click: {again}")
+    say(unpin.get("posted") is True and unpin.get("noteClosed") is True,
+        f"note ({size}): a real click on the unpin control put the note away",
+        f"note ({size}): the click on the unpin control did not put the note away: {unpin}")
+    # Closed by the click, or — where the click did not reach the control — by the control pressed as VoiceOver presses
+    # it: the same action, and the same close, so what the close does to Settings is measured either way.
+    closing = unpin if unpin.get("noteClosed") else (o.get("unpinPressed") or {})
+    say(closing.get("noteClosed") is True and closing.get("settingsInFront") is False,
+        f"note ({size}): closing a note left Settings behind {other}",
+        f"note ({size}): closing a note brought Settings in front of {other}, or did not close it: {closing}")
+    note(f"note ({size}): at the unpin control Accessibility finds {o.get('hitAtTheControl')}; pressed by Accessibility "
+         f"after the click: {o.get('pressedByAccessibility')}, then {o.get('unpinPressed')}")
+    note(f"note ({size}): the unpin control was found by {o.get('unpinFoundBy')}, at {o.get('unpinControl')}; "
+         f"Accessibility listed, under the pointer, the buttons {o.get('buttonsUnderThePointer')}")
+    note(f"note ({size}): after a click on its words — frontmost={body.get('frontmost')}, "
+         f"appIsActive={body.get('appIsActive')}, keyWindow={body.get('keyWindow')}; after unpinning — "
+         f"frontmost={unpin.get('frontmost')}, appIsActive={unpin.get('appIsActive')}, "
+         f"keyWindow={unpin.get('keyWindow')}, settingsIsKey={unpin.get('settingsIsKey')}")
+p = r.get("panel") or {}
+if p.get("measured"):
+    a = p["afterClick"]
+    note(f"note ({size}): the lookup panel, clicked with Settings behind {other} — "
+         f"settingsInFront={a.get('settingsInFront')}, frontmost={a.get('frontmost')}, "
+         f"appIsActive={a.get('appIsActive')}, keyWindow={a.get('keyWindow')}, posted={a.get('posted')}, "
+         f"panelStillShown={a.get('panelStillShown')}")
+else:
+    note(f"note ({size}): the lookup panel was not clicked: {p.get('problem')}")
+print("DONE")
+PYNOTE
+}
+note_size_had=no; note_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && note_size_had=yes
+restore_note_size() { restore_default TextSize "$note_size_had" "$note_size_was"; }
+at_exit restore_note_size
+# The app Settings is left behind: TextEdit on the harness's own fixture, opened by LaunchServices.
+open -a TextEdit "$helpers/notes.txt" >/dev/null 2>&1 || true
+sleep 2
+for note_size in standard huge; do
+    defaults write com.xiaolaidict TextSize "$note_size"
+    note_ledger_before=$(ledger_digest "$ledger") || note_ledger_before=""
+    report=$(run_report --note-report 150) || true
+    ledger_left "panel: --note-report ($note_size)" "$note_ledger_before"
+    if [ -z "$report" ]; then
+        flunk "panel: --note-report ($note_size) printed nothing ($(head -c 200 "$reports/note-report.err" 2>/dev/null))"
+        continue
+    fi
+    consume_verdicts panel "$(note_verdicts "$report" "$note_size")"
+done
+restore_note_size
 fi
 
 if want provider; then

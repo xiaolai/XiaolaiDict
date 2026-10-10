@@ -61,6 +61,24 @@ import Testing
         #expect(notes.count == 2)
     }
 
+    /// **A note's window is found by its id, and let go with the note.** Two notes may share a headword, which is
+    /// their windows' title, so the scene reports each window against the id it was opened for.
+    @Test func aNotesWindowIsFoundByItsIdAndLetGoWithIt() {
+        let notes = PinnedNoteController()
+        let first = notes.pin(note(text: "a penalty"), near: .zero)
+        let second = notes.pin(note(text: "of high quality"), near: .zero)
+        let windows = (0..<2).map { _ in
+            NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        }
+        notes.attach(windows[0], to: first)
+        notes.attach(windows[1], to: second)
+        #expect(notes.window(of: first) === windows[0])
+        #expect(notes.window(of: second) === windows[1])
+        notes.dismissed(first)
+        #expect(notes.window(of: first) == nil, "an unpinned note's window is still held")
+        #expect(notes.window(of: second) === windows[1])
+    }
+
     /// **Unpinning really lets go.** Without this the dedupe would be a one-way door: a sense
     /// pinned, closed, and wanted back would match nothing on screen and still have to open.
     @Test func aSenseCanBePinnedAgainAfterItIsUnpinned() {

@@ -19,7 +19,7 @@ struct InstrumentLedgerTests {
     @Test func anInstrumentThatLooksAWordUpKeepsItsLedgerInAScratchDirectoryOfItsOwn() async throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-instrument-ledger")
         defer { Instruments.finish() }
-        for instrument in [Instruments.Windowed.panel, .placement] {
+        for instrument in [Instruments.Windowed.panel, .note, .placement] {
             let root = try #require(try Instruments.ledgerSupport(for: instrument, scratchIn: scratch.url),
                                     "\(instrument) records into the reader's own ledger")
             #expect(root.deletingLastPathComponent().standardizedFileURL == scratch.url.standardizedFileURL)

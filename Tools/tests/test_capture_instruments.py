@@ -33,7 +33,7 @@ PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 # What a release says for each development instrument, one sentence each.
 REFUSALS = {flag: f"{flag} is a development instrument and is not built into a release" for flag in (
     "--read-point", "--read-selection", "--reminder-report", "--provider-status", "--spelling-report",
-    "--history-report", "--panel-report", "--placement-report")}
+    "--history-report", "--panel-report", "--note-report", "--placement-report")}
 
 # A sentence only each instrument's live code holds.
 LIVE = {

@@ -81,6 +81,21 @@ public struct PinnedNote: Equatable, Identifiable {
     }
 }
 
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+extension PinnedNote {
+    /// **A note `--note-report` pins**, through the `PinnedNoteController.pin` the card's pin button reaches. Development
+    /// builds only: a member only an instrument calls is never public in a library (ADR-0052), so this one rides the
+    /// define the instruments do.
+    public static func measured(
+        heading: String, dictionary: DictionaryIdentity, partOfSpeech: String?, pronunciation: String?, text: String,
+        standing: Standing
+    ) -> PinnedNote {
+        PinnedNote(heading: heading, dictionary: dictionary, partOfSpeech: partOfSpeech, pronunciation: pronunciation,
+                   text: text, standing: standing)
+    }
+}
+#endif
+
 /// The pinned notes on screen. Each is its own always-on-top window, closed by its own button — a
 /// new lookup never touches them, which is the whole point of pinning one.
 ///

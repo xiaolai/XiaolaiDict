@@ -150,7 +150,7 @@ struct LookupCommandTests {
 #if XIAOLAIDICT_CAPTURE_INSTRUMENTS
         #expect(Instruments.Windowed.allCases.allSatisfy { $0.refusalInARelease == nil })
 #else
-        for instrument in [Instruments.Windowed.history, .panel, .placement] {
+        for instrument in [Instruments.Windowed.history, .panel, .note, .placement] {
             #expect(instrument.refusalInARelease?.hasSuffix("is a development instrument and is not built into a release")
                     == true, "\(instrument) is built into a release")
         }

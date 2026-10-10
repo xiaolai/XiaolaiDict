@@ -703,8 +703,8 @@ verify_service_boundaries() {
 # notification center for and is no use to a reader, `--provider-status`, which starts the
 # reader's CLI or sends their key to whatever endpoint the defaults name (ADR-0053),
 # `--spelling-report`, which asks the spell checker on demand (plan-spelling-suggestion), and the
-# three windowed instruments that capture the screen or click: `--history-report`, `--panel-report`
-# and `--placement-report`.
+# four windowed instruments that capture the screen or click: `--history-report`, `--panel-report`,
+# `--note-report` and `--placement-report`.
 #
 # Both directions, because a gate only ever checked the safe way round is a gate that could be
 # inverted and still pass. The marker is the refusal sentence the `#if` compiles in — **one per
@@ -733,7 +733,7 @@ verify_capture_instruments() {
         || { echo "nm listed none of what every Swift binary imports, so it read nothing of $binary"; return 1; }
     # Every development instrument a release refuses, by the flag its sentence starts with.
     local flags=(--read-point --read-selection --reminder-report --provider-status --spelling-report
-                 --history-report --panel-report --placement-report)
+                 --history-report --panel-report --note-report --placement-report)
     # What only live code holds: what it is, then the sentence.
     local witnesses=(
         "the capture instruments' own code|has no window to find its process by"

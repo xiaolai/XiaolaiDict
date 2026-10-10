@@ -87,6 +87,12 @@ case .success(.panelReport):
     guard Instruments.run(.panel) else { exit(CommandStatus.usage.rawValue) }
     XiaolaiDictScene.main()
 
+// Pins notes, opens Settings and clicks both, so AppKit's runloop and `.accessory` for the panel report's reasons. **Not in a
+// release**: it posts clicks.
+case .success(.noteReport):
+    guard Instruments.run(.note) else { exit(CommandStatus.usage.rawValue) }
+    XiaolaiDictScene.main()
+
 // Shows the lookup panel against a word rectangle the stage measured, so the same two reasons apply. **Not in a release**:
 // it captures the screen and posts clicks and a drag, aimed from its command line.
 case .success(.placementReport(let x, let y, let width, let height, let capture, let drag)):

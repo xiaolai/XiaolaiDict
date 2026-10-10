@@ -604,6 +604,8 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/PlacementReport.swift",
         // And what a reader's drag, the entry arriving and a disclosure do to it after (D3, 2026-10-10).
         "Sources/XiaolaiDict/PlacementDragReport.swift",
+        // A pinned note's blank, and what a click on it or on the panel brings forward (reported 2026-10-10).
+        "Sources/XiaolaiDict/NoteReport.swift",
         "Sources/XiaolaiDict/HistoryReport.swift",
         "Sources/XiaolaiDict/SettingsReport.swift",
         "Sources/XiaolaiDict/ModelReport.swift",

@@ -180,6 +180,7 @@ struct CommandCoverageTests {
         ("--model-report", LaunchMode.modelReport),
         ("--sense-report", LaunchMode.senseReport),
         ("--panel-report", LaunchMode.panelReport),
+        ("--note-report", LaunchMode.noteReport),
         ("--review-report", LaunchMode.reviewReport),
         ("--reminder-report", LaunchMode.reminderReport),
         ("--provider-status", LaunchMode.providerStatus),

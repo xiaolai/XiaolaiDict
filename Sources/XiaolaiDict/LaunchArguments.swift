@@ -47,6 +47,11 @@ enum LaunchMode: Equatable {
     /// reader clicks.
     case panelReport
 
+    /// `--note-report`: what a pinned note's window is, how much blank it leaves above and below its words, and whether a
+    /// click on it — on its words, on its unpin control — brings the app's other windows forward over the reader's. Pins
+    /// real notes in the real scene, so it runs inside the bundle like `--panel-report`.
+    case noteReport
+
     /// `--placement-report X Y W H [--capture PATH] [--drag DX DY]`: where the lookup panel goes for a word at that
     /// rectangle (y down, as Accessibility gives it), at first show and once its content has grown — and whether it covers
     /// the word (plan-card-refinements WI-2). Shows the real panel, so it runs inside the bundle like `--panel-report`.
@@ -97,6 +102,7 @@ enum LaunchArguments {
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
                XiaolaiDict --panel-report
+               XiaolaiDict --note-report
                XiaolaiDict --placement-report X Y WIDTH HEIGHT [--capture PATH.png] [--drag DX DY]
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
@@ -124,6 +130,7 @@ enum LaunchArguments {
         case "--model-report": alone(arguments, is: .modelReport)
         case "--sense-report": alone(arguments, is: .senseReport)
         case "--panel-report": alone(arguments, is: .panelReport)
+        case "--note-report": alone(arguments, is: .noteReport)
         case "--placement-report": placementReport(Array(arguments.dropFirst()))
         case "--review-report": alone(arguments, is: .reviewReport)
         case "--reminder-report": alone(arguments, is: .reminderReport)

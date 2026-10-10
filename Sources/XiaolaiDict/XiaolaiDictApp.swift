@@ -358,6 +358,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
                 case .history: await HistoryReport.run(in: self)
                 case .settings: await SettingsReport.run(in: self)
                 case .panel: await PanelReport.run(in: self)
+                case .note: await NoteReport.run(in: self)
                 case .placement: await PlacementReport.run(in: self)
                 }
                 Instruments.finish()

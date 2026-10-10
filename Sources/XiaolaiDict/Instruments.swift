@@ -24,6 +24,8 @@ enum Instruments {
         case history
         case settings
         case panel
+        /// `--note-report`: pinned notes, Settings and a click on each.
+        case note
         /// `--placement-report`; its word rectangle is `PlacementReport.word`.
         case placement
 
@@ -41,13 +43,15 @@ enum Instruments {
             case .settings: nil
             case .history: "--history-report is a development instrument and is not built into a release"
             case .panel: "--panel-report is a development instrument and is not built into a release"
+            case .note: "--note-report is a development instrument and is not built into a release"
             case .placement: "--placement-report is a development instrument and is not built into a release"
             }
 #endif
         }
 
         /// Whether it looks a word up through the reader's own door — which records, so into a ledger of its own.
-        var looksWordsUp: Bool { self == .panel || self == .placement }
+        /// `--note-report` does too: it clicks a lookup panel as well as its notes.
+        var looksWordsUp: Bool { self == .panel || self == .note || self == .placement }
     }
 
     private static let chosen = Mutex<Windowed?>(nil)
