@@ -4,6 +4,7 @@ import Foundation
 @testable import StudyKit
 import Testing
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// **Undo puts back the discard it was asked to, and clears only that discard's receipt.**
 ///
@@ -21,7 +22,7 @@ struct HistoryDrawerUndoTests {
 
     /// Waits for work the model started and did not await, with a deadline rather than a guess.
     private func eventually(_ what: Comment, _ condition: () -> Bool) async throws {
-        for _ in 0..<500 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
+        _ = await Patience.until { condition() }
         #expect(condition(), what)
     }
 

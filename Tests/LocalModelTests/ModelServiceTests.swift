@@ -143,12 +143,9 @@ struct ScriptedExecutor: LanguageModelExecutor {
                     if var counts = $0[id] { counts.now -= 1; $0[id] = counts }
                 }
             }
-            // Bounded by a count of looks and not by the clock, for the reason `waitUntil` gives:
-            // these tests run in parallel, so an elapsed-time bound measures the runner's load. A
-            // gate nobody releases therefore fails the test that forgot to, rather than hanging it.
-            for _ in 0..<2_000 where !ScriptedModel.released.withLock({ $0.contains(id) }) {
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            // Bounded by `Patience`, for the reason `waitUntil` gives. A gate nobody releases fails the
+            // test that forgot to, rather than hanging it.
+            _ = await Patience.until { ScriptedModel.released.withLock({ $0.contains(id) }) }
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .wedgeOnce(let text)?:
             if ScriptedModel.wedged.withLock({ $0.insert(id).inserted }) {
@@ -224,12 +221,12 @@ struct ModelServiceTests {
         return (store, scratch)
     }
 
-    /// Waits for something to become true, **bounded by a count of looks rather than by the clock**:
-    /// these tests run in parallel, so an elapsed-time bound measures how busy the runner is. The
-    /// caller asserts the condition straight afterwards, so a wait that ran out fails by name
-    /// instead of going quietly on to measure nothing.
+    /// Waits for something to become true, **bounded by `Patience`**: these tests run in parallel, so a
+    /// short bound measures how busy the runner is — and a count of looks was one, 600 looks of 5 ms
+    /// being a three-second clock. The caller asserts the condition straight afterwards, so a wait that
+    /// ran out fails by name instead of going quietly on to measure nothing.
     private static func waitUntil(_ condition: @Sendable () -> Bool) async {
-        for _ in 0..<600 where !condition() { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { condition() }
     }
 
     /// The scratch directories these tests made, held for the life of the test instance so they are

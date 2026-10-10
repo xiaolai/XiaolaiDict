@@ -258,13 +258,10 @@ struct EraseWiringTests {
 
     /// **Generous on purpose.** Each of these opens a ledger, runs every migration and takes a
     /// backup, and the suite runs them in parallel with the rest — a budget tuned to one test alone
-    /// fails under load and reads as a defect in the code rather than in the wait.
+    /// fails under load and reads as a defect in the code rather than in the wait. `Patience.wait`:
+    /// the 2,000 looks of 5 ms it was were themselves a ten-second budget.
     private func settle(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<2_000 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the model never reached the expected state")
+        if await !Patience.until(condition) { Issue.record("the model never reached the expected state") }
     }
 }
 

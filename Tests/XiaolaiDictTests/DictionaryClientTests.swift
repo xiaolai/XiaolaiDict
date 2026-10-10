@@ -91,7 +91,7 @@ struct DictionaryClientTests {
         let lookupA = Task { try await client.lookup("a") }
         await service.waitForSend(on: 1)
         service.die(1)
-        for _ in 0..<200 where await client.openSessionGeneration != nil { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { await client.openSessionGeneration == nil }
         #expect(await client.openSessionGeneration == nil, "the dead session was not forgotten")
 
         #expect(try await client.lookup("b") == .entries(Self.entries, unreadable: []))
@@ -235,7 +235,9 @@ private final class FakeService: Sendable {
     }
 
     func waitForSend(on connection: Int) async {
-        while !state.withLock({ $0.sent.contains(connection) }) { try? await Task.sleep(for: .milliseconds(5)) }
+        if await !Patience.until({ state.withLock({ $0.sent.contains(connection) }) }) {
+            Issue.record("nothing was sent on connection \(connection)")
+        }
     }
 
     fileprivate struct Transport: DictionaryTransport {
@@ -261,6 +263,6 @@ private final class Gate: Sendable {
     func open() { opened.withLock { $0 = true } }
 
     func wait() async {
-        while !opened.withLock({ $0 }) { try? await Task.sleep(for: .milliseconds(5)) }
+        if await !Patience.until({ opened.withLock({ $0 }) }), !Task.isCancelled { Issue.record("the gate was never opened") }
     }
 }

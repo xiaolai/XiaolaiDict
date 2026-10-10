@@ -2,6 +2,7 @@ import Foundation
 import XiaolaiDictBase
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// Synchronous work that nothing can interrupt — a private API that deadlocked — is bounded by
 /// acting from outside it.
@@ -37,7 +38,7 @@ struct WatchdogTests {
         }
         watchdog.run {
             // Stuck until the alarm has gone off — as a deadlocked call would stay stuck.
-            _ = alarm.wait(timeout: .now() + 60)
+            _ = alarm.wait(timeout: .now() + Patience.wait / .seconds(1))
         }
         #expect(fired.withLock { $0 })
     }

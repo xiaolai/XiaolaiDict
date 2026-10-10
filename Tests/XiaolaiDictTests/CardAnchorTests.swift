@@ -4,6 +4,7 @@ import SwiftUI
 import Testing
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// **The card anchored on its word, with a tail that points at it** (the owner's decision of 2026-10-09: like the
 /// system's own popup) — as arithmetic, each rule beside a control that would fail it.
@@ -435,7 +436,7 @@ struct SteadyFrameTests {
         func next() -> CGRect? { answers.count > 1 ? answers.removeFirst() : answers.first ?? nil }
     }
 
-    private func watch(_ read: @escaping () -> CGRect?, budget: Duration = .seconds(60)) async -> PlacementReport.Watched {
+    private func watch(_ read: @escaping () -> CGRect?, budget: Duration = Patience.wait) async -> PlacementReport.Watched {
         await PlacementReport.watch(read, steady: .milliseconds(20), budget: budget, every: .milliseconds(1))
     }
 
@@ -478,7 +479,7 @@ struct SteadyFrameTests {
         }
         let watched = await PlacementReport.watch(
             answered: { answer.arrived }, frame: { answer.arrived ? answered : waiting },
-            steady: .milliseconds(20), budget: .seconds(60), every: .milliseconds(1))
+            steady: .milliseconds(20), budget: Patience.wait, every: .milliseconds(1))
         #expect(watched == .steady(answered), "the waiting card was measured as the settled one: \(watched)")
     }
 

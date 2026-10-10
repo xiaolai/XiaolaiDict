@@ -52,7 +52,9 @@ struct LookupRunnerSpellingTests {
         func suggestion(for term: String, language: String?) async -> String? {
             state.withLock { $0.asked.append(term) }
             ask.yield()
-            while state.withLock({ $0.held }) { try? await Task.sleep(for: .milliseconds(2)) }
+            if await !Patience.until(every: .milliseconds(2), { !state.withLock({ $0.held }) }), !Task.isCancelled {
+                Issue.record("the checker was never released")
+            }
             return answers[term]
         }
         /// Returns once the checker has been asked — at once where it already was. A checker never asked is held to the
@@ -120,7 +122,7 @@ struct LookupRunnerSpellingTests {
 
     /// **The miss first, final-looking; the line after, once verified** (§3). While the checker is still answering, the
     /// card already holds the miss and no line; once the dictionaries have the word, the same card gains it.
-    @Test(.timeLimit(.minutes(1))) func theMissIsShownFirstAndItsVerifiedSuggestionArrivesAfter() async throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func theMissIsShownFirstAndItsVerifiedSuggestionArrivesAfter() async throws {
         let panel = RecordingPanel(), service = Service(["the"]), checker = Checker(["teh": "the"], held: true)
         let runner = runner(panel, service, checker)
         let ticket = panel.newRequest()
@@ -199,7 +201,7 @@ struct LookupRunnerSpellingTests {
     /// **A newer lookup cancels a pending suggestion** (§4): the reader pressed again while the checker answered, so the
     /// task was cancelled — no line lands on any card, the dictionaries are never asked to verify, and nothing is left
     /// to follow.
-    @Test(.timeLimit(.minutes(1))) func aNewerLookupCancelsAPendingSuggestion() async throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aNewerLookupCancelsAPendingSuggestion() async throws {
         let panel = RecordingPanel(), service = Service(["the"]), checker = Checker(["teh": "the"], held: true)
         let runner = runner(panel, service, checker)
         let ticket = panel.newRequest()
@@ -217,7 +219,7 @@ struct LookupRunnerSpellingTests {
     /// **A lookup the reader moved on from, though nobody cancelled it, offers nothing to follow.** A hover's claim
     /// supersedes without cancelling, so the runner's own question — is this still the card on screen? — is what keeps
     /// a late line off a card it was not made for, and a press on a stale card from looking anything up.
-    @Test(.timeLimit(.minutes(1))) func aSupersededLookupKeepsNoSuggestion() async throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aSupersededLookupKeepsNoSuggestion() async throws {
         let panel = RecordingPanel(), service = Service(["the"]), checker = Checker(["teh": "the"], held: true)
         let runner = runner(panel, service, checker)
         let ticket = panel.newRequest()

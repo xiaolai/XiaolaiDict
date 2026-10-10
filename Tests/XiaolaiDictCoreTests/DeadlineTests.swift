@@ -17,12 +17,12 @@ struct DeadlineTests {
     }
 
     /// **No clock is read here.** The work **never finishes**, so a guard that waited for it would
-    /// hang for ever; that hang is the failure, and the framework's own time limit (minute
-    /// granularity, far beyond any scheduling stall) is what turns it into one. This asserted
+    /// hang for ever; that hang is the failure, and the framework's own time limit (the shared
+    /// `Patience.limitMinutes`, far beyond any scheduling stall) is what turns it into one. This asserted
     /// `clock.now - started < .seconds(10)` before, and failed twice while other builds loaded the
     /// machine (load average 14–17): a unit test may not assert elapsed wall-clock time against an
     /// absolute bound (AGENTS.md), and a ten-second bound measures how busy the machine is.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func workThatNeverAnswersIsAbandonedAtTheDeadline() async {
         await #expect(throws: DeadlineExceeded.self) {
             try await withDeadline(.milliseconds(200)) { () async -> Int in
@@ -35,7 +35,7 @@ struct DeadlineTests {
     /// may be minutes away, finally settles. The deadline is **`Patience.never`**, longer than the time limit:
     /// a guard that answered a cancelled caller only at the deadline would still be waiting when the
     /// framework ends the test, so the failure is structural and no stopwatch is involved.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func aCancelledCallerIsAnsweredAtOnce() async {
         let caller = Task {
             try await withDeadline(Patience.never) { () async -> Int in
@@ -73,7 +73,7 @@ struct DeadlineTests {
     /// ten seconds uncancelled — which only a timer starved of its thread for that long explains
     /// (inferred; nothing measured the timer). Now work nobody cancels outlives the test, and the
     /// framework's limit is the failure.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func workThatOverrunsIsCancelled() async throws {
         let stopped = Mutex(false)
         let (exits, exit) = AsyncStream<Void>.makeStream()

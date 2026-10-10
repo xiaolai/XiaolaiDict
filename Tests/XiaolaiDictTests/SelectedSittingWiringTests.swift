@@ -88,7 +88,7 @@ struct SelectedSittingWiringTests {
         var stores = 0
         var open = false
         func gate() async {
-            while !open { try? await Task.sleep(for: .milliseconds(5)) }
+            if await !Patience.until({ open }), !Task.isCancelled { Issue.record("the gate was never opened") }
         }
     }
     /// What the Library handed over, in order.

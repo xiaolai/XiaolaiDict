@@ -113,7 +113,7 @@ struct LookupRunnerTests {
         // A ticket the panel handed out. `PanelTicket(number: 0)` stood here and was current only
         // because the stand-in's counter happened to start at 0 — a request nobody made.
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
-        for _ in 0..<200 where prewarmed.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { prewarmed.withLock({ $0 }) != 0 }
         #expect(prewarmed.withLock { $0 } == 1)
     }
 
@@ -318,7 +318,10 @@ private struct RepliesWhenReleased: DictionaryTransport {
     let entry: DictionaryEntry
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
         gate.ask()
-        while !gate.isOpen { try await Task.sleep(for: .milliseconds(5)) }
+        if await !Patience.until({ gate.isOpen }) {
+            try Task.checkCancellation()
+            Issue.record("the reply gate was never opened")
+        }
         return .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: [])))
     }
     func cancel(reason: String) {}
@@ -413,11 +416,7 @@ final class RecordingPanel: LookupPanelPresenting {
 
     /// Waits for the panel to be presented, rather than assuming it already has been.
     func waitForShow() async throws {
-        for _ in 0..<2_000 {
-            if !contents.isEmpty { return }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        Issue.record("the panel was never shown")
+        if await !Patience.until(every: .milliseconds(1), { !contents.isEmpty }) { Issue.record("the panel was never shown") }
     }
 }
 

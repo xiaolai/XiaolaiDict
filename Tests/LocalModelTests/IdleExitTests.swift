@@ -40,7 +40,7 @@ struct IdleExitTests {
     @Test func drainingStopsAdmittingBeforeItWaits() async throws {
         let idle = IdleExit(after: .seconds(60)) {}
         let lease = try #require(idle.admit())
-        async let drained = idle.drain(within: .seconds(2))
+        async let drained = idle.drain(within: Patience.wait)
         try await Task.sleep(for: .milliseconds(50))
         #expect(idle.admit() == nil, "a request was admitted while the service was draining")
         lease.release()
@@ -64,7 +64,7 @@ struct IdleExitTests {
         let idle = IdleExit(after: .milliseconds(100)) { fired.withLock { $0 += 1 } }
         idle.start()
         idle.start()
-        for _ in 0..<50 where fired.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        _ = await Patience.until { fired.withLock({ $0 }) != 0 }
         try await Task.sleep(for: .milliseconds(150))
         #expect(fired.withLock { $0 } == 1)
     }
@@ -90,7 +90,7 @@ struct IdleExitTests {
         let lease = try #require(idle.admit())
         #expect(await idle.drain(within: .milliseconds(100)) == false)
         lease.release()
-        #expect(await idle.drain(within: .seconds(1)))
+        #expect(await idle.drain(within: Patience.wait))
     }
 
     @Test func theIntervalDefaultsToTenMinutesAndIsClamped() {

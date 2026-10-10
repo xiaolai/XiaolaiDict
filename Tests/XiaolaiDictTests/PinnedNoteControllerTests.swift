@@ -5,6 +5,7 @@ import Testing
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// **One sticky per sense, and a note that carries no window controls.**
 ///
@@ -128,7 +129,7 @@ import Testing
         }
         notes.attach(windows[0], to: first)
         notes.attach(windows[1], to: second)
-        let placed = await Poll.until(within: .seconds(2)) {
+        let placed = await Poll.until(within: Patience.wait) {
             windows[0].frame.minX == pointer.x + step && windows[1].frame.minX == pointer.x + step + step
         }
         #expect(placed == .met, "the windows stayed at \(windows.map(\.frame))")
@@ -146,7 +147,7 @@ import Testing
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120), styleMask: [.borderless],
                               backing: .buffered, defer: true)
         notes.attach(window, to: id)
-        _ = await Poll.until(within: .seconds(2)) { window.frame.minX != 0 }
+        _ = await Poll.until(within: Patience.wait) { window.frame.minX != 0 }
         let dragged = NSPoint(x: visible.minX + 400, y: visible.maxY - 300)
         window.setFrameTopLeftPoint(dragged)
         notes.attach(window, to: id)

@@ -1,5 +1,6 @@
 import Testing
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// One poll for every "wait until this is true" in the app (audit round 3, #19): the panel's
 /// visibility check and the instruments' `settle` were two copies of the same loop that had already
@@ -61,7 +62,7 @@ struct PollTests {
                 return superseded.value > 0
             }
         }
-        while checks.value == 0 { await Task.yield() }
+        _ = await Patience.until { checks.value != 0 }
         superseded.value = 1
         task.cancel()
         #expect(await task.value == .abandoned, "a superseded poll was reported met at cancellation")

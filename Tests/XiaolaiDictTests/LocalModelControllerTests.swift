@@ -84,7 +84,7 @@ struct LocalModelControllerTests {
     }
 
     private func settle(_ controller: LocalModelController) async {
-        for _ in 0..<500 where controller.state.isDownloading { try? await Task.sleep(for: .milliseconds(10)) }
+        _ = await Patience.until { !controller.state.isDownloading }
     }
 
     @Test func aFreshMacIsNotDownloadedAndATinyOneIsNotOffered() {
@@ -434,9 +434,7 @@ struct LocalModelControllerTests {
         #expect(controller.choice.answering.answering == .standard)
 
         controller.choice.removeModel(.standard)
-        for _ in 0..<200 where store.installed(Self.manifest(.standard)) != nil {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await Patience.until { store.installed(Self.manifest(.standard)) == nil }
         #expect(store.installed(Self.manifest(.standard)) == nil, "the board's Remove reached nothing")
     }
 
@@ -479,9 +477,7 @@ struct LocalModelControllerTests {
         controller.choose(.large)
 
         await controller.remove(.large)
-        for _ in 0..<200 where store.installed(Self.manifest(.large)) != nil {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await Patience.until { store.installed(Self.manifest(.large)) == nil }
         #expect(store.installed(Self.manifest(.large)) == nil, "the model was not removed")
         #expect(controller.wanted == nil, "a choice was kept for a model that is gone")
         #expect(store.installed(Self.manifest(.standard)) != nil, "removing one took the other")
@@ -671,10 +667,10 @@ struct LocalModelControllerTests {
             if case .downloading(let progress, _, _) = controller.state { return progress.received }
             return nil
         }
-        for _ in 0..<500 where received() != RestartingTransport.before { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { received() == RestartingTransport.before }
         #expect(received() == RestartingTransport.before, "the premise: the first reading was shown")
         restarted.release()
-        for _ in 0..<500 where received() != RestartingTransport.after { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { received() == RestartingTransport.after }
         #expect(received() == RestartingTransport.after, "the restart was not shown")
         restarted.finish()
         controller.cancelDownload()
@@ -707,10 +703,10 @@ final class TestHold: Sendable {
     func finish() { state.withLock { $0.finished = true } }
 
     func waitForRelease() async {
-        for _ in 0..<2_000 where !state.withLock({ $0.released }) { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { state.withLock({ $0.released }) }
     }
 
     func waitForFinish() async {
-        for _ in 0..<2_000 where !state.withLock({ $0.finished }) { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { state.withLock({ $0.finished }) }
     }
 }

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Synchronization
+import XiaolaiDictTestSupport
 
 /// **An HTTP/1.1 server on 127.0.0.1, on real sockets, in this test process** — the wire a `URLProtocol` stub
 /// cannot show: whether a connection is kept and reused, what the request line and headers really are once the
@@ -132,14 +133,9 @@ final class LoopbackHTTPServer: Sendable {
     var acceptedConnections: Int { core.state.withLock { $0.accepted } }
     var requests: [Request] { core.state.withLock { $0.requests } }
 
-    /// Whether `count` requests have been read within `bound` — a minute, only so a defect fails rather than hangs.
-    func waitForRequests(_ count: Int, within bound: Duration = .seconds(60)) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: bound)
-        while requests.count < count {
-            guard ContinuousClock.now < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return true
+    /// Whether `count` requests have been read within `Patience.wait` — only so a defect fails rather than hangs.
+    func waitForRequests(_ count: Int) async -> Bool {
+        await Patience.until { requests.count >= count }
     }
 
     /// Stops listening and ends every connection. The threads see it within one poll interval.

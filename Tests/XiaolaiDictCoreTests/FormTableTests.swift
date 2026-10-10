@@ -256,8 +256,7 @@ struct FormAuthorityTests {
         authority.use(store)
         try store.write(table("swear"))
         authority.refreshInBackground()
-        let deadline = ContinuousClock.now + .seconds(180)
-        while authority.table == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        _ = await Patience.until { authority.table != nil }
         #expect(authority.table?.sources == ["swear"])
     }
 
@@ -281,10 +280,10 @@ struct FormAuthorityTests {
         let store = FormTableStore(directory: scratch.url)
         try store.write(table("swear"))
         let authority = FormAuthority()
-        #expect(await authority.settled(within: .seconds(5)) == .idle)
+        #expect(await authority.settled(within: Patience.wait) == .idle)
         #expect(authority.table == nil, "nothing installed, nothing waited for")
         authority.useInBackground(store)
-        let ended = await authority.settled(within: .seconds(180))
+        let ended = await authority.settled(within: Patience.wait)
         #expect(ended == .finished || ended == .idle, "the wait timed out: \(ended)")
         #expect(authority.table?.sources == ["swear"])
     }
@@ -298,7 +297,7 @@ struct FormAuthorityTests {
         let authority = FormAuthority()
         authority.useInBackground(storeA)
         authority.useInBackground(storeB)
-        let ended = await authority.settled(within: .seconds(180))
+        let ended = await authority.settled(within: Patience.wait)
         #expect(ended != .timedOut)
         #expect(authority.table?.sources == ["b"], "got \(String(describing: authority.table?.sources))")
     }
@@ -318,7 +317,7 @@ struct FormAuthorityTests {
         try store.write(FormTable(sources: ["second-file"], forms: ["x": [.init(lemma: "y", partOfSpeech: "")]], ownHeadwords: []))
         // `useInBackground`, not `use`: the seam runs inside the read lock, which `use` would wait on for ever.
         authority.refresh { authority.useInBackground(elsewhere) }
-        _ = await authority.settled(within: .seconds(180))
+        _ = await authority.settled(within: Patience.wait)
         #expect(authority.table?.sources == ["published"], "a read from a superseded store was committed")
     }
 
@@ -335,7 +334,7 @@ struct FormAuthorityTests {
         case 1: authority.use(store)
         default: authority.useInBackground(store)
         }
-        let ended = await authority.settled(within: .seconds(180))
+        let ended = await authority.settled(within: Patience.wait)
         #expect(ended != .timedOut)
     }
 

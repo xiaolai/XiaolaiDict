@@ -27,15 +27,7 @@ struct ModelBackendRouterTests {
 
         /// Waits until the settings have been read `count` times in all — bounded, so a defect fails rather than hangs.
         func waitUntilRead(_ count: Int) async {
-            // A minute, only so a defect fails rather than hangs: the wait ends when the condition holds.
-            let deadline = ContinuousClock.now.advanced(by: .seconds(60))
-            while reads < count {
-                guard ContinuousClock.now < deadline else {
-                    Issue.record("the settings were not read")
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            if await !Patience.until({ reads >= count }) { Issue.record("the settings were not read") }
         }
     }
 
@@ -54,15 +46,7 @@ struct ModelBackendRouterTests {
         var all: [RouterEvent] { events.withLock { $0 } }
 
         func wait(for event: RouterEvent) async {
-            // A minute, only so a defect fails rather than hangs: the wait ends when the condition holds.
-            let deadline = ContinuousClock.now.advanced(by: .seconds(60))
-            while !all.contains(event) {
-                guard ContinuousClock.now < deadline else {
-                    Issue.record("the router never reported \(event)")
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            if await !Patience.until({ all.contains(event) }) { Issue.record("the router never reported \(event)") }
         }
     }
 

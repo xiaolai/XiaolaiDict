@@ -11,14 +11,12 @@ import XiaolaiDictTestSupport
 /// domain and **leaves its plist file in place** — with or without a synchronize after it. Only
 /// removing the domain and deleting the file makes it go, and it stays gone after a later read.
 struct TemporaryDefaultsTests {
-    /// cfprefsd writes asynchronously, so the file is waited for rather than assumed.
-    private func fileExists(_ name: String, within seconds: Double = 5) -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        repeat {
-            if FileManager.default.fileExists(atPath: TemporaryDefaults.file(of: name).path) { return true }
-            Thread.sleep(forTimeInterval: 0.05)
-        } while Date() < deadline
-        return false
+    /// cfprefsd writes asynchronously, so the file is waited for rather than assumed — within `Patience.wait`,
+    /// because cfprefsd is another process and a busy Mac schedules it late; the five seconds it was measured that.
+    private func fileExists(_ name: String, within bound: Duration = Patience.wait) -> Bool {
+        Patience.blockingUntil(within: bound, every: .milliseconds(50)) {
+            FileManager.default.fileExists(atPath: TemporaryDefaults.file(of: name).path)
+        }
     }
 
     @Test func aRemovedSuiteLeavesNoFileBehind() throws {
@@ -30,10 +28,10 @@ struct TemporaryDefaultsTests {
 
         TemporaryDefaults.remove(name)
 
-        #expect(!fileExists(name, within: 1), "the plist survived removal")
+        #expect(!fileExists(name, within: .seconds(1)), "the plist survived removal")
         // Nor does touching the suite again bring it back.
         _ = UserDefaults(suiteName: name)?.string(forKey: "k")
-        #expect(!fileExists(name, within: 1), "a later read resurrected the plist")
+        #expect(!fileExists(name, within: .seconds(1)), "a later read resurrected the plist")
     }
 
     /// **Every suite name a test uses comes from `TemporaryDefaults`, mechanically.** A suite

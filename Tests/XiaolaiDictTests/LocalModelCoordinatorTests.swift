@@ -95,7 +95,7 @@ struct LocalModelCoordinatorTests {
         // asked and can only be let go by a process seen to have gone — so this is a settled state
         // and not an early reading, and `sessionsOpened` goes on asking across the whole window
         // that the test above opens its second session inside.
-        #expect(await sessionsOpened(prewarming: coordinator, of: service, until: 2) == 1,
+        #expect(await sessionsOpened(prewarming: coordinator, of: service, until: 2, within: .milliseconds(500)) == 1,
                 "the local rung answered again while the replaced model's service was still running")
         await coordinator.pruning?.value
     }
@@ -106,22 +106,24 @@ struct LocalModelCoordinatorTests {
     /// is asked, so once this has returned the hold is already in place — which is what makes the
     /// prewarming afterwards a question about the lift alone rather than about timing.
     private func unloadReaches(_ service: ModelClientTests.Service) async {
-        for _ in 0..<400 where !service.asked.withLock({ $0.contains(.unload) }) {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        _ = await Patience.until { service.asked.withLock({ $0.contains(.unload) }) }
         #expect(service.asked.withLock { $0.contains(.unload) },
                 "installing a model never asked the service holding the old one to end")
     }
 
     /// Prewarms the way a lookup does until the service has been asked for `wanted` sessions, and
     /// answers how many it was asked for. Polled for the same reason, and the count rather than the
-    /// clock is what is read: a lookup that opens a session is the local rung answering.
+    /// clock is what is read: a lookup that opens a session is the local rung answering. `within` is a
+    /// hang guard where the sessions are expected, and a window where they must **not** come — a wait for
+    /// an absence cannot end early, so it is short, and can miss a defect on a slow Mac but never invent one.
     private func sessionsOpened(
-        prewarming coordinator: LocalModelCoordinator, of service: ModelClientTests.Service, until wanted: Int
+        prewarming coordinator: LocalModelCoordinator, of service: ModelClientTests.Service, until wanted: Int,
+        within bound: Duration = Patience.wait
     ) async -> Int {
-        for _ in 0..<100 where service.sessions.withLock({ $0 }) < wanted {
+        _ = await Patience.until(within: bound) {
+            if service.sessions.withLock({ $0 }) >= wanted { return true }
             await coordinator.prewarm()
-            try? await Task.sleep(for: .milliseconds(5))
+            return false
         }
         return service.sessions.withLock { $0 }
     }
@@ -134,9 +136,7 @@ struct LocalModelCoordinatorTests {
     @Test func theTranslationPanesDownloadIsTheOneTheRowOffers() async {
         let coordinator = coordinator()
         coordinator.choice.download(.large)
-        for _ in 0..<500 where coordinator.choice.state.isDownloading {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await Patience.until { !coordinator.choice.state.isDownloading }
         guard case .stopped(_, let stopped, _) = coordinator.choice.state else {
             Issue.record("the download did not stop: \(coordinator.choice.state)")
             return
@@ -156,9 +156,7 @@ struct LocalModelCoordinatorTests {
         // directory this test owns has already been removed. That is how one directory per run was
         // still being left behind after everything else had been cleaned up.
         coordinator.choice.cancel()
-        for _ in 0..<500 where coordinator.choice.state.isDownloading {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await Patience.until { !coordinator.choice.state.isDownloading }
         #expect(!coordinator.choice.state.isDownloading)
     }
 

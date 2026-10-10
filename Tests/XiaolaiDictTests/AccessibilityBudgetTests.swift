@@ -200,7 +200,7 @@ struct AccessibilityLaneTests {
             }, cancelled: { -1 })
         }
         // The blocker is inside the lane before the waiter queues behind it.
-        while !started.withLock({ $0 }) { await Task.yield() }
+        _ = await Patience.until { started.withLock({ $0 }) }
         let waiting = Task { await lane.run(timeout: 1, { worked.withLock { $0 += 1 }; return 1 }, cancelled: { -1 }) }
         waiting.cancel()
         #expect(await waiting.value == -1)
@@ -223,12 +223,12 @@ extension AccessibilityLaneTests {
                 return 0
             }, cancelled: { -1 })
         }
-        while !started.withLock({ $0 }) { await Task.yield() }
+        _ = await Patience.until { started.withLock({ $0 }) }
         let waiting = Task { await lane.run(timeout: 1, { 1 }, cancelled: { -1 }) }
         waiting.cancel()
         // **Bounded, so a regression fails rather than hangs**: the read ahead is released only
         // after this, and a lane that made the caller wait for it would wait for ever.
-        let answered = try? await withDeadline(.seconds(10)) { await waiting.value }
+        let answered = try? await withDeadline(Patience.wait) { await waiting.value }
         #expect(answered == -1, "a cancelled caller waited for the read ahead of it")
         release.withLock { $0 = true }
         _ = await blocker.value

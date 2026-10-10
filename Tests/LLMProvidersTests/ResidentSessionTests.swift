@@ -14,8 +14,8 @@ struct ResidentSessionTests {
     /// deadline names its own, short, against a fake that never answers. No idle end unless a test sets one.
     static func configuration(recycleAfter: Int = 6, turnTimeout: Duration = .seconds(60),
                               idleAfter: Duration? = nil) -> ResidentConfiguration {
-        ResidentConfiguration(recycleAfter: recycleAfter, turnTimeout: turnTimeout, openTimeout: .seconds(60),
-                              idleAfter: idleAfter, closeGrace: .milliseconds(500), versionTimeout: .seconds(60))
+        ResidentConfiguration(recycleAfter: recycleAfter, turnTimeout: turnTimeout, openTimeout: Patience.wait,
+                              idleAfter: idleAfter, closeGrace: .milliseconds(500), versionTimeout: Patience.wait)
     }
 
     static func question(_ marks: String = "") -> GenerationRequest {
@@ -121,7 +121,7 @@ struct ResidentSessionTests {
     /// A CLI that exits before reading anything fails the question at once rather than at the deadline. **Shown by the
     /// test's limit, not a stopwatch** (AGENTS.md): the deadline is `Patience.never`, longer than the limit, so a session that
     /// waited for it fails by the limit. The stopwatch it had measured the Mac's load — 7.4 s on 2026-10-09.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func aCLIThatExitsAtOnceFailsWithoutWaitingForTheDeadline() async throws {
         let fake = try FakeCLI.claude(.exitEarly)
         let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never))
@@ -131,7 +131,7 @@ struct ResidentSessionTests {
 
     /// **A caller who gives up ends the turn and its process**, at once and not at the deadline — shown by the test's
     /// limit: the answer and the deadline are both `Patience.never` away, longer than the limit.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func cancellingAQuestionEndsItsProcess() async throws {
         let fake = try FakeCLI.claude()
         let events = EventLog()
@@ -199,19 +199,19 @@ struct ResidentSessionTests {
     }
 
     /// A question waiting its turn that the caller gives up on leaves at once, without waiting for the one ahead —
-    /// **shown by order, not a stopwatch**: it has left while the question ahead, ten seconds long, is still being
-    /// answered. And the question ahead holds the turn first because the fake has its text, not because 300 ms passed.
+    /// **shown by order, not a stopwatch**: it has left while the question ahead, held until the test lets it go, is
+    /// still being answered. It was held for ten seconds, which a starved run could outlast before the cancellation
+    /// was seen. And the question ahead holds the turn first because the fake has its text, not because 300 ms passed.
     @Test func aWaitingQuestionThatIsCancelledLeavesAtOnce() async throws {
         let fake = try FakeCLI.claude()
         let provider = Self.provider(fake)
+        let release = fake.directory.appending("release-ahead")
         let ahead = Settling { () async throws(ProviderFailure) in
-            try await provider.generate(Self.question("[[slow:10]] [[echo:ahead]]"))
+            try await provider.generate(Self.question("[[hold:\(release.path)]] [[echo:ahead]]"))
         }
-        let reached = ContinuousClock.now.advanced(by: .seconds(60))
-        while try !fake.logged("text", as: String.self).contains(where: { $0.contains("echo:ahead") }),
-              ContinuousClock.now < reached {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try #require(try await Patience.until {
+            try fake.logged("text", as: String.self).contains(where: { $0.contains("echo:ahead") })
+        }, "the question ahead never reached the fake")
         let waiting = Settling { () async throws(ProviderFailure) in
             try await provider.generate(Self.question("[[echo:waiting]]"))
         }
@@ -219,6 +219,7 @@ struct ResidentSessionTests {
         waiting.task.cancel()
         try #require(await waiting.outcome() == .failure(.cancelled), "the waiting question was not cancelled")
         #expect(await ahead.outcome(within: .zero) == nil, "it left only after the question ahead was answered")
+        try #require(FileManager.default.createFile(atPath: release.path, contents: nil), "the question ahead was never let go")
         #expect(try #require(await ahead.outcome()).get().hasSuffix("echo=ahead"))
         #expect(try fake.logged("text", as: String.self).allSatisfy { !$0.contains("echo:waiting") })
         await provider.shutDown()
@@ -387,15 +388,8 @@ final class TestGate: Sendable {
 
     var entered: Int { state.withLock { $0.entered } }
 
-    /// Waits until someone has reached the gate — bounded, so a defect that never reaches it fails the test.
-    func waitUntilEntered(_ count: Int = 1, within bound: Duration = .seconds(60)) async {
-        let deadline = ContinuousClock.now.advanced(by: bound)
-        while entered < count {
-            guard ContinuousClock.now < deadline else {
-                Issue.record("nothing reached the gate")
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    /// Waits until someone has reached the gate — bounded by `Patience`, so a defect that never reaches it fails the test.
+    func waitUntilEntered(_ count: Int = 1) async {
+        if await !Patience.until({ entered >= count }) { Issue.record("nothing reached the gate") }
     }
 }

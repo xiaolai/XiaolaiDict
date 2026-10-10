@@ -119,7 +119,7 @@ struct ClaudeCLIProviderTests {
     /// **The version read waits as long as the provider's configuration says** — the product's own five seconds, or a
     /// test's — never a bound the configuration cannot reach: a `--version` the Mac is slow to start is then a fact
     /// about the configuration, not about how loaded the Mac running it is. The fake answers after six seconds.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func thePreflightWaitsForTheVersionAsLongAsItsConfigurationSays() async throws {
         let fake = try FakeCLI.claude(.slowVersion)
         var configuration = ResidentSessionTests.configuration()

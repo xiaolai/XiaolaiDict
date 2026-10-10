@@ -3,6 +3,7 @@ import Foundation
 import ModelKit
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// **`OpenAICompatibleProvider` against a stub of the endpoint** — the request it builds, every answer it reads, and
 /// every way an answer can fail, each mapped to one `ProviderFailure`. The wire itself — a kept connection, the
@@ -364,8 +365,8 @@ struct OpenAICompatibleProviderTests {
         let provider = Self.provider(endpoint)
         let call = Task { await Self.failure(of: provider) }
         // Wait for the request to be in flight — the work, not the call that started it.
-        // Up to a minute, only so a defect fails rather than hangs: it ends when the request arrives.
-        for _ in 0..<6_000 where endpoint.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        // Bounded only so a defect fails rather than hangs: it ends when the request arrives.
+        _ = await Patience.until { !endpoint.requests.isEmpty }
         try #require(!endpoint.requests.isEmpty, "the request never reached the stub")
         call.cancel()
         #expect(await call.value == .cancelled)

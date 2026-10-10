@@ -155,20 +155,20 @@ struct LookupKeepRaceTests {
         let ledger = try Ledger(path:path)
         try ledger.run("CREATE TRIGGER fail_keep BEFORE INSERT ON study_notes BEGIN SELECT RAISE(ABORT, 'injected'); END", bind:[]) { _ in }
         recorder.enrol(sense("reader"), request:1, language:"en")
-        for _ in 0..<100 where recorder.states[1] != .failed { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] == .failed }
         #expect(recorder.states[1] == .failed)
         await recorder.refreshStatus(request:1)
         #expect(recorder.states[1] == .failed)
         try ledger.run("DROP TRIGGER fail_keep", bind:[]) { _ in }
         recorder.retry(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] != .keeping }
         #expect(recorder.states[1] == .kept)
         #expect(try ledger.notes().count == 1)
         _ = try ledger.changeDisposition(.discarded, lookups:[1], operation:UUID())
         await recorder.refreshStatus(request:1)
         #expect(recorder.states[1] == .discardedExternally)
         recorder.undoDiscard(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .discardedExternally { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] != .discardedExternally }
         #expect(try ledger.disposition(ofLookup:1) == .kept)
     }
 
@@ -182,12 +182,12 @@ struct LookupKeepRaceTests {
         let ledger = try Ledger(path:path)
         try ledger.run("CREATE TRIGGER fail_keep BEFORE INSERT ON study_notes BEGIN SELECT RAISE(ABORT, 'injected'); END", bind:[]) { _ in }
         recorder.enrol(sense("reader"), request:1, language:"en")
-        for _ in 0..<100 where recorder.states[1] != .failed { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] == .failed }
         #expect(recorder.states[1] == .failed)
         try ledger.run("DROP TRIGGER fail_keep", bind:[]) { _ in }
         await settled(recorder, request:1, row:row(sense("model", by:.model), policy:.manual))
         recorder.retry(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] != .keeping }
         #expect(try ledger.notes().count == 1, "Retry lost the reader's enrolment")
         #expect(try ledger.notes().first?.target == .sense(dictionary:"noad",entryID:"e",senseKey:"reader",senseKeyKind:.publisher))
         #expect(recorder.states[1] == .kept)
@@ -203,14 +203,14 @@ struct LookupKeepRaceTests {
         let ledger = try Ledger(path:path)
         try ledger.run("CREATE TRIGGER fail_keep BEFORE INSERT ON study_notes BEGIN SELECT RAISE(ABORT, 'injected'); END", bind:[]) { _ in }
         recorder.enrol(sense("aux", dictionary:"other"), request:1, language:"en")
-        for _ in 0..<100 where recorder.states[1] != .failed { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] == .failed }
         #expect(recorder.states[1] == .failed)
         try ledger.run("DROP TRIGGER fail_keep", bind:[]) { _ in }
         await settled(recorder, request:1, row:row(sense("primary", by:.onlySense)))
         #expect(try ledger.notes().map(\.target.dictionary) == ["noad"], "positive control: the primary was kept")
         #expect(recorder.states[1] == .failed, "the primary's success hid the auxiliary failure")
         recorder.retry(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping || recorder.states[1] == .failed { await Task.yield() }
+        _ = await Patience.until { !(recorder.states[1] == .keeping || recorder.states[1] == .failed) }
         #expect(Set(try ledger.notes().map(\.target.dictionary)) == ["noad", "other"], "Retry did not replay the auxiliary choice")
         #expect(recorder.states[1] != .failed)
     }
@@ -225,18 +225,18 @@ struct LookupKeepRaceTests {
         let ledger = try Ledger(path:path)
         try ledger.run("CREATE TRIGGER fail_keep BEFORE INSERT ON study_notes BEGIN SELECT RAISE(ABORT, 'injected'); END", bind:[]) { _ in }
         recorder.enrol(sense("reader"), request:1, language:"en")
-        for _ in 0..<100 where recorder.states[1] != .failed { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] == .failed }
         #expect(recorder.states[1] == .failed, "positive control: the enrolment failed")
         try ledger.run("DROP TRIGGER fail_keep", bind:[]) { _ in }
         recorder.discard(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] != .keeping }
         #expect(recorder.states[1] == .discarded, "the failed enrolment hid the discard and its Undo")
         #expect(try ledger.disposition(ofLookup:1) == .discarded)
         recorder.undoDiscard(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .discarded || recorder.states[1] == .keeping { await Task.yield() }
+        _ = await Patience.until { !(recorder.states[1] == .discarded || recorder.states[1] == .keeping) }
         #expect(recorder.states[1] == .failed, "undoing the discard lost the unsaved choice")
         recorder.retry(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping || recorder.states[1] == .failed { await Task.yield() }
+        _ = await Patience.until { !(recorder.states[1] == .keeping || recorder.states[1] == .failed) }
         #expect(try ledger.notes().count == 1, "Retry after the undo did not save the choice")
     }
 
@@ -272,7 +272,7 @@ struct LookupKeepRaceTests {
         await settled(recorder, request:1, row:row(policy:.manual))
         #expect(recorder.states[1] == .failed)
         recorder.retry(request:1)
-        for _ in 0..<1000 where recorder.states[1] == .keeping { await Task.yield() }
+        _ = await Patience.until { recorder.states[1] != .keeping }
         #expect(recorder.states[1] == .manual)
         #expect(try Ledger(path:path).readingArchive(ReadingArchiveQuery()).count == 1)
     }

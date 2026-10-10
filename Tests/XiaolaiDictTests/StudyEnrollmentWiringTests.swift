@@ -203,15 +203,12 @@ struct StudyEnrollmentWiringTests {
     /// **Waits for the row, never for a duration.** The recorder starts its write in a task of its
     /// own, so the caller's `await` returns before anything is on disk. A sleep long enough to pass
     /// here is a sleep that asserts this machine's load; the condition is what is actually meant, and
-    /// a bound on the attempts is what stops a failure hanging instead of failing.
+    /// `Patience` is what stops a failure hanging instead of failing. A bound on the attempts was not:
+    /// 400 attempts of 5 ms is a two-second clock.
     private static func waiting(at path: String,
                                for condition: (Ledger) throws -> Bool) async throws -> Ledger {
         let ledger = try Ledger(path: path)
-        for _ in 0..<400 {
-            if try condition(ledger) { return ledger }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("the write never landed")
+        if try await !Patience.until({ try condition(ledger) }) { Issue.record("the write never landed") }
         return ledger
     }
 }

@@ -5,6 +5,7 @@ import Testing
 import XiaolaiDictBase
 import XiaolaiDictCore
 @testable import XiaolaiDict
+import XiaolaiDictTestSupport
 
 /// **`--spelling-report`: what each term's miss is offered, through the path the card is offered it by** — one JSON
 /// line a term, with kinds, the checker's word and two durations, and never a word of dictionary text.
@@ -183,14 +184,14 @@ struct SpellingReportFormTableTests {
     @Test func aTableAlreadyStoredIsUsedAndNothingIsStarted() async {
         let store = Store()
         store.presentFrom = 1
-        #expect(await self.await(store, within: .seconds(60)) != nil)
+        #expect(await self.await(store, within: Patience.wait) != nil)
         #expect(store.startedService == 0)
     }
 
     @Test func aTableTheServiceIsStillBuildingIsWaitedFor() async {
         let store = Store()
         store.presentFrom = 5
-        #expect(await self.await(store, within: .seconds(60)) != nil, "the rebuild was not waited for")
+        #expect(await self.await(store, within: Patience.wait) != nil, "the rebuild was not waited for")
         #expect(store.startedService == 1, "the service was not started, or started more than once")
     }
 

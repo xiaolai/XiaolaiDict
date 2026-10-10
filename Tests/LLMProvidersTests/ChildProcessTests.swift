@@ -115,13 +115,14 @@ struct ChildProcessTests {
 
     /// The pid `parent(of:escapes:)`'s descendant wrote, once it has.
     static func descendant(writtenTo file: URL) async throws -> Int32 {
-        for _ in 0..<500 {
-            if let text = try? String(contentsOf: file, encoding: .utf8),
-               let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return pid }
-            try await Task.sleep(for: .milliseconds(10))
+        func written() -> Int32? {
+            (try? String(contentsOf: file, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         }
-        Issue.record("the child's own process never started")
-        throw ProviderFailure.unreachable
+        guard await Patience.until({ written() != nil }), let pid = written() else {
+            Issue.record("the child's own process never started")
+            throw ProviderFailure.unreachable
+        }
+        return pid
     }
 
     /// **Ending a child ends what it started**: it runs in a process group of its own, and the group is what is
@@ -203,8 +204,8 @@ struct ChildProcessTests {
         let fake = try FakeCLI.claude(.unknownOption)
         let child = try ChildProcess.start(ChildLaunch(executable: fake.executable, arguments: [],
                                                        workingDirectory: fake.workingDirectory))
-        // A minute, only so a defect cannot hang the run: the child ends by itself, at once.
-        let exit = await child.exit(within: .seconds(60))
+        // Bounded only so a defect cannot hang the run: the child ends by itself, at once.
+        let exit = await child.exit(within: Patience.wait)
         #expect(exit.status == 1)
         #expect(exit.diagnostics.contains("unknown option '--tools'"))
     }

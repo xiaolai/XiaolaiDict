@@ -764,7 +764,7 @@ struct ReviewWiringTests {
     @MainActor private final class Gate {
         var closed = false
         func wait() async {
-            while closed { try? await Task.sleep(for: .milliseconds(5)) }
+            if await !Patience.until({ !closed }), !Task.isCancelled { Issue.record("the gate was never opened") }
         }
     }
 
@@ -794,7 +794,7 @@ struct ReviewWiringTests {
         }
 
         private func release() async {
-            while !released { try? await Task.sleep(for: .milliseconds(5)) }
+            if await !Patience.until({ released }), !Task.isCancelled { Issue.record("the held store call was never released") }
         }
     }
 
@@ -1154,10 +1154,11 @@ struct ReviewWiringTests {
         #expect(summary.wasPractice == false)
     }
 
-    /// A wait that never holds must end its test, not let everything after it run.
+    /// A wait that never holds must end its test, not let everything after it run — given no time at all, so the
+    /// control does not wait out the bound every other wait has.
     @Test func awaitThatNeverHoldsStopsTheTest() async throws {
         await #expect(throws: WiringTimeout.self) {
-            try await Wiring.settle("this never holds") { false }
+            try await Wiring.settle("this never holds", within: .zero) { false }
         }
     }
 

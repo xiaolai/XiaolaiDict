@@ -42,6 +42,16 @@ struct PatienceTests {
         #expect(await Patience.until { MainActor.assertIsolated(); looks += 1; return looks == 2 })
     }
 
+    /// **And one passed on as a value, not written in place** — `Wiring.settle` hands its own `() -> Bool` on. A
+    /// literal takes its context's actor; a function value turned into an async one ran on the global executor, and a
+    /// main-actor condition there trapped the whole test process (2026-10-10).
+    @MainActor @Test func aConditionPassedOnRunsOnTheCallersActorToo() async {
+        var onMain: [Bool] = []
+        @MainActor func settle(_ condition: () -> Bool) async -> Bool { await Patience.until(condition) }
+        #expect(await settle { onMain.append(Thread.isMainThread); return onMain.count == 2 })
+        #expect(onMain == [true, true], "the condition ran off the caller's actor")
+    }
+
     @Test func aThrowingConditionThrows() async {
         struct Boom: Error {}
         await #expect(throws: Boom.self) { _ = try await Patience.until { throw Boom() } }
@@ -53,6 +63,8 @@ struct PatienceTests {
         #expect(Patience.blockingUntil { looks += 1; return looks == 3 })
         #expect(looks == 3)
         #expect(Patience.blockingUntil(within: .zero) { false } == false)
+        var pauses = 0
+        #expect(Patience.blockingUntil(pause: { _ in pauses += 1 }) { pauses == 2 })
     }
 
     /// **The order the three bounds keep**: a wait fails by name before the test's limit ends it, and

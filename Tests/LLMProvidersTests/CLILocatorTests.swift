@@ -181,7 +181,7 @@ struct CLILocatorTests {
     /// A profile that hangs — waiting on a prompt, say — is ended at the bound and finds nothing. **Shown by the test's
     /// limit, not a stopwatch** (AGENTS.md): the shell sleeps for `Patience.never`, longer than the limit, so a probe that waited
     /// for it fails by the limit.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func aLoginShellThatHangsIsEndedAtTheBound() async throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-locator")
         let program = try Self.install("claude", in: scratch.appending("bin"))

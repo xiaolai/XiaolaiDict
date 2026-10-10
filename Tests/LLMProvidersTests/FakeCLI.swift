@@ -11,7 +11,8 @@ import XiaolaiDictTestSupport
 /// what it was started with and what it received to `log`, one JSON object a line, so a test asserts the wire — the
 /// arguments, the directory, the requests — and not only the answer.
 ///
-/// **A question steers the fake with markers in its text**: `[[slow:0.5]]` sleeps first, `[[silent]]` never answers,
+/// **A question steers the fake with markers in its text**: `[[slow:0.5]]` sleeps first, `[[hold:PATH]]` (the `claude`
+/// fake's) waits until the test creates PATH, so "still answering" is a state the test ends, `[[silent]]` never answers,
 /// `[[crash]]` exits mid-turn, `[[garbage]]` writes a line that is not JSON first, `[[overlong]]` writes a line past
 /// `ChildProcess.lineLimit`, `[[echo:X]]` puts X in the answer. Each fake's own markers are listed in its script.
 /// The answer names the process (`pid=…`), so a test can tell a reused process from a new one.
@@ -173,6 +174,9 @@ struct FakeCLI: Sendable {
                 sys.exit(1)
             if "slow" in marks:
                 time.sleep(float(marks["slow"]))
+            if "hold" in marks:
+                while not os.path.exists(marks["hold"]):
+                    time.sleep(0.01)
             if "silent" in marks:
                 time.sleep(3600)
             if "crash" in marks:
@@ -361,15 +365,11 @@ func isAlive(_ pid: Int32) -> Bool {
     kill(pid, 0) == 0
 }
 
-/// Waits until `pid` has gone, up to `bound`. True if it went.
-/// Whether `pid` has gone within `bound`. **Sixty seconds, because the bound only stops a defect hanging the run** — the wait ends the moment the condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's Python took 7.4 s to start and exit while other builds ran).
-func waitUntilGone(_ pid: Int32, within bound: Duration = .seconds(60)) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: bound)
-    while isAlive(pid) {
-        if ContinuousClock.now >= deadline { return false }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return true
+/// Whether `pid` has gone within `Patience.wait`, **because the bound only stops a defect hanging the run** — the wait
+/// ends the moment the condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's
+/// Python took 7.4 s to start and exit while other builds ran), and so, on 2026-10-10, did sixty seconds.
+func waitUntilGone(_ pid: Int32) async -> Bool {
+    await Patience.until { !isAlive(pid) }
 }
 
 /// The `pid=…` an answer of a fake names.
@@ -402,13 +402,11 @@ final class Settling<T: Sendable>: Sendable {
     }
 
     /// The outcome, once there is one, or nil if there is none by `bound` — `.zero` asks whether there is one yet.
-    /// **Sixty seconds, because the bound only stops a defect hanging the run** — the wait ends the moment the condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's Python took 7.4 s to start and exit while other builds ran).
-    func outcome(within bound: Duration = .seconds(60)) async -> Result<T, ProviderFailure>? {
-        let deadline = ContinuousClock.now.advanced(by: bound)
-        while ContinuousClock.now < deadline {
-            if let settled = outcome.value.withLock({ $0 }) { return settled }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+    /// **`Patience.wait`, because the bound only stops a defect hanging the run** — the wait ends the moment the
+    /// condition holds; a bound of a few seconds measured how loaded the Mac was (2026-10-09: a fake's Python took 7.4 s
+    /// to start and exit while other builds ran).
+    func outcome(within bound: Duration = Patience.wait) async -> Result<T, ProviderFailure>? {
+        _ = await Patience.until(within: bound) { outcome.value.withLock({ $0 }) != nil }
         return outcome.value.withLock { $0 }
     }
 }
@@ -438,14 +436,9 @@ final class EventLog: Sendable {
 
     var sink: @Sendable (ResidentEvent) -> Void { { [self] in record($0) } }
 
-    /// Waits until an event matching `predicate` has been recorded, up to `bound`.
-    func wait(within bound: Duration = .seconds(60), for predicate: (ResidentEvent) -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: bound)
-        while !all.contains(where: { predicate($0.event) }) {
-            if ContinuousClock.now >= deadline { return false }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return true
+    /// Whether an event matching `predicate` has been recorded within `Patience.wait`.
+    func wait(for predicate: (ResidentEvent) -> Bool) async -> Bool {
+        await Patience.until { all.contains(where: { predicate($0.event) }) }
     }
 }
 

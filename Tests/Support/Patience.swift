@@ -32,9 +32,14 @@ public enum Patience {
     /// looked at first, so a condition already true costs no sleep, and once more when the caller is
     /// cancelled. **The answer is not discardable**: a wait whose outcome nobody asserts lets everything
     /// after it run against a state that never arrived.
-    public static func until(
+    ///
+    /// **`nonisolated(nonsending)`, the wait and its condition both**, so a condition runs where its caller
+    /// is. An `isolated` parameter was not enough: a condition handed on as a value — `Wiring.settle`'s own
+    /// `() -> Bool` — became a plain async function, ran on the global executor, and a main-actor
+    /// condition there trapped the test process.
+    public nonisolated(nonsending) static func until(
         within bound: Duration = wait, every interval: Duration = look,
-        isolation: isolated (any Actor)? = #isolation, _ condition: () async throws -> Bool
+        _ condition: nonisolated(nonsending) () async throws -> Bool
     ) async rethrows -> Bool {
         let deadline = ContinuousClock.now.advanced(by: bound)
         while true {
@@ -44,16 +49,17 @@ public enum Patience {
         }
     }
 
-    /// `until`, for a test that must not suspend — one turning a run loop itself, or a synchronous test
-    /// waiting on another process.
+    /// `until`, for a test that must not suspend — a synchronous test waiting on another process, or one
+    /// turning the run loop itself, which passes a `pause` that turns it for `interval` instead of sleeping.
     public static func blockingUntil(
-        within bound: Duration = wait, every interval: Duration = look, _ condition: () throws -> Bool
+        within bound: Duration = wait, every interval: Duration = look,
+        pause: (Duration) -> Void = { Thread.sleep(forTimeInterval: $0 / .seconds(1)) }, _ condition: () throws -> Bool
     ) rethrows -> Bool {
         let deadline = ContinuousClock.now.advanced(by: bound)
         while true {
             if try condition() { return true }
             guard ContinuousClock.now < deadline else { return false }
-            Thread.sleep(forTimeInterval: interval / .seconds(1))
+            pause(interval)
         }
     }
 }

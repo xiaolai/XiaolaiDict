@@ -83,7 +83,7 @@ struct ModelClientTests {
         #expect(service.asked.withLock { $0.filter { $0 == .prewarm }.count } == 1)
 
         service.endItself()
-        for _ in 0..<200 where await client.openSessionGeneration != nil { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { await client.openSessionGeneration == nil }
         await client.prewarmOnce()
         #expect(service.asked.withLock { $0.filter { $0 == .prewarm }.count } == 2)
     }
@@ -125,9 +125,7 @@ struct ModelClientTests {
             connect: { service.connect($0) }, servicePresence: { running.withLock { $0 } ? .running : .gone },
             shutdownLimit: .seconds(600), deadline: { _ in .milliseconds(100) })
         let unloading = Task { await client.unload() }
-        for _ in 0..<400 where !service.asked.withLock({ $0.contains(.unload) }) {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        _ = await Patience.until { service.asked.withLock({ $0.contains(.unload) }) }
         let given = Recorder<[String]>([])
         let cancelled = Task {
             _ = await client.ask(Self.question)
@@ -138,7 +136,7 @@ struct ModelClientTests {
             _ = await client.ask(Self.question)
             given.withLock { $0.append("deadline") }
         }
-        for _ in 0..<2_000 where given.withLock({ $0.count }) < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { given.withLock({ $0.count }) >= 2 }
         #expect(Set(given.withLock { $0 }) == ["cancelled", "deadline"], "a question waited out the unload")
         running.withLock { $0 = false }
         #expect(await unloading.value, "giving up on the wait ended the unload")
