@@ -6,25 +6,24 @@ import SwiftUI
 @MainActor
 final class PinnedNoteController {
     private var notes: [UUID: PinnedNote] = [:]
-    /// A note's size until the reader resizes one. Named rather than inline because it is a design
-    /// value in a file the view layer's scan does not reach — see `NoMagicValuesTests`.
-    static let noteSize = NSSize(width: 320, height: 200)
+    /// **How tall a note opens**, before the fit gives it its words' height (`PinnedNoteView`). Named rather than inline
+    /// because it is a design value in a file the view layer's scan does not reach — see `NoMagicValuesTests`. Its width is
+    /// the reader's text size's (`PinnedNoteView.openingWidth`).
+    static let openingHeight: CGFloat = 200
+    /// The reader's text size, read as each note is pinned. Set by the app; the standard size until then.
+    var textSize: @MainActor () -> TextSize = { .standard }
     /// How far each successive note is stepped down and right, and how many steps before the
     /// cascade starts again at the top.
     static let cascadeStep: CGFloat = 24
     static let cascadeLength = 8
     /// The gap kept between a note and the screen's edge.
     static let screenMargin: CGFloat = 8
-    /// **The narrowest a reader may drag a note to** and still have it hold a sentence. A width alone: the
-    /// height is the note's words', which the fit gives it (`PinnedNoteView`), and a floor of 140 pt
-    /// under them stood a short note in white below its last line, as the fixed opening height did.
-    static let narrowestNote: CGFloat = 240
-
     /// **Where the next note opens, as `defaultWindowPlacement` reads it: its top-left, y down from the top of the primary
     /// display.** It was an AppKit frame, origin at the bottom, and SwiftUI took that origin for the top: measured
     /// 2026-10-10 on the E2E Mac, a note pinned 80 pt under the menu bar opened with its top 780 pt down. Only a first
     /// guess, which SwiftUI does not always take — `attach` puts the window where it belongs.
-    private(set) var placement = NSRect(origin: .zero, size: noteSize)
+    private(set) var placement = NSRect(origin: .zero, size: NSSize(width: PinnedNoteView.openingWidth(for: .standard),
+                                                                         height: openingHeight))
 
     /// **Each note's frame in AppKit's space until its window is reported**, then put there once (`attach`). SwiftUI
     /// placed the second of two notes 29 pt from the first, by its own cascade, whatever the closure said — measured on
@@ -132,7 +131,7 @@ final class PinnedNoteController {
         }
         // Unwrapped once for the placement math below, which is all in AppKit's space.
         let pointer = pointer.cg
-        let size = placement.size
+        let size = NSSize(width: PinnedNoteView.openingWidth(for: textSize()), height: Self.openingHeight)
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
         let frame = Self.frame(near: pointer, size: size, visible: visible, openBefore: notes.count)
@@ -211,7 +210,6 @@ struct PinnedNoteSceneView: View {
         // inset: SwiftUI still laid the note out below it, so its first line stood the bar's height
         // (32 pt on macOS 27) further from the top than the card's padding says.
         .ignoresSafeArea(.container, edges: .top)
-        .frame(minWidth: PinnedNoteController.narrowestNote)
         .xiaolaiDictPanelBehaviour(transient: true) { window in
             PinnedNoteWindow.configure(window)
             controller.attach(window, to: id)

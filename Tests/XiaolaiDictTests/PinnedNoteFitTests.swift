@@ -85,11 +85,15 @@ import Testing
     }
 
     /// **No floor under the words.** A minimum height on the scene's content is a minimum the window cannot be fitted
-    /// below: 140 pt stood a short note in white, as the fixed opening height did. The width keeps its floor.
-    @Test func aNoteHasAWidthFloorAndNoHeightFloor() throws {
+    /// below: 140 pt stood a short note in white, as the fixed opening height did. The width keeps its floor — **at the
+    /// reader's text size**, the quick card's narrowest: a floor of 240 pt at Huge is ten characters a line.
+    @Test func aNoteHasAWidthFloorAtTheReadersSizeAndNoHeightFloor() throws {
+        let view = try code("Sources/XiaolaiDictUI/PinnedNote.swift")
         let scene = try code("Sources/XiaolaiDict/PinnedNoteController.swift")
-        #expect(scene.contains(".frame(minWidth: PinnedNoteController.narrowestNote)"), "a note has no width floor")
-        #expect(!scene.contains("minHeight"), "a note's window has a height floor its words cannot fit below")
+        #expect(view.contains(".frame(minWidth: scale.space.lookupMinWidth)"), "a note has no width floor at the reader's size")
+        #expect(!scene.contains("narrowestNote"), "a note's width floor is still a fixed number of points")
+        #expect(!scene.contains("minHeight") && !view.contains("minHeight"),
+                "a note's window has a height floor its words cannot fit below")
     }
 
     /// The source with comment lines removed, so a rule written out in a comment cannot satisfy a scan of the code.

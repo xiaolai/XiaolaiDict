@@ -340,6 +340,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         activation.watchForClosingWindows()
         // The lookup window opens as wide as the card is at the reader's text size.
         panel.textSize = { [weak self] in self?.appearance.textSize ?? .standard }
+        // And a pinned note opens as wide as the card it came from.
+        panel.notes.textSize = { [weak self] in self?.appearance.textSize ?? .standard }
         // **The reminder re-plans from here on**: now, and at every ledger change, wake, zone or clock
         // change and study-day start. Off by default, and then it touches nothing (R3). Not in an
         // instrument run, for the reason hover is not.

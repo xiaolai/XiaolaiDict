@@ -122,6 +122,10 @@ public struct PinnedNoteView: View {
         self.unpin = unpin
     }
 
+    /// **How wide a note opens: the quick card's measure, at the reader's text size.** It was 320 pt at every size, so at
+    /// Huge a line held half the words the card's did. For the window, which is sized in AppKit before any view is.
+    public static func openingWidth(for size: TextSize) -> CGFloat { Scale(size).space.lookupWidth }
+
     public var body: some View {
         ScrollView {
             // **At the reader's text size, like the card it was pinned from.** These were the
@@ -191,6 +195,9 @@ public struct PinnedNoteView: View {
                 .accessibilityHidden(true)
         }
         .onHover { pointerIsOver = $0 }
+        // **The narrowest a reader may drag it, at their text size** — the quick card's narrowest, so it still holds a
+        // sentence. A width alone: the height is the words', which the fit gives it.
+        .frame(minWidth: scale.space.lookupMinWidth)
     }
 
     /// **Always in the view tree, and so always in the accessibility tree.**

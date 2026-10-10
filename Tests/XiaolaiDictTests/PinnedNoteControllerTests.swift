@@ -169,4 +169,30 @@ import Testing
         let fresh = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 0)
         #expect(wrapped == fresh, "the cascade does not start again after eight notes")
     }
+
+    // MARK: - How wide a note opens
+
+    /// **At the reader's text size, as the card it came from** — 25 em, the quick card's measure. It was 320 pt at every
+    /// size, so at Huge, where an em is 24 pt, a line held half the words a line of the card did. The ems are written
+    /// here, not read from the scale, so a changed measure fails.
+    @Test func aNoteOpensAsWideAsTheReadersTextAsks() throws {
+        for size in [TextSize.standard, .huge] {
+            let notes = PinnedNoteController()
+            notes.textSize = { size }
+            notes.pin(note(), near: .zero)
+            #expect(notes.placement.width == size.em * 25, "at \(size) a note opens \(notes.placement.width) pt wide")
+        }
+    }
+
+    /// The size is the reader's at the moment of pinning, read each time: a reader who changes the size between two
+    /// notes gets the second at the new one.
+    @Test func eachNoteReadsTheSizeWhenItIsPinned() {
+        let notes = PinnedNoteController()
+        notes.textSize = { .standard }
+        notes.pin(note(text: "a penalty"), near: .zero)
+        let first = notes.placement.width
+        notes.textSize = { .huge }
+        notes.pin(note(text: "of high quality"), near: .zero)
+        #expect(notes.placement.width == first * 2)
+    }
 }
