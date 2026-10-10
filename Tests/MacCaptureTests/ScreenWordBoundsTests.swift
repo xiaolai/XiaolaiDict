@@ -15,13 +15,14 @@ struct ScreenWordBoundsTests {
         let text: String
         /// Which dialect the fake speaks: the Cocoa text range, or only a value and per-range boxes (Chromium).
         let speaksTextRange: Bool
-        /// Answers every box empty, as some views do.
-        let emptyBoxes: Bool
+        /// Answers the token's own box empty, as some views do — every one-character glyph box stays valid, so the word
+        /// is still read and only its box is missing.
+        let emptyTokenBox: Bool
 
-        init(_ text: String, speaksTextRange: Bool, emptyBoxes: Bool = false) {
+        init(_ text: String, speaksTextRange: Bool, emptyTokenBox: Bool = false) {
             self.text = text
             self.speaksTextRange = speaksTextRange
-            self.emptyBoxes = emptyBoxes
+            self.emptyTokenBox = emptyTokenBox
         }
 
         func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {
@@ -49,7 +50,7 @@ struct ScreenWordBoundsTests {
                 return String(decoding: units, as: UTF16.self) as CFString
             case kAXBoundsForRangeParameterizedAttribute:
                 let range = Self.range(argument)
-                var box = emptyBoxes ? CGRect.zero
+                var box = emptyTokenBox && range.length > 1 ? CGRect.zero
                     : CGRect(x: 100 + 10 * CGFloat(range.location), y: 200, width: 10 * CGFloat(range.length), height: 20)
                 return AXValueCreate(.cgRect, &box)
             default:
@@ -112,9 +113,13 @@ struct ScreenWordBoundsTests {
         #expect(hit(Endless()) == nil)
     }
 
-    /// An app answering empty boxes reads its word and locates nothing — the pointer rule, not a box at the origin.
-    @Test func anEmptyBoxLocatesNothing() {
-        let hit = hit(Glyphs("The cat sat.", speaksTextRange: true, emptyBoxes: true))
-        #expect(hit?.bounds == nil)
+    /// An app answering the token's box empty reads its word and locates nothing — the pointer rule, not a box at the
+    /// origin. **The word must be read** (audit of 2026-10-10): this test emptied every box, the glyphs' too, so nothing
+    /// was read at all, and `hit?.bounds == nil` passed on no hit.
+    @Test func anEmptyBoxLocatesNothing() throws {
+        let hit = try #require(hit(Glyphs("The cat sat.", speaksTextRange: true, emptyTokenBox: true)),
+                               "the word was not read, so its missing box says nothing")
+        #expect(hit.word.word == "cat")
+        #expect(hit.bounds == nil)
     }
 }
