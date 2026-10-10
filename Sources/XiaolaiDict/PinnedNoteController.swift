@@ -47,6 +47,41 @@ final class PinnedNoteController {
         windows[id] = nil
     }
 
+    /// **Puts a note away, handing back first the activation a click on it gave this app** (reported 2026-10-10).
+    ///
+    /// A click on a note makes this app active and the note key; when the note then closes, AppKit makes the window
+    /// left behind it key and orders it front — measured on the E2E Mac, Settings, left open behind TextEdit, came in
+    /// front of it, key and main, as the only note was unpinned. So where an ordinary window of another app is in front
+    /// of every one of this app's, activation goes back to that app before the note closes, and the close happens once
+    /// this app is no longer active: an inactive app's new key window is ordered in front of nothing. Where this app's
+    /// own window is in front — a reader working in Settings — it is closed where it stands.
+    func unpin(_ id: UUID, closing dismiss: @escaping @MainActor () -> Void) {
+        let listed = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]]) ?? []
+        let windows = listed.compactMap { entry -> PinnedNoteClosing.Listed? in
+            guard let owner = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue else { return nil }
+            return PinnedNoteClosing.Listed(owner: owner, layer: layer)
+        }
+        guard let pid = PinnedNoteClosing.handBack(
+                  among: windows, ours: getpid(), isActive: NSApplication.shared.isActive),
+              let reader = NSRunningApplication(processIdentifier: pid)
+        else {
+            dismiss()
+            return
+        }
+        NSApplication.shared.yieldActivation(to: reader)
+        reader.activate(from: NSRunningApplication.current, options: [])
+        Task { @MainActor in
+            // Bounded: an activation the system declines still closes the note, as it did before.
+            _ = await Poll.until(within: Self.handBackPatience) { !NSApplication.shared.isActive }
+            dismiss()
+        }
+    }
+
+    /// How long a note waits for this app to stop being active before it closes anyway.
+    static let handBackPatience: Duration = .milliseconds(500)
+
     /// Keeps a sense as a note, and answers with the id of the note now on screen.
     ///
     /// **The same sense pins once.** Every `PinnedNote` value carries a fresh `UUID`, so inserting
@@ -109,6 +144,30 @@ enum PinnedNoteWindow {
     }
 }
 
+/// **Which app a note's activation goes back to as it closes** — a decision over the compositor's front-to-back list, so
+/// it can be held without a window server.
+enum PinnedNoteClosing {
+    /// One window the compositor lists: who owns it, and at what level.
+    struct Listed: Equatable {
+        let owner: pid_t
+        let layer: Int
+    }
+
+    /// The level ordinary windows are at — Settings, the Library, another app's document.
+    static let ordinaryLayer = 0
+    /// The level a note and the lookup panel float at (`NSWindow.Level.floating`).
+    static let floatingLayer = Int(CGWindowLevelForKey(.floatingWindow))
+
+    /// The app to hand activation back to before a note closes, or nil to close it where it stands: the owner of the
+    /// frontmost ordinary window, where that is not this app and this app is active.
+    static func handBack(among listed: [Listed], ours: pid_t, isActive: Bool) -> pid_t? {
+        guard isActive, let front = listed.first(where: { $0.layer == ordinaryLayer }), front.owner != ours else {
+            return nil
+        }
+        return front.owner
+    }
+}
+
 /// One pinned note's scene content.
 struct PinnedNoteSceneView: View {
     let controller: PinnedNoteController
@@ -120,7 +179,7 @@ struct PinnedNoteSceneView: View {
     var body: some View {
         Group {
             if let note = controller.note(id) {
-                PinnedNoteView(note: note) { dismiss() }
+                PinnedNoteView(note: note) { controller.unpin(id) { dismiss() } }
             }
         }
         // **Under the title bar the scene hides.** `.hiddenTitleBar` hides the bar and keeps its
