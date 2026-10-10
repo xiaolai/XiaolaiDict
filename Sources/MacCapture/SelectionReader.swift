@@ -398,7 +398,9 @@ public enum SelectionReader {
             return ReadBounds.checked(box, quality: .exact)
         case .accessibilityTextMarkers:
             guard let markers = capture.markers,
-                  try ax.string(capture.host, "AXStringForTextMarkerRange", markers) == capture.text
+                  try ax.string(capture.host, "AXStringForTextMarkerRange", markers) == capture.text,
+                  let now = try ax.markerRange(capture.host, "AXSelectedTextMarkerRange"),
+                  try sameEnds(now, markers, in: capture.host, ax)
             else { return nil }
             if !whole,
                let box = try orNone({ () throws(CaptureError) in try termBox(in: markers, term: term, host: capture.host, ax) }),
@@ -410,6 +412,24 @@ public enum SelectionReader {
         case .accessibilityBoundsScan, .opticalRecognition:
             return nil
         }
+    }
+
+    /// **Whether two marker ranges have the same two ends** — the selection now, and the one captured (audit of
+    /// 2026-10-10: the captured markers were read back, and the selection never asked again, so a selection moved to
+    /// another occurrence of the same word kept the old rectangle). The same bytes are the same end; other bytes are
+    /// compared by WebKit's index for each, since one position need not be handed back as identical markers; an end
+    /// neither can vouch for is not the same.
+    private static func sameEnds(
+        _ now: AXTextMarkerRange, _ captured: AXTextMarkerRange, in host: AXUIElement, _ ax: some AccessibilityReading
+    ) throws(CaptureError) -> Bool {
+        let ends = [(AXTextMarkerRangeCopyStartMarker(now), AXTextMarkerRangeCopyStartMarker(captured)),
+                    (AXTextMarkerRangeCopyEndMarker(now), AXTextMarkerRangeCopyEndMarker(captured))]
+        for (current, kept) in ends where !CFEqual(current, kept) {
+            guard let at = try ax.integer(host, "AXIndexForTextMarker", current),
+                  let was = try ax.integer(host, "AXIndexForTextMarker", kept), at == was
+            else { return false }
+        }
+        return true
     }
 
     /// The text at `range` now: asked for that range, or — from a view that answers only with its whole value — cut from

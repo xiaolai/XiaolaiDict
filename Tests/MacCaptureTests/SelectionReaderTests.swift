@@ -323,6 +323,36 @@ struct SelectionReaderTests {
         #expect(box == ReadBounds(rect: DownRect(x: 80, y: 140, width: 42, height: 18), quality: .containing))
     }
 
+    /// **A WebKit selection that moved locates nothing, even onto the same word** (audit of 2026-10-10): the captured
+    /// markers' text was read back, and still is, but the selection was never asked again — so moving it, to another
+    /// occurrence of the same word, kept the old rectangle. The current selection's two ends must be the captured ones.
+    @Test func aMarkerSelectionThatMovedLocatesNothing() {
+        let tree = FakeAccessibility()
+        let page = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+        tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        tree.scriptMarkers(on: page, selected: "word", sentence: "A word here.")
+        tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 40, height: 18))
+        tree.moveSelection(on: page, toMarkers: 8, 9, indices: nil)
+        guard case .selected(let selection, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "word")
+        #expect(bounds == nil, "the rectangle of where the selection was was given for where it went")
+    }
+
+    /// **The same ends, read as other bytes, are the same selection**: WebKit need not hand back identical markers for one
+    /// position, so where the bytes differ the ends are compared by their indices — equal here, so the box stands.
+    @Test func aMarkerSelectionReadAgainAtTheSameEndsKeepsItsBox() {
+        let tree = FakeAccessibility()
+        let page = tree.element(1)
+        tree.set(tree.application, kAXFocusedUIElementAttribute, page)
+        tree.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        tree.scriptMarkers(on: page, selected: "word", sentence: "A word here.")
+        tree.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 40, height: 18))
+        tree.moveSelection(on: page, toMarkers: 10, 11, indices: (2, 6))
+        guard case .selected(_, let bounds) = read(tree) else { Issue.record("expected a selection"); return }
+        #expect(bounds == ReadBounds(rect: DownRect(x: 80, y: 140, width: 40, height: 18), quality: .exact))
+    }
+
     /// **WebKit: the selection's own markers, boxed** — exact where the term is the whole selection, `containing` where
     /// punctuation was trimmed from it, since the box then holds that too.
     @Test func theMarkerDialectBoxesTheSelection() {
@@ -510,6 +540,18 @@ private final class FakeAccessibility: AccessibilityReading {
     /// own box is found from it.
     func failIndex(on page: AXUIElement, with error: CaptureError) {
         answer(page, "AXIndexForTextMarker", argument: marker(1), in: [10 as CFNumber], thenFail: error)
+    }
+
+    /// The selection read a second time — when its box is asked for — as the markers `start` and `end`. With `indices`,
+    /// those and the scripted selection's own ends answer the same indices, as one position read twice does.
+    func moveSelection(on page: AXUIElement, toMarkers start: UInt8, _ end: UInt8, indices: (start: Int, end: Int)?) {
+        answer(page, "AXSelectedTextMarkerRange",
+               in: [AXTextMarkerRangeCreate(nil, marker(1), marker(2)), AXTextMarkerRangeCreate(nil, marker(start), marker(end))])
+        guard let indices else { return }
+        set(page, "AXIndexForTextMarker", argument: marker(1), indices.start as CFNumber)
+        set(page, "AXIndexForTextMarker", argument: marker(2), indices.end as CFNumber)
+        set(page, "AXIndexForTextMarker", argument: marker(start), indices.start as CFNumber)
+        set(page, "AXIndexForTextMarker", argument: marker(end), indices.end as CFNumber)
     }
 
     /// The box WebKit gives the scripted selection's own markers.
