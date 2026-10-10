@@ -109,6 +109,8 @@ extension PlacementReport {
         case unsettled(last: CGRect)
         /// It was not listed — before the watch began, or once it had.
         case vanished
+        /// The lookup never answered within the budget, so no frame of the card it fills was measured.
+        case unanswered
 
         /// The frame, where it held still; nil otherwise.
         var frame: CGRect? {
@@ -123,6 +125,7 @@ extension PlacementReport {
             case .unsettled(let last):
                 "the lookup panel never held still \(moment), within the budget; last at \(last)"
             case .vanished: "the lookup panel was no longer listed by the compositor \(moment)"
+            case .unanswered: "the lookup never answered \(moment), within the budget, so its card was not measured"
             }
         }
     }
@@ -131,6 +134,23 @@ extension PlacementReport {
     /// that the window went.
     static func steadyFrame(of window: NSWindow) async -> Watched {
         await watch({ listedFrame(of: window) }, steady: steady, budget: budget, every: .milliseconds(100))
+    }
+
+    /// **The card's frame once its lookup has answered and it has then held still** (second audit of 2026-10-10). A card
+    /// is shown waiting before the dictionaries are asked, and "Looking up…" held for a second counted as settled
+    /// whenever they took longer — the frame measured was the waiting card's. So the answer is waited for first, within
+    /// the same budget, the window checked on throughout; then `frame` is watched as `watch` watches it.
+    static func watch(
+        answered: @escaping @MainActor () -> Bool, frame: () -> CGRect?, steady: Duration, budget: Duration,
+        every interval: Duration
+    ) async -> Watched {
+        let deadline = ContinuousClock.now + budget
+        while !answered() {
+            guard frame() != nil else { return .vanished }
+            guard ContinuousClock.now < deadline else { return .unanswered }
+            try? await Task.sleep(for: interval)
+        }
+        return await watch(frame, steady: steady, budget: max(.zero, deadline - .now), every: interval)
     }
 
     /// **`frame` read until it has held one value for `steady`** (audit of 2026-10-10). Never the last value seen when

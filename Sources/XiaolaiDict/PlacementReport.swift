@@ -67,6 +67,14 @@ enum PlacementReport {
 
         // **The reader's ledger is never written**: the lookup records into this run's own (`Instruments.ledgerSupport`).
         app.lookUpHovered(selection, at: pointer, protecting: protected)
+        // **When the lookup has answered** — its whole run, entry, sense and recording — so the card measured is the one
+        // it fills, never the waiting one (second audit of 2026-10-10).
+        let answer = LookupAnswered()
+        let lookup = app.lookup
+        Task { @MainActor in
+            await lookup?.value
+            answer.arrived = true
+        }
         guard await Instrument.settle(until: PanelReport.appearance, {
             Instrument.isOnScreen(app.panelController.window)
         }), let window = app.panelController.window, let first = listedFrame(of: window) else {
@@ -75,7 +83,8 @@ enum PlacementReport {
         }
         // Settled: the same compositor frame for `steady`, within the budget — **or a failed measurement**, never the
         // first frame standing in for one the card never settled at (audit of 2026-10-10).
-        let watched = await steadyFrame(of: window)
+        let watched = await watch(answered: { answer.arrived }, frame: { listedFrame(of: window) }, steady: steady,
+                                  budget: budget, every: .milliseconds(100))
         guard let settled = watched.frame else {
             app.panelController.close()
             _ = Instrument.write(["appeared": true, "word": box(given), "initial": box(first),
@@ -215,6 +224,12 @@ enum PlacementReport {
     static func box(_ rect: CGRect) -> [String: Double] {
         ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
     }
+}
+
+/// Whether the lookup the placement report started has run to its end — set on the main actor by the task that awaits it.
+@MainActor
+private final class LookupAnswered {
+    var arrived = false
 }
 
 /// **A real click, and who received it** — this app, or another one beneath it — so the placement report can say

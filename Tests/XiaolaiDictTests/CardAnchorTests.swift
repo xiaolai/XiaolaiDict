@@ -462,6 +462,33 @@ struct SteadyFrameTests {
     @Test func aWindowNeverListedIsGone() async {
         #expect(await watch({ nil }) == .vanished)
     }
+
+    /// **A waiting card holding still is not a settled card** (second audit of 2026-10-10): the placement report watched
+    /// the frame from the moment the panel was listed, so "Looking up…" held for a second counted as settled whenever the
+    /// dictionaries took longer than that. The lookup's answer is waited for first, within the budget, and the card's
+    /// frame is measured after it — here an answer a second and a half late, and the entry it brings doubling the card.
+    @Test func anAnswerLaterThanASecondIsWaitedForBeforeTheFrameIsMeasured() async {
+        final class Answer: @unchecked Sendable { var arrived = false }
+        let answer = Answer()
+        let waiting = CGRect(x: 100, y: 200, width: 400, height: 76)
+        let answered = CGRect(x: 100, y: 200, width: 400, height: 290)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1_500))
+            answer.arrived = true
+        }
+        let watched = await PlacementReport.watch(
+            answered: { answer.arrived }, frame: { answer.arrived ? answered : waiting },
+            steady: .milliseconds(20), budget: .seconds(60), every: .milliseconds(1))
+        #expect(watched == .steady(answered), "the waiting card was measured as the settled one: \(watched)")
+    }
+
+    /// And an answer that never arrives within the budget is a failed measurement, not the waiting card's frame.
+    @Test func anAnswerThatNeverArrivesIsNotASettledCard() async {
+        let watched = await PlacementReport.watch(
+            answered: { false }, frame: { Self.frame }, steady: .milliseconds(20), budget: .milliseconds(200),
+            every: .milliseconds(1))
+        #expect(watched == .unanswered)
+    }
 }
 
 /// **A click is judged against the outline the card drew** (audit of 2026-10-10). The click-away test used the compact
