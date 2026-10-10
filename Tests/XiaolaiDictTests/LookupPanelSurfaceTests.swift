@@ -540,8 +540,13 @@ struct LookupSurfaceSweepTests {
         let note = try code("Sources/XiaolaiDictUI/PinnedNote.swift")
         #expect(!note.contains("if pointerIsOver"),
                 "the unpin button is only in the tree under a pointer, so VoiceOver cannot reach it")
-        #expect(note.contains(".opacity(pointerIsOver || unpinIsFocused ? 1 : 0)"),
-                "the unpin button is not faded by opacity")
+        // **Faded by its colour, never its opacity**: SwiftUI drops a view of opacity 0 from the accessibility tree,
+        // which the `panel` E2E stage measured — no button in a note's tree at all (2026-10-10). The stage's walk is
+        // what holds the control there; this holds the spelling that put it back.
+        #expect(note.contains(".foregroundStyle(HierarchicalShapeStyle.secondary.opacity(pointerIsOver || unpinIsFocused ? 1 : 0))"),
+                "the unpin button is not faded by its colour")
+        #expect(!note.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix(".opacity(pointerIsOver") },
+                "the unpin button is faded by its opacity, which takes it out of the accessibility tree")
         #expect(note.contains("IconButton(.unpinNote, shortcut: KeyboardShortcut(\"w\", modifiers: .command)"),
                 "Command-W does not close a note")
         #expect(note.contains(".keyboardShortcut(.cancelAction)"), "Escape does not close a note")

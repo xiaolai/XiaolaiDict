@@ -199,17 +199,20 @@ public struct PinnedNoteView: View {
     /// button at all, and the note's window has no traffic lights — so a VoiceOver or keyboard
     /// reader could make an always-on-top window and had no way to remove it (2026-10-01). The
     /// reader asked for the control to stay out of sight until wanted, and it still does: that is
-    /// the opacity. Its existence no longer depends on a pointer.
+    /// its colour, faded to nothing. Its existence no longer depends on a pointer.
     ///
     /// Command-W is bound here, and named in the tooltip, because this window has no menu to
     /// offer Close from.
     private var unpinControl: some View {
         IconButton(.unpinNote, shortcut: KeyboardShortcut("w", modifiers: .command), action: unpin)
             .focused($unpinIsFocused)
-            .foregroundStyle(.secondary)
+            // **Faded by its colour, never by its opacity.** SwiftUI drops a view of opacity 0 from the
+            // accessibility tree: measured 2026-10-10 on the E2E Mac, a note's tree held its words and no
+            // button at all, with or without a pointer over it — so the control this comment promises
+            // VoiceOver was never there. Its ink is what goes; the button stays.
+            .foregroundStyle(HierarchicalShapeStyle.secondary.opacity(pointerIsOver || unpinIsFocused ? 1 : 0))
             .padding(.top, scale.space.padDown)
             .padding(.trailing, scale.space.padAcross)
-            .opacity(pointerIsOver || unpinIsFocused ? 1 : 0)
             .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: pointerIsOver)
             .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: unpinIsFocused)
     }
