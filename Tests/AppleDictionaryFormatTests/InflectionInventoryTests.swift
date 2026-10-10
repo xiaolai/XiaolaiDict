@@ -130,6 +130,20 @@ struct InflectionInventoryReadTests {
         #expect(inventory.headwords == ["big"] && inventory.covered.isEmpty, "covered \(inventory.covered)")
     }
 
+    /// **And a dictionary that prints inflections but no doubled one vouches for nothing either** (third audit of
+    /// 2026-10-10): its silence about a word's doubling is evidence only where it is seen to print doubling at all — a
+    /// dictionary printing *swore* alone says nothing about *commit*. Oxford's prints *committed*, *stopped*, *unzipped*.
+    @Test func aDictionaryThatPrintsNoDoubledFormVouchesForNothing() throws {
+        let scratch = TemporaryDirectory()
+        let bundle = try SyntheticDictionary.bundle(in: scratch, identifier: "test.irregulars", entries: [
+            Parsing.entry(title: "swear", Parsing.block("verb", Parsing.group("past", "swore"))),
+            Parsing.entry(title: "commit", Parsing.block("verb", "")),
+        ])
+        let inventory = try InflectionInventory.read(bundle)
+        #expect(!inventory.forms.isEmpty && inventory.headwords == ["commit", "swear"])
+        #expect(inventory.covered.isEmpty, "covered \(inventory.covered)")
+    }
+
     /// **What a printing dictionary's silence is evidence for: an entry it read whole** (third audit of 2026-10-10). An
     /// entry with no inflection group printed none; one whose groups were parsed printed what it printed; one carrying
     /// a group that could not be parsed is a title with nothing known about its forms, and is not vouched for — even

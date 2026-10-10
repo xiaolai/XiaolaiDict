@@ -42,7 +42,7 @@ public struct InflectionInventory: Sendable, Equatable {
     /// reason, as `PhraseInventory.formatVersion`: `contentVersion` says whether the dictionary changed and
     /// cannot say whether this code did. A stored table built by an older extraction would be accepted as
     /// current for ever. `FormTableReader` writes it into the table's sources, so moving it rebuilds.
-    public static let formatVersion = "inflections/3"
+    public static let formatVersion = "inflections/4"
 
     /// Which build of which dictionary this was read from — `DictionaryBundle.contentVersion()`.
     public let contentVersion: String
@@ -66,9 +66,10 @@ public struct InflectionInventory: Sendable, Equatable {
 
     /// **The titles this dictionary vouches for** — each one whose every entry it read whole for inflections: an entry
     /// with no inflection group printed none, and one whose groups were parsed printed what it printed. Not a title any of
-    /// whose entries carried a group that could not be parsed, and **empty for a dictionary that printed no inflection at
-    /// all** — the thesaurus says nothing about a word's forms by printing none (third audit of 2026-10-10). What the
-    /// form table reads a title's silence as evidence by (`FormTable.vouchesForSilence`).
+    /// whose entries carried a group that could not be parsed, and **empty for a dictionary not seen to print a doubled
+    /// form** (`printsDoubling`) — the thesaurus, printing nothing, says nothing about a word's forms by printing none
+    /// (third audit of 2026-10-10). What the form table reads a title's silence as evidence by
+    /// (`FormTable.vouchesForSilence`).
     public let covered: Set<String>
 
     public init(contentVersion: String, forms: [String: Set<Reading>], ownHeadwords: Set<String>,
@@ -119,7 +120,19 @@ public struct InflectionInventory: Sendable, Equatable {
         let words = titles.filter(isWord)
         return InflectionInventory(contentVersion: contentVersion ?? bundle.contentVersion(), forms: forms,
                                    ownHeadwords: Set(forms.keys).intersection(titles),
-                                   headwords: words, covered: forms.isEmpty ? [] : words.subtracting(unparsed))
+                                   headwords: words, covered: printsDoubling(forms) ? words.subtracting(unparsed) : [])
+    }
+
+    /// **Whether a dictionary is seen to print a doubled consonant at all** — a form that is its headword, the last letter
+    /// again and *-ed* or *-ing* (*stopped*, *committed*). Only such a dictionary's silence about a word's doubling is
+    /// evidence (third audit of 2026-10-10): one printing irregulars alone, or nothing, says nothing about *commit*.
+    static func printsDoubling(_ forms: [String: Set<Reading>]) -> Bool {
+        forms.contains { form, readings in
+            readings.contains { reading in
+                guard let last = reading.lemma.last else { return false }
+                return form == reading.lemma + String(last) + "ed" || form == reading.lemma + String(last) + "ing"
+            }
+        }
     }
 
     // MARK: - One entry
