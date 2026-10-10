@@ -1430,7 +1430,10 @@ spelling=$("$exe" --spelling-report recieve ambages gazeboes dalesmen droughtier
 if [ "$spelling_status" -ne 0 ]; then
     flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
 fi
-consume_verdicts lookup "$(python3 - "$spelling" 2>&1 <<'PYSPELLING' || true
+# The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+# cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+spelling_verdicts() {
+    python3 - "$@" <<'PYSPELLING' 2>&1 || true
 import json, sys
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
 # The terms the report is asked about, read back by name — terms, not report keys.
@@ -1504,7 +1507,8 @@ else:
           f"{rare.get('correction') or ''}".rstrip())
 print("DONE")
 PYSPELLING
-)"
+}
+consume_verdicts lookup "$(spelling_verdicts "$spelling")"
 
 #     **And as the reader meets it**: the typo selected in the fixture and ⌃⌥D pressed — the miss card first, then the
 #     line under it, then the line pressed and the corrected word's card in the same panel, and both readings in the
@@ -1639,7 +1643,10 @@ details_follow_the_entry() {  # details_follow_the_entry <details_state before t
         [ "$again" != "$after" ] && break
         sleep 0.1
     done
-    consume_verdicts lookup "$(python3 - "$before" "$opened" "$after" "$again" "$other" <<'PYBACK' 2>&1 || true
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    details_back_verdicts() {
+        python3 - "$@" <<'PYBACK' 2>&1 || true
 import json, sys
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
 def state(raw, empty): return json.loads(raw or empty)
@@ -1658,7 +1665,8 @@ say(back["offered"] is True and bool(revealed) and len(shown_again) > len(shown_
     f"{len(shown_again)} after a press, e.g. {sorted(shown_back)[:3]}")
 print("DONE")
 PYBACK
-)"
+    }
+    consume_verdicts lookup "$(details_back_verdicts "$before" "$opened" "$after" "$again" "$other")"
 }
 sense_details_on() {  # sense_details_on <panel report of the card for “receive”>
     local before after why
@@ -2414,7 +2422,10 @@ placement_at() {  # placement_at <reading> <text size> [capture] [side]
         flunk "placement ($2): --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
         return
     fi
-    consume_verdicts hover "$(python3 - "$report" "$2" "$capture" "$side" <<'PYPLACE' 2>&1 || true
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    placement_verdicts() {
+        python3 - "$@" <<'PYPLACE' 2>&1 || true
 import json, sys
 r, size, capture, side = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
@@ -2468,7 +2479,8 @@ say(r.get("clickBesideTheTail") == "elsewhere" and r.get("openAfterTheClickBesid
     f"placement ({size}): a click beside the tail went to {r.get('clickBesideTheTail')}, card open {r.get('openAfterTheClickBeside')}")
 print("DONE")
 PYPLACE
-)"
+    }
+    consume_verdicts hover "$(placement_verdicts "$report" "$2" "$capture" "$side")"
 }
 # **A reader's drag lets go of the word** (plan-card-refinements D3, 2026-10-10): the card shown waiting on TextEdit's word,
 # dragged with real events, then its entry arriving and a disclosure opening — it must stay where the reader put it, its
@@ -2486,7 +2498,10 @@ placement_drag_at() {  # placement_drag_at <reading> <dx> <dy>
         flunk "drag: --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
         return
     fi
-    consume_verdicts hover "$(python3 - "$report" "$2" "$3" <<'PYDRAG' 2>&1 || true
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    drag_verdicts() {
+        python3 - "$@" <<'PYDRAG' 2>&1 || true
 import json, sys
 r, dx, dy = json.loads(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
@@ -2528,7 +2543,8 @@ say(r.get("disclosure") == "pressed" and bool(expanded) and near(expanded.get("x
     f"{box(arrived)} → {box(expanded)}, tail {r.get('tailExpanded')}")
 print("DONE")
 PYDRAG
-)"
+    }
+    consume_verdicts hover "$(drag_verdicts "$report" "$2" "$3")"
 }
 # **The card above its word, on this screen** (D3): a word box near the foot of the screen, at Huge, in the light and the
 # dark appearance — placed above it, its tail on its bottom edge at the word's middle, a click beside that tail (where the

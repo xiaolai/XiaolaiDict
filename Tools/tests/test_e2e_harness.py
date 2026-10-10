@@ -1280,3 +1280,54 @@ class TheFollowedCardStaysWhereTheReaderLeftIt(unittest.TestCase):
 
     def test_no_frame_for_the_card_fails(self):
         self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, None))
+
+
+def remote_scripts(text: str | None = None) -> dict[str, str]:
+    """Every script `e2e.sh` sends to the E2E Mac, assembled as it assembles them: each `<<'SH'` body, after
+    `common.sh` where the line that opens it reads `common.sh` first — the run, and the install step."""
+    lines = (SCRIPT.read_text() if text is None else text).split("\n")
+    openings = [i for i, line in enumerate(lines) if "<<'SH'" in line]
+
+    def body(start: int) -> list[str]:
+        end = lines.index("SH", start + 1)
+        return lines[start + 1:end]
+
+    common = next(body(i) for i in openings if 'cat >"$remote_scripts/common.sh"' in lines[i])
+    scripts = {}
+    for i in openings:
+        prefix = common if 'cat "$remote_scripts/common.sh" -' in lines[i] else []
+        scripts[f"line {i + 1}"] = "\n".join(prefix + body(i)) + "\n"
+    return scripts
+
+
+class TheRemoteScriptsParseUnderTheMacsOwnBash(unittest.TestCase):
+    """**Every script sent to the E2E Mac parses under `/bin/bash`, macOS's Bash 3.2** (third audit of 2026-10-10). The
+    E2E Mac happens to run Homebrew's Bash 5 for `bash -s`, so a run passed while the assembled run script did not parse
+    under the system's own: Bash 3.2 cannot parse a heredoc inside a command substitution whose body holds an apostrophe
+    — four validators did, from `got.get('correction')` to a comment's "card's". AGENTS.md names the same hazard for a
+    `python3 -c` block. Parsed as assembled, and a plant of the hazard is refused, so the check can fail."""
+
+    def parses(self, script: str) -> subprocess.CompletedProcess:
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+            handle.write(script)
+        try:
+            return subprocess.run([BASH, "-n", handle.name], capture_output=True, text=True, timeout=60, check=False)
+        finally:
+            os.unlink(handle.name)
+
+    def test_the_bash_is_the_systems_own(self):
+        version = subprocess.run([BASH, "--version"], capture_output=True, text=True, check=True).stdout
+        self.assertIn("version 3.2", version, "the check is only worth having against the Bash macOS ships")
+
+    def test_every_assembled_remote_script_parses(self):
+        scripts = remote_scripts()
+        self.assertGreaterEqual(len(scripts), 4, f"the assembly found only {sorted(scripts)}")
+        for name, script in scripts.items():
+            with self.subTest(script=name):
+                done = self.parses(script)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_validator_inside_a_substitution_with_an_apostrophe_is_refused(self):
+        planted = 'f() {\n    x="$(python3 - <<\'PYPLANT\' || true\nprint(got.get(\'correction\') or \'nothing\')\n' \
+                  "# the card's own words\nPYPLANT\n)\"\n}\n"
+        self.assertNotEqual(self.parses(planted).returncode, 0, "the plant parsed, so this check cannot fail")
