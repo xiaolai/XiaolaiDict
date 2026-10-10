@@ -1370,9 +1370,7 @@ public struct LookupPanelContent: View {
             symbol: (copied ? ActionSymbol.done : ActionSymbol.copy).symbol,
             // Only where it has something to add: the name is the tooltip otherwise, and a help
             // that repeated the name was read twice by VoiceOver.
-            help: copyable == nil
-                ? Text("No meaning was identified, so there is nothing to copy")
-                : nil,
+            help: CardActionHelp.copy(card(for: entry)),
             isEnabled: copyable != nil
         ) {
             guard let copyable else { return }
@@ -1406,9 +1404,7 @@ public struct LookupPanelContent: View {
         let keep = card(for: entry).senseToKeep
         return IconButton(
             .pinNote,
-            help: keep == nil
-                ? Text("No meaning was identified, so there is nothing to pin")
-                : nil,
+            help: CardActionHelp.pin(card(for: entry)),
             isEnabled: keep != nil
         ) {
             guard let keep else { return }
@@ -1423,6 +1419,27 @@ public struct LookupPanelContent: View {
     }
 }
 
+
+/// **What a disabled Pin or Copy says, as a decision rather than view code.** The help is the tooltip
+/// and the accessibility hint both (`IconButton`), and nil where the control is on: its name says it
+/// all then. Where the card lists meanings to choose from, the remedy is to choose one, and the help
+/// says so — "no meaning was identified" beside seven listed meanings left the reader no way to tell
+/// what would turn the control on. Where there is nothing to choose, choosing is not offered.
+public enum CardActionHelp {
+    public static func pin(_ card: LookupCard) -> Text? {
+        guard card.senseToKeep == nil else { return nil }
+        return card.alternatives.isEmpty
+            ? Text("No meaning was identified, so there is nothing to pin")
+            : Text("Choose a meaning first, then pin it")
+    }
+
+    public static func copy(_ card: LookupCard) -> Text? {
+        guard card.copyableText == nil else { return nil }
+        return card.alternatives.isEmpty
+            ? Text("No meaning was identified, so there is nothing to copy")
+            : Text("Choose a meaning first, then copy it")
+    }
+}
 
 /// **Which caveats a result needs, as decisions rather than as view code.**
 ///
