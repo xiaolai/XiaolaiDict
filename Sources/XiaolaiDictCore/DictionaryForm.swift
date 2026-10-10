@@ -59,10 +59,14 @@ public struct DictionaryForm: Equatable, Sendable {
         // its past whatever a rule would allow, and *pretzel* prints *pretzeled*, so *pretzelled* is not offered. A form
         // whose slot cannot be told blocks every slot it could be: *many* prints *more* and *most*, so neither *manier*
         // nor *maniest* is offered.
-        let printedSlots = (table?.printed(under: form) ?? []).reduce(into: Set<InflectionSlot>()) {
+        let printed = table?.printed(under: form) ?? []
+        let printedSlots = printed.reduce(into: Set<InflectionSlot>()) {
             $0.formUnion(RegularSpelling.slots(ofPrinted: $1.form, as: $1.partOfSpeech))
         }
-        let slot = RegularSpelling.slots(of: written, from: form).first { !printedSlots.contains($0) }
+        // **Whether a longer word doubles is the dictionary's to say** (second audit of 2026-10-10): what it prints in one
+        // slot — *committed*, *hollered* — decides the others, and with nothing printed the rule abstains.
+        let doubling = RegularSpelling.doubling(of: form, printed: printed.map(\.form))
+        let slot = RegularSpelling.slots(of: written, from: form, doubling: doubling).first { !printedSlots.contains($0) }
         return slot.map { DictionaryForm(word: form, evidence: .regular($0)) }
     }
 
@@ -132,14 +136,32 @@ enum WordClass: Sendable {
 /// The rules: *-es* after a sibilant, *-ies*/*-ied*/*-ier*/*-iest* after a consonant and *y*, a final *e* shared
 /// (*prided*, never *prideed*), *-ck-* after *c* and never a bare *c* (*panicked*; *arced* only where printed), and a
 /// final consonant **doubled after one vowel in a word of one syllable** (*tipped*, *whinned*, *quizzes*; an *s* may or
-/// may not, *buses*, *busses*) and **never in a longer one** (*hollering*, *pretzeled*): whether a longer word
-/// doubles depends on stress, which spelling does not show, and Oxford prints the forms of every word that does
-/// (*unzipped*, *inspanned*), which `DictionaryForm.candidate` asks first.
+/// may not, *buses*, *busses*). **Whether a longer word doubles depends on stress, which spelling does not show** —
+/// *committed* but *hollered* — so there the rule takes what the dictionary prints in another slot (`doubling`) and
+/// otherwise abstains (second audit of 2026-10-10: undoubled always, *commited* qualified as *commit*'s past and
+/// outranked the checker's *committed*).
 enum RegularSpelling {
-    /// The slots in which `term` is `base`'s regular inflection, in `InflectionSlot` order.
-    static func slots(of term: String, from base: String) -> [InflectionSlot] {
-        let forms = forms(of: base)
+    /// The slots in which `term` is `base`'s regular inflection, in `InflectionSlot` order. `doubling` is what the
+    /// dictionary's own forms say about a longer word ending in one vowel and a consonant: nil where they say nothing.
+    static func slots(of term: String, from base: String, doubling: Bool? = nil) -> [InflectionSlot] {
+        let forms = forms(of: base, doubling: doubling)
         return InflectionSlot.allCases.filter { forms[$0]?.contains(term) == true }
+    }
+
+    /// **Whether `base` doubles its last consonant before an ending, by the forms printed under it** — true where one
+    /// is the base, its last letter again and *-ed*, *-ing*, *-er* or *-est*; false where one is the base and the ending
+    /// alone; nil where none is either, or where they disagree (a dictionary printing both spellings has decided nothing).
+    static func doubling(of base: String, printed: [String]) -> Bool? {
+        let word = base.lowercased()
+        guard let last = word.last else { return nil }
+        var seen: Set<Bool> = []
+        for form in printed.map({ $0.lowercased() }) {
+            for ending in ["ed", "ing", "er", "est"] {
+                if form == word + String(last) + ending { seen.insert(true) }
+                if form == word + ending { seen.insert(false) }
+            }
+        }
+        return seen.count == 1 ? seen.first : nil
     }
 
     /// Whether a word has a vowel letter. An abbreviation — *hrs*, *sb*, *chf* — has none, and inflects no regular way.
@@ -153,8 +175,9 @@ enum RegularSpelling {
     ///
     /// Printed under an adjective or adverb alone, it is a comparison: *-est* a superlative, *-er* a comparative, and an
     /// irregular one — *more*, *most*, *less* — either. Otherwise by its ending first, then by the class it was printed
-    /// under for an irregular (*dalesmen* is a noun's, so a plural; *went* a verb's past). Empty for an irregular printed
-    /// under no class.
+    /// under for an irregular (*dalesmen* is a noun's, so a plural; *went* a verb's past). **An irregular printed under no
+    /// class it names could be any of them, so it blocks every slot** (second audit of 2026-10-10: *more* and *most*
+    /// under *many*, with no part of speech, blocked nothing).
     static func slots(ofPrinted form: String, as partOfSpeech: String) -> Set<InflectionSlot> {
         let classes = WordClass.of(partOfSpeech)
         if !classes.isEmpty, classes.isSubset(of: [.adjective, .adverb]) {
@@ -168,11 +191,12 @@ enum RegularSpelling {
         }
         if classes.contains(.noun) { return [.s] }
         if classes.contains(.verb) { return [.ed] }
-        return []
+        return Set(InflectionSlot.allCases)
     }
 
-    /// Every regular inflection of `base`, by slot.
-    static func forms(of base: String) -> [InflectionSlot: Set<String>] {
+    /// Every regular inflection of `base`, by slot — none in a slot whose spelling turns on stress the dictionary has not
+    /// settled (`doubling`).
+    static func forms(of base: String, doubling: Bool? = nil) -> [InflectionSlot: Set<String>] {
         let word = base.lowercased()
         let letters = Array(word)
         guard let last = letters.last, letters.count >= 2 else { return [:] }
@@ -182,7 +206,12 @@ enum RegularSpelling {
         let oneSyllable = syllables(in: letters) == 1
         func regular(_ suffix: String) -> Set<String> {
             guard doubles else { return [word + suffix] }
-            return [oneSyllable ? word + String(last) + suffix : word + suffix]
+            if oneSyllable { return [word + String(last) + suffix] }
+            switch doubling {
+            case true?: return [word + String(last) + suffix]
+            case false?: return [word + suffix]
+            case nil: return []
+            }
         }
 
         var forms: [InflectionSlot: Set<String>] = [:]

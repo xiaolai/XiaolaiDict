@@ -302,6 +302,62 @@ struct DictionaryFormGuardTests {
         #expect(offered == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
     }
 
+    /// **Evidence that names no class and no ending is evidence against every slot** (second audit of 2026-10-10): the
+    /// same *more* and *most* under *many*, printed under no part of speech, blocked nothing, and *manier* and *maniest*
+    /// were offered *many*.
+    @Test func anIrregularPrintedUnderNoClassBlocksEverySlot() async throws {
+        let printed = FormTable(sources: [], forms: [
+            "more": [.init(lemma: "many", partOfSpeech: "")],
+            "most": [.init(lemma: "many", partOfSpeech: "")],
+        ], ownHeadwords: [])
+        let dictionaries = Dictionaries(entries: ["many": [Headed("many", ["determiner, pronoun, & adjective"])]])
+        for term in ["maniest", "manier"] {
+            let offered = try await offer(term, lemma: "many", dictionaries: dictionaries, printed: printed)
+            #expect(offered.suggestion?.kind != .dictionaryForm, "\(term) was offered many")
+        }
+        #expect(dictionaries.questions.isEmpty)
+        // A printed form whose ending names its slot still blocks that slot alone, whatever its class says.
+        let named = FormTable(sources: [], forms: ["redder": [.init(lemma: "red", partOfSpeech: "")]], ownHeadwords: [])
+        #expect(try await offer("reddest", lemma: "red", dictionaries: Dictionaries(entries: ["red": [Headed("red", ["adjective"])]]),
+                                printed: named) == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
+    }
+
+    /// **Whether a longer word doubles its last consonant is a matter of stress, which spelling does not show** (second
+    /// audit of 2026-10-10): *commit* is *committed*, *holler* is *hollered*. The rule spelled every such word undoubled, so
+    /// with no form table *commited* qualified as *commit*'s past and outranked the checker's *committed*. Without
+    /// printed evidence the rule now abstains; a form the dictionary prints in another slot decides it for the rest.
+    @Test func aLongerWordsDoublingIsDecidedOnlyByWhatTheDictionaryPrints() async throws {
+        let lexicon: [String: [Headed]] = [
+            "commit": [Headed("commit", ["verb"])], "committed": [Headed("committed")], "committing": [Headed("committing")],
+            "holler": [Headed("holler", ["verb", "noun"])],
+        ]
+        // No table: the checker's correction, and never the base.
+        for (term, correction) in [("commited", "committed"), ("commiting", "committing")] {
+            let dictionaries = Dictionaries(entries: lexicon)
+            let offered = try await offer(term, lemma: "commit", checker: Checker([term: correction]),
+                                          dictionaries: dictionaries, printed: nil)
+            #expect(offered == .offered(SpellingSuggestion(term: term, word: correction)), "\(term): \(offered)")
+            #expect(dictionaries.questions == [correction], "\(term): a stress-dependent form was looked up")
+        }
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: nil)
+            .suggestion?.kind != .dictionaryForm)
+        // A form printed in one slot decides the others: *committed* says *commit* doubles, *hollered* that *holler* does
+        // not — so *committing* and *hollering* are regular, and *commiting* is not.
+        let printed = FormTable(sources: [], forms: [
+            "committed": [.init(lemma: "commit", partOfSpeech: "verb")],
+            "hollered": [.init(lemma: "holler", partOfSpeech: "verb")],
+        ], ownHeadwords: [])
+        #expect(try await offer("committing", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
+            == .offered(SpellingSuggestion(term: "committing", word: "commit", kind: .dictionaryForm)))
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: printed)
+            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
+        #expect(try await offer("commiting", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
+            .suggestion?.kind != .dictionaryForm)
+        // A word of one syllable doubles by spelling alone, as before.
+        #expect(try await offer("tipped", lemma: "tip", dictionaries: Dictionaries(entries: ["tip": [Headed("tip", ["verb"])]]),
+                                printed: nil) == .offered(SpellingSuggestion(term: "tipped", word: "tip", kind: .dictionaryForm)))
+    }
+
     /// **A word in *-c* takes *k* before *-ed* and *-ing***: *panicked*, *mimicking* (audit of 2026-10-10). The rule took
     /// *paniced* and *panicing* too, so with no form table read, *panic*'s verb entry licensed both. The few words that
     /// keep a bare *c* — *arced*, *disced*, *synced* — are offered only where the dictionaries print them.
@@ -469,8 +525,11 @@ struct DictionaryFormGuardTests {
     static let refusedThoughRight: Set<Int> = [21855, 25177, 29635, 29948, 31227, 31540, 31541, 29903, 32161]
 
     /// **Refused once the form was looked up** — its entry licenses no such inflection — rather than before: the
-    /// spelling, a capital, a form with no vowel, or what the dictionaries print refuse without a lookup.
-    static let refusedByTheEntry: Set<Int> = [20201, 21855, 23074, 24702, 25177, 26918, 26948, 27039,
+    /// spelling, a capital, a form with no vowel, or what the dictionaries print refuse without a lookup. *summated*,
+    /// *summating* and *untiling* left this list on 2026-10-10 (the second audit): *summat* and *until* end in one vowel
+    /// and a consonant in more than one syllable, where doubling turns on stress, and with nothing printed the rule now
+    /// abstains before any lookup.
+    static let refusedByTheEntry: Set<Int> = [21855, 25177, 26918, 26948, 27039,
                                                29635, 29948, 31227, 31540, 31541]
 
     static var table: FormTable {
