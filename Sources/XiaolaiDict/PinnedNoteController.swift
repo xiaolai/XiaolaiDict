@@ -20,8 +20,17 @@ final class PinnedNoteController {
     /// under them stood a short note in white below its last line, as the fixed opening height did.
     static let narrowestNote: CGFloat = 240
 
-    /// Where the next note should be placed, read back by `defaultWindowPlacement`.
+    /// **Where the next note opens, as `defaultWindowPlacement` reads it: its top-left, y down from the top of the primary
+    /// display.** It was an AppKit frame, origin at the bottom, and SwiftUI took that origin for the top: measured
+    /// 2026-10-10 on the E2E Mac, a note pinned 80 pt under the menu bar opened with its top 780 pt down. Only a first
+    /// guess, which SwiftUI does not always take — `attach` puts the window where it belongs.
     private(set) var placement = NSRect(origin: .zero, size: noteSize)
+
+    /// **Each note's frame in AppKit's space until its window is reported**, then put there once (`attach`). SwiftUI
+    /// placed the second of two notes 29 pt from the first, by its own cascade, whatever the closure said — measured on
+    /// the E2E Mac with the two pinned 820 pt apart — and that note covered the first one's unpin control, so a click
+    /// on it reached the second note's scroll area.
+    private var opening: [UUID: NSRect] = [:]
 
     func note(_ id: UUID) -> PinnedNote? { notes[id] }
 
@@ -31,8 +40,17 @@ final class PinnedNoteController {
     private var windows: [UUID: Held] = [:]
     private struct Held { weak var window: NSWindow? }
 
-    /// Reported by the note's scene once SwiftUI has made its window.
-    func attach(_ window: NSWindow, to id: UUID) { windows[id] = Held(window: window) }
+    /// Reported by the note's scene once SwiftUI has made its window, and again on every update of it. **The first report
+    /// puts the window beside where the note was pinned, and no later one moves it** — a reader who drags a note keeps it
+    /// where they put it. Set on the next turn of the main queue, outside the update that reported it: a frame set inside
+    /// layout re-enters layout (plan-pinned-cards §4). Top-left, because the fit holds a note's top edge and grows it down.
+    func attach(_ window: NSWindow, to id: UUID) {
+        windows[id] = Held(window: window)
+        guard let frame = opening.removeValue(forKey: id) else { return }
+        DispatchQueue.main.async { [weak window] in
+            window?.setFrameTopLeftPoint(NSPoint(x: frame.minX, y: frame.maxY))
+        }
+    }
 
     func window(of id: UUID) -> NSWindow? { windows[id]?.window }
 
@@ -45,6 +63,7 @@ final class PinnedNoteController {
     func dismissed(_ id: UUID) {
         notes[id] = nil
         windows[id] = nil
+        opening[id] = nil
     }
 
     /// **Puts a note away, handing back first the activation a click on it gave this app** (reported 2026-10-10).
@@ -79,6 +98,16 @@ final class PinnedNoteController {
         }
     }
 
+    /// **A note's frame, in AppKit's space, for a pointer**: its top-left a cascade step down and right of the pointer, a
+    /// step further for each note already open — starting again after `cascadeLength` — and kept on the usable area a
+    /// screen margin in, so a note pinned in a corner opens where it can be read.
+    static func frame(near pointer: NSPoint, size: NSSize, visible: NSRect, openBefore: Int) -> NSRect {
+        let offset = CGFloat(openBefore % cascadeLength + 1) * cascadeStep
+        let x = max(visible.minX + screenMargin, min(pointer.x + offset, visible.maxX - size.width - screenMargin))
+        let top = min(visible.maxY - screenMargin, max(pointer.y - offset, visible.minY + screenMargin + size.height))
+        return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
+    }
+
     /// How long a note waits for this app to stop being active before it closes anyway.
     static let handBackPatience: Duration = .milliseconds(500)
 
@@ -106,15 +135,11 @@ final class PinnedNoteController {
         let size = placement.size
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
-        // Offset per open note, so pinning several does not stack them exactly on top of one another.
-        let offset = CGFloat(notes.count % Self.cascadeLength) * Self.cascadeStep
-        placement = NSRect(
-            origin: NSPoint(
-                x: min(pointer.x + Self.cascadeStep + offset,
-                       visible.maxX - size.width - Self.screenMargin),
-                y: max(pointer.y - Self.cascadeStep - size.height - offset,
-                       visible.minY + Self.screenMargin)),
-            size: size)
+        let frame = Self.frame(near: pointer, size: size, visible: visible, openBefore: notes.count)
+        opening[note.id] = frame
+        // The same frame in the space SwiftUI reads, about the primary display — whose top every global y starts from.
+        let primary = NSScreen.screens.first?.frame.height ?? visible.maxY
+        placement = UpRect(frame).flipped(aboutPrimaryHeight: primary).cg
 
         notes[note.id] = note
         WindowActions.shared.openWindow(value: note.id)
