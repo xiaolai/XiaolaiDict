@@ -178,25 +178,32 @@ struct ModelBackendRouterTests {
     /// it once it has been put away.** A, then B, then A again, each question asked while the first A is still being
     /// made: the question for B puts the first A away when that making ends, and the first question — matched by its
     /// source alone — would then be handed the A that had just been put away, while a new A was being made.
+    ///
+    /// **Ordered by what the router was seen to do, not by sleeps.** The first making is held until the test lets it
+    /// go, and each question is asked once the one before has read the reader's choice. It was ordered by two 50 ms
+    /// sleeps under a 400 ms making, and a question that read its choice after the next change was asked a different
+    /// question.
     @Test func aSourceChosenAgainIsANewOneAndTheOldIsNeverAsked() async {
         let settings = Settings(Self.hosted)
         let first = RecordingProvider { _ in "From the first." }, second = RecordingProvider { _ in "From the second." }
-        let made = Mutex(0)
+        let made = Mutex(0), released = Mutex(false)
         let factory = ProviderFactory { source in
             guard source == Self.hosted else { return ProviderBuild(backend: RecordingProvider { _ in "From B." }) }
             let count = made.withLock { $0 += 1; return $0 }
-            if count == 1 { try? await Task.sleep(for: .milliseconds(400)) }
+            if count == 1, await !Patience.until({ released.withLock { $0 } }) { Issue.record("the first making was never let go") }
             return ProviderBuild(backend: count == 1 ? first : second)
         }
         let router = Self.router(settings, LocalModel(), factory)
         async let waiting = router.ask(.explain(Self.explanation), origin: .reader)
-        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Patience.until { made.withLock { $0 } == 1 }, "the first question never started its making")
         settings.choose(Self.loopback)
         async let leaving = router.ask(.explain(Self.explanation), origin: .reader)
-        try? await Task.sleep(for: .milliseconds(50))
+        await settings.waitUntilRead(2)
         settings.choose(Self.hosted)
-        let again = await router.ask(.explain(Self.explanation), origin: .reader)
-        _ = await (waiting, leaving)
+        async let chosenAgain = router.ask(.explain(Self.explanation), origin: .reader)
+        await settings.waitUntilRead(3)
+        released.withLock { $0 = true }
+        let (again, _, _) = await (chosenAgain, waiting, leaving)
         #expect(again.reply == .explanation("From the second."))
         #expect(first.requests.isEmpty, "a question was sent to a source after it had been put away")
         #expect(first.shutDowns == 1)

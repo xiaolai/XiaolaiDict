@@ -138,7 +138,9 @@ struct ResidentSessionTests {
         let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never), events: events)
         let asking = Task { try await provider.generate(Self.question("[[slow:\(Int(Patience.never / .seconds(1)))]]")) }
         #expect(await events.wait { if case .opened = $0 { true } else { false } })
-        try await Task.sleep(for: .milliseconds(200))
+        // The turn is in the fake's hands before the caller gives up — seen in its log, where a 200 ms sleep only
+        // usually arranged it, and a cancellation that landed first tested a question never asked.
+        try #require(try await Patience.until { try !fake.logged("turn", as: Int.self).isEmpty }, "the turn never reached the fake")
         asking.cancel()
         await #expect(throws: ProviderFailure.cancelled) { try await asking.value }
         let spawned = try #require(events.all.compactMap { record -> Int32? in

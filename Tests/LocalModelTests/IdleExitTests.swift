@@ -41,7 +41,9 @@ struct IdleExitTests {
         let idle = IdleExit(after: .seconds(60)) {}
         let lease = try #require(idle.admit())
         async let drained = idle.drain(within: Patience.wait)
-        try await Task.sleep(for: .milliseconds(50))
+        // Draining has begun once it says so — a 50 ms sleep only usually arranged that, and an `admit` that came first
+        // was admitted correctly, failing the test for a reason that is not the order.
+        #expect(await Patience.until { idle.isDraining }, "the drain never began")
         #expect(idle.admit() == nil, "a request was admitted while the service was draining")
         lease.release()
         #expect(await drained)
