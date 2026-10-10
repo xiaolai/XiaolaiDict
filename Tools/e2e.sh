@@ -4989,7 +4989,7 @@ at_exit restore_note_size
 # The app Settings is left behind: TextEdit on the harness's own fixture, opened by LaunchServices.
 open -a TextEdit "$helpers/notes.txt" >/dev/null 2>&1 || true
 sleep 2
-for note_size in standard huge; do
+for note_size in standard comfortable large huge; do
     defaults write com.xiaolaidict TextSize "$note_size"
     note_ledger_before=$(ledger_digest "$ledger") || note_ledger_before=""
     report=$(run_report --note-report 150) || true
