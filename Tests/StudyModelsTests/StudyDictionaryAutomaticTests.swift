@@ -217,7 +217,7 @@ struct StudyDictionarySettlingTests {
     @Test func settlingGivesUpWhileTheServiceIsStillPending() async {
         let answered = Flag()
         let dictionary = StudyDictionary(defaults: TemporaryDefaults.suite(), language: { "zh-Hans-CN" }) { _ in
-            try? await Task.sleep(for: .seconds(120))
+            try? await Task.sleep(for: Patience.never)
             answered.set()
             return nil
         }

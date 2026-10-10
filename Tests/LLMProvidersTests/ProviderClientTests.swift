@@ -3,6 +3,7 @@ import Foundation
 import ModelKit
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// **A provider asked what the ladders ask** — what it is sent for each tier and origin, how its answer is read, and
 /// what its failures become. The provider here is in-process and records every request it is handed, so each test
@@ -220,7 +221,7 @@ struct ProviderClientTests {
     /// through. Asserted by what it ends as, never by how long that took.
     @Test func aProviderThatNeverAnswersTimesOut() async {
         let provider = RecordingProvider { _ in
-            try? await Task.sleep(for: .seconds(60))
+            try? await Task.sleep(for: Patience.never)
             return "too late"
         }
         let reply = await Self.client(provider, .remote, deadline: .milliseconds(50))

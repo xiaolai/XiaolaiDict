@@ -119,24 +119,24 @@ struct ResidentSessionTests {
     }
 
     /// A CLI that exits before reading anything fails the question at once rather than at the deadline. **Shown by the
-    /// test's limit, not a stopwatch** (AGENTS.md): the deadline is ten minutes and the limit two, so a session that
+    /// test's limit, not a stopwatch** (AGENTS.md): the deadline is `Patience.never`, longer than the limit, so a session that
     /// waited for it fails by the limit. The stopwatch it had measured the Mac's load — 7.4 s on 2026-10-09.
     @Test(.timeLimit(.minutes(2)))
     func aCLIThatExitsAtOnceFailsWithoutWaitingForTheDeadline() async throws {
         let fake = try FakeCLI.claude(.exitEarly)
-        let provider = Self.provider(fake, Self.configuration(turnTimeout: .seconds(600)))
+        let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never))
         await #expect(throws: ProviderFailure.unreachable) { try await provider.generate(Self.question()) }
         await provider.shutDown()
     }
 
     /// **A caller who gives up ends the turn and its process**, at once and not at the deadline — shown by the test's
-    /// limit: the answer and the deadline are both ten minutes away and the limit is two.
+    /// limit: the answer and the deadline are both `Patience.never` away, longer than the limit.
     @Test(.timeLimit(.minutes(2)))
     func cancellingAQuestionEndsItsProcess() async throws {
         let fake = try FakeCLI.claude()
         let events = EventLog()
-        let provider = Self.provider(fake, Self.configuration(turnTimeout: .seconds(600)), events: events)
-        let asking = Task { try await provider.generate(Self.question("[[slow:600]]")) }
+        let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never), events: events)
+        let asking = Task { try await provider.generate(Self.question("[[slow:\(Int(Patience.never / .seconds(1)))]]")) }
         #expect(await events.wait { if case .opened = $0 { true } else { false } })
         try await Task.sleep(for: .milliseconds(200))
         asking.cancel()

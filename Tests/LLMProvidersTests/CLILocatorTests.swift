@@ -145,7 +145,7 @@ struct CLILocatorTests {
         let shell = try FakeCLI.shell(printing: [])
         try Data("#!/bin/sh\necho $$ > '\(pidFile.path)'\nexec sleep 3600\n".utf8).write(to: shell.executable)
         let locating = Settling { () async throws(ProviderFailure) in
-            await Self.locator([], shell: shell.executable, timeout: .seconds(600)).locate(.claude, override: nil)
+            await Self.locator([], shell: shell.executable, timeout: Patience.never).locate(.claude, override: nil)
         }
         let pid = try await ChildProcessTests.descendant(writtenTo: pidFile)
         locating.task.cancel()
@@ -162,7 +162,7 @@ struct CLILocatorTests {
         let cli = try Self.install("claude", in: scratch.appending("bin"))
         try Data("#!/bin/sh\necho $$ > '\(pidFile.path)'\nexec sleep 3600\n".utf8).write(to: cli)
         let reading = Settling { () async throws(ProviderFailure) in
-            await CLIVersion.read(cli, in: scratch.url, searchPath: nil, timeout: .seconds(600))
+            await CLIVersion.read(cli, in: scratch.url, searchPath: nil, timeout: Patience.never)
         }
         let pid = try await ChildProcessTests.descendant(writtenTo: pidFile)
         reading.task.cancel()
@@ -179,13 +179,13 @@ struct CLILocatorTests {
     }
 
     /// A profile that hangs — waiting on a prompt, say — is ended at the bound and finds nothing. **Shown by the test's
-    /// limit, not a stopwatch** (AGENTS.md): the shell sleeps ten minutes and the limit is two, so a probe that waited
+    /// limit, not a stopwatch** (AGENTS.md): the shell sleeps for `Patience.never`, longer than the limit, so a probe that waited
     /// for it fails by the limit.
     @Test(.timeLimit(.minutes(2)))
     func aLoginShellThatHangsIsEndedAtTheBound() async throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-locator")
         let program = try Self.install("claude", in: scratch.appending("bin"))
-        let shell = try FakeCLI.shell(printing: [program.path], sleep: 600)
+        let shell = try FakeCLI.shell(printing: [program.path], sleep: Patience.never / .seconds(1))
         #expect(await Self.locator([], shell: shell.executable, timeout: .milliseconds(500))
             .locate(.claude, override: nil) == .notFound)
     }

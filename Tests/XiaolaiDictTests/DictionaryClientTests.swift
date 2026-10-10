@@ -63,7 +63,7 @@ struct DictionaryClientTests {
 
     @Test func aHungServiceIsAbandonedAtTheDeadline() async throws {
         let service = FakeService { _ in
-            try await Task.sleep(for: .seconds(30))
+            try await Task.sleep(for: Patience.never)
             return .notFound
         }
         let client = service.client(deadline: .milliseconds(100), fallback: { _ in "plain" })
@@ -108,7 +108,7 @@ struct DictionaryClientTests {
     /// wrong — is kept.
     @Test func cancellationIsTheCallersNotTheServices() async throws {
         let service = FakeService { _ in
-            try await Task.sleep(for: .seconds(30))
+            try await Task.sleep(for: Patience.never)
             return .notFound
         }
         let client = service.client(fallback: { _ in "plain" })

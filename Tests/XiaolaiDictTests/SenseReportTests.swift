@@ -192,7 +192,7 @@ struct SenseReportTests {
     /// killed from outside says nothing at all about which rung stopped.
     @Test func aRungThatOutlivesTheLimitWhileWarmingIsNamed() async throws {
         let slow = ScriptedRung { word, _ in
-            try? await Task.sleep(for: .seconds(30))
+            try? await Task.sleep(for: Patience.never)
             return .chose(key: "\(word).right", margin: nil)
         }
         let lines = Recorder<[String]>([])
@@ -217,7 +217,7 @@ struct SenseReportTests {
     @Test func aRungThatStallsWhileBeingTimedIsNamedWithTheWordItStalledOn() async throws {
         // The first call is the warm-up, which must pass; every call after it stalls.
         let slow = ScriptedRung { word, turn in
-            if turn > 1 { try? await Task.sleep(for: .seconds(30)) }
+            if turn > 1 { try? await Task.sleep(for: Patience.never) }
             return .chose(key: "\(word).right", margin: nil)
         }
         let lines = Recorder<[String]>([])

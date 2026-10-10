@@ -295,7 +295,7 @@ struct LookupRunnerTests {
 /// for. It must outlast the deadline, so it sleeps well past it rather than racing it.
 struct NeverReplies: DictionaryTransport {
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
-        try await Task.sleep(for: .seconds(60))
+        try await Task.sleep(for: Patience.never)
         return .lookup(LookupAnswer(word: .notFound))
     }
 

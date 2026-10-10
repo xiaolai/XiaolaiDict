@@ -31,10 +31,10 @@ struct ScriptedModel: LanguageModel {
         /// running when the test makes its second request. This is what makes `mostAtOnce == 1` a
         /// measurement rather than a coincidence.
         case answerWhenReleased(String)
-        /// Hangs the **first** request for ten minutes — longer than anything in this suite waits —
+        /// Hangs the **first** request for `Patience.never` — longer than anything in this suite waits —
         /// and answers every request after it at once: a prewarm the tests can treat as never
         /// coming back, in front of a question that would answer immediately if it were let
-        /// through. **Ten minutes, not the ten seconds it was**: a suite that starves the cooperative
+        /// through. **Never, not the ten seconds it was**: a suite that starves the cooperative
         /// pool can hold a waiting test longer than ten seconds (2026-10-10, `DeadlineTests`), and a
         /// wedge that ran out in that time would read as a question that waited for it. **A cancelled wedge is not failed**: the sleep is `try?`, so a cancelled wedge
         /// falls out of the pause and answers. That is why every test here asserts what it came for
@@ -152,7 +152,7 @@ struct ScriptedExecutor: LanguageModelExecutor {
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .wedgeOnce(let text)?:
             if ScriptedModel.wedged.withLock({ $0.insert(id).inserted }) {
-                try? await Task.sleep(for: .seconds(600))
+                try? await Task.sleep(for: Patience.never)
             }
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .refuse?:

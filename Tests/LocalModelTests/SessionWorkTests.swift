@@ -6,11 +6,11 @@ import XiaolaiDictTestSupport
 /// One session's work, made and tracked under the same lock — so there is no moment where work is
 /// running that the session does not know about.
 struct SessionWorkTests {
-    /// Work that runs until it is cancelled — ten minutes stands for never, so no starved test pool can outlast it (the
+    /// Work that runs until it is cancelled — `Patience.never`, so no starved test pool can outlast it (the
     /// ten seconds it was could be, 2026-10-10: `DeadlineTests.workThatOverrunsIsCancelled`).
     private func waiting(_ cancelled: Recorder<Bool>) -> @Sendable () async -> Void {
         { await withTaskCancellationHandler {
-            try? await Task.sleep(for: .seconds(600))
+            try? await Task.sleep(for: Patience.never)
         } onCancel: { cancelled.withLock { $0 = true } } }
     }
 

@@ -3,6 +3,7 @@ import ApplicationServices
 import Synchronization
 import Testing
 import XiaolaiDictBase
+import XiaolaiDictTestSupport
 
 /// **Hover's Accessibility read is bounded, and stops at the first failure.**
 ///
@@ -258,7 +259,7 @@ struct CancellationWatchOrderTests {
     @Test func aCancelledCallersFallbackComesBeforeWatching() async {
         let order = Mutex<[String]>([])
         // Ends when cancelled, which `value(of:)` does — so nothing is left running behind the test.
-        let never = Task<Int, Never> { try? await Task.sleep(for: .seconds(60)); return 1 }
+        let never = Task<Int, Never> { try? await Task.sleep(for: Patience.never); return 1 }
         let caller = Task {
             await value(of: never, orOnCancel: { order.withLock { $0.append("fallback") }; return 0 },
                         watching: { order.withLock { $0.append("watching") } })

@@ -107,7 +107,7 @@ struct ModelStoreTests {
             progress(offset + Int64(slice.count))
             guard file.path == parkingOn else { return }
             landed.withLock { $0 = true }
-            try await Task.sleep(for: .seconds(30))
+            try await Task.sleep(for: Patience.never)
             throw NeverCancelled()
         }
     }

@@ -1,6 +1,7 @@
 import XiaolaiDictBase
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// A deadline that gives up on work that never answers. The spike found the case that matters: a
 /// continuation that is never resumed. A task group cannot bound that — it waits for every child
@@ -31,13 +32,13 @@ struct DeadlineTests {
     }
 
     /// A caller that gives up must get its answer now — not when the work or the deadline, which
-    /// may be minutes away, finally settles. The deadline is **ten minutes** and the time limit two:
+    /// may be minutes away, finally settles. The deadline is **`Patience.never`**, longer than the time limit:
     /// a guard that answered a cancelled caller only at the deadline would still be waiting when the
     /// framework ends the test, so the failure is structural and no stopwatch is involved.
     @Test(.timeLimit(.minutes(2)))
     func aCancelledCallerIsAnsweredAtOnce() async {
         let caller = Task {
-            try await withDeadline(.seconds(600)) { () async -> Int in
+            try await withDeadline(Patience.never) { () async -> Int in
                 await withUnsafeContinuation { _ in }  // never resumed
             }
         }
@@ -49,7 +50,7 @@ struct DeadlineTests {
     @Test func aCallerCancelledBeforeItStartsIsAnsweredAtOnce() async {
         let caller = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await withDeadline(.seconds(10)) { () async -> Int in
+            return try await withDeadline(Patience.never) { () async -> Int in
                 await withUnsafeContinuation { _ in }
             }
         }
@@ -66,7 +67,7 @@ struct DeadlineTests {
     /// stream to its end, so it ends when the work has *answered* and the verdict is only whether it
     /// was cancelled.
     ///
-    /// **And the work runs for ten minutes under a two-minute limit, not for ten seconds.** Ten
+    /// **And the work runs for `Patience.never`, longer than the test's limit, not for ten seconds.** Ten
     /// seconds was itself a stopwatch: on 2026-10-10, in a full suite whose every test in this target
     /// reported 13.7 s, the guard threw `DeadlineExceeded` as it should and yet the work ran out its
     /// ten seconds uncancelled — which only a timer starved of its thread for that long explains
@@ -79,7 +80,7 @@ struct DeadlineTests {
         await #expect(throws: DeadlineExceeded.self) {
             try await withDeadline(.milliseconds(100)) { () async throws -> Int in
                 do {
-                    try await Task.sleep(for: .seconds(600))
+                    try await Task.sleep(for: Patience.never)
                 } catch {
                     stopped.withLock { $0 = true }
                     exit.finish()
