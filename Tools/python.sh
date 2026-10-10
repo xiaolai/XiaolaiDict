@@ -27,6 +27,6 @@ xiaolaidict_python() {
 }
 
 # Run, not sourced: answer.
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     xiaolaidict_python
 fi

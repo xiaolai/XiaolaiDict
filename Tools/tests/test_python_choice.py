@@ -87,6 +87,19 @@ class TheHarnessRunsOnTheChosenPython(unittest.TestCase):
                               text=True, timeout=60, check=False)
         self.assertEqual(done.stdout.strip(), "function", done.stderr)
 
+    def test_sent_as_a_remote_script_under_set_u_it_chooses_without_running(self):
+        """As `e2e.sh` sends it: on stdin to `bash -s`, where `BASH_SOURCE` is empty, under `set -euo pipefail`."""
+        stand_ins = Path(tempfile.mkdtemp(prefix="python-remote-"))
+        self.addCleanup(shutil.rmtree, stand_ins, True)
+        tool = stand_ins / "python3.13"
+        tool.write_text('#!/bin/bash\n[ "$1" = -c ] && exit 0\n')
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+        script = "set -euo pipefail\n" + SCRIPT.read_text() + '\necho "chose $(xiaolaidict_python)"\n'
+        done = subprocess.run(["/bin/bash", "-s"], input=script, capture_output=True, text=True, timeout=60,
+                              check=False, env={"PATH": f"{stand_ins}:/bin"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), f"chose {tool}")
+
     def test_both_macs_python3_is_the_choice(self):
         text = (SCRIPT.parent / "e2e.sh").read_text()
         self.assertEqual(text.count('python3() { "$XIAOLAIDICT_PYTHON" "$@"; }'), 2, "here and on the E2E Mac")
