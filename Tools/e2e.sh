@@ -4876,6 +4876,35 @@ for n in notes:
          f"nonactivatingPanel={n.get('nonactivatingPanel')}, canBecomeKey={n.get('canBecomeKey')}, "
          f"canBecomeMain={n.get('canBecomeMain')}, resizableByHand={n.get('resizableByHand')}, "
          f"styleMask={n.get('styleMask')}, level={n.get('level')}; {shape}")
+    # **Where it opens: beside where it was pinned** — its top-left a cascade step down and right of the pointer, and a
+    # step further for each note already open, so several notes fan out. The step is 24 pt, the design's own; the pointer
+    # is near the screen's top, so nothing here is pushed back by an edge. It opened about 780 pt down (2026-10-10).
+    at, before = n.get("pinnedAt"), n.get("openBefore")
+    if at is None or before is None:
+        say(False, "", f"note ({size}): the report does not say where “{h}” was pinned")
+    else:
+        step = 24 * (before + 1)
+        dx, dy = w["x"] - at["x"], w["y"] - at["y"]
+        say(abs(dx - step) <= tolerance and abs(dy - step) <= tolerance,
+            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned, {step} each way",
+            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned at "
+            f"({at['x']:.0f}, {at['y']:.0f}), not {step} each way ({shape})")
+    v = r.get("visible")
+    if v:
+        say(w["x"] >= v["x"] and w["y"] >= v["y"] and w["x"] + w["width"] <= v["x"] + v["width"]
+            and w["y"] + w["height"] <= v["y"] + v["height"] + tolerance,
+            f"note ({size}): “{h}” is wholly on the screen's usable area",
+            f"note ({size}): “{h}” at {w} is not wholly inside the usable area {v}")
+    # **As wide as the reader's text asks** — 25 em, the quick card's measure, at every size: it was 320 pt at all of
+    # them, so at Huge a line held half the words. And nothing written in it runs past either side of its window.
+    want = 25 * em
+    say(abs(w["width"] - want) <= tolerance,
+        f"note ({size}): “{h}” is {w['width']:.0f} pt wide, 25 em at this size",
+        f"note ({size}): “{h}” is {w['width']:.0f} pt wide where 25 em is {want:g}")
+    outside = [t.get("text", "")[:16] for t in texts
+               if t["frame"]["x"] < w["x"] - tolerance or t["frame"]["x"] + t["frame"]["width"] > w["x"] + w["width"] + tolerance]
+    say(not outside, f"note ({size}): every line of “{h}” lies within its window's width",
+        f"note ({size}): lines of “{h}” run past its window's sides: {outside}")
 o = r.get("order") or {}
 if not o.get("measured"):
     say(False, "", f"note ({size}): what a click on a note does to Settings was not measured: {o.get('problem')}")
@@ -4916,6 +4945,32 @@ else:
          f"appIsActive={body.get('appIsActive')}, keyWindow={body.get('keyWindow')}; after unpinning — "
          f"frontmost={unpin.get('frontmost')}, appIsActive={unpin.get('appIsActive')}, "
          f"keyWindow={unpin.get('keyWindow')}, settingsIsKey={unpin.get('settingsIsKey')}")
+# **The two notes stand apart**, as they were pinned: a note cascaded onto another covers the one behind it, unpin
+# control and all.
+shown = [n["window"] for n in notes if n.get("window")]
+if len(shown) == 2:
+    a, b = shown
+    apart = (a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"]
+             or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"])
+    say(apart, f"note ({size}): the two notes, pinned apart, do not overlap",
+        f"note ({size}): the two notes overlap — {a} and {b}")
+# **Each of two notes put away by a real click on its own control, the first first** (reported 2026-10-10: with two on
+# screen, the click on the first note's control did not reach it).
+both = r.get("bothUnpinned") or []
+say(len(both) == 2, f"note ({size}): two notes were on screen for the clicks that put each away",
+    f"note ({size}): {len(both)} notes were on screen for the unpin clicks, not 2")
+for b in both:
+    h = b.get("heading")
+    if b.get("problem"):
+        say(False, "", f"note ({size}): “{h}” could not be clicked away: {b['problem']}")
+        continue
+    say(b.get("frontmostAtThePoint") == "this note",
+        f"note ({size}): at “{h}”'s unpin control the compositor draws that note in front",
+        f"note ({size}): at “{h}”'s unpin control {b.get('at')} the compositor draws {b.get('frontmostAtThePoint')} in front "
+        f"(Accessibility finds {b.get('hit')}; {b.get('notesOnScreen')} notes on screen, “{h}” at {b.get('window')})")
+    say(b.get("posted") is True and b.get("closed") is True,
+        f"note ({size}): a real click on “{h}”'s unpin control put it away with {b.get('notesOnScreen')} notes on screen",
+        f"note ({size}): a real click on “{h}”'s unpin control did not put it away: {b}")
 p = r.get("panel") or {}
 if p.get("measured"):
     a = p["afterClick"]

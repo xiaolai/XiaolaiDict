@@ -117,9 +117,11 @@ extension NoteReport {
         var measured: [[String: Any]] = []
         var shown: [NSWindow] = []
         let visible = screen.visibleFrame
+        let primary = screen.frame.height
+        // **Where the screen's usable area is, y down**, so the stage can hold a note to being on it.
+        report["visible"] = PlacementReport.box(UpRect(visible).flipped(aboutPrimaryHeight: primary).cg)
         let pinned = app.panelController.notes
-        for (note, across) in zip(notes(), pinnedAcross) {
-            let pointer = UpPoint(NSPoint(x: visible.minX + visible.width * across, y: visible.maxY - pinnedBelowTop))
+        for (index, (note, pointer)) in zip(notes(), pointers(on: visible)).enumerated() {
             let id = pinned.pin(note, near: pointer)
             guard await Instrument.settle(until: appearance, { Instrument.isOnScreen(pinned.window(of: id)) }),
                   let window = pinned.window(of: id)
@@ -128,7 +130,12 @@ extension NoteReport {
                 continue
             }
             shown.append(window)
-            measured.append(await describe(note, in: window))
+            var described = await describe(note, in: window)
+            // **Where it was pinned, y down, and how many notes were open before it** — what the stage places it from.
+            let down = pointer.flipped(aboutPrimaryHeight: primary).cg
+            described["pinnedAt"] = ["x": down.x, "y": down.y]
+            described["openBefore"] = index
+            measured.append(described)
         }
         report["notes"] = measured
         guard let clicked = shown.first else {
@@ -146,8 +153,77 @@ extension NoteReport {
 
         report["order"] = await clicks(on: clicked, settings: settings, other: other)
         report["panel"] = await panelClick(in: app, settings: settings, other: other)
+        report["bothUnpinned"] = await unpinEach(pinned, on: visible)
         guard Instrument.write(report) else { return .failure }
         return .success
+    }
+
+    /// Where each note is pinned: near the top of the usable screen, apart across it.
+    private static func pointers(on visible: NSRect) -> [UpPoint] {
+        pinnedAcross.map { UpPoint(NSPoint(x: visible.minX + visible.width * $0, y: visible.maxY - pinnedBelowTop)) }
+    }
+
+    // MARK: - Two notes, each put away by a real click
+
+    /// **Both notes on screen again, and each put away by a real click on its own unpin control, first the first** — the
+    /// click reported not to reach the first note's control while a second was on screen (2026-10-10). Before each click,
+    /// what the compositor draws frontmost at the point and what Accessibility finds there, so a click that lands on
+    /// another window is told from one the control ignored.
+    private static func unpinEach(_ pinned: PinnedNoteController, on visible: NSRect) async -> [[String: Any]] {
+        var windows: [(heading: String, window: NSWindow)] = []
+        for (note, pointer) in zip(notes(), pointers(on: visible)) {
+            let id = pinned.pin(note, near: pointer)
+            if await Instrument.settle(until: appearance, { Instrument.isOnScreen(pinned.window(of: id)) }),
+               let window = pinned.window(of: id) {
+                windows.append((note.heading, window))
+            }
+        }
+        var results: [[String: Any]] = []
+        for (heading, window) in windows {
+            var result: [String: Any] = ["heading": heading, "notesOnScreen": windows.filter { Instrument.isOnScreen($0.window) }.count]
+            guard let frame = (await PlacementReport.watch({ PlacementReport.listedFrame(of: window) }, steady: steady,
+                                                           budget: settling, every: sampling)).frame,
+                  let control = elements(in: frame).unpin
+            else {
+                result["problem"] = "the note's window or its unpin control could not be found"
+                results.append(result)
+                continue
+            }
+            let at = CGPoint(x: control.midX, y: control.midY)
+            result["window"] = PlacementReport.box(frame)
+            result["at"] = ["x": at.x, "y": at.y]
+            result["frontmostAtThePoint"] = frontmost(at: at, mine: window, among: windows.map(\.window))
+            result["hit"] = hit(at: at)
+            _ = Instrument.postMouse(.mouseMoved, at: CGPoint(x: frame.minX - approach, y: frame.midY))
+            try? await Task.sleep(for: arrival)
+            result["posted"] = await click(at: at, resting: reveal)
+            result["closed"] = await Instrument.settle(until: delivery) { !Instrument.isOnScreen(window) }
+            results.append(result)
+        }
+        // Nothing left behind for the next run: a note a click did not reach is put away as VoiceOver would.
+        for (_, window) in windows where Instrument.isOnScreen(window) {
+            _ = PlacementReport.press(endingWith: String(localized: ActionSymbol.unpinNote.title), inWindowTitled: window.title)
+            _ = await Instrument.settle(until: delivery) { !Instrument.isOnScreen(window) }
+        }
+        return results
+    }
+
+    /// **The window the compositor draws frontmost at `point`** (global, y down): `this note`, `another note`, or the owner
+    /// and level of whatever else it is.
+    private static func frontmost(at point: CGPoint, mine: NSWindow, among notes: [NSWindow]) -> String {
+        let listed = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]]) ?? []
+        guard let entry = listed.first(where: { entry in
+            guard let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
+            return rect.contains(point)
+        }) else { return "nothing" }
+        let number = (entry[kCGWindowNumber as String] as? NSNumber)?.intValue
+        if number == mine.windowNumber { return "this note" }
+        if notes.contains(where: { $0.windowNumber == number }) { return "another note" }
+        let owner = (entry[kCGWindowOwnerName as String] as? String) ?? "an unnamed owner"
+        let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+        return "\(owner), level \(layer)"
     }
 
     // MARK: - The blank
