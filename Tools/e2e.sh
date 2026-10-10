@@ -26,6 +26,14 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 readonly SELF
 cd "$(dirname "$SELF")/.."
 
+# **The Python this script's own checks run on — and, below, the E2E Mac's** — chosen by version (`Tools/python.sh`):
+# `python3` was whichever came first on PATH, and when a Homebrew upgrade left both Macs' newest Python unlinked on
+# 2026-10-10, macOS's 3.9.6 answered and the panel stage's validator no longer compiled. Every `python3` below is this.
+# shellcheck source=Tools/python.sh
+. Tools/python.sh
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "e2e: FAIL: no Python 3.12 or later on this Mac" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
+
 host=${1:?usage: e2e.sh <ssh-host> [stage...]}
 shift
 STAGES="$*"
@@ -245,6 +253,14 @@ is_running() {  # $1: an executable path. Stops the run, rather than answering, 
     find_pids "$1"
     [ "${#PIDS[@]}" -gt 0 ]
 }
+SH
+# **The E2E Mac's Python, chosen the way this Mac's is** — `Tools/python.sh`'s function, sent with every remote script,
+# and `python3` there made that choice, so every validator and helper below runs on 3.12 or later whatever its PATH
+# answers to `python3` (2026-10-10: 3.9.6, after a Homebrew upgrade). No such Python is a stopped run that says so.
+cat Tools/python.sh >>"$remote_scripts/common.sh"
+cat >>"$remote_scripts/common.sh" <<'SH'
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "e2e: the E2E Mac has no Python 3.12 or later" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
 SH
 
 # ---------------------------------------------------------------------------------------------
@@ -4924,7 +4940,9 @@ provider_endpoint() {
 # app starts it exactly as it starts the reader's; its turns land in the stub's log under `provider_remote_model`.
 provider_claude_arm() {
     local launcher="$provider_evidence/claude" python report
-    python=$(command -v python3) || { flunk "provider: no python3 to run the stand-in claude"; return 0; }
+    # The chosen interpreter's own path: the launcher is a script of its own, where the `python3` function is not.
+    python=${XIAOLAIDICT_PYTHON:-}
+    [ -n "$python" ] || { flunk "provider: no Python to run the stand-in claude"; return 0; }
     # Arguments as data, quoted for the shell that runs the launcher: never a path spliced in as code.
     if ! printf '#!/bin/sh\nexec %q %q claude %q "$@"\n' "$python" "$helpers/provider-stub.py" "$provider_stub_log" \
             > "$launcher" || ! chmod 700 "$launcher"; then

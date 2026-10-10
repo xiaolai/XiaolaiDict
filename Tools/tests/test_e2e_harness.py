@@ -848,6 +848,7 @@ class TheProviderStage(unittest.TestCase):
         evidence.mkdir()
         done = fake.run(textwrap.dedent(f"""\
             STAGE=provider
+            XIAOLAIDICT_PYTHON=/opt/chosen/python3.14
             provider_evidence="{evidence}"; provider_stub_log="{evidence}/stub.jsonl"
             provider_remote_model=xiaolaidict-e2e-remote
             run_report() {{ cat "{report}"; }}
@@ -861,7 +862,8 @@ class TheProviderStage(unittest.TestCase):
         self.assertIn("write com.xiaolaidict SubscriptionCLIsEnabled -bool YES", calls)
         self.assertIn(f"write com.xiaolaidict ClaudeCLIPath -string {evidence}/claude", calls)
         launcher = (evidence / "claude").read_text()
-        self.assertTrue(launcher.startswith("#!/bin/sh\nexec "), launcher)
+        self.assertTrue(launcher.startswith("#!/bin/sh\nexec /opt/chosen/python3.14 "),
+                        f"the launcher does not run the chosen Python (Tools/python.sh): {launcher}")
         self.assertIn("provider-stub.py claude", launcher)
         self.assertIn("evidence\\ with\\ a\\ space/stub.jsonl", launcher, "a path was spliced in unquoted")
 

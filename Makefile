@@ -125,7 +125,7 @@ lint:
 # gitignored — so this line made `make test` pass here and fail on any fresh clone, discovery of a
 # missing directory being an `ImportError`. A gate that depends on an untracked file is not a gate.
 #
-# **On a Python of 3.10 or later, chosen by `Tools/python.sh`** (2026-10-10): `python3` alone was whichever came first on
+# **On a Python of 3.12 or later, chosen by `Tools/python.sh`** (2026-10-10): `python3` alone was whichever came first on
 # PATH, and when a Homebrew upgrade left its own unlinked, macOS's 3.9.6 ran the suites and three tests failed on the
 # interpreter rather than the code. None found is a failure that says so.
 test-tools:
