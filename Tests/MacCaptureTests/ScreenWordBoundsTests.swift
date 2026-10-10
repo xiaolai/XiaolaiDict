@@ -18,11 +18,14 @@ struct ScreenWordBoundsTests {
         /// Answers the token's own box empty, as some views do — every one-character glyph box stays valid, so the word
         /// is still read and only its box is missing.
         let emptyTokenBox: Bool
+        /// Fails the request for the token's own box with this — the one geometry request made after the word is read.
+        let failingTokenBox: CaptureError?
 
-        init(_ text: String, speaksTextRange: Bool, emptyTokenBox: Bool = false) {
+        init(_ text: String, speaksTextRange: Bool, emptyTokenBox: Bool = false, failingTokenBox: CaptureError? = nil) {
             self.text = text
             self.speaksTextRange = speaksTextRange
             self.emptyTokenBox = emptyTokenBox
+            self.failingTokenBox = failingTokenBox
         }
 
         func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {
@@ -50,6 +53,7 @@ struct ScreenWordBoundsTests {
                 return String(decoding: units, as: UTF16.self) as CFString
             case kAXBoundsForRangeParameterizedAttribute:
                 let range = Self.range(argument)
+                if range.length > 1, let failingTokenBox { throw failingTokenBox }
                 var box = emptyTokenBox && range.length > 1 ? CGRect.zero
                     : CGRect(x: 100 + 10 * CGFloat(range.location), y: 200, width: 10 * CGFloat(range.length), height: 20)
                 return AXValueCreate(.cgRect, &box)
@@ -104,6 +108,26 @@ struct ScreenWordBoundsTests {
         let hit = try #require(hit(Glyphs("The cat sat.", speaksTextRange: false)))
         #expect(hit.source == .accessibilityBoundsScan)
         #expect(hit.bounds == ReadBounds(rect: DownRect(x: 140, y: 200, width: 30, height: 20), quality: .exact))
+    }
+
+    /// **The word is read; its box is worth having, not worth the word** (audit of 2026-10-10). The token's own box is one
+    /// request made after the word is identified, and its failure ended the read as a miss — a good capture thrown away
+    /// and the pixels read instead, against "a poor capture does not suppress retrieval". The word stands with no box.
+    @Test func aTokenBoxThatFailsKeepsTheWordWithNoBox() throws {
+        for failure in [CaptureError.notResponding, .deadlineExceeded, .appUnavailable] {
+            let found = try #require(hit(Glyphs("The cat sat.", speaksTextRange: true, failingTokenBox: failure)),
+                                     "\(failure) after the word was read lost the word")
+            #expect(found.word.word == "cat")
+            #expect(found.source == .accessibilityTextRange)
+            #expect(found.bounds == nil)
+        }
+    }
+
+    /// **And the reader moving on still ends the read**: a cancellation at that request is a cancellation, not a word.
+    @Test func aTokenBoxCancelledCancelsTheRead() {
+        let outcome = ScreenWordReader.read(at: point, in: target,
+                                            with: Glyphs("The cat sat.", speaksTextRange: true, failingTokenBox: .cancelled))
+        guard case .cancelled = outcome else { Issue.record("a cancelled read answered \(outcome)"); return }
     }
 
     /// **An index from another process is summed without trapping** (audit of 2026-10-10): the window of text around it

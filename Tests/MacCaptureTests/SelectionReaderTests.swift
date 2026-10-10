@@ -272,6 +272,57 @@ struct SelectionReaderTests {
         #expect(bounds == nil, "the markers' box was believed over text that is no longer the selection's")
     }
 
+    /// **Where the word is, is worth having and not worth the selection — but the reader moving on still ends the read**
+    /// (audit of 2026-10-10). The box's requests were read with `try?`, which took a cancellation for "no box" and handed
+    /// back a selection the reader had already left; in the marker dialect the term's own box swallowed it too. A failure
+    /// there leaves the selection with no box; a cancellation cancels.
+    @Test func aCancellationWhileTheBoxIsReadCancelsTheSelection() {
+        // The text-range dialect: the selection's range, read again for the box, is where the reader moved on.
+        let range = FakeAccessibility()
+        let field = range.element(1)
+        range.set(range.application, kAXFocusedUIElementAttribute, field)
+        range.set(field, kAXSelectedTextAttribute, "cat" as CFString)
+        range.answer(field, kAXSelectedTextRangeAttribute, in: [rangeValue(4, 3)], thenFail: .cancelled)
+        range.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(4, 3), "cat" as CFString)
+        // The marker dialect: the selection's first index, asked for the term's own box.
+        let markers = FakeAccessibility()
+        let page = markers.element(1)
+        markers.set(markers.application, kAXFocusedUIElementAttribute, page)
+        markers.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        markers.scriptMarkers(on: page, selected: "“Q…”", sentence: "Then came “Q…” and more.")
+        markers.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 42, height: 18))
+        markers.failIndex(on: page, with: .cancelled)
+        for (dialect, tree) in [("range", range), ("markers", markers)] {
+            let outcome = read(tree)
+            guard case .nothing(.failed(.cancelled, _)) = outcome else {
+                Issue.record("\(dialect): a cancelled read answered \(outcome)"); continue
+            }
+        }
+    }
+
+    /// **And any other failure there keeps the selection, with no box** — or, where only the term's own box failed, the
+    /// selection's box, `containing`, as where WebKit cannot say where the term is.
+    @Test func aFailureWhileTheBoxIsReadKeepsTheSelection() {
+        let range = FakeAccessibility()
+        let field = range.element(1)
+        range.set(range.application, kAXFocusedUIElementAttribute, field)
+        range.set(field, kAXSelectedTextAttribute, "cat" as CFString)
+        range.answer(field, kAXSelectedTextRangeAttribute, in: [rangeValue(4, 3)], thenFail: .notResponding)
+        range.set(field, kAXStringForRangeParameterizedAttribute, argument: rangeValue(4, 3), "cat" as CFString)
+        guard case .selected(let selection, let bounds) = read(range) else { Issue.record("expected a selection"); return }
+        #expect(selection.text == "cat" && bounds == nil)
+
+        let markers = FakeAccessibility()
+        let page = markers.element(1)
+        markers.set(markers.application, kAXFocusedUIElementAttribute, page)
+        markers.set(page, kAXRoleAttribute, "AXWebArea" as CFString)
+        markers.scriptMarkers(on: page, selected: "“Q…”", sentence: "Then came “Q…” and more.")
+        markers.scriptSelectionBox(on: page, CGRect(x: 80, y: 140, width: 42, height: 18))
+        markers.failIndex(on: page, with: .notResponding)
+        guard case .selected(_, let box) = read(markers) else { Issue.record("expected a selection"); return }
+        #expect(box == ReadBounds(rect: DownRect(x: 80, y: 140, width: 42, height: 18), quality: .containing))
+    }
+
     /// **WebKit: the selection's own markers, boxed** — exact where the term is the whole selection, `containing` where
     /// punctuation was trimmed from it, since the box then holds that too.
     @Test func theMarkerDialectBoxesTheSelection() {
@@ -387,7 +438,12 @@ private final class FakeAccessibility: AccessibilityReading {
     private var values: [Key: CFTypeRef] = [:]
     private var failures: [Key: CaptureError] = [:]
     /// Answers that change between reads, as an app's do while the reader works: one per read, the last kept.
-    private var sequences: [Key: [CFTypeRef]] = [:]
+    private var sequences: [Key: [Answer]] = [:]
+
+    private enum Answer {
+        case value(CFTypeRef)
+        case failure(CaptureError)
+    }
 
     func element(_ number: Int32) -> AXUIElement { AXUIElementCreateApplication(90_000 + number) }
 
@@ -395,9 +451,12 @@ private final class FakeAccessibility: AccessibilityReading {
         values[Key(element: element, name: name, argument: argument.map(Self.describe))] = value
     }
 
-    /// `name` answers each of `answers` in turn, one per read, and then the last one for good.
-    func answer(_ element: AXUIElement, _ name: String, argument: CFTypeRef? = nil, in answers: [CFTypeRef]) {
-        sequences[Key(element: element, name: name, argument: argument.map(Self.describe))] = answers
+    /// `name` answers each of `answers` in turn, one per read, and then the last one for good — or, given `failure`,
+    /// fails with it from the read after the last answer on.
+    func answer(_ element: AXUIElement, _ name: String, argument: CFTypeRef? = nil, in answers: [CFTypeRef],
+                thenFail failure: CaptureError? = nil) {
+        sequences[Key(element: element, name: name, argument: argument.map(Self.describe))] =
+            answers.map(Answer.value) + (failure.map { [Answer.failure($0)] } ?? [])
     }
 
     /// The scripted selection's text, read through its markers, answering each of `texts` in turn.
@@ -406,10 +465,13 @@ private final class FakeAccessibility: AccessibilityReading {
                in: texts.map { $0 as CFString })
     }
 
-    private func next(_ key: Key) -> CFTypeRef? {
+    private func next(_ key: Key) throws(CaptureError) -> CFTypeRef? {
         guard var answers = sequences[key], let first = answers.first else { return values[key] }
         if answers.count > 1 { answers.removeFirst(); sequences[key] = answers }
-        return first
+        switch first {
+        case .value(let value): return value
+        case .failure(let error): throw error
+        }
     }
 
     func fail(_ element: AXUIElement, _ name: String, with error: CaptureError) {
@@ -444,6 +506,12 @@ private final class FakeAccessibility: AccessibilityReading {
         set(page, "AXBoundsForTextMarkerRange", argument: range, AXValueCreate(.cgRect, &box)!)
     }
 
+    /// The selection's first index answered once — for the sentence context — and failing with `error` when the term's
+    /// own box is found from it.
+    func failIndex(on page: AXUIElement, with error: CaptureError) {
+        answer(page, "AXIndexForTextMarker", argument: marker(1), in: [10 as CFNumber], thenFail: error)
+    }
+
     /// The box WebKit gives the scripted selection's own markers.
     func scriptSelectionBox(on page: AXUIElement, _ rect: CGRect) {
         var box = rect
@@ -454,11 +522,11 @@ private final class FakeAccessibility: AccessibilityReading {
     func attribute(_ element: AXUIElement, _ name: String, ofApplication: Bool) throws(CaptureError) -> CFTypeRef? {
         let key = Key(element: element, name: name, argument: nil)
         if let failure = failures[key] { throw failure }
-        return next(key)
+        return try next(key)
     }
 
     func parameterized(_ element: AXUIElement, _ name: String, _ argument: CFTypeRef) throws(CaptureError) -> CFTypeRef? {
-        next(Key(element: element, name: name, argument: Self.describe(argument)))
+        try next(Key(element: element, name: name, argument: Self.describe(argument)))
     }
 
     private func marker(_ byte: UInt8) -> AXTextMarker { AXTextMarkerCreate(nil, [byte], 1) }

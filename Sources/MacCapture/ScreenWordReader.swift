@@ -242,11 +242,19 @@ enum ScreenWordReader {
             let lower = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
             let upper = text.utf16.distance(from: text.startIndex, to: range.upperBound)
             return lower <= best.offset && best.offset < upper
-        }), String(text[token]) == best.hit.word,
-           let box = try ax.rect(element, kAXBoundsForRangeParameterizedAttribute, value(CFRange(
-               location: start + text.utf16.distance(from: text.startIndex, to: token.lowerBound),
-               length: text.utf16.distance(from: token.lowerBound, to: token.upperBound)))) {
-            bounds = ReadBounds.checked(box, quality: .exact, near: point)
+        }), String(text[token]) == best.hit.word {
+            // **The word is read; its box is worth having, not worth the word** (audit of 2026-10-10). A failure here
+            // ended the read as a miss and sent a good capture to the pixels — a poor capture suppressing retrieval. It
+            // leaves the word with no box now; only the reader moving on (`cancelled`) still ends the read.
+            do throws(CaptureError) {
+                if let box = try ax.rect(element, kAXBoundsForRangeParameterizedAttribute, value(CFRange(
+                    location: start + text.utf16.distance(from: text.startIndex, to: token.lowerBound),
+                    length: text.utf16.distance(from: token.lowerBound, to: token.upperBound)))) {
+                    bounds = ReadBounds.checked(box, quality: .exact, near: point)
+                }
+            } catch {
+                if error == .cancelled { throw error }
+            }
         }
         return (best.hit, bounds)
     }

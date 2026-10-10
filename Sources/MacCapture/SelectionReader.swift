@@ -156,10 +156,12 @@ public enum SelectionReader {
                 // the selection stands without it.
                 let place = (try? readPlace(host: capture.host, app: app, ax, policy: .shipped)) ?? ReadingPlace(
                     bundleID: app.bundleID, name: app.name)
-                // Where it is on screen, likewise: worth having, not worth the selection.
-                return selection(from: capture, app: app, place: place) { term in
-                    (try? bounds(of: capture, term: term, ax)) ?? nil
+                // Where it is on screen, likewise: worth having, not worth the selection — **but a cancellation is the
+                // reader moving on, and ends the read** (audit of 2026-10-10: `try?` took one for "no box").
+                let located = try SelectedTerm(from: capture.text).flatMap { (term) throws(CaptureError) in
+                    try orNone { () throws(CaptureError) in try bounds(of: capture, term: term, ax) }
                 }
+                return selection(from: capture, app: app, place: place) { _ in located }
             case .nothing:
                 return .nothing(.nothingSelected(app: app.name))
             case .searchLimitReached:
@@ -398,7 +400,8 @@ public enum SelectionReader {
             guard let markers = capture.markers,
                   try ax.string(capture.host, "AXStringForTextMarkerRange", markers) == capture.text
             else { return nil }
-            if !whole, let box = termBox(in: markers, term: term, host: capture.host, ax),
+            if !whole,
+               let box = try orNone({ () throws(CaptureError) in try termBox(in: markers, term: term, host: capture.host, ax) }),
                let exact = ReadBounds.checked(box, quality: .exact) {
                 return exact
             }
@@ -442,25 +445,23 @@ public enum SelectionReader {
     /// (`AXIndexForTextMarker`, the unit `select-web` and the sentence context use too), so the term's markers are the
     /// selection's first index plus where the term sits in it; the range they make is **read back and held to the term**
     /// before its box is believed. Nil where any step goes unanswered or reads back as something else — the selection's
-    /// own box then stands, `containing`. Indices come from another process, so the sums are checked, never trusted.
+    /// own box then stands, `containing`. A request that fails throws, and the caller keeps the selection's box for any
+    /// failure but a cancellation, which ends the read (audit of 2026-10-10: a `catch` here took one for "no box").
+    /// Indices come from another process, so the sums are checked, never trusted.
     static func termBox(
         in selection: AXTextMarkerRange, term: SelectedTerm, host: AXUIElement, _ ax: some AccessibilityReading
-    ) -> CGRect? {
-        do {
-            let start = AXTextMarkerRangeCopyStartMarker(selection)
-            guard let index = try ax.integer(host, "AXIndexForTextMarker", start), index >= 0 else { return nil }
-            let (first, overflowed) = index.addingReportingOverflow(term.range.location)
-            let (last, overflowedAgain) = first.addingReportingOverflow(term.range.length)
-            guard !overflowed, !overflowedAgain,
-                  let from = try ax.marker(host, "AXTextMarkerForIndex", first as CFNumber),
-                  let to = try ax.marker(host, "AXTextMarkerForIndex", last as CFNumber),
-                  let range = try ax.markerRange(host, "AXTextMarkerRangeForUnorderedTextMarkers", [from, to] as CFArray),
-                  try ax.string(host, "AXStringForTextMarkerRange", range) == term.text
-            else { return nil }
-            return try ax.rect(host, "AXBoundsForTextMarkerRange", range)
-        } catch {
-            return nil
-        }
+    ) throws(CaptureError) -> CGRect? {
+        let start = AXTextMarkerRangeCopyStartMarker(selection)
+        guard let index = try ax.integer(host, "AXIndexForTextMarker", start), index >= 0 else { return nil }
+        let (first, overflowed) = index.addingReportingOverflow(term.range.location)
+        let (last, overflowedAgain) = first.addingReportingOverflow(term.range.length)
+        guard !overflowed, !overflowedAgain,
+              let from = try ax.marker(host, "AXTextMarkerForIndex", first as CFNumber),
+              let to = try ax.marker(host, "AXTextMarkerForIndex", last as CFNumber),
+              let range = try ax.markerRange(host, "AXTextMarkerRangeForUnorderedTextMarkers", [from, to] as CFArray),
+              try ax.string(host, "AXStringForTextMarkerRange", range) == term.text
+        else { return nil }
+        return try ax.rect(host, "AXBoundsForTextMarkerRange", range)
     }
 
     // MARK: - The result
