@@ -13,7 +13,8 @@ import Foundation
 /// So the three bounds below are long, and **a wait ends the moment its condition holds**: the length
 /// is paid only by a test that is already failing. The order is the point — a wait fails by name
 /// before the limit ends the test, and the limit ends a test before anything standing for "never" can
-/// finish and let it pass. `PatienceTests` holds the order.
+/// finish and let it pass. `PatienceTests` holds the order, and `PatienceScanTests` holds every test file to these
+/// names — a poll, a time limit, a bound or a "never" spelled by hand is refused unless it is declared, with its reason.
 ///
 /// A deadline that *is* a test's subject — the product's own, against a fake that never answers — is
 /// short on purpose and is not this. A product deadline a test expects **not** to reach is: it stands
