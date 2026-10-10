@@ -38,7 +38,7 @@ struct ProviderCompositionTests {
         struct NoService: Error {}
         let coordinator = LocalModelCoordinator(
             defaults: suite, store: ModelStore(root: ScratchFile.unmade("providers", file: "models")),
-            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }),
+            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }, deadline: { _ in Patience.wait }),
             providers: ProviderFactory { _ in ProviderBuild(backend: backend) })
         return (coordinator, suite)
     }
@@ -53,7 +53,7 @@ struct ProviderCompositionTests {
         let (models, _) = Self.coordinator(choosing: .openAICompatible, backend: backend)
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithTwoSenses() }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithTwoSenses() }), panel: panel,
             primary: { PrimaryDictionary(chosen: "noad") }, selector: models.senseLadder)
         let selection = Selection(
             text: "fine", sentence: "He paid a heavy fine.", rangeInSentence: NSRange(location: 16, length: 4),

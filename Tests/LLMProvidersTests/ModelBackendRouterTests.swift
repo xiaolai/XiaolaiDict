@@ -444,7 +444,7 @@ struct ModelBackendRouterTests {
     /// reports its process's events to `events`.
     static func factory(finding fake: FakeCLI, events: EventLog) -> ProviderFactory {
         ProviderFactory(
-            locator: CLILocator(searchDirectories: [fake.directory.url], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [fake.directory.url], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding(events.sink))
@@ -563,7 +563,7 @@ struct ProviderSourceTests {
 struct ProviderFactoryTests {
     static func factory(searching directory: URL, scratch: URL) -> ProviderFactory {
         ProviderFactory(
-            locator: CLILocator(searchDirectories: [directory], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [directory], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: scratch) }, events: { _ in })
     }
@@ -619,7 +619,7 @@ struct ProviderFactoryTests {
     @Test func aCLIRunByAnInterpreterBesideItIsStartedAndAnswers() async throws {
         let fake = try FakeCLI.claude(runBy: "xiaolaidict-fake-interpreter")
         let factory = ProviderFactory(
-            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding { _ in })
@@ -645,7 +645,7 @@ struct ProviderFactoryTests {
                                                  "\(LoginShell.searchPathMarker)\(elsewhere.url.path):/usr/bin:/bin"])
         let factory = ProviderFactory(
             locator: CLILocator(searchDirectories: [], loginShell: LoginShell(accountShell: shell.executable.path),
-                                shellTimeout: .seconds(5)),
+                                shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding { _ in })

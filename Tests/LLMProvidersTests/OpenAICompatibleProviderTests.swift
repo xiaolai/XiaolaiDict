@@ -21,7 +21,7 @@ struct OpenAICompatibleProviderTests {
         // A stub's base is https, an address the app sends to.
         return OpenAICompatibleProvider(endpoint: EndpointAddress(url: base).unsafelyUnwrapped, model: model,
                                         credentials: credentials ?? InMemoryCredentials(key: "sk-test", for: base),
-                                        timeout: .seconds(10), sessionConfiguration: StubEndpoint.configuration(),
+                                        timeout: Patience.wait, sessionConfiguration: StubEndpoint.configuration(),
                                         responseByteLimit: limit)
     }
 

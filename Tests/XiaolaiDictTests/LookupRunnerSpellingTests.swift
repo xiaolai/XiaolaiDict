@@ -109,7 +109,7 @@ struct LookupRunnerSpellingTests {
 
     private func runner(_ panel: RecordingPanel, _ service: Service, _ checker: Checker) -> LookupRunner {
         LookupRunner(
-            client: DictionaryClient(connect: { _ in service }, fallback: { _ in nil }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in service }, fallback: { _ in nil }), panel: panel,
             spelling: checker, readerEnglish: { nil })
     }
 
@@ -179,17 +179,21 @@ struct LookupRunnerSpellingTests {
     /// **Only the service's own miss of one Latin word asks the checker**: a found word, a fallback's prose, a miss the
     /// service could not answer, a phrase and CJK are offered nothing, and the checker never hears of them.
     @Test func nothingButAMissOfOneLatinWordAsksTheChecker() async {
-        let cases: [(Selection, DictionaryClient.Connect, String?)] = [
-            (Self.selection("the", in: "I saw the cat."), { _ in Service(["the"]) }, nil),
-            (Self.selection("teh"), { _ in NeverReplies() }, "an article"),
-            (Self.selection("teh"), { _ in NeverReplies() }, nil),
-            (Self.selection("teh cat", in: "I saw teh cat."), { _ in Service([]) }, nil),
-            (Self.selection("水", in: "我看见水。"), { _ in Service([]) }, nil),
+        // A service that answers is given `Patience.wait`, and one that never does the short deadline it is about: the
+        // 50 ms all five had was a deadline the answering services missed on a loaded Mac, turning a found word and a
+        // miss into "the service could not answer" — a case this test lists separately.
+        let answers = Patience.wait, never = Duration.milliseconds(50)
+        let cases: [(Selection, DictionaryClient.Connect, Duration, String?)] = [
+            (Self.selection("the", in: "I saw the cat."), { _ in Service(["the"]) }, answers, nil),
+            (Self.selection("teh"), { _ in NeverReplies() }, never, "an article"),
+            (Self.selection("teh"), { _ in NeverReplies() }, never, nil),
+            (Self.selection("teh cat", in: "I saw teh cat."), { _ in Service([]) }, answers, nil),
+            (Self.selection("水", in: "我看见水。"), { _ in Service([]) }, answers, nil),
         ]
-        for (selection, connect, fallback) in cases {
+        for (selection, connect, deadline, fallback) in cases {
             let panel = RecordingPanel(), checker = Checker(["teh": "the", "the": "they", "水": "the"])
             let runner = LookupRunner(
-                client: DictionaryClient(deadline: .milliseconds(50), connect: connect, fallback: { _ in fallback }),
+                client: DictionaryClient(deadline: deadline, connect: connect, fallback: { _ in fallback }),
                 panel: panel, spelling: checker, readerEnglish: { nil })
             _ = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
             #expect(checker.questions.isEmpty, "\(selection.text) asked the checker")
@@ -258,7 +262,7 @@ struct LookupRunnerSpellingTests {
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
         let panel = RecordingPanel(), selector = PartOfSpeechSelector()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in Service(["record"], twoSenses: true) }, fallback: { _ in nil }),
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in Service(["record"], twoSenses: true) }, fallback: { _ in nil }),
             panel: panel, selector: selector, spelling: Checker(["recrod": "record"]), readerEnglish: { nil })
         let missed = panel.newRequest()
         _ = await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed)
@@ -286,7 +290,7 @@ struct LookupRunnerSpellingTests {
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in Service(["record"]) }, fallback: { _ in nil }),
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in Service(["record"]) }, fallback: { _ in nil }),
             panel: panel, spelling: Checker(["recrod": "record"]), readerEnglish: { nil })
         let missed = panel.newRequest()
         let miss = try #require(await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed))
@@ -328,7 +332,7 @@ struct LookupRunnerSpellingTests {
         try #require(fromSentence != alone, "the fixture's sentence no longer reads as another language than its word")
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in Service(["the"], twoSenses: true) }, fallback: { _ in nil }),
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in Service(["the"], twoSenses: true) }, fallback: { _ in nil }),
             panel: panel, selector: PartOfSpeechSelector(), spelling: Checker(["teh": "the"]), readerEnglish: { nil })
         let missed = panel.newRequest()
         _ = await runner.run(Self.typo, near: .zero, requestedAt: .now, ticket: missed)

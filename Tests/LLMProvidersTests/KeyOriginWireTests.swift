@@ -38,7 +38,7 @@ struct KeyOriginWireTests {
     static func router(_ suite: UserDefaults, _ credentials: InMemoryCredentials,
                        session: @escaping @Sendable () -> URLSessionConfiguration = { .ephemeral }) -> ModelBackendRouter {
         let factory = ProviderFactory(
-            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: Patience.wait),
             credentials: credentials, configuration: ResidentSessionTests.configuration(),
             endpointSession: session, scratch: { nil }, events: { _ in })
         return ModelBackendRouter(

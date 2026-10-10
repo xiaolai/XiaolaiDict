@@ -1,6 +1,7 @@
 import Foundation
 @testable import LLMProviders
 import Testing
+import XiaolaiDictTestSupport
 
 /// **The real wire, on a socket of this Mac** — what a `URLProtocol` stub cannot show: the request line and headers
 /// as the loading system writes them, a connection kept and reused across calls (a new TCP and TLS connection per
@@ -11,7 +12,7 @@ struct LoopbackWireTests {
                                            maxTokens: 8, temperature: 0)
 
     static func provider(_ base: URL, key: String? = "sk-loopback",
-                         timeout: Duration = .seconds(10)) -> OpenAICompatibleProvider {
+                         timeout: Duration = Patience.wait) -> OpenAICompatibleProvider {
         // Every base here is this Mac's loopback, an address the app sends to.
         OpenAICompatibleProvider(endpoint: EndpointAddress(url: base).unsafelyUnwrapped, model: "loopback-model",
                                  credentials: key.map { InMemoryCredentials(key: $0, for: base) } ?? InMemoryCredentials(),

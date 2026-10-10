@@ -17,6 +17,6 @@ extension LocalModelCoordinator {
         LocalModelCoordinator(
             defaults: defaults,
             store: ModelStore(root: ScratchFile.unmade("app", file: "models")),
-            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }))
+            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }, deadline: { _ in Patience.wait }))
     }
 }

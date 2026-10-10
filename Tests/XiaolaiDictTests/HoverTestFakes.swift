@@ -210,7 +210,7 @@ final class ScriptedScreenWords: ScreenWordSource, @unchecked Sendable {
 enum HoverFixtures {
     /// A capture deadline for tests that are not about the deadline. The shipped 5 s fired under a
     /// busy full-suite run, and a test about consent then failed on a deadline it never mentioned.
-    static let patient: Duration = .seconds(600)
+    static let patient: Duration = Patience.wait
 
     static func selection(_ text: String, in bundleID: String = "com.apple.TextEdit") -> Selection {
         Selection(

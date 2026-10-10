@@ -46,7 +46,7 @@ struct LocalModelCoordinatorTests {
             // Short, because what is being measured is a service that will not go rather than the
             // reader's Mac being slow. The shipped bound is the service's own drain; waiting that
             // out here would measure the constant and not the wire.
-            shutdownLimit: .milliseconds(50))
+            shutdownLimit: .milliseconds(50), deadline: { _ in Patience.wait })
         let coordinator = LocalModelCoordinator(
             defaults: TemporaryDefaults.suite(), store: store, client: client,
             transport: LocalModelControllerTests.Transport(fails: true),
@@ -226,7 +226,7 @@ struct LocalModelCoordinatorTests {
             let service = ModelClientTests.Service()
             let coordinator = LocalModelCoordinator(
                 defaults: TemporaryDefaults.suite(), store: store,
-                client: ModelClient(connect: { service.connect($0) }, servicePresence: { .gone }),
+                client: ModelClient(connect: { service.connect($0) }, servicePresence: { .gone }, deadline: { _ in Patience.wait }),
                 transport: LocalModelControllerTests.Transport(fails: true),
                 probe: LocalModelControllerTests.FixedProbe(), physicalMemory: memory)
             await coordinator.prewarm()

@@ -160,7 +160,7 @@ struct LookupRunnerTests {
         let panel = RecordingPanel()
         let gate = ReplyGate()
         let runner = LookupRunner(
-            client: DictionaryClient(deadline: .seconds(600),
+            client: DictionaryClient(deadline: Patience.wait,
                                      connect: { [entry = Self.twoSenses] _ in RepliesWhenReleased(gate: gate, entry: entry) },
                                      fallback: { _ in nil }),
             panel: panel)
@@ -183,7 +183,7 @@ struct LookupRunnerTests {
         let panel = RecordingPanel()
         let supersede = SupersedingSelector(panel: panel)
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) }, fallback: { _ in nil }),
+            client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) }, fallback: { _ in nil }),
             panel: panel, selector: supersede)
         let recording = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         #expect(supersede.asked, "the selector never ran, so nothing was superseded during it")
@@ -219,7 +219,7 @@ struct LookupRunnerTests {
     @Test func theAnsweredLookupIsRecorded() async throws {
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }), panel: panel)
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }), panel: panel)
         let recording = try #require(await runner.run(
             Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest()))
         let record = recording.record
@@ -251,7 +251,7 @@ struct LookupRunnerTests {
             occasions: [PriorEncounter(at: .now.addingTimeInterval(-86_400), where: "Preview", title: "paper")],
             met: [met])
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
             panel: panel,
             priorEncounters: { _, _, language in
                 // The ledger is asked in the language the sentence was read in.
@@ -272,7 +272,7 @@ struct LookupRunnerTests {
     @Test func aFirstLookupIsShownNoMemoryStrip() async throws {
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
             panel: panel)
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         // **A run that produced no lookup would pass this loop without executing one assertion.**
@@ -458,7 +458,7 @@ struct AutomaticKeepWiringTests {
                 senses:[DictionarySense(path:SensePath(block:1,ordinal:1),key:"s",keyKind:.publisher,definition:"meaning",text:"meaning")])]))
         var preference = PrimaryDictionary(chosen:chosen)
         var received: [LookupRecording] = []
-        let runner = LookupRunner(client:DictionaryClient(connect:{ _ in AnswersWith(entry:entry) }),panel:panel,
+        let runner = LookupRunner(client:DictionaryClient(deadline: Patience.wait, connect:{ _ in AnswersWith(entry:entry) }),panel:panel,
             primary:{ preference },keepPolicy:{ .automatic },initialRecording:{ row,_ in
                 received.append(row); preference = PrimaryDictionary(chosen:"changed-in-flight")
             })
@@ -487,7 +487,7 @@ struct AutomaticKeepWiringTests {
         let word = entry("e", "s")
         var received: [LookupRecording] = []
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithPhrase(entry: word, hit: hit) }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithPhrase(entry: word, hit: hit) }), panel: panel,
             selector: Abstains(), keepPolicy: { .automatic }, initialRecording: { row, _ in received.append(row) })
         let selection = Selection(text: "fine", sentence: "A fine print day.", rangeInSentence: NSRange(location: 2, length: 4),
             quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())

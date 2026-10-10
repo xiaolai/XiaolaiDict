@@ -7,12 +7,25 @@ import XiaolaiDictTestSupport
 /// Synchronous work that nothing can interrupt — a private API that deadlocked — is bounded by
 /// acting from outside it.
 struct WatchdogTests {
+    /// **Read only where the work did finish in time.** The limit is the subject, so it is short — and a run of
+    /// `{ 42 }` held off its thread past it, as a loaded Mac can, *is* work that overran: the alarm firing then is the
+    /// watchdog working. So the run is timed from outside, which can only over-count, and one that took the limit or
+    /// more is run again, within `Patience`. Only a run that kept to it is read, and its alarm must stay silent.
     @Test func workThatFinishesInTimeNeverTriggersIt() async throws {
-        let fired = Mutex(false)
-        let watchdog = Watchdog(limit: .milliseconds(100)) { fired.withLock { $0 = true } }
-        #expect(watchdog.run { 42 } == 42)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(!fired.withLock { $0 }, "the alarm outlived the work it guarded")
+        var fired = true
+        let measured = await Patience.until {
+            let alarm = Mutex(false)
+            let watchdog = Watchdog(limit: .milliseconds(100)) { alarm.withLock { $0 = true } }
+            let started = ContinuousClock.now
+            #expect(watchdog.run { 42 } == 42)
+            let took = ContinuousClock.now - started
+            try? await Task.sleep(for: watchdog.limit * 3)
+            guard took < watchdog.limit else { return false }
+            fired = alarm.withLock { $0 }
+            return true
+        }
+        #expect(measured, "no run of the work kept to the limit, so nothing was measured")
+        #expect(!fired, "the alarm outlived the work it guarded")
     }
 
     /// **The stuck work waits on the alarm rather than polling for it**, and the wait is long.
@@ -45,7 +58,7 @@ struct WatchdogTests {
 
     @Test func anErrorPassesThrough() {
         struct Boom: Error, Equatable {}
-        let watchdog = Watchdog(limit: .seconds(5)) {}
+        let watchdog = Watchdog(limit: Patience.wait) {}
         #expect(throws: Boom()) { try watchdog.run { throw Boom() } }
     }
 }

@@ -218,7 +218,7 @@ private final class FakeService: Sendable {
     var connections: Int { state.withLock { $0.connections } }
     func cancelled(_ connection: Int) -> Bool { state.withLock { $0.cancelled.contains(connection) } }
 
-    func client(deadline: Duration = .seconds(3), fallback: @escaping @Sendable (String) -> String? = { _ in nil }) -> DictionaryClient {
+    func client(deadline: Duration = Patience.wait, fallback: @escaping @Sendable (String) -> String? = { _ in nil }) -> DictionaryClient {
         DictionaryClient(deadline: deadline, connect: { onCancel in
             let number = self.state.withLock { state in
                 state.connections += 1

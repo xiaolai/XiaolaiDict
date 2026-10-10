@@ -242,7 +242,7 @@ struct ModelServiceTests {
         physical: UInt64 = 48 * gigabyte,
         built: Recorder<Int> = Recorder(0), chose: Recorder<[LocalModelSize]> = Recorder([]),
         manifests: [ModelManifest] = [ModelServiceTests.manifest(.standard)],
-        prewarmWait: Duration = .seconds(45)
+        prewarmWait: Duration = Patience.wait
     ) throws -> ModelService {
         let store = try store ?? {
             let (made, scratch) = try Self.installedStore()
@@ -406,7 +406,7 @@ struct ModelServiceTests {
                 makeModel: { _, size in
                     chose.withLock { $0.append(size) }
                     return ScriptedModel(.answer(#"{"senseNumber": 1}"#))
-                }, wanted: { wanted })
+                }, prewarmWait: Patience.wait, wanted: { wanted })
             #expect(await service.reply(to: .pickSense(Self.question)) == .sense(1))
             #expect(chose.withLock { $0 } == [loaded], "chose \(wanted) with \(available / Self.gigabyte) GB free")
             guard case .status(let status) = await service.reply(to: .status) else {
@@ -457,7 +457,7 @@ struct ModelServiceTests {
                          return made }(),
             manifests: [Self.manifest(.standard)], physicalMemory: 48 * Self.gigabyte,
             availableMemory: { nil },
-            makeModel: { _, _ in built.withLock { $0 += 1 }; return ScriptedModel(.answer("{}")) })
+            makeModel: { _, _ in built.withLock { $0 += 1 }; return ScriptedModel(.answer("{}")) }, prewarmWait: Patience.wait)
         guard case .failure(.insufficientMemory) = await service.reply(to: .pickSense(Self.question)) else {
             Issue.record("loaded with free memory unknown")
             return

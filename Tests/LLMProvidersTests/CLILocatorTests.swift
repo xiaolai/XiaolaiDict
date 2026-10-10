@@ -17,7 +17,7 @@ struct CLILocatorTests {
     }
 
     static func locator(_ directories: [URL], shell: URL? = nil,
-                        timeout: Duration = .seconds(5)) -> CLILocator {
+                        timeout: Duration = Patience.wait) -> CLILocator {
         CLILocator(searchDirectories: directories, loginShell: shell.map { LoginShell(accountShell: $0.path) },
                    shellTimeout: timeout)
     }

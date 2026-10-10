@@ -12,7 +12,7 @@ struct ResidentSessionTests {
     /// a minute each, so a fake slow to start on a loaded Mac is not a failure (2026-10-09: 7.4 s for a fake's Python
     /// to start and exit, and a preflight's version read missing a five-second bound no test could reach). A test of a
     /// deadline names its own, short, against a fake that never answers. No idle end unless a test sets one.
-    static func configuration(recycleAfter: Int = 6, turnTimeout: Duration = .seconds(60),
+    static func configuration(recycleAfter: Int = 6, turnTimeout: Duration = Patience.wait,
                               idleAfter: Duration? = nil) -> ResidentConfiguration {
         ResidentConfiguration(recycleAfter: recycleAfter, turnTimeout: turnTimeout, openTimeout: Patience.wait,
                               idleAfter: idleAfter, closeGrace: .milliseconds(500), versionTimeout: Patience.wait)
@@ -260,13 +260,17 @@ struct ResidentSessionTests {
         await provider.shutDown()
     }
 
-    /// Questions keep a process from going idle: the clock starts again at each.
+    /// Questions keep a process from going idle: the clock starts again at each. **Timed, because the subject is a
+    /// clock**: a gap between questions is where a timer nobody restarted would fire — inside a turn the session
+    /// refuses to retire — so the gaps are real, and together outlast the idle interval. Each gap leaves the interval
+    /// four seconds of room for the hops between one answer and the next question. It left half a second (300 ms gaps
+    /// under 800 ms), which a loaded Mac's scheduling could take.
     @Test func questionsKeepAProcessFromGoingIdle() async throws {
         let fake = try FakeCLI.claude()
-        let provider = Self.provider(fake, Self.configuration(idleAfter: .milliseconds(800)))
+        let provider = Self.provider(fake, Self.configuration(idleAfter: .seconds(6)))
         let first = try answeringPID(try await provider.generate(Self.question()))
         for _ in 0..<4 {
-            try await Task.sleep(for: .milliseconds(300))
+            try await Task.sleep(for: .seconds(2))
             #expect(try answeringPID(try await provider.generate(Self.question())) == first)
         }
         await provider.shutDown()
