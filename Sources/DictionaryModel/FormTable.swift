@@ -50,11 +50,15 @@ public struct FormTable: Sendable, Equatable {
     private let entries: [String: Entry]
     /// The dictionary's own one-word titles. What a regular inflection it does not print is looked up in.
     private(set) var words: Set<String>
+    /// **The titles whose silence is evidence** — those an inflection-printing dictionary read whole
+    /// (`InflectionInventory.covered`). A subset of `words`: the thesaurus titles words and prints no inflection, and a
+    /// title whose entry could not be read for its forms is a title and nothing more (third audit of 2026-10-10).
+    private(set) var covered: Set<String>
 
     /// `forms` carries one set of readings per form. A form with no reading, an empty lemma, or a lemma
     /// equal to itself says nothing and is dropped, so a caller cannot build an entry that judges nothing.
     public init(sources: [String], forms: [String: Set<Reading>], ownHeadwords: Set<String>,
-                words: Set<String> = []) {
+                words: Set<String> = [], covered: Set<String> = []) {
         var built: [String: Entry] = [:]
         built.reserveCapacity(forms.count)
         let own = Set(ownHeadwords.map(Self.canonical))
@@ -70,7 +74,14 @@ public struct FormTable: Sendable, Equatable {
         // **Each title twice where it carries a diacritic.** `Boötes` is a title, and `bootes` — what a reader or a
         // recogniser writes — must find it, or `bootes` is read as the plural of `boot`.
         self.words = Self.withFolded(words.map(Self.canonical))
+        self.covered = Self.withFolded(covered.map(Self.canonical))
     }
+
+    /// **Whether a dictionary that prints inflections read `word`'s entry whole**, so that printing no form under it is
+    /// evidence of having none to print — what a longer word's doubling is decided by when nothing else is printed
+    /// (ADR-0054). A title alone is not: it was every English dictionary's, the thesaurus's included, and one that was
+    /// read while another failed (third audit of 2026-10-10: a table that only listed *commit* offered it for *commited*).
+    public func vouchesForSilence(about word: String) -> Bool { covered.contains(Self.canonical(word)) }
 
     public var count: Int { entries.count }
 
@@ -213,10 +224,11 @@ public struct FormTable: Sendable, Equatable {
     /// nothing says this code did, and a stored table built by older extraction would be accepted as current.
     /// `InflectionInventory.formatVersion` is the extraction's half and `FormTable` records both, so either
     /// moving rebuilds it.
-    public static let formatVersion = "forms/2"
+    public static let formatVersion = "forms/3"
 
     /// A counted header, then the sources, then one form per line:
-    /// `form`, `1` when it is also a headword, and one `class:lemma` per reading — class empty where unknown.
+    /// `form`, `1` when it is also a headword, and one `class:lemma` per reading — class empty where unknown. Then one
+    /// title per line, followed by a tab and `1` where the table vouches for its silence (`covered`; `forms/3`).
     ///
     /// **Flat tab-separated text, for the reason the phrase inventory is** — read whole on every launch, 14 k
     /// lines, and nothing queries it but a dictionary lookup in memory.
@@ -235,7 +247,7 @@ public struct FormTable: Sendable, Equatable {
             let readings = entry.readings.map { "\($0.partOfSpeech):\($0.lemma)" }
             lines.append(([form, entry.isOwnHeadword ? "1" : "0"] + readings).joined(separator: "\t"))
         }
-        lines.append(contentsOf: titles)
+        lines.append(contentsOf: titles.map { covered.contains($0) ? "\($0)\t1" : $0 })
         return lines.joined(separator: "\n")
     }
 
@@ -276,12 +288,20 @@ public struct FormTable: Sendable, Equatable {
             forms[parts[0], default: []].formUnion(readings)
             if parts[1] == "1" { own.insert(parts[0]) }
         }
-        let titles = Set(lines[(1 + sourceCount + formCount) ..< (1 + sourceCount + formCount + wordCount)].map(String.init))
+        var titles = Set<String>(), vouched = Set<String>()
+        for line in lines[(1 + sourceCount + formCount) ..< (1 + sourceCount + formCount + wordCount)] {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard parts.count == 1 || (parts.count == 2 && parts[1] == "1") else { return nil }
+            let title = String(parts[0])
+            titles.insert(title)
+            if parts.count == 2 { vouched.insert(title) }
+        }
         guard titles.count == wordCount, !titles.contains("") else { return nil }
         // The titles were canonical when they were written, so they are not canonicalised again: that was most of
         // the 1.5 s a launch spent reading 76,000 of them. A hand-edited file that breaks this finds nothing.
         var table = FormTable(sources: sources, forms: forms, ownHeadwords: own)
         table.words = Self.withFolded(titles)
+        table.covered = Self.withFolded(vouched)
         // A line that decoded to nothing useful was dropped by the initialiser; the count says so.
         guard table.count == formCount else { return nil }
         self = table

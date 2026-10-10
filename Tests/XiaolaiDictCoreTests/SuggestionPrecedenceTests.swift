@@ -353,15 +353,23 @@ struct DictionaryFormGuardTests {
             == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
         #expect(try await offer("commiting", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
             .suggestion?.kind != .dictionaryForm)
-        // **A title the dictionary lists and prints no doubled form under does not double** — Oxford prints the forms of
-        // every word that does (measured on this Mac's table, 2026-10-10: all 30 doublers asked, *commit* to *excel*), so
-        // its silence is evidence. A table that lists *holler* and prints nothing under it makes *hollering* regular.
-        let listing = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["holler", "commit"])
-        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: listing)
+        // **A title whose entry a dictionary that prints inflections read whole, printing no doubled form, does not
+        // double** — Oxford prints the forms of every word that does (measured on this Mac's table, 2026-10-10: all 30
+        // doublers asked, *commit* to *excel*), so its silence about an entry it read is evidence. A table that covers
+        // *holler* and prints nothing under it makes *hollering* regular.
+        let covering = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["holler", "commit"], covered: ["holler"])
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: covering)
             == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
-        // A title it does not list says nothing, and the rule abstains as with no table at all.
-        let unlisted = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["commit"])
-        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: unlisted)
+        // **A title alone is not that** (third audit of 2026-10-10): the table's titles are every English dictionary's,
+        // the thesaurus's too, which prints no inflection at all — a table that only lists *commit* says nothing about
+        // whether it doubles, and *commited* is the checker's to correct.
+        let titleOnly = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["commit", "holler"])
+        for (term, correction, form) in [("commited", "committed", "commit"), ("commiting", "committing", "commit")] {
+            let offered = try await offer(term, lemma: form, checker: Checker([term: correction]),
+                                          dictionaries: Dictionaries(entries: lexicon), printed: titleOnly)
+            #expect(offered == .offered(SpellingSuggestion(term: term, word: correction)), "\(term): \(offered)")
+        }
+        #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: titleOnly)
             .suggestion?.kind != .dictionaryForm)
         // Both spellings printed decide nothing: *travel* prints *traveled* and *travelled*, so neither is the rule's.
         let both = FormTable(sources: [], forms: [

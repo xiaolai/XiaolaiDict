@@ -64,10 +64,11 @@ public struct DictionaryForm: Equatable, Sendable {
             $0.formUnion(RegularSpelling.slots(ofPrinted: $1.form, as: $1.partOfSpeech))
         }
         // **Whether a longer word doubles is the dictionary's to say** (second audit of 2026-10-10): what it prints in one
-        // slot — *committed*, *hollered* — decides the others; a title it lists and prints no doubled form under does not
-        // double; with neither, the rule abstains.
+        // slot — *committed*, *hollered* — decides the others; a title whose entry a printing dictionary read whole, with
+        // no doubled form printed under it, does not double (third audit: a title alone is not that); with neither, the
+        // rule abstains.
         let doubling = RegularSpelling.doubling(of: form, printed: printed.map(\.form),
-                                                listed: table?.wordList.contains(Lemmatizer.canonical(form)) ?? false)
+                                                listed: table?.vouchesForSilence(about: form) ?? false)
         let slot = RegularSpelling.slots(of: written, from: form, doubling: doubling).first { !printedSlots.contains($0) }
         return slot.map { DictionaryForm(word: form, evidence: .regular($0)) }
     }
@@ -153,9 +154,10 @@ enum RegularSpelling {
     /// **Whether `base` doubles its last consonant before an ending, by what the dictionary prints** — true where a form
     /// printed under it is the base, its last letter again and *-ed*, *-ing*, *-er* or *-est*; false where one is the base
     /// and the ending alone; nil where they disagree, since a dictionary printing both spellings has decided nothing.
-    /// Where none is either, **false for a title the table lists** (`listed`): Oxford prints the forms of every word that
-    /// doubles — measured on this Mac's table on 2026-10-10, all 30 doublers asked are printed doubled, *commit* to
-    /// *excel* — so its silence about one it lists is evidence; nil for one it does not list, and with no table at all.
+    /// Where none is either, **false for a title the table vouches for** (`listed`, `FormTable.vouchesForSilence`): Oxford
+    /// prints the forms of every word that doubles — measured on this Mac's table on 2026-10-10, all 30 doublers asked are
+    /// printed doubled, *commit* to *excel* — so its silence about an entry it read whole is evidence; nil otherwise —
+    /// a title only the thesaurus gave, one whose entry could not be read, or no table at all (third audit of 2026-10-10).
     static func doubling(of base: String, printed: [String], listed: Bool) -> Bool? {
         let word = base.lowercased()
         guard let last = word.last else { return nil }

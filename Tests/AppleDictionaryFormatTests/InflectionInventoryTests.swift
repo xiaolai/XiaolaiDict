@@ -125,6 +125,30 @@ struct InflectionInventoryReadTests {
         ])
         let inventory = try InflectionInventory.read(bundle)
         #expect(inventory.forms.isEmpty && inventory.ownHeadwords.isEmpty)
+        // **And vouches for no title's silence** (third audit of 2026-10-10): a dictionary that prints no inflection
+        // says nothing about one by printing none — the thesaurus's titles made *commit* read as not doubling.
+        #expect(inventory.headwords == ["big"] && inventory.covered.isEmpty, "covered \(inventory.covered)")
+    }
+
+    /// **What a printing dictionary's silence is evidence for: an entry it read whole** (third audit of 2026-10-10). An
+    /// entry with no inflection group printed none; one whose groups were parsed printed what it printed; one carrying
+    /// a group that could not be parsed is a title with nothing known about its forms, and is not vouched for — even
+    /// where another of its entries printed none.
+    @Test func theDictionaryVouchesOnlyForTheEntriesItReadWhole() throws {
+        let scratch = TemporaryDirectory()
+        let broken = """
+            <d:entry xmlns:d="http://www.apple.com/DTDs/DictionaryService-1.0.rng" id="r" d:title="regret">\
+            <span class="infg"><span class="inf">regretted</span></d:entry>
+            """
+        let bundle = try SyntheticDictionary.bundle(in: scratch, identifier: "test.printing", entries: [
+            Parsing.entry(title: "commit", Parsing.block("verb", Parsing.group("past", "committed"))),
+            Parsing.entry(title: "holler", Parsing.block("verb", "")),
+            broken,
+            Parsing.entry(title: "regret", Parsing.block("noun", "")),
+        ])
+        let inventory = try InflectionInventory.read(bundle)
+        #expect(inventory.headwords == ["commit", "holler", "regret"])
+        #expect(inventory.covered == ["commit", "holler"], "covered \(inventory.covered)")
     }
 }
 
@@ -162,7 +186,10 @@ struct InflectionInventoryAuditTests {
     @Test func anEntryThatPrintedFormsReturnsItsHeadwordSoItIsNotParsedAgain() {
         var out: [String: Set<InflectionInventory.Reading>] = [:]
         #expect(InflectionInventory.accumulate(Parsing.entry(Parsing.block("verb", Parsing.group("past", "broke"))), into: &out) == .named("break"))
-        #expect(InflectionInventory.accumulate(Parsing.entry(Parsing.block("verb", "")), into: &out) == .unread)
+        #expect(InflectionInventory.accumulate(Parsing.entry(Parsing.block("verb", "")), into: &out) == .noInflections)
+        // A record carrying a group that is not XML could not be read for its forms — told apart from one with none.
+        let unparsable = Parsing.entry(Parsing.block("verb", Parsing.group("past", "broke"))).replacingOccurrences(of: "</d:entry>", with: "")
+        #expect(InflectionInventory.accumulate(unparsable, into: &out) == .unparsed)
         let placeholder = Parsing.entry(title: "@", Parsing.block("verb", Parsing.group("past", "ed")))
         #expect(InflectionInventory.accumulate(placeholder, into: &out) == .named(""), "parsed, no usable headword: not parsed again")
     }

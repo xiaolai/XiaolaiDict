@@ -20,8 +20,37 @@ struct FormTableReaderTests {
     }
 
     static func inventory(_ forms: [String: Set<Reading>], own: Set<String> = [],
-                          headwords: Set<String> = []) -> InflectionInventory {
-        InflectionInventory(contentVersion: "v", forms: forms, ownHeadwords: own, headwords: headwords)
+                          headwords: Set<String> = [], covered: Set<String> = []) -> InflectionInventory {
+        InflectionInventory(contentVersion: "v", forms: forms, ownHeadwords: own, headwords: headwords, covered: covered)
+    }
+
+    /// **The table vouches for a title's silence only where a dictionary that prints inflections read its entry whole**
+    /// (third audit of 2026-10-10). Titles are merged from every English dictionary — the thesaurus's, which prints none,
+    /// and one read while another failed — so a title alone said "does not double" about *commit*. Coverage is merged
+    /// instead, and a partial read covers only what was read.
+    @Test func aTitleIsVouchedForOnlyWhereAPrintingDictionaryReadItsEntry() throws {
+        let scratch = TemporaryDirectory()
+        let swore: [String: Set<Reading>] = ["swore": [Reading(lemma: "swear", partOfSpeech: "verb")]]
+        // The printing dictionary failed; the thesaurus, which prints nothing, titles *commit*.
+        let partial = FormTableReader.table(
+            for: [Self.bundle("noad"), Self.bundle("thesaurus")], store: FormTableStore(directory: scratch.url)) { bundle, _ in
+            guard bundle.identifier == "thesaurus" else { throw Boom() }
+            return Self.inventory([:], headwords: ["commit", "holler"])
+        }
+        let table = try #require(partial.table)
+        #expect(table.wordList.contains("commit"), "the fixture must list commit")
+        #expect(!table.vouchesForSilence(about: "commit"), "a title alone vouched for commit's silence")
+        // Read whole by a printing dictionary: vouched for; only titled by the thesaurus: not.
+        let whole = FormTableReader.table(
+            for: [Self.bundle("noad"), Self.bundle("thesaurus")],
+            store: FormTableStore(directory: TemporaryDirectory().url)) { bundle, _ in
+            bundle.identifier == "noad"
+                ? Self.inventory(swore, headwords: ["holler", "swear"], covered: ["holler", "swear"])
+                : Self.inventory([:], headwords: ["commit"])
+        }
+        let read = try #require(whole.table)
+        #expect(read.vouchesForSilence(about: "holler"))
+        #expect(!read.vouchesForSilence(about: "commit"))
     }
 
     struct Boom: Error {}

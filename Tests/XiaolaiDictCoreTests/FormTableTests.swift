@@ -141,6 +141,18 @@ struct FormTableCodecTests {
         #expect(decoded.sources == ["a\t1", "inflections/2"])
     }
 
+    /// **The titles a printing dictionary read whole survive the file**, the rest staying titles only (third audit of
+    /// 2026-10-10) — so a stored table vouches for what the built one did, and for nothing more.
+    @Test func theTitlesItVouchesForSurviveTheRoundTrip() throws {
+        let table = FormTable(sources: ["a\t1"], forms: ["swore": [Reading(lemma: "swear", partOfSpeech: "verb")]],
+                              ownHeadwords: [], words: ["holler", "commit", "swear"], covered: ["holler", "swear"])
+        let decoded = try #require(FormTable(decoding: table.encoded()))
+        #expect(decoded == table)
+        #expect(decoded.vouchesForSilence(about: "holler") && decoded.vouchesForSilence(about: "Holler"))
+        #expect(!decoded.vouchesForSilence(about: "commit") && decoded.wordList.contains("commit"))
+        #expect(!decoded.vouchesForSilence(about: "absent"))
+    }
+
     @Test func theSameTableEncodesToTheSameBytes() {
         #expect(Self.sample().encoded() == Self.sample().encoded())
     }
@@ -151,19 +163,29 @@ struct FormTableCodecTests {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         #expect(FormTable(decoding: lines.dropLast().joined(separator: "\n")) == nil, "a cut file was read as current")
         #expect(FormTable(decoding: "") == nil)
-        #expect(FormTable(decoding: "forms/2\tx\ty\tz") == nil)
+        #expect(FormTable(decoding: "\(FormTable.formatVersion)\tx\ty\tz") == nil)
     }
 
     /// A header claiming `Int.max` lines must be refused, not trap on the sum in a process lookups run in.
-    @Test(arguments: ["forms/2\t9223372036854775807\t0\t0", "forms/2\t0\t9223372036854775807\t1", "forms/2\t1\t1\t9223372036854775807"])
-    func aHeaderClaimingMoreLinesThanExistIsRefusedWithoutTrapping(header: String) {
-        #expect(FormTable(decoding: header + "\nx") == nil)
+    /// **In this build's version**, so each is refused for what it claims and not for being another version's — a
+    /// literal version here went stale when the format moved (third audit of 2026-10-10: `forms/2` → `forms/3`).
+    @Test(arguments: ["\t9223372036854775807\t0\t0", "\t0\t9223372036854775807\t1", "\t1\t1\t9223372036854775807"])
+    func aHeaderClaimingMoreLinesThanExistIsRefusedWithoutTrapping(counts: String) {
+        #expect(FormTable(decoding: FormTable.formatVersion + counts + "\nx") == nil)
     }
 
     @Test func aMalformedFormLineIsRefused() {
-        #expect(FormTable(decoding: "forms/2\t0\t1\t0\nswore\t1") == nil)
-        #expect(FormTable(decoding: "forms/2\t0\t1\t0\nswore\t2\tverb:swear") == nil)
-        #expect(FormTable(decoding: "forms/2\t0\t1\t0\nswore\t0\tverbswear") == nil)
+        let header = "\(FormTable.formatVersion)\t0\t1\t0\n"
+        #expect(FormTable(decoding: header + "swore\t1") == nil)
+        #expect(FormTable(decoding: header + "swore\t2\tverb:swear") == nil)
+        #expect(FormTable(decoding: header + "swore\t0\tverbswear") == nil)
+        // The control: the same header with a well-formed line is read, so each refusal above is the line's.
+        #expect(FormTable(decoding: header + "swore\t0\tverb:swear") != nil)
+        // A title line flags its coverage with `1` and nothing else.
+        let titled = "\(FormTable.formatVersion)\t0\t0\t1\n"
+        #expect(FormTable(decoding: titled + "holler\t1") != nil)
+        #expect(FormTable(decoding: titled + "holler\t2") == nil)
+        #expect(FormTable(decoding: titled + "holler\t1\t1") == nil)
     }
 
     @Test func aFormCarryingATabIsSkippedNotEscaped() throws {
