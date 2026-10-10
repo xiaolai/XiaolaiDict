@@ -217,9 +217,20 @@ struct CommandCoverageTests {
                 == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: 30, dy: 0))))
         for wrong in [["--capture"], ["--capture", "card.jpg"], ["--capture", "--drag"], ["--drag", "1"],
                       ["--drag", "0", "0"], ["--drag", "a", "1"], ["--drag", "1", "1", "--drag", "2", "2"],
-                      ["--capture", "a.png", "--capture", "b.png"], ["--shake"]] {
+                      ["--capture", "a.png", "--capture", "b.png"], ["--shake"],
+                      // **Bounded, not merely finite** (third audit of 2026-10-10): `1e100` trapped on the drag's step
+                      // count with the button down.
+                      ["--drag", "1e100", "0"], ["--drag", "0", "-2001"], ["--drag", "inf", "1"], ["--drag", "nan", "1"]] {
             if case .success(let parsed) = LaunchArguments.parse(box + wrong) {
                 Issue.record("\(wrong) parsed as \(parsed)")
+            }
+        }
+        #expect(LaunchArguments.parse(box + ["--drag", "-2000", "2000"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: -2000, dy: 2000))))
+        // And a box no screen holds: its capture's pixel count is an `Int`.
+        for huge in [["1e100", "690", "80", "20"], ["600", "690", "1e100", "20"], ["600", "-1e6", "80", "20"]] {
+            if case .success(let parsed) = LaunchArguments.parse(["--placement-report"] + huge) {
+                Issue.record("\(huge) parsed as \(parsed)")
             }
         }
     }

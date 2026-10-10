@@ -1331,3 +1331,37 @@ class TheRemoteScriptsParseUnderTheMacsOwnBash(unittest.TestCase):
         planted = 'f() {\n    x="$(python3 - <<\'PYPLANT\' || true\nprint(got.get(\'correction\') or \'nothing\')\n' \
                   "# the card's own words\nPYPLANT\n)\"\n}\n"
         self.assertNotEqual(self.parses(planted).returncode, 0, "the plant parsed, so this check cannot fail")
+
+
+class TheDragHelperIsBoundedBeforeItPresses(unittest.TestCase):
+    """`drag-card` refuses a distance no card travels **before it asks Accessibility anything, let alone presses the
+    button** (third audit of 2026-10-10): `1e100` trapped on its step count after the button went down, with no mouse-up
+    to follow. Built as the install step builds it, and run with each distance; a bounded one goes on to the next check."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-drag-card-"))
+        source = cls.scratch / "main.swift"
+        shutil.copy(HELPERS / "drag-card.swift", source)
+        cls.helper = cls.scratch / "drag-card"
+        subprocess.run(["xcrun", "swiftc", "-O", str(source), str(RESOLVER), "-o", str(cls.helper)], check=True,
+                       capture_output=True, timeout=600, env={**os.environ, "TMPDIR": str(cls.scratch)})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.scratch, True)
+
+    def run_helper(self, dx: str, dy: str) -> subprocess.CompletedProcess:
+        return subprocess.run([str(self.helper), "com.example.nothing", "Lookup", "No entry for", dx, dy],
+                              capture_output=True, text=True, timeout=60, check=False)
+
+    def test_a_distance_no_card_travels_is_refused_as_usage(self):
+        for dx, dy in (("1e100", "0"), ("0", "-1e100"), ("inf", "0"), ("nan", "1"), ("2001", "0"), ("0", "-2001")):
+            with self.subTest(dx=dx, dy=dy):
+                done = self.run_helper(dx, dy)
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn("at most 2000 points", done.stderr)
+
+    def test_a_bounded_distance_goes_on_to_the_next_check(self):
+        done = self.run_helper("80", "-2000")
+        self.assertNotEqual(done.returncode, 2, done.stderr)

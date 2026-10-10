@@ -182,27 +182,47 @@ extension PlacementReport {
 
     /// The longest step a posted drag takes, in points — what the window may lag the pointer by at the end.
     static let dragStep: CGFloat = 2
+    /// **The farthest a drag may go on either axis**, in points — farther than the card can travel on any display it was
+    /// measured on, and a thousand steps at most. Checked before the button goes down (third audit of 2026-10-10).
+    nonisolated static let dragLimit: CGFloat = 2_000
 
     /// **A real drag**: the button down at `start` (global, y down), moved there by `delta` in steps, and up — each event
-    /// through `Instrument.postMouse`, which states its modifiers. False where an event could not be made.
-    static func drag(from start: CGPoint, by delta: CGVector) async -> Bool {
-        func post(_ type: CGEventType, _ point: CGPoint) -> Bool { Instrument.postMouse(type, at: point) }
-        guard post(.leftMouseDown, start) else { return false }
-        try? await Task.sleep(for: .milliseconds(120))
+    /// through `post`, `Instrument.postMouse` by default, which states its modifiers. False where the drag could not be
+    /// made, or was cancelled.
+    ///
+    /// **Bounded before the button goes down, and the button always comes up** (third audit of 2026-10-10): a distance
+    /// that is not finite, or past `dragLimit`, posts nothing — `1e100` trapped on its step count with the button down and
+    /// no mouse-up to follow; and once the button is down, an event that cannot be made or a cancellation ends the drag
+    /// with the button released where the pointer last went.
+    static func drag(
+        from start: CGPoint, by delta: CGVector,
+        post: (CGEventType, CGPoint) -> Bool = { Instrument.postMouse($0, at: $1) },
+        pause: (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    ) async -> Bool {
+        guard delta.dx.isFinite, delta.dy.isFinite, abs(delta.dx) <= dragLimit, abs(delta.dy) <= dragLimit else {
+            return false
+        }
         // **Steps of at most `dragStep`, as a hand's are**: a drag begins on its first move, so the window follows from
         // there and the first step is the most it can lag the pointer by — measured on the E2E Mac, 12 steps of 10 pt
-        // moved a window 110 of 120 pt, by AppKit's own background drag as by SwiftUI's.
+        // moved a window 110 of 120 pt, by AppKit's own background drag as by SwiftUI's. Bounded by `dragLimit` above.
         let steps = max(1, Int((max(abs(delta.dx), abs(delta.dy)) / dragStep).rounded(.up)))
+        guard post(.leftMouseDown, start) else { return false }
+        var at = start
+        var released = false
+        defer { if !released { _ = post(.leftMouseUp, at) } }
+        await pause(.milliseconds(120))
         for step in 1...steps {
+            guard !Task.isCancelled else { return false }
             let part = CGFloat(step) / CGFloat(steps)
-            guard post(.leftMouseDragged, CGPoint(x: start.x + delta.dx * part, y: start.y + delta.dy * part)) else {
-                return false
-            }
-            try? await Task.sleep(for: .milliseconds(10))
+            let next = CGPoint(x: start.x + delta.dx * part, y: start.y + delta.dy * part)
+            guard post(.leftMouseDragged, next) else { return false }
+            at = next
+            await pause(.milliseconds(10))
         }
-        let posted = post(.leftMouseUp, CGPoint(x: start.x + delta.dx, y: start.y + delta.dy))
-        try? await Task.sleep(for: .milliseconds(120))
-        return posted
+        released = true
+        let posted = post(.leftMouseUp, at)
+        await pause(.milliseconds(120))
+        return posted && !Task.isCancelled
     }
 
     /// **A control on this app's window pressed as VoiceOver presses it**: `AXPress`, found by a name ending `suffix`, in

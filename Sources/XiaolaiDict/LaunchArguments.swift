@@ -181,11 +181,16 @@ enum LaunchArguments {
         return .success(.readPoint(x: x, y: y))
     }
 
+    /// The farthest from the origin a point or a box's side on any display may be, in points.
+    static let screenLimit: Double = 100_000
+
     private static func placementReport(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
         let box = Array(arguments.prefix(4))
-        let numbers = box.compactMap(Double.init).filter(\.isFinite)
+        // **On a screen, not merely finite** (third audit of 2026-10-10): a box of `1e100` reached a capture whose pixel
+        // count is an `Int`. No display holds a point or a word past `screenLimit`.
+        let numbers = box.compactMap(Double.init).filter { $0.isFinite && abs($0) <= Self.screenLimit }
         guard box.count == 4, numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else {
-            return fail("--placement-report needs X Y WIDTH HEIGHT, a box with area, not \(arguments.joined(separator: " "))")
+            return fail("--placement-report needs X Y WIDTH HEIGHT, a box with area on a screen, not \(arguments.joined(separator: " "))")
         }
         var capture: String?
         var drag: PlacementDrag?
@@ -202,8 +207,11 @@ enum LaunchArguments {
                 rest = rest.dropFirst()
             case "--drag":
                 guard drag == nil else { return fail("--drag given twice") }
-                let move = rest.prefix(2).compactMap(Double.init).filter(\.isFinite)
-                guard move.count == 2, move != [0, 0] else { return fail("--drag needs DX DY, a move, not nothing") }
+                // Within `PlacementReport.dragLimit`, which the drag checks again before the button goes down.
+                let move = rest.prefix(2).compactMap(Double.init).filter { $0.isFinite && abs($0) <= PlacementReport.dragLimit }
+                guard move.count == 2, move != [0, 0] else {
+                    return fail("--drag needs DX DY, a move of at most \(Int(PlacementReport.dragLimit)) points each way, not nothing")
+                }
                 drag = PlacementDrag(dx: move[0], dy: move[1])
                 rest = rest.dropFirst(2)
             default:

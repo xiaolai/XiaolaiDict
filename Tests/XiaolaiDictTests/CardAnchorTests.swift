@@ -539,3 +539,60 @@ struct CardOutlineHitTests {
         }
     }
 }
+
+/// **A drag the instrument posts is bounded before the button goes down, and the button always comes up** (third audit
+/// of 2026-10-10). The distance was converted to a step count unchecked, so `1e100` trapped with the button down and no
+/// mouse-up ever posted; a smaller huge one looped for hours; and an event that could not be made returned with the
+/// button still down. Driven with the events recorded, never posted.
+@MainActor
+struct DragEventTests {
+    private final class Events {
+        var posted: [CGEventType] = []
+        /// The event, counted from one, that cannot be made.
+        var failing: Int?
+    }
+
+    private func drag(_ delta: CGVector, failing: Int? = nil,
+                      pause: @escaping (Duration) async -> Void = { _ in }) async -> (Bool, [CGEventType]) {
+        let events = Events()
+        events.failing = failing
+        let finished = await PlacementReport.drag(from: CGPoint(x: 500, y: 400), by: delta, post: { type, _ in
+            events.posted.append(type)
+            return events.posted.count != events.failing
+        }, pause: pause)
+        return (finished, events.posted)
+    }
+
+    @Test(arguments: [CGVector(dx: 1e100, dy: 0), CGVector(dx: 0, dy: -1e100), CGVector(dx: CGFloat.infinity, dy: 0),
+                      CGVector(dx: CGFloat.nan, dy: 10), CGVector(dx: PlacementReport.dragLimit + 1, dy: 0)])
+    func aDistanceNoScreenHoldsIsRefusedBeforeTheButtonGoesDown(_ delta: CGVector) async {
+        let (finished, posted) = await drag(delta)
+        #expect(!finished)
+        #expect(posted.isEmpty, "the button went down for a drag that could not be made: \(posted.count) events")
+    }
+
+    /// The control: a drag of 120,80 is the button down, sixty steps of two points, and up.
+    @Test func aDragIsDownStepsAndUp() async {
+        let (finished, posted) = await drag(CGVector(dx: 120, dy: 80))
+        #expect(finished)
+        #expect(posted.first == .leftMouseDown && posted.last == .leftMouseUp)
+        #expect(posted.filter { $0 == .leftMouseDragged }.count == 60)
+    }
+
+    @Test func anEventThatCannotBeMadeStillReleasesTheButton() async {
+        let (finished, posted) = await drag(CGVector(dx: 120, dy: 80), failing: 5)
+        #expect(!finished)
+        #expect(posted.last == .leftMouseUp, "the button was left down: \(posted.suffix(3))")
+        #expect(posted.count == 6, "the drag went on past the event that failed")
+    }
+
+    @Test func aCancelledDragStopsAndReleasesTheButton() async {
+        let task = Task { @MainActor in
+            await drag(CGVector(dx: 120, dy: 80), pause: { _ in withUnsafeCurrentTask { $0?.cancel() } })
+        }
+        let (finished, posted) = await task.value
+        #expect(!finished)
+        #expect(posted.last == .leftMouseUp, "the button was left down")
+        #expect(posted.filter { $0 == .leftMouseDragged }.count < 60, "a cancelled drag went on to the end")
+    }
+}

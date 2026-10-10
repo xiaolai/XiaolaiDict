@@ -15,8 +15,14 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 func die(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8)); exit(1)
 }
-guard arguments.count == 5, let dx = Double(arguments[3]), let dy = Double(arguments[4]) else {
-    FileHandle.standardError.write(Data("usage: drag-card <bundle-id> <window-title> <text> <dx> <dy>\n".utf8)); exit(2)
+// **Bounded before anything is asked, let alone the button pressed** (third audit of 2026-10-10): `1e100` trapped on the
+// step count after the button went down, and a smaller huge distance looped for hours. No card travels farther.
+let limit = 2_000.0
+guard arguments.count == 5, let dx = Double(arguments[3]), let dy = Double(arguments[4]),
+      dx.isFinite, dy.isFinite, abs(dx) <= limit, abs(dy) <= limit else {
+    FileHandle.standardError.write(Data(
+        "usage: drag-card <bundle-id> <window-title> <text> <dx> <dy>, each move at most \(Int(limit)) points\n".utf8))
+    exit(2)
 }
 guard AXIsProcessTrusted() else { die("this process is not trusted for Accessibility, so it can see nothing") }
 let (bundleID, title, text) = (arguments[0], arguments[1], arguments[2])
@@ -62,23 +68,32 @@ while head < queue.count, head < 4_000, grip == nil {
 }
 guard let grip else { die("no text holding “\(text)” in the window titled \(title)") }
 
-func post(_ type: CGEventType, _ point: CGPoint) {
+/// One event, its modifiers stated. False where it could not be made.
+func post(_ type: CGEventType, _ point: CGPoint) -> Bool {
     guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
-    else { die("a mouse event could not be made") }
+    else { return false }
     event.flags = []
     event.post(tap: .cghidEventTap)
+    return true
 }
 let start = CGPoint(x: grip.midX, y: grip.midY)
-post(.leftMouseDown, start)
+guard post(.leftMouseDown, start) else { die("the button could not be pressed") }
 usleep(120_000)
-// Steps of at most two points, as a hand's are: a drag begins on its first move (`PlacementReport.dragStep`).
+// Steps of at most two points, as a hand's are: a drag begins on its first move (`PlacementReport.dragStep`). A thousand
+// at most, by the bound above. **The button comes up however the drag ends**, where the pointer last went.
 let steps = max(1, Int((max(abs(dx), abs(dy)) / 2).rounded(.up)))
+var at = start
 for step in 1...steps {
     let part = Double(step) / Double(steps)
-    post(.leftMouseDragged, CGPoint(x: start.x + dx * part, y: start.y + dy * part))
+    let next = CGPoint(x: start.x + dx * part, y: start.y + dy * part)
+    guard post(.leftMouseDragged, next) else {
+        _ = post(.leftMouseUp, at)
+        die("a drag event could not be made; the button was released at \(at)")
+    }
+    at = next
     usleep(10_000)
 }
-post(.leftMouseUp, CGPoint(x: start.x + dx, y: start.y + dy))
+guard post(.leftMouseUp, at) else { die("the button could not be released") }
 usleep(400_000)
 guard let after = frame(window) else { die("the window titled \(title) went during the drag") }
 let report: [String: Any] = ["before": box(before), "after": box(after)]
