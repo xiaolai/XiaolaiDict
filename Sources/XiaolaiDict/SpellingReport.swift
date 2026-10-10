@@ -25,12 +25,36 @@ enum SpellingReport {
         // The witness `verify_bundle` looks for in a development bundle: a sentence only this branch has.
         LookupCommand.writeError("spelling-report: asking the spell checker about each term the dictionaries miss")
         // **The reader's own form table, as the app reads it at launch** — the dictionary form the card is offered is
-        // decided with it (plan-card-refinements WI-3), and without it a term alone has only the tagger's lemma.
-        FormAuthority.shared.use(FormTableStore())
+        // decided with it (plan-card-refinements WI-3), and without it a term alone has only the tagger's lemma. Waited
+        // for where the service is still building it, and said where it never came (`awaitFormTable`).
         let client = DictionaryClient()
+        let store = FormTableStore()
+        let table = await awaitFormTable(read: { store.read() }, startService: { _ = try? await client.lookup("the") },
+                                         within: .seconds(120), every: .seconds(1))
+        if table == nil {
+            LookupCommand.writeError("spelling-report: no form table after 120 s, so each term has the tagger's lemma alone")
+        }
+        FormAuthority.shared.use(store)
         return await run(terms: terms, lookUp: { term throws(CancellationError) in try await client.lookup(term) },
                          checker: SystemSpellChecker(), write: LookupCommand.writeLine)
 #endif
+    }
+
+    /// **The reader's form table, waited for where the service is still building it** (2026-10-10). A new table format
+    /// refuses the stored one, and the dictionary service rebuilds it in the background once a lookup starts it — about
+    /// 30 s on the Macs measured — so a report made straight after installing such a build measured the offers with no
+    /// table, and the lookup stage read the guards as having lost *heavy* for *heavied*. Read; where there is none, the
+    /// service started once and the store read again until it answers or `within` runs out. Nil at the deadline.
+    static func awaitFormTable(read: () -> FormTable?, startService: () async -> Void, within: Duration,
+                               every interval: Duration) async -> FormTable? {
+        if let table = read() { return table }
+        await startService()
+        let deadline = ContinuousClock.now + within
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: interval)
+            if let table = read() { return table }
+        }
+        return nil
     }
 
     /// The report for `terms`, through `lookUp` and `checker`, written through `write`. **`.failure` where the service

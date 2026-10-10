@@ -155,3 +155,48 @@ struct SpellingReportTests {
         #expect(await SpellingReport.run(terms: ["recieve"]) == .usage)
     }
 }
+
+/// **The report measures with the form table the reader will have, not the first seconds after an update** (2026-10-10).
+/// A new format refuses the stored table, and the dictionary service rebuilds it in the background once a lookup starts it
+/// — about 30 s on the Macs measured. The lookup stage asked straight after installing a build that moved the format, so
+/// `heavied` and `gazeboes` were reported with no table and read as guards that had lost them. The table is waited for,
+/// bounded, and its absence at the deadline is said.
+@MainActor
+struct SpellingReportFormTableTests {
+    private final class Store {
+        var reads = 0
+        var startedService = 0
+        /// The read, counted from one, from which the table is there; nil for never.
+        var presentFrom: Int?
+        let table = FormTable(sources: ["s"], forms: [:], ownHeadwords: [])
+        func read() -> FormTable? {
+            reads += 1
+            return presentFrom.map { reads >= $0 } == true ? table : nil
+        }
+    }
+
+    private func await(_ store: Store, within: Duration) async -> FormTable? {
+        await SpellingReport.awaitFormTable(read: store.read, startService: { store.startedService += 1 },
+                                            within: within, every: .milliseconds(1))
+    }
+
+    @Test func aTableAlreadyStoredIsUsedAndNothingIsStarted() async {
+        let store = Store()
+        store.presentFrom = 1
+        #expect(await self.await(store, within: .seconds(60)) != nil)
+        #expect(store.startedService == 0)
+    }
+
+    @Test func aTableTheServiceIsStillBuildingIsWaitedFor() async {
+        let store = Store()
+        store.presentFrom = 5
+        #expect(await self.await(store, within: .seconds(60)) != nil, "the rebuild was not waited for")
+        #expect(store.startedService == 1, "the service was not started, or started more than once")
+    }
+
+    @Test func aTableThatNeverArrivesIsNoneAtTheDeadline() async {
+        let store = Store()
+        #expect(await self.await(store, within: .milliseconds(50)) == nil)
+        #expect(store.startedService == 1)
+    }
+}
