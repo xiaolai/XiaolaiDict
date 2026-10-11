@@ -2708,6 +2708,18 @@ say(whole.get("context") == "complete",
 say(long.get("captureSource") == "opticalRecognition" and long.get("context") == "mayBeCut",
     "hover: a sentence taller than the tallest strip is marked as possibly cut",
     f"hover: the overlong sentence was not marked mayBeCut: {sys.argv[2][:400]}")
+# **The word first, the rest of the sentence after** (C1, 2026-10-11): the tall sentence runs off the first strip, so the
+# first reading arrives cut and marked, and the taller strip settles on the whole sentence later. The card is drawn with
+# the first; the sense waits for the second, which the runner tests hold.
+first = whole.get("first") or {}
+first_words = words(first.get("sentence"))
+say(bool(first) and first.get("grew") is True and first.get("context") == "mayBeCut",
+    "hover: the first reading of the tall sentence arrived cut and marked, and a taller strip replaced it",
+    f"hover: the tall sentence had no first reading that grew: {json.dumps(first)[:300]}")
+say(bool(first) and 0 < first.get("milliseconds", 0) < whole.get("milliseconds", 0) and 0 < len(first_words) < len(got),
+    f"hover: the word was there at {first.get('milliseconds', 0):.0f} ms with {len(first_words)} words, before the whole "
+    f"sentence at {whole.get('milliseconds', 0):.0f} ms with {len(got)}",
+    f"hover: the first reading was not earlier and shorter than the settled one: {json.dumps(first)[:300]}")
 for name, r in (("tall", whole), ("overlong", long)):
     if r:
         print(f"NOTE\thover: the {name} sentence's read took {r.get('milliseconds', 0):.0f} ms")
