@@ -126,6 +126,26 @@ public struct PinnedNoteView: View {
     /// Huge a line held half the words the card's did. For the window, which is sized in AppKit before any view is.
     public static func openingWidth(for size: TextSize) -> CGFloat { Scale(size).space.lookupWidth }
 
+    /// **The unpin control's hit target, as `unpinControl` draws it**: the glyph at the body size, padded to the
+    /// pointing floor (`IconButton`). Measured from the symbol itself, so a size whose glyph outgrows the floor is
+    /// answered with the glyph.
+    public static func unpinTarget(for size: TextSize) -> CGSize {
+        let glyph = NSImage(systemSymbolName: ActionSymbol.unpinNote.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: Scale(size).text.body, weight: .regular))?
+            .size ?? .zero
+        return CGSize(width: max(Token.Target.minimum, glyph.width), height: max(Token.Target.minimum, glyph.height))
+    }
+
+    /// **How far each note pinned at the same point is stepped down from the one before**: enough that the older
+    /// note's whole unpin target, and the space between items on a line, is left uncovered — the control's top inset
+    /// (`unpinControl`'s `padDown`), its target's height, and `inline`. A newer note is in front and covers everything
+    /// of the older below its own top edge, so the vertical step alone is what exposes the control (2026-10-11: the
+    /// fixed 24 pt step left a newer note over the older's control, which sits 1.25 em down and is 28 pt tall).
+    public static func cascadeStep(for size: TextSize) -> CGFloat {
+        let scale = Scale(size)
+        return scale.space.padDown + unpinTarget(for: size).height + scale.space.inline
+    }
+
     public var body: some View {
         ScrollView {
             // **At the reader's text size, like the card it was pinned from.** These were the

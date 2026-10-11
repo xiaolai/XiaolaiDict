@@ -94,8 +94,9 @@ import XiaolaiDictTestSupport
 
     // MARK: - Where a note opens
 
-    /// The cascade step the design names, written here rather than read from the controller, so a changed step fails.
-    private let step: CGFloat = 24
+    /// The cascade step the design names at the standard size, written here rather than read from the controller, so a
+    /// changed step fails: the unpin control's top inset (1.25 em), its 28 pt target and the inline gap (0.5 em).
+    private let step: CGFloat = 15 + 28 + 6
 
     /// **What the scene hands `WindowPlacement` is a top-left, y down from the top of the primary display** — the space
     /// SwiftUI reads it in, measured 2026-10-10 on the E2E Mac: an AppKit origin of y 780 (the bottom of a note pinned
@@ -161,14 +162,56 @@ import XiaolaiDictTestSupport
         let visible = NSRect(x: 0, y: 40, width: 1000, height: 700)
         let size = NSSize(width: 300, height: 200)
         let margin: CGFloat = 8
-        let corner = PinnedNoteController.frame(near: NSPoint(x: 990, y: 50), size: size, visible: visible, openBefore: 0)
+        // In the corner the whole cascade is raised so its last note sits a margin above the foot.
+        let corner = PinnedNoteController.frame(near: NSPoint(x: 990, y: 50), size: size, visible: visible, openBefore: 0,
+                                                step: step)
         #expect(corner.maxX == visible.maxX - margin)
-        #expect(corner.minY == visible.minY + margin)
-        let top = PinnedNoteController.frame(near: NSPoint(x: 100, y: 739), size: size, visible: visible, openBefore: 0)
+        let last = PinnedNoteController.frame(near: NSPoint(x: 990, y: 50), size: size, visible: visible, openBefore: 7,
+                                              step: step)
+        #expect(last.minY == visible.minY + margin)
+        let top = PinnedNoteController.frame(near: NSPoint(x: 100, y: 739), size: size, visible: visible, openBefore: 0,
+                                             step: step)
         #expect(top.maxY == 739 - step)
-        let wrapped = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 8)
-        let fresh = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 0)
+        let wrapped = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 8,
+                                                 step: step)
+        let fresh = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 0,
+                                               step: step)
         #expect(wrapped == fresh, "the cascade does not start again after eight notes")
+    }
+
+    /// **Two notes pinned at one point leave the older one's whole unpin target uncovered, at every text size and at
+    /// every edge** (2026-10-11). The control is drawn at the note's top-right, `padDown` and `padAcross` in, as tall as
+    /// its target; the newer note is in front. The positive control: the old fixed 24 pt step covers it. Clamping each
+    /// note to the screen's foot on its own (the old rule) put two notes pinned there at one top — the foot pointers.
+    @Test(arguments: TextSize.allCases)
+    func aSteppedNoteLeavesTheOlderOnesUnpinTargetUncovered(textSize: TextSize) {
+        let visible = NSRect(x: 0, y: 40, width: 1728, height: 1077)
+        let size = NSSize(width: PinnedNoteView.openingWidth(for: textSize), height: PinnedNoteController.openingHeight)
+        let scale = Scale(textSize), target = PinnedNoteView.unpinTarget(for: textSize)
+        #expect(target.width >= Token.Target.minimum && target.height >= Token.Target.minimum)
+        func control(of note: NSRect) -> NSRect {
+            NSRect(x: note.maxX - scale.space.padAcross - target.width, y: note.maxY - scale.space.padDown - target.height,
+                   width: target.width, height: target.height)
+        }
+        func uncovered(at pointer: NSPoint, step: CGFloat, count: Int) -> Bool {
+            let frames = (0..<count).map {
+                PinnedNoteController.frame(near: pointer, size: size, visible: visible, openBefore: $0, step: step)
+            }
+            return frames.indices.allSatisfy { older in
+                frames[(older + 1)...].allSatisfy { newer in
+                    let exposed = control(of: frames[older])
+                    return !newer.intersects(exposed) && exposed.minY - newer.maxY >= scale.space.inline - 0.001
+                }
+            }
+        }
+        let step = PinnedNoteView.cascadeStep(for: textSize)
+        let pointers = [NSPoint(x: 600, y: 700), NSPoint(x: 1720, y: 700), NSPoint(x: 600, y: 45),
+                        NSPoint(x: 1720, y: 45), NSPoint(x: 0, y: 1117)]
+        for pointer in pointers {
+            #expect(uncovered(at: pointer, step: step, count: 2), "\(textSize) at \(pointer)")
+            #expect(uncovered(at: pointer, step: step, count: PinnedNoteController.cascadeLength), "\(textSize) at \(pointer)")
+        }
+        #expect(!uncovered(at: NSPoint(x: 600, y: 700), step: 24, count: 2), "the old 24 pt step was not caught")
     }
 
     // MARK: - How wide a note opens

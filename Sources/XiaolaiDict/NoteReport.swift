@@ -153,7 +153,15 @@ extension NoteReport {
 
         report["order"] = await clicks(on: clicked, settings: settings, other: other)
         report["panel"] = await panelClick(in: app, settings: settings, other: other)
-        report["bothUnpinned"] = await unpinEach(pinned, on: visible)
+        report["bothUnpinned"] = await unpinEach(pinned, at: pointers(on: visible))
+        // **Two notes pinned at one point, the older one put away first while the newer stands over it** (2026-10-11):
+        // the cascade's step must leave the older note's unpin control uncovered — mid-screen, and in the screen's
+        // bottom-right corner, where clamping each note to the edge had put both at one place.
+        let middle = UpPoint(NSPoint(x: visible.midX, y: visible.midY))
+        report["stackedUnpinned"] = await unpinEach(pinned, at: [middle, middle])
+        let corner = UpPoint(NSPoint(x: visible.maxX - PinnedNoteController.screenMargin,
+                                     y: visible.minY + PinnedNoteController.screenMargin))
+        report["stackedAtTheEdgeUnpinned"] = await unpinEach(pinned, at: [corner, corner])
         guard Instrument.write(report) else { return .failure }
         return .success
     }
@@ -169,9 +177,9 @@ extension NoteReport {
     /// click reported not to reach the first note's control while a second was on screen (2026-10-10). Before each click,
     /// what the compositor draws frontmost at the point and what Accessibility finds there, so a click that lands on
     /// another window is told from one the control ignored.
-    private static func unpinEach(_ pinned: PinnedNoteController, on visible: NSRect) async -> [[String: Any]] {
+    private static func unpinEach(_ pinned: PinnedNoteController, at pointers: [UpPoint]) async -> [[String: Any]] {
         var windows: [(heading: String, window: NSWindow)] = []
-        for (note, pointer) in zip(notes(), pointers(on: visible)) {
+        for (note, pointer) in zip(notes(), pointers) {
             let id = pinned.pin(note, near: pointer)
             if await Instrument.settle(until: appearance, { Instrument.isOnScreen(pinned.window(of: id)) }),
                let window = pinned.window(of: id) {

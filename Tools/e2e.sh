@@ -4967,21 +4967,29 @@ if len(shown) == 2:
         f"note ({size}): the two notes overlap — {a} and {b}")
 # **Each of two notes put away by a real click on its own control, the first first** (reported 2026-10-10: with two on
 # screen, the click on the first note's control did not reach it).
-both = r.get("bothUnpinned") or []
-say(len(both) == 2, f"note ({size}): two notes were on screen for the clicks that put each away",
-    f"note ({size}): {len(both)} notes were on screen for the unpin clicks, not 2")
-for b in both:
-    h = b.get("heading")
-    if b.get("problem"):
-        say(False, "", f"note ({size}): “{h}” could not be clicked away: {b['problem']}")
-        continue
-    say(b.get("frontmostAtThePoint") == "this note",
-        f"note ({size}): at “{h}”'s unpin control the compositor draws that note in front",
-        f"note ({size}): at “{h}”'s unpin control {b.get('at')} the compositor draws {b.get('frontmostAtThePoint')} in front "
-        f"(Accessibility finds {b.get('hit')}; {b.get('notesOnScreen')} notes on screen, “{h}” at {b.get('window')})")
-    say(b.get("posted") is True and b.get("closed") is True,
-        f"note ({size}): a real click on “{h}”'s unpin control put it away with {b.get('notesOnScreen')} notes on screen",
-        f"note ({size}): a real click on “{h}”'s unpin control did not put it away: {b}")
+# **And two pinned at one point, mid-screen and in the bottom-right corner** (2026-10-11): the older note is clicked away
+# first, with the newer one stepped over it, so its whole unpin control must be uncovered at every size.
+for key, where in (("bothUnpinned", "pinned apart"), ("stackedUnpinned", "pinned at one point"),
+                   ("stackedAtTheEdgeUnpinned", "pinned at one point in the corner")):
+    both = r.get(key) or []
+    say(len(both) == 2 and both[0].get("notesOnScreen") == 2,
+        f"note ({size}, {where}): two notes were on screen for the clicks that put each away",
+        f"note ({size}, {where}): {len(both)} notes for the unpin clicks, the first with "
+        f"{(both[0] if both else {}).get('notesOnScreen')} on screen, not 2")
+    for b in both:
+        h = b.get("heading")
+        if b.get("problem"):
+            say(False, "", f"note ({size}, {where}): “{h}” could not be clicked away: {b['problem']}")
+            continue
+        say(b.get("frontmostAtThePoint") == "this note",
+            f"note ({size}, {where}): at “{h}”'s unpin control the compositor draws that note in front",
+            f"note ({size}, {where}): at “{h}”'s unpin control {b.get('at')} the compositor draws "
+            f"{b.get('frontmostAtThePoint')} in front (Accessibility finds {b.get('hit')}; {b.get('notesOnScreen')} "
+            f"notes on screen, “{h}” at {b.get('window')})")
+        say(b.get("posted") is True and b.get("closed") is True,
+            f"note ({size}, {where}): a real click on “{h}”'s unpin control put it away with "
+            f"{b.get('notesOnScreen')} notes on screen",
+            f"note ({size}, {where}): a real click on “{h}”'s unpin control did not put it away: {b}")
 p = r.get("panel") or {}
 if p.get("measured"):
     a = p["afterClick"]

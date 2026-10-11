@@ -12,9 +12,8 @@ final class PinnedNoteController {
     static let openingHeight: CGFloat = 200
     /// The reader's text size, read as each note is pinned. Set by the app; the standard size until then.
     var textSize: @MainActor () -> TextSize = { .standard }
-    /// How far each successive note is stepped down and right, and how many steps before the
-    /// cascade starts again at the top.
-    static let cascadeStep: CGFloat = 24
+    /// How many steps before the cascade starts again at the top. The step itself is the reader's text size's
+    /// (`PinnedNoteView.cascadeStep(for:)`): the older note's unpin control must stay uncovered.
     static let cascadeLength = 8
     /// The gap kept between a note and the screen's edge.
     static let screenMargin: CGFloat = 8
@@ -100,10 +99,20 @@ final class PinnedNoteController {
     /// **A note's frame, in AppKit's space, for a pointer**: its top-left a cascade step down and right of the pointer, a
     /// step further for each note already open — starting again after `cascadeLength` — and kept on the usable area a
     /// screen margin in, so a note pinned in a corner opens where it can be read.
-    static func frame(near pointer: NSPoint, size: NSSize, visible: NSRect, openBefore: Int) -> NSRect {
-        let offset = CGFloat(openBefore % cascadeLength + 1) * cascadeStep
-        let x = max(visible.minX + screenMargin, min(pointer.x + offset, visible.maxX - size.width - screenMargin))
-        let top = min(visible.maxY - screenMargin, max(pointer.y - offset, visible.minY + screenMargin + size.height))
+    ///
+    /// **Clamped as a cascade, never note by note** (2026-10-11): clamping each note to the screen's foot put every note
+    /// pinned there at the same top, and the newest covered the others' unpin controls. Near the foot the whole cascade is
+    /// raised so its last note fits, and where the screen cannot hold a full one the cascade is as long as it can hold.
+    static func frame(near pointer: NSPoint, size: NSSize, visible: NSRect, openBefore: Int, step: CGFloat) -> NSRect {
+        let room = visible.height - 2 * screenMargin - size.height
+        let length = max(1, min(cascadeLength, Int((room / step).rounded(.down)) + 1))
+        let index = openBefore % length
+        let x = max(visible.minX + screenMargin,
+                    min(pointer.x + CGFloat(index + 1) * step, visible.maxX - size.width - screenMargin))
+        // The first note's top, held high enough that the rest of the cascade fits below it.
+        let below = CGFloat(length - 1) * step
+        let first = min(visible.maxY - screenMargin, max(pointer.y - step, visible.minY + screenMargin + size.height + below))
+        let top = first - CGFloat(index) * step
         return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
     }
 
@@ -131,10 +140,12 @@ final class PinnedNoteController {
         }
         // Unwrapped once for the placement math below, which is all in AppKit's space.
         let pointer = pointer.cg
-        let size = NSSize(width: PinnedNoteView.openingWidth(for: textSize()), height: Self.openingHeight)
+        let textSize = textSize()
+        let size = NSSize(width: PinnedNoteView.openingWidth(for: textSize), height: Self.openingHeight)
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
-        let frame = Self.frame(near: pointer, size: size, visible: visible, openBefore: notes.count)
+        let frame = Self.frame(near: pointer, size: size, visible: visible, openBefore: notes.count,
+                               step: PinnedNoteView.cascadeStep(for: textSize))
         opening[note.id] = frame
         // The same frame in the space SwiftUI reads, about the primary display — whose top every global y starts from.
         let primary = NSScreen.screens.first?.frame.height ?? visible.maxY
