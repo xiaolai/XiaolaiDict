@@ -399,6 +399,8 @@ final class LookupRunner {
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
             sentence: usable ? selection.sentence : nil, outcome: nil)
         presentation.sentenceLooksMisread = misread
+        // **Withheld as before, and now said.** A misread is the stronger reason and has its own notice.
+        presentation.sentenceMayBeCut = !misread && selection.sentence != nil && selection.quality.context == .mayBeCut
         // Kept beside the sentence it indexes: without it the card has to search, and a search
         // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
         // the sentence, another occurrence of it.

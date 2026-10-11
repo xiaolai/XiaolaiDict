@@ -215,6 +215,27 @@ struct LookupRunnerTests {
         }
     }
 
+    /// **A sentence the capture may have cut is withheld, and the card says why.** It was withheld in silence: a missing
+    /// sentence and an unpicked meaning, with nothing on the card to tell them from a lookup with no sentence at all.
+    @Test func aSentenceThatMayBeCutIsWithheldAndSaysSo() async throws {
+        for context in [CaptureQuality.Context.mayBeCut, .complete] {
+            let panel = RecordingPanel()
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) },
+                                         fallback: { _ in nil }),
+                panel: panel)
+            let selection = Selection(
+                text: "comfortable", sentence: "A comfortable chair stood by the", rangeInSentence: nil,
+                quality: try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: context)),
+                place: ReadingPlace())
+            _ = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+            guard case .lookup(let shown)? = panel.contents.first else { Issue.record("no lookup shown"); continue }
+            let cut = context == .mayBeCut
+            #expect(shown.sentenceMayBeCut == cut, "\(context): the card was told \(shown.sentenceMayBeCut)")
+            #expect((shown.sentence == nil) == cut)
+        }
+    }
+
     /// Each lookup's panel content carries its request, which is what gives it a view of its own.
     @Test func theShownLookupCarriesItsRequest() async throws {
         let panel = RecordingPanel()

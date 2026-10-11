@@ -45,6 +45,9 @@ public struct LookupPresentation: Equatable {
     /// **The captured sentence carries signs of a misread** (`CaptureQuality.doubts(sentence:)`), so `sentence` is nil
     /// and the card says why rather than drawing it as the reader's own — nor is it given to the sense picker or a model.
     public var sentenceLooksMisread = false
+    /// **The captured sentence may run past what could be read** (`CaptureQuality.Context.mayBeCut`), so `sentence` is
+    /// nil — a cut sentence is not given to the sense picker or a model as though it were whole — and the card says so.
+    public var sentenceMayBeCut = false
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?

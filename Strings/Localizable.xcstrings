@@ -1833,6 +1833,9 @@
     "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning." : {
 
     },
+    "The sentence around this word runs past what could be read, so it is not shown or used to pick a meaning." : {
+
+    },
     "The sentence may be cut short" : {
 
     },

@@ -761,6 +761,7 @@ public struct LookupPanelContent: View {
     /// Keep a short quality signal visible; expansion carries the precise explanation and remedy.
     private var compactIsIncomplete: Bool {
         if PanelCaveats.serviceUnanswered(presentation.outcome) || presentation.sentenceLooksMisread
+            || presentation.sentenceMayBeCut
             || PanelCaveats.readOffTheScreen(presentation.capture, warning: options.warnsAboutScreenReading) {
             return true
         }
@@ -906,6 +907,12 @@ public struct LookupPanelContent: View {
         if presentation.sentenceLooksMisread {
             Notice(text: Text(
                 "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning."))
+        }
+        // **A sentence withheld because it may be cut says so**, for the same reason: unexplained, it reads as a lookup
+        // that had no sentence at all.
+        if presentation.sentenceMayBeCut {
+            Notice(text: Text(
+                "The sentence around this word runs past what could be read, so it is not shown or used to pick a meaning."))
         }
     }
 
