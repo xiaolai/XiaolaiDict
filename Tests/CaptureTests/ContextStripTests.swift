@@ -52,9 +52,18 @@ struct StripPage {
 
     /// What a capture of the strip `top ..< top + height`, the window's full width, reads: every row wholly inside it,
     /// normalised to the strip. A row the strip's edge cuts is not read, which is what Vision does with half a line.
-    func strip(top: CGFloat, height: CGFloat) -> (lines: [RecognisedLine], region: CGSize) {
+    ///
+    /// With `readingCutRows`, a row the edge cuts is read too, its box clipped to the strip — what Vision does with a row
+    /// mostly inside, measured on the E2E Mac 2026-10-11: the clipped row's short box ended the paragraph there.
+    func strip(top: CGFloat, height: CGFloat, readingCutRows: Bool = false) -> (lines: [RecognisedLine], region: CGSize) {
         let region = CGSize(width: size.width, height: height)
-        let lines = rows.filter { $0.y >= top && $0.y + $0.height <= top + height }.map { row -> RecognisedLine in
+        let inside = rows.filter {
+            readingCutRows ? $0.y < top + height && $0.y + $0.height > top : $0.y >= top && $0.y + $0.height <= top + height
+        }
+        let lines = inside.map { original -> RecognisedLine in
+            let clippedTop = max(original.y, top), clippedBottom = min(original.y + original.height, top + height)
+            let row = (text: original.text, x: original.x, y: clippedTop, height: clippedBottom - clippedTop,
+                       charWidth: original.charWidth)
             var runs: [RecognisedRun] = []
             var offset = 0
             var column = 0
@@ -240,6 +249,23 @@ struct ParagraphFinderTests {
         // The strip starts between rows two and three: rows three to five are read, with clear space below.
         let (found, _) = try Self.find(page, top: 438, height: 300, pointingAt: "soft")
         #expect(found.open == [.above], "open \(found.open)")
+    }
+
+    /// **A row the strip's edge cuts is no boundary.** Read with a short box, it failed the size test and closed the
+    /// paragraph there as `complete` — the E2E Mac's first run of this change. It is the strip's edge, and the side is
+    /// open: on the bottom and on the top alike.
+    @Test func aRowCutByTheEdgeLeavesThatSideOpen() throws {
+        var page = StripPage()
+        page.paragraph(StripText.fiveRows, x: 40, top: 400, columns: 60)
+        // The bottom edge at 468 cuts row four (460 ..< 474) in half; the top edge at 426 cuts row two (420 ..< 434).
+        let (below, _) = page.strip(top: 300, height: 168, readingCutRows: true)
+        let seedBelow = try #require(StripPage.index(of: "keeper", in: below))
+        let foundBelow = ParagraphFinder.paragraph(around: seedBelow, in: below, region: CGSize(width: 2672, height: 168))
+        #expect(foundBelow.open == [.below], "open \(foundBelow.open)")
+        let (above, _) = page.strip(top: 426, height: 300, readingCutRows: true)
+        let seedAbove = try #require(StripPage.index(of: "soft", in: above))
+        let foundAbove = ParagraphFinder.paragraph(around: seedAbove, in: above, region: CGSize(width: 2672, height: 300))
+        #expect(foundAbove.open == [.above], "open \(foundAbove.open)")
     }
 
     @Test func aParagraphBreakEndsTheParagraphOnBothSides() throws {

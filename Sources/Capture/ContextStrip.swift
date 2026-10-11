@@ -177,6 +177,10 @@ public enum ParagraphFinder {
     /// Two left edges closer than this many line heights are one margin: Vision's boxes jitter, and a character is
     /// about half a line height wide.
     static let marginTolerance: CGFloat = 0.5
+    /// **A row this close to the strip's top or bottom edge, in line heights, may be cut by it.** Vision reads a row the
+    /// edge cuts in half with a short box, and that box failed the size test and closed the paragraph there as complete
+    /// (the E2E Mac, 2026-10-11). Such a row is the strip's edge, not a boundary: the walk stops before it, open.
+    static let edgeContact: CGFloat = 0.25
 
     public static func paragraph(around index: Int, in lines: [RecognisedLine], region: CGSize) -> StripParagraph {
         guard lines.indices.contains(index), region.width > 0, region.height > 0 else {
@@ -249,6 +253,8 @@ public enum ParagraphFinder {
         func left(_ row: Int) -> CGFloat { rows[row].line.box.minX * region.width }
         func height(_ row: Int) -> CGFloat { rows[row].line.box.height * region.height }
         func marked(_ row: Int) -> Bool { ListMarker.starts(rows[row].line.text) }
+        func touchesTop(_ row: Int) -> Bool { top(row) <= lineHeight * ParagraphFinder.edgeContact }
+        func touchesBottom(_ row: Int) -> Bool { bottom(row) >= region.height - lineHeight * ParagraphFinder.edgeContact }
 
         func length(_ range: ClosedRange<Int>) -> Int {
             range.map { rows[$0].line.text.utf16.count }.reduce(0, +) + range.count - 1
@@ -280,6 +286,7 @@ public enum ParagraphFinder {
                     return breaks(upper: (0, lineHeight), lower: (self.top(top), bottom(top)))
                 }
                 let candidate = top - 1
+                if touchesTop(candidate) { return false }
                 if breaks(candidate, top) { return true }
                 if !sameMargin(candidate, top) {
                     // A list item's hanging indent, or a first line set in from the rest: that row starts this
@@ -301,6 +308,7 @@ public enum ParagraphFinder {
                     return breaks(upper: (self.top(bottom), self.bottom(bottom)), lower: (edge - lineHeight, edge))
                 }
                 let candidate = bottom + 1
+                if touchesBottom(candidate) { return false }
                 if breaks(bottom, candidate) || marked(candidate) { return true }
                 if !sameMargin(candidate, bottom) {
                     // Only the paragraph's first row may differ from the rest — a list marker hanging out, or a first
