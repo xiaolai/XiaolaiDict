@@ -1,3 +1,4 @@
+import DictionaryModel
 import Foundation
 import XiaolaiDictCore
 
@@ -113,6 +114,8 @@ public struct LookupCard: Equatable {
     /// The reader's own sentence, where one was captured. The cue that makes a wrong answer
     /// visible: they can judge the claim against the text they read it in without opening anything.
     public let sentence: String?
+    /// Which ends of `sentence` may be cut — the card marks that side with an ellipsis and says it quietly.
+    public var sentenceCut: TextSegmenter.Clipping = []
     /// How many times this word has been looked up before, and where. **Shown as a number, not
     /// as a sentence.** "3rd lookup" spelled out above the answer tells a reader they have failed
     /// to learn this word twice already — true, unasked for, and the last thing someone reaching

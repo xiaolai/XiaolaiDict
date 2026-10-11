@@ -394,13 +394,14 @@ final class LookupRunner {
         // **A sentence with signs of a misread is not the reader's sentence**, however whole: the card says so instead
         // of drawing it, and nothing downstream — the sentence pane, translation, the phrase line — is given it.
         let misread = selection.quality.doubts(sentence: selection.sentence)
-        let usable = selection.quality.context == .complete && !misread
+        // **A sentence that may be cut is shown and used, and marked** (the owner's decision, 2026-10-11): never gate,
+        // always annotate. Only a misread one is withheld.
+        let usable = !misread
         var presentation = LookupPresentation(
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
             sentence: usable ? selection.sentence : nil, outcome: nil)
         presentation.sentenceLooksMisread = misread
-        // **Withheld as before, and now said.** A misread is the stronger reason and has its own notice.
-        presentation.sentenceMayBeCut = !misread && selection.sentence != nil && selection.quality.context == .mayBeCut
+        presentation.sentenceCut = usable && selection.sentence != nil ? selection.sentenceCut : []
         // Kept beside the sentence it indexes: without it the card has to search, and a search
         // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
         // the sentence, another occurrence of it.

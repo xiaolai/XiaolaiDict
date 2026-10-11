@@ -296,6 +296,13 @@ public struct LookupCardView: View {
                         .lineSpacing(scale.text.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .setApart()
+                    // **Quietly, and only where it applies**: the sentence is the reader's all the same, and the
+                    // ellipsis on its cut side has already said where.
+                    if !card.sentenceCut.isEmpty {
+                        Text("The sentence may go on past what could be read.")
+                            .font(.system(size: scale.text.small))
+                            .foregroundStyle(.secondary)
+                    }
                     // **Under the sentence, and only where there is one.** The notice explains a span the
                     // reader has just seen underlined; without the sentence there is no span to explain,
                     // and the phrase alone would be an answer to a question nobody asked.
@@ -369,6 +376,14 @@ public struct LookupCardView: View {
     /// used to ignore, hardcoding semibold in `.primary` while the drawer honoured the preference
     /// and coloured by the word's own accent.
     private func marked(_ sentence: String) -> AttributedString {
+        var text = markedWords(sentence)
+        // **An ellipsis on the side that was cut**, outside the reader's words so nothing in them moves.
+        if card.sentenceCut.contains(.start) { text.insert(AttributedString("…"), at: text.startIndex) }
+        if card.sentenceCut.contains(.end) { text.append(AttributedString("…")) }
+        return text
+    }
+
+    private func markedWords(_ sentence: String) -> AttributedString {
         // **The captured range, and a search only where there is none — and never for a word in no position of the
         // sentence.** Searching took the first case-insensitive substring, so looking up *he* in "The man said he was
         // fine" marked the *he* inside "The", and a followed correction marked another occurrence of itself. The
@@ -761,7 +776,6 @@ public struct LookupPanelContent: View {
     /// Keep a short quality signal visible; expansion carries the precise explanation and remedy.
     private var compactIsIncomplete: Bool {
         if PanelCaveats.serviceUnanswered(presentation.outcome) || presentation.sentenceLooksMisread
-            || presentation.sentenceMayBeCut
             || PanelCaveats.readOffTheScreen(presentation.capture, warning: options.warnsAboutScreenReading) {
             return true
         }
@@ -908,12 +922,6 @@ public struct LookupPanelContent: View {
             Notice(text: Text(
                 "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning."))
         }
-        // **A sentence withheld because it may be cut says so**, for the same reason: unexplained, it reads as a lookup
-        // that had no sentence at all.
-        if presentation.sentenceMayBeCut {
-            Notice(text: Text(
-                "The sentence around this word runs past what could be read, so it is not shown or used to pick a meaning."))
-        }
     }
 
     /// A dictionary that answered with a different headword says so. `entry.match` was computed
@@ -957,12 +965,14 @@ public struct LookupPanelContent: View {
 
     private func card(for entry: DictionaryEntry) -> LookupCard {
         let mark = mark(for: entry)
-        return LookupCard(
+        var card = LookupCard(
             presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
             term: presentation.term, lemma: presentation.lemma.text,
             placement: presentation.termPlacement,
             sentence: presentation.sentence, mark: mark,
             memory: presentation.memory, phrase: presentation.phrase)
+        card.sentenceCut = presentation.sentenceCut
+        return card
     }
 
     /// **A card with no entry behind it.** Both states the primary dictionary can leave the panel
@@ -970,7 +980,7 @@ public struct LookupPanelContent: View {
     /// one builder: written out twice, a change to the sentence or the memory strip reached one
     /// card and not the other.
     private func cardWithoutAnEntry(_ answer: LookupCard.Answer) -> LookupCard {
-        LookupCard(
+        var card = LookupCard(
             term: presentation.term, lemma: presentation.lemma.text, placement: presentation.termPlacement,
             heading: presentation.term, partOfSpeech: nil,
             pronunciation: nil, answer: answer,
@@ -981,6 +991,8 @@ public struct LookupPanelContent: View {
             phrase: presentation.phrase,
             // Nil for prose: the rule draws a suggestion under the service's own miss and nowhere else.
             suggestion: presentation.offeredSuggestion)
+        card.sentenceCut = presentation.sentenceCut
+        return card
     }
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a

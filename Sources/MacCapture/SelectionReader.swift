@@ -65,12 +65,21 @@ public struct Selection: Sendable, Equatable {
 
     /// Written out, because a struct's own memberwise initialiser is never public: the app makes a selection of
     /// its own for a word the reader named, a reading reopened and an instrument's panel.
-    public init(text: String, sentence: String?, rangeInSentence: NSRange?, quality: CaptureQuality, place: ReadingPlace) {
+    /// **Which ends of `sentence` may be cut**, where the capture knows — for the card to mark that side. Empty for a
+    /// whole sentence; both ends where the context may be cut and the capture could not say which.
+    public let sentenceCut: TextSegmenter.Clipping
+
+    public init(
+        text: String, sentence: String?, rangeInSentence: NSRange?, quality: CaptureQuality, place: ReadingPlace,
+        sentenceCut: TextSegmenter.Clipping? = nil
+    ) {
         self.text = text
         self.sentence = sentence
         self.rangeInSentence = rangeInSentence
         self.quality = quality
         self.place = place
+        let cut = sentenceCut ?? []
+        self.sentenceCut = quality.context == .mayBeCut ? (cut.isEmpty ? [.start, .end] : cut) : []
     }
 
 }
@@ -504,7 +513,8 @@ public enum SelectionReader {
         }
         return .selected(Selection(
             text: term.text, sentence: context?.text, rangeInSentence: rangeInSentence,
-            quality: .accessibility(capture.source, context: quality), place: place), bounds: locate(term))
+            quality: .accessibility(capture.source, context: quality), place: place, sentenceCut: context?.cut),
+            bounds: locate(term))
     }
 
     private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "selection")

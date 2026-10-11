@@ -291,7 +291,7 @@ final class ScreenTextRecogniser: Sendable {
         // sentence is rebuilt carrying the answer rather than left to derive its own.
         let cut = settled.sentence.mayBeCut || junction
         guard let sentence = SentenceContext(
-            text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection)
+            text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection, cut: settled.sentence.cut)
         else { return nil }
 
         // **What a taller strip could finish**: an open side the sentence reaches, unless the length cap closed it.

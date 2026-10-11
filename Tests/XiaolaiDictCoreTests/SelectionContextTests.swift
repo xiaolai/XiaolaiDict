@@ -75,6 +75,15 @@ struct SelectionContextTests {
         #expect(sentence("whole", in: window, clipped: [.start, .end])?.mayBeCut == false)
     }
 
+    /// **Which end was cut, side by side**, so the card can mark the side the sentence may go on past.
+    @Test func aCutSentenceSaysWhichEndWasCut() {
+        let window = "rest of a long sentence that began before the window. A whole one. And one that runs"
+        #expect(sentence("began", in: window, clipped: [.start, .end])?.cut == [.start])
+        #expect(sentence("runs", in: window, clipped: [.start, .end])?.cut == [.end])
+        #expect(sentence("whole", in: window, clipped: [.start, .end])?.cut == [])
+        #expect(sentence("fragment", in: "only a fragment", clipped: [.start, .end])?.cut == [.start, .end])
+    }
+
     /// The document's own start and end are not cuts: a sentence reaching them is complete.
     @Test func aSentenceAtTheDocumentsOwnEdgeIsComplete() {
         let text = "The first sentence. The last one"

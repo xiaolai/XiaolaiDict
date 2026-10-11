@@ -215,24 +215,28 @@ struct LookupRunnerTests {
         }
     }
 
-    /// **A sentence the capture may have cut is withheld, and the card says why.** It was withheld in silence: a missing
-    /// sentence and an unpicked meaning, with nothing on the card to tell them from a lookup with no sentence at all.
-    @Test func aSentenceThatMayBeCutIsWithheldAndSaysSo() async throws {
-        for context in [CaptureQuality.Context.mayBeCut, .complete] {
+    /// **A sentence the capture may have cut is shown, used, and marked on the side that was cut** (the owner's decision
+    /// of 2026-10-11, replacing the withholding: never gate, always annotate). It was withheld from the card and the
+    /// picker in silence, so a sentence that ran one row past the strip cost the reader both the sentence and the meaning.
+    @Test func aSentenceThatMayBeCutIsShownUsedAndMarked() async throws {
+        let sentence = "A comfortable chair stood by the"
+        for (context, cut) in [(CaptureQuality.Context.mayBeCut, TextSegmenter.Clipping.end), (.complete, [])] {
             let panel = RecordingPanel()
+            let selector = SentenceRecordingSelector()
             let runner = LookupRunner(
                 client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) },
                                          fallback: { _ in nil }),
-                panel: panel)
+                panel: panel, selector: selector)
             let selection = Selection(
-                text: "comfortable", sentence: "A comfortable chair stood by the", rangeInSentence: nil,
+                text: "comfortable", sentence: sentence, rangeInSentence: NSRange(location: 2, length: 11),
                 quality: try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: context)),
-                place: ReadingPlace())
+                place: ReadingPlace(), sentenceCut: cut)
             _ = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
             guard case .lookup(let shown)? = panel.contents.first else { Issue.record("no lookup shown"); continue }
-            let cut = context == .mayBeCut
-            #expect(shown.sentenceMayBeCut == cut, "\(context): the card was told \(shown.sentenceMayBeCut)")
-            #expect((shown.sentence == nil) == cut)
+            #expect(shown.sentence == sentence, "\(context): the sentence was withheld")
+            #expect(shown.sentenceCut == cut, "\(context): the card was told \(shown.sentenceCut)")
+            #expect(!selector.sentences.isEmpty, "the picker was never asked, so this proves nothing")
+            #expect(selector.sentences.allSatisfy { $0 == sentence }, "\(context): the picker was given \(selector.sentences)")
         }
     }
 

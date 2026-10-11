@@ -540,7 +540,7 @@ public final class HoverReader: HoverReading {
         of word: WordAtPoint, quality: CaptureQuality, bundleID: String?, appName: String?
     ) -> Selection {
         Selection(text: word.word, sentence: word.sentence.text, rangeInSentence: word.sentence.selection,
-                  quality: quality, place: ReadingPlace(bundleID: bundleID, name: appName))
+                  quality: quality, place: ReadingPlace(bundleID: bundleID, name: appName), sentenceCut: word.sentence.cut)
     }
 }
 

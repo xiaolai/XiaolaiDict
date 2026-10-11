@@ -74,6 +74,7 @@ struct StripReadingTests {
         #expect(read.mayBeCut, "a cut paragraph was reported complete: \(read.word.sentence.text)")
         #expect(read.word.sentence.mayBeCut == read.mayBeCut)
         #expect(read.wantsMore == [.below], "wants \(read.wantsMore)")
+        #expect(read.word.sentence.cut == [.end], "cut \(read.word.sentence.cut)")
     }
 
     @Test func aThreeHundredPointStripReadsItWholeAndComplete() throws {
@@ -90,6 +91,7 @@ struct StripReadingTests {
         let read = try Self.read(rows, top: 438, height: 300, word: "soft")
         #expect(read.mayBeCut)
         #expect(read.wantsMore == [.above], "wants \(read.wantsMore)")
+        #expect(read.word.sentence.cut == [.start], "cut \(read.word.sentence.cut)")
     }
 
     /// **An interior sentence is not cut by an open side it does not reach**, and asks for nothing.
