@@ -3498,7 +3498,7 @@ PYBOARD
     chose=no
     why=""
     for _ in $(seq 1 50); do
-        if why=$("$helpers/click-element" com.xiaolaidict "Choose…" 2>&1); then chose=yes; break; fi
+        if why=$("$helpers/click-element" com.xiaolaidict "setup-language-model-choose" 2>&1); then chose=yes; break; fi
         sleep 0.2
     done
     if [ "$chose" != yes ]; then

@@ -1516,3 +1516,21 @@ class TheProviderStubEndsWhenItsPidIsEnded(unittest.TestCase):
         out, err = self.run_it()
         self.assertEqual(out[0], "ended-0", err)
         self.assertEqual(out[1], "0", "the stub outlived the stage that ended it; the SSH channel stays open on it")
+
+
+class TheSetupStageClicksTheLanguageModelRowByItsIdentifier(unittest.TestCase):
+    """The setup stage clicked a button called "Choose…" and refused when two were enabled, which they are on a Mac that
+    has no study dictionary chosen of its own (the dictionary row says "Choose…" too, `SetupView`): MacMini-001,
+    2026-10-12, where `mbp16` had one chosen and so showed "Change…" there. A stage that depends on what the machine has
+    accumulated measures the machine; the row's button is named by an identifier the view declares."""
+
+    IDENTIFIER = "setup-language-model-choose"
+
+    def test_the_stage_clicks_the_identifier_not_the_shared_label(self):
+        stage = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(f'click-element" com.xiaolaidict "{self.IDENTIFIER}"', stage)
+        self.assertNotIn('click-element" com.xiaolaidict "Choose…"', stage)
+
+    def test_the_view_declares_that_identifier_once(self):
+        view = (REPO / "Sources" / "XiaolaiDictUI" / "SetupView.swift").read_text(encoding="utf-8")
+        self.assertEqual(view.count(f'.accessibilityIdentifier("{self.IDENTIFIER}")'), 1)

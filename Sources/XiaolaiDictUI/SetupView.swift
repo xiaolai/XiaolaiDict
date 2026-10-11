@@ -589,6 +589,7 @@ public struct SetupView: View {
                 Button(board.provider == .none ? "Choose…" : "Change…") { openSettings(.languageModel) }
                     .stepAction()
                     .controlSize(.small)
+                    .accessibilityIdentifier("setup-language-model-choose")
             }
         case .shortcut:
             if let openSettings {
