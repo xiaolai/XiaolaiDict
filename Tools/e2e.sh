@@ -4973,18 +4973,23 @@ for n in notes:
          f"canBecomeMain={n.get('canBecomeMain')}, resizableByHand={n.get('resizableByHand')}, "
          f"styleMask={n.get('styleMask')}, level={n.get('level')}; {shape}")
     # **Where it opens: beside where it was pinned** — its top-left a cascade step down and right of the pointer, and a
-    # step further for each note already open, so several notes fan out. The step is 24 pt, the design's own; the pointer
-    # is near the screen's top, so nothing here is pushed back by an edge. It opened about 780 pt down (2026-10-10).
+    # step further for each note already open, so several notes fan out. The pointer is near the screen's top, so nothing
+    # here is pushed back by an edge. It opened about 780 pt down (2026-10-10). **The step is the design's, read from the
+    # design** (2026-10-11, e4b012b): enough to leave the older note's unpin control uncovered — its top inset (1.25 em),
+    # its target (at least 28 pt, its glyph's height where taller, at most 1.5 em) and the inline gap (0.5 em). It was a
+    # fixed 24 pt, which a newer note stacked at one point used to cover that control.
     at, before = n.get("pinnedAt"), n.get("openBefore")
     if at is None or before is None:
         say(False, "", f"note ({size}): the report does not say where “{h}” was pinned")
     else:
-        step = 24 * (before + 1)
+        least, most = (1.75 * em + 28) * (before + 1), (1.75 * em + max(28, 1.5 * em)) * (before + 1)
         dx, dy = w["x"] - at["x"], w["y"] - at["y"]
-        say(abs(dx - step) <= tolerance and abs(dy - step) <= tolerance,
-            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned, {step} each way",
+        within = lambda d: least - tolerance <= d <= most + tolerance
+        say(within(dx) and within(dy),
+            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned, "
+            f"{least:g}–{most:g} each way",
             f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned at "
-            f"({at['x']:.0f}, {at['y']:.0f}), not {step} each way ({shape})")
+            f"({at['x']:.0f}, {at['y']:.0f}), not {least:g}–{most:g} each way ({shape})")
     v = r.get("visible")
     if v:
         say(w["x"] >= v["x"] and w["y"] >= v["y"] and w["x"] + w["width"] <= v["x"] + v["width"]
