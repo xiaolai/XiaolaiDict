@@ -759,6 +759,13 @@ public final class Ledger {
             })
 
     /// Whether this database holds a table called `name`.
+    func hasColumn(_ column: String, in table: String) throws -> Bool {
+        var found = false
+        try run("SELECT EXISTS (SELECT 1 FROM pragma_table_info(?) WHERE name = ?)",
+                bind: [.text(table), .text(column)]) { found = $0.integer(0) == 1 }
+        return found
+    }
+
     func hasTable(_ name: String) throws -> Bool {
         var found = false
         try run("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
@@ -1146,8 +1153,11 @@ public final class Ledger {
                 // Which side of a sentence the capture may have cut. NULL for every row written before this:
                 // `context_quality` still says whether a cut was possible, and its side stays unknown — never
                 // read as the end, which is where a single ellipsis used to put it. A plain added column, so
-                // the table keeps its other constraints and needs no rebuild.
-                try execute("ALTER TABLE lookups ADD COLUMN context_cut TEXT CHECK (context_cut IN ('start', 'end', 'both'));")
+                // the table keeps its other constraints and needs no rebuild. **Only where it is missing**: an earlier
+                // step that rebuilt `lookups` did so from today's statement, which already holds it.
+                if try !hasColumn("context_cut", in: "lookups") {
+                    try execute("ALTER TABLE lookups ADD COLUMN context_cut TEXT CHECK (context_cut IN ('start', 'end', 'both'));")
+                }
             }
             try checkForeignKeysAfterMigrating()
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
