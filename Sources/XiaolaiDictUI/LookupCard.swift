@@ -118,6 +118,8 @@ public struct LookupCard: Equatable {
     public var sentenceCut: TextSegmenter.Clipping = []
     /// The rest of `sentence` is still being read off the screen: the card says so quietly, and proposes no sense yet.
     public var sentenceStillBeingRead = false
+    /// The sentence may be cut and nobody recorded on which side: said quietly, with no ellipsis.
+    public var sentenceCutSideUnknown = false
     /// How many times this word has been looked up before, and where. **Shown as a number, not
     /// as a sentence.** "3rd lookup" spelled out above the answer tells a reader they have failed
     /// to learn this word twice already — true, unasked for, and the last thing someone reaching

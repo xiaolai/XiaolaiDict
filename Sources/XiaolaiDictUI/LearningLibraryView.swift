@@ -322,7 +322,9 @@ public struct LearningLibraryView<Review: View>: View {
                 Text(row.at, format: .dateTime.year().month().day().hour().minute())
             }
             if row.cue != .none {
-                Text(verbatim: row.sentence).font(.system(size: scale.text.small)).foregroundStyle(.primary).textSelection(.enabled)
+                // An ellipsis on the side recorded as cut; an unknown side is said below, without one.
+                Text(CutEllipsis.applied(to: AttributedString(row.sentence), cut: row.sentenceCut))
+                    .font(.system(size: scale.text.small)).foregroundStyle(.primary).textSelection(.enabled)
             }
             if row.times > 1 { Text("Read ^[\(row.times) time](inflect: true), in this same sentence") }
             if let place = row.place.label ?? row.place.name { Text(verbatim: place) }
@@ -334,7 +336,10 @@ public struct LearningLibraryView<Review: View>: View {
             if row.result == .notFound { Text("Not found") }
             if row.result == .pending { Text("No dictionary entry was recorded.") }
             if row.cue == .none { Text("No sentence was captured.") }
-            if row.cue == .truncatedSentence {
+            if row.cutSideUnknown {
+                StatusLabel(.caution, "Part of this sentence may not have been read.", size: scale.text.micro,
+                            prominence: .secondary)
+            } else if row.cue == .truncatedSentence {
                 StatusLabel(.caution, "The sentence may be cut short", size: scale.text.micro, prominence: .secondary)
             }
             if let meaning, revealed {

@@ -644,7 +644,9 @@ private struct RecordingBasis {
             quality: quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
-            senseAbstention: abstention, script: script)
+            senseAbstention: abstention, script: script,
+            // Which side of the sentence may be cut, so a reopened card draws it where this one did.
+            contextCut: named ? [] : selection.sentenceCut)
     }
 }
 

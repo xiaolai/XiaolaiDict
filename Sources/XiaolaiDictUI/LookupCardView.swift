@@ -307,6 +307,10 @@ public struct LookupCardView: View {
                         Text("The sentence may go on past what could be read.")
                             .font(.system(size: scale.text.small))
                             .foregroundStyle(.secondary)
+                    } else if card.sentenceCutSideUnknown {
+                        Text("Part of this sentence may not have been read.")
+                            .font(.system(size: scale.text.small))
+                            .foregroundStyle(.secondary)
                     }
                     // **Under the sentence, and only where there is one.** The notice explains a span the
                     // reader has just seen underlined; without the sentence there is no span to explain,
@@ -381,11 +385,8 @@ public struct LookupCardView: View {
     /// used to ignore, hardcoding semibold in `.primary` while the drawer honoured the preference
     /// and coloured by the word's own accent.
     private func marked(_ sentence: String) -> AttributedString {
-        var text = markedWords(sentence)
         // **An ellipsis on the side that was cut**, outside the reader's words so nothing in them moves.
-        if card.sentenceCut.contains(.start) { text.insert(AttributedString("…"), at: text.startIndex) }
-        if card.sentenceCut.contains(.end) { text.append(AttributedString("…")) }
-        return text
+        CutEllipsis.applied(to: markedWords(sentence), cut: card.sentenceCut)
     }
 
     private func markedWords(_ sentence: String) -> AttributedString {
@@ -978,6 +979,7 @@ public struct LookupPanelContent: View {
             memory: presentation.memory, phrase: presentation.phrase)
         card.sentenceCut = presentation.sentenceCut
         card.sentenceStillBeingRead = presentation.sentenceStillBeingRead
+        card.sentenceCutSideUnknown = presentation.sentenceCutSideUnknown
         return card
     }
 
@@ -999,6 +1001,7 @@ public struct LookupPanelContent: View {
             suggestion: presentation.offeredSuggestion)
         card.sentenceCut = presentation.sentenceCut
         card.sentenceStillBeingRead = presentation.sentenceStillBeingRead
+        card.sentenceCutSideUnknown = presentation.sentenceCutSideUnknown
         return card
     }
 

@@ -52,6 +52,9 @@ public struct LookupPresentation: Equatable {
     /// **The rest of the sentence is still being read** — a taller strip of the screen (`PendingContext`). The card draws
     /// the first strip's sentence and says, quietly, that it may be cut; no sense is proposed until it settles.
     public var sentenceStillBeingRead = false
+    /// **A sentence that may be cut on a side nobody recorded** — a reading kept before the side was, reopened. Said
+    /// without a direction, and never drawn as a cut at the end.
+    public var sentenceCutSideUnknown: Bool { sentence != nil && capture.context == .mayBeCut && sentenceCut.isEmpty }
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?

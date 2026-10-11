@@ -582,7 +582,9 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// at the range recorded. Not private: a reading recorded one way and reopened another is the defect a test reads.
     static func selection(reopening row: ReadingEntry) -> Selection {
         Selection(text: row.surface, sentence: row.cue == .none ? nil : row.sentence, rangeInSentence: row.sentenceRange,
-                  quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place)
+                  quality: row.quality ?? .accessibility(.accessibilityTextRange, context: .missing), place: row.place,
+                  // The side recorded, or none where it never was — which the quality keeps a possible cut.
+                  sentenceCut: row.sentenceCut)
     }
 
     // MARK: - Hover

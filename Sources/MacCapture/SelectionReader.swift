@@ -66,7 +66,9 @@ public struct Selection: Sendable, Equatable {
     /// Written out, because a struct's own memberwise initialiser is never public: the app makes a selection of
     /// its own for a word the reader named, a reading reopened and an instrument's panel.
     /// **Which ends of `sentence` may be cut**, where the capture knows — for the card to mark that side. Empty for a
-    /// whole sentence; both ends where the context may be cut and the capture could not say which.
+    /// whole sentence, and for a possible cut whose side nobody knows (`quality.context` says which): a reading recorded
+    /// before the side was kept, or a cut the capture could not place. Never both ends for an unknown one — that drew
+    /// two cuts where there may have been one, and is a different answer from "not known".
     public let sentenceCut: TextSegmenter.Clipping
 
     public init(
@@ -78,8 +80,7 @@ public struct Selection: Sendable, Equatable {
         self.rangeInSentence = rangeInSentence
         self.quality = quality
         self.place = place
-        let cut = sentenceCut ?? []
-        self.sentenceCut = quality.context == .mayBeCut ? (cut.isEmpty ? [.start, .end] : cut) : []
+        self.sentenceCut = quality.context == .mayBeCut ? sentenceCut ?? [] : []
     }
 
 }
