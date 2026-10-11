@@ -9,8 +9,10 @@
 #   make lint     SwiftLint's correctness rules over Sources, warnings failing (.swiftlint.yml)
 #   make icon     regenerate Resources/XiaolaiDict.icon and MenuBarIcon.svg from Tools/icon
 #   make e2e      the same as make, then the end-to-end tests on the E2E machine (E2E_HOST).
-#                 STAGES="drawer recogniser" runs only those; with none, all of them. A full run
-#                 costs minutes and most changes touch one or two.
+#                 Incremental: a stage whose inputs (Tools/e2e/stage-inputs.tsv) are unchanged since a
+#                 fresh pass on that Mac and macOS is CARRIED, not run, and the table says why.
+#                 STAGES="drawer recogniser" runs only those, fresh. FULL=1 runs every stage fresh.
+#   make e2e-full every stage, fresh — what a merge or a release needs; CARRIED never counts there
 #   make e2e-status  what each stage last did, and on which build
 #   make release BUILD_NUMBER=<n>
 #                 swift test, then sign with a secure timestamp, notarise and staple the app, and
@@ -28,7 +30,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-status release clean metal-guard portability
+.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-full e2e-status release clean metal-guard portability
 
 # Machine-local settings, untracked: the name of your end-to-end machine and anything else that
 # belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
@@ -147,7 +149,12 @@ e2e: all
 	  echo "Set it once in local.mk (untracked):   echo 'E2E_HOST = your-ssh-host' > local.mk"; \
 	  echo "or per run:                            make e2e E2E_HOST=your-ssh-host"; \
 	  exit 1; }
-	@Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
+	@XIAOLAIDICT_E2E_FULL="$(FULL)" Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
+
+# Every stage, fresh, whatever is recorded: the run a merge or a release is judged by. A CARRIED stage is a judgment that
+# its inputs did not change, never a run, and `Tools/e2e-status.sh require-fresh <build>` refuses one.
+e2e-full:
+	@$(MAKE) e2e FULL=1
 
 # Reads the record rather than running anything. The script is the one implementation of it: the end
 # of a run prints the same table from the same place, and a second copy here had already lost a

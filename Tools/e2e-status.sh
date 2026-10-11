@@ -1,8 +1,17 @@
 #!/bin/bash
 # The end-to-end stage record: one line per stage, against the build it ran on.
 #
-#   e2e-status.sh record   file the `RESULT<TAB>stage<TAB>pass|fail` lines arriving on stdin
+#   e2e-status.sh record <build> [<keys> <host> <os>]
+#                          file the `RESULT<TAB>stage<TAB>pass|fail` lines arriving on stdin
 #   e2e-status.sh show     print what each stage last did, marking anything stale
+#   e2e-status.sh require-fresh <build>
+#                          exit 1 unless every stage's last result is a fresh pass on <build>
+#
+# **A row is `stage, result, build, when, key, host, os`**, tab-separated. The last three — the stage's inputs key
+# (`Tools/e2e-inputs.py keys`), the E2E Mac's hardware UUID and its macOS version and build — are what lets a later
+# run carry a pass forward instead of running the stage again; `Tools/e2e-inputs.py` reads them (`read_status`), and
+# a row without them, or with `-` for a key, is never carried. Only a stage that ran is filed: a carried stage keeps
+# the row of the fresh pass it was carried from, so the build on that row says what was actually tested.
 #
 # **One implementation, because two had already drifted.** `make e2e-status` and the end of a run
 # each printed this table from its own copy of the rules, and the run's copy had quietly lost the
@@ -34,7 +43,7 @@ build() {
 # bundle on disk so a hand-run `record` still works, which is the only caller that legitimately has
 # nothing to pass.
 record() {
-    local ran now name result
+    local ran now name result keys=${2:-} host=${3:--} os=${4:--} key
     ran=${1:-$(build)}
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mkdir -p "$(dirname "$STATUS")"
@@ -49,7 +58,10 @@ record() {
     | while IFS=$'\t' read -r name result; do
         [ -n "${name:-}" ] || continue
         if [ -f "$STATUS" ]; then grep -v "^$name	" "$STATUS" > "$STATUS.new" || true; else : > "$STATUS.new"; fi
-        printf '%s\t%s\t%s\t%s\n' "$name" "$result" "$ran" "$now" >> "$STATUS.new"
+        # The key the stage ran under, or `-` — no keys given, a row that is not a stage, or a key that moved mid-run.
+        key=-
+        [ -z "$keys" ] || key=$(awk -F'\t' -v s="$name" '$1 == s { print $2 }' "$keys")
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$result" "$ran" "$now" "${key:--}" "$host" "$os" >> "$STATUS.new"
         mv "$STATUS.new" "$STATUS"
     done
 }
@@ -65,7 +77,7 @@ show() {
     # **A pass is a fact about the build it ran on and expires with it.** One carried over from an
     # older build is shown as stale rather than as a pass: a green mark that outlives what it tested
     # is worse than no mark.
-    sort "$STATUS" | while IFS=$'\t' read -r name result on when; do
+    sort "$STATUS" | while IFS=$'\t' read -r name result on when _; do
         if [ "$on" != "$ran" ]; then
             printf '  %-14s %-4s stale (ran on %s, %s)\n' "$name" "$result" "$on" "$when"
         else
@@ -75,8 +87,18 @@ show() {
     echo "  $STATUS"
 }
 
+# **A merge or a release needs a fresh pass of every stage on its own build.** A CARRIED result is a development-loop
+# shortcut — its inputs were unchanged, which is a judgment about what each stage exercises, not a run — so a row that
+# says `carried`, or a pass filed against another build, is refused. Decided in `Tools/e2e-inputs.py release-gate`.
+require_fresh() {
+    local python
+    python=$(Tools/python.sh) || exit 1
+    "$python" Tools/e2e-inputs.py release-gate "$STATUS" "${1:?usage: e2e-status.sh require-fresh <build>}"
+}
+
 case ${1:-} in
-    record) shift; record "${1:-}" ;;
+    record) shift; record "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     show) show ;;
-    *) echo "usage: e2e-status.sh record|show" >&2; exit 64 ;;
+    require-fresh) shift; require_fresh "${1:-}" ;;
+    *) echo "usage: e2e-status.sh record|show|require-fresh" >&2; exit 64 ;;
 esac

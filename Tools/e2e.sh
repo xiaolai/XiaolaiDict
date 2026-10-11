@@ -6,14 +6,20 @@
 #
 #   e2e.sh <ssh-host> [stage...]   ship .build/XiaolaiDict.app to the host and run stages there
 #
-# With no stage names every stage runs. With them, only those — a full run costs minutes and most
-# changes touch one or two. The names are `KNOWN_STAGES` below, and a name that is not one of them
-# is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
+# With stage names, only those run, fresh. The names are `KNOWN_STAGES` below, and a name that is not
+# one of them is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
 #
-# Each result is filed by `Tools/e2e-status.sh` against the build it ran on, which is also what
-# `make e2e-status` reads. A pass is only a fact about that build, so one carried over from an older
-# build is shown as stale rather than as a pass: a green mark that outlives what it tested is worse
-# than no mark.
+# **With none, the run is incremental** (2026-10-11): each stage's inputs — the modules its assertions
+# exercise and what they depend on, its helpers and fixtures, its own region of this file, and the
+# harness every stage shares (`Tools/e2e/stage-inputs.tsv`) — are hashed into a key by
+# `Tools/e2e-inputs.py`, and a stage whose key equals that of its last fresh pass, on the same E2E Mac
+# and macOS build, is CARRIED rather than run. The table says which, and why. `XIAOLAIDICT_E2E_FULL=1`
+# (`make e2e-full`) runs every stage fresh. **CARRIED is a development-loop shortcut and is never
+# valid for a merge or a release**: those need a fresh pass of every stage on their own build, and
+# `Tools/e2e-status.sh require-fresh` refuses anything else.
+#
+# Each result is filed by `Tools/e2e-status.sh` against the build it ran on and the key it ran under,
+# which is also what `make e2e-status` reads.
 #
 # Each stage asserts what it saw, including that the thing it tested happened at all: a test that
 # silently did nothing must not look like one that passed.
@@ -277,6 +283,25 @@ IFS='|' read -r remote_uuid remote_name remote_model remote_os remote_build <<<"
 [ -n "$remote_uuid" ] || fail "$host did not report a hardware UUID"
 [ "$remote_uuid" != "$local_uuid" ] || fail "$host is this Mac; E2E tests run on the E2E machine, not the one that builds"
 echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
+
+# ---------------------------------------------------------------------------------------------
+# **Which stages run.** Each stage's key is its inputs' hash; a stage last passed fresh under an equal key, on this
+# Mac and this macOS build, is carried. Asked-for stages and a full run ignore what is recorded. Computed here, before
+# anything is shipped, so a run that has nothing to do costs seconds — and printed, so a carry is never silent.
+stage "plan"
+e2e_os="$remote_os $remote_build"
+python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys" || fail "the stages' input keys could not be computed"
+full_flag=""
+[ -z "${XIAOLAIDICT_E2E_FULL:-}" ] || full_flag=--full
+python3 Tools/e2e-inputs.py plan "$remote_scripts/keys" .build/e2e-status.tsv "$remote_uuid" "$e2e_os" \
+    ${full_flag:+"$full_flag"} --asked "$STAGES" >"$remote_scripts/plan" || fail "the run could not be planned"
+python3 Tools/e2e-inputs.py table "$remote_scripts/plan"
+STAGES=$(awk -F'\t' '$2 == "run" { printf "%s ", $1 }' "$remote_scripts/plan")
+STAGES=${STAGES% }
+if [ -z "$STAGES" ]; then
+    echo "nothing to run: every stage is carried forward"
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------------------------
 # Runs on the E2E machine: quit a running copy of the E2E bundle, by its exact executable path.
@@ -5670,7 +5695,15 @@ if [ "$remote_status" -ge 2 ]; then
     echo "whatever the log holds is a partial run, not this build's verdict" >&2
     exit "$remote_status"
 fi
-Tools/e2e-status.sh record "$remote_version" <"$RUN_LOG"
+# **Filed under the key each stage ran under — unless that key moved while it ran.** A file edited mid-run is in no
+# bundle this run tested, so a stage whose key changed is filed with none and can never be carried from this pass.
+# A key that cannot be computed again files none for every stage: that direction is only ever an extra run.
+python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys-after" || : >"$remote_scripts/keys-after"
+python3 Tools/e2e-inputs.py settle "$remote_scripts/keys" "$remote_scripts/keys-after" >"$remote_scripts/keys-settled" \
+    || fail "the keys this run ran under could not be settled; nothing is recorded"
+Tools/e2e-status.sh record "$remote_version" "$remote_scripts/keys-settled" "$remote_uuid" "$e2e_os" <"$RUN_LOG"
+echo
+python3 Tools/e2e-inputs.py table "$remote_scripts/plan" "$RUN_LOG"
 echo
 Tools/e2e-status.sh show
 exit "$remote_status"
