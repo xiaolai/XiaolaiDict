@@ -114,6 +114,51 @@ struct StripReadingTests {
         #expect(!read.word.sentence.text.contains("market"))
     }
 
+    /// **Measured on the E2E Mac, 2026-10-11**: `strip.html`'s tall sentence, the 300 pt strip centred on its first row,
+    /// read by Vision into these boxes (points, the strip 1280 pt wide). The sentence runs on below the last row read;
+    /// the run that found this stored it as `complete`.
+    @Test func theMeasuredStripOfTheTallFixtureIsOpenBelow() throws {
+        let rows: [(String, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+            ("Meanwhile a market town kept a", 552.5, 810.0, 143.7, 161.2),
+            ("Lighthouse keepers along the northern", 72.5, 380.0, 143.7, 161.2),
+            ("coast counted every vessel that passed", 71.2, 387.5, 170.0, 186.2),
+            ("crooked clock that ran seven minutes", 551.2, 848.7, 170.0, 183.7),
+            ("fast for a whole century while the", 550.0, 820.8, 191.5, 216.7),
+            ("the outer rocks after dusk and copied", 70.8, 375.0, 191.5, 216.7),
+            ("mayor and the baker argued about", 550.0, 833.3, 216.5, 241.7),
+            ("each name into a heavy ledger whose", 70.8, 379.2, 216.5, 241.7),
+            ("pages had gone soft with salt and lamp", 70.8, 391.7, 245.8, 266.7),
+            ("bread prices.", 551.2, 657.6, 246.9, 265.6),
+            ("smoke until the winter storms closed the", 70.8, 395.8, 270.8, 291.7),
+        ]
+        let region = CGSize(width: 1280, height: 300)
+        let lines = rows.map { text, left, right, top, bottom -> RecognisedLine in
+            let box = CGRect(x: left / region.width, y: top / region.height,
+                             width: (right - left) / region.width, height: (bottom - top) / region.height)
+            var runs: [RecognisedRun] = []
+            var offset = 0
+            let perCharacter = box.width / CGFloat(text.count)
+            for piece in text.split(separator: " ", omittingEmptySubsequences: false) {
+                if !piece.isEmpty {
+                    runs.append(RecognisedRun(
+                        text: String(piece), utf16Offset: offset,
+                        box: CGRect(x: box.minX + CGFloat(offset) * perCharacter, y: box.minY,
+                                    width: CGFloat(piece.count) * perCharacter, height: box.height)))
+                }
+                offset += piece.utf16.count + 1
+            }
+            return RecognisedLine(text: text, box: box, runs: runs)
+        }
+        let run = lines[1].runs[0].box
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: 1, run: 0), at: CGPoint(x: run.midX, y: run.midY),
+            region: region, appName: nil, bundleID: nil))
+        #expect(!read.word.sentence.text.contains("Meanwhile"), "\(read.word.sentence.text)")
+        #expect(read.word.sentence.text.hasSuffix("closed the"), "\(read.word.sentence.text)")
+        #expect(read.mayBeCut, "a sentence running past the strip's bottom was called complete")
+        #expect(read.wantsMore == [.below], "wants \(read.wantsMore)")
+    }
+
     /// The strip's heights stay inside the deadline's reach and the tiling rule: full width, tiled as before.
     @Test @MainActor func theStripIsTallerThanTheOldBandAndBounded() {
         #expect(ContextStrip.initialHeight >= 2 * 140)

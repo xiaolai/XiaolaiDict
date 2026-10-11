@@ -172,8 +172,10 @@ public enum ParagraphFinder {
     /// A clear gap this many line heights tall starts a new paragraph, whatever the spacing elsewhere — the rule that
     /// holds where there are too few rows for a median to mean anything.
     static let paragraphGap: CGFloat = 1.5
-    /// Two rows set this differently in size are not one paragraph — a title over body text. `LineJoiner`'s own ratio.
-    static let sizeRatio: CGFloat = 0.6
+    /// Two rows set this differently in size are not one paragraph — a title over body text. **Below `LineJoiner`'s
+    /// 0.6, by measurement**: Vision boxed neighbouring rows of one 18 px canvas paragraph at 13.8 and 25.2 pt (0.55) on
+    /// the E2E Mac, 2026-10-11, and 0.6 ended the paragraph there as `complete`. A heading is set apart by its gap too.
+    static let sizeRatio: CGFloat = 0.5
     /// Two left edges closer than this many line heights are one margin: Vision's boxes jitter, and a character is
     /// about half a line height wide.
     static let marginTolerance: CGFloat = 0.5

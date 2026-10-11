@@ -268,6 +268,20 @@ struct ParagraphFinderTests {
         #expect(foundAbove.open == [.above], "open \(foundAbove.open)")
     }
 
+    /// **Vision's row heights jitter within one paragraph**: measured on the E2E Mac, one 18 px canvas paragraph came back
+    /// at 13.8 pt and 25.2 pt on neighbouring rows (0.55). A size test at `LineJoiner`'s 0.6 ended the paragraph there
+    /// and stored the cut sentence as `complete`.
+    @Test func rowHeightsThatJitterAreOneParagraph() throws {
+        var page = StripPage()
+        for (index, row) in StripPage.wrapped(StripText.fiveRows, columns: 60).enumerated() {
+            let tall = index.isMultiple(of: 2)
+            page.add(row, x: 40, y: 400 + CGFloat(index) * 26 + (tall ? 0 : 5), height: tall ? 25.2 : 13.8)
+        }
+        let (found, _) = try Self.find(page, top: 300, height: 300, pointingAt: "keeper")
+        #expect(found.block.text == StripText.fiveRows, "\(found.block.text)")
+        #expect(found.open.isEmpty, "open \(found.open)")
+    }
+
     @Test func aParagraphBreakEndsTheParagraphOnBothSides() throws {
         var page = StripPage()
         page.paragraph(StripText.before, x: 10, top: 300, columns: 60)
