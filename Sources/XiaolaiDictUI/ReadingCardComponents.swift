@@ -45,6 +45,17 @@ struct ReadingPronunciation: View {
     }
 }
 
+/// **"Possibly misread from the screen"** under a sentence an optical read captured with a misread's signs
+/// (`CaptureQuality.doubts(sentence:)`) — on History's cards, the Library's and its inspector, whatever the reader's
+/// "read off the screen" setting says: the sentence is kept for inspection and must not read as an exact quotation.
+struct PossiblyMisreadLabel: View {
+    @Environment(\.scale) private var scale
+
+    var body: some View {
+        StatusLabel(.caution, "Possibly misread from the screen", size: scale.text.micro, prominence: .secondary)
+    }
+}
+
 struct ReadingSentence: View {
     @Environment(\.scale) private var scale
     let sentence: String
@@ -210,6 +221,7 @@ struct ReadingCardView: View {
             VStack(alignment: .leading, spacing: scale.space.inline) {
                 headline
                 if entry.cue != .none { sentenceLine }
+                if entry.looksMisread { PossiblyMisreadLabel() }
                 if revealed, let gloss = entry.sense?.gloss { meaning(gloss) }
             }
             actionRow

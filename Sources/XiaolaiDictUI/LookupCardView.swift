@@ -783,12 +783,14 @@ public struct LookupPanelContent: View {
                 // unreachable XPC service, with the public fallback also finding nothing, told the
                 // reader their dictionaries do not have the word.
                 if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+                misreadCaveat
             }
         case .plainText(let text, _):
             VStack(alignment: .leading, spacing: scale.space.stack) {
                 let card = cardWithoutAnEntry(.prose(text))
                 LookupCardView(card: card)
                 if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+                misreadCaveat
                 // Its one action, Copy, is in `pinnedFooter`.
             }
         case .entries(_, let unreadable):
@@ -901,9 +903,16 @@ public struct LookupPanelContent: View {
             presentation.capture, warning: options.warnsAboutScreenReading) {
             Notice(text: Text("This word was read off the screen, so it may not be exactly right."))
         }
-        // **Not behind the reader's switch for the word's caveat**: that one fires on a quarter of optical reads, and
-        // this on a sentence that carries a misread's own signs, where the card has withheld the sentence and owes the
-        // reason — otherwise a missing sentence and an unpicked meaning are both unexplained.
+        misreadCaveat
+    }
+
+    /// **Not behind the reader's switch for the word's caveat**: that one fires on a quarter of optical reads, and this
+    /// on a sentence that carries a misread's own signs, where the card has withheld the sentence and owes the reason —
+    /// otherwise a missing sentence and an unpicked meaning are both unexplained. **On every card that answered** — an
+    /// entry, a miss and prose alike (2026-10-11: it was drawn only beside an entry, so a miss withheld its sentence
+    /// unexplained).
+    @ViewBuilder
+    private var misreadCaveat: some View {
         if presentation.sentenceLooksMisread {
             Notice(text: Text(
                 "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning."))

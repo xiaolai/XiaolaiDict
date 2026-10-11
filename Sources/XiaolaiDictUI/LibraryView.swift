@@ -716,6 +716,7 @@ struct LibraryRowView: View {
             }
             if !row.excerpt.isEmpty {
                 ReadingSentence(sentence: row.excerpt, ranges: row.marks, accent: accent)
+                if row.excerptLooksMisread { PossiblyMisreadLabel() }
             }
             HStack(spacing: scale.space.inline) {
                 ReadingPronunciation(word: row.word, sentence: row.excerpt)

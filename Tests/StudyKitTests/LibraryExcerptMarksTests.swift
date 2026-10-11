@@ -14,12 +14,12 @@ struct LibraryExcerptMarksTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func row(surface: String, lemma: String, sentence: String,
-                     at range: NSRange?) throws -> LibraryRow {
+                     at range: NSRange?, quality: CaptureQuality? = nil) throws -> LibraryRow {
         let ledger = try Ledger(path: ":memory:")
         let lookup = try ledger.record(LookupRecord(
             surface: surface, lemma: lemma, context: sentence, lemmaBasis: .tagger,
             language: "en", contextRange: range, place: ReadingPlace(bundleID: nil, name: nil),
-            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: nil))
+            lookedUpAt: now, result: .found, answeredBy: .dictionaryService, quality: quality))
         try ledger.enroll(
             .sense(dictionary: "noad", entryID: "e1", senseKey: "e1.001", senseKeyKind: .publisher),
             issuer: .live, language: "en", chosenBy: .reader,
@@ -51,5 +51,22 @@ struct LibraryExcerptMarksTests {
         #expect(found.excerptMarks == Lemmatizer.parts(of: "temper", surface: "temper",
                                                        in: sentence, at: range))
         #expect(found.excerptMarks == [NSRange(location: 8, length: 8)], "the whole word, tempered")
+    }
+
+    /// **A saved word's sentence read off the screen with a misread's signs is marked in the Library too**, from the
+    /// newest reading's stored source and sentence — and an app's own text with the same characters is not
+    /// (2026-10-11).
+    @Test func aMisreadExcerptIsMarkedFromTheStoredSourceAndSentence() throws {
+        let sentence = "comfortable (1TÆ฿J)"
+        let range = NSRange(location: 0, length: 11)
+        let optical = try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete))
+        let misread = try row(surface: "comfortable", lemma: "comfortable", sentence: sentence, at: range,
+                              quality: optical)
+        #expect(misread.excerptLooksMisread)
+        #expect(misread.excerpt == sentence, "the captured text was not kept for inspection")
+        let ownText = try row(surface: "comfortable", lemma: "comfortable", sentence: sentence, at: range,
+                              quality: .accessibility(.accessibilityTextRange, context: .complete))
+        #expect(!ownText.excerptLooksMisread)
+        #expect(!(try row(surface: "comfortable", lemma: "comfortable", sentence: sentence, at: range)).excerptLooksMisread)
     }
 }

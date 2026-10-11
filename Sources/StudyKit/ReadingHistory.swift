@@ -158,6 +158,13 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         Lemmatizer.parts(of: lemma, surface: surface, in: sentence, at: sentenceRange)
     }
 
+    /// **The sentence was read off the screen and carries signs of a misread** (`CaptureQuality.doubts(sentence:)`) —
+    /// so History and Library show it as captured text kept for inspection, never as an exact quotation. Derived from
+    /// the stored source and sentence each time, like `cue`; no verdict is stored. Only a sentence the card shows.
+    public var looksMisread: Bool {
+        cue != .none && quality?.doubts(sentence: sentence) == true
+    }
+
     /// What the card may say about `sentence`.
     ///
     /// Derived, never stored twice — the same rule as `ReadingPlace.precision`. A cue that could

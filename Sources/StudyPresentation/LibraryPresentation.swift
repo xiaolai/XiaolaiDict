@@ -367,6 +367,9 @@ public struct LibraryPresentation: Sendable, Equatable {
         public let excerpt: String
         /// Where the word sits in `excerpt` — `LibraryRow.excerptMarks`, decided below the view.
         public let marks: [NSRange]
+        /// `excerpt` was read off the screen and looks misread (`LibraryRow.excerptLooksMisread`): drawn as captured
+        /// text with "Possibly misread from the screen", never as an exact quotation.
+        public let excerptLooksMisread: Bool
         /// The answer, which the row shows only when the reader asks.
         public let answer: String
         /// Why it is not being asked, where it is not. Nil when it is simply due or waiting.
@@ -399,6 +402,7 @@ public struct LibraryPresentation: Sendable, Equatable {
         }
 
         public init(id: UUID, word: String, accentKey: String? = nil, excerpt: String, marks: [NSRange],
+                    excerptLooksMisread: Bool = false,
                     answer: String, status: Status?, due: String?, isConfirmable: Bool = false,
                     review: Review = .notAskable) {
             self.id = id
@@ -408,6 +412,7 @@ public struct LibraryPresentation: Sendable, Equatable {
             self.accentKey = accentKey ?? word
             self.excerpt = excerpt
             self.marks = marks
+            self.excerptLooksMisread = excerptLooksMisread
             self.answer = answer
             self.status = status
             self.due = due
