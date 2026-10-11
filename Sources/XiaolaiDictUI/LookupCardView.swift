@@ -456,7 +456,7 @@ public struct LookupCardView: View {
     }
 
     /// Tapping one promotes it. That is the correction path for the cases the fallback selector gets
-    /// confidently wrong (2 of the labelled set's 6 since 2026-10-11, ADR-0053), and it is a single click by design.
+    /// confidently wrong (27.4% of 585 held-out NOAD cases, 2026-10-11, ADR-0053), and it is a single click by design.
     private func alternative(_ sense: SensePresentation) -> some View {
         Button { onChoose?(sense) } label: {
             HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {

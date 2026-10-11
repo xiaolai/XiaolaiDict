@@ -12,8 +12,8 @@ import XiaolaiDictCore
 /// selector is not reliable enough to show only one**: on the six NOAD cases of the labelled set,
 /// re-measured 2026-09-22, Apple's on-device model was confidently wrong on 1 (17%), and so was the
 /// `NLEmbedding` fallback while it narrowed to the tagger's part of speech. **Since 2026-10-11 the
-/// fallback narrows nothing, and it is wrong on 2 of the 6 (33%)** (ADR-0053 addendum). Six cases are an
-/// order, not a rate. The fallback is what runs where FoundationModels is unavailable, which by the
+/// fallback narrows nothing and weighs the tag as a bounded bonus: 1 of the 6 again, and 27.4% of 585
+/// held-out NOAD cases** (ADR-0053 addenda). Six cases are an order, not a rate. The fallback is what runs where FoundationModels is unavailable, which by the
 /// project's own note includes mainland China, a core audience, so a confident wrong answer the reader
 /// cannot notice is to be expected with or without Apple Intelligence.
 ///

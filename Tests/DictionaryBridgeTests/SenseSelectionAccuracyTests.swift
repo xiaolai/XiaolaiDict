@@ -192,15 +192,19 @@ struct SenseSelectionAccuracyTests {
         #expect(narrowing.wrong <= base.wrong, "it bought accuracy by being wrong more often")
     }
 
-    /// **The shipped embedding rung, case by case.** At the shipped weight it is rung 1 exactly while that weight is
-    /// zero; whatever the weight, the tag may only reorder: every keyable sense is still ranked, and no score moves
-    /// by more than the weight.
+    /// **The shipped embedding rung, case by case**, at the weight the held-out evaluation enabled. Six cases rank rungs
+    /// and are not a rate; the held-out set in `SenseEvaluation` is what chose the weight. Whatever the weight, the tag
+    /// may only reorder: every keyable sense is still ranked, and no score moves by more than the weight.
     @Test func theShippedEmbeddingRungIsPinnedCaseByCase() async throws {
         let shipped = try await Self.score(EmbeddingSenseSelector(), named: "the embedding rung as shipped")
         print(shipped.report)
-        if EmbeddingSenseSelector.partOfSpeechWeight == 0 {
-            #expect(shipped.outcomes == Self.rungOneOutcomes, "the shipped rung is no longer rung 1 at weight zero")
-        }
+        // At w = 0.1 (2026-10-11): 2 right, 1 wrong, 3 led wrong under an ambiguous badge. *rein* is the case it
+        // moves — from rung 1's confident verb to a hedge that still leads with the verb, at a margin of 0.023.
+        #expect(shipped.right == 2 && shipped.wrong == 1 && shipped.ambiguousWrong == 3, "the shipped rung's score moved")
+        #expect(shipped.outcomes == [
+            "fine": .ambiguousWrong, "hold": .right, "sanction": .ambiguousWrong,
+            "table": .wrong, "rein": .ambiguousWrong, "temper": .right,
+        ], "a case changed bucket")
         let weight = max(EmbeddingSenseSelector.partOfSpeechWeight, SenseEvaluation.weights.max() ?? 0)
         let rung = EmbeddingSenseSelector(partOfSpeechWeight: weight)
         for labelled in Self.hardCases {

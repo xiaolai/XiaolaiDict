@@ -199,16 +199,21 @@ public struct EmbeddingSenseSelector: SenseSelecting {
     /// Beyond this, nothing in the entry is close to the sentence.
     public static let maximumDistance = 1.45
 
-    /// **The part-of-speech bonus: zero, so off, until a held-out evaluation shows a weight is worth having.**
+    /// **The part-of-speech bonus, 0.1 — chosen on a development half and held to a held-out half (2026-10-11).**
     ///
     /// A candidate whose dictionary label names the tagger's part of speech (`PartOfSpeechLabel.matches`) is ranked by
     /// `distance - weight`; any other candidate, an absent tag and an unlabelled sense contribute nothing. It reorders
     /// **eligible** candidates only — eligibility stays the raw distance against `maximumDistance` — so it can never
     /// rescue a sentence with no context, a language with no embedding, or a sense nothing in the sentence is close to,
-    /// and it removes no candidate (AGENTS.md, "never gate, always annotate"). A weight is a tuned threshold (D6), so
-    /// one is chosen on a development half and held to a held-out half by the paired evaluator in
-    /// `Tests/DictionaryBridgeTests/SenseEvaluation` (ADR-0053 addendum); until it passes, this stays zero.
-    public static let partOfSpeechWeight = 0.0
+    /// and it removes no candidate (AGENTS.md, "never gate, always annotate").
+    ///
+    /// A weight is a tuned threshold (D6), so it was chosen by a rule fixed before measuring, on 320 development cases,
+    /// from a grid declared in advance, and then frozen. On 585 held-out NOAD cases over 123 other headwords it was
+    /// right on 36.6% against the unfiltered rung's 28.5% (paired 95% lower bound on the gain +5.3 points) and
+    /// confidently wrong on 27.4% against 35.4%, and against the retired narrowing's 31.8% (ADR-0053 addendum). The
+    /// paired evaluator is `Tests/DictionaryBridgeTests/SenseEvaluation`; its cases are derived from NOAD and are not
+    /// in the repository, so changing this number means re-running it on a Mac that has them.
+    public static let partOfSpeechWeight = 0.1
 
     private let minimumMargin: Double
     private let maximumDistance: Double

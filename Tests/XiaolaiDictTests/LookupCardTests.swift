@@ -34,9 +34,9 @@ struct LookupCardTests {
         #expect(chosen.isHypothesis == false, "the reader's own tap is a fact")
     }
 
-    /// **Never only one.** The fallback selector is confidently wrong on 2 of the labelled set's 6 NOAD
-    /// cases since 2026-10-11 (1 of 6 while it narrowed by part of speech), so every other sense has to
-    /// remain reachable or a reader is stuck with a wrong answer and no way to notice.
+    /// **Never only one.** The fallback selector was confidently wrong on 27.4% of 585 held-out NOAD cases
+    /// (2026-10-11, ADR-0053), so every other sense has to remain reachable or a reader is stuck with a
+    /// wrong answer and no way to notice.
     @Test func everyOtherSenseIsStillThere() {
         let chosen = card(.chosen(key: "m_en_gbus0362750.005", by: .reader))
         #expect(chosen.otherSenseCount == entry.senseCount - 1)

@@ -107,6 +107,15 @@ struct SenseEvaluationRunTests {
             verdict = .notShown(["the set is smaller than declared: \(heldOut.count) held out, \(groups.count) headwords"])
         }
 
+        // Written before the check below, which re-ranks every case and takes as long as the run did.
+        let report = SenseEvaluationReport.render(
+            labelled: labelled, outcomes: outcomes, chose: chose, development: development, heldOut: heldOut,
+            weight: weight, verdict: verdict, versions: Self.versions(candidatesFor))
+        print(report)
+        try report.write(to: directory.appendingPathComponent("report.txt"), atomically: true, encoding: .utf8)
+        try SenseEvaluationReport.outcomes(labelled: labelled, outcomes: outcomes, arms: arms)
+            .write(to: directory.appendingPathComponent("outcomes.tsv"), atomically: true, encoding: .utf8)
+
         // **The shortcut is the rung.** For the two arms that matter, the whole of `choose` must answer what the
         // per-arm decision answered, case by case — or the evaluation measured something that does not ship.
         for checked in Set([0, weight]) {
@@ -118,14 +127,6 @@ struct SenseEvaluationRunTests {
                         "\(item.case.id): choose and decide disagree at w = \(checked)")
             }
         }
-
-        let report = SenseEvaluationReport.render(
-            labelled: labelled, outcomes: outcomes, chose: chose, development: development, heldOut: heldOut,
-            weight: weight, verdict: verdict, versions: Self.versions(candidatesFor))
-        print(report)
-        try report.write(to: directory.appendingPathComponent("report.txt"), atomically: true, encoding: .utf8)
-        try SenseEvaluationReport.outcomes(labelled: labelled, outcomes: outcomes, arms: arms)
-            .write(to: directory.appendingPathComponent("outcomes.tsv"), atomically: true, encoding: .utf8)
 
         // **What ships is what was shown.** The production weight is zero, or the weight this run enabled.
         let shipped = EmbeddingSenseSelector.partOfSpeechWeight
