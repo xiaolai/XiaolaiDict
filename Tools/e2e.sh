@@ -14,7 +14,8 @@
 # harness every stage shares (`Tools/e2e/stage-inputs.tsv`) — are hashed into a key by
 # `Tools/e2e-inputs.py`, and a stage whose key equals that of its last fresh pass, on the same E2E Mac
 # and macOS build, is CARRIED rather than run. The table says which, and why. `XIAOLAIDICT_E2E_FULL=1`
-# (`make e2e-full`) runs every stage fresh. **CARRIED is a development-loop shortcut and is never
+# (`make e2e-full`) runs every stage fresh; `XIAOLAIDICT_E2E_WITHIN="a b"` (`make e2e WITHIN="a b"`) is
+# incremental over those stages alone. **CARRIED is a development-loop shortcut and is never
 # valid for a merge or a release**: those need a fresh pass of every stage on their own build, and
 # `Tools/e2e-status.sh require-fresh` refuses anything else.
 #
@@ -294,7 +295,8 @@ python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys" || fail "the stages' in
 full_flag=""
 [ -z "${XIAOLAIDICT_E2E_FULL:-}" ] || full_flag=--full
 python3 Tools/e2e-inputs.py plan "$remote_scripts/keys" .build/e2e-status.tsv "$remote_uuid" "$e2e_os" \
-    ${full_flag:+"$full_flag"} --asked "$STAGES" >"$remote_scripts/plan" || fail "the run could not be planned"
+    ${full_flag:+"$full_flag"} --asked "$STAGES" --within "${XIAOLAIDICT_E2E_WITHIN:-}" >"$remote_scripts/plan" \
+    || fail "the run could not be planned"
 python3 Tools/e2e-inputs.py table "$remote_scripts/plan"
 STAGES=$(awk -F'\t' '$2 == "run" { printf "%s ", $1 }' "$remote_scripts/plan")
 STAGES=${STAGES% }

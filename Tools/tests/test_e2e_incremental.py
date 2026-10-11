@@ -285,6 +285,25 @@ class OnlyAFreshPassWithAnEqualKeyIsCarried(unittest.TestCase):
         self.assertFalse(by_stage["lookup"].carried)
 
 
+class AnIncrementalRunCanBeScopedToNamedStages(unittest.TestCase):
+    """`make e2e WITHIN="a b"`: incremental over those stages alone — carried where the key allows, run otherwise —
+    and every other stage neither run nor carried."""
+
+    def test_within_carries_or_runs_the_named_and_leaves_the_rest(self):
+        keys = {stage: inputs.Key(KEY, "") for stage in ("lookup", "panel", "model")}
+        rows = record([FRESH, FRESH.replace("lookup", "panel").replace(KEY, "b" * 64)])
+        by_stage = {d.stage: d for d in inputs.decide(("lookup", "panel", "model"), keys, rows, HOST, OS,
+                                                      within=("lookup", "panel"))}
+        self.assertTrue(by_stage["lookup"].carried)
+        self.assertTrue(by_stage["panel"].run)
+        self.assertFalse(by_stage["model"].run or by_stage["model"].carried)
+        self.assertEqual(by_stage["model"].why, "not asked for")
+
+    def test_the_run_and_the_makefile_pass_it_through(self):
+        self.assertIn("XIAOLAIDICT_E2E_WITHIN", (REPO / "Makefile").read_text())
+        self.assertIn("--within", (REPO / "Tools" / "e2e.sh").read_text())
+
+
 class TheRecordHoldsTheKeyItRanUnder(unittest.TestCase):
     """`e2e-status.sh record` files the key, the host and the macOS build beside each stage; Python reads them back."""
 

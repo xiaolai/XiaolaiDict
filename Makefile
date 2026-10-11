@@ -12,6 +12,7 @@
 #                 Incremental: a stage whose inputs (Tools/e2e/stage-inputs.tsv) are unchanged since a
 #                 fresh pass on that Mac and macOS is CARRIED, not run, and the table says why.
 #                 STAGES="drawer recogniser" runs only those, fresh. FULL=1 runs every stage fresh.
+#                 WITHIN="drawer recogniser" is incremental over those stages alone.
 #   make e2e-full every stage, fresh — what a merge or a release needs; CARRIED never counts there
 #   make e2e-status  what each stage last did, and on which build
 #   make release BUILD_NUMBER=<n>
@@ -149,7 +150,7 @@ e2e: all
 	  echo "Set it once in local.mk (untracked):   echo 'E2E_HOST = your-ssh-host' > local.mk"; \
 	  echo "or per run:                            make e2e E2E_HOST=your-ssh-host"; \
 	  exit 1; }
-	@XIAOLAIDICT_E2E_FULL="$(FULL)" Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
+	@XIAOLAIDICT_E2E_FULL="$(FULL)" XIAOLAIDICT_E2E_WITHIN="$(WITHIN)" Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
 
 # Every stage, fresh, whatever is recorded: the run a merge or a release is judged by. A CARRIED stage is a judgment that
 # its inputs did not change, never a run, and `Tools/e2e-status.sh require-fresh <build>` refuses one.

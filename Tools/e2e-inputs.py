@@ -3,7 +3,7 @@
 is carried forward, marked, instead of run again.
 
     e2e-inputs.py keys                       stage<TAB>key<TAB>why, for every stage (key `-` where none can be made)
-    e2e-inputs.py plan KEYS STATUS HOST OS [--full] [--asked "a b"]
+    e2e-inputs.py plan KEYS STATUS HOST OS [--full] [--asked "a b"] [--within "a b"]
                                              stage<TAB>run|carried|not-asked<TAB>why
     e2e-inputs.py settle BEFORE AFTER        stage<TAB>key, `-` where the key moved while the stages ran
     e2e-inputs.py table PLAN [RUN_LOG]       the table a person reads: PASS, FAIL, CARRIED (and why), NO RESULT
@@ -342,12 +342,16 @@ def read_status(text: str) -> dict[str, Record]:
 
 
 def decide(stages, keys: dict[str, Key], records: dict[str, Record], host: str, os_version: str,
-           asked=(), full: bool = False) -> list[Decision]:
+           asked=(), full: bool = False, within=()) -> list[Decision]:
+    """`asked`: run those, fresh, and nothing else. `full`: run every stage fresh. `within`: incremental over those
+    stages alone. None of them: incremental over every stage."""
     decisions = []
     for stage in stages:
         key = keys.get(stage, Key(None, "no key"))
         record = records.get(stage)
-        if asked:
+        if within and stage not in within:
+            decisions.append(Decision(stage, False, False, "not asked for"))
+        elif asked:
             decisions.append(Decision(stage, stage in asked, False, "asked for" if stage in asked else "not asked for"))
         elif full:
             decisions.append(Decision(stage, True, False, "a full run"))
@@ -525,6 +529,7 @@ def main(argv: list[str]) -> int:
     plan.add_argument("os")
     plan.add_argument("--full", action="store_true")
     plan.add_argument("--asked", default="")
+    plan.add_argument("--within", default="")
     settled = commands.add_parser("settle")
     settled.add_argument("before")
     settled.add_argument("after")
@@ -553,8 +558,13 @@ def main(argv: list[str]) -> int:
                                           if line)}
         status = pathlib.Path(args.status)
         records = read_status(status.read_text()) if status.exists() else {}
-        asked = tuple(args.asked.split())
-        for decision in decide(known_stages(script_text), keys, records, args.host, args.os, asked=asked, full=args.full):
+        asked, within = tuple(args.asked.split()), tuple(args.within.split())
+        unknown = sorted(set(within) - set(known_stages(script_text)))
+        if unknown:
+            print(f"e2e-inputs: no stage called {', '.join(unknown)}", file=sys.stderr)
+            return 1
+        for decision in decide(known_stages(script_text), keys, records, args.host, args.os, asked=asked, full=args.full,
+                               within=within):
             verdict = "run" if decision.run else "carried" if decision.carried else "not-asked"
             print(f"{decision.stage}\t{verdict}\t{decision.why}")
         return 0
