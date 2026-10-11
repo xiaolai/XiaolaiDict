@@ -301,7 +301,7 @@ python3 Tools/e2e-inputs.py table "$remote_scripts/plan"
 STAGES=$(awk -F'\t' '$2 == "run" { printf "%s ", $1 }' "$remote_scripts/plan")
 STAGES=${STAGES% }
 if [ -z "$STAGES" ]; then
-    echo "nothing to run: every stage is carried forward"
+    echo "nothing to run: every stage in scope is carried forward"
     exit 0
 fi
 
