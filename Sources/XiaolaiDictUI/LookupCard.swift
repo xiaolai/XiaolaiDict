@@ -9,12 +9,13 @@ import XiaolaiDictCore
 /// and the reader already has one — it is called Dictionary.app and it is one click away.
 ///
 /// So this leads with a single sense. The constraint that shapes everything else is that **the
-/// selector is not reliable enough to show only one**: re-measured 2026-09-22, the confidently-wrong
-/// rate is **17% with Apple's on-device model and 17% with the `NLEmbedding` fallback** — the two
-/// are now the same, where the model rung used to be 0%. The fallback is what runs where
-/// FoundationModels is unavailable, which by the project's own note includes mainland China, a core
-/// audience. One reader in six gets a confident wrong answer and no way to notice, **and that is
-/// now true with or without Apple Intelligence.**
+/// selector is not reliable enough to show only one**: on the six NOAD cases of the labelled set,
+/// re-measured 2026-09-22, Apple's on-device model was confidently wrong on 1 (17%), and so was the
+/// `NLEmbedding` fallback while it narrowed to the tagger's part of speech. **Since 2026-10-11 the
+/// fallback narrows nothing, and it is wrong on 2 of the 6 (33%)** (ADR-0053 addendum). Six cases are an
+/// order, not a rate. The fallback is what runs where FoundationModels is unavailable, which by the
+/// project's own note includes mainland China, a core audience, so a confident wrong answer the reader
+/// cannot notice is to be expected with or without Apple Intelligence.
 ///
 /// Hence the shape: **the answer, the evidence, the way out.** The answer is one sense. The
 /// evidence is the reader's own sentence beside it and a plain statement of how the sense was

@@ -55,6 +55,9 @@ struct SenseSelectionAccuracyTests {
         /// fact the right one, because a hedge that is usually right and one that is usually
         /// wrong are different things to ship.
         var ambiguousRight = 0, ambiguousWrong = 0
+        /// Case by case, keyed by word: **aggregate counts can hide two failures exchanged for each other**, so the
+        /// pins below name which case landed where.
+        var outcomes: [String: LabelledSenses.Bucket] = [:]
         var report = ""
 
         var ambiguous: Int { ambiguousRight + ambiguousWrong }
@@ -71,6 +74,7 @@ struct SenseSelectionAccuracyTests {
             let choice = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
             let bucket = LabelledSenses.bucket(choice, correct: labelled.correct)
+            score.outcomes[labelled.word] = bucket
             switch choice {
             case .chose(let key, let margin, _):
                 let right = bucket == .right
@@ -134,7 +138,7 @@ struct SenseSelectionAccuracyTests {
     /// content update, or a change in this code — rather than a test to relax.
     @Test func rungOneIsMeasuredOnTheLabelledSet() async throws {
         let score = try await Self.score(
-            EmbeddingSenseSelector(), named: "rung 1 — NLEmbedding alone")
+            EmbeddingSenseSelector(partOfSpeechWeight: 0), named: "rung 1 — NLEmbedding alone")
         print(score.report)
         try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1.txt", atomically: true, encoding: .utf8)
         #expect(
@@ -147,21 +151,68 @@ struct SenseSelectionAccuracyTests {
         #expect(score.abstained == 0, "it said nothing at all, which it did not used to do")
         #expect(score.ambiguousRight == 0, "the hedge started leading right")
         #expect(score.ambiguousWrong == 2, "the hedge stopped leading wrong")
+        #expect(score.outcomes == Self.rungOneOutcomes, "a case changed bucket")
     }
 
-    /// **The shipped embedding rung is rung 1.** It used to be rung 1b, narrowed to the tagger's part of
-    /// speech, which scored 3 right and 1 wrong here against rung 1's 2 and 2. The narrowing was retired on
-    /// 2026-10-11 (ADR-0053): on 270 hard cases it deleted the right sense in 40, and six cases cannot
-    /// outvote that. This pins that what ships is what rung 1 measures, so the trade stays visible.
-    @Test func theShippedEmbeddingRungIsRungOne() async throws {
-        let shipped = try await Self.score(EmbeddingSenseSelector(), named: "rung 1 — as shipped")
-        #expect(shipped.right == 2, "top-1 accuracy moved")
-        #expect(shipped.wrong == 2, "the confidently-wrong rate moved")
-        // And the tag changes nothing: scored again with no part of speech handed over.
-        let untagged = try await Self.score(EmbeddingSenseSelector(), named: "rung 1 — untagged", tagged: false)
-        let counts = { (score: Score) in
-            [score.right, score.wrong, score.abstained, score.ambiguousRight, score.ambiguousWrong] }
-        #expect(counts(untagged) == counts(shipped), "the tag moved the embedding rung")
+    /// The six cases, word by word, as rung 1 scores them — the pure embedding, untagged and unweighted.
+    static let rungOneOutcomes: [String: LabelledSenses.Bucket] = [
+        "fine": .ambiguousWrong, "hold": .right, "sanction": .ambiguousWrong,
+        "table": .wrong, "rein": .wrong, "temper": .right,
+    ]
+
+    /// **Rung 1b, kept as an evaluation-only comparator** (`LegacyNarrowingComparator`): the narrowing retired on
+    /// 2026-10-11 (ADR-0053 addendum) did score 3 right and 1 wrong here, against rung 1's 2 and 2. Pinned case by case,
+    /// so the trade the retirement made stays visible — and so the evaluator's comparator is shown to be that rung.
+    @Test func theLegacyNarrowingComparatorIsRungOneB() async throws {
+        let score = try await Self.score(LegacyNarrowingComparator(), named: "rung 1b — the retired narrowing")
+        print(score.report)
+        #expect(score.right == 3, "top-1 accuracy moved")
+        #expect(score.wrong == 1, "the confidently-wrong rate moved")
+        #expect(score.abstained == 0)
+        #expect(score.ambiguousRight == 0)
+        #expect(score.ambiguousWrong == 2)
+        #expect(score.outcomes == [
+            // *rein* is the one case the narrowing moved: the noun "power to direct" over the verb "restrain".
+            "fine": .ambiguousWrong, "hold": .right, "sanction": .ambiguousWrong,
+            "table": .wrong, "rein": .right, "temper": .right,
+        ], "a case changed bucket")
+    }
+
+    /// **The D6 comparison, run rather than asserted in prose**, restored: a rung ships only if it gains **≥ 10 points
+    /// of top-1 accuracy** and its **confidently-wrong rate is no higher**. On these six cases the retired narrowing
+    /// clears it against rung 1. That is a fact about six NOAD cases and the `NLEmbedding` rung; the 270 hard cases
+    /// that retired the narrowing (ADR-0053) measured language-model rungs, a different system, so neither result
+    /// overrules the other — the held-out evaluation in `SenseEvaluation` is what decides the embedding rung.
+    @Test func theHigherRungClearsTheMarginSetBeforeMeasuring() async throws {
+        let base = try await Self.score(EmbeddingSenseSelector(partOfSpeechWeight: 0), named: "rung 1")
+        let narrowing = try await Self.score(LegacyNarrowingComparator(), named: "rung 1b")
+        let total = Double(Self.hardCases.count)
+        let gain = (Double(narrowing.right) - Double(base.right)) / total * 100
+        #expect(gain >= 10, "gained only \(gain) points, under the 10 fixed before measuring")
+        #expect(narrowing.wrong <= base.wrong, "it bought accuracy by being wrong more often")
+    }
+
+    /// **The shipped embedding rung, case by case.** At the shipped weight it is rung 1 exactly while that weight is
+    /// zero; whatever the weight, the tag may only reorder: every keyable sense is still ranked, and no score moves
+    /// by more than the weight.
+    @Test func theShippedEmbeddingRungIsPinnedCaseByCase() async throws {
+        let shipped = try await Self.score(EmbeddingSenseSelector(), named: "the embedding rung as shipped")
+        print(shipped.report)
+        if EmbeddingSenseSelector.partOfSpeechWeight == 0 {
+            #expect(shipped.outcomes == Self.rungOneOutcomes, "the shipped rung is no longer rung 1 at weight zero")
+        }
+        let weight = max(EmbeddingSenseSelector.partOfSpeechWeight, SenseEvaluation.weights.max() ?? 0)
+        let rung = EmbeddingSenseSelector(partOfSpeechWeight: weight)
+        for labelled in Self.hardCases {
+            let considered = SenseCandidates.considered(try Self.candidates(for: labelled.word))
+            let partOfSpeech = Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
+            let ranked = rung.rank(considered, reading: labelled.sentence)
+            let scored = rung.scored(ranked, partOfSpeech: partOfSpeech)
+            #expect(scored.count == ranked.count && ranked.count == considered.count,
+                    "\(labelled.word): a candidate was dropped")
+            #expect(scored.allSatisfy { $0.score <= $0.distance && $0.score >= $0.distance - weight },
+                    "\(labelled.word): a score moved by more than the weight")
+        }
     }
 
     /// The margin does **not** separate right answers from wrong ones on this set, so it cannot be
@@ -485,10 +536,10 @@ struct SelectorConfigurationTests {
 /// embedding compares the reader's sentence against the sense wording — it has no memory of which
 /// sense NOAD numbers what.
 struct InflectedEntryChoiceTests {
-    /// Prints both numbers. **Narrowing by word class was retired** (ADR-0053, 2026-10-11) — on 270
-    /// hard cases it deleted the right sense in 40 — so the tag must now change nothing: the two
-    /// columns are asserted equal, case by case, and a narrowing that crept back would split them.
-    @Test func aWordClassTagChangesNothingOnEitherHalfOfEachPair() async throws {
+    /// Prints both numbers. **Narrowing by word class was retired** (ADR-0053, 2026-10-11), so the tag
+    /// may reorder the embedding rung's field and never delete from it: both answers must come from the
+    /// whole keyable field, and at weight zero the two columns must agree case by case.
+    @Test func aWordClassTagDeletesNothingOnEitherHalfOfEachPair() async throws {
         let selector = EmbeddingSenseSelector()
         var report = "\ninflected entry choice — \(LabelledSenses.inflectedCases.count) paired cases\n"
         var narrowedRight = 0, wideRight = 0
@@ -505,7 +556,13 @@ struct InflectedEntryChoiceTests {
 
             let wideOK = LabelledSenses.bucket(wide, correct: labelled.correct) == .right
             let narrowOK = LabelledSenses.bucket(narrow, correct: labelled.correct) == .right
-            #expect(wide == narrow, "\(labelled.word): the tag changed the embedding rung's answer")
+            // The tag may reorder, never delete: whatever it says, both answers come from the whole keyable field.
+            let keys = SenseCandidates.considered(candidates).map(\.key)
+            #expect([wide.key ?? wide.nearest?.key, narrow.key ?? narrow.nearest?.key]
+                .allSatisfy { $0 == nil || keys.contains($0!) }, "\(labelled.word): answered outside the field")
+            if EmbeddingSenseSelector.partOfSpeechWeight == 0 {
+                #expect(wide == narrow, "\(labelled.word): at weight zero the tag changed the answer")
+            }
             if wideOK { wideRight += 1 }
             if narrowOK { narrowedRight += 1 }
 
