@@ -1621,6 +1621,13 @@ PYSTATE
 spelling_view=""
 spelling_offer() {
     local term=$1 word=$2 style=$3 why started missed="" offered="" state grant settled
+    # **The fixture in front at the moment of selecting**, not only before the step: the shortcut reads the selection of
+    # the app in front, and on the E2E Mac Safari came forward between a relaunch and this step (2026-10-11), so the
+    # compact card looked up Safari's selection instead of the typo.
+    if ! why=$(ensure_fixture_open 2>&1); then
+        flunk "lookup ($style): $why, so “$term” was never looked up"
+        return 1
+    fi
     if ! why=$("$helpers/select-text" com.apple.TextEdit "$term" 1 2>&1); then
         flunk "lookup ($style): could not select “$term” in the fixture ($why)"
         return 1
