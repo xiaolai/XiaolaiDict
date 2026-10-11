@@ -29,6 +29,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -1480,3 +1481,38 @@ class NoVariableIsFollowedByANonAsciiCharacter(unittest.TestCase):
                  for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
                  if self.BARE.search(line)]
         self.assertEqual(found, [])
+
+
+class TheProviderStubEndsWhenItsPidIsEnded(unittest.TestCase):
+    """On the E2E Mac the remote `python3` is a **shell function** (the interpreter chosen by version), and under macOS's
+    own bash 3.2 `$!` of a backgrounded function is the wrapping subshell, not the Python inside it. The stage ended that
+    pid, the real stub survived with the SSH channel as its stdout, and the run waited on the channel for ever — twice,
+    on the Mac mini, 49 minutes and 1 h 47 min after every stage had already finished (2026-10-12). `mbp16`'s bash 5 ends
+    the function's process directly, so nothing there ever showed it."""
+
+    def run_it(self, extra: str = "") -> tuple[str, str]:
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-stub-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        stub = scratch / "provider-stub.py"
+        stub.write_text("import sys, time\ntime.sleep(120)\n")
+        script = "\n".join([
+            "set -u",
+            f'XIAOLAIDICT_PYTHON="{sys.executable}"',
+            'python3() { "$XIAOLAIDICT_PYTHON" "$@"; }',
+            f'helpers="{scratch}"; provider_stub_log="{scratch}/log"; provider_evidence="{scratch}"',
+            function("end_process"), function("start_provider_stub"), function("stop_provider_stub"),
+            "start_provider_stub; sleep 1; stop_provider_stub; echo ended-$?",
+            "sleep 0.5",
+            f'pgrep -f "{stub}" | wc -l',
+        ]) + extra
+        # To files, never pipes: a stub left holding a pipe is the very fault, and would hang this test as it hung the run.
+        with open(scratch / "out", "w") as out, open(scratch / "err", "w") as err:
+            subprocess.run([BASH, "-c", script], stdout=out, stderr=err, timeout=60, check=False)
+        # Whatever was left running is ended here, so a failing test leaves nothing behind.
+        subprocess.run(["pkill", "-f", str(stub)], check=False)
+        return (scratch / "out").read_text().split(), (scratch / "err").read_text()
+
+    def test_no_stub_is_left_running_and_none_holds_the_channel(self):
+        out, err = self.run_it()
+        self.assertEqual(out[0], "ended-0", err)
+        self.assertEqual(out[1], "0", "the stub outlived the stage that ended it; the SSH channel stays open on it")

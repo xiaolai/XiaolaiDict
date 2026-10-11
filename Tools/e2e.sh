@@ -5231,6 +5231,15 @@ at_exit restore_provider_settings
 provider_evidence="$e2e_home/provider-evidence"
 provider_stub_log="$provider_evidence/stub.jsonl"
 provider_stub_pid=""
+# **`exec`ed in a subshell, its stdout sent away, so `$!` is the stub and nothing it holds outlives it.** `python3` here is
+# a shell function (the chosen interpreter), and under macOS's bash 3.2 the pid of a backgrounded function is its
+# wrapping subshell: ending that pid left the stub running with the SSH channel as its stdout, and the run waited on
+# the channel for 49 minutes after every stage had finished (MacMini-001, 2026-10-12; bash 5 on `mbp16` ends it directly).
+start_provider_stub() {
+    ( exec "$XIAOLAIDICT_PYTHON" "$helpers/provider-stub.py" serve "$provider_stub_log" "$provider_evidence/stub.port" \
+        >/dev/null 2>"$provider_evidence/stub.err" ) &
+    provider_stub_pid=$!
+}
 stop_provider_stub() {
     [ -n "$provider_stub_pid" ] || return 0
     end_process "$provider_stub_pid" || { echo "the provider stub (pid $provider_stub_pid) would not end" >&2; return 1; }
@@ -5391,9 +5400,7 @@ provider_stage() {
     local port="" verdicts
     mkdir -p "$provider_evidence" && chmod 700 "$provider_evidence"
     rm -f "$provider_evidence/stub.port"
-    python3 "$helpers/provider-stub.py" serve "$provider_stub_log" "$provider_evidence/stub.port" \
-        2>"$provider_evidence/stub.err" &
-    provider_stub_pid=$!
+    start_provider_stub
     for _ in $(seq 1 50); do
         port=$(cat "$provider_evidence/stub.port" 2>/dev/null || true)
         [ -n "$port" ] && break
