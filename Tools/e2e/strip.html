@@ -1,0 +1,63 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>XiaolaiDict E2E strip</title>
+<style>
+  body { margin: 180px 60px 60px; background: #fff; }
+  body.long { margin-top: 60px; }
+  #strip-text { display: inline-block; }
+  #strip-text canvas { display: block; }
+</style></head>
+<body>
+<!--
+  Paragraphs drawn only as pixels, so a hover over them is read by the recogniser and its context comes from the strip.
+  Two columns with an empty gutter: the left holds one sentence taller than the old 140 pt band, then a second paragraph
+  after a blank line; the right holds text that must never reach the left's sentence. With `?long`, the left holds one
+  sentence taller than the tallest strip, which must come back as possibly cut.
+
+  The geometry is fixed so the hover stage can aim without asking the recogniser: the group's frame is the canvas, the
+  text starts `margin` in, and every row is `line` tall. The texts are written again, independently, in `e2e.sh`.
+-->
+<div id="strip-text" role="group"><canvas id="ink"></canvas></div>
+<script>
+  const long = location.search.includes("long");
+  const margin = 12, line = 26, font = "18px Helvetica", left = 340, gutter = 140, right = 300;
+  const tall = "Lighthouse keepers along the northern coast counted every vessel that passed the outer rocks after "
+    + "dusk and copied each name into a heavy ledger whose pages had gone soft with salt and lamp smoke until the "
+    + "winter storms closed the harbour and nothing sailed again before the first warm days of spring returned.";
+  const after = "Inland, the farmers paid no attention to any of this.";
+  const other = "Meanwhile a market town kept a crooked clock that ran seven minutes fast for a whole century "
+    + "while the mayor and the baker argued about bread prices.";
+  const page = Array.from({ length: 14 }, () =>
+    "Lighthouse keepers along the northern coast counted every vessel that passed the outer rocks").join(" and ")
+    + " until the ledger was full.";
+  document.body.classList.toggle("long", long);
+  const canvas = document.getElementById("ink"), context = canvas.getContext("2d");
+  context.font = font;
+  function wrap(text, width) {
+    const rows = [];
+    let row = "";
+    for (const word of text.split(" ")) {
+      const next = row ? row + " " + word : word;
+      if (row && context.measureText(next).width > width) { rows.push(row); row = word; } else { row = next; }
+    }
+    if (row) rows.push(row);
+    return rows;
+  }
+  const leftRows = long ? wrap(page, left) : wrap(tall, left).concat([""], wrap(after, left));
+  const rightRows = wrap(other, right);
+  const width = left + gutter + right + 2 * margin;
+  const height = Math.max(leftRows.length, rightRows.length) * line + 2 * margin;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  context.scale(scale, scale);
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, width, height);
+  context.font = font;
+  context.fillStyle = "#000";
+  context.textBaseline = "middle";
+  leftRows.forEach((row, index) => context.fillText(row, margin, margin + index * line + line / 2));
+  rightRows.forEach((row, index) => context.fillText(row, margin + left + gutter, margin + index * line + line / 2));
+</script>
+</body></html>
