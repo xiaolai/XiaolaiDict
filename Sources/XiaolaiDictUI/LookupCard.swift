@@ -127,6 +127,9 @@ public struct LookupCard: Equatable {
     /// **"Did you mean “X”?" under a miss**, where the panel's rule offers one (`LookupPresentation.offeredSuggestion`)
     /// — nil on every card with an entry, and on a miss nobody has a suggestion for.
     public let suggestion: SpellingSuggestion?
+    /// The checker's verified correction drawn under a **tentative** dictionary form, where it is another word
+    /// (`LookupPresentation.offeredBeside`) — so an inferred form never silently displaces it.
+    public let besideSuggestion: SpellingSuggestion?
     /// **What the entry's senses say beyond their labels** (plan-card-refinements WI-4) — every sense's, the one the card
     /// leads with included. Empty for a monolingual entry and for every card without one.
     public let details: SenseDetails
@@ -280,7 +283,7 @@ public struct LookupCard: Equatable {
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
         memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil,
-        details: SenseDetails = .none
+        besideSuggestion: SpellingSuggestion? = nil, details: SenseDetails = .none
     ) {
         self.term = term
         self.entry = entry
@@ -288,6 +291,7 @@ public struct LookupCard: Equatable {
         self.lemma = lemma ?? term
         self.phrase = phrase
         self.suggestion = suggestion
+        self.besideSuggestion = besideSuggestion
         self.placement = placement
         self.heading = heading
         self.partOfSpeech = partOfSpeech

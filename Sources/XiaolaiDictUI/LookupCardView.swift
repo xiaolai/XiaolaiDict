@@ -261,6 +261,7 @@ public struct LookupCardView: View {
                 // **The way out for a typo or a misread — under the miss, never instead of it** (plan-spelling-suggestion
                 // §3). The miss is the answer; the line fills in once the dictionaries have the word.
                 if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
+                if let beside = card.besideSuggestion { SpellingSuggestionLine(suggestion: beside) }
             }
         }
     }
@@ -973,7 +974,7 @@ public struct LookupPanelContent: View {
             sentence: presentation.sentence, alternatives: [], memory: presentation.memory,
             phrase: presentation.phrase,
             // Nil for prose: the rule draws a suggestion under the service's own miss and nowhere else.
-            suggestion: presentation.offeredSuggestion)
+            suggestion: presentation.offeredSuggestion, besideSuggestion: presentation.offeredBeside)
     }
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a

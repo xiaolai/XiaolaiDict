@@ -28,16 +28,23 @@ public struct SpellingSuggestion: Sendable, Hashable {
     /// What the word is to the term: the checker's correction of a typo, or the term's dictionary form — "ran" as
     /// "run", where the dictionaries had no entry for the inflection (plan-card-refinements WI-3).
     public let kind: Kind
+    /// **A dictionary form inferred from English spelling alone** — no dictionary of the reader's prints the term
+    /// under it (`DictionaryForm.Evidence.regular`), so the card says it is a guess. False for a printed form and for
+    /// every correction of the checker's (ADR-0054 part B, 2026-10-11).
+    public let isTentative: Bool
 
     public enum Kind: String, Sendable, Hashable {
         case spelling
         case dictionaryForm
     }
 
-    public init(term: String, word: String, kind: Kind = .spelling) {
+    /// `tentative` only for a dictionary form: a checker's correction is verified or not offered, never inferred.
+    public init(term: String, word: String, kind: Kind = .spelling, tentative: Bool = false) {
+        precondition(!tentative || kind == .dictionaryForm, "only a dictionary form is inferred")
         self.term = term
         self.word = word
         self.kind = kind
+        isTentative = tentative
     }
 }
 
@@ -101,8 +108,10 @@ public enum SpellingEligibility: Equatable, Sendable {
 /// What asking for a suggestion came to — **the one offer, and every way there was none, kept apart**, so the lookup
 /// path can draw the first and an instrument can say which of the others it was.
 public enum SpellingOffer: Equatable, Sendable {
-    /// A correction the reader's dictionaries have: drawn as a line under the miss.
-    case offered(SpellingSuggestion)
+    /// A correction the reader's dictionaries have: drawn as a line under the miss. `beside` is the checker's verified
+    /// correction where the first is a **tentative** dictionary form and the checker's word is another one: the reader
+    /// is offered both, the form first, so an inference never silently displaces a verified correction (2026-10-11).
+    case offered(SpellingSuggestion, beside: SpellingSuggestion? = nil)
     /// Not asked at all, and why (`SpellingEligibility`).
     case refused(SpellingEligibility.Refusal)
     /// The checker had no confident correction, or only the term again up to case.
@@ -112,8 +121,15 @@ public enum SpellingOffer: Equatable, Sendable {
 
     /// The suggestion to draw, where there is one.
     public var suggestion: SpellingSuggestion? {
-        guard case .offered(let suggestion) = self else { return nil }
+        guard case .offered(let suggestion, _) = self else { return nil }
         return suggestion
+    }
+
+    /// Every suggestion to draw, in the order the card draws them — none, one, or a tentative form and the checker's
+    /// word beside it.
+    public var suggestions: [SpellingSuggestion] {
+        guard case .offered(let suggestion, let beside) = self else { return [] }
+        return [suggestion] + (beside.map { [$0] } ?? [])
     }
 }
 
@@ -166,13 +182,17 @@ public struct SpellingSuggester: Sendable {
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
         let form = DictionaryForm.candidate(lemma, for: asked, printed: forms())
         var unoffered = SpellingOffer.noCorrection
+        // A tentative form borne out, waiting to learn whether the checker's verified word competes with it.
+        var tentative: SpellingSuggestion?
         for kind in SuggestionPrecedence.of(dictionaryForm: form?.word).order {
             let word: String
             let bearsOut: (LookupOutcome) -> Bool
             switch kind {
             case .spelling:
                 let corrected = await checker.suggestion(for: asked, language: language())
-                guard let candidate = SpellingCorrection.candidate(corrected, for: asked) else { continue }
+                guard let candidate = SpellingCorrection.candidate(corrected, for: asked),
+                      tentative.map({ candidate.compare($0.word, options: .caseInsensitive) != .orderedSame }) ?? true
+                else { continue }
                 word = candidate
                 bearsOut = SpellingCorrection.isVerified
             case .dictionaryForm:
@@ -181,12 +201,20 @@ public struct SpellingSuggester: Sendable {
                 bearsOut = form.isSupported(by:)
             }
             if Task.isCancelled { throw CancellationError() }
-            if bearsOut(try await lookUp(word)) {
-                return .offered(SpellingSuggestion(term: term, word: word, kind: kind))
+            guard bearsOut(try await lookUp(word)) else {
+                if kind == .spelling, tentative == nil { unoffered = .unverified(word) }
+                continue
             }
-            if kind == .spelling { unoffered = .unverified(word) }
+            let suggestion = SpellingSuggestion(term: term, word: word, kind: kind,
+                                                tentative: kind == .dictionaryForm && form?.evidence != .printed)
+            // **A printed form outranks the checker; an inferred one only goes first.** The checker is still asked,
+            // and a verified correction that is another word is offered beside it (2026-10-11): *cursting* is offered
+            // *curst*, a guess from spelling, and *cursing*.
+            if let tentative { return .offered(tentative, beside: suggestion) }
+            guard suggestion.isTentative else { return .offered(suggestion) }
+            tentative = suggestion
         }
-        return unoffered
+        return tentative.map { .offered($0) } ?? unoffered
     }
 }
 

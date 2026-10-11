@@ -51,6 +51,24 @@ struct SpellingSuggestionLineTests {
         #expect(Self.presentation(.notFound(serviceFailure: nil), suggestion: nil).offeredSuggestion == nil)
     }
 
+    /// **The second line is drawn only beside a tentative form, for this card's own term** (2026-10-11): beside a
+    /// printed form or a correction it is nothing, so a printed form still outranks the checker on the card.
+    @Test func theCheckersWordIsDrawnOnlyBesideATentativeForm() {
+        let tentative = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm, tentative: true)
+        let printed = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
+        var shown = Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative)
+        shown.besideSuggestion = Self.the
+        #expect(shown.offeredBeside == Self.the)
+        shown.suggestion = printed
+        #expect(shown.offeredBeside == nil, "a printed form drew the checker's word beside it")
+        shown.suggestion = tentative
+        shown.besideSuggestion = SpellingSuggestion(term: "thier", word: "their")
+        #expect(shown.offeredBeside == nil, "another lookup's suggestion was drawn")
+        var refused = Self.presentation(.notFound(serviceFailure: "crashed"), suggestion: tentative)
+        refused.besideSuggestion = Self.the
+        #expect(refused.offeredBeside == nil, "a line was drawn under a miss the service could not answer")
+    }
+
     // MARK: - The line, on both cards
 
     private func hosted(_ presentation: LookupPresentation, compact: Bool,
@@ -109,6 +127,31 @@ struct SpellingSuggestionLineTests {
         let bare = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: nil), compact: compact).fittingSize
         let offered = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: form), compact: compact).fittingSize
         #expect(offered.height > bare.height, "the line added no height: \(bare.height) then \(offered.height)")
+    }
+
+    /// **A guess says so, and the checker's word beside it is a line of its own** — on both cards: the tentative label
+    /// widens or deepens the line (a printed form's line is the same words without it), and the second line adds
+    /// height. The label's words are read from the source, as the line's are above.
+    @Test(arguments: [false, true])
+    func aTentativeFormIsLabelledAndTheCheckersWordDrawnBesideIt(compact: Bool) throws {
+        let printed = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
+        let tentative = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm, tentative: true)
+        // The line alone: on the detailed card it sits in a row the card's width already holds.
+        func width(_ suggestion: SpellingSuggestion) -> CGFloat {
+            NSHostingView(rootView: SpellingSuggestionLine(suggestion: suggestion).environment(\.scale, Scale.standard))
+                .fittingSize.width
+        }
+        #expect(width(tentative) > width(printed), "the tentative label added nothing to the line")
+        let guessed = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative), compact: compact)
+            .fittingSize
+        var both = Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative)
+        both.besideSuggestion = Self.the
+        let two = hosted(both, compact: compact).fittingSize
+        #expect(two.height > guessed.height, "the checker's word added no line: \(guessed.height) then \(two.height)")
+        let line = try String(contentsOf: AppModules.repository.appending(path: "Sources/XiaolaiDictUI/SpellingSuggestionLine.swift"),
+                              encoding: .utf8)
+        #expect(line.contains("if suggestion.isTentative {\n                Text(\"A guess from the spelling\")"),
+                "the tentative label is not drawn for a tentative form alone")
     }
 
     // MARK: - The app's wire

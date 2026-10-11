@@ -162,7 +162,7 @@ struct LookupRunnerSpellingTests {
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
         let recording = await runner(panel, service, checker).run(cats, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         #expect(Self.lookups(panel.updates).last?.suggestion
-                == SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm))
+                == SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm, tentative: true))
         #expect(service.questions == ["cats", "cat"], "the dictionary form was not verified before it was offered")
         #expect(panel.contents.count == 1, "the dictionary form opened a panel of its own")
         #expect(recording?.record.result == .notFound, "the miss stopped being a miss")
@@ -406,6 +406,28 @@ struct LookupRunnerSpellingTests {
         if closed { panel.close() } else { _ = panel.newRequest() }
         #expect(runner.followUp(Self.the, from: ticket.number) == nil,
                 "a press on a card \(closed ? "the reader closed" : "a newer lookup replaced") was followed")
+    }
+
+    /// **A tentative form and the checker's verified word reach the card together, and either may be followed**
+    /// (2026-10-11): *cats* is *cat*'s regular plural, printed nowhere here, so it is a guess and the checker's *cuts* is
+    /// offered beside it — and a press on the second line is followed like one on the first.
+    @Test(arguments: [false, true])
+    func aTentativeFormAndTheCheckersWordAreBothOfferedAndFollowable(second: Bool) async throws {
+        let panel = RecordingPanel(), service = Service(["cat", "cuts"], twoSenses: true), checker = Checker(["cats": "cuts"])
+        let runner = runner(panel, service, checker)
+        let cats = Selection(
+            text: "cats", sentence: "The cats sat on the mat.", rangeInSentence: NSRange(location: 4, length: 4),
+            quality: .accessibility(.accessibilityTextRange, context: .complete),
+            place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
+        let ticket = panel.newRequest()
+        _ = await runner.run(cats, near: .zero, requestedAt: .now, ticket: ticket)
+        let form = SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm, tentative: true)
+        let correction = SpellingSuggestion(term: "cats", word: "cuts")
+        let shown = try #require(Self.lookups(panel.updates).last)
+        #expect(shown.offeredSuggestion == form)
+        #expect(shown.offeredBeside == correction, "the checker's verified word was displaced by a guess")
+        let followed = runner.followUp(second ? correction : form, from: ticket.number)
+        #expect(followed?.text == (second ? "cuts" : "cat"))
     }
 
     /// **An offer is spent by the press that follows it**: a second press — a double click, a press landing while the

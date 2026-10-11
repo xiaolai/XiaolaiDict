@@ -13,9 +13,25 @@ import os
 /// pressable (2026-10-01).
 struct SpellingSuggestionLine: View {
     @Environment(\.followSuggestion) private var follow
+    @Environment(\.scale) private var scale
     let suggestion: SpellingSuggestion
 
     var body: some View {
+        // **A form inferred from spelling alone says so, quietly** (ADR-0054 part B, 2026-10-11): what the dictionaries
+        // print reads as a plain offer; a guess from English spelling carries a secondary word after the button —
+        // a caveat, never an alarm, and never a reason to press it for the reader.
+        HStack(spacing: scale.space.inline) {
+            button
+            if suggestion.isTentative {
+                Text("A guess from the spelling")
+                    .font(.system(size: scale.text.small))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var button: some View {
         Button { follow(suggestion) } label: {
             // **What the word is to the reader's**: a typo's correction, or the form the dictionaries file it under
             // (plan-card-refinements WI-3) — "did you mean" would call a correct inflection a mistake.

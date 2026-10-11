@@ -179,6 +179,7 @@ struct CompactLookupCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 // Under the miss on the quick card too, so the way out is not one click further away (§3).
                 if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
+                if let beside = card.besideSuggestion { SpellingSuggestionLine(suggestion: beside) }
             }
         }
     }

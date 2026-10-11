@@ -114,6 +114,11 @@ struct SpellingReportLine: Encodable, Equatable {
     var correction: String?
     /// What an offered word is to the term: `spelling` | `dictionaryForm` (plan-card-refinements WI-3).
     var correctionKind: String?
+    /// `true` where the offered word is a dictionary form inferred from spelling alone, which the card labels a guess;
+    /// absent otherwise (ADR-0054 part B, 2026-10-11).
+    var correctionTentative: Bool?
+    /// The checker's verified correction offered beside a tentative dictionary form, where it is another word.
+    var besideCorrection: String?
     /// The term's dictionary form the suggester tried first, offered or not — absent where it had none. What tells "this
     /// Mac's dictionaries give the term no form" from "the form could not be verified" (the owner's order, 2026-10-09).
     var dictionaryForm: String?
@@ -140,10 +145,12 @@ struct SpellingReportLine: Encodable, Equatable {
         case .notFound: self.outcome = "notFound"
         }
         switch offer {
-        case .offered(let suggestion):
+        case .offered(let suggestion, let beside):
             self.offer = "offered"
             correction = suggestion.word
             correctionKind = suggestion.kind.rawValue
+            correctionTentative = suggestion.isTentative ? true : nil
+            besideCorrection = beside?.word
         case .refused(let why):
             self.offer = "refused"
             refusal = why.rawValue

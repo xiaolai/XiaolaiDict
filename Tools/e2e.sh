@@ -1507,6 +1507,17 @@ say(heavied.get("outcome") == "notFound" and heavied.get("dictionaryForm") == "h
     f"lookup: the guards keep “heavy” for “heavied” on this Mac’s dictionaries "
     f"({heavied.get('dictionaryFormEvidence')})",
     f"lookup: the guards lost “heavy” for “heavied”: {heavied or sys.argv[1][:300]}")
+# **A form inferred from spelling alone is offered as a guess, a printed one is not** (ADR-0054 part B, 2026-10-11): the
+# card labels a regular form tentative, and the report says so on exactly the lines whose evidence is regular. A step
+# with no dictionary-form offer measured nothing, and fails.
+forms_offered = [got for got in lines.values()
+                 if got.get("offer") == "offered" and got.get("correctionKind") == "dictionaryForm"]
+mislabelled = [got.get("term") for got in forms_offered
+               if (got.get("correctionTentative") is True) != (got.get("dictionaryFormEvidence") == "regular")]
+say(bool(forms_offered) and not mislabelled,
+    f"lookup: {len(forms_offered)} dictionary forms offered, each tentative exactly where only spelling supports it "
+    f"({sum(1 for got in forms_offered if got.get('correctionTentative'))} tentative)",
+    f"lookup: tentative labels disagree with the evidence for {mislabelled or 'no offer at all'}")
 # **And refuse what they exist to refuse**: “prideed” is no form of “pride” and “Frances” no plural of “France”, so no
 # dictionary form is tried for either, and whatever the checker offers stands.
 for rejected_term, rejected_form in (("prideed", "pride"), ("Frances", "france")):

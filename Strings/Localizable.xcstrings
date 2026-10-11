@@ -284,6 +284,9 @@
     "A backup copy could not be deleted: %@" : {
 
     },
+    "A guess from the spelling" : {
+
+    },
     "A guess, not confirmed" : {
       "comment" : "On a pinned note whose sense the selector proposed"
     },

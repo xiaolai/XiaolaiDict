@@ -112,7 +112,8 @@ struct SpellingReportTests {
     /// dictionary's name would be licensed content printed from a shell.
     @Test func noLineCarriesDictionaryText() async {
         let (_, lines, raw) = await report(["recieve", "ephemeral", "crash", "receives"])
-        let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "readersEnglish",
+        let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "correctionTentative",
+                                    "besideCorrection", "readersEnglish",
                                     "dictionaryForm", "dictionaryFormEvidence", "lookupMilliseconds",
                                     "suggestionMilliseconds"]
         for line in lines { #expect(Set(line.keys).isSubset(of: allowed), "\(line.keys.sorted())") }

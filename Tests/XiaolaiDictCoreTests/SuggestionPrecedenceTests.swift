@@ -185,8 +185,13 @@ struct DictionaryFormGuardTests {
                                     ("glacises", "glacis", "glasses")] {
             let checker = Checker([term: wrong])
             let offered = try await offer(term, lemma: form, checker: checker)
-            #expect(offered == .offered(SpellingSuggestion(term: term, word: form, kind: .dictionaryForm)), "\(term)")
-            #expect(checker.questions.isEmpty, "\(term): the checker was asked")
+            // *heavied* is regular, so it is a guess and the checker's verified *heavier* is offered beside it, second
+            // (2026-10-11); the two printed ones stand alone and the checker is not asked.
+            let regular = term == "heavied"
+            #expect(offered.suggestion == SpellingSuggestion(term: term, word: form, kind: .dictionaryForm,
+                                                             tentative: regular), "\(term)")
+            #expect(offered.suggestions.dropFirst().map(\.word) == (regular ? [wrong] : []), "\(term)")
+            #expect(checker.questions == (regular ? [term] : []), "\(term): the checker was asked")
         }
     }
 
@@ -195,7 +200,8 @@ struct DictionaryFormGuardTests {
     @Test func theThreeRecoveriesNeedNoPrintedForm() async throws {
         for (term, form) in [("heavied", "heavy"), ("droughtier", "droughty"), ("glacises", "glacis")] {
             let offered = try await offer(term, lemma: form, printed: nil)
-            #expect(offered == .offered(SpellingSuggestion(term: term, word: form, kind: .dictionaryForm)), "\(term)")
+            #expect(offered == .offered(SpellingSuggestion(term: term, word: form, kind: .dictionaryForm,
+                                                           tentative: true)), "\(term)")
         }
     }
 
@@ -299,7 +305,7 @@ struct DictionaryFormGuardTests {
                                 ownHeadwords: [])
         let dictionaries = Dictionaries(entries: ["red": [Headed("red", ["adjective", "noun"])]])
         let offered = try await offer("reddest", lemma: "red", dictionaries: dictionaries, printed: printed)
-        #expect(offered == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
+        #expect(offered == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm, tentative: true)))
     }
 
     /// **Evidence that names no class and no ending is evidence against every slot** (second audit of 2026-10-10): the
@@ -319,7 +325,7 @@ struct DictionaryFormGuardTests {
         // A printed form whose ending names its slot still blocks that slot alone, whatever its class says.
         let named = FormTable(sources: [], forms: ["redder": [.init(lemma: "red", partOfSpeech: "")]], ownHeadwords: [])
         #expect(try await offer("reddest", lemma: "red", dictionaries: Dictionaries(entries: ["red": [Headed("red", ["adjective"])]]),
-                                printed: named) == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm)))
+                                printed: named) == .offered(SpellingSuggestion(term: "reddest", word: "red", kind: .dictionaryForm, tentative: true)))
     }
 
     /// **Whether a longer word doubles its last consonant is a matter of stress, which spelling does not show** (second
@@ -348,9 +354,9 @@ struct DictionaryFormGuardTests {
             "hollered": [.init(lemma: "holler", partOfSpeech: "verb")],
         ], ownHeadwords: [])
         #expect(try await offer("committing", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
-            == .offered(SpellingSuggestion(term: "committing", word: "commit", kind: .dictionaryForm)))
+            == .offered(SpellingSuggestion(term: "committing", word: "commit", kind: .dictionaryForm, tentative: true)))
         #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: printed)
-            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
+            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm, tentative: true)))
         #expect(try await offer("commiting", lemma: "commit", dictionaries: Dictionaries(entries: lexicon), printed: printed)
             .suggestion?.kind != .dictionaryForm)
         // **A title whose entry a dictionary that prints inflections read whole, printing no doubled form, does not
@@ -359,7 +365,7 @@ struct DictionaryFormGuardTests {
         // *holler* and prints nothing under it makes *hollering* regular.
         let covering = FormTable(sources: [], forms: [:], ownHeadwords: [], words: ["holler", "commit"], covered: ["holler"])
         #expect(try await offer("hollering", lemma: "holler", dictionaries: Dictionaries(entries: lexicon), printed: covering)
-            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm)))
+            == .offered(SpellingSuggestion(term: "hollering", word: "holler", kind: .dictionaryForm, tentative: true)))
         // **A title alone is not that** (third audit of 2026-10-10): the table's titles are every English dictionary's,
         // the thesaurus's too, which prints no inflection at all — a table that only lists *commit* says nothing about
         // whether it doubles, and *commited* is the checker's to correct.
@@ -379,7 +385,7 @@ struct DictionaryFormGuardTests {
                                 printed: both).suggestion?.kind != .dictionaryForm)
         // A word of one syllable doubles by spelling alone, as before.
         #expect(try await offer("tipped", lemma: "tip", dictionaries: Dictionaries(entries: ["tip": [Headed("tip", ["verb"])]]),
-                                printed: nil) == .offered(SpellingSuggestion(term: "tipped", word: "tip", kind: .dictionaryForm)))
+                                printed: nil) == .offered(SpellingSuggestion(term: "tipped", word: "tip", kind: .dictionaryForm, tentative: true)))
     }
 
     /// **A word in *-c* takes *k* before *-ed* and *-ing***: *panicked*, *mimicking* (audit of 2026-10-10). The rule took
@@ -397,7 +403,7 @@ struct DictionaryFormGuardTests {
         }
         for term in ["panicked", "panicking"] {
             let offered = try await offer(term, lemma: "panic", dictionaries: Dictionaries(entries: lexicon), printed: nil)
-            #expect(offered == .offered(SpellingSuggestion(term: term, word: "panic", kind: .dictionaryForm)), "\(term)")
+            #expect(offered == .offered(SpellingSuggestion(term: term, word: "panic", kind: .dictionaryForm, tentative: true)), "\(term)")
         }
         // A bare *c* where the dictionary prints it, and only there.
         #expect(try await offer("arced", lemma: "arc", dictionaries: Dictionaries(entries: lexicon), printed: nil)
@@ -584,7 +590,7 @@ struct DictionaryFormGuardTests {
         case .unclear: false
         }
         if expected {
-            #expect(offered == .offered(SpellingSuggestion(term: row.term, word: row.form, kind: .dictionaryForm)))
+            #expect(offered == .offered(SpellingSuggestion(term: row.term, word: row.form, kind: .dictionaryForm, tentative: true)))
         } else {
             #expect(offered == .noCorrection)
         }

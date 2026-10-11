@@ -46,7 +46,7 @@ final class LookupRunner {
     private let suggester: SpellingSuggester
     /// The suggestion the card on screen was offered, and the reading it was offered under — what a press on its line
     /// looks up. **Only the latest**, because only the card on screen can be pressed.
-    private var offered: (request: Int, selection: Selection, suggestion: SpellingSuggestion)?
+    private var offered: (request: Int, selection: Selection, suggestions: [SpellingSuggestion])?
 
     init(
         client: DictionaryClient, panel: any LookupPanelPresenting,
@@ -316,9 +316,10 @@ final class LookupRunner {
                     logSpelling(offer, took: took)
                     // **Only on the card it was made for.** A hover's claim supersedes without cancelling, so the offer
                     // can arrive for a card no longer shown: it is neither drawn nor kept to be followed.
-                    guard let suggestion = offer?.suggestion, panel.isCurrent(ticket) else { continue }
+                    guard let offer, let suggestion = offer.suggestion, panel.isCurrent(ticket) else { continue }
                     presentation.suggestion = suggestion
-                    offered = (ticket.number, selection, suggestion)
+                    presentation.besideSuggestion = offer.suggestions.dropFirst().first
+                    offered = (ticket.number, selection, offer.suggestions)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -350,7 +351,7 @@ final class LookupRunner {
     /// **No range.** The captured one is where the misspelling sits, and nothing may mark the corrected word there; the
     /// app launches it as a word in no position of the sentence (`TermPlacement.notInSentence`).
     func followUp(_ suggestion: SpellingSuggestion, from request: Int) -> Selection? {
-        guard let offered, offered.request == request, offered.suggestion == suggestion,
+        guard let offered, offered.request == request, offered.suggestions.contains(suggestion),
               panel.isCurrent(PanelTicket(number: request)) else { return nil }
         self.offered = nil
         let read = offered.selection

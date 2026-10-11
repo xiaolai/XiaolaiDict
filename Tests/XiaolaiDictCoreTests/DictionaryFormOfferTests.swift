@@ -27,7 +27,7 @@ struct DictionaryFormOfferTests {
     @Test func aVerifiedDictionaryFormIsOfferedWhereTheCheckerHasNothing() async throws {
         let offer = try await suggester(Checker([:]), Dictionaries(entries: ["luncheon": [Headed("luncheon", ["noun"])]]))
             .offer(for: "luncheoning", outcome: Self.miss, lemma: Lemma(text: "luncheon", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", kind: .dictionaryForm)))
+        #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", kind: .dictionaryForm, tentative: true)))
     }
 
     /// **A defensible dictionary form outranks the spelling line** (the owner's decision, 2026-10-09, reversing WI-3's
@@ -38,9 +38,12 @@ struct DictionaryFormOfferTests {
         let checker = Checker(["gazeboes": "gazebos"])
         let offer = try await suggester(checker, dictionaries)
             .offer(for: "gazeboes", outcome: Self.miss, lemma: Lemma(text: "gazebo", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "gazeboes", word: "gazebo", kind: .dictionaryForm)))
-        #expect(dictionaries.questions == ["gazebo"], "the correction was looked up after the form was offered")
-        #expect(checker.questions.isEmpty)
+        // *gazeboes* is printed nowhere here, so the form is a guess from spelling: the checker is still asked, and its
+        // verified *gazebos* is offered **beside** it, second (2026-10-11) — the form still first.
+        #expect(offer == .offered(SpellingSuggestion(term: "gazeboes", word: "gazebo", kind: .dictionaryForm, tentative: true),
+                                  beside: SpellingSuggestion(term: "gazeboes", word: "gazebos")))
+        #expect(dictionaries.questions == ["gazebo", "gazebos"])
+        #expect(checker.questions == ["gazeboes"])
     }
 
     /// **A lemma the term is no inflection of gives way to the checker** (D1, 2026-10-10): *concreti* is an OCR typo,
