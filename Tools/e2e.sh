@@ -1625,11 +1625,11 @@ spelling_offer() {
     # the app in front, and on the E2E Mac Safari came forward between a relaunch and this step (2026-10-11), so the
     # compact card looked up Safari's selection instead of the typo.
     if ! why=$(ensure_fixture_open 2>&1); then
-        flunk "lookup ($style): $why, so “$term” was never looked up"
+        flunk "lookup ($style): $why, so “${term}” was never looked up"
         return 1
     fi
     if ! why=$("$helpers/select-text" com.apple.TextEdit "$term" 1 2>&1); then
-        flunk "lookup ($style): could not select “$term” in the fixture ($why)"
+        flunk "lookup ($style): could not select “${term}” in the fixture ($why)"
         return 1
     fi
     started=$(now_seconds)
@@ -1649,26 +1649,26 @@ spelling_offer() {
     done
     if [ -z "$missed" ]; then
         grant=$(missing_grant)
-        flunk "lookup ($style): “$term” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$spelling_view" | head -c 300))"
+        flunk "lookup ($style): “${term}” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$spelling_view" | head -c 300))"
         return 1
     fi
     if [ -z "$word" ]; then
         if [[ " $state " == *" offers=0 "* ]] && [[ " $state " == *" miss "* ]]; then
-            pass "lookup ($style): the miss card for “$term” offers no button — its candidates disagree — and keeps its miss"
+            pass "lookup ($style): the miss card for “${term}” offers no button — its candidates disagree — and keeps its miss"
             return 0
         fi
-        flunk "lookup ($style): the miss card for “$term” offered a button where its candidates disagree: $state ($(printf '%s' "$spelling_view" | head -c 300))"
+        flunk "lookup ($style): the miss card for “${term}” offered a button where its candidates disagree: $state ($(printf '%s' "$spelling_view" | head -c 300))"
         return 1
     fi
     if [ -z "$offered" ]; then
-        flunk "lookup ($style): the miss card for “$term” never offered “Look up “$word”” in 15 s ($(printf '%s' "$spelling_view" | head -c 300))"
+        flunk "lookup ($style): the miss card for “${term}” never offered “Look up “${word}”” in 15 s ($(printf '%s' "$spelling_view" | head -c 300))"
         return 1
     fi
     if [[ " $state " == *" offers=1 "* ]] && [[ " $state " == *" miss "* ]]; then
-        pass "lookup ($style): the miss card for “$term” came up $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, its miss kept and one button, “Look up “$word””, under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
+        pass "lookup ($style): the miss card for “${term}” came up $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, its miss kept and one button, “Look up “${word}””, under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
         return 0
     fi
-    flunk "lookup ($style): the miss card for “$term” did not hold its miss and exactly one button: $state"
+    flunk "lookup ($style): the miss card for “${term}” did not hold its miss and exactly one button: $state"
     return 1
 }
 #     press_offer <word> <card style>: presses "Look up “word”" through Accessibility and waits for the word's own card in
@@ -1676,8 +1676,8 @@ spelling_offer() {
 #     app, so the frontmost rule a real click needs can never be met for it (`click-element --press`).
 press_offer() {
     local word=$1 style=$2 why state
-    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Look up “$word”" 2>&1); then
-        flunk "lookup ($style): “Look up “$word”” could not be pressed ($why)"
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Look up “${word}”" 2>&1); then
+        flunk "lookup ($style): “Look up “${word}”” could not be pressed ($why)"
         return 1
     fi
     for _ in $(seq 1 100); do
@@ -1686,7 +1686,7 @@ press_offer() {
         [[ " $state " == *" card "* ]] && return 0
         sleep 0.1
     done
-    flunk "lookup ($style): pressing the button never showed the card for “$word” ($(printf '%s' "$spelling_view" | head -c 300))"
+    flunk "lookup ($style): pressing the button never showed the card for “${word}” ($(printf '%s' "$spelling_view" | head -c 300))"
     return 1
 }
 #     **What a bilingual sense's label leaves out, on the default card, behind its own disclosure** (plan-card-refinements
@@ -1755,7 +1755,7 @@ PYROW
         sleep 0.1
     done
     [ -n "$row" ] || { echo "the list showed no row to switch to"; return 1; }
-    why=$("$helpers/click-element" com.xiaolaidict --press "$row" 2>&1) || { echo "“$row” could not be pressed ($why)"; return 1; }
+    why=$("$helpers/click-element" com.xiaolaidict --press "$row" 2>&1) || { echo "“${row}” could not be pressed ($why)"; return 1; }
     for _ in $(seq 1 30); do
         footer=$(footer_row "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
         if [ -n "$footer" ] && { { [ "$to" = other ] && [[ "$footer" != "$from"* ]]; } || [[ "$footer" == "$to"* ]]; }; then
@@ -1764,7 +1764,7 @@ PYROW
         fi
         sleep 0.1
     done
-    echo "pressing “$row” never switched the card"; return 1
+    echo "pressing “${row}” never switched the card"; return 1
 }
 details_follow_the_entry() {  # details_follow_the_entry <details_state before the details were opened> <… once opened>
     local before=$1 opened=$2 original other back after
@@ -2111,11 +2111,11 @@ PYBOX
 punctuated_box() {
     local word=$1 punctuated=$2 alone whole reading why
     if ! why=$("$helpers/select-web" com.apple.Safari "$word" 2>&1 >/dev/null); then
-        flunk "selection: could not select “$word” alone ($why)"; return 0
+        flunk "selection: could not select “${word}” alone ($why)"; return 0
     fi
     alone=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
     if ! whole=$("$helpers/select-web" com.apple.Safari "$punctuated" 2>"$reports/select-web.err"); then
-        flunk "selection: could not select “$punctuated” ($(head -c 200 "$reports/select-web.err"))"; return 0
+        flunk "selection: could not select “${punctuated}” ($(head -c 200 "$reports/select-web.err"))"; return 0
     fi
     reading=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
     consume_verdicts selection "$(punctuated_verdicts "$alone" "$whole" "$reading" "$word" "$punctuated")"

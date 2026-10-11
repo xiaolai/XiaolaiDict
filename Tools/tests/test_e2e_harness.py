@@ -1453,3 +1453,30 @@ class ALedgerTheBuildCannotOpenStopsTheRun(unittest.TestCase):
         status, said = self.refusal("", "13")
         self.assertEqual(status, 1)
         self.assertTrue(said)
+
+
+class NoVariableIsFollowedByANonAsciiCharacter(unittest.TestCase):
+    """macOS's own `/bin/bash` is 3.2, and it reads the first byte of a character after a bare `$name` as part of the
+    name: `"“$term”"` failed on the Mac mini as `term\\xe2: unbound variable` while the Homebrew bash 5 on the other
+    E2E Mac read it correctly (2026-10-12). The E2E script runs on whichever bash the test Mac puts first on its PATH,
+    so every variable directly before a non-ASCII character — a curly quote, a dash, an ellipsis — is braced."""
+
+    BARE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]")
+
+    def test_the_pattern_finds_the_shape_that_failed(self):
+        # A positive control: a check that cannot fail is not a check.
+        self.assertTrue(self.BARE.search('echo "“$term” was never looked up"'))
+        self.assertIsNone(self.BARE.search('echo "“${term}” was never looked up"'))
+
+    def test_the_e2e_script_braces_every_such_variable(self):
+        found = [f"line {number}: {line.strip()[:100]}"
+                 for number, line in enumerate(SCRIPT.read_text(encoding="utf-8").splitlines(), 1)
+                 if self.BARE.search(line)]
+        self.assertEqual(found, [], "bare variable before a non-ASCII character; write ${name}")
+
+    def test_the_stage_helpers_brace_them_too(self):
+        found = [f"{path.name}:{number}"
+                 for path in sorted(HELPERS.rglob("*.sh"))
+                 for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                 if self.BARE.search(line)]
+        self.assertEqual(found, [])
