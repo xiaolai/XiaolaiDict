@@ -57,6 +57,7 @@ lookup	module	XiaolaiDictService	a lookup through the real XPC path answers with
 lookup	module	XiaolaiDictCore	the spelling suggestion and the sense ladder the card shows
 lookup	module	XiaolaiDictUI	the panel's "Did you mean" line is pressed and read
 lookup	module	StudyKit	the ledger rows each lookup writes are asserted
+lookup	module	StudyModels	LookupRecorder and LedgerStore, which write those rows
 lookup	path	Tools/e2e/click-element.swift	its helper
 lookup	path	Tools/e2e/drag-card.swift	its helper
 
@@ -77,6 +78,7 @@ shortcut	module	MacCapture	the selection the shortcut reads
 shortcut	module	XiaolaiDictService	the lookup the shortcut makes
 shortcut	module	XiaolaiDictUI	the panel drawn at the selection, and Escape
 shortcut	module	StudyKit	the ledger row the lookup writes
+shortcut	module	StudyModels	LookupRecorder and LedgerStore, which write that row
 shortcut	path	Tools/e2e/claim-escape.swift	its helper
 
 deadline	own	XiaolaiDict	the 1 s promise is the client's deadline
@@ -88,6 +90,7 @@ hover	module	MacCapture	the three Accessibility dialects and the recogniser
 hover	module	XiaolaiDictUI	the card's placement and the pinned note
 hover	module	XiaolaiDictService	the words hovered are looked up
 hover	module	StudyKit	the ledger rows a hover writes
+hover	module	StudyModels	LookupRecorder and LedgerStore, which write those rows
 hover	path	Tools/e2e/word-point.swift	its helper
 hover	path	Tools/e2e/element-frame.swift	its helper
 hover	path	Tools/e2e/page.html	its Safari and Chrome fixture
@@ -97,6 +100,7 @@ drawer	own	XiaolaiDict	the history drawer and the --history-report instrument
 drawer	module	XiaolaiDictUI	the drawer's surface, docking and stripes
 drawer	module	StudyPresentation	what the drawer's cards say about each reading
 drawer	module	StudyKit	the readings the drawer lists
+drawer	module	StudyModels	LedgerStore, through which the drawer reads them
 drawer	path	Tools/e2e/drawer-interactions.swift	its helper
 
 recogniser	own	XiaolaiDict	the --read-point instrument
@@ -116,7 +120,7 @@ scenes	path	Tools/e2e/click-element.swift	its helper
 panel	own	XiaolaiDict	the panel window and the --panel-report and --note-report instruments
 panel	module	XiaolaiDictUI	the panel's window, its key status and the pinned note
 panel	module	XiaolaiDictService	the lookups the panel shows
-panel	module	StudyModels	the pinned note's model, claimed in doubt
+panel	module	StudyModels	LookupRecorder and LedgerStore, and the pinned note's model
 panel	module	StudyKit	the ledger rows the panel's lookups write
 
 provider	own	XiaolaiDict	the router and the --provider-report instrument
@@ -124,6 +128,7 @@ provider	module	LLMProviders	endpoints and CLIs, what may leave the Mac, refusal
 provider	module	XiaolaiDictCore	the questions the panes ask
 provider	module	XiaolaiDictUI	the panes the answers are read from
 provider	module	XiaolaiDictService	the lookup the panes are asked about
+provider	module	StudyModels	the ledger rows its lookups write are asserted
 provider	path	Tools/e2e/click-element.swift	its helper
 provider	path	Tools/e2e/provider-stub.py	the stub endpoint and stand-in CLI
 
@@ -131,6 +136,7 @@ model	own	XiaolaiDict	the model client and the --model-report and --sense-report
 model	module	XiaolaiDictModelService	download, sense answers, translation, footprint, idle unload
 model	module	XiaolaiDictCore	the sense ladder the labelled set is scored through
 model	module	XiaolaiDictService	the entries the senses are picked from
+model	module	StudyModels	the ledger rows its lookups write are asserted
 model	path	Tools/e2e/ladder-gate.py	the ladder gate that judges the order
 
 learning	own	XiaolaiDict	the Library scene, relaunch and appearance
