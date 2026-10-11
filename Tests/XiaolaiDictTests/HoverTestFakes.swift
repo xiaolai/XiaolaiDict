@@ -110,7 +110,7 @@ final class ScriptedHoverReader: HoverReading {
     func answerWord(_ text: String = "hold") {
         guard let ask = asks.last else { return }
         answer(.selection(HoverFixtures.selection(text), request: ask.request, key: "key-\(text)-\(ask.request)",
-                          bounds: nil))
+                          bounds: nil, context: nil))
     }
 
     func answer(_ outcome: HoverReader.Outcome) {
@@ -128,7 +128,8 @@ final class RecordingDelivery: HoverDelivering {
     func beginRequest() -> Int { requests.begin() }
 
     func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
-                 askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
+                 askedAt: ContinuousClock.Instant, context: PendingContext?,
+                 seen: @escaping @MainActor (Bool) -> Void) -> Bool {
         guard requests.claim(request) else { return false }
         delivered.append((selection.text, pointer, request, requestedAt, word))
         seens.append(seen)

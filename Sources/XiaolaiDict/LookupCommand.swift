@@ -112,8 +112,18 @@ enum LookupCommand {
             begin: { 0 })
         let took = (ContinuousClock.now - started).milliseconds
         switch outcome {
-        case .selection(let selection, _, _, let bounds):
-            return emit(PointReport(selection, bounds: bounds, milliseconds: took.rounded()), through: writeLine) ?? .success
+        case .selection(let read, _, _, let bounds, let context):
+            // **The reading the reader's card settles on**: the first strip's, or the taller one's where the sentence
+            // grew — so the instrument reports what is used, and its time includes the growth. **And the first reading,
+            // with when it arrived**, where a context was still being read: the word the card is drawn with at once.
+            let settled = await context?.settled()
+            let total = (ContinuousClock.now - started).milliseconds
+            var report = PointReport(settled ?? read, bounds: bounds, milliseconds: total.rounded())
+            if context != nil {
+                report.first = PointReport.First(sentence: read.sentence, context: read.quality.context.rawValue,
+                                                 milliseconds: took.rounded(), grew: settled != nil)
+            }
+            return emit(report, through: writeLine) ?? .success
         case .quiet(let refusal):
             writeError("nothing read: \(refusal.reason)")
             return .failure
@@ -294,6 +304,17 @@ struct PointReport: Encodable, Equatable {
     /// Where the word is, y down, and how well that is known — absent where the dialect could not say
     /// (plan-card-refinements WI-2).
     let bounds: Bounds?
+    /// **The first strip's reading, where the rest of its sentence was still being read** — what the card is drawn with
+    /// at once, and when it arrived. Absent where the first reading was the whole one.
+    var first: First?
+
+    struct First: Encodable, Equatable {
+        let sentence: String?
+        let context: String
+        let milliseconds: Double
+        /// Whether a taller strip was read and replaced it.
+        let grew: Bool
+    }
 
     struct Bounds: Encodable, Equatable {
         let x: Double

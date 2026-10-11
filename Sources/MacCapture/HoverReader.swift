@@ -182,7 +182,9 @@ public final class HoverReader: HoverReading {
     public enum Outcome: Sendable {
         /// A word, the panel request it was read for, and the key that suppresses it once shown.
         /// `bounds` is where the word is on screen, y down, where the read could say (plan-card-refinements WI-2).
-        case selection(Selection, request: Int, key: String, bounds: ReadBounds?)
+        /// `context` is the rest of its sentence, still being read off the screen — nil where there is none to read.
+        /// **Whoever drops the word cancels it**: it holds the one capture until it settles.
+        case selection(Selection, request: Int, key: String, bounds: ReadBounds?, context: PendingContext?)
         /// The gate said no. Ordinary, and not worth showing.
         case quiet(HoverRefusal)
         /// The gate said yes and nothing could be read, with why — worth a log line, not a panel.
@@ -248,7 +250,8 @@ public final class HoverReader: HoverReading {
         if let target {
             switch await source.read(at: point, in: target, budget: accessibilityBudget) {
             case .hit(let hit):
-                return accept(Self.selection(from: hit), bounds: hit.bounds, request: request, policy: policy, point: point)
+                return accept(Self.selection(from: hit), bounds: hit.bounds, request: request, policy: policy, point: point,
+                              context: nil)
             case .miss(let reason):
                 log.debug("accessibility missed: \(reason, privacy: .public)")
             case .cancelled:
@@ -337,13 +340,27 @@ public final class HoverReader: HoverReading {
             // The recogniser checks the *window's* owner against the same rule before it captures
             // a single pixel — the AX target may be nil here, so this is the only exclusion the
             // OCR path gets before the fact.
-            let recognition = try await bounded {
+            let started = ContinuousClock.now
+            let (recognition, growing) = try await bounded {
                 try await source.recognise(at: point, window: window, policy: policy)
+            }
+            // **The rest of the sentence, while the card is already up** — dropped with the word if the word is, and
+            // **waited for no longer than the capture deadline**, counted from the first read: a taller strip that stops
+            // answering leaves the first reading standing, and the guard held until it answers, as any wedge does.
+            let deadline = captureDeadline
+            let context = growing.map { growing in
+                PendingContext {
+                    let left = max(.zero, deadline - (ContinuousClock.now - started))
+                    let grown = try? await withDeadline(left) { await value(of: growing, orOnCancel: { nil }) }
+                    return grown.flatMap { $0 }.flatMap(Self.selection(from:))
+                }
             }
             // **The run's box, which holds the word** (`containing`) — measured against a word whose box is known on the
             // E2E Mac before it was carried (plan-card-refinements §6, the owner's decision of 2026-10-09).
-            return accept(Self.selection(from: recognition), bounds: recognition.bounds, request: request, policy: policy,
-                          point: point)
+            let outcome = accept(Self.selection(from: recognition), bounds: recognition.bounds, request: request,
+                                 policy: policy, point: point, context: context)
+            if case .selection = outcome {} else { context?.cancel() }
+            return outcome
         } catch RecognitionError.screenRecordingDenied {
             // A reader who moved on is not told anything.
             return Task.isCancelled ? .quiet(.cancelled) : .needsScreenRecording(request: request)
@@ -369,14 +386,15 @@ public final class HoverReader: HoverReading {
     /// delivered and `lastLookedUp` written under them. The work cannot be stopped; accepting its
     /// result can be.
     private func accept(
-        _ selection: Selection?, bounds: ReadBounds?, request: Int, policy: HoverPolicy, point: CGPoint
+        _ selection: Selection?, bounds: ReadBounds?, request: Int, policy: HoverPolicy, point: CGPoint,
+        context: PendingContext?
     ) -> Outcome {
         guard !Task.isCancelled else { return .quiet(.cancelled) }
         guard let selection else { return .nothing("no word under the pointer") }
         if let refusal = postReadRefusal(selection, policy: policy, point: point) {
             return .quiet(refusal)
         }
-        return .selection(selection, request: request, key: Self.key(selection, at: point), bounds: bounds)
+        return .selection(selection, request: request, key: Self.key(selection, at: point), bounds: bounds, context: context)
     }
 
     func remember(_ key: String) { lastLookedUp = key }
@@ -411,14 +429,21 @@ public final class HoverReader: HoverReading {
     ///
     /// So the guard is released by the work's own continuation. A capture that never finishes holds
     /// it forever, and that is the correct outcome: while one is wedged, no other may start.
-    private func bounded<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    ///
+    /// **The first reading answers; the rest of its sentence goes on under the guard.** Where the reading offers a
+    /// `growth`, it runs inside the same work, after the first answer has been handed back, and its task is returned
+    /// beside it: the guard is released when the growth ends, so no capture starts while a taller strip is read.
+    private func bounded(
+        _ work: @escaping @Sendable () async throws -> Recognition
+    ) async throws -> (Recognition, Task<Recognition?, Never>?) {
         // **The guard is released by the work's own continuation, not by this function's return.**
         // A capture that never finishes holds it forever, and that is the correct outcome: while
         // one is wedged, no other may start. Nothing is caught here — an earlier version wrapped
         // the call in a `do/catch` that only rethrew, under a comment asserting the deadline had
         // won. It had not necessarily: a capture error and a cancellation arrive by the same path,
         // and the comment claimed to know which.
-        let finished = Task { [capturing, weak self] () async throws -> T in
+        let firstAnswer = FirstAnswer<Result<Recognition, any Error>>()
+        let finished = Task { [capturing, weak self] () async -> Recognition? in
             defer {
                 let (held, wasReported) = capturing.release()
                 if wasReported {
@@ -430,7 +455,14 @@ public final class HoverReader: HoverReading {
                 // guard is asked again against a guard it can claim.
                 Task { @MainActor in self?.onCaptureReleased?() }
             }
-            return try await work()
+            let first: Recognition
+            do { first = try await work() } catch {
+                firstAnswer.give(.failure(error))
+                return nil
+            }
+            firstAnswer.give(.success(first))
+            guard let growth = first.growth, !Task.isCancelled else { return nil }
+            return await growth()
         }
         // **Cancelled when the deadline wins, and that is not the same as stopping it.**
         // `withDeadline` cancels the task *waiting* on `finished.value`, never `finished` itself —
@@ -443,8 +475,9 @@ public final class HoverReader: HoverReading {
         // `capturing` until it finishes, because the release is in the work's own `defer` and
         // ScreenCaptureKit does not honour cancellation anyway. All this changes is that the
         // abandoned work can now *find out* it was abandoned.
+        var handedOn = false
         defer {
-            finished.cancel()
+            if !handedOn { finished.cancel() }
             // **A wedge is noticed even if nobody waits for it.** A hover cancelled mid-capture left
             // the capture holding the guard and nothing to look at it again; checked once the
             // deadline has passed, it is reported whether or not another hover ever asks.
@@ -458,7 +491,12 @@ public final class HoverReader: HoverReading {
                 }
             }
         }
-        return try await withDeadline(captureDeadline) { try await finished.value }
+        let first = try await withDeadline(captureDeadline) {
+            try await withCheckedContinuation { firstAnswer.install($0) }.get()
+        }
+        guard first.growth != nil else { return (first, nil) }
+        handedOn = true
+        return (first, finished)
     }
 
     /// The refusals that need the reading itself, so they cannot be part of the gate.
@@ -523,7 +561,7 @@ public final class HoverReader: HoverReading {
         return selection(of: hit.word, quality: quality, bundleID: hit.bundleID, appName: hit.appName)
     }
 
-    private static func selection(from recognition: Recognition) -> Selection? {
+    nonisolated private static func selection(from recognition: Recognition) -> Selection? {
         // The recogniser's own confidence, not 1. A reading at 0.5 is a guess, and the panel and
         // the ledger both have to be able to say so.
         guard let quality = CaptureQuality(
@@ -536,7 +574,7 @@ public final class HoverReader: HoverReading {
 
     /// The one construction both sources share; what differs between them is the quality, which each
     /// works out for itself (audit round 3, #12).
-    private static func selection(
+    nonisolated private static func selection(
         of word: WordAtPoint, quality: CaptureQuality, bundleID: String?, appName: String?
     ) -> Selection {
         Selection(text: word.word, sentence: word.sentence.text, rangeInSentence: word.sentence.selection,

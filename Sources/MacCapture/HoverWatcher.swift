@@ -31,8 +31,11 @@ public protocol HoverDelivering: AnyObject {
     /// granted is not a word shown, and a word remembered on the claim alone was never offered again.
     /// `word` is where the word is on screen, in AppKit's space, where the read could say — for the panel to keep
     /// clear (plan-card-refinements WI-2).
+    /// `context` is the rest of the word's sentence, still being read: **a refused claim cancels it**, and an accepted one
+    /// hands it to the lookup.
     func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
-                 askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool
+                 askedAt: ContinuousClock.Instant, context: PendingContext?,
+                 seen: @escaping @MainActor (Bool) -> Void) -> Bool
     /// A hover needed the pixels and Screen Recording is off. Hover never asks the system; this
     /// tells the reader where to grant it — **once per launch**, and answers whether it told them.
     @discardableResult
@@ -75,7 +78,8 @@ public final class HoverWatcher {
     private var cancelSettle: Cancel?
     private var readTask: Task<Void, Never>?
     /// What a read found, kept until the session says whether to deliver it.
-    private var found: [Int: (selection: Selection, request: Int, key: String, bounds: ReadBounds?)] = [:]
+    /// A word dropped from here cancels its context, which holds the one capture until it settles.
+    private var found: [Int: (selection: Selection, request: Int, key: String, bounds: ReadBounds?, context: PendingContext?)] = [:]
     /// Each request's panel number and when it was asked — **by origin**, so a tap served after the
     /// read it waited for, or a rest asked again once a capture freed, keeps the number and the time
     /// of the gesture that asked. Re-numbered, an older gesture could claim the panel over a lookup
@@ -215,7 +219,9 @@ public final class HoverWatcher {
         case .drop(let intent, let why):
             // **With the capture source**, so drops can be counted by path: the 2 pt rule ends a
             // hold mid-read, and a hand drifting during a 250–570 ms capture is the case to watch.
-            let source = found.removeValue(forKey: intent.serial)?.selection.quality.source.rawValue ?? "no word"
+            let dropped = found.removeValue(forKey: intent.serial)
+            dropped?.context?.cancel()
+            let source = dropped?.selection.quality.source.rawValue ?? "no word"
             log.notice("hover dropped: \(why.rawValue, privacy: .public) · \(source, privacy: .public)")
         }
     }
@@ -262,8 +268,9 @@ public final class HoverWatcher {
         if session.inFlight?.serial == intent.serial { readTask = nil }
         let end: HoverSession.ReadEnd
         switch outcome {
-        case .selection(let selection, let request, let key, let bounds):
-            found[intent.serial] = (selection, request, key, bounds)
+        case .selection(let selection, let request, let key, let bounds, let context):
+            found[intent.serial]?.context?.cancel()
+            found[intent.serial] = (selection, request, key, bounds, context)
             end = .word
         case .quiet(.captureInFlight):
             end = .captureBusy
@@ -295,9 +302,10 @@ public final class HoverWatcher {
         let protected = Self.primaryHeight(among: screens()).flatMap { word.bounds?.flipped(aboutPrimaryHeight: $0) }
         guard let delivery,
               delivery.deliver(word.selection, at: intent.point, protecting: protected, request: word.request,
-                               requestedAt: asked.date, askedAt: asked.instant,
+                               requestedAt: asked.date, askedAt: asked.instant, context: word.context,
                                seen: { [weak self] shown in if !shown { self?.reader.forget(word.key) } })
         else {
+            word.context?.cancel()
             log.debug("hover dropped: a later request has the panel")
             return
         }

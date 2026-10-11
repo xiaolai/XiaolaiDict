@@ -500,13 +500,14 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     private func launch(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
         ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
-        protecting word: WordBounds? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        protecting word: WordBounds? = nil, context: PendingContext? = nil,
+        seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         lookup?.cancel()
         lookup = Task {
             await lookUp(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt,
                          ticket: ticket, existingLookup: existingLookup, placement: placement, protecting: word,
-                         seen: seen)
+                         context: context, seen: seen)
         }
     }
 
@@ -538,10 +539,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// that request claimed the panel after it, the claim here is refused, and the late word is
     /// dropped instead of replacing what the reader asked for — and its lookup is not cancelled.
     func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
-                 askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
+                 askedAt: ContinuousClock.Instant, context: PendingContext?,
+                 seen: @escaping @MainActor (Bool) -> Void) -> Bool {
         guard let ticket = panel.claim(request) else { return false }
         launch(selection, near: pointer, requestedAt: requestedAt, askedAt: askedAt, ticket: ticket, protecting: word,
-               seen: seen)
+               context: context, seen: seen)
         return true
     }
 
@@ -593,7 +595,8 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     private func lookUp(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, askedAt: ContinuousClock.Instant,
         ticket: PanelTicket, existingLookup: LookupIdentity? = nil, placement: TermPlacement? = nil,
-        protecting word: WordBounds? = nil, seen: @escaping @MainActor (Bool) -> Void = { _ in }
+        protecting word: WordBounds? = nil, context: PendingContext? = nil,
+        seen: @escaping @MainActor (Bool) -> Void = { _ in }
     ) async {
         timings.begin(request: ticket.number, at: askedAt, source: selection.quality.source.rawValue)
         timings.mark(.captured, request: ticket.number)
@@ -601,7 +604,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         var drawn = false
         guard let row = await runner.run(selection, near: pointer, requestedAt: requestedAt, ticket: ticket,
                                          existingLookup: existingLookup, placement: placement, protecting: word,
-                                         seen: { shown in drawn = shown; seen(shown) }) else {
+                                         context: context, seen: { shown in drawn = shown; seen(shown) }) else {
             // **Ended with no row to finish, and still said.** A lookup dropped after its pending row
             // was written has that row in the ledger, so the write is waited for and counted; one
             // dropped before it is `dropped` — never silence, which is where waits went unmeasured.

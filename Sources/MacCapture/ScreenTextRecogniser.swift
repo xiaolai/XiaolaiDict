@@ -24,6 +24,10 @@ struct Recognition: Sendable {
     /// **Where the word is on screen**, y down: the box of the run it was read from — the finest box Vision gives, so
     /// it holds the word and whatever the run joins to it (`containing`). Nil where the box is not one worth trusting.
     var bounds: ReadBounds?
+    /// **The rest of the sentence, still to be read**: a taller strip toward `wantsMore`, read while the card is already
+    /// up, answering the reading it settled on — or nil where nothing grew. Nil where there is nothing to grow, or no
+    /// budget to grow it in. Whoever runs it holds the one capture until it ends.
+    var growth: (@Sendable () async -> Recognition?)?
 }
 
 enum RecognitionError: LocalizedError, Equatable {
@@ -116,33 +120,63 @@ final class ScreenTextRecogniser: Sendable {
         // captures deadlock, which is why that guard exists and why occupying it needlessly costs
         // the next lookup rather than only this one.
         let started = ContinuousClock.now
-        var strip = target
-        var reading = try await read(strip, at: point, of: window)
-        var lastRead = ContinuousClock.now - started
-        // **Grown only where the sentence ran into the strip's edge**, one side at a time, and only while a further
-        // read can finish inside the budget: the panel waits for this word, and growing must never turn a read that
-        // answered into one that timed out. Where growth stops short, the sentence is already marked as possibly cut.
-        while !reading.wantsMore.isEmpty,
+        var first = try await read(target, at: point, of: window)
+        let lastRead = ContinuousClock.now - started
+        // **The word now, the rest of the sentence after** (C1, 2026-10-11): the card does not wait for a taller strip.
+        // Offered only where a taller one could be read inside the budget, so a sentence nothing can finish is never
+        // drawn as still being read.
+        if Self.taller(than: target, toward: first.wantsMore, elapsed: lastRead, lastRead: lastRead) != nil {
+            first.growth = { [self, first] in
+                await self.grow(first, strip: target, at: point, of: window, started: started, lastRead: lastRead)
+            }
+        }
+        return first
+    }
+
+    /// The strip grown toward `sides`, where it can grow and a further read still fits the budget.
+    private static func taller(
+        than strip: Target, toward sides: StripSides, elapsed: Duration, lastRead: Duration
+    ) -> Target? {
+        guard !sides.isEmpty,
               let taller = ContextStrip.grown(
-                  strip.region.minY...strip.region.maxY, toward: reading.wantsMore,
-                  within: strip.frame.minY...strip.frame.maxY),
-              ContextStrip.affordable(elapsed: ContinuousClock.now - started, lastRead: lastRead) {
-            try Task.checkCancellation()
-            let next = strip.vertically(taller)
+                  strip.region.minY...strip.region.maxY, toward: sides, within: strip.frame.minY...strip.frame.maxY),
+              ContextStrip.affordable(elapsed: elapsed, lastRead: lastRead)
+        else { return nil }
+        return strip.vertically(taller)
+    }
+
+    /// **Grown only where the sentence ran into the strip's edge**, one side at a time, and only while a further read can
+    /// finish inside the budget, counted from the first read's start: growing must never turn a read that answered into
+    /// one that timed out. Where growth stops short, the sentence is already marked as possibly cut. Answers the last
+    /// reading made, or nil where none was made beyond `first` — a reader who moved on included.
+    private func grow(
+        _ first: Recognition, strip from: Target, at point: CGPoint, of window: ListedWindow,
+        started: ContinuousClock.Instant, lastRead firstRead: Duration
+    ) async -> Recognition? {
+        var strip = from
+        var reading = first
+        var grown: Recognition?
+        var lastRead = firstRead
+        while let next = Self.taller(
+            than: strip, toward: reading.wantsMore, elapsed: ContinuousClock.now - started, lastRead: lastRead) {
+            guard !Task.isCancelled else { return nil }
             let begun = ContinuousClock.now
             do {
                 reading = try await read(next, at: point, of: window)
-            } catch let error where !(error is CancellationError) {
+            } catch {
                 // **What was read stands.** A window that moved, or a pointer the taller strip could not place, says
                 // nothing against the reading already made — which carries its own `mayBeCut`.
-                Self.log.notice("capture: the taller strip was not read (\(error.localizedDescription, privacy: .public)); keeping the \(Int(strip.region.height), privacy: .public) pt reading")
+                if !(error is CancellationError) {
+                    Self.log.notice("capture: the taller strip was not read (\(error.localizedDescription, privacy: .public)); keeping the \(Int(strip.region.height), privacy: .public) pt reading")
+                }
                 break
             }
             Self.log.info("capture: the strip grew to \(Int(next.region.height), privacy: .public) pt toward \(reading.wantsMore.rawValue, privacy: .public)")
             strip = next
+            grown = reading
             lastRead = ContinuousClock.now - begun
         }
-        return reading
+        return Task.isCancelled ? nil : grown
     }
 
     /// One capture of `target` and its reading: the pixels, Vision, then the word and sentence under `point`.

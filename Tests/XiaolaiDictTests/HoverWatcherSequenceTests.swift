@@ -246,7 +246,7 @@ struct HoverWatcherSequenceTests {
         await rig.rest()
         let read = ReadBounds(rect: DownRect(x: 90, y: 890, width: 40, height: 20), quality: .exact)
         rig.reader.answer(.selection(HoverFixtures.selection("tide"), request: rig.reader.asks[0].request,
-                                     key: "key-tide", bounds: read))
+                                     key: "key-tide", bounds: read, context: nil))
         await HoverFixtures.settle { !rig.delivery.delivered.isEmpty }
         #expect(rig.delivery.delivered.map(\.bounds)
                 == [WordBounds(rect: UpRect(x: 90, y: 90, width: 40, height: 20), quality: .exact)])
@@ -321,7 +321,7 @@ struct HoverDeliveryTests {
         app.lookUpWord("tide")
         let newer = app.lookup
         let claimed = app.deliver(HoverFixtures.selection("hold"), at: UpPoint(x: 1, y: 1), protecting: nil, request: hover,
-                                  requestedAt: .now, askedAt: .now, seen: { _ in })
+                                  requestedAt: .now, askedAt: .now, context: nil, seen: { _ in })
         #expect(!claimed)
         #expect(app.lookup == newer, "the late hover replaced the newer lookup's task")
         #expect(newer?.isCancelled == false, "the late hover cancelled the newer lookup")
@@ -353,7 +353,7 @@ struct HoverReaderSourceTests {
             return
         }
         screen.readOutcome = HoverFixtures.hit("tide")
-        guard case .selection(let selection, let request, _, _) = await read(reader(screen)) else {
+        guard case .selection(let selection, let request, _, _, _) = await read(reader(screen)) else {
             Issue.record("a Latin word was refused")
             return
         }
@@ -368,7 +368,7 @@ struct HoverReaderSourceTests {
         screen.targetOutcome = .found(HoverFixtures.target())
         screen.readOutcome = HoverFixtures.hit("tide")
         let reader = reader(screen)
-        guard case .selection(_, _, let key, _) = await read(reader) else {
+        guard case .selection(_, _, let key, _, _) = await read(reader) else {
             Issue.record("no word")
             return
         }
