@@ -221,10 +221,20 @@ extension NoteReport {
     private static func frontmost(at point: CGPoint, mine: NSWindow, among notes: [NSWindow]) -> String {
         let listed = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]]) ?? []
+        // **Drawn, not merely listed**: the Dock's whole-display window some Macs have draws nothing (`DockEventSurface`).
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &displayCount)
+        var activeDisplays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        CGGetActiveDisplayList(displayCount, &activeDisplays, &displayCount)
+        let displays = activeDisplays.map { CGDisplayBounds($0) }
         guard let entry = listed.first(where: { entry in
             guard let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
-            return rect.contains(point)
+            let transparent = DockEventSurface.isOne(
+                owner: entry[kCGWindowOwnerName as String] as? String,
+                layer: (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1,
+                bounds: rect, displays: displays)
+            return rect.contains(point) && !transparent
         }) else { return "nothing" }
         let number = (entry[kCGWindowNumber as String] as? NSNumber)?.intValue
         if number == mine.windowNumber { return "this note" }
