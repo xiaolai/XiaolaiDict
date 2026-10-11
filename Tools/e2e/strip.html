@@ -10,7 +10,7 @@
 <!--
   Paragraphs drawn only as pixels, so a hover over them is read by the recogniser and its context comes from the strip.
   Two columns with an empty gutter: the left holds one sentence taller than the old 140 pt band, then a second paragraph
-  after a blank line; the right holds text that must never reach the left's sentence. With `?long`, the left holds one
+  after a blank line; the right holds text that must never reach the left's sentence. Copied as `strip-long.html`, the left holds one
   sentence taller than the tallest strip, which must come back as possibly cut.
 
   The geometry is fixed so the hover stage can aim without asking the recogniser: the group's frame is the canvas, the
@@ -18,7 +18,7 @@
 -->
 <div id="strip-text" role="group"><canvas id="ink"></canvas></div>
 <script>
-  const long = location.search.includes("long");
+  const long = location.pathname.endsWith("-long.html");
   const margin = 12, line = 26, font = "18px Helvetica", left = 340, gutter = 140, right = 300;
   const tall = "Lighthouse keepers along the northern coast counted every vessel that passed the outer rocks after "
     + "dusk and copied each name into a heavy ledger whose pages had gone soft with salt and lamp smoke until the "
@@ -30,6 +30,8 @@
     "Lighthouse keepers along the northern coast counted every vessel that passed the outer rocks").join(" and ")
     + " until the ledger was full.";
   document.body.classList.toggle("long", long);
+  // Its own id, so the stage never measures the other page in a tab behind it.
+  if (long) document.getElementById("strip-text").id = "strip-long";
   const canvas = document.getElementById("ink"), context = canvas.getContext("2d");
   context.font = font;
   function wrap(text, width) {

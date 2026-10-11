@@ -313,6 +313,8 @@ done
 # and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
 # document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
 cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/canvas.html Tools/e2e/strip.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
+# The same page under a second name draws the overlong paragraph: `open` takes a query string as part of a file's name.
+cp -p Tools/e2e/strip.html .build/e2e/strip-long.html
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -2663,20 +2665,20 @@ PYPIXELS
 fi
 # **The context is the paragraph, not a fixed band** (the owner's report of 2026-10-11: a command soft-wrapped over eight
 # rows was kept to `pkill`, mid-command, as `complete`). `strip.html` draws, only in pixels, one sentence taller than the
-# old 140 pt band beside a second column, and with `?long` one taller than the tallest strip. The pointer goes on the
+# old 140 pt band beside a second column, and as `strip-long.html` one taller than the tallest strip. The pointer goes on the
 # sentence's first row, aimed from the page's own geometry; the texts below are written here, not read from the page.
-# strip_read <url-suffix> <row>: the `--read-point` reading at the first word of that row of the left column.
+# strip_read <page> <row> <dom-id>: the `--read-point` reading at the first word of that row of the left column.
 strip_read() {
-    open -a Safari "file://$helpers/strip.html$1"; sleep 3
+    open -a Safari "$helpers/$1"; sleep 3
     local frame point
-    frame=$("$helpers/element-frame" com.apple.Safari strip-text 2>&1) || { echo "no frame: $frame"; return 1; }
+    frame=$("$helpers/element-frame" com.apple.Safari "$3" 2>&1) || { echo "no frame: $frame"; return 1; }
     point=$(python3 -c 'import sys; x, y, w, h = map(float, sys.argv[1:5]); row = int(sys.argv[5]); print("%.0f %.0f" % (x + 12 + 30, y + 12 + row * 26 + 13))' \
         $frame "$2")
     # shellcheck disable=SC2086
     "$exe" --read-point $point 2>&1
 }
-strip_whole=$(strip_read "" 0) || strip_whole="${strip_whole:-no reading}"
-strip_long=$(strip_read "?long" 8) || strip_long="${strip_long:-no reading}"
+strip_whole=$(strip_read strip.html 0 strip-text) || strip_whole="${strip_whole:-no reading}"
+strip_long=$(strip_read strip-long.html 8 strip-long) || strip_long="${strip_long:-no reading}"
 consume_verdicts hover "$(python3 - "$strip_whole" "$strip_long" <<'PYSTRIP' 2>&1 || true
 import difflib, json, re, sys
 def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
@@ -2695,7 +2697,8 @@ got = words(whole.get("sentence"))
 similarity = difflib.SequenceMatcher(None, got, words(expected)).ratio()
 say(whole.get("captureSource") == "opticalRecognition" and similarity >= 0.95,
     f"hover: a sentence taller than the old band is read whole off the screen ({len(got)} words, similarity {similarity:.3f})",
-    f"hover: the tall sentence was not read whole (similarity {similarity:.3f}): {sys.argv[1][:400]}")
+    f"hover: the tall sentence was not read whole (similarity {similarity:.3f}, context {whole.get('context')}): "
+    f"{whole.get('sentence') or sys.argv[1][:300]}")
 say(bool(got) and not foreign & set(got),
     "hover: nothing of the other column, or of the next paragraph, is in it",
     f"hover: the sentence took in text it does not hold: {sorted(foreign & set(got))}")
