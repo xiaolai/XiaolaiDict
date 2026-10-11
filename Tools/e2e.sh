@@ -278,6 +278,44 @@ IFS='|' read -r remote_uuid remote_name remote_model remote_os remote_build <<<"
 [ "$remote_uuid" != "$local_uuid" ] || fail "$host is this Mac; E2E tests run on the E2E machine, not the one that builds"
 echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
 
+# **The E2E Mac's ledger must be one this build can open** (2026-10-11). Every branch's build shares it, a build migrates
+# an older ledger forward, and a build refuses one newer than its own schema (`LedgerError.newerSchema`) — so once a newer
+# branch's build had run there, this branch's build recorded no lookup at all, and the lookup stage's ledger check failed
+# as "got: nothing" with nothing to say why. Asked before anything is installed, and stopped by name.
+#     ledger_schema_refusal <schema found there> <schema this build supports>: nothing and 0 where the build can open
+#     it; the reason and 1 where it cannot, or where the answer is no number.
+ledger_schema_refusal() {
+    local found=$1 supported=$2
+    case "$found" in
+        ''|*[!0-9]*) echo "the E2E Mac's ledger schema could not be read (answer: ${found:-nothing})"; return 1 ;;
+    esac
+    if [ "$found" -gt "$supported" ]; then
+        echo "the E2E Mac's ledger is at schema $found and this build supports $supported: a newer branch's build \
+migrated it, and this build refuses a newer ledger, so no lookup would be recorded. Move ledger.sqlite and its -wal and \
+-shm aside on that Mac (a .schema$supported.backup beside them is the ledger before that migration), or test a build of \
+schema $found"
+        return 1
+    fi
+}
+ledger_supported=$(sed -n 's/^ *public static let schemaVersion = \([0-9][0-9]*\)$/\1/p' Sources/StudyKit/Ledger.swift)
+[ -n "$ledger_supported" ] || fail "could not read Ledger.schemaVersion from Sources/StudyKit/Ledger.swift"
+# The quoted delimiter keeps this Mac's shell from expanding the remote $HOME and $f. **Read from a copy**: a ledger in
+# WAL mode whose app is not running has no -shm, and `-readonly` cannot open it at all (measured on the E2E Mac); a copy
+# with its -wal and -shm reads the same version and leaves the reader's files as they were.
+ledger_found=$(ssh_e2e bash -s <<'SH'
+f="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
+[ -f "$f" ] || { echo 0; exit 0; }
+t=$(mktemp -d)
+for part in "" -wal -shm; do [ ! -e "$f$part" ] || cp -p "$f$part" "$t/ledger.sqlite$part"; done
+sqlite3 "$t/ledger.sqlite" "pragma user_version"
+rm -rf "$t"
+SH
+) || ledger_found=""
+if ! why=$(ledger_schema_refusal "$ledger_found" "$ledger_supported"); then
+    fail "$why"
+fi
+echo "ledger: schema $ledger_found there, this build's $ledger_supported"
+
 # ---------------------------------------------------------------------------------------------
 # Runs on the E2E machine: quit a running copy of the E2E bundle, by its exact executable path.
 remote_quit() {

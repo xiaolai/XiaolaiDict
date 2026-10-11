@@ -1423,3 +1423,33 @@ class EveryHelperWritesItsReportThroughOneCheckedDoor(unittest.TestCase):
         done = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, check=False)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.split("\n")[:2], ["refused", '{"x":"a","y":1}'])
+
+
+class ALedgerTheBuildCannotOpenStopsTheRun(unittest.TestCase):
+    """`ledger_schema_refusal`, asked before anything is installed (2026-10-11). The E2E Mac's ledger is shared by every
+    branch's build, and a build refuses a ledger newer than its own schema (`LedgerError.newerSchema`) — so after a
+    newer branch's build migrated it, this branch's build recorded no lookup at all, and the lookup stage's ledger check
+    failed as "got: nothing" with no word about why. A ledger newer than the build stops the run and says so; one at
+    the build's schema or older, or none, does not."""
+
+    def refusal(self, found: str, supported: str) -> tuple[int, str]:
+        source = function("ledger_schema_refusal") + '\nledger_schema_refusal "$@"\n'
+        done = subprocess.run([BASH, "-c", source, "ledger_schema_refusal", found, supported],
+                              capture_output=True, text=True, timeout=60, check=False)
+        return done.returncode, done.stdout
+
+    def test_a_newer_ledger_is_refused_by_name(self):
+        status, said = self.refusal("14", "13")
+        self.assertEqual(status, 1)
+        self.assertIn("schema 14", said)
+        self.assertIn("13", said)
+
+    def test_a_ledger_this_build_can_open_is_not(self):
+        for found in ("13", "12", "0"):
+            with self.subTest(found=found):
+                self.assertEqual(self.refusal(found, "13"), (0, ""))
+
+    def test_an_unreadable_answer_is_refused_rather_than_passed(self):
+        status, said = self.refusal("", "13")
+        self.assertEqual(status, 1)
+        self.assertTrue(said)
