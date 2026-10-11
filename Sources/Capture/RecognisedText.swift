@@ -41,12 +41,16 @@ public struct RecognisedLine: Equatable, Sendable {
     /// said anything was wrong while the recogniser returned `exthdt6n6` at confidence 0.5; the
     /// panel rendered it as confidently as a correct reading (finding 6b).
     public let confidence: Double
+    /// **Text is missing from inside this line**: a run on it was cut by a tile's inner edge in every tile that read it,
+    /// so what lay past that edge was read by none (`BandTiling.rereads`). False for a line read in one piece.
+    public let cutInside: Bool
 
-    public init(text: String, box: CGRect, runs: [RecognisedRun], confidence: Double = 1) {
+    public init(text: String, box: CGRect, runs: [RecognisedRun], confidence: Double = 1, cutInside: Bool = false) {
         self.text = text
         self.box = box
         self.runs = runs
         self.confidence = confidence
+        self.cutInside = cutInside
     }
 }
 

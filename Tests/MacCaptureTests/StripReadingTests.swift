@@ -77,6 +77,26 @@ struct StripReadingTests {
         #expect(read.word.sentence.cut == [.end], "cut \(read.word.sentence.cut)")
     }
 
+    /// **A line missing text from inside it makes its sentence possibly cut** — kept and shown, as any such sentence is
+    /// (never gate, always annotate), but never reported complete.
+    @Test func aLineCutInsideMakesItsSentenceMayBeCut() throws {
+        let rows = Self.rows(Self.sentence, x: 40, top: 400, columns: 60)
+        let (whole, region) = Self.strip(rows, top: 400 - 150, height: 300)
+        let lines = whole.enumerated().map { index, line in
+            index == 1 ? RecognisedLine(text: line.text, box: line.box, runs: line.runs, confidence: line.confidence,
+                                        cutInside: true) : line
+        }
+        let line = try #require(lines.firstIndex { $0.runs.contains { $0.text == "keeper" } })
+        let run = try #require(lines[line].runs.firstIndex { $0.text == "keeper" })
+        let box = lines[line].runs[run].box
+        let read = try #require(ScreenTextRecogniser.reading(
+            lines, pick: RecognisedPick(line: line, run: run), at: CGPoint(x: box.midX, y: box.midY),
+            region: region, appName: nil, bundleID: nil))
+        #expect(read.word.sentence.text == Self.sentence)
+        #expect(read.mayBeCut, "a sentence with text missing inside it was reported complete")
+        #expect(read.word.sentence.mayBeCut)
+    }
+
     @Test func aThreeHundredPointStripReadsItWholeAndComplete() throws {
         let rows = Self.rows(Self.sentence, x: 40, top: 400, columns: 60)
         let read = try Self.read(rows, top: 400 - 150, height: 300, word: "keeper")

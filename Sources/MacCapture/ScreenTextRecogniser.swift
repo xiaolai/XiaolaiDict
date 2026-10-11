@@ -92,6 +92,10 @@ final class ScreenTextRecogniser: Sendable {
     /// reaches half its length past the boundary on each side, so this holds a word of 25 cells at 2x.
     static let tileOverlapPixels: CGFloat = 600
 
+    /// How many times a band is read again for tokens every tile cut. Each round is one Vision call per such token,
+    /// ~50–100 ms, and only where one exists; two rounds read whole every path the 2026-10-11 sweep cut but one.
+    static let maximumRereadRounds = 2
+
     private let cache = ShareableContentCache()
 
     /// Whether XiaolaiDict may capture at all. Injectable so the refusal can be tested; `.system`
@@ -323,7 +327,9 @@ final class ScreenTextRecogniser: Sendable {
         // sentence reach the block's ends — so it cannot express a cut in the middle, and leaving
         // the two to be computed separately is what let them disagree in the first place. The
         // sentence is rebuilt carrying the answer rather than left to derive its own.
-        let cut = settled.sentence.mayBeCut || junction
+        // **And text missing from inside a line**: a run every tile cut and no re-read could read whole. The sentence is
+        // kept, as any possibly-cut one is, and said to be so.
+        let cut = settled.sentence.mayBeCut || junction || covering.contains { lines[$0].cutInside }
         guard let sentence = SentenceContext(
             text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection, cut: settled.sentence.cut)
         else { return nil }
@@ -517,11 +523,24 @@ final class ScreenTextRecogniser: Sendable {
             forWidth: image.width, maximum: Int(maximumTilePixels), overlap: Int(tileOverlapPixels))
         guard tiles.count > 1 else { return try readTile(image) }
         var read: [(tile: BandTile, lines: [RecognisedLine])] = []
-        for tile in tiles {
-            try Task.checkCancellation()
-            guard let part = image.cropping(to: CGRect(x: tile.x, y: 0, width: tile.width, height: image.height))
-            else { throw RecognitionError.windowNotCapturable }
-            read.append((tile, try readTile(part)))
+        func readAll(_ tiles: [BandTile]) throws {
+            for tile in tiles {
+                try Task.checkCancellation()
+                guard let part = image.cropping(to: CGRect(x: tile.x, y: 0, width: tile.width, height: image.height))
+                else { throw RecognitionError.windowNotCapturable }
+                read.append((tile, try readTile(part)))
+            }
+        }
+        try readAll(tiles)
+        // **A token longer than the overlap is read again, whole, from a tile of its own** — every tile cut it, and the
+        // merge could otherwise keep only one of its pieces (`BandTiling.rereads`). A re-read can itself cut a piece it
+        // chained in, so it is asked once more; past that a line still cut inside says so rather than reading on.
+        var rounds = 0
+        var again = BandTiling.rereads(read, bandWidth: image.width, maximum: Int(maximumTilePixels))
+        while !again.isEmpty, rounds < maximumRereadRounds {
+            try readAll(again)
+            rounds += 1
+            again = BandTiling.rereads(read, bandWidth: image.width, maximum: Int(maximumTilePixels))
         }
         return BandTiling.merged(read, bandWidth: image.width)
     }

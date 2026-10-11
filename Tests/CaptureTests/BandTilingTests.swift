@@ -348,4 +348,69 @@ struct BandTilingTests {
         let block = LineJoiner.block(around: pick.line, in: merged, region: region)
         #expect(block.text == words.joined(separator: " "), "context from all three tiles: \(block.text)")
     }
+
+    // MARK: - A token longer than the overlap
+
+    /// The measured case (2026-10-11, Menlo 14 pt at 2x, a 96-character path rendered at band pixels 1801...3419 of a
+    /// 5120 px band): tile 0 saw `/Users/alice` up to its edge, tile 1 the path but its last character, tile 2 its tail
+    /// from its left edge. Every piece was cut, so all three ranked at depth zero.
+    private static let path = "/Users/alice/github/someone/myprojects/someonedict/.claude/worktrees/spelling-suggestion-gates2;"
+    private static let pathTiles = BandTiling.tiles(forWidth: 5120, maximum: 2000, overlap: 600)
+    private static func pathPieces() -> [(tile: BandTile, lines: [RecognisedLine])] {
+        let tiles = pathTiles
+        return [
+            (tiles[0], [seen("/Users/alice", from: 1801, to: 2000, by: tiles[0])]),
+            (tiles[1], [seen(String(path.dropLast()), from: 1801, to: 3400, by: tiles[1])]),
+            (tiles[2], [seen("vorktrees/spelling-suggestion-gates2;", from: 2800, to: 3419, by: tiles[2])]),
+            (tiles[3], [seen("ion-gates2;", from: 3120, to: 3419, by: tiles[3])]),
+        ]
+    }
+
+    /// **Red before this change**: the earliest tile's 200 px piece was kept, the 1600 px reading of the same ink
+    /// dropped for it, and the line read `/Users/alice vorktrees/spelling-…` — text lost from its middle, said nowhere.
+    /// Now the piece that saw most of the ink is kept and the line says it is cut inside.
+    @Test func piecesEveryTileCutKeepTheWidestAndSaySo() {
+        let merged = BandTiling.merged(Self.pathPieces(), bandWidth: 5120)
+        #expect(Self.runTexts(merged) == [String(Self.path.dropLast())], "\(Self.runTexts(merged))")
+        #expect(merged.allSatisfy { $0.cutInside }, "a line missing text inside it was not marked")
+    }
+
+    /// **And it is read again whole**: one tile, no wider than the limit, holding every piece's ink.
+    @Test func aTokenEveryTileCutIsReadAgainFromATileOfItsOwn() throws {
+        let again = BandTiling.rereads(Self.pathPieces(), bandWidth: 5120, maximum: 2000)
+        let tile = try #require(again.first)
+        #expect(again.count == 1)
+        #expect(tile.width == 2000)
+        #expect(tile.x + 4 < 1801 && tile.x + tile.width - 4 > 3419, "the re-read tile cuts the token again: \(tile)")
+
+        let whole = Self.seen(Self.path, from: 1801, to: 3419, by: tile)
+        let merged = BandTiling.merged(Self.pathPieces() + [(tile, [whole])], bandWidth: 5120)
+        #expect(Self.runTexts(merged) == [Self.path], "\(Self.runTexts(merged))")
+        #expect(!merged.contains { $0.cutInside })
+        #expect(BandTiling.rereads(Self.pathPieces() + [(tile, [whole])], bandWidth: 5120, maximum: 2000).isEmpty,
+                "a token read whole is not read again")
+    }
+
+    /// **The ordinary case costs nothing**: a word the boundary cut in one tile and the next saw whole asks for no read.
+    @Test func aWordSeenWholeSomewhereAsksForNoReread() {
+        let tiles = Self.pathTiles
+        let read = [
+            (tiles[0], [Self.seen("buckj", from: 1900, to: 2000, by: tiles[0])]),
+            (tiles[1], [Self.seen("buckjumper", from: 1900, to: 2080, by: tiles[1])]),
+        ]
+        #expect(BandTiling.rereads(read, bandWidth: 5120, maximum: 2000).isEmpty)
+        #expect(!BandTiling.merged(read, bandWidth: 5120).contains { $0.cutInside })
+    }
+
+    /// A token wider than any tile can be whole in none: nothing is read again, and the line says it is cut inside.
+    @Test func aTokenWiderThanATileIsNotReadAgainButMarked() {
+        let tiles = Self.pathTiles
+        let read = [
+            (tiles[0], [Self.seen("aaaa", from: 100, to: 2000, by: tiles[0])]),
+            (tiles[1], [Self.seen("bbbb", from: 1400, to: 3400, by: tiles[1])]),
+            (tiles[2], [Self.seen("cccc", from: 2800, to: 3500, by: tiles[2])]),
+        ]
+        #expect(BandTiling.rereads(read, bandWidth: 5120, maximum: 2000).isEmpty)
+        #expect(BandTiling.merged(read, bandWidth: 5120).contains { $0.cutInside })
+    }
 }
