@@ -47,7 +47,7 @@ public final class HoverReader: HoverReading {
     /// immediately afterwards succeeds, so it is contention, not corruption. **Any other
     /// screen-recording app can therefore stall this one**, which is why every capture is bounded
     /// and only one may be in flight.
-    static let captureDeadline: Duration = .seconds(5)
+    nonisolated static let captureDeadline: Duration = .seconds(5)
     /// How long past the deadline an unwatched capture is looked at again — enough that "held past
     /// the deadline" is true when it is.
     static let stuckCheckMargin: Duration = .milliseconds(100)

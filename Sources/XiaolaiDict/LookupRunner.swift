@@ -289,7 +289,7 @@ final class LookupRunner {
             // sense — and the phrase is asked again about the sentence it settled to, which is what the sense weighs.
             if let context {
                 group.addTask { [client] in
-                    guard let settled = await context.settled(), !Task.isCancelled else { return .context(nil, nil) }
+                    guard let settled = await context.settled(bound: PendingContext.longestWait), !Task.isCancelled else { return .context(nil, nil) }
                     let reply = try? await client.lookup(LookupRequest(
                         term: settled.text, sentence: settled.sentence, termLocation: settled.rangeInSentence?.location,
                         termLength: settled.rangeInSentence?.length))

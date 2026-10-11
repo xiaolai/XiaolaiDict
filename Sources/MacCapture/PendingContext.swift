@@ -16,10 +16,17 @@ public final class PendingContext: Sendable {
         reading = Task { await work() }
     }
 
-    /// The selection the context settled on, or nil where the first reading stands. Answers nil at once if the caller
-    /// is cancelled, and cancels the reading.
-    public func settled() async -> Selection? {
-        await value(of: reading, orOnCancel: { nil })
+    /// **How long a lookup waits for a context**: the capture deadline it is read under. The hover reader already gives
+    /// up on a taller strip at that deadline; this is the bound for whoever waits, so no context can hold a lookup longer.
+    public static let longestWait: Duration = HoverReader.captureDeadline
+
+    /// The selection the context settled on, or nil where the first reading stands — **or where it has not settled
+    /// within `bound`**. Answers nil at once if the caller is cancelled, and cancels the reading either way.
+    public func settled(bound: Duration) async -> Selection? {
+        let reading = reading
+        let settled = try? await withDeadline(bound) { await value(of: reading, orOnCancel: { nil }) }
+        guard let settled else { reading.cancel(); return nil }
+        return settled
     }
 
     /// Stops reading: a lookup nobody will show this context for.

@@ -116,7 +116,7 @@ enum LookupCommand {
             // **The reading the reader's card settles on**: the first strip's, or the taller one's where the sentence
             // grew — so the instrument reports what is used, and its time includes the growth. **And the first reading,
             // with when it arrived**, where a context was still being read: the word the card is drawn with at once.
-            let settled = await context?.settled()
+            let settled = await context?.settled(bound: PendingContext.longestWait)
             let total = (ContinuousClock.now - started).milliseconds
             var report = PointReport(settled ?? read, bounds: bounds, milliseconds: total.rounded())
             if context != nil {

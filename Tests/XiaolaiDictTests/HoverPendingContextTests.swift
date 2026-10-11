@@ -65,7 +65,7 @@ struct HoverPendingContextTests {
         }
         #expect(releases == 0)
         gate.open()
-        let settled = try #require(await pending.settled(), "the grown reading never arrived")
+        let settled = try #require(await pending.settled(bound: Patience.wait), "the grown reading never arrived")
         #expect(settled.text == "fine")
         #expect(settled.sentence == "Before leaving, he paid the fine and went home.")
         #expect(settled.rangeInSentence == NSRange(location: 28, length: 4))
@@ -86,7 +86,7 @@ struct HoverPendingContextTests {
         context.cancel()
         #expect(await Patience.until { gate.sawCancellation }, "the taller strip went on being read")
         #expect(await Patience.until { releases == 1 }, "the capture was held for a context nobody will show")
-        #expect(await context.settled() == nil)
+        #expect(await context.settled(bound: Patience.wait) == nil)
     }
 
     /// **A reading with nothing left to read has no context**, and lets the capture go as it always did.
