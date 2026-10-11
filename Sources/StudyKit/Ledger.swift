@@ -52,6 +52,11 @@ public struct LookupRecord: Equatable, Sendable {
     /// before — which is why nil means "not recorded", not "a sense was marked". It is what keeps
     /// "the model declined this sentence" (`refused`) apart from "no model here" (`unavailable`).
     public let senseAbstention: Abstention?
+    /// **Which ends of `context` may be cut**, where `quality` says it may be — schema 14 on. Empty is either a
+    /// sentence with no possible cut or a possible cut whose side was not recorded, and `quality` tells the two apart:
+    /// every row written before schema 14, and a cut the capture could not place, is a cut on an unknown side, never
+    /// one read as cut at its end.
+    public let contextCut: TextSegmenter.Clipping
 
     public init(
         surface: String, lemma: String, context: String, lemmaBasis: Lemma.Basis? = nil,
@@ -59,8 +64,10 @@ public struct LookupRecord: Equatable, Sendable {
         place: ReadingPlace = ReadingPlace(),
         lookedUpAt: Date, result: LookupResult, answeredBy: AnswerSource?, quality: CaptureQuality?,
         legacySourceURL: String? = nil, senseAbstention: Abstention? = nil,
-        script: ProbeScript? = nil
+        script: ProbeScript? = nil, contextCut: TextSegmenter.Clipping = []
     ) {
+        // A side is a fact about a possible cut, so a whole sentence has none whatever a caller passed.
+        self.contextCut = quality?.context == .mayBeCut ? contextCut : []
         self.surface = surface
         self.lemma = Lemmatizer.canonical(lemma)
         self.context = context
@@ -157,7 +164,7 @@ final class Connection {
 }
 
 public final class Ledger {
-    public static let schemaVersion = 13
+    public static let schemaVersion = 14
     /// A mistake in this file's own SQL has to reach the log whatever a caller does with the thrown
     /// error — see `ProjectionFault`. Nothing reader-facing is written here: no target below the view
     /// layer carries display text (ADR-0025).
@@ -286,6 +293,17 @@ public final class Ledger {
         }
     }
 
+    /// `context_cut`'s spelling of a side: NULL where none is recorded, which `context_quality` reads as whole or as a
+    /// cut on an unknown side.
+    static func storedCut(_ cut: TextSegmenter.Clipping) -> String? {
+        switch (cut.contains(.start), cut.contains(.end)) {
+        case (true, true): "both"
+        case (true, false): "start"
+        case (false, true): "end"
+        case (false, false): nil
+        }
+    }
+
     /// Returns the row's id, so a sense encounter can be hung off the lookup that produced it.
     @discardableResult
     public func record(_ record: LookupRecord) throws -> Int {
@@ -303,8 +321,8 @@ public final class Ledger {
                                  result, answered_by, capture_source, capture_confidence, context_quality,
                                  lemma_basis, language, context_range_location, context_range_length,
                                  source_name, source_document, source_page, source_title, source_title_raw,
-                                 source_precision, part_of_speech, sense_abstention, script)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 source_precision, part_of_speech, sense_abstention, script, context_cut)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bind: [
                 .text(record.surface), .text(record.lemma), .text(record.context),
@@ -320,7 +338,7 @@ public final class Ledger {
                 .optionalText(record.place.page), .optionalText(record.place.title),
                 .optionalText(record.place.rawTitle), .text(record.place.precision.rawValue),
                 .optionalText(record.partOfSpeech), .optionalText(record.senseAbstention?.rawValue),
-                .optionalText(record.script?.rawValue),
+                .optionalText(record.script?.rawValue), .optionalText(Self.storedCut(record.contextCut)),
             ]
         ) { _ in }
         return Int(sqlite3_last_insert_rowid(db))
@@ -589,7 +607,7 @@ public final class Ledger {
                    result, answered_by, capture_source, capture_confidence, context_quality,
                    lemma_basis, language, context_range_location, context_range_length,
                    source_name, source_document, source_page, source_title, source_title_raw,
-                   part_of_speech, sense_abstention, script
+                   part_of_speech, sense_abstention, script, context_cut
             -- Numbered, not bare: a bare `?` is parameter 1, so `?1` beside it would alias the
             -- lemma rather than the language.
             FROM lookups WHERE lemma = ?1 AND (?2 IS NULL OR language = ?2)
@@ -610,7 +628,7 @@ public final class Ledger {
                 lookedUpAt: Date(timeIntervalSince1970: row.real(5)),
                 result: try row.result(6), answeredBy: try row.answerSource(7), quality: try row.quality(8),
                 legacySourceURL: row.optionalText(4), senseAbstention: try row.abstention(21),
-                script: try row.optional(ProbeScript.self, 22, "lookups.script")))
+                script: try row.optional(ProbeScript.self, 22, "lookups.script"), contextCut: try row.contextCut(23)))
         }
         return records
     }
@@ -670,7 +688,9 @@ public final class Ledger {
                        kn.id, kn.confirmed_at, kn.target_kind, ka.is_usable, ka.text, ka.origin,
                        ks.dictionary_name, ks.sense_block, ks.sense_ordinal, ks.entry_sense_count,
                        ks.gloss, ks.chosen_by
-                       """ : "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL")
+                       """ : "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL"),
+                   -- Which side of a possible cut, from schema 14 — appended, for the reason above.
+                   l.context_cut
             FROM lookups l
             -- By id rather than by lookup_id, so a lookup with more than one encounter contributes
             -- one row and not several. Only the primary dictionary is recorded, so there should be
@@ -830,7 +850,8 @@ public final class Ledger {
             studyNoteID: try row.optionalUUID(27, "study_notes.id"),
             studyStatus: row.isNull(27) ? nil : StudyReadiness.of(try readinessFacts(from: row)),
             studyAnswer: row.optionalText(31), studySense: try row.senseNote(33),
-            studyObstacle: row.isNull(27) ? nil : StudyReadiness.obstacle(try readinessFacts(from: row)))
+            studyObstacle: row.isNull(27) ? nil : StudyReadiness.obstacle(try readinessFacts(from: row)),
+            sentenceCut: try row.contextCut(39))
     }
 
     /// Readiness's facts about the note a reading is kept under — **facts, not a verdict**: the rule is
@@ -1121,6 +1142,13 @@ public final class Ledger {
                 try execute(Self.keepingSchema)
                 if try hasTable("study_notes") { try execute(Self.studyKeepingSchema) }
             }
+            if found < 14 {
+                // Which side of a sentence the capture may have cut. NULL for every row written before this:
+                // `context_quality` still says whether a cut was possible, and its side stays unknown — never
+                // read as the end, which is where a single ellipsis used to put it. A plain added column, so
+                // the table keeps its other constraints and needs no rebuild.
+                try execute("ALTER TABLE lookups ADD COLUMN context_cut TEXT CHECK (context_cut IN ('start', 'end', 'both'));")
+            }
             try checkForeignKeysAfterMigrating()
             try execute("PRAGMA user_version = \(Self.schemaVersion)")
             try execute("COMMIT")
@@ -1366,6 +1394,17 @@ public final class Ledger {
             guard let raw = optionalText(column) else { return nil }
             guard let why = Abstention(rawValue: raw) else { throw LedgerError.corruptRow("sense_abstention '\(raw)'") }
             return why
+        }
+
+        /// `context_cut`: NULL is no side recorded; a spelling this build cannot read is refused, never read as none.
+        func contextCut(_ column: Int32) throws -> TextSegmenter.Clipping {
+            switch optionalText(column) {
+            case nil: return []
+            case "start": return .start
+            case "end": return .end
+            case "both": return [.start, .end]
+            case let raw?: throw LedgerError.corruptRow("context_cut '\(raw)'")
+            }
         }
 
         func answerSource(_ column: Int32) throws -> AnswerSource? {

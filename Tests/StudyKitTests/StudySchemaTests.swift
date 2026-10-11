@@ -330,6 +330,8 @@ struct StudyMigrationTests {
         // **Off, or a rebuild deletes the children.** Dropping a parent table with foreign keys on is a
         // `DELETE` that cascades; this connection is gone once the statements below have run.
         var statements: [String] = ["PRAGMA foreign_keys = OFF;"]
+        // Which side of a possible cut, from 14: a plain added column, so dropping it is today's shape at 13.
+        if version < 14 { statements += ["ALTER TABLE lookups DROP COLUMN context_cut;"] }
         if version < 13 {
             statements += ["DROP TRIGGER remember_removed_target;", "DROP TRIGGER study_keep_new_note;",
                 "DROP TABLE lookup_disposition_receipts;", "DROP TABLE lookup_disposition_operations;",
@@ -604,7 +606,7 @@ struct StudyMigrationTests {
     /// and every real schema-8 ledger failed its upgrade outright, because `DROP COLUMN` cannot take a
     /// column a `CHECK` names. Reproduced on ledgers built from each version's own SQL before this
     /// existed (the plan's round-2 entry).
-    @Test(arguments: [7, 8, 9, 10, 11, 12])
+    @Test(arguments: [7, 8, 9, 10, 11, 12, 13])
     func aLedgerMigratedFromAnOlderSchemaHasTheShapeOfAFreshOne(version: Int) throws {
         let fresh = path(), old = path()
         defer { remove(fresh); remove(old) }
@@ -627,7 +629,7 @@ struct StudyMigrationTests {
     /// **And keeps every row while it gets there**, the study rows above all: a table rebuilt with its
     /// parent's foreign keys enforced cascades, and the reader's notes, answers, schedules and histories
     /// would go with it. Written by the shipping code, wound back, migrated, and counted.
-    @Test(arguments: [8, 9, 10, 11, 12])
+    @Test(arguments: [8, 9, 10, 11, 12, 13])
     func themigrationFromAnOlderSchemaKeepsEveryRow(version: Int) throws {
         let path = path()
         defer { remove(path) }
