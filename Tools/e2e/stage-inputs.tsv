@@ -2,7 +2,8 @@
 #
 # **CARRIED is a development-loop shortcut, never a gate.** A stage whose key is unchanged since a fresh pass on the
 # same E2E Mac and macOS build is carried forward instead of run. A merge or a release needs a FRESH pass of every
-# stage on its own build — `make e2e-full`, then `Tools/e2e-status.sh require-fresh <build>`, which refuses CARRIED.
+# stage of a development bundle built from its own clean source tree — `make e2e-full`, then `Tools/e2e-status.sh
+# require-fresh`, which refuses CARRIED and which `make release` asks before it uploads anything.
 #
 # One row per input, four tab-separated fields: stage, kind, value, reason.
 #   stage   a name in KNOWN_STAGES (Tools/e2e.sh); `*` for an input of every stage; `-` for an `unexercised` row

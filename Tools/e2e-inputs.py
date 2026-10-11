@@ -7,7 +7,11 @@ is carried forward, marked, instead of run again.
                                              stage<TAB>run|carried|not-asked<TAB>why
     e2e-inputs.py settle BEFORE AFTER        stage<TAB>key, `-` where the key moved while the stages ran
     e2e-inputs.py table PLAN [RUN_LOG]       the table a person reads: PASS, FAIL, CARRIED (and why), NO RESULT
-    e2e-inputs.py release-gate STATUS BUILD  exit 1, naming each stage without a fresh pass on BUILD
+    e2e-inputs.py release-gate STATUS        exit 1, naming each stage without a fresh pass of this source tree
+    e2e-inputs.py tree                       the git tree of a clean working copy, or `-`
+    e2e-inputs.py mode BUILD                 `development` or `release`, from the shape of a build number
+    e2e-inputs.py snapshot DIR               DIR/keys and DIR/tree, taken before `make e2e` builds the bundle
+    e2e-inputs.py since-build BEFORE NOW     stage<TAB>key<TAB>why, `-` where a key moved between build and run
     e2e-inputs.py check                      exit 1, naming every problem with the declarations
 
 **What a key covers** — `Tools/e2e/stage-inputs.tsv` declares it, one row per input:
@@ -20,7 +24,9 @@ is carried forward, marked, instead of run again.
 - and, for every stage, the `*` rows and everything in `Tools/e2e.sh` outside the stages' regions.
 
 **A carried result is a development-loop optimisation and nothing more.** A merge or a release needs a fresh pass of
-every stage on its own build (`release-gate`), and a CARRIED row is refused there.
+every stage of a development bundle built from its own clean source tree (`release-gate`), and a CARRIED row is refused
+there. The release artifact itself is not what the harness ran: ADR-0010 compiles the instruments the stages observe
+through out of a release, and `verify_bundle` is what checks that artifact (`release_gap`).
 
 **A false skip is far worse than an extra run**, so every doubt resolves to "run it": a declared pattern that matches
 nothing, a module the package does not have, a stage with no entry — each leaves the stage without a key, and a stage
@@ -70,7 +76,8 @@ class Key:
 @dataclasses.dataclass(frozen=True)
 class Record:
     """One row of `.build/e2e-status.tsv`, as `Tools/e2e-status.sh record` writes it:
-    stage, result, build, when, key, host, os — the last three absent from a row filed before keys existed."""
+    stage, result, build, when, key, host, os, tree, mode — `key`, `host` and `os` absent from a row filed before keys
+    existed, `tree` and `mode` from one filed before the release receipt; each reads as `-`."""
     stage: str
     result: str
     build: str
@@ -78,6 +85,8 @@ class Record:
     key: str
     host: str
     os: str
+    tree: str
+    mode: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -336,8 +345,8 @@ def read_status(text: str) -> dict[str, Record]:
         if not line.strip():
             continue
         fields = line.split("\t")
-        fields += [NO_KEY] * (7 - len(fields))
-        records[fields[0]] = Record(*fields[:7])
+        fields += [NO_KEY] * (9 - len(fields))
+        records[fields[0]] = Record(*fields[:9])
     return records
 
 
@@ -380,8 +389,52 @@ def settle(before: dict[str, str], after: dict[str, str]) -> dict[str, str]:
     return {stage: key if after.get(stage) == key else NO_KEY for stage, key in before.items()}
 
 
-def release_refusals(stages, records: dict[str, Record], build: str) -> list[str]:
+def since_build(before: dict[str, str], now: dict[str, str]) -> list[tuple[str, str, str]]:
+    """The keys a run may plan and file under: those taken before the bundle was built, where they still hold. A key
+    that moved in between describes files the bundle may not have been built from, so the stage runs and its pass can
+    never be carried — the same rule as `settle`, one step earlier."""
+    out = []
+    for stage, key in now.items():
+        if key != NO_KEY and before.get(stage) == key:
+            out.append((stage, key, "inputs unchanged since the build"))
+        elif key == NO_KEY:
+            out.append((stage, NO_KEY, "no key could be made, so it always runs"))
+        else:
+            out.append((stage, NO_KEY, "its inputs changed between the build and the run, so it runs and cannot be "
+                                       "carried from this pass"))
+    return out
+
+
+def source_tree(repo: pathlib.Path) -> str | None:
+    """The git tree a clean working copy is, or None — a modified or untracked file is source no commit names, and a
+    directory that is not a repository has no tree. Ignored files (`.build`, `dev-docs`, `local.mk`) are not source."""
+    def ask(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=120, check=False)
+    status = ask("status", "--porcelain", "--untracked-files=normal")
+    if status.returncode != 0 or status.stdout.strip():
+        return None
+    tree = ask("rev-parse", "HEAD^{tree}")
+    value = tree.stdout.strip()
+    return value if tree.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", value) else None
+
+
+def build_mode(build: str) -> str:
+    """`build-bundle.sh` numbers a release from the release counter — a positive integer, and nothing else may be one —
+    and a development bundle from the clock, `year.monthday.time`."""
+    if re.fullmatch(r"[1-9][0-9]{0,8}", build):
+        return "release"
+    if re.fullmatch(r"[0-9]+(\.[0-9]+)+", build):
+        return "development"
+    return NO_KEY
+
+
+def release_refusals(stages, records: dict[str, Record], tree: str | None) -> list[str]:
+    """Every reason a release may not go out on this E2E record. `tree` is the release's own clean source tree."""
+    if tree is None:
+        return ["the source tree has uncommitted or untracked changes, so no end-to-end pass can be shown to be of "
+                "what would be released: commit, then make e2e-full"]
     refused = []
+    passes = []
     for stage in stages:
         record = records.get(stage)
         if record is None:
@@ -390,9 +443,86 @@ def release_refusals(stages, records: dict[str, Record], build: str) -> list[str
             refused.append(f"{stage}: CARRIED, which is never valid for a merge or a release")
         elif record.result != "pass":
             refused.append(f"{stage}: last result {record.result}")
-        elif record.build != build:
-            refused.append(f"{stage}: last fresh pass was on build {record.build}, not {build}")
+        elif record.tree in (NO_KEY, ""):
+            refused.append(f"{stage}: its last pass recorded no clean source tree (a dirty tree, a run not started by "
+                           f"make e2e, or a tree that moved during the run)")
+        elif record.tree != tree:
+            refused.append(f"{stage}: stale — its last fresh pass was of source tree {record.tree[:12]}, "
+                           f"not this one, {tree[:12]}")
+        elif record.mode in (NO_KEY, ""):
+            refused.append(f"{stage}: its last pass recorded no build mode")
+        elif record.mode != "development":
+            refused.append(f"{stage}: its last pass ran a {record.mode} bundle; the evidence is a development bundle "
+                           f"built from this tree")
+        elif record.host in (NO_KEY, "") or record.os in (NO_KEY, ""):
+            refused.append(f"{stage}: its last pass recorded no E2E Mac or macOS build")
+        else:
+            passes.append(record)
+    if passes:
+        first = passes[0]
+        for record in passes[1:]:
+            if (record.host, record.os) != (first.host, first.os):
+                refused.append(f"{record.stage}: passed on {record.host} macOS {record.os}, where {first.stage} passed "
+                               f"on {first.host} macOS {first.os} — the evidence is one E2E Mac's, on one macOS build")
     return refused
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# What a release cannot have run.
+
+def release_refused_instruments(bundle_script: str) -> tuple[str, ...]:
+    """The launch modes a release refuses, read from the list `verify_capture_instruments` holds the binary to."""
+    found = re.search(r"local flags=\(([^)]*)\)", bundle_script)
+    if not found:
+        raise ValueError("Tools/build-bundle.sh has no `local flags=(…)` list of the instruments a release refuses")
+    return tuple(found.group(1).split())
+
+
+def instruments_by_stage(script_text: str, flags) -> dict[str, list[str]]:
+    """Each stage that calls a refused instrument — in its own region, or through a shared function that does, however
+    deeply — and which. Comments and the Python validators' bodies are not calls."""
+    regions, shared = _regions(script_text)
+    bodies: dict[str, list[str]] = {}
+    current = None
+    for line in _code(shared).split("\n"):
+        opened = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\(\) \{", line)
+        if opened:
+            current = opened.group(1)
+            bodies[current] = []
+        if current:
+            bodies[current].append(line)
+            if line.startswith("}"):
+                current = None
+    calls = {name: {flag for flag in flags if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", "\n".join(body))}
+             for name, body in bodies.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name, body in bodies.items():
+            text = "\n".join(body)
+            for other in bodies:
+                if other != name and re.search(rf"\b{other}\b", text) and not calls[other] <= calls[name]:
+                    calls[name] |= calls[other]
+                    changed = True
+    used = {}
+    for stage, lines in regions.items():
+        text = _code("\n".join(lines))
+        found = {flag for flag in flags if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", text)}
+        for name, through in calls.items():
+            if through and re.search(rf"\b{name}\b", text):
+                found |= through
+        if found:
+            used[stage] = sorted(found)
+    return used
+
+
+def release_gap(script_text: str, bundle_script: str) -> str:
+    used = instruments_by_stage(script_text, release_refused_instruments(bundle_script))
+    lines = ["The evidence is a development bundle built from this source tree, not the release artifact: ADR-0010",
+             "compiles the instruments below out of a release, so the harness cannot drive the signed artifact.",
+             "verify_bundle is what checks the artifact itself. Observations that rest on an instrument a release lacks:"]
+    lines += [f"  {stage:<14} {' '.join(flags)}" for stage, flags in used.items()]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -538,7 +668,14 @@ def main(argv: list[str]) -> int:
     shown.add_argument("run_log", nargs="?")
     gate = commands.add_parser("release-gate")
     gate.add_argument("status")
-    gate.add_argument("build")
+    commands.add_parser("tree")
+    mode = commands.add_parser("mode")
+    mode.add_argument("build")
+    snapshot = commands.add_parser("snapshot")
+    snapshot.add_argument("directory")
+    since = commands.add_parser("since-build")
+    since.add_argument("before")
+    since.add_argument("now")
     args = parser.parse_args(argv)
 
     script_text = SCRIPT.read_text()
@@ -577,13 +714,36 @@ def main(argv: list[str]) -> int:
         return 0
     if args.command == "release-gate":
         status = pathlib.Path(args.status)
+        tree = source_tree(REPO)
         refused = release_refusals(known_stages(script_text), read_status(status.read_text()) if status.exists() else {},
-                                   args.build)
+                                   tree)
         for line in refused:
             print(f"refused: {line}")
         if refused:
-            print(f"a release needs a fresh pass of every stage on build {args.build}: make e2e-full")
+            print("a release needs a fresh pass of every stage, of a development bundle built from this clean source "
+                  "tree: commit, then make e2e-full")
+        else:
+            print(f"end-to-end evidence: a fresh pass of every stage of source tree {tree}")
+        print(release_gap(script_text, (REPO / "Tools" / "build-bundle.sh").read_text()))
         return 1 if refused else 0
+    if args.command == "tree":
+        print(source_tree(REPO) or NO_KEY)
+        return 0
+    if args.command == "mode":
+        print(build_mode(args.build))
+        return 0
+    if args.command == "snapshot":
+        directory = pathlib.Path(args.directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        keys = stage_keys(REPO, script_text, parse_inputs(INPUTS.read_text()), targets_from_dump(dump_package(REPO)))
+        (directory / "keys").write_text("".join(f"{stage}\t{key.value or NO_KEY}\t{key.why}\n"
+                                                for stage, key in keys.items()))
+        (directory / "tree").write_text((source_tree(REPO) or NO_KEY) + "\n")
+        return 0
+    if args.command == "since-build":
+        for stage, key, why in since_build(_read_keys(args.before), _read_keys(args.now)):
+            print(f"{stage}\t{key}\t{why}")
+        return 0
     return 2
 
 

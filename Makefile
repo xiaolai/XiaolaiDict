@@ -13,7 +13,9 @@
 #                 fresh pass on that Mac and macOS is CARRIED, not run, and the table says why.
 #                 STAGES="drawer recogniser" runs only those, fresh. FULL=1 runs every stage fresh.
 #                 WITHIN="drawer recogniser" is incremental over those stages alone.
-#   make e2e-full every stage, fresh — what a merge or a release needs; CARRIED never counts there
+#   make e2e-full every stage, fresh — what a merge or a release needs; CARRIED never counts there.
+#                 A release refuses unless every stage's last result is a fresh pass of a development bundle
+#                 built from its own clean git tree (e2e-evidence); a merge should be judged the same way
 #   make e2e-status  what each stage last did, and on which build
 #   make release BUILD_NUMBER=<n>
 #                 swift test, then sign with a secure timestamp, notarise and staple the app, and
@@ -31,7 +33,7 @@
 # Stated, not inferred from position: make's default is "the first target", which is a property
 # of where a line was pasted rather than of intent.
 .DEFAULT_GOAL := all
-.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-full e2e-status release clean metal-guard portability
+.PHONY: all run test test-swift test-tools lint icon strings e2e e2e-full e2e-status e2e-evidence release clean metal-guard portability
 
 # Machine-local settings, untracked: the name of your end-to-end machine and anything else that
 # belongs to one developer's network rather than to this project. Read BEFORE the defaults below,
@@ -144,16 +146,26 @@ strings: metal-guard
 icon:
 	@Tools/build-bundle.sh icon
 
-e2e: all
+# **The stages' keys and the source tree are taken before the bundle is built**, and the run holds them to what it finds
+# when it starts and when it ends: an edit made while `all` built, or in the seconds before the run read the tree, would
+# otherwise be filed against a bundle that does not have it. Anything that moved is filed with no key and no tree — it
+# can be neither carried nor offered to a release. `all` is made from here, after the snapshot, rather than as a
+# prerequisite, which make would run first.
+E2E_PREBUILD := .build/e2e-prebuild
+
+e2e:
 	@[ -n "$(E2E_HOST)" ] || { \
 	  echo "E2E_HOST is not set. The end-to-end tests run on a second Mac, reached over SSH."; \
 	  echo "Set it once in local.mk (untracked):   echo 'E2E_HOST = your-ssh-host' > local.mk"; \
 	  echo "or per run:                            make e2e E2E_HOST=your-ssh-host"; \
 	  exit 1; }
-	@XIAOLAIDICT_E2E_FULL="$(FULL)" XIAOLAIDICT_E2E_WITHIN="$(WITHIN)" Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
+	@rm -rf $(E2E_PREBUILD) && python=$$(Tools/python.sh) && "$$python" Tools/e2e-inputs.py snapshot $(E2E_PREBUILD)
+	@$(MAKE) all
+	@XIAOLAIDICT_E2E_PREBUILD=$(E2E_PREBUILD) \
+	  XIAOLAIDICT_E2E_FULL="$(FULL)" XIAOLAIDICT_E2E_WITHIN="$(WITHIN)" Tools/e2e.sh "$(E2E_HOST)" $(STAGES)
 
 # Every stage, fresh, whatever is recorded: the run a merge or a release is judged by. A CARRIED stage is a judgment that
-# its inputs did not change, never a run, and `Tools/e2e-status.sh require-fresh <build>` refuses one.
+# its inputs did not change, never a run, and `Tools/e2e-status.sh require-fresh` refuses one.
 e2e-full:
 	@$(MAKE) e2e FULL=1
 
@@ -163,9 +175,16 @@ e2e-full:
 e2e-status:
 	@Tools/e2e-status.sh show
 
+# **End-to-end evidence of this source first** — ADR-0024 addendum: a fresh `make e2e-full` of a development bundle built
+# from the same clean git tree, never CARRIED. Asked before the tests so a missing run costs seconds, and asked again by
+# `Tools/release.sh` after its build and before any upload. Only here: `make`, `make test` and the development loop never
+# ask for it.
+e2e-evidence:
+	@Tools/e2e-status.sh require-fresh
+
 # Tests first, as for every bundle: nothing is published over a failing suite, and a notarised
 # one least of all, since it is the build other people download.
-release: lint test-swift
+release: e2e-evidence lint test-swift
 	@Tools/release.sh
 
 clean:

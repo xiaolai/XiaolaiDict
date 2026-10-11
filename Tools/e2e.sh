@@ -16,8 +16,8 @@
 # and macOS build, is CARRIED rather than run. The table says which, and why. `XIAOLAIDICT_E2E_FULL=1`
 # (`make e2e-full`) runs every stage fresh; `XIAOLAIDICT_E2E_WITHIN="a b"` (`make e2e WITHIN="a b"`) is
 # incremental over those stages alone. **CARRIED is a development-loop shortcut and is never
-# valid for a merge or a release**: those need a fresh pass of every stage on their own build, and
-# `Tools/e2e-status.sh require-fresh` refuses anything else.
+# valid for a merge or a release**: those need a fresh pass of every stage of a development bundle
+# built from their own clean source tree, and `Tools/e2e-status.sh require-fresh` refuses anything else.
 #
 # Each result is filed by `Tools/e2e-status.sh` against the build it ran on and the key it ran under,
 # which is also what `make e2e-status` reads.
@@ -291,7 +291,25 @@ echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
 # anything is shipped, so a run that has nothing to do costs seconds — and printed, so a carry is never silent.
 stage "plan"
 e2e_os="$remote_os $remote_build"
-python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys" || fail "the stages' input keys could not be computed"
+# **Held to the keys and the tree taken before the bundle was built** (`make e2e` sets XIAOLAIDICT_E2E_PREBUILD): a key
+# that moved since then describes files the bundle may lack, so that stage runs and is filed with no key; a tree that
+# moved, or was dirty, files no tree, which a release refuses. Run without it — `e2e.sh` by hand — nothing says what the
+# bundle was built from, so the keys are the ones read now and the tree is `-`.
+python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys-now" || fail "the stages' input keys could not be computed"
+source_tree=-
+if [ -n "${XIAOLAIDICT_E2E_PREBUILD:-}" ]; then
+    python3 Tools/e2e-inputs.py since-build "$XIAOLAIDICT_E2E_PREBUILD/keys" "$remote_scripts/keys-now" >"$remote_scripts/keys" \
+        || fail "the keys taken before the build could not be read from $XIAOLAIDICT_E2E_PREBUILD"
+    built_tree=$(cat "$XIAOLAIDICT_E2E_PREBUILD/tree") || fail "the tree taken before the build could not be read"
+    [ "$built_tree" != "$(python3 Tools/e2e-inputs.py tree)" ] || source_tree=$built_tree
+else
+    cp "$remote_scripts/keys-now" "$remote_scripts/keys"
+fi
+if [ "$source_tree" = - ]; then
+    echo "source tree: none recorded (dirty, changed since the build, or not started by make e2e), so this run cannot be a release receipt"
+else
+    echo "source tree: $source_tree"
+fi
 full_flag=""
 [ -z "${XIAOLAIDICT_E2E_FULL:-}" ] || full_flag=--full
 python3 Tools/e2e-inputs.py plan "$remote_scripts/keys" .build/e2e-status.tsv "$remote_uuid" "$e2e_os" \
@@ -346,6 +364,7 @@ rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy
 local_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
 remote_version=$(ssh_e2e "/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' '$REMOTE_DIR/XiaolaiDict.app/Contents/Info.plist'")
 [ "$local_version" = "$remote_version" ] || fail "shipped build $local_version, found $remote_version"
+build_mode=$(python3 Tools/e2e-inputs.py mode "$remote_version") || fail "the build mode of $remote_version could not be read"
 ssh_e2e "codesign --verify --strict --deep '$REMOTE_DIR/XiaolaiDict.app'" || fail "the shipped bundle does not verify there"
 echo "build $remote_version installed and verified"
 
@@ -5703,7 +5722,9 @@ fi
 python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys-after" || : >"$remote_scripts/keys-after"
 python3 Tools/e2e-inputs.py settle "$remote_scripts/keys" "$remote_scripts/keys-after" >"$remote_scripts/keys-settled" \
     || fail "the keys this run ran under could not be settled; nothing is recorded"
-Tools/e2e-status.sh record "$remote_version" "$remote_scripts/keys-settled" "$remote_uuid" "$e2e_os" <"$RUN_LOG"
+# The tree likewise: one that moved while the stages ran is no tree this run tested.
+[ "$source_tree" = "$(python3 Tools/e2e-inputs.py tree)" ] || source_tree=-
+Tools/e2e-status.sh record "$remote_version" "$remote_scripts/keys-settled" "$remote_uuid" "$e2e_os" "$source_tree" "$build_mode" <"$RUN_LOG"
 echo
 python3 Tools/e2e-inputs.py table "$remote_scripts/plan" "$RUN_LOG"
 echo

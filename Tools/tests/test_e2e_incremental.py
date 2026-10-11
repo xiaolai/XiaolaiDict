@@ -317,7 +317,7 @@ class TheRecordHoldsTheKeyItRanUnder(unittest.TestCase):
 
     def run_record(self, results: str) -> dict:
         done = subprocess.run([BASH, str(self.root / "Tools" / "e2e-status.sh"), "record", "2026.1011.9",
-                               str(self.keys), HOST, OS], input=results, capture_output=True, text=True,
+                               str(self.keys), HOST, OS, TREE, "development"], input=results, capture_output=True, text=True,
                               timeout=60, check=False)
         self.assertEqual(done.returncode, 0, done.stderr)
         return inputs.read_status((self.root / ".build" / "e2e-status.tsv").read_text())
@@ -327,6 +327,7 @@ class TheRecordHoldsTheKeyItRanUnder(unittest.TestCase):
         self.assertEqual((records["lookup"].result, records["lookup"].key, records["lookup"].host, records["lookup"].os),
                          ("pass", KEY, HOST, OS))
         self.assertEqual(records["lookup"].build, "2026.1011.9")
+        self.assertEqual((records["lookup"].tree, records["lookup"].mode), (TREE, "development"))
         self.assertEqual(records["panel"].result, "fail")
         self.assertEqual(records["panel"].key, "-")
 
@@ -342,46 +343,288 @@ class TheRecordHoldsTheKeyItRanUnder(unittest.TestCase):
         self.assertEqual(inputs.settle({"lookup": KEY}, {"lookup": KEY}), {"lookup": KEY})
 
 
-class AReleaseNeedsAFreshPassOfEveryStageOnItsBuild(unittest.TestCase):
+TREE = "c" * 40
+RECEIPT = f"{FRESH}\t{TREE}\tdevelopment"
+
+
+def git(root: pathlib.Path, *args: str) -> str:
+    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=120, check=True)
+    return done.stdout.strip()
+
+
+def scratch_git_repo(test: unittest.TestCase, files: dict[str, str]) -> pathlib.Path:
+    root = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-e2e-tree-"))
+    test.addCleanup(shutil.rmtree, root, True)
+    for relative, text in {".gitignore": ".build/\n", **files}.items():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_text(text)
+        if relative.endswith(".sh"):
+            (root / relative).chmod(0o755)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "fixture")
+    return root
+
+
+class TheReceiptNamesTheSourceTreeItWasBuiltFrom(unittest.TestCase):
+    """A pass is filed with the git tree the bundle was built from and the bundle's build mode, so a release can ask
+    whether the E2E evidence is of its own source — a build number cannot say that, since a release renumbers."""
+
+    def test_a_clean_tree_is_named_by_its_hash_and_a_dirty_one_by_nothing(self):
+        root = scratch_git_repo(self, {"Sources/a.swift": "let a = 1\n"})
+        self.assertEqual(inputs.source_tree(root), git(root, "rev-parse", "HEAD^{tree}"))
+        (root / ".build").mkdir()
+        (root / ".build" / "ignored").write_text("an ignored file is not source\n")
+        self.assertIsNotNone(inputs.source_tree(root))
+        (root / "Sources" / "a.swift").write_text("let a = 2\n")
+        self.assertIsNone(inputs.source_tree(root), "a modified tracked file")
+        git(root, "checkout", "-q", "--", "Sources/a.swift")
+        (root / "Sources" / "b.swift").write_text("let b = 1\n")
+        self.assertIsNone(inputs.source_tree(root), "an untracked file the build would compile")
+
+    def test_a_directory_that_is_not_a_repository_has_no_tree(self):
+        root = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-e2e-notgit-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertIsNone(inputs.source_tree(root))
+
+    def test_a_key_that_moved_between_the_build_and_the_run_is_not_a_key(self):
+        before = {"lookup": KEY, "panel": "b" * 64, "model": "-"}
+        now = {"lookup": KEY, "panel": "d" * 64, "model": "-"}
+        found = {stage: (key, why) for stage, key, why in inputs.since_build(before, now)}
+        self.assertEqual(found["lookup"][0], KEY)
+        self.assertEqual(found["panel"][0], "-")
+        self.assertIn("between the build and the run", found["panel"][1])
+        self.assertEqual(found["model"][0], "-")
+
+    def test_a_row_from_before_the_receipt_reads_as_no_tree_and_no_mode(self):
+        old = record([FRESH])["lookup"]
+        self.assertEqual((old.tree, old.mode), ("-", "-"))
+        new = record([RECEIPT])["lookup"]
+        self.assertEqual((new.tree, new.mode), (TREE, "development"))
+
+    def test_the_build_mode_is_read_off_the_build_number(self):
+        self.assertEqual(inputs.build_mode("2026.1011.95412"), "development")
+        self.assertEqual(inputs.build_mode("42"), "release")
+        self.assertEqual(inputs.build_mode("none"), "-")
+
+
+class AReleaseNeedsAFreshFullPassOfItsOwnSourceTree(unittest.TestCase):
+    """`require-fresh`: every stage's last result a fresh pass of a development bundle built from the release's own
+    clean source tree, all on one E2E Mac and macOS build. The release artifact itself is not what ran (ADR-0010)."""
 
     STAGES = ("lookup", "panel")
 
-    def rows(self, panel_result="pass", panel_build="2026.1011.1"):
-        return record([FRESH, FRESH.replace("lookup", "panel").replace("\tpass\t", f"\t{panel_result}\t")
-                       .replace("2026.1011.1", panel_build)])
+    def rows(self, **panel):
+        fields = dict(zip(("stage", "result", "build", "when", "key", "host", "os", "tree", "mode"),
+                          RECEIPT.replace("lookup", "panel", 1).split("\t")))
+        fields.update(panel)
+        return record([RECEIPT, "\t".join(fields.values())])
 
-    def test_every_fresh_pass_on_the_build_is_accepted(self):
-        self.assertEqual(inputs.release_refusals(self.STAGES, self.rows(), "2026.1011.1"), [])
+    def refusals(self, records, tree=TREE):
+        return inputs.release_refusals(self.STAGES, records, tree)
 
-    def test_a_carried_failed_missing_or_older_row_is_refused(self):
-        for name, rows in {
-            "carried": self.rows(panel_result="carried"),
-            "failed": self.rows(panel_result="fail"),
-            "another build": self.rows(panel_build="2026.1010.7"),
-            "missing": record([FRESH]),
-        }.items():
+    def test_a_fresh_pass_of_every_stage_on_this_tree_is_accepted(self):
+        self.assertEqual(self.refusals(self.rows()), [])
+
+    def test_every_other_state_is_refused_with_its_reason(self):
+        cases = {
+            "carried": (self.rows(result="carried"), "CARRIED"),
+            "failed": (self.rows(result="fail"), "fail"),
+            "missing": (record([RECEIPT]), "never recorded"),
+            "another tree": (self.rows(tree="e" * 40), "stale"),
+            "no tree": (self.rows(tree="-"), "no clean source tree"),
+            "before receipts": (record([RECEIPT, FRESH.replace("lookup", "panel", 1)]), "no clean source tree"),
+            "a release bundle": (self.rows(mode="release"), "release"),
+            "no mode": (self.rows(mode="-"), "build mode"),
+            "no host": (self.rows(host="-"), "E2E Mac"),
+            "another Mac": (self.rows(host="UUID-2"), "one E2E Mac"),
+            "another macOS": (self.rows(os="27.1 26B10"), "one E2E Mac"),
+        }
+        for name, (records, reason) in cases.items():
             with self.subTest(name):
-                refused = inputs.release_refusals(self.STAGES, rows, "2026.1011.1")
+                refused = self.refusals(records)
                 self.assertEqual(len(refused), 1, refused)
                 self.assertIn("panel", refused[0])
+                self.assertIn(reason, refused[0])
 
-    def test_the_status_script_gate_refuses_a_file_holding_a_carried_row(self):
-        root = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-e2e-gate-"))
-        self.addCleanup(shutil.rmtree, root, True)
-        (root / "Tools").mkdir()
+    def test_a_dirty_tree_is_refused_whatever_is_recorded(self):
+        refused = self.refusals(self.rows(), tree=None)
+        self.assertEqual(len(refused), 1, refused)
+        self.assertIn("uncommitted", refused[0])
+
+    def gate_repo(self) -> pathlib.Path:
+        root = scratch_git_repo(self, {f"Tools/{name}": (REPO / "Tools" / name).read_text()
+                                       for name in ("e2e-status.sh", "e2e-inputs.py", "python.sh", "e2e.sh",
+                                                    "build-bundle.sh")})
         (root / ".build").mkdir()
-        shutil.copy(STATUS_SCRIPT, root / "Tools" / "e2e-status.sh")
-        shutil.copy(TOOL, root / "Tools" / "e2e-inputs.py")
-        shutil.copy(REPO / "Tools" / "python.sh", root / "Tools" / "python.sh")
-        shutil.copy(REPO / "Tools" / "e2e.sh", root / "Tools" / "e2e.sh")
+        return root
+
+    def run_gate(self, root: pathlib.Path, rows: list[str]):
+        (root / ".build" / "e2e-status.tsv").write_text("\n".join(rows) + "\n")
+        return subprocess.run([BASH, str(root / "Tools" / "e2e-status.sh"), "require-fresh"],
+                              capture_output=True, text=True, timeout=120, check=False)
+
+    def test_the_status_script_gate_accepts_this_tree_and_refuses_the_rest(self):
+        root = self.gate_repo()
+        tree = git(root, "rev-parse", "HEAD^{tree}")
         stages = inputs.known_stages((REPO / "Tools" / "e2e.sh").read_text())
-        good = [FRESH.replace("lookup", stage, 1) for stage in stages]
-        for rows, expected in ((good, 0), (good[:-1] + [good[-1].replace("\tpass\t", "\tcarried\t")], 1)):
-            (root / ".build" / "e2e-status.tsv").write_text("\n".join(rows) + "\n")
-            done = subprocess.run([BASH, str(root / "Tools" / "e2e-status.sh"), "require-fresh", "2026.1011.1"],
-                                  capture_output=True, text=True, timeout=120, check=False)
-            self.assertEqual(done.returncode, expected, done.stdout + done.stderr)
-        self.assertIn(stages[-1], done.stdout + done.stderr)
+        good = [RECEIPT.replace("lookup", stage, 1).replace(TREE, tree) for stage in stages]
+        done = self.run_gate(root, good)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("not the release artifact", done.stdout)
+        for name, rows in {
+            "carried": good[:-1] + [good[-1].replace("\tpass\t", "\tcarried\t")],
+            "stale": good[:-1] + [good[-1].replace(tree, TREE)],
+            "missing": good[:-1],
+        }.items():
+            with self.subTest(name):
+                done = self.run_gate(root, rows)
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                self.assertIn(stages[-1], done.stdout)
+                self.assertIn("make e2e-full", done.stdout)
+        (root / "Tools" / "e2e-status.sh").write_text((root / "Tools" / "e2e-status.sh").read_text() + "# edited\n")
+        done = self.run_gate(root, good)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("uncommitted", done.stdout)
+
+    def test_the_gate_names_what_a_release_cannot_have_run(self):
+        """The known gap, computed from the script and from the flags `verify_capture_instruments` refuses in a release —
+        never a hand list that could drift from either."""
+        flags = inputs.release_refused_instruments((REPO / "Tools" / "build-bundle.sh").read_text())
+        self.assertGreaterEqual(len(flags), 9)
+        for flag in ("--read-point", "--read-selection", "--panel-report", "--history-report", "--reminder-report"):
+            self.assertIn(flag, flags)
+        used = inputs.instruments_by_stage((REPO / "Tools" / "e2e.sh").read_text(), flags)
+        self.assertIn("--read-point", used["hover"])
+        self.assertIn("--read-point", used["recogniser"])
+        self.assertIn("--read-selection", used["selection"])
+        self.assertIn("--history-report", used["drawer"])
+        self.assertIn("--panel-report", used["panel"])
+        self.assertIn("--reminder-report", used["reminder"])
+        self.assertNotIn("launch", used)
+        gap = inputs.release_gap((REPO / "Tools" / "e2e.sh").read_text(), (REPO / "Tools" / "build-bundle.sh").read_text())
+        self.assertIn("ADR-0010", gap)
+        self.assertIn("verify_bundle", gap)
+        self.assertIn("hover", gap)
+
+
+class TheReleaseRefusesBeforeAnyUpload(unittest.TestCase):
+    """`Tools/release.sh` asks the gate after the production bundle is built and before anything is sent to Apple.
+
+    Driven in a scratch repository with stand-ins, never for real: a release notarises and publishes. The stand-in
+    `build-bundle.sh` writes an Info.plist and nothing else; `xcrun` accepts the profile, logs every call, takes an
+    upload and then answers `Invalid`, so a release that reaches the upload stops there; `codesign` says nothing."""
+
+    def setUp(self):
+        build = textwrap.dedent("""\
+            #!/bin/bash
+            set -euo pipefail
+            cd "$(dirname "$0")/.."
+            mkdir -p .build/XiaolaiDict.app/Contents
+            printf '%s\\n' '<?xml version="1.0" encoding="UTF-8"?>' '<plist version="1.0"><dict>' \\
+                '<key>CFBundleVersion</key><string>'"$XIAOLAIDICT_BUILD_NUMBER"'</string>' \\
+                '<key>CFBundleShortVersionString</key><string>1.0</string>' '</dict></plist>' \\
+                > .build/XiaolaiDict.app/Contents/Info.plist
+            echo built >> .build/stand-in.log
+            """)
+        files = {f"Tools/{name}": (REPO / "Tools" / name).read_text()
+                 for name in ("release.sh", "e2e-status.sh", "e2e-inputs.py", "python.sh", "e2e.sh")}
+        # The list of instruments a release refuses, which the gate reads to name what the artifact never ran.
+        flags = " ".join(inputs.release_refused_instruments((REPO / "Tools" / "build-bundle.sh").read_text()))
+        files["Tools/build-bundle.sh"] = build + f"# local flags=({flags})\n"
+        self.root = scratch_git_repo(self, files)
+        self.bin = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-release-bin-"))
+        self.addCleanup(shutil.rmtree, self.bin, True)
+        self.log = self.bin / "calls.log"
+        stands = {
+            "xcrun": textwrap.dedent(f"""\
+                #!/bin/bash
+                echo "xcrun $*" >> {self.log}
+                case "$1 $2" in
+                    "notarytool history") exit 0 ;;
+                    "notarytool submit") printf '%s' '<plist version="1.0"><dict><key>id</key><string>abc</string></dict></plist>'; exit 0 ;;
+                    "notarytool wait") printf '%s' '<plist version="1.0"><dict><key>status</key><string>Invalid</string></dict></plist>'; exit 0 ;;
+                esac
+                exit 0
+                """),
+            "codesign": f"#!/bin/bash\necho \"codesign $*\" >> {self.log}\nexit 0\n",
+        }
+        for name, text in stands.items():
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+
+    def release(self):
+        environment = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "XIAOLAIDICT_SIGN_ID": "stand-in",
+                       "XIAOLAIDICT_BUILD_NUMBER": "7", "XIAOLAIDICT_NOTARY_PROFILE": "stand-in"}
+        return subprocess.run([BASH, str(self.root / "Tools" / "release.sh")], capture_output=True, text=True,
+                              env=environment, timeout=300, check=False)
+
+    def calls(self) -> str:
+        return self.log.read_text() if self.log.exists() else ""
+
+    def test_no_evidence_stops_the_release_after_the_build_and_before_any_upload(self):
+        done = self.release()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("built", (self.root / ".build" / "stand-in.log").read_text())
+        self.assertNotIn("notarytool submit", self.calls())
+        self.assertIn("never recorded", done.stdout + done.stderr)
+
+    def test_a_carried_or_stale_receipt_stops_it_too(self):
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        stages = inputs.known_stages((REPO / "Tools" / "e2e.sh").read_text())
+        good = [RECEIPT.replace("lookup", stage, 1).replace(TREE, tree) for stage in stages]
+        (self.root / ".build").mkdir(exist_ok=True)
+        for rows in (good[:-1] + [good[-1].replace("\tpass\t", "\tcarried\t")], [row.replace(tree, TREE) for row in good]):
+            (self.root / ".build" / "e2e-status.tsv").write_text("\n".join(rows) + "\n")
+            done = self.release()
+            self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertNotIn("notarytool submit", self.calls())
+
+    def test_a_fresh_full_pass_of_this_tree_lets_it_reach_the_upload(self):
+        """The positive control: the same stand-ins with a good receipt get as far as the upload, so the refusals above
+        are the gate's and not a stand-in failing."""
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        stages = inputs.known_stages((REPO / "Tools" / "e2e.sh").read_text())
+        (self.root / ".build").mkdir(exist_ok=True)
+        (self.root / ".build" / "e2e-status.tsv").write_text(
+            "\n".join(RECEIPT.replace("lookup", stage, 1).replace(TREE, tree) for stage in stages) + "\n")
+        done = self.release()
+        self.assertIn("notarytool submit", self.calls(), done.stdout + done.stderr)
+        self.assertIn("Invalid", done.stdout + done.stderr)
+
+
+class OnlyAReleaseAsksForTheEvidence(unittest.TestCase):
+
+    def prerequisites(self, target: str) -> list[str]:
+        found = re_search(rf"(?m)^{target}:(.*)$", (REPO / "Makefile").read_text())
+        return found.split()
+
+    def test_make_release_asks_before_its_tests_and_nothing_else_does(self):
+        self.assertEqual(self.prerequisites("release")[0], "e2e-evidence")
+        make = (REPO / "Makefile").read_text()
+        self.assertRegex(make, r"(?m)^e2e-evidence:\n\t@Tools/e2e-status.sh require-fresh$")
+        for target in ("all", "run", "test", "test-swift", "e2e", "e2e-full"):
+            with self.subTest(target=target):
+                self.assertNotIn("e2e-evidence", self.prerequisites(target))
+        self.assertEqual(make.count("require-fresh\n"), 1)
+        self.assertIn("Tools/e2e-status.sh require-fresh", (REPO / "Tools" / "release.sh").read_text())
+
+    def test_the_release_script_asks_after_its_build_and_before_its_first_upload(self):
+        text = (REPO / "Tools" / "release.sh").read_text()
+        code = "\n".join(line for line in text.split("\n") if not line.lstrip().startswith("#"))
+        build = code.index("Tools/build-bundle.sh build")
+        gate = code.index("Tools/e2e-status.sh require-fresh")
+        upload = code.index('notarize "$OUT/XiaolaiDict.zip"')
+        self.assertLess(build, gate)
+        self.assertLess(gate, upload)
+
+
+def re_search(pattern: str, text: str) -> str:
+    import re
+    found = re.search(pattern, text)
+    if not found:
+        raise AssertionError(f"no match for {pattern}")
+    return found.group(1)
 
 
 class TheRealInputsFileCoversTheTree(unittest.TestCase):
@@ -479,6 +722,24 @@ class TheCommandsAndTheRunUseIt(unittest.TestCase):
         for needle in ("Tools/e2e-inputs.py keys", "Tools/e2e-inputs.py plan", "Tools/e2e-inputs.py settle", "Tools/e2e-inputs.py table",
                        "e2e-status.sh record \"$remote_version\" \"$"):
             self.assertIn(needle, text)
+
+    def test_the_run_files_the_source_tree_and_mode_and_holds_its_keys_to_the_build(self):
+        """The keys and the tree are taken before the bundle is built (`make e2e`), compared when the run starts and
+        again when it ends; anything that moved in between is filed as no key and no tree."""
+        text = (REPO / "Tools" / "e2e.sh").read_text()
+        for needle in ("XIAOLAIDICT_E2E_PREBUILD", "Tools/e2e-inputs.py since-build", "Tools/e2e-inputs.py tree",
+                       "Tools/e2e-inputs.py mode",
+                       'e2e-status.sh record "$remote_version" "$remote_scripts/keys-settled" "$remote_uuid" "$e2e_os" '
+                       '"$source_tree" "$build_mode"'):
+            self.assertIn(needle, text)
+        make = (REPO / "Makefile").read_text()
+        recipe = make[make.index("\ne2e:"):make.index("\ne2e-full:")]
+        snapshot = recipe.index("Tools/e2e-inputs.py snapshot")
+        build = recipe.index("$(MAKE) all")
+        run = recipe.index("Tools/e2e.sh")
+        self.assertLess(snapshot, build)
+        self.assertLess(build, run)
+        self.assertIn("XIAOLAIDICT_E2E_PREBUILD=", recipe[run - 200:run])
 
 
 if __name__ == "__main__":
