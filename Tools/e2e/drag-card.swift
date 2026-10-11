@@ -96,7 +96,18 @@ for step in 1...steps {
 }
 guard post(.leftMouseUp, at) else { die("the button could not be released") }
 usleep(400_000)
-guard let after = frame(window) else { die("the window titled \(title) went during the drag") }
+guard let after = frame(window) else {
+    // **Say which of two different failures this was.** A window that is gone answers `invalidUIElement`; an app too busy to
+    // answer within the messaging timeout answers `cannotComplete` — a hang in the product, not a vanished card. The first
+    // run that failed here (2026-10-11) could not be told apart, and the two have different remedies.
+    var probe: AnyObject?
+    let positionError = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &probe)
+    var listed: AnyObject?
+    let listError = AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &listed)
+    let titles = (listed as? [AXUIElement])?.compactMap { value($0, kAXTitleAttribute as String) as? String } ?? []
+    die("the window titled \(title) went during the drag (reading its position: AXError \(positionError.rawValue); "
+        + "listing the app's windows: AXError \(listError.rawValue), titles \(titles))")
+}
 let report: [String: Any] = ["before": box(before), "after": box(after)]
 // Through `jsonLine`, which asks before it serialises (`shared/report.swift`).
 guard let line = jsonLine(report) else { die("the report holds a value JSON cannot") }
