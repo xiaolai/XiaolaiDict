@@ -1911,7 +1911,13 @@ spelling_panel() {
     # **A typed inflection whose candidates disagree is offered nothing** (the owner's ruling of 2026-10-11): what this
     # Mac's instrument decided for “heavied” is what its card must show — no button where the regular “heavy” meets the
     # checker's “heavier”, the one word where the dictionaries print it.
-    spelling_offer heavied "$heavied_offer" "detailed card" || true
+    # The fixture brought to the front again: pressing the button left the panel's app in front, and the shortcut reads
+    # the selection of the app in front.
+    if ensure_fixture_open; then
+        spelling_offer heavied "$heavied_offer" "detailed card" || true
+    else
+        flunk "lookup (detailed card): the TextEdit fixture would not come to the front for “heavied”"
+    fi
     "$helpers/keys" 53 2>/dev/null || true
 }
 # The word the instrument offered for “heavied” on this Mac, or nothing — what both cards are held to.
