@@ -298,7 +298,12 @@ public struct LookupCardView: View {
                         .setApart()
                     // **Quietly, and only where it applies**: the sentence is the reader's all the same, and the
                     // ellipsis on its cut side has already said where.
-                    if !card.sentenceCut.isEmpty {
+                    // **While the rest is still being read, that is what is said**: the sentence may yet be whole.
+                    if card.sentenceStillBeingRead {
+                        Text("Still reading the rest of the sentence; what is shown may be cut.")
+                            .font(.system(size: scale.text.small))
+                            .foregroundStyle(.secondary)
+                    } else if !card.sentenceCut.isEmpty {
                         Text("The sentence may go on past what could be read.")
                             .font(.system(size: scale.text.small))
                             .foregroundStyle(.secondary)
@@ -972,6 +977,7 @@ public struct LookupPanelContent: View {
             sentence: presentation.sentence, mark: mark,
             memory: presentation.memory, phrase: presentation.phrase)
         card.sentenceCut = presentation.sentenceCut
+        card.sentenceStillBeingRead = presentation.sentenceStillBeingRead
         return card
     }
 
@@ -992,6 +998,7 @@ public struct LookupPanelContent: View {
             // Nil for prose: the rule draws a suggestion under the service's own miss and nowhere else.
             suggestion: presentation.offeredSuggestion)
         card.sentenceCut = presentation.sentenceCut
+        card.sentenceStillBeingRead = presentation.sentenceStillBeingRead
         return card
     }
 

@@ -26,10 +26,11 @@ public struct LookupPresentation: Equatable {
     /// answer still arriving for an old lookup lands in a view that is already gone.
     public let request: Int
     public let term: String
-    public let lemma: Lemma
+    /// Settled again, with `capture`, when a sentence still being read arrives whole (`sentenceStillBeingRead`).
+    public var lemma: Lemma
     /// The app, and the site, the word was read in.
     public let source: String?
-    public let capture: CaptureQuality
+    public var capture: CaptureQuality
     /// The reader's own sentence, where one was captured. The sentence pane explains this, and it
     /// is the only text the remote tier would ever be allowed to see.
     public var sentence: String?
@@ -48,6 +49,9 @@ public struct LookupPresentation: Equatable {
     /// **Which ends of `sentence` may run past what could be read** (`CaptureQuality.Context.mayBeCut`). The sentence is
     /// drawn and used all the same; the card marks the cut side and says, quietly, that it may go on.
     public var sentenceCut: TextSegmenter.Clipping = []
+    /// **The rest of the sentence is still being read** — a taller strip of the screen (`PendingContext`). The card draws
+    /// the first strip's sentence and says, quietly, that it may be cut; no sense is proposed until it settles.
+    public var sentenceStillBeingRead = false
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?
