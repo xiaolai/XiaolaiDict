@@ -60,13 +60,14 @@ struct SenseSelectionAccuracyTests {
         var ambiguous: Int { ambiguousRight + ambiguousWrong }
     }
 
-    static func score(_ selector: some SenseSelecting, named: String) async throws -> Score {
+    /// `tagged` hands each rung the tagger's part of speech, as the lookup path does; off, it is handed none.
+    static func score(_ selector: some SenseSelecting, named: String, tagged: Bool = true) async throws -> Score {
         var score = Score()
         score.report = "\n\(named) — on \(hardCases.count) hard cases\n"
         for labelled in hardCases {
             let candidates = try candidates(for: labelled.word)
-            let partOfSpeech = Lemmatizer.partOfSpeech(
-                of: labelled.word, in: labelled.sentence, at: nil)
+            let partOfSpeech = tagged
+                ? Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil) : nil
             let choice = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: partOfSpeech)
             let bucket = LabelledSenses.bucket(choice, correct: labelled.correct)
@@ -133,7 +134,7 @@ struct SenseSelectionAccuracyTests {
     /// content update, or a change in this code — rather than a test to relax.
     @Test func rungOneIsMeasuredOnTheLabelledSet() async throws {
         let score = try await Self.score(
-            EmbeddingSenseSelector(matchesPartOfSpeech: false), named: "rung 1 — NLEmbedding alone")
+            EmbeddingSenseSelector(), named: "rung 1 — NLEmbedding alone")
         print(score.report)
         try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1.txt", atomically: true, encoding: .utf8)
         #expect(
@@ -148,60 +149,19 @@ struct SenseSelectionAccuracyTests {
         #expect(score.ambiguousWrong == 2, "the hedge stopped leading wrong")
     }
 
-    /// Rung 1 with the part-of-speech constraint the entries already carry.
-    ///
-    /// Not a tuned threshold: every sense sits in an `x_xd0` block labelled with `d:pos`, and
-    /// `NLTagger` — already linked for lemmas — says how the word is being used. A word used as a
-    /// noun cannot mean a verb sense. This was added because of *how* rung 1 failed, not to make a
-    /// number go up: it chose the verb "to hold something back" for the noun in "kept a tight
-    /// rein on public spending", getting the meaning right and the grammar wrong.
-    @Test func thePartOfSpeechConstraintIsMeasuredToo() async throws {
-        let score = try await Self.score(
-            EmbeddingSenseSelector(), named: "rung 1b — NLEmbedding + part of speech")
-        print(score.report)
-        try? score.report.write(toFile: "/tmp/xiaolaidict-probe/rung1b.txt", atomically: true, encoding: .utf8)
-        #expect(
-            score.right + score.wrong + score.abstained + score.ambiguous == Self.hardCases.count,
-            "a case was not scored")
-        // Pinned as measured, in the same spirit as rung 1's. It fixed *rein* — the case that
-        // prompted it — and it no longer costs *sanction*.
-        //
-        // **Re-measured 2026-09-20, and the trade got better.** `Lemmatizer.partOfSpeech` used to
-        // run its own word search: any supplied range taken on trust, and a bare substring
-        // fallback that matched inside longer words and silently took the first of a repeated
-        // word. It now asks `occurrence(of:in:at:)`, which checks word boundaries and answers nil
-        // where the sentence is ambiguous — which is what this function's own contract already
-        // promised. *sanction* tags as `[?]` under it and abstains, where the loose match had
-        // given it a part of speech confident enough to be wrong with.
-        //
-        // Confidently wrong 2 → 1 (33% → 17%) at unchanged accuracy. The abstention it buys that
-        // back with is the cheap half of the trade: this project's rule is that a wrong mark is
-        // worse than no mark.
-        #expect(score.right == 3, "top-1 accuracy moved")
-        #expect(score.wrong == 1, "the confidently-wrong rate moved")
-        #expect(score.abstained == 0, "it said nothing at all, which it did not used to do")
-        // **The finding that matters about leading with a near miss.** Both of this rung's
-        // abstentions kept a favourite, and both favourites were the wrong sense — at margins of
-        // 0.0103 and 0.0015, which is noise rather than a preference. Showing them is defensible
-        // only because the card badges them and opens the alternatives; on this evidence the
-        // favourite itself carries no signal, and that is pinned here so it is impossible to
-        // believe otherwise without re-measuring.
-        #expect(score.ambiguousRight == 0, "the hedge started leading right — re-read the trade")
-        #expect(score.ambiguousWrong == 2, "the hedge stopped leading wrong")
-    }
-
-    /// The D6 comparison itself, run rather than asserted in prose: a rung ships only if it gains
-    /// **≥ 10 points of top-1 accuracy** and its **confidently-wrong rate is no higher**. Both
-    /// halves are checked, because a rung that buys accuracy by being wrong more often has bought
-    /// nothing worth having.
-    @Test func theHigherRungClearsTheMarginSetBeforeMeasuring() async throws {
-        let base = try await Self.score(
-            EmbeddingSenseSelector(matchesPartOfSpeech: false), named: "rung 1")
-        let withPartOfSpeech = try await Self.score(EmbeddingSenseSelector(), named: "rung 1b")
-        let total = Double(Self.hardCases.count)
-        let gain = (Double(withPartOfSpeech.right) - Double(base.right)) / total * 100
-        #expect(gain >= 10, "gained only \(gain) points, under the 10 fixed before measuring")
-        #expect(withPartOfSpeech.wrong <= base.wrong, "it bought accuracy by being wrong more often")
+    /// **The shipped embedding rung is rung 1.** It used to be rung 1b, narrowed to the tagger's part of
+    /// speech, which scored 3 right and 1 wrong here against rung 1's 2 and 2. The narrowing was retired on
+    /// 2026-10-11 (ADR-0053): on 270 hard cases it deleted the right sense in 40, and six cases cannot
+    /// outvote that. This pins that what ships is what rung 1 measures, so the trade stays visible.
+    @Test func theShippedEmbeddingRungIsRungOne() async throws {
+        let shipped = try await Self.score(EmbeddingSenseSelector(), named: "rung 1 — as shipped")
+        #expect(shipped.right == 2, "top-1 accuracy moved")
+        #expect(shipped.wrong == 2, "the confidently-wrong rate moved")
+        // And the tag changes nothing: scored again with no part of speech handed over.
+        let untagged = try await Self.score(EmbeddingSenseSelector(), named: "rung 1 — untagged", tagged: false)
+        let counts = { (score: Score) in
+            [score.right, score.wrong, score.abstained, score.ambiguousRight, score.ambiguousWrong] }
+        #expect(counts(untagged) == counts(shipped), "the tag moved the embedding rung")
     }
 
     /// The margin does **not** separate right answers from wrong ones on this set, so it cannot be
@@ -268,35 +228,27 @@ struct SenseSelectionAccuracyTests {
     /// worse, and the right move is not to build it.
     ///
     /// Reported, **not pinned**: six cases cannot carry a pinned expectation for a new
-    /// measurement. One number here is worth reading closely though — `recall@all` below 6/6 means
-    /// the part-of-speech filter dropped the labelled sense before anything was ranked, which
-    /// would be a finding about the filter rather than about the ranking.
+    /// measurement. `recall@all` below 6/6 would mean the labelled sense was dropped before anything
+    /// was ranked — which only the keyable filter can now do.
     @Test func theEmbeddingsRecallAtKIsMeasured() async throws {
         let selector = EmbeddingSenseSelector()
         var report = "\nembedding recall@K — on \(Self.hardCases.count) hard cases\n"
-        for narrowing in [false, true] {
-            var placings: [(word: String, place: Int?, among: Int)] = []
-            for labelled in Self.hardCases {
-                let partOfSpeech = narrowing
-                    ? Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
-                    : nil
-                let considered = SenseCandidates.considered(
-                    try Self.candidates(for: labelled.word), matching: partOfSpeech)
-                let ranked = selector.rank(considered, reading: labelled.sentence)
-                let place = ranked.firstIndex { $0.candidate.key == labelled.correct }.map { $0 + 1 }
-                placings.append((labelled.word, place, ranked.count))
-            }
-            report += "  \(narrowing ? "with" : "without") the part-of-speech filter\n"
-            for placing in placings {
-                let where_ = placing.place.map { "rank \($0)" } ?? "NOT RANKED"
-                report += "    \(placing.word.padded(10)) \(where_.padded(12)) of \(placing.among)\n"
-            }
-            for k in [1, 3, 5, 10] {
-                let hit = placings.filter { ($0.place ?? .max) <= k }.count
-                report += "    \("recall@\(k)".padded(12)) \(hit)/\(placings.count)\n"
-            }
-            report += "    \("recall@all".padded(12)) \(placings.filter { $0.place != nil }.count)/\(placings.count)\n"
+        var placings: [(word: String, place: Int?, among: Int)] = []
+        for labelled in Self.hardCases {
+            let considered = SenseCandidates.considered(try Self.candidates(for: labelled.word))
+            let ranked = selector.rank(considered, reading: labelled.sentence)
+            let place = ranked.firstIndex { $0.candidate.key == labelled.correct }.map { $0 + 1 }
+            placings.append((labelled.word, place, ranked.count))
         }
+        for placing in placings {
+            let where_ = placing.place.map { "rank \($0)" } ?? "NOT RANKED"
+            report += "    \(placing.word.padded(10)) \(where_.padded(12)) of \(placing.among)\n"
+        }
+        for k in [1, 3, 5, 10] {
+            let hit = placings.filter { ($0.place ?? .max) <= k }.count
+            report += "    \("recall@\(k)".padded(12)) \(hit)/\(placings.count)\n"
+        }
+        report += "    \("recall@all".padded(12)) \(placings.filter { $0.place != nil }.count)/\(placings.count)\n"
         print(report)
         try? report.write(toFile: "/tmp/xiaolaidict-probe/recall.txt", atomically: true, encoding: .utf8)
     }
@@ -328,10 +280,10 @@ struct FoundationModelsRungTests {
             return
         }
         let bare = try await SenseSelectionAccuracyTests.score(
-            FoundationModelsSenseSelector(matchesPartOfSpeech: false),
-            named: "rung 2 — Apple on-device model")
+            FoundationModelsSenseSelector(), named: "rung 2 — Apple on-device model", tagged: false)
+        // The tagger's part of speech reaches this rung as a guess in its prompt, never as a narrowing.
         let narrowed = try await SenseSelectionAccuracyTests.score(
-            selector, named: "rung 2b — Apple on-device model + part of speech")
+            selector, named: "rung 2b — Apple on-device model + the tagger's guess as a hint")
         print(bare.report + narrowed.report)
         try? (bare.report + narrowed.report).write(
             toFile: "/tmp/xiaolaidict-probe/rung2.txt", atomically: true, encoding: .utf8)
@@ -341,7 +293,7 @@ struct FoundationModelsRungTests {
         // The D6 bar, fixed before any of this was run: ≥ 10 points of top-1 over rung 1, and a
         // confidently-wrong rate no higher.
         let rungOne = try await SenseSelectionAccuracyTests.score(
-            EmbeddingSenseSelector(matchesPartOfSpeech: false), named: "rung 1")
+            EmbeddingSenseSelector(), named: "rung 1")
         let total = Double(SenseSelectionAccuracyTests.hardCases.count)
         let gain = (Double(narrowed.right) - Double(rungOne.right)) / total * 100
         #expect(gain >= 10, "rung 2 gained only \(gain) points over rung 1")
@@ -472,23 +424,21 @@ struct SelectorConfigurationTests {
     @Test func thePromptShrinksOnAnEntryBigEnoughToShowIt() async throws {
         let sentence = "She decided to run for office in the spring election."
         let partOfSpeech = Lemmatizer.partOfSpeech(of: "run", in: sentence, at: nil)
-        let considered = SenseCandidates.considered(
-            try SenseSelectionAccuracyTests.candidates(for: "run"), matching: partOfSpeech)
+        let considered = SenseCandidates.considered(try SenseSelectionAccuracyTests.candidates(for: "run"))
         let shortlisted = EmbeddingSenseSelector()
             .rank(considered, reading: sentence).prefix(5).map(\.candidate)
         // The prompt both model rungs send, from the one place it is written.
         let whole = ModelPrompt.sense(SenseQuestion(
-            sentence: sentence, partOfSpeech: partOfSpeech, senses: considered.map(\.text)))
+            sentence: sentence, taggerGuess: partOfSpeech,
+            senses: considered.map { SenseQuestion.Sense(text: $0.text, partOfSpeech: $0.partOfSpeech) }))
         let short = ModelPrompt.sense(SenseQuestion(
-            sentence: sentence, partOfSpeech: partOfSpeech, senses: shortlisted.map(\.text)))
+            sentence: sentence, taggerGuess: partOfSpeech,
+            senses: shortlisted.map { SenseQuestion.Sense(text: $0.text, partOfSpeech: $0.partOfSpeech) }))
 
-        let everything = SenseCandidates.considered(
-            try SenseSelectionAccuracyTests.candidates(for: "run"), matching: nil)
         var report = """
 
             prompt size — run [\(partOfSpeech ?? "?")]
-              keyable senses      \(everything.count)
-              narrowed to \(partOfSpeech ?? "?")     \(considered.count) senses, \(whole.count) characters
+              keyable senses      \(considered.count) senses, \(whole.count) characters
               shortlist 5         \(shortlisted.count) senses, \(short.count) characters
 
             """
@@ -502,8 +452,8 @@ struct SelectorConfigurationTests {
         // "prompt size wins" reading was produced from the order alone. Alternating spreads any
         // drift across both.
         let arrangements = [("all senses", considered), ("shortlist 5", Array(shortlisted))]
-        let timers = [Timed(FoundationModelsSenseSelector(matchesPartOfSpeech: false)),
-                      Timed(FoundationModelsSenseSelector(matchesPartOfSpeech: false))]
+        let timers = [Timed(FoundationModelsSenseSelector()),
+                      Timed(FoundationModelsSenseSelector())]
         for (timer, arrangement) in zip(timers, arrangements) {
             _ = await timer.inner.choose(
                 from: arrangement.1, reading: sentence, context: .complete, partOfSpeech: partOfSpeech)
@@ -535,18 +485,17 @@ struct SelectorConfigurationTests {
 /// embedding compares the reader's sentence against the sense wording — it has no memory of which
 /// sense NOAD numbers what.
 struct InflectedEntryChoiceTests {
-    /// Prints both numbers rather than asserting one. What narrowing is worth is a measurement to
-    /// be read and argued with, not a threshold to be defended — and a bar set from the first run
-    /// would only ever record what this Mac did that day.
-    @Test func narrowingByWordClassIsMeasuredOnBothHalvesOfEachPair() async throws {
+    /// Prints both numbers. **Narrowing by word class was retired** (ADR-0053, 2026-10-11) — on 270
+    /// hard cases it deleted the right sense in 40 — so the tag must now change nothing: the two
+    /// columns are asserted equal, case by case, and a narrowing that crept back would split them.
+    @Test func aWordClassTagChangesNothingOnEitherHalfOfEachPair() async throws {
         let selector = EmbeddingSenseSelector()
         var report = "\ninflected entry choice — \(LabelledSenses.inflectedCases.count) paired cases\n"
-        var narrowedRight = 0, wideRight = 0, narrowedCandidates = 0, wideCandidates = 0
+        var narrowedRight = 0, wideRight = 0
 
         for labelled in LabelledSenses.inflectedCases {
             let candidates = try SenseSelectionAccuracyTests.candidates(for: labelled.word)
-            let partOfSpeech = Lemmatizer.partOfSpeech(
-                of: labelled.word, in: labelled.sentence, at: nil)
+            let partOfSpeech = Lemmatizer.partOfSpeech(of: labelled.word, in: labelled.sentence, at: nil)
 
             let wide = await selector.choose(
                 from: candidates, reading: labelled.sentence, context: .complete, partOfSpeech: nil)
@@ -556,28 +505,17 @@ struct InflectedEntryChoiceTests {
 
             let wideOK = LabelledSenses.bucket(wide, correct: labelled.correct) == .right
             let narrowOK = LabelledSenses.bucket(narrow, correct: labelled.correct) == .right
+            #expect(wide == narrow, "\(labelled.word): the tag changed the embedding rung's answer")
             if wideOK { wideRight += 1 }
             if narrowOK { narrowedRight += 1 }
-            wideCandidates += candidates.count
-            narrowedCandidates += candidates.filter {
-                guard let partOfSpeech, let its = $0.partOfSpeech else { return true }
-                return its.split(separator: " ").contains(Substring(partOfSpeech))
-            }.count
 
             report += "  \(labelled.word.padded(8)) [\(partOfSpeech ?? "?")]"
-                + "  all: \(wideOK ? "✓" : "✗")   narrowed: \(narrowOK ? "✓" : "✗")"
+                + "  untagged: \(wideOK ? "✓" : "✗")   tagged: \(narrowOK ? "✓" : "✗")"
                 + "   \(labelled.why)\n"
         }
         report += "  ——\n"
-        report += "  right without narrowing: \(wideRight)/\(LabelledSenses.inflectedCases.count)"
-            + "   candidates seen: \(wideCandidates)\n"
-        report += "  right with narrowing:    \(narrowedRight)/\(LabelledSenses.inflectedCases.count)"
-            + "   candidates seen: \(narrowedCandidates)\n"
+        report += "  right untagged: \(wideRight)/\(LabelledSenses.inflectedCases.count)\n"
+        report += "  right tagged:   \(narrowedRight)/\(LabelledSenses.inflectedCases.count)\n"
         print(report)
-
-        // The one thing that must hold however the numbers land: narrowing must not make the
-        // reader worse off. A filter that loses answers is worse than no filter.
-        #expect(narrowedRight >= wideRight,
-                "narrowing by word class lost answers it should have kept")
     }
 }

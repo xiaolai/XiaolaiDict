@@ -260,8 +260,9 @@ struct ModelServiceTests {
     }
 
     private static let question = SenseQuestion(
-        sentence: "The ship's hold was full of grain.", partOfSpeech: "noun",
-        senses: ["an act of grasping", "a large space in the lower part of a ship"])
+        sentence: "The ship's hold was full of grain.", taggerGuess: "noun",
+        senses: [SenseQuestion.Sense(text: "an act of grasping", partOfSpeech: "noun"),
+                 SenseQuestion.Sense(text: "a large space in the lower part of a ship")])
 
     @Test func aSenseAnswerComesBackAsTheNumberTheModelChose() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 2}"#))
@@ -269,22 +270,24 @@ struct ModelServiceTests {
         #expect(reply == .sense(2))
     }
 
-    /// The model is asked the app's own question: the instructions, the sentence, the part of speech
-    /// and every sense, numbered.
+    /// The model is asked the app's own question: the instructions, the sentence, the tagger's guess
+    /// said as a guess, and every sense, numbered, with the dictionary's label where it printed one.
     @Test func theModelIsAskedTheAppsOwnQuestion() async throws {
         let model = ScriptedModel(.answer(#"{"senseNumber": 2}"#))
         _ = try await service(model).reply(to: .pickSense(Self.question))
         let asked = try #require(model.requests.first)
         #expect(asked.contains("You identify which dictionary sense of a word"))
         #expect(asked.contains("Sentence: The ship's hold was full of grain."))
-        #expect(asked.contains("The word is used as a noun."))
+        #expect(asked.contains(
+            "A part-of-speech tagger guessed the word is a noun in this sentence; the guess may be wrong."))
+        #expect(!asked.contains("The word is used as a"), "the tagger's guess is stated as a fact")
         // The whole list, written out rather than re-derived from `ModelPrompt.sense` — a check that
         // asks the assembler what it should have assembled agrees with it whatever it does. One
         // candidate is not "every sense, numbered": it says nothing about the sense the model would
         // have had to choose *between*, nor about where the numbering starts.
         #expect(asked.contains("""
             Senses:
-            1. an act of grasping
+            1. (noun) an act of grasping
             2. a large space in the lower part of a ship
             Which number?
             """))
@@ -751,7 +754,7 @@ struct ModelServiceTests {
         let service = try service(ScriptedModel(.answer(#"{"senseNumber": 1}"#)), built: built)
         let tooMany = ModelPrompt.maximumSenses + 1
         let long = SenseQuestion(
-            sentence: "A sentence.", partOfSpeech: nil, senses: (1...tooMany).map { "sense \($0)" })
+            sentence: "A sentence.", taggerGuess: nil, senses: (1...tooMany).map { SenseQuestion.Sense(text: "sense \($0)") })
         guard case .failure(.invalidRequest) = await service.reply(to: .pickSense(long)) else {
             Issue.record("a list of \(tooMany) senses was asked")
             return
@@ -766,8 +769,8 @@ struct ModelServiceTests {
         let model = ScriptedModel(.answer(#"{"senseNumber": 1}"#))
         let service = try service(model)
         let full = SenseQuestion(
-            sentence: "A sentence.", partOfSpeech: nil,
-            senses: (1...ModelPrompt.maximumSenses).map { "sense \($0)" })
+            sentence: "A sentence.", taggerGuess: nil,
+            senses: (1...ModelPrompt.maximumSenses).map { SenseQuestion.Sense(text: "sense \($0)") })
         #expect(await service.reply(to: .pickSense(full)) == .sense(1))
         #expect(model.requests.count == 1, "the longest legal list never reached the model")
     }
@@ -829,7 +832,7 @@ struct ModelServiceTests {
         let built = Recorder(0)
         let service = try service(ScriptedModel(.answer("{}")), built: built)
         guard case .failure(.invalidRequest) = await service.reply(
-            to: .pickSense(SenseQuestion(sentence: " ", partOfSpeech: nil, senses: ["a"])))
+            to: .pickSense(SenseQuestion(sentence: " ", taggerGuess: nil, senses: ["a"].map { SenseQuestion.Sense(text: $0) })))
         else { Issue.record("a blank sentence was asked"); return }
         #expect(built.withLock { $0 } == 0)
     }
@@ -841,7 +844,7 @@ struct ModelServiceTests {
     /// built for any of them: a question missing what it needs is refused before any weights load.
     @Test(arguments: [
         ModelRequest.explain(SentenceQuestion(sentence: "The ship's hold was full.", term: "  ", senseText: nil)),
-        .pickSense(SenseQuestion(sentence: "The ship's hold was full.", partOfSpeech: nil, senses: [])),
+        .pickSense(SenseQuestion(sentence: "The ship's hold was full.", taggerGuess: nil, senses: [])),
         .translate(TranslationQuestion(sentence: "  ", target: "zh-Hans")),
         .translate(TranslationQuestion(sentence: "The ship's hold was full.", target: " ")),
     ])
