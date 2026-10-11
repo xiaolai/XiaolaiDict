@@ -216,6 +216,46 @@ struct EntryParsingAuditTests {
         #expect(parsed.pronunciations == ["fīn"])
     }
 
+    /// **A pronunciation is the respelling, not the comma after it** (measured 2026-10-11: 19 of 38 entries in NOAD,
+    /// 牛津英汉汉英 and 牛津粵英 printed two variants, and the first's element holds the separator, `class="gp tg_ph"` —
+    /// so the card drew "ˈfeb(y)əˌwerē," with a dangling comma). Every IPA and respelling character is kept as printed.
+    @Test func aPronunciationLeavesOutTheSeparatorPrintedInsideIt() throws {
+        let body = """
+            <d:entry id="e"><span class="hg x_xh0"><span class="pr">            <span d:prn="US" dialect="AmE" class="ph t_respell">ˈfeb(y)əˌwerē<d:prn/><span class="gp tg_ph">, </span></span>            <span d:prn="US" dialect="AmE" class="ph t_respell">ˈēT͟Hər<d:prn/></span></span></span></d:entry>
+            """
+        let parsed = try #require(EntryDocument.parse(Self.document(body)))
+        #expect(parsed.pronunciations == ["ˈfeb(y)əˌwerē", "ˈēT͟Hər"])
+        #expect(parsed.pronunciations.last?.unicodeScalars.map(\.value) == [0x2C8, 0x113, 0x54, 0x35F, 0x48, 0x259, 0x72],
+                "a combining mark or a stress mark was changed")
+    }
+
+    /// **The measured shapes, as the three dictionaries print them** (2026-10-11): each row is the first `d:prn` element
+    /// of a real entry with the separator after it, and the pronunciation the card must draw — the old walk drew every
+    /// one with a trailing comma. Every character inside is kept: macrons, the combining double macron (U+035E), the
+    /// combining tilde, stress and length marks.
+    static let measuredPronunciations: [(markup: String, expected: String)] = [
+        (#"<span d:prn="US" class="ph t_respell">ˈkəmfərdəb(ə)l<d:prn/><span class="gp tg_ph">, </span></span>"#,
+         "ˈkəmfərdəb(ə)l"),
+        (#"<span d:prn="US" class="ph t_respell">ˈskeˌjo͞ol<d:prn/><span class="gp tg_ph">, </span></span>"#, "ˈskeˌjo͞ol"),
+        (#"<span d:prn="UK_IPA" class="ph">ˈʃɛdjuːl<d:prn></d:prn><span class="gp tg_ph">, </span></span>"#, "ˈʃɛdjuːl"),
+        (#"<span d:prn="UK_IPA" class="ph t_IPA">ˈɡarɑː(d)ʒ<d:prn></d:prn><span class="gp tg_ph">, </span></span>"#,
+         "ˈɡarɑː(d)ʒ"),
+        (#"<span d:prn="UK_IPA" class="ph">ˈk(r)wasɒ̃<d:prn></d:prn><span class="gp tg_ph">, </span></span>"#, "ˈk(r)wasɒ̃"),
+        (#"<span d:prn="UK_IPA" class="ph t_IPA">ˈfɛbr(ər)i<d:prn></d:prn><span class="gp tg_ph">, </span></span>"#,
+         "ˈfɛbr(ər)i"),
+        // No separator inside: unchanged.
+        (#"<span d:prn="US" class="ph t_respell">ˈTHərō<d:prn/></span>"#, "ˈTHərō"),
+        (#"<span d:prn="US" class="ph t_respell">ˌk(r)wäˈsän(t)<d:prn/></span>"#, "ˌk(r)wäˈsän(t)"),
+    ]
+
+    @Test(arguments: measuredPronunciations)
+    func aMeasuredPronunciationIsDrawnWithoutItsSeparator(markup: String, expected: String) throws {
+        let body = #"<d:entry id="e"><span class="hg x_xh0"><span class="pr">"# + markup + "</span></span></d:entry>"
+        let parsed = try #require(EntryDocument.parse(Self.document(body)))
+        #expect(parsed.pronunciations.first == expected)
+        #expect(parsed.pronunciations.first?.unicodeScalars.map(\.value) == expected.unicodeScalars.map(\.value))
+    }
+
     /// `first<br/>second` collapsed to "firstsecond": a corrupted definition, a corrupted input to
     /// the sense selector, and a hash that no longer matches the sense it is supposed to track.
     @Test func anExplicitBreakIsAWordBoundary() throws {

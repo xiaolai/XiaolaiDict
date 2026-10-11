@@ -165,6 +165,8 @@ final class EntryReader: NSObject, XMLParserDelegate {
     }
 
     private var open: [Open] = []
+    /// The depths of the open `gp` elements — printed punctuation, which a pronunciation leaves out.
+    private var punctuationDepths: [Int] = []
     private var depth = 0
 
     /// The block being filled, if any. One slot: the dictionaries do not nest part-of-speech blocks.
@@ -302,6 +304,9 @@ final class EntryReader: NSObject, XMLParserDelegate {
         openDisplayRegions(attributes)
         if hasDictionaryAttribute("pos", attributes) { open.append(Open(depth: depth, region: .partOfSpeech)) }
         if hasDictionaryAttribute("prn", attributes) { open.append(Open(depth: depth, region: .pronunciation)) }
+        // **The punctuation Oxford prints between two pronunciations sits inside the first one's element** (`gp`, a
+        // grammar-punctuation span): kept out of the pronunciation, never trimmed off it afterwards (2026-10-11).
+        if Self.hasClass("gp", attributes) { punctuationDepths.append(depth) }
     }
 
     func parser(_ parser: XMLParser, didEndElement qualified: String, namespaceURI: String?, qualifiedName: String?) {
@@ -319,6 +324,7 @@ final class EntryReader: NSObject, XMLParserDelegate {
             close(last)
         }
 
+        if punctuationDepths.last == depth { punctuationDepths.removeLast() }
         depth -= 1
         if scopes.count > 1 { scopes.removeLast() }
     }
@@ -335,7 +341,13 @@ final class EntryReader: NSObject, XMLParserDelegate {
     }
 
     private func appendToOpenRegions(_ text: String) {
-        for index in open.indices { open[index].text += text }
+        for index in open.indices {
+            // Separator punctuation opened inside a pronunciation is not part of it.
+            if case .pronunciation = open[index].region, let inner = punctuationDepths.last, inner > open[index].depth {
+                continue
+            }
+            open[index].text += text
+        }
     }
 
     /// XHTML elements that separate words even with no whitespace around them, opening *and*
