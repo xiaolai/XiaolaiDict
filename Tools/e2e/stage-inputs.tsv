@@ -13,10 +13,12 @@
 #   path    a file, a directory or a glob, relative to the repository; it must match at least one file
 #   unexercised  a target no stage claims, with the reason (test targets are never in the bundle and need no row)
 #
-# **A stage claims the subject modules its assertions exercise, not everything the app links.** What the app does
-# incidentally on the way — the model service prewarmed on every lookup, the ledger opened at launch — is not a
-# stage's subject unless the stage asserts on it; unit tests cover it, and the full run before a merge catches the
-# rest. When in doubt a module is claimed: a false skip is far worse than an extra run.
+# **A stage claims the modules its assertions exercise and those it runs on the way that can break it**, not everything
+# the app links. Decided 2026-10-11 (ADR-0024 addendum): the model service is claimed by every stage, since the
+# preflight launches the app for every stage and the app starts it; StudyKit by crash, deadline and scenes; the
+# dictionary service by every stage that launches a lookup or asserts the service answered. A row is added only where
+# the stage's other rows do not already reach the module transitively (`Tools/tests/test_e2e_incremental.py` holds both).
+# When in doubt a module is claimed: a false skip is far worse than an extra run.
 #
 # Every stage also depends on its own region of Tools/e2e.sh and on everything in that file outside the regions;
 # those are hashed without being listed here. The scan in Tools/tests/test_e2e_incremental.py holds this file to the
@@ -48,6 +50,7 @@
 *	path	Tools/e2e/panel.swift	the shared lookup-panel reads (ensure_one_lookup)
 *	path	Tools/e2e/keys.swift	the shared key presses
 *	path	Tools/e2e/reminder.py	the shared restore of the reader's reminders
+*	module	XiaolaiDictModelService	the preflight launches the app for every stage and the app starts this service; a crash or hang there can fail any stage
 
 # --- Stage by stage -------------------------------------------------------------------------------------------------
 launch	own	XiaolaiDict	the app process LaunchServices starts and that must stay up
@@ -64,13 +67,16 @@ lookup	path	Tools/e2e/drag-card.swift	its helper
 
 crash	own	XiaolaiDict	the client's fallback when its service dies, and its recovery
 crash	module	XiaolaiDictService	the service killed mid-run and started again
+crash	module	StudyKit	the ledger a recovered lookup writes; a write that fails takes the lookup with it
 
 accessibility	own	XiaolaiDict	the --read-point and --read-selection instruments
 accessibility	module	MacCapture	reads the selection and the point through Accessibility
+accessibility	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
 accessibility	path	Tools/e2e/select-web.swift	its helper
 
 selection	own	XiaolaiDict	the --read-selection instrument
 selection	module	MacCapture	selections read from TextEdit and Safari, as boxes and sentences
+selection	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
 selection	path	Tools/e2e/page.html	its Safari fixture
 selection	path	Tools/e2e/select-web.swift	its helper
 
@@ -84,7 +90,7 @@ shortcut	path	Tools/e2e/claim-escape.swift	its helper
 
 deadline	own	XiaolaiDict	the 1 s promise is the client's deadline
 deadline	module	XiaolaiDictService	a hung service, suspended with SIGSTOP
-deadline	module	XiaolaiDictUI	the panel appears at once and says what it waits for
+deadline	module	XiaolaiDictUI	the panel appears at once and says what it waits for; reaches StudyKit, the ledger the lookup writes
 
 hover	own	XiaolaiDict	the hover watcher and the --read-point instrument
 hover	module	MacCapture	the three Accessibility dialects and the recogniser
@@ -106,6 +112,7 @@ drawer	path	Tools/e2e/drawer-interactions.swift	its helper
 
 recogniser	own	XiaolaiDict	the --read-point instrument
 recogniser	module	MacCapture	the OCR fallback, through a terminal that exposes no text
+recogniser	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
 recogniser	path	Tools/e2e/window-frame.swift	its helper
 
 setup	own	XiaolaiDict	the setup board, its menu item and its window
@@ -115,7 +122,8 @@ setup	module	XiaolaiDictModelService	the board's model row, with the model store
 setup	path	Tools/e2e/click-element.swift	its helper
 
 scenes	own	XiaolaiDict	the windows that are SwiftUI scenes
-scenes	module	XiaolaiDictUI	Settings' panes, sizes and shortcut recorder
+scenes	module	XiaolaiDictUI	Settings' panes, sizes and shortcut recorder; reaches StudyKit, the ledger the scenes open
+scenes	module	XiaolaiDictService	asserted directly: the stage checks that the dictionary service answered
 scenes	path	Tools/e2e/click-element.swift	its helper
 
 panel	own	XiaolaiDict	the panel window and the --panel-report and --note-report instruments
@@ -152,12 +160,14 @@ review	own	XiaolaiDict	the Review scene and the --review-report instrument
 review	module	StudyModels	the sitting, its planner and its keys
 review	module	XiaolaiDictUI	the review surface, read as VoiceOver reads it
 review	module	ReviewKit	the scheduler each grade moves
+review	module	XiaolaiDictService	the app the review runs in launches and asks the dictionary service
 review	path	Tools/e2e/review.py	seeds and judges the review
 
 reminder	own	XiaolaiDict	the reminder coordinator, delivery and the --reminder-report instrument
 reminder	module	StudyModels	the queue the reminder counts, claimed in doubt
 reminder	module	StudyKit	the cards the plan counts
 reminder	module	ReviewKit	the study day and allowance
+reminder	module	XiaolaiDictService	the app the reminder runs in launches and asks the dictionary service
 reminder	path	Tools/e2e/review.py	seeds the fixture cards
 
 # --- Modules no stage asserts on ------------------------------------------------------------------------------------

@@ -704,6 +704,58 @@ class TheRealInputsFileCoversTheTree(unittest.TestCase):
         self.assertGreater(mutations, 50)
 
 
+class TheIncidentalServicesAreClaimed(unittest.TestCase):
+    """Decided 2026-10-11: what a stage runs on the way is claimed where it can break the stage — the model service by
+    every stage (the preflight launches the app, which starts it), StudyKit by crash, deadline and scenes, the dictionary
+    service by review, reminder, scenes, recogniser, accessibility and selection. A touch of one of the module's own
+    files, in a copy of the tree, moves exactly the stages that must claim it, and more where others claim it already."""
+
+    CLAIMS = {
+        "XiaolaiDictModelService": None,   # every stage
+        "StudyKit": ("crash", "deadline", "scenes"),
+        "XiaolaiDictService": ("review", "reminder", "scenes", "recogniser", "accessibility", "selection"),
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.targets = inputs.targets_from_dump(inputs.dump_package(REPO))
+        cls.script = (REPO / "Tools" / "e2e.sh").read_text()
+        cls.rows = inputs.parse_inputs(inputs.INPUTS.read_text())
+        cls.stages = inputs.known_stages(cls.script)
+
+    def test_a_touch_of_each_module_moves_every_stage_that_must_claim_it(self):
+        copy = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-e2e-incidental-"))
+        self.addCleanup(shutil.rmtree, copy, True)
+        for name in ("Sources", "Tools", "Resources", "Strings"):
+            shutil.copytree(REPO / name, copy / name, ignore=shutil.ignore_patterns(".build", "__pycache__"))
+        for name in ("Package.swift", "Package.resolved", "Makefile"):
+            shutil.copy(REPO / name, copy / name)
+        before = inputs.stage_keys(copy, self.script, self.rows, self.targets)
+        for module, stages in self.CLAIMS.items():
+            target = copy / inputs.target_own_files(copy, self.targets, module)[0]
+            original = target.read_bytes()
+            target.write_bytes(original + b"\n// touched\n")
+            try:
+                after = inputs.stage_keys(copy, self.script, self.rows, self.targets)
+            finally:
+                target.write_bytes(original)
+            moved = {stage for stage in self.stages if after[stage].value != before[stage].value}
+            with self.subTest(module=module):
+                self.assertTrue(set(stages or self.stages) <= moved, sorted(set(stages or self.stages) - moved))
+
+    def test_no_new_claim_repeats_what_a_stage_already_reaches(self):
+        """A row added for these claims names a module the stage's other rows do not already reach transitively —
+        StudyKit is reached by deadline and scenes through XiaolaiDictUI, so they have no row of their own for it."""
+        for module, stages in self.CLAIMS.items():
+            for stage in stages or ("*",):
+                rows = [row for row in self.rows if row.stage in (stage, "*") and row.kind == "module"]
+                named = [row for row in rows if row.value == module and row.stage == stage]
+                others = {row.value for row in rows if row.value != module}
+                with self.subTest(module=module, stage=stage):
+                    if named:
+                        self.assertNotIn(module, inputs.closure(self.targets, others))
+
+
 class TheCommandsAndTheRunUseIt(unittest.TestCase):
 
     def test_the_makefile_offers_incremental_full_and_named_runs(self):
