@@ -13,7 +13,7 @@ import XiaolaiDictTestSupport
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
-/// **"Did you mean …?" as `LookupRunner` delivers it** (plan-spelling-suggestion §3–§4): the miss is on the card first,
+/// **"Look up “X”" as `LookupRunner` delivers it** (plan-spelling-suggestion §3–§4): the miss is on the card first,
 /// and final-looking; the line arrives after, only once the dictionaries have the word; a lookup the reader has moved on
 /// from draws no line and offers nothing to follow — through the real `DictionaryClient`, over a transport that answers
 /// from a word list and counts what it was asked.
@@ -27,7 +27,7 @@ struct LookupRunnerSpellingTests {
         quality: .accessibility(.accessibilityTextRange, context: .complete),
         place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
 
-    static let the = SpellingSuggestion(term: "teh", word: "the")
+    static let the = SpellingSuggestion(term: "teh", word: "the", evidence: .correction(.transposition))
 
     private static func selection(_ text: String, in sentence: String? = nil) -> Selection {
         Selection(text: text, sentence: sentence, rangeInSentence: nil,
@@ -162,7 +162,7 @@ struct LookupRunnerSpellingTests {
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
         let recording = await runner(panel, service, checker).run(cats, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         #expect(Self.lookups(panel.updates).last?.suggestion
-                == SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm, tentative: true))
+                == SpellingSuggestion(term: "cats", word: "cat", evidence: .regular(.s)))
         #expect(service.questions == ["cats", "cat"], "the dictionary form was not verified before it was offered")
         #expect(panel.contents.count == 1, "the dictionary form opened a panel of its own")
         #expect(recording?.record.result == .notFound, "the miss stopped being a miss")
@@ -266,7 +266,8 @@ struct LookupRunnerSpellingTests {
             panel: panel, selector: selector, spelling: Checker(["recrod": "record"]), readerEnglish: { nil })
         let missed = panel.newRequest()
         _ = await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed)
-        let followed = try #require(runner.followUp(SpellingSuggestion(term: "recrod", word: "record"), from: missed.number))
+        let followed = try #require(runner.followUp(SpellingSuggestion(term: "recrod", word: "record", evidence: .correction(.transposition)),
+                                                       from: missed.number))
 
         _ = await runner.run(followed, near: .zero, requestedAt: .now, ticket: panel.newRequest(), placement: .notInSentence)
         let shown = try #require(Self.lookups(panel.updates).last)
@@ -295,7 +296,8 @@ struct LookupRunnerSpellingTests {
         let missed = panel.newRequest()
         let miss = try #require(await runner.run(typo, near: .zero, requestedAt: .now, ticket: missed))
         #expect(miss.record.context == sentence, "the miss lost the sentence its word was read in")
-        let followed = try #require(runner.followUp(SpellingSuggestion(term: "recrod", word: "record"), from: missed.number))
+        let followed = try #require(runner.followUp(
+            SpellingSuggestion(term: "recrod", word: "record", evidence: .correction(.transposition)), from: missed.number))
         let word = try #require(await runner.run(followed, near: .zero, requestedAt: .now, ticket: panel.newRequest(),
                                                  placement: .notInSentence))
         #expect(word.record.surface == "record")
@@ -381,7 +383,8 @@ struct LookupRunnerSpellingTests {
         // Refusals first: a press that is followed spends the offer, so a refusal checked after it would hold for
         // that reason alone.
         #expect(runner.followUp(Self.the, from: ticket.number + 1) == nil, "another card's press looked the word up")
-        #expect(runner.followUp(SpellingSuggestion(term: "teh", word: "ten"), from: ticket.number) == nil,
+        #expect(runner.followUp(SpellingSuggestion(term: "teh", word: "ten", evidence: .correction(.substitution)),
+                                from: ticket.number) == nil,
                 "a word that was never offered was looked up")
 
         let followed = try #require(runner.followUp(Self.the, from: ticket.number))
@@ -408,11 +411,10 @@ struct LookupRunnerSpellingTests {
                 "a press on a card \(closed ? "the reader closed" : "a newer lookup replaced") was followed")
     }
 
-    /// **A tentative form and the checker's verified word reach the card together, and either may be followed**
-    /// (2026-10-11): *cats* is *cat*'s regular plural, printed nowhere here, so it is a guess and the checker's *cuts* is
-    /// offered beside it — and a press on the second line is followed like one on the first.
-    @Test(arguments: [false, true])
-    func aTentativeFormAndTheCheckersWordAreBothOfferedAndFollowable(second: Bool) async throws {
+    /// **A regular form and a credible rival leave the card with no button, and nothing to follow** (the owner's ruling of
+    /// 2026-10-11): *cats* is *cat*'s regular plural, printed nowhere here, and the checker's *cuts* is verified one edit
+    /// away — two credible readings, so silence, where the card once offered both. The miss stays on the card as it was.
+    @Test func aRegularFormAndARivalCorrectionOfferNothing() async throws {
         let panel = RecordingPanel(), service = Service(["cat", "cuts"], twoSenses: true), checker = Checker(["cats": "cuts"])
         let runner = runner(panel, service, checker)
         let cats = Selection(
@@ -421,13 +423,16 @@ struct LookupRunnerSpellingTests {
             place: ReadingPlace(bundleID: "com.apple.TextEdit", name: "TextEdit"))
         let ticket = panel.newRequest()
         _ = await runner.run(cats, near: .zero, requestedAt: .now, ticket: ticket)
-        let form = SpellingSuggestion(term: "cats", word: "cat", kind: .dictionaryForm, tentative: true)
-        let correction = SpellingSuggestion(term: "cats", word: "cuts")
+        #expect(checker.questions == ["cats"], "the checker was not asked, so no rival was weighed")
+        #expect(service.questions == ["cats", "cat", "cuts"], "both candidates were not verified: \(service.questions)")
         let shown = try #require(Self.lookups(panel.updates).last)
-        #expect(shown.offeredSuggestion == form)
-        #expect(shown.offeredBeside == correction, "the checker's verified word was displaced by a guess")
-        let followed = runner.followUp(second ? correction : form, from: ticket.number)
-        #expect(followed?.text == (second ? "cuts" : "cat"))
+        #expect(shown.offeredSuggestion == nil, "a contested word was offered: \(String(describing: shown.offeredSuggestion))")
+        #expect(shown.outcome == .notFound(serviceFailure: nil), "the miss did not stay on the card")
+        for word in ["cat", "cuts"] {
+            let evidence: SpellingSuggestion.Evidence = word == "cat" ? .regular(.s) : .correction(.substitution)
+            #expect(runner.followUp(SpellingSuggestion(term: "cats", word: word, evidence: evidence), from: ticket.number) == nil,
+                    "\(word) could be followed though it was never offered")
+        }
     }
 
     /// **An offer is spent by the press that follows it**: a second press — a double click, a press landing while the

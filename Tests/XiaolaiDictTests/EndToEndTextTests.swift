@@ -273,13 +273,14 @@ struct EndToEndTextTests {
              """,
          insteadRequire: ["Text(\"Downloading \\(size.displayName)", "\"Qwen3.5 \\(parameters)\""],
          fixture: nil),
-        (phrase: "Did you mean “receive”?",
+        (phrase: "Look up “receive”",
          because: """
-             it spans an interpolation: the line is written `Did you mean “\\(suggestion.word)”?`, and the word is the \
+             it spans an interpolation: the button is written `Look up “\\(suggestion.word)”`, and the word is the \
              checker's correction of the fixture's typo. The `lookup` stage asserts the control by this exact name \
-             (audit, 2026-10-09), so the literal it is drawn from must still say it.
+             (audit, 2026-10-09; the one button of the owner's ruling of 2026-10-11), so the literal it is drawn from \
+             must still say it.
              """,
-         insteadRequire: ["Text(\"Did you mean “\\(suggestion.word)”?\")"],
+         insteadRequire: ["Text(\"Look up “\\(suggestion.word)”\")"],
          fixture: nil),
         (phrase: "stopped meeting at noon",
          because: """

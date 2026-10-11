@@ -150,7 +150,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
             guard let self else { return false }
             return recorder.collect(phrase, request: request, language: recorder.language(of: request))
         }
-        // **"Did you mean …?" pressed** (plan-spelling-suggestion §3) — routed to the runner, which kept what the card
+        // **"Look up “X”" pressed** (plan-spelling-suggestion §3) — routed to the runner, which kept what the card
         // was offered, and started as a lookup of its own.
         panel.onFollowSuggestion = { [weak self] suggestion, request in self?.follow(suggestion, from: request) }
     }
@@ -510,7 +510,7 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
         }
     }
 
-    /// **The word a card suggested, looked up as a lookup of its own** — the reader pressed "Did you mean …?"
+    /// **The word a card suggested, looked up as a lookup of its own** — the reader pressed "Look up “X”"
     /// (plan-spelling-suggestion §3). In the sentence and place the miss was read in, **where the panel already is**,
     /// so the card for the word replaces the miss in place; the miss stays recorded as the miss it was, and this is a
     /// new reading beside it. Never automatic: nothing but a press reaches here.

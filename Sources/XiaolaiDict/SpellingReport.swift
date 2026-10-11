@@ -1,16 +1,19 @@
+import CaptureModel
 import DictionaryModel
 import Foundation
 import XiaolaiDictBase
 import XiaolaiDictCore
 import XiaolaiDictUI
 
-/// `--spelling-report TERM…`: **what each term's miss would be offered** — "Did you mean …?" — through the checker and
-/// the dictionaries the card is offered it by, one JSON line a term (plan-spelling-suggestion §3).
+/// `--spelling-report TERM…`: **what each term's miss would be offered** — "Look up “X”" or nothing — through the checker
+/// and the dictionaries the card is offered it by, one JSON line a term (plan-spelling-suggestion §3).
 ///
 /// Each term is looked up as `--lookup` looks it up, then asked of `SpellingSuggester` — the one the lookup runner asks
 /// — so the instrument measures what the card is offered, not a second implementation of it. **What it prints is the
-/// term, kinds, the checker's word, the term's dictionary form and two durations**: never a definition, a headword or a
-/// dictionary's name, which are licensed text a shell has no business printing.
+/// term, both candidates — the term's dictionary form and the checker's word — with whether the dictionaries bore each
+/// out and how far each is from the term, the rule that decided, and two durations**, even where nothing is offered
+/// (the owner's ruling of 2026-10-11): never a definition, a headword or a dictionary's name, which are licensed text a
+/// shell has no business printing.
 ///
 /// **Compiled out of a release**, as `--reminder-report` and `--provider-status` are: a reader has the line on the card,
 /// and nothing in a reader's copy needs a command that asks the spell checker on demand. `verify_bundle` checks both
@@ -74,23 +77,16 @@ enum SpellingReport {
         for term in terms {
             let started = now()
             let outcome: LookupOutcome
-            let offer: SpellingOffer
             do {
                 outcome = try await lookUp(term)
                 let looked = now()
                 // The term's dictionary form as the card's lookup would work it out — alone, as a term on the command
                 // line has no sentence, and with the table the suggester is given — so the instrument measures the
-                // offer the card is made.
-                let table = forms()
-                let lemma = Lemmatizer.lemma(of: term, in: nil, at: nil, using: table)
-                offer = try await suggester.offer(for: term, outcome: outcome, lemma: lemma)
-                // **The form the suggester tried, where it tried one** — none for a word it was not asked about.
-                let tried: DictionaryForm? = if case .refused = offer { nil } else {
-                    DictionaryForm.candidate(lemma, for: term, printed: table)
-                }
-                let line = SpellingReportLine(term: term, outcome: outcome, offer: offer, dictionaryForm: tried,
-                                              readersEnglish: language(), lookup: looked - started,
-                                              suggestion: now() - looked)
+                // offer the card is made. **Typed, so no capture source**: the same thresholds hold for every source.
+                let lemma = Lemmatizer.lemma(of: term, in: nil, at: nil, using: forms())
+                let decision = try await suggester.decide(for: term, outcome: outcome, lemma: lemma, capture: nil)
+                let line = SpellingReportLine(outcome: outcome, decision: decision, readersEnglish: language(),
+                                              lookup: looked - started, suggestion: now() - looked)
                 if let failed = LookupCommand.emit(line, through: write, writeError: writeError) { return failed }
             } catch {
                 return .interrupted
@@ -106,62 +102,78 @@ struct SpellingReportLine: Encodable, Equatable {
     let term: String
     /// The term's own lookup, in `--lookup`'s words: `entries` | `plainText` | `notFound`.
     let outcome: String
-    /// `offered` | `refused` | `noCorrection` | `unverified` — `SpellingOffer`'s cases.
+    /// How the term was captured — `CaptureQuality.Source`'s name — or `typed` for one named rather than captured, as
+    /// every term on the command line is. Recorded, never weighed.
+    let captureSource: String
+    /// `offered` | `refused` | `abstained` — `SpellingOffer`'s cases.
     let offer: String
+    /// **The rule that decided** (`SpellingDecision.rule`): the offered evidence — `printed`, `regular`, `agreement`,
+    /// `correction` — `refused`, or the abstention's name.
+    let rule: String
     /// Why nothing was asked, where nothing was: `SpellingEligibility.Refusal`'s name.
     var refusal: String?
-    /// The checker's word: the one offered, or the one no dictionary of the reader's has.
-    var correction: String?
-    /// What an offered word is to the term: `spelling` | `dictionaryForm` (plan-card-refinements WI-3).
-    var correctionKind: String?
-    /// `true` where the offered word is a dictionary form inferred from spelling alone, which the card labels a guess;
-    /// absent otherwise (ADR-0054 part B, 2026-10-11).
-    var correctionTentative: Bool?
-    /// The checker's verified correction offered beside a tentative dictionary form, where it is another word.
-    var besideCorrection: String?
-    /// The term's dictionary form the suggester tried first, offered or not — absent where it had none. What tells "this
-    /// Mac's dictionaries give the term no form" from "the form could not be verified" (the owner's order, 2026-10-09).
+    /// The one word offered, where one was.
+    var suggestion: String?
+    /// The term's dictionary form a rule proposed, offered or not: `dictionaryFormEvidence` says which rule —
+    /// `printed` | `regular` — and the slot where regular.
     var dictionaryForm: String?
-    /// What makes that form the term's: `printed` | `regular` (`DictionaryForm.Evidence`, D1 of 2026-10-10) — the
-    /// provenance of a dictionary-form offer, which the card does not draw and a measurement of the guards needs.
     var dictionaryFormEvidence: String?
+    var dictionaryFormSlot: String?
+    /// Whether the form's lookup bore it out; absent where it was never looked up.
+    var dictionaryFormSupported: Bool?
+    var dictionaryFormDistance: Int?
+    /// The base the lemmatiser proposed, kept for the ambiguity guards whether or not a rule made it a form.
+    var proposedBase: String?
+    /// The checker's word, offered or not, with whether the dictionaries have it, its distance and its one edit.
+    var correction: String?
+    var correctionVerified: Bool?
+    var correctionDistance: Int?
+    var correctionEdit: String?
     /// The reader's English the checker was asked in, as they list it; absent where they list none (plain English).
     var readersEnglish: String?
     let lookupMilliseconds: Double
     let suggestionMilliseconds: Double
 
-    init(term: String, outcome: LookupOutcome, offer: SpellingOffer, dictionaryForm: DictionaryForm? = nil,
-         readersEnglish: String?, lookup: Duration, suggestion: Duration) {
-        self.term = term
-        self.dictionaryForm = dictionaryForm?.word
-        dictionaryFormEvidence = switch dictionaryForm?.evidence {
-        case .printed?: "printed"
-        case .regular?: "regular"
-        case nil: nil
-        }
+    init(outcome: LookupOutcome, decision: SpellingDecision, readersEnglish: String?, lookup: Duration,
+         suggestion duration: Duration) {
+        term = decision.term
         switch outcome {
         case .entries: self.outcome = "entries"
         case .plainText: self.outcome = "plainText"
         case .notFound: self.outcome = "notFound"
         }
-        switch offer {
-        case .offered(let suggestion, let beside):
-            self.offer = "offered"
-            correction = suggestion.word
-            correctionKind = suggestion.kind.rawValue
-            correctionTentative = suggestion.isTentative ? true : nil
-            besideCorrection = beside?.word
+        captureSource = decision.capture?.rawValue ?? "typed"
+        rule = decision.rule
+        switch decision.offer {
+        case .offered(let offered):
+            offer = "offered"
+            suggestion = offered.word
         case .refused(let why):
-            self.offer = "refused"
+            offer = "refused"
             refusal = why.rawValue
-        case .noCorrection:
-            self.offer = "noCorrection"
-        case .unverified(let word):
-            self.offer = "unverified"
-            correction = word
+        case .abstained:
+            offer = "abstained"
+        }
+        if let form = decision.form {
+            dictionaryForm = form.word
+            switch form.evidence {
+            case .printed: dictionaryFormEvidence = "printed"
+            case .regular(let slot):
+                dictionaryFormEvidence = "regular"
+                dictionaryFormSlot = slot.rawValue
+            }
+            dictionaryFormSupported = form.supported
+            dictionaryFormDistance = form.edit.distance
+        }
+        proposedBase = decision.proposedBase
+        if let checked = decision.correction {
+            correction = checked.word
+            correctionVerified = checked.verified
+            correctionDistance = checked.edit.distance
+            correctionEdit = checked.edit.operation?.rawValue
         }
         self.readersEnglish = readersEnglish
         lookupMilliseconds = lookup.milliseconds.rounded()
-        suggestionMilliseconds = suggestion.milliseconds.rounded()
+        suggestionMilliseconds = duration.milliseconds.rounded()
     }
 }

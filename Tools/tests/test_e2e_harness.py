@@ -964,19 +964,22 @@ if __name__ == "__main__":
 
 
 class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
-    """`spelling_state`, the `lookup` stage's reading of the panel for "Did you mean …?" (audit, 2026-10-09). It took
-    any text holding "receive" for the corrected word's card — a heading "receiver", a definition, the reader's sentence
-    — and any control holding "Did you mean" and "receive" for the line, and never asked whether the walk finished. Each
-    of those is a control here: the panel that should be called the card is, and every one that should not is not."""
+    """`spelling_state`, the `lookup` stage's reading of the panel for "Look up “…”" (audit, 2026-10-09; the owner's ruling
+    of 2026-10-11). It took any text holding "receive" for the corrected word's card — a heading "receiver", a definition,
+    the reader's sentence — and any control holding the word for the button, and never asked whether the walk finished.
+    Each of those is a control here: the panel that should be called the card is, and every one that should not is not —
+    and it counts the buttons, since a card offering two words is the defect the ruling removed."""
 
     TYPO_MISS = "No entry for “recieve” in your dictionaries."
-    LINE = "Did you mean “receive”?"
+    LINE = "Look up “receive”"
 
-    def state(self, texts: list[str], controls: list[str] | None = None, complete: bool = True) -> list[str]:
+    def state(self, texts: list[str], controls: list[str] | None = None, complete: bool = True,
+              term: str | None = None, word: str | None = None) -> list[str]:
         report = {"complete": complete, "frontmost": "com.apple.TextEdit", "incomplete": [] if complete else ["deadline"],
                   "windows": [{"title": "Lookup", "texts": texts, "controls": controls or []}]}
-        source = function("spelling_state") + '\nspelling_state "$1"\n'
-        done = subprocess.run([BASH, "-c", source, "spelling_state", json.dumps(report, ensure_ascii=False)],
+        source = function("spelling_state") + '\nspelling_state "$@"\n'
+        arguments = [json.dumps(report, ensure_ascii=False)] + [a for a in (term, word) if a is not None]
+        done = subprocess.run([BASH, "-c", source, "spelling_state", *arguments],
                               capture_output=True, text=True, timeout=60, check=False)
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout.split()
@@ -998,17 +1001,28 @@ class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
         self.assertNotIn("card", self.state(["Lookup", "receive", "Looking up “receive” in your dictionaries…"]))
         self.assertNotIn("card", self.state(["Lookup", "receive", "No entry for “receive” in your dictionaries."]))
 
-    def test_the_miss_and_the_line_are_read_by_their_own_words(self):
-        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE]), ["miss", "line"])
-        # A miss of another word, and a line naming another word, are neither.
+    def test_the_miss_and_the_button_are_read_by_their_own_words(self):
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE]), ["miss", "line", "offers=1"])
+        # A miss of another word, and a button naming another word, are neither — though the button is still counted.
         self.assertEqual(self.state(["Lookup", "receiver", "No entry for “receiver” in your dictionaries."],
-                                    ["Did you mean “receiver”?", "Did you mean “receive” instead"]), [])
+                                    ["Look up “receiver”", "Look up “receive” instead"]), ["offers=1"])
+        # The retired wording is no button.
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], ["Did you mean “receive”?"]), ["miss", "offers=0"])
+
+    def test_two_buttons_are_counted_as_two(self):
+        """The owner's ruling of 2026-10-11: one offer or none. A card offering the regular form and the checker's word
+        side by side must read as two, so the stage can refuse it."""
+        self.assertEqual(self.state(["Lookup", "heavied", "No entry for “heavied” in your dictionaries."],
+                                    ["Look up “heavy”", "Look up “heavier”"], term="heavied", word="heavy"),
+                         ["miss", "line", "offers=2"])
+        self.assertEqual(self.state(["Lookup", "heavied", "No entry for “heavied” in your dictionaries."], [],
+                                    term="heavied", word="-"), ["miss", "offers=0"])
 
     def test_the_dictionaries_exit_is_read_by_its_exact_name(self):
         """plan-card-refinements WI-1: every answered card carries "Dictionaries…"; a control merely holding the word,
         or named without its ellipsis, is not it."""
         self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE, "Dictionaries…"]),
-                         ["miss", "line", "exit"])
+                         ["miss", "line", "offers=1", "exit"])
         self.assertNotIn("exit", self.state(["Lookup", "receive"], ["Dictionaries", "Choose Another Dictionary…"]))
 
 
@@ -1258,7 +1272,7 @@ class TheAppearanceIsChangedOnlyWhenItCanBePutBack(unittest.TestCase):
 
 
 class TheFollowedCardStaysWhereTheReaderLeftIt(unittest.TestCase):
-    """`replaced_in_place`, the lookup stage's check that pressing "Did you mean …?" after dragging the miss card aside
+    """`replaced_in_place`, the lookup stage's check that pressing "Look up “…”" after dragging the miss card aside
     replaces it where the reader left it (audit of 2026-10-10: the replacement was placed afresh against the
     misspelling). The card held where the drag left it passes; one that jumped back, or a drag that never moved it, fails."""
 

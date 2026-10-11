@@ -8,13 +8,13 @@ import XiaolaiDictCore
 import XiaolaiDictTestSupport
 
 /// **`--spelling-report`: what each term's miss is offered, through the path the card is offered it by** — one JSON
-/// line a term, with kinds, the checker's word and two durations, and never a word of dictionary text.
+/// line a term, with both candidates, the rule that decided and two durations, and never a word of dictionary text.
 @MainActor
 struct SpellingReportTests {
     /// The checker of the experiment's table, in miniature.
     private struct Checker: SpellingSuggesting {
         func suggestion(for term: String, language: String?) async -> String? {
-            ["recieve": "receive", "mochii": "mochi"][term]
+            ["recieve": "receive", "mochii": "mochi", "receives": "receiver"][term]
         }
     }
 
@@ -24,7 +24,8 @@ struct SpellingReportTests {
     nonisolated private static func lookUp(_ term: String) throws(CancellationError) -> LookupOutcome {
         if term == "crash" { return .notFound(serviceFailure: "the dictionary service crashed") }
         if term == "fallback" { return .plainText("an answer in prose", serviceFailure: "the dictionary service crashed") }
-        guard let partOfSpeech = ["receive": "verb", "ephemeral": "adjective", "dalesman": "noun"][term] else {
+        let partsOfSpeech = ["receive": "verb", "ephemeral": "adjective", "dalesman": "noun", "receiver": "noun"]
+        guard let partOfSpeech = partsOfSpeech[term] else {
             return .notFound(serviceFailure: nil)
         }
         let document = EntryDocument(isStyled: true, entryID: "e1", homograph: nil,
@@ -53,11 +54,18 @@ struct SpellingReportTests {
         #expect(lines.count == 4, "\(raw)")
         #expect(lines.map { $0["term"] as? String } == ["recieve", "mochii", "ambages", "ephemeral"])
         #expect(lines.map { $0["outcome"] as? String } == ["notFound", "notFound", "notFound", "entries"])
-        #expect(lines.map { $0["offer"] as? String } == ["offered", "unverified", "noCorrection", "refused"])
+        #expect(lines.map { $0["offer"] as? String } == ["offered", "abstained", "abstained", "refused"])
+        #expect(lines.map { $0["rule"] as? String } == ["correction", "unverified", "noCandidate", "refused"])
+        #expect(lines[0]["suggestion"] as? String == "receive")
         #expect(lines[0]["correction"] as? String == "receive")
+        #expect(lines[0]["correctionEdit"] as? String == "transposition")
         #expect(lines[1]["correction"] as? String == "mochi")
+        #expect(lines[1]["correctionVerified"] as? Bool == false)
+        #expect(lines[1]["suggestion"] == nil)
         #expect(lines[2]["correction"] == nil)
         #expect(lines[3]["refusal"] as? String == "notAMiss")
+        // **A term on the command line was typed**, and says so: the source is recorded, never weighed.
+        #expect(lines.allSatisfy { $0["captureSource"] as? String == "typed" })
         #expect(lines.allSatisfy { $0["readersEnglish"] as? String == "en-GB" })
         for line in lines {
             #expect((line["lookupMilliseconds"] as? Double).map { $0 >= 0 } == true)
@@ -66,26 +74,46 @@ struct SpellingReportTests {
     }
 
     /// **The dictionary form too, as the card is offered it** (plan-card-refinements WI-3): a missed inflection whose
-    /// lemma the dictionaries have is reported offered, with the form and its kind; a checker's correction says its own.
+    /// lemma the dictionaries have is reported offered, with the form and the rule; a checker's correction says its own.
     @Test func aMissedInflectionIsReportedWithItsDictionaryForm() async {
-        let (_, lines, raw) = await report(["receives", "recieve"])
+        let (_, lines, raw) = await report(["receiving", "recieve"])
         #expect(lines.count == 2, "\(raw)")
         #expect(lines.first?["offer"] as? String == "offered")
-        #expect(lines.first?["correction"] as? String == "receive")
-        #expect(lines.first?["correctionKind"] as? String == "dictionaryForm")
-        #expect(lines.last?["correctionKind"] as? String == "spelling")
+        #expect(lines.first?["suggestion"] as? String == "receive")
+        #expect(lines.first?["rule"] as? String == "regular")
+        #expect(lines.first?["dictionaryFormSlot"] as? String == "ing")
+        #expect(lines.last?["rule"] as? String == "correction")
+    }
+
+    /// **Both candidates, their verification and their distances, and the rule — even where nothing is offered** (the
+    /// owner's ruling of 2026-10-11): *receives* is *receive*'s regular third person and the checker's *receiver* is
+    /// verified one edit away, so the card is offered nothing, and the line says why.
+    @Test func anAbstentionIsReportedWithBothCandidates() async {
+        let (_, lines, raw) = await report(["receives"])
+        let line = lines.first ?? [:]
+        #expect(line["offer"] as? String == "abstained", "\(raw)")
+        #expect(line["rule"] as? String == "conflict")
+        #expect(line["suggestion"] == nil)
+        #expect(line["dictionaryForm"] as? String == "receive")
+        #expect(line["dictionaryFormSupported"] as? Bool == true)
+        #expect(line["dictionaryFormDistance"] as? Int == 1)
+        #expect(line["correction"] as? String == "receiver")
+        #expect(line["correctionVerified"] as? Bool == true)
+        #expect(line["correctionDistance"] as? Int == 1)
+        #expect(line["correctionEdit"] as? String == "substitution")
     }
 
     /// **Which dictionary form was tried, offered or not** (the owner's order of 2026-10-09): a miss that had none is told
     /// apart from one whose form the dictionaries could not verify — the difference between "this Mac's dictionaries
     /// have no form for it" and "the form lost". Absent where the term has none, and on a found word.
     @Test func eachLineNamesTheDictionaryFormItTried() async {
-        let (_, lines, raw) = await report(["receives", "runs", "recieve", "ephemeral"])
+        let (_, lines, raw) = await report(["receiving", "runs", "recieve", "ephemeral"])
         #expect(lines.count == 4, "\(raw)")
         #expect(lines[0]["dictionaryForm"] as? String == "receive")
         #expect(lines[0]["offer"] as? String == "offered")
         #expect(lines[1]["dictionaryForm"] as? String == "run", "an unverified form was not named: \(raw)")
-        #expect(lines[1]["offer"] as? String == "noCorrection")
+        #expect(lines[1]["dictionaryFormSupported"] as? Bool == false)
+        #expect(lines[1]["offer"] as? String == "abstained")
         #expect(lines[2]["dictionaryForm"] == nil)
         #expect(lines[3]["dictionaryForm"] == nil)
     }
@@ -111,11 +139,12 @@ struct SpellingReportTests {
     /// **No dictionary text, ever** — the keys are exactly these, whatever the outcome: a definition, a headword or a
     /// dictionary's name would be licensed content printed from a shell.
     @Test func noLineCarriesDictionaryText() async {
-        let (_, lines, raw) = await report(["recieve", "ephemeral", "crash", "receives"])
-        let allowed: Set<String> = ["term", "outcome", "offer", "refusal", "correction", "correctionKind", "correctionTentative",
-                                    "besideCorrection", "readersEnglish",
-                                    "dictionaryForm", "dictionaryFormEvidence", "lookupMilliseconds",
-                                    "suggestionMilliseconds"]
+        let (_, lines, raw) = await report(["recieve", "ephemeral", "crash", "receiving", "receives"])
+        let allowed: Set<String> = ["term", "outcome", "captureSource", "offer", "rule", "refusal", "suggestion",
+                                    "dictionaryForm", "dictionaryFormEvidence", "dictionaryFormSlot",
+                                    "dictionaryFormSupported", "dictionaryFormDistance", "proposedBase", "correction",
+                                    "correctionVerified", "correctionDistance", "correctionEdit", "readersEnglish",
+                                    "lookupMilliseconds", "suggestionMilliseconds"]
         for line in lines { #expect(Set(line.keys).isSubset(of: allowed), "\(line.keys.sorted())") }
         #expect(!raw.joined().contains("definition nobody may print"))
         #expect(!raw.joined().contains("NOAD"))

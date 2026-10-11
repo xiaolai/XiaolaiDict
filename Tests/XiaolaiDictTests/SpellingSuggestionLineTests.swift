@@ -10,16 +10,16 @@ import XiaolaiDictTestSupport
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
 
-/// **"Did you mean “X”?" on the card** (plan-spelling-suggestion §3): drawn only under the service's own miss of the
-/// card's own term, on the compact card and the detailed one, as a button that hands the suggestion to the app — and
-/// the app's hook set where the panel's other hooks are.
+/// **"Look up “X”" on the card** (plan-spelling-suggestion §3; the owner's ruling of 2026-10-11): one button, drawn only
+/// under the service's own miss of the card's own term, on the compact card and the detailed one, in the same words for
+/// every kind of evidence, handing the suggestion to the app — and the app's hook set where the panel's other hooks are.
 ///
 /// Decided in the model where a rule can be asked (`LookupPresentation.offeredSuggestion`), and seen in a hosted card
 /// by the height it adds and the control it puts in the accessibility tree: a grouped `Form` and glass cannot be
 /// pixel-tested (AGENTS.md), and this card is neither.
 @MainActor
 struct SpellingSuggestionLineTests {
-    private static let the = SpellingSuggestion(term: "teh", word: "the")
+    private static let the = SpellingSuggestion(term: "teh", word: "the", evidence: .correction(.transposition))
 
     private static func presentation(_ outcome: LookupOutcome?, suggestion: SpellingSuggestion? = the,
                                      term: String = "teh") -> LookupPresentation {
@@ -51,24 +51,6 @@ struct SpellingSuggestionLineTests {
         #expect(Self.presentation(.notFound(serviceFailure: nil), suggestion: nil).offeredSuggestion == nil)
     }
 
-    /// **The second line is drawn only beside a tentative form, for this card's own term** (2026-10-11): beside a
-    /// printed form or a correction it is nothing, so a printed form still outranks the checker on the card.
-    @Test func theCheckersWordIsDrawnOnlyBesideATentativeForm() {
-        let tentative = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm, tentative: true)
-        let printed = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
-        var shown = Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative)
-        shown.besideSuggestion = Self.the
-        #expect(shown.offeredBeside == Self.the)
-        shown.suggestion = printed
-        #expect(shown.offeredBeside == nil, "a printed form drew the checker's word beside it")
-        shown.suggestion = tentative
-        shown.besideSuggestion = SpellingSuggestion(term: "thier", word: "their")
-        #expect(shown.offeredBeside == nil, "another lookup's suggestion was drawn")
-        var refused = Self.presentation(.notFound(serviceFailure: "crashed"), suggestion: tentative)
-        refused.besideSuggestion = Self.the
-        #expect(refused.offeredBeside == nil, "a line was drawn under a miss the service could not answer")
-    }
-
     // MARK: - The line, on both cards
 
     private func hosted(_ presentation: LookupPresentation, compact: Bool,
@@ -88,17 +70,23 @@ struct SpellingSuggestionLineTests {
     /// accessibility tree in a test process (a hosted card exposes one empty group), puts no `NSButton` under a
     /// bordered button, and lets no mouse event reach its action in a window that is not on screen — and ordering one
     /// on screen would put a window in front of whoever is at the building Mac. The real press is the `lookup` E2E
-    /// stage's: the panel's line pressed by its name, and the corrected word's card read back.
+    /// stage's: the panel's button pressed by its name, and the word's card read back.
+    ///
+    /// **Its words are "Look up “X”" for every kind of offer, its VoiceOver hint "Opens a new lookup."**, and nothing
+    /// names the evidence: "Did you mean" and "A guess from the spelling" are gone (the owner's ruling of 2026-10-11).
     @Test func theLineIsAButtonThatHandsItsOwnSuggestionToTheApp() throws {
         let line = try String(contentsOf: AppModules.repository.appending(path: "Sources/XiaolaiDictUI/SpellingSuggestionLine.swift"),
                               encoding: .utf8)
         #expect(line.contains("Button { follow(suggestion) } label:"), "the line's press does not hand its suggestion over")
         #expect(line.contains("@Environment(\\.followSuggestion) private var follow"), "the line does not ask the app")
-        #expect(line.contains("Text(\"Did you mean “\\(suggestion.word)”?\")"), "the line does not say what it offers")
-        // **A dictionary form says what it is** (plan-card-refinements WI-3): not "did you mean", which calls the
-        // reader's word a mistake, but the form the dictionaries file it under.
-        #expect(line.contains("case .dictionaryForm: Text(\"Look up “\\(suggestion.term)” as “\\(suggestion.word)”?\")"),
-                "the dictionary form's line does not say it is the word's dictionary form")
+        #expect(line.contains("Text(\"Look up “\\(suggestion.word)”\")"), "the line does not say what it offers")
+        #expect(line.contains(".accessibilityHint(Text(\"Opens a new lookup.\"))"), "VoiceOver is not told what a press does")
+        // Read past the comments, which say why the old words went.
+        let code = line.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        for gone in ["Did you mean", "A guess from the spelling", "suggestion.evidence", "suggestion.term"] {
+            #expect(!code.contains(gone), "the line still says or branches on \(gone)")
+        }
     }
 
     /// **The card grows by the line, and only where the rule offers it** — on the compact card and the detailed one. A
@@ -120,38 +108,35 @@ struct SpellingSuggestionLineTests {
         }
     }
 
-    /// **The dictionary form's line is drawn on both cards too** (plan-card-refinements WI-3).
+    /// **Every kind of evidence draws the same button** — a printed form, a regular one, an agreement and the checker's
+    /// correction of the same word make the same card, on both: nothing the reader sees says which it was.
     @Test(arguments: [false, true])
-    func theDictionaryFormLineIsDrawnOnBothCards(compact: Bool) {
-        let form = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
+    func everyKindOfEvidenceDrawsTheSameButton(compact: Bool) {
+        let kinds: [SpellingSuggestion.Evidence] = [.printed, .regular(.ed), .agreement(.s), .correction(.transposition)]
+        let sizes = kinds.map { evidence in
+            hosted(Self.presentation(.notFound(serviceFailure: nil),
+                                     suggestion: SpellingSuggestion(term: "teh", word: "the", evidence: evidence)),
+                   compact: compact).fittingSize
+        }
+        #expect(Set(sizes.map(\.height)).count == 1 && Set(sizes.map(\.width)).count == 1, "\(sizes)")
         let bare = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: nil), compact: compact).fittingSize
-        let offered = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: form), compact: compact).fittingSize
-        #expect(offered.height > bare.height, "the line added no height: \(bare.height) then \(offered.height)")
+        #expect(sizes[0].height > bare.height, "the button added no height: \(bare.height) then \(sizes[0].height)")
     }
 
-    /// **A guess says so, and the checker's word beside it is a line of its own** — on both cards: the tentative label
-    /// widens or deepens the line (a printed form's line is the same words without it), and the second line adds
-    /// height. The label's words are read from the source, as the line's are above.
-    @Test(arguments: [false, true])
-    func aTentativeFormIsLabelledAndTheCheckersWordDrawnBesideIt(compact: Bool) throws {
-        let printed = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm)
-        let tentative = SpellingSuggestion(term: "teh", word: "te", kind: .dictionaryForm, tentative: true)
-        // The line alone: on the detailed card it sits in a row the card's width already holds.
-        func width(_ suggestion: SpellingSuggestion) -> CGFloat {
-            NSHostingView(rootView: SpellingSuggestionLine(suggestion: suggestion).environment(\.scale, Scale.standard))
-                .fittingSize.width
+    /// **The button's words wrap at a large text size rather than run past the card**: held to a width narrower than
+    /// its words, it grows down.
+    @Test func theButtonWrapsInANarrowWidth() {
+        let long = SpellingSuggestion(term: "antidisestablishmentarianisms", word: "antidisestablishmentarianism",
+                                      evidence: .printed)
+        func size(width: CGFloat?) -> CGSize {
+            let line = SpellingSuggestionLine(suggestion: long).environment(\.scale, Scale(TextSize.huge))
+            let view = NSHostingView(rootView: line.frame(width: width))
+            view.layoutSubtreeIfNeeded()
+            return view.fittingSize
         }
-        #expect(width(tentative) > width(printed), "the tentative label added nothing to the line")
-        let guessed = hosted(Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative), compact: compact)
-            .fittingSize
-        var both = Self.presentation(.notFound(serviceFailure: nil), suggestion: tentative)
-        both.besideSuggestion = Self.the
-        let two = hosted(both, compact: compact).fittingSize
-        #expect(two.height > guessed.height, "the checker's word added no line: \(guessed.height) then \(two.height)")
-        let line = try String(contentsOf: AppModules.repository.appending(path: "Sources/XiaolaiDictUI/SpellingSuggestionLine.swift"),
-                              encoding: .utf8)
-        #expect(line.contains("if suggestion.isTentative {\n                Text(\"A guess from the spelling\")"),
-                "the tentative label is not drawn for a tentative form alone")
+        let natural = size(width: nil)
+        let narrow = size(width: natural.width / 2)
+        #expect(narrow.height > natural.height, "the words did not wrap: \(natural) then \(narrow)")
     }
 
     // MARK: - The app's wire

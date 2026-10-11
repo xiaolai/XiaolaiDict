@@ -1,3 +1,4 @@
+import CaptureModel
 import DictionaryModel
 import Foundation
 
@@ -16,35 +17,44 @@ public protocol SpellingSuggesting: Sendable {
     func suggestion(for term: String, language: String?) async -> String?
 }
 
-/// **A word the reader may have meant**, under a lookup no dictionary answered — a line they may tap, never a word
-/// looked up in their place: mark, never jump.
+/// **A word the reader may have meant**, under a lookup no dictionary answered — one button they may press, never a
+/// word looked up in their place: mark, never jump.
 public struct SpellingSuggestion: Sendable, Hashable {
     /// What the reader looked up, as they looked it up, and no dictionary had. The card compares it with its own term,
     /// so a suggestion can only ever be drawn under the lookup it was made for.
     public let term: String
-    /// What the checker offered instead, in its own spelling — a word the reader's dictionaries were asked about and
-    /// have (`SpellingCorrection.isVerified`).
+    /// The word offered — one the reader's dictionaries were asked about and bear out.
     public let word: String
-    /// What the word is to the term: the checker's correction of a typo, or the term's dictionary form — "ran" as
-    /// "run", where the dictionaries had no entry for the inflection (plan-card-refinements WI-3).
-    public let kind: Kind
-    /// **A dictionary form inferred from English spelling alone** — no dictionary of the reader's prints the term
-    /// under it (`DictionaryForm.Evidence.regular`), so the card says it is a guess. False for a printed form and for
-    /// every correction of the checker's (ADR-0054 part B, 2026-10-11).
-    public let isTentative: Bool
+    /// **Why it is offered**, kept as typed data for the instrument and the log. The card draws every kind the same
+    /// way, "Look up “X”" (the owner's ruling of 2026-10-11): a label naming the evidence was rejected.
+    public let evidence: Evidence
 
-    public enum Kind: String, Sendable, Hashable {
-        case spelling
-        case dictionaryForm
+    public enum Evidence: Sendable, Hashable {
+        /// The reader's form table prints the term under the word (rule 1).
+        case printed
+        /// The term is the word's regular inflection in this slot, licensed by its entry, with no credible rival
+        /// (rule 5).
+        case regular(InflectionSlot)
+        /// The regular inflection and the checker agree: the same word, or the same base in the same slot (rule 2).
+        case agreement(InflectionSlot)
+        /// The checker's verified correction, one edit away, with no morphological rival (rule 5).
+        case correction(SpellingEdit.Operation)
+
+        /// The rule's name, as `--spelling-report` prints it.
+        public var rule: String {
+            switch self {
+            case .printed: "printed"
+            case .regular: "regular"
+            case .agreement: "agreement"
+            case .correction: "correction"
+            }
+        }
     }
 
-    /// `tentative` only for a dictionary form: a checker's correction is verified or not offered, never inferred.
-    public init(term: String, word: String, kind: Kind = .spelling, tentative: Bool = false) {
-        precondition(!tentative || kind == .dictionaryForm, "only a dictionary form is inferred")
+    public init(term: String, word: String, evidence: Evidence) {
         self.term = term
         self.word = word
-        self.kind = kind
-        isTentative = tentative
+        self.evidence = evidence
     }
 }
 
@@ -105,39 +115,48 @@ public enum SpellingEligibility: Equatable, Sendable {
     }
 }
 
-/// What asking for a suggestion came to — **the one offer, and every way there was none, kept apart**, so the lookup
-/// path can draw the first and an instrument can say which of the others it was.
+/// What asking for a suggestion came to — **one offer, or why there is none**, so the lookup path draws the first and
+/// an instrument can say which of the others it was.
 public enum SpellingOffer: Equatable, Sendable {
-    /// A correction the reader's dictionaries have: drawn as a line under the miss. `beside` is the checker's verified
-    /// correction where the first is a **tentative** dictionary form and the checker's word is another one: the reader
-    /// is offered both, the form first, so an inference never silently displaces a verified correction (2026-10-11).
-    case offered(SpellingSuggestion, beside: SpellingSuggestion? = nil)
+    /// The one word the card offers, as a button under the miss.
+    case offered(SpellingSuggestion)
     /// Not asked at all, and why (`SpellingEligibility`).
     case refused(SpellingEligibility.Refusal)
-    /// The checker had no confident correction, or only the term again up to case.
-    case noCorrection
-    /// The checker's word, which no dictionary of the reader's has. Never offered.
-    case unverified(String)
+    /// Asked, and nothing survived the rules: silence, which beats a wrong offer.
+    case abstained(Abstention)
 
     /// The suggestion to draw, where there is one.
     public var suggestion: SpellingSuggestion? {
-        guard case .offered(let suggestion, _) = self else { return nil }
+        guard case .offered(let suggestion) = self else { return nil }
         return suggestion
     }
 
-    /// Every suggestion to draw, in the order the card draws them — none, one, or a tentative form and the checker's
-    /// word beside it.
-    public var suggestions: [SpellingSuggestion] {
-        guard case .offered(let suggestion, let beside) = self else { return [] }
-        return [suggestion] + (beside.map { [$0] } ?? [])
+    /// **Why a miss is offered nothing**, by the rule that decided it (`SpellingSuggester.decide`).
+    public enum Abstention: String, Sendable, CaseIterable {
+        /// No dictionary form and no correction from the checker — or only ones that are the term again.
+        case noCandidate
+        /// The checker's word, which no dictionary of the reader's has.
+        case unverified
+        /// The table prints the term under several bases and nothing in the lookup says which (rule 1).
+        case printedAmbiguous
+        /// The table prints the term under a base the dictionaries do not answer (rule 1).
+        case printedUnverified
+        /// A regular inflection and a credible checker correction name different words (rule 3).
+        case conflict
+        /// The term is one edit from a form printed under its base, and the checker's word is another family's (rule 4).
+        case printedNeighbour
+        /// A supported irregular pattern reads the term as another family's form than the checker's word (rule 4).
+        case irregularPattern
+        /// The checker's word is more than one edit away (rule 5).
+        case tooFar
     }
 }
 
-/// **Miss → correction → verified → offered**, the one path to a suggestion (§3). The lookup runner asks it beside the
-/// sense and the memory strip, and `--spelling-report` asks it from the command line — one implementation, so the
-/// instrument measures what the card is offered.
+/// **Miss → candidates → evidence → one offer or none**, the one path to a suggestion (ADR-0054 part B, the owner's
+/// ruling of 2026-10-11). The lookup runner asks it beside the sense and the memory strip, and `--spelling-report` asks
+/// it from the command line — one implementation, so the instrument measures what the card is offered.
 ///
-/// No dictionary text leaves the Mac and no model is asked: the checker is the operating system's, and the
+/// No dictionary text leaves the Mac and no model is asked: the checker is the operating system's, and every
 /// verification is an ordinary lookup through the same client as the reader's own.
 public struct SpellingSuggester: Sendable {
     /// One lookup of a word through the dictionary service — `DictionaryClient.lookup(_:)`'s shape, which throws only
@@ -162,88 +181,146 @@ public struct SpellingSuggester: Sendable {
         self.forms = forms
     }
 
-    /// What `term`'s lookup is offered. Throws only when the caller is cancelled — a newer lookup — and then **before
-    /// a dictionary is asked**: the checker cannot be stopped mid-word, the verification lookup can, and a lookup nobody
-    /// will see must not cost the service one.
-    ///
-    /// Two suggestions, tried in the order `SuggestionPrecedence` decides, the first the dictionaries bear out offered:
-    /// the term's dictionary form — from `lemma`, the one the lookup already worked out (plan-card-refinements WI-3) —
-    /// and the checker's correction. **The dictionary form first, where the term has a defensible one** (the owner's
-    /// decision of 2026-10-09, guarded by D1 of 2026-10-10): the checker's word for a real inflection was wrong on the
-    /// E2E Mac four times in four, and a lemma that is no inflection of the term — *prideed* as *pride* — is no form of
-    /// it (`DictionaryForm`). A typo with none still gets its correction; where neither is borne out, the checker's
-    /// word is reported.
+    /// What `term`'s lookup is offered — `decide`'s offer alone.
     public func offer(
-        for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil
+        for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil, capture: CaptureQuality.Source? = nil
     ) async throws(CancellationError) -> SpellingOffer {
+        try await decide(for: term, outcome: outcome, lemma: lemma, capture: capture).offer
+    }
+
+    /// **One offer chosen by evidence, and silence where credible alternatives remain** — the owner's ruling of
+    /// 2026-10-11, in this order, after the eligibility guards:
+    ///
+    /// 1. **A unique printed relationship wins.** The form table prints the term under one base (or under several, of
+    ///    which the lookup's lemma names one): that base is offered if the dictionaries have it, and neither the
+    ///    spelling rules nor the checker are asked. Printed under several the lemma cannot choose between: nothing.
+    /// 2. **Agreement is one offer.** The term's regular dictionary form, licensed by its entry, and the checker's word
+    ///    the same word — or the same base in the same slot (*gazebos* for *gazeboes*): the base. Sharing a base alone
+    ///    is not agreement (*heavier* is not *heavied*'s slot).
+    /// 3. **A regular form against a credible correction is nothing.** Credible: verified and one edit away, as the
+    ///    checker's word must be to be offered alone. Distance never chooses between the two.
+    /// 4. **A checker's word alone faces the term's morphological explanations first**: the base the lemmatiser proposed,
+    ///    kept even where no rule made it a form, and a supported productive irregular (*-men*). The term one edit from a
+    ///    form printed under that base, or read by the pattern, and the checker's word another family's: nothing.
+    /// 5. **Otherwise the checker's verified word at one edit**, and a regular form with no credible rival.
+    ///
+    /// The same thresholds for every capture source; `capture` is recorded, never weighed. Throws only when the caller
+    /// is cancelled — a newer lookup — and then **before a dictionary is asked**: the checker cannot be stopped mid-word,
+    /// a verification lookup can, and a lookup nobody will see must not cost the service one.
+    public func decide(
+        for term: String, outcome: LookupOutcome?, lemma: Lemma? = nil, capture: CaptureQuality.Source? = nil
+    ) async throws(CancellationError) -> SpellingDecision {
+        var trial = Trial(term: term, capture: capture)
         if case .refused(let refusal) = SpellingEligibility.of(term: term, outcome: outcome) {
-            return .refused(refusal)
+            return trial.decided(.refused(refusal))
         }
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        let form = DictionaryForm.candidate(lemma, for: asked, printed: forms())
-        var unoffered = SpellingOffer.noCorrection
-        // A tentative form borne out, waiting to learn whether the checker's verified word competes with it.
-        var tentative: SpellingSuggestion?
-        for kind in SuggestionPrecedence.of(dictionaryForm: form?.word).order {
-            let word: String
-            let bearsOut: (LookupOutcome) -> Bool
-            switch kind {
-            case .spelling:
-                let corrected = await checker.suggestion(for: asked, language: language())
-                guard let candidate = SpellingCorrection.candidate(corrected, for: asked),
-                      tentative.map({ candidate.compare($0.word, options: .caseInsensitive) != .orderedSame }) ?? true
-                else { continue }
-                word = candidate
-                bearsOut = SpellingCorrection.isVerified
-            case .dictionaryForm:
-                guard let form else { continue }
-                word = form.word
-                bearsOut = form.isSupported(by:)
-            }
-            if Task.isCancelled { throw CancellationError() }
-            guard bearsOut(try await lookUp(word)) else {
-                if kind == .spelling, tentative == nil { unoffered = .unverified(word) }
-                continue
-            }
-            let suggestion = SpellingSuggestion(term: term, word: word, kind: kind,
-                                                tentative: kind == .dictionaryForm && form?.evidence != .printed)
-            // **A printed form outranks the checker; an inferred one only goes first.** The checker is still asked,
-            // and a verified correction that is another word is offered beside it (2026-10-11): *cursting* is offered
-            // *curst*, a guess from spelling, and *cursing*.
-            if let tentative { return .offered(tentative, beside: suggestion) }
-            guard suggestion.isTentative else { return .offered(suggestion) }
-            tentative = suggestion
+        let table = forms()
+
+        // 1. What the dictionaries print.
+        switch PrintedEvidence.of(asked, lemma: lemma, in: table) {
+        case .unique(let base)?:
+            let verified = SpellingCorrection.isVerified(try await ask(base))
+            trial.form = .init(word: base, evidence: .printed, supported: verified, edit: .between(asked, base))
+            return trial.decided(verified ? trial.offered(base, .printed) : .abstained(.printedUnverified))
+        case .ambiguous?:
+            return trial.decided(.abstained(.printedAmbiguous))
+        case nil:
+            break
         }
-        return tentative.map { .offered($0) } ?? unoffered
+
+        // The regular form, looked up first: what the checker's word is weighed against.
+        trial.proposedBase = DictionaryForm.proposedBase(lemma, for: asked)
+        let regular = DictionaryForm.regular(lemma, for: asked, printed: table)
+        if let regular {
+            let supported = regular.isSupported(by: try await ask(regular.word))
+            trial.form = .init(word: regular.word, evidence: regular.evidence, supported: supported,
+                               edit: .between(asked, regular.word))
+        }
+        let corrected = SpellingCorrection.candidate(await checker.suggestion(for: asked, language: language()), for: asked)
+
+        if let regular, case .regular(let slot) = regular.evidence, trial.form?.supported == true {
+            guard let corrected else { return trial.decided(trial.offered(regular.word, .regular(slot))) }
+            // 2. The same word, or the same base in the same slot: one offer, the base.
+            if Lemmatizer.canonical(corrected) == Lemmatizer.canonical(regular.word) {
+                trial.correction = .init(word: corrected, verified: true, edit: .between(asked, corrected))
+                return trial.decided(trial.offered(regular.word, .agreement(slot)))
+            }
+            let verified = SpellingCorrection.isVerified(try await ask(corrected))
+            trial.correction = .init(word: corrected, verified: verified, edit: .between(asked, corrected))
+            if Self.fills(slot, of: regular.word, with: corrected, table: table) {
+                return trial.decided(trial.offered(regular.word, .agreement(slot)))
+            }
+            // 3. A credible rival leaves nothing; an unverified or distant one is no rival.
+            guard verified, trial.correction?.edit.distance == 1 else {
+                return trial.decided(trial.offered(regular.word, .regular(slot)))
+            }
+            return trial.decided(.abstained(.conflict))
+        }
+
+        // The checker's word alone.
+        guard let corrected else { return trial.decided(.abstained(.noCandidate)) }
+        let verified = SpellingCorrection.isVerified(try await ask(corrected))
+        let edit = SpellingEdit.between(asked, corrected)
+        trial.correction = .init(word: corrected, verified: verified, edit: edit)
+        guard verified else { return trial.decided(.abstained(.unverified)) }
+        // 4. A morphological explanation the checker's word is outside of.
+        if let base = trial.proposedBase {
+            let family = MorphologicalFamily(base: base, table: table)
+            if !family.contains(corrected), family.hasPrintedNeighbour(of: asked) {
+                return trial.decided(.abstained(.printedNeighbour))
+            }
+        }
+        for pattern in IrregularPattern.all {
+            guard let base = pattern.base(of: asked),
+                  !MorphologicalFamily(base: base, table: table).contains(corrected) else { continue }
+            if pattern.isSupported(base, by: try await ask(base)) {
+                return trial.decided(.abstained(.irregularPattern))
+            }
+        }
+        // 5. One edit, or nothing.
+        guard edit.distance == 1, let operation = edit.operation else { return trial.decided(.abstained(.tooFar)) }
+        return trial.decided(trial.offered(corrected, .correction(operation)))
     }
-}
 
-/// **Which of a miss's two suggestions is tried first** — a value, so the order is decided where a test can ask it
-/// (plan-card-refinements §6, the owner's decision of 2026-10-09).
-public enum SuggestionPrecedence: Equatable, Sendable {
-    /// The checker's correction, then the dictionary form — only where the term has no dictionary form, so the second
-    /// is never tried: a typo.
-    case spellingFirst
-    /// The dictionary form, then the checker: the checker's word for a rare real inflection was wrong four times in four
-    /// on the E2E Mac (`dalesmen` → *salesmen*, `droughtier` → *doughtier*, `heavied` → *heavier*, `glacises` →
-    /// *glasses*), each verified and offered as "Did you mean".
-    case dictionaryFormFirst
-
-    /// **The dictionary form first wherever there is a defensible one** — `DictionaryForm.candidate`. What the bare
-    /// lemma cost was measured before it was adopted: of the WI-3 spike's 1,221 recoveries, 53 had a verified correction
-    /// from the checker that it displaced, 49 of them OCR-typo controls (`penetrateed` as *penetrate*, not
-    /// *penetrated*). Narrowing it to forms the dictionaries print was refuted on the E2E Mac, whose dictionaries print
-    /// neither `heavied` nor `dalesmen`; D1 (2026-10-10) keeps the broad rule and guards it instead — printed, or regular
-    /// by spelling and licensed by the form's own entry — so `penetrateed` has no form and is offered *penetrated*.
-    public static func of(dictionaryForm: String?) -> SuggestionPrecedence {
-        dictionaryForm == nil ? .spellingFirst : .dictionaryFormFirst
+    /// **The checker's word fills the same slot of the same base** — *gazebos* is *gazebo*'s plural as *gazeboes* is — by
+    /// the table's print or English's regular spelling, either doubling.
+    private static func fills(_ slot: InflectionSlot, of base: String, with word: String, table: FormTable?) -> Bool {
+        let written = Lemmatizer.canonical(word)
+        let printed = (table?.printed(under: base) ?? []).contains {
+            Lemmatizer.canonical($0.form) == written && RegularSpelling.slots(ofPrinted: $0.form, as: $0.partOfSpeech) == [slot]
+        }
+        return printed || ([true, false, nil] as [Bool?]).contains {
+            RegularSpelling.forms(of: base, doubling: $0)[slot]?.contains(written) == true
+        }
     }
 
-    /// The kinds of suggestion, in the order they are tried.
-    public var order: [SpellingSuggestion.Kind] {
-        switch self {
-        case .spellingFirst: [.spelling, .dictionaryForm]
-        case .dictionaryFormFirst: [.dictionaryForm, .spelling]
+    /// One verification lookup — never sent once the caller has been cancelled.
+    private func ask(_ word: String) async throws(CancellationError) -> LookupOutcome {
+        if Task.isCancelled { throw CancellationError() }
+        return try await lookUp(word)
+    }
+
+    /// The decision being assembled.
+    private struct Trial {
+        let term: String
+        let capture: CaptureQuality.Source?
+        var form: SpellingDecision.FormTrial?
+        var proposedBase: String?
+        var correction: SpellingDecision.CorrectionTrial?
+
+        init(term: String, capture: CaptureQuality.Source?) {
+            self.term = term
+            self.capture = capture
+        }
+
+        func offered(_ word: String, _ evidence: SpellingSuggestion.Evidence) -> SpellingOffer {
+            .offered(SpellingSuggestion(term: term, word: word, evidence: evidence))
+        }
+
+        func decided(_ offer: SpellingOffer) -> SpellingDecision {
+            SpellingDecision(term: term, capture: capture, offer: offer, form: form, proposedBase: proposedBase,
+                             correction: correction)
         }
     }
 }

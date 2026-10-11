@@ -284,9 +284,6 @@
     "A backup copy could not be deleted: %@" : {
 
     },
-    "A guess from the spelling" : {
-
-    },
     "A guess, not confirmed" : {
       "comment" : "On a pinned note whose sense the selector proposed"
     },
@@ -558,9 +555,6 @@
 
     },
     "Dictionary" : {
-
-    },
-    "Did you mean “%@”?" : {
 
     },
     "Discard" : {
@@ -845,17 +839,7 @@
     "Look up the selection" : {
 
     },
-    "Look up “%@” as “%@”?" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Look up “%1$@” as “%2$@”?"
-          }
-        }
-      }
-    },
-    "Look up “%@” in your dictionaries" : {
+    "Look up “%@”" : {
 
     },
     "Looked up on ^[%lld day](inflect: true), in ^[%lld place](inflect: true)" : {
@@ -1195,6 +1179,9 @@
     },
     "OpenAI, through your codex program" : {
       "comment" : "Where a question goes: the reader's own Codex CLI, which sends it to OpenAI"
+    },
+    "Opens a new lookup." : {
+
     },
     "Option" : {
       "comment" : "The Option key, in the hover key picker"

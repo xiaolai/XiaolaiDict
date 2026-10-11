@@ -41,12 +41,13 @@ final class LookupRunner {
     private let settle: () async -> Void
     /// Notes each stage this lookup reaches, under its request — `LookupTimeline`.
     private let mark: @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void
-    /// **"Did you mean …?"** — miss → the operating system's checker → verified through this runner's own `client` → the
-    /// card (plan-spelling-suggestion §3). Asked beside the sense and the memory strip, so it holds neither up.
+    /// **"Look up “X”"** — miss → the term's dictionary form and the operating system's checker → verified through this
+    /// runner's own `client` → one offer or none on the card (plan-spelling-suggestion §3; the owner's ruling of
+    /// 2026-10-11). Asked beside the sense and the memory strip, so it holds neither up.
     private let suggester: SpellingSuggester
     /// The suggestion the card on screen was offered, and the reading it was offered under — what a press on its line
     /// looks up. **Only the latest**, because only the card on screen can be pressed.
-    private var offered: (request: Int, selection: Selection, suggestions: [SpellingSuggestion])?
+    private var offered: (request: Int, selection: Selection, suggestion: SpellingSuggestion)?
 
     init(
         client: DictionaryClient, panel: any LookupPanelPresenting,
@@ -266,8 +267,8 @@ final class LookupRunner {
         enum Arrival: Sendable {
             case memory(PriorEncounters)
             case sense(SenseResolution)
-            /// Nil where the offer was cancelled — a newer lookup — and with how long it took.
-            case suggestion(SpellingOffer?, Duration)
+            /// Nil where the decision was cancelled — a newer lookup — and with how long it took.
+            case suggestion(SpellingDecision?, Duration)
         }
         var resolution = SenseResolution(mark: nil, encounter: nil)
         await withTaskGroup(of: Arrival.self) { group in
@@ -287,16 +288,18 @@ final class LookupRunner {
                     sentence: selection.quality.doubts(sentence: selection.sentence) ? nil : selection.sentence,
                     context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
             }
-            // **"Did you mean …?", a third arrival, after the miss is already on the card** — so the card is final-looking
+            // **"Look up “X”", a third arrival, after the miss is already on the card** — so the card is final-looking
             // the moment the dictionaries answer, and the line fills in once the checker and the dictionaries have spoken.
             // Nothing is drawn while it is checked. A child of the group for the reason the sense is one: superseding the
             // lookup cancels it, and the verification lookup a cancelled offer would have sent is never sent.
-            // **And the dictionary form, where the checker has nothing** (plan-card-refinements WI-3): the lemma this
-            // lookup already settled, offered as a line and verified first — never looked up in the reader's place.
+            // **And the dictionary form** (plan-card-refinements WI-3): the lemma this lookup already settled, weighed
+            // against the checker's word — one offer or none, never looked up in the reader's place. The capture's source
+            // is recorded with the decision and weighed by nothing: recognised text gets no larger edit budget.
             group.addTask { [suggester, lemma] in
                 let started = ContinuousClock.now
-                let offer = try? await suggester.offer(for: selection.text, outcome: outcome, lemma: lemma)
-                return .suggestion(offer, .now - started)
+                let decision = try? await suggester.decide(for: selection.text, outcome: outcome, lemma: lemma,
+                                                           capture: selection.quality.source)
+                return .suggestion(decision, .now - started)
             }
             for await arrival in group {
                 switch arrival {
@@ -312,14 +315,13 @@ final class LookupRunner {
                     Self.apply(answered, to: &presentation, phrase: resolved.phrase,
                                studyDictionary: effectivePrimary)
                     panel.update(.lookup(presentation), for: ticket)
-                case .suggestion(let offer, let took):
-                    logSpelling(offer, took: took)
+                case .suggestion(let decision, let took):
+                    logSpelling(decision, took: took)
                     // **Only on the card it was made for.** A hover's claim supersedes without cancelling, so the offer
                     // can arrive for a card no longer shown: it is neither drawn nor kept to be followed.
-                    guard let offer, let suggestion = offer.suggestion, panel.isCurrent(ticket) else { continue }
+                    guard let suggestion = decision?.offer.suggestion, panel.isCurrent(ticket) else { continue }
                     presentation.suggestion = suggestion
-                    presentation.besideSuggestion = offer.suggestions.dropFirst().first
-                    offered = (ticket.number, selection, offer.suggestions)
+                    offered = (ticket.number, selection, suggestion)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -340,7 +342,7 @@ final class LookupRunner {
             phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: resolved.phrase))
     }
 
-    /// **What a press on the card's "Did you mean …?" looks up**: the offered word, in the sentence and the place the miss
+    /// **What a press on the card's "Look up “X”" looks up**: the offered word, in the sentence and the place the miss
     /// was read in, as a reading of its own — the miss stays recorded as the miss it was. Nil where the card `request`
     /// was not offered `suggestion`, so a press can only follow the line it pressed.
     ///
@@ -351,7 +353,7 @@ final class LookupRunner {
     /// **No range.** The captured one is where the misspelling sits, and nothing may mark the corrected word there; the
     /// app launches it as a word in no position of the sentence (`TermPlacement.notInSentence`).
     func followUp(_ suggestion: SpellingSuggestion, from request: Int) -> Selection? {
-        guard let offered, offered.request == request, offered.suggestions.contains(suggestion),
+        guard let offered, offered.request == request, offered.suggestion == suggestion,
               panel.isCurrent(PanelTicket(number: request)) else { return nil }
         self.offered = nil
         let read = offered.selection
@@ -359,17 +361,16 @@ final class LookupRunner {
                          quality: read.quality, place: read.place)
     }
 
-    /// One line about a miss's suggestion — **its kind and how long it took, never a word**: the term and the
-    /// correction are the reader's reading. Silent for a word that was found, which is nearly every lookup.
-    private func logSpelling(_ offer: SpellingOffer?, took: Duration) {
+    /// One line about a miss's suggestion — **the rule that decided it and how long it took, never a word**: the term and
+    /// the candidates are the reader's reading. Silent for a word that was found, which is nearly every lookup.
+    private func logSpelling(_ decision: SpellingDecision?, took: Duration) {
         let kind: String
-        switch offer {
+        switch decision?.offer {
         case nil: kind = "cancelled"
-        case .offered: kind = "offered"
-        case .noCorrection: kind = "the checker had no correction"
-        case .unverified: kind = "no dictionary has the correction"
-        case .refused(.notAMiss): return
-        case .refused(let refusal): kind = "not asked (\(refusal.rawValue))"
+        case .offered?: kind = "offered (\(decision?.rule ?? ""))"
+        case .abstained(let why)?: kind = "nothing offered (\(why.rawValue))"
+        case .refused(.notAMiss)?: return
+        case .refused(let refusal)?: kind = "not asked (\(refusal.rawValue))"
         }
         log.notice("spelling: \(kind, privacy: .public) after \(Int(took.milliseconds), privacy: .public) ms")
     }

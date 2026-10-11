@@ -207,7 +207,7 @@ final class LookupPanelController: LookupPanelPresenting {
     var onCollectPhrase: (@MainActor (PhraseCollection, Int) -> Bool)?
     /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
     var onOpenDictionarySettings: (@MainActor () -> Void)?
-    /// The reader pressed "Did you mean …?" on the card `Int` drew (plan-spelling-suggestion §3). Set by the app, which
+    /// The reader pressed "Look up “X”" on the card `Int` drew (plan-spelling-suggestion §3). Set by the app, which
     /// starts lookups — under the card's request, for the reason the study hooks carry one: the runner kept the
     /// suggestion under it, and a press filed under another card follows nothing.
     var onFollowSuggestion: (@MainActor (SpellingSuggestion, Int) -> Void)?
@@ -676,7 +676,7 @@ private struct LookupCardWiring: ViewModifier {
                 return collect(phrase, request)
             }
             .environment(\.phraseCollectStatuses, request.flatMap { recorder?.phraseStates[$0] } ?? [:])
-            // **"Did you mean …?", under this card's request.** Unwired, it is loud: a press that reaches nothing is a
+            // **"Look up “X”", under this card's request.** Unwired, it is loud: a press that reaches nothing is a
             // broken switch.
             .environment(\.followSuggestion) { [controller] suggestion in
                 guard let request, let follow = controller.onFollowSuggestion else {

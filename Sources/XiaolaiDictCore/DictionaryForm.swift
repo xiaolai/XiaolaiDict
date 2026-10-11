@@ -2,8 +2,7 @@ import DictionaryModel
 import Foundation
 
 /// **The term's dictionary form worth offering, and what makes the offer defensible** (plan-card-refinements WI-3; the
-/// guards are D1 of 2026-10-10, ADR-0054). An offer, never a substitution: the card draws "Look up “X” as “Y”?" and the
-/// reader decides.
+/// guards are D1 of 2026-10-10, ADR-0054). An offer, never a substitution: the card draws "Look up “Y”" and the reader decides.
 ///
 /// **A lemma the dictionaries have is not a relationship to the term.** They have *pride*, and *prideed* is still none
 /// of its forms. On the WI-3 spike's 1,221 recoveries the bare lemma was offered for 55 that the labels called wrong,
@@ -12,13 +11,15 @@ import Foundation
 /// noun read as a *-y* adjective (*hedgiest*), and a name or abbreviation read as an inflection (*Frances*, *Hans*,
 /// *Jos*, *hrses*). So a form is a candidate only where one of two things holds, decided with no model:
 ///
-/// - **printed** — the reader's own dictionaries print the term as an inflection of the form (`FormTable`, ADR-0051);
+/// - **printed** — the reader's own dictionaries print the term as an inflection of the form (`FormTable`, ADR-0051),
+///   decided by `PrintedEvidence` before any rule here is asked;
 /// - **regular** — the term is the form's regular inflection by English spelling (`RegularSpelling`, stricter than
 ///   `RegularInflection`, whose concatenations accept *prideed*), the form prints nothing in that slot to say
 ///   otherwise, and the term is written in lowercase with a vowel in its form — and, once the form is looked up, an
 ///   entry headed by it in lowercase has a part of speech that inflects so (`isSupported(by:)`).
 ///
-/// Anything else is no candidate, and the checker's verified correction is offered as if the term had no form.
+/// Anything else is no candidate. A regular form is weighed against the checker's word before it is offered
+/// (`SpellingSuggester.decide`, the owner's ruling of 2026-10-11): a credible rival leaves the reader nothing.
 public struct DictionaryForm: Equatable, Sendable {
     /// The form, in the lemmatiser's spelling: what is looked up, and what the card offers.
     public let word: String
@@ -37,20 +38,26 @@ public struct DictionaryForm: Equatable, Sendable {
         self.evidence = evidence
     }
 
-    /// The form worth asking the dictionaries about, or nil. `lemma` must be one the lemmatiser stands by — the
-    /// tagger's, a rule's or the usual reading of an irregular, never one it called `ambiguous` or none at all — and
-    /// not the term again up to case; `printed` is the reader's form table, nil where none has been read.
-    public static func candidate(_ lemma: Lemma?, for term: String, printed table: FormTable?) -> DictionaryForm? {
+    /// **The base the lemmatiser proposes**, whether or not any rule makes it the term's form — kept so that a checker's
+    /// word competing with it can be weighed (the owner's ruling of 2026-10-11, rule 4). One the lemmatiser stands by —
+    /// the tagger's, a rule's or the usual reading of an irregular, never `ambiguous` or none — and not the term again.
+    public static func proposedBase(_ lemma: Lemma?, for term: String) -> String? {
         guard let lemma, lemma.basis <= .likely else { return nil }
         let form = lemma.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !form.isEmpty, form.compare(asked, options: .caseInsensitive) != .orderedSame else { return nil }
+        return form
+    }
+
+    /// **The term's regular dictionary form**, or nil. `lemma` must be a proposed base (`proposedBase`); `printed` is the
+    /// reader's form table, nil where none has been read. **What the dictionaries print outranks every rule here**: a
+    /// term the table prints is never given a form by spelling — its printed base is `PrintedEvidence`'s to decide, and
+    /// *judies*, printed under *judy*, is never *judie*'s plural whatever the spelling says.
+    public static func regular(_ lemma: Lemma?, for term: String, printed table: FormTable?) -> DictionaryForm? {
+        guard let form = proposedBase(lemma, for: term) else { return nil }
+        let asked = term.trimmingCharacters(in: .whitespacesAndNewlines)
         let written = Lemmatizer.canonical(asked)
-        // **What the dictionaries print outranks every rule below.** A term they print is offered only a form they
-        // print it under — *judies* is printed under *judy*, so *judie* is not its form whatever the spelling says.
-        if let printed = table?.entry(for: written) {
-            return printed.readings.contains { $0.lemma == form } ? DictionaryForm(word: form, evidence: .printed) : nil
-        }
+        if table?.entry(for: written) != nil { return nil }
         // **A capital anywhere is a name, an abbreviation or a brand** — *Frances*, *Hans*, *HRSes* — and none is a
         // regular inflection; ADR-0051's rule for the same table. A sentence's first word loses a rare inflection to
         // this, which is the cheaper error: the checker is still asked.

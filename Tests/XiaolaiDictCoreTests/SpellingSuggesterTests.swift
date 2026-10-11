@@ -80,8 +80,9 @@ struct SpellingSuggesterTests {
     @Test func aVerifiedCorrectionIsOffered() async throws {
         let checker = Checker(["teh": "the"]), dictionaries = Dictionaries(["the"])
         let offer = try await suggester(checker, dictionaries).offer(for: "teh", outcome: Self.miss)
-        #expect(offer == .offered(SpellingSuggestion(term: "teh", word: "the")))
-        #expect(offer.suggestion == SpellingSuggestion(term: "teh", word: "the"))
+        let the = SpellingSuggestion(term: "teh", word: "the", evidence: .correction(.transposition))
+        #expect(offer == .offered(the))
+        #expect(offer.suggestion == the)
         #expect(checker.questions == ["teh"])
         #expect(checker.askedIn == ["en-GB"], "the checker was not asked in the reader's English")
         #expect(dictionaries.questions == ["the"])
@@ -92,7 +93,7 @@ struct SpellingSuggesterTests {
     @Test func aCorrectionNoDictionaryHasIsNotOffered() async throws {
         let checker = Checker(["mochii": "mochi"]), dictionaries = Dictionaries(["the"])
         let offer = try await suggester(checker, dictionaries).offer(for: "mochii", outcome: Self.miss)
-        #expect(offer == .unverified("mochi"))
+        #expect(offer == .abstained(.unverified))
         #expect(offer.suggestion == nil)
         #expect(dictionaries.questions == ["mochi"], "the dictionaries were not asked before the offer was refused")
     }
@@ -101,9 +102,9 @@ struct SpellingSuggesterTests {
     @Test func noCorrectionAsksTheDictionariesNothing() async throws {
         let checker = Checker(["teh": "TEH"]), dictionaries = Dictionaries(["teh", "TEH"])
         #expect(try await suggester(checker, dictionaries).offer(for: "teh", outcome: Self.miss)
-                == .noCorrection)
+                == .abstained(.noCandidate))
         #expect(try await suggester(checker, dictionaries).offer(for: "ambages", outcome: Self.miss)
-                == .noCorrection)
+                == .abstained(.noCandidate))
         #expect(checker.questions == ["teh", "ambages"])
         #expect(dictionaries.questions.isEmpty)
     }

@@ -3,14 +3,14 @@ import Testing
 import XiaolaiDictBase
 import XiaolaiDictCore
 
-/// **"Look up “ran” as “run”?" — the dictionary form offered as a tap under a miss** (plan-card-refinements WI-3, the
+/// **"Look up “run”" — the dictionary form offered as a tap under a miss** (plan-card-refinements WI-3, the
 /// owner's D3: offered, never substituted).
 ///
 /// Measured first (§6): the dictionaries already answer most inflections, and of the forms that still miss, the app's
 /// own lemma recovered 1,221 of 6,228, wrong in at most 2.69% of the inflected ones at 95% — too many to swap in
 /// silently, and a line the reader may ignore. WI-3 put the spelling line first; the owner reversed that on
-/// 2026-10-09, after the checker's word for four real inflections was wrong on the E2E Mac — see
-/// `SuggestionPrecedenceTests`.
+/// 2026-10-09, after the checker's word for four real inflections was wrong on the E2E Mac, and the ruling of
+/// 2026-10-11 made it one offer chosen by evidence — see `SpellingArbitrationTests`.
 struct DictionaryFormOfferTests {
     private typealias Checker = SpellingSuggesterTests.Checker
     private typealias Dictionaries = SpellingSuggesterTests.Dictionaries
@@ -27,21 +27,18 @@ struct DictionaryFormOfferTests {
     @Test func aVerifiedDictionaryFormIsOfferedWhereTheCheckerHasNothing() async throws {
         let offer = try await suggester(Checker([:]), Dictionaries(entries: ["luncheon": [Headed("luncheon", ["noun"])]]))
             .offer(for: "luncheoning", outcome: Self.miss, lemma: Lemma(text: "luncheon", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", kind: .dictionaryForm, tentative: true)))
+        #expect(offer == .offered(SpellingSuggestion(term: "luncheoning", word: "luncheon", evidence: .regular(.ing))))
     }
 
-    /// **A defensible dictionary form outranks the spelling line** (the owner's decision, 2026-10-09, reversing WI-3's
-    /// order): both verify here, the form is offered, and the checker is not asked. `DictionaryFormPrecedenceTests`
-    /// holds the four words that decided it; a typo with no dictionary form keeps its correction.
-    @Test func aVerifiedDictionaryFormComesBeforeTheSpellingLine() async throws {
+    /// **A regular form and the checker's word for the same slot of the same base are one offer** (the owner's ruling of
+    /// 2026-10-11): *gazeboes* is printed nowhere here, the checker says *gazebos*, and both are *gazebo*'s plural — so
+    /// *gazebo* is offered, once.
+    @Test func aRegularFormAndTheCheckersPluralOfItAgree() async throws {
         let dictionaries = Dictionaries(entries: ["gazebo": [Headed("gazebo", ["noun"])], "gazebos": [Headed("gazebos")]])
         let checker = Checker(["gazeboes": "gazebos"])
         let offer = try await suggester(checker, dictionaries)
             .offer(for: "gazeboes", outcome: Self.miss, lemma: Lemma(text: "gazebo", basis: .tagger))
-        // *gazeboes* is printed nowhere here, so the form is a guess from spelling: the checker is still asked, and its
-        // verified *gazebos* is offered **beside** it, second (2026-10-11) — the form still first.
-        #expect(offer == .offered(SpellingSuggestion(term: "gazeboes", word: "gazebo", kind: .dictionaryForm, tentative: true),
-                                  beside: SpellingSuggestion(term: "gazeboes", word: "gazebos")))
+        #expect(offer == .offered(SpellingSuggestion(term: "gazeboes", word: "gazebo", evidence: .agreement(.s))))
         #expect(dictionaries.questions == ["gazebo", "gazebos"])
         #expect(checker.questions == ["gazeboes"])
     }
@@ -55,7 +52,7 @@ struct DictionaryFormOfferTests {
         let checker = Checker(["concreti": "concrete"])
         let offer = try await suggester(checker, dictionaries)
             .offer(for: "concreti", outcome: Self.miss, lemma: Lemma(text: "concret", basis: .tagger))
-        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concrete")))
+        #expect(offer == .offered(SpellingSuggestion(term: "concreti", word: "concrete", evidence: .correction(.substitution))))
         #expect(dictionaries.questions == ["concrete"])
     }
 
@@ -81,7 +78,7 @@ struct DictionaryFormOfferTests {
         let dictionaries = Dictionaries(entries: ["see": [Headed("see", ["verb"])]])
         let offer = try await suggester(Checker([:]), dictionaries, printed: printed)
             .offer(for: "sawz", outcome: Self.miss, lemma: Lemma(text: "see", basis: .likely))
-        #expect(offer.suggestion?.kind == .dictionaryForm)
+        #expect(offer == .offered(SpellingSuggestion(term: "sawz", word: "see", evidence: .printed)))
         let unprinted = try await suggester(Checker([:]), dictionaries)
             .offer(for: "sawz", outcome: Self.miss, lemma: Lemma(text: "see", basis: .likely))
         #expect(unprinted.suggestion == nil)
@@ -115,9 +112,5 @@ struct DictionaryFormOfferTests {
             #expect(offer == .refused(.notAMiss))
             #expect(dictionaries.questions.isEmpty)
         }
-    }
-
-    @Test func aSpellingSuggestionIsItsOwnKindByDefault() {
-        #expect(SpellingSuggestion(term: "teh", word: "the").kind == .spelling)
     }
 }

@@ -3,48 +3,42 @@ import XiaolaiDictBase
 import XiaolaiDictCore
 import os
 
-/// **"Did you mean “receive”?" — under a miss, the way out for a typo or a misread** (plan-spelling-suggestion §3).
+/// **"Look up “receive”" — under a miss, the one way out for a typo, a misread or an inflection the dictionaries do not
+/// answer** (plan-spelling-suggestion §3; the owner's ruling of 2026-10-11, ADR-0054 part B).
 ///
-/// A second line, never a replacement: the miss above it is the answer and stays one. Pressing it looks the word up as
-/// a lookup of its own; nothing presses it for the reader — mark, never jump.
+/// A button under the miss, never a replacement: the miss above it is the answer and stays one until the reader presses.
+/// Pressing it looks the word up as a lookup of its own; nothing presses it for the reader — mark, never jump.
+///
+/// **The same words for every kind of offer** — a printed form, a regular one, the checker's correction. The words say
+/// what the press does and claim nothing about the reader's spelling or the word's relation to it: "Did you mean" calls
+/// the reader wrong, and a label naming the evidence ("A guess from the spelling") was rejected. Why the word is offered
+/// stays in the model and the instrument (`SpellingSuggestion.Evidence`, `--spelling-report`).
 ///
 /// **A button that looks like one** — bordered and small, as the card's other in-content controls are ("Yes, That's
 /// It", "Choose Another Dictionary…"): the card is paper, and tinted text with no edge said nothing about being
-/// pressable (2026-10-01).
+/// pressable (2026-10-01). Its words wrap at a large text size rather than run past the card.
 struct SpellingSuggestionLine: View {
     @Environment(\.followSuggestion) private var follow
-    @Environment(\.scale) private var scale
     let suggestion: SpellingSuggestion
 
     var body: some View {
-        // **A form inferred from spelling alone says so, quietly** (ADR-0054 part B, 2026-10-11): what the dictionaries
-        // print reads as a plain offer; a guess from English spelling carries a secondary word after the button —
-        // a caveat, never an alarm, and never a reason to press it for the reader.
-        HStack(spacing: scale.space.inline) {
-            button
-            if suggestion.isTentative {
-                Text("A guess from the spelling")
-                    .font(.system(size: scale.text.small))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var button: some View {
         Button { follow(suggestion) } label: {
-            // **What the word is to the reader's**: a typo's correction, or the form the dictionaries file it under
-            // (plan-card-refinements WI-3) — "did you mean" would call a correct inflection a mistake.
-            switch suggestion.kind {
-            case .spelling: Text("Did you mean “\(suggestion.word)”?")
-            case .dictionaryForm: Text("Look up “\(suggestion.term)” as “\(suggestion.word)”?")
-            }
+            // One complete sentence with its placeholder, so a translation may put the word where its language does.
+            Text("Look up “\(suggestion.word)”")
+                .lineLimit(nil)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        // What the press does, which the name alone does not say — and not the name again, which VoiceOver would read
-        // twice.
-        .help(Text("Look up “\(suggestion.word)” in your dictionaries"))
+        // **On the button as well as its words**: a bordered button keeps one line however narrow it is offered, so its
+        // words were cut rather than wrapped until the button itself was let grow down (measured 2026-10-11, 306 pt of
+        // words held to 120 pt: 20 pt tall without this, 62 pt with it).
+        .fixedSize(horizontal: false, vertical: true)
+        // The name is the label; the hint says what pressing does, which the name alone does not — a new lookup, the
+        // miss above it left as it is.
+        .help(Text("Opens a new lookup."))
+        .accessibilityHint(Text("Opens a new lookup."))
     }
 }
 
@@ -60,8 +54,8 @@ private struct FollowSuggestionKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// **The reader pressed "Did you mean …?"** — look the word up as a new lookup, filed by the panel under the card's
-    /// own request.
+    /// **The reader pressed "Look up “X”"** — look the word up as a new lookup, filed by the panel under the card's own
+    /// request.
     public var followSuggestion: @MainActor (SpellingSuggestion) -> Void {
         get { self[FollowSuggestionKey.self] }
         set { self[FollowSuggestionKey.self] = newValue }

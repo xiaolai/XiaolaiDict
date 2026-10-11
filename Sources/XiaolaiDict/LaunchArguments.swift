@@ -76,7 +76,7 @@ enum LaunchMode: Equatable {
     /// path, a URL or a key. Compiled out of a release (ADR-0053).
     case providerStatus
 
-    /// `--spelling-report TERM…`: what each term's miss would be offered — "Did you mean …?" — through the
+    /// `--spelling-report TERM…`: what each term's miss would be offered — "Look up “X”" — through the
     /// checker and the dictionaries the card is offered it by, and how long each took. Never dictionary
     /// text. Compiled out of a release (plan-spelling-suggestion).
     case spellingReport(terms: [String])

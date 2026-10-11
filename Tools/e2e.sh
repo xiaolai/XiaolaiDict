@@ -1132,7 +1132,8 @@ end_process() {
 # stage looks up (plan-spelling-suggestion). Asking for the first alone passed a TextEdit holding an **older copy** of
 # the fixture — `open` brings a document already open forward and never reads it again — and `select-text` then found
 # no typo to select, on the E2E Mac, the first run after the fixture gained its line.
-fixture_sentences=("The meeting ended after we stopped meeting at noon." "We will recieve the parcel tomorrow.")
+fixture_sentences=("The meeting ended after we stopped meeting at noon." "We will recieve the parcel tomorrow."
+                   "The clouds heavied over the hill.")
 fixture_health() {
     local health="" state sentence
     for _ in $(seq 1 20); do
@@ -1434,7 +1435,9 @@ else
     flunk "lookup: $lookup"
 fi
 
-# 2b. **"Did you mean …?" (plan-spelling-suggestion), through the instrument and then as the reader meets it.**
+# 2b. **"Look up “X”" under a miss (plan-spelling-suggestion; the owner's ruling of 2026-10-11, ADR-0054 part B), through
+#     the instrument and then as the reader meets it.** One offer chosen by evidence, or none where credible alternatives
+#     remain — never two side by side.
 #
 #     The instrument needs no grant: the fixture's typo, through this bundle's spell checker and dictionary service, is
 #     offered its correction — the same `SpellingSuggester` the card asks. The rare real word is reported, not asserted:
@@ -1462,75 +1465,76 @@ for raw in sys.argv[1].splitlines():
         continue
     lines[line.get("term")] = line
 typo = lines.get(typo_term) or {}
-say(typo.get("outcome") == "notFound" and typo.get("offer") == "offered" and typo.get("correction") == "receive",
-    f"lookup: --spelling-report offers “receive” for the fixture typo “recieve”, {typo.get('suggestionMilliseconds')} ms "
-    f"after its {typo.get('lookupMilliseconds')} ms miss",
-    f"lookup: --spelling-report did not offer “receive” for “recieve”: {typo or sys.argv[1][:300]}")
-# **A missed inflection is offered its dictionary form** (plan-card-refinements WI-3): `gazeboes` is a plural the
-# dictionaries print and do not answer, and its lemma, from the reader's own form table, is offered — not substituted.
+say(typo.get("outcome") == "notFound" and typo.get("offer") == "offered" and typo.get("suggestion") == "receive"
+    and typo.get("rule") == "correction" and typo.get("correctionEdit") == "transposition",
+    f"lookup: --spelling-report offers “receive” for the fixture typo “recieve”, one transposition, "
+    f"{typo.get('suggestionMilliseconds')} ms after its {typo.get('lookupMilliseconds')} ms miss",
+    f"lookup: --spelling-report did not offer “receive” for “recieve” as one transposition: {typo or sys.argv[1][:300]}")
+# **Every line is one offer or none, and says which rule decided** (the owner's ruling of 2026-10-11): an offered line
+# names its one word and an offering rule; an abstention names no word. A step in which no line was read measured nothing.
+offering = {"printed", "regular", "agreement", "correction"}
+malformed = [t for t, got in lines.items()
+             if (got.get("offer") == "offered") != (bool(got.get("suggestion")) and got.get("rule") in offering)]
+rules = ", ".join(sorted(str(t) + "=" + str(got.get("rule")) for t, got in lines.items()))
+say(bool(lines) and not malformed,
+    f"lookup: {len(lines)} lines, each one offer or none with its deciding rule ({rules})",
+    f"lookup: lines whose offer and rule disagree: {malformed or 'no line at all'}")
+# **A missed inflection is offered its dictionary form, or nothing** (plan-card-refinements WI-3): `gazeboes` is
+# *gazebo*'s plural, printed or regular. Regular, it is offered only where the checker's word is the same noun's plural
+# (agreement) or the checker names no credible rival; against a rival from another family, nothing.
 form_term = "gazeboes"
 form = lines.get(form_term) or {}
-say(form.get("outcome") == "notFound" and form.get("offer") == "offered" and form.get("correction") == "gazebo"
-    and form.get("correctionKind") == "dictionaryForm",
-    "lookup: --spelling-report offers the dictionary form “gazebo” for the missed inflection “gazeboes”",
-    f"lookup: --spelling-report did not offer “gazebo” as the dictionary form of “gazeboes”: {form or sys.argv[1][:300]}")
-# **A verified dictionary form outranks the checker** (plan-card-refinements §6, the owner's decision of 2026-10-09): on
-# this Mac the checker made these four real inflections into salesmen, doughtier, heavier and glasses, and each verified.
-# Where this Mac's dictionaries give the term a dictionary form it must be the one offered; where they give none the
-# report says so (`dictionaryForm` absent) and that is a note — measured 2026-10-09, no dictionary in an English reader's
-# form table here lists dalesman. A step in which none of the four has a form measured nothing, and fails.
-with_form = 0
-for inflected_term, inflected_form in (("dalesmen", "dalesman"), ("droughtier", "droughty"), ("heavied", "heavy"),
-                                       ("glacises", "glacis")):
+gazebo_offered = form.get("offer") == "offered" and form.get("suggestion") == "gazebo" \
+    and form.get("rule") in ("printed", "agreement", "regular")
+gazebo_silent = form.get("offer") == "abstained" and form.get("rule") == "conflict"
+say(form.get("outcome") == "notFound" and (gazebo_offered or gazebo_silent),
+    f"lookup: --spelling-report decides “gazeboes” by {form.get('rule')}: "
+    f"{'offers “gazebo”' if gazebo_offered else 'nothing, against the checker’s “' + str(form.get('correction')) + '”'}",
+    f"lookup: --spelling-report offered “gazeboes” neither “gazebo” nor a reasoned nothing: {form or sys.argv[1][:300]}")
+# **What the checker made of four real inflections on this Mac is never offered** (plan-card-refinements §6): it turned
+# them into salesmen, doughtier, heavier and glasses, and each verified. Printed, the form is offered and the checker is
+# not asked; unprinted, the checker's word is a rival and nothing is offered. A step in which none was decided measured
+# nothing, and fails.
+decided = 0
+for inflected_term, inflected_form, wrong in (("dalesmen", "dalesman", "salesmen"), ("droughtier", "droughty", "doughtier"),
+                                              ("heavied", "heavy", "heavier"), ("glacises", "glacis", "glasses")):
     got = lines.get(inflected_term) or {}
-    if got and got.get("outcome") == "notFound" and "dictionaryForm" not in got:
-        print(f"NOTE\tlookup: this Mac’s dictionaries give “{inflected_term}” no dictionary form, so the checker’s "
-              f"“{got.get('correction') or 'nothing'}” stands")
+    if not got:
         continue
-    with_form += 1
-    say(got.get("outcome") == "notFound" and got.get("dictionaryForm") == inflected_form
-        and got.get("offer") == "offered" and got.get("correction") == inflected_form
-        and got.get("correctionKind") == "dictionaryForm",
-        f"lookup: --spelling-report offers the dictionary form “{inflected_form}” for “{inflected_term}”, not the "
-        f"checker’s word",
-        f"lookup: --spelling-report did not offer the dictionary form “{inflected_form}” for “{inflected_term}”: "
-        f"{got or sys.argv[1][:300]}")
-if with_form == 0:
-    say(False, "", "lookup: none of the four inflections had a dictionary form here, so the order was not measured")
-# **The guards (D1, 2026-10-10, ADR-0054) must keep “heavied” here**, where NOAD prints no verb of “heavy”: it is kept as
-# the regular past of an adjective whose entry this Mac has, and the compromise fails if it is not — so this is a check,
-# never the note above.
+    decided += 1
+    printed = got.get("rule") == "printed" and got.get("suggestion") == inflected_form
+    say(got.get("outcome") == "notFound" and got.get("suggestion") != wrong
+        and (printed or got.get("offer") == "abstained" or got.get("suggestion") == inflected_form),
+        f"lookup: “{inflected_term}” is offered {('“' + inflected_form + '”, printed') if printed else 'nothing'} "
+        f"({got.get('rule')}), never the checker’s “{wrong}”",
+        f"lookup: “{inflected_term}” was offered the wrong word or no reasoned decision: {got}")
+if decided == 0:
+    say(False, "", "lookup: none of the four inflections was reported, so the order was not measured")
+# **Where nothing prints “heavied”, its regular “heavy” meets the checker’s “heavier” one edit away**, and the card is
+# offered nothing: two credible readings, never both (the owner's ruling of 2026-10-11). Printed, “heavy” stands alone.
 kept_term = "heavied"  # a term, read back by name, not a report key
 heavied = lines.get(kept_term) or {}
-say(heavied.get("outcome") == "notFound" and heavied.get("dictionaryForm") == "heavy"
-    and heavied.get("correction") == "heavy" and heavied.get("correctionKind") == "dictionaryForm",
-    f"lookup: the guards keep “heavy” for “heavied” on this Mac’s dictionaries "
-    f"({heavied.get('dictionaryFormEvidence')})",
-    f"lookup: the guards lost “heavy” for “heavied”: {heavied or sys.argv[1][:300]}")
-# **A form inferred from spelling alone is offered as a guess, a printed one is not** (ADR-0054 part B, 2026-10-11): the
-# card labels a regular form tentative, and the report says so on exactly the lines whose evidence is regular. A step
-# with no dictionary-form offer measured nothing, and fails.
-forms_offered = [got for got in lines.values()
-                 if got.get("offer") == "offered" and got.get("correctionKind") == "dictionaryForm"]
-mislabelled = [got.get("term") for got in forms_offered
-               if (got.get("correctionTentative") is True) != (got.get("dictionaryFormEvidence") == "regular")]
-say(bool(forms_offered) and not mislabelled,
-    f"lookup: {len(forms_offered)} dictionary forms offered, each tentative exactly where only spelling supports it "
-    f"({sum(1 for got in forms_offered if got.get('correctionTentative'))} tentative)",
-    f"lookup: tentative labels disagree with the evidence for {mislabelled or 'no offer at all'}")
-# **And refuse what they exist to refuse**: “prideed” is no form of “pride” and “Frances” no plural of “France”, so no
-# dictionary form is tried for either, and whatever the checker offers stands.
+say(heavied.get("outcome") == "notFound"
+    and ((heavied.get("rule") == "printed" and heavied.get("suggestion") == "heavy")
+         or (heavied.get("rule") == "conflict" and heavied.get("dictionaryForm") == "heavy"
+             and heavied.get("correctionDistance") == 1 and "suggestion" not in heavied)
+         or (heavied.get("rule") == "regular" and heavied.get("suggestion") == "heavy")),
+    f"lookup: “heavied” is decided by {heavied.get('rule')} on this Mac’s dictionaries "
+    f"(form {heavied.get('dictionaryForm')} {heavied.get('dictionaryFormEvidence')}, checker {heavied.get('correction')})",
+    f"lookup: “heavied” was not decided by print, agreement-free regularity or conflict: {heavied or sys.argv[1][:300]}")
+# **And refuse what the guards exist to refuse**: “prideed” is no form of “pride” and “Frances” no plural of “France”,
+# so no dictionary form is tried for either, and neither base is offered.
 for rejected_term, rejected_form in (("prideed", "pride"), ("Frances", "france")):
     got = lines.get(rejected_term)
-    say(got is not None and got.get("dictionaryForm") is None and got.get("correction") != rejected_form,
-        f"lookup: the guards offer “{rejected_term}” no dictionary form; the checker’s "
-        f"“{(got or {}).get('correction') or 'nothing'}” stands",
+    say(got is not None and got.get("dictionaryForm") is None and got.get("suggestion") != rejected_form,
+        f"lookup: the guards offer “{rejected_term}” no dictionary form; the decision is "
+        f"{(got or {}).get('rule')} “{(got or {}).get('suggestion') or 'nothing'}”",
         f"lookup: the guards let “{rejected_term}” be offered “{rejected_form}”: {got or sys.argv[1][:300]}")
 rare = lines.get(rare_term)
 if rare is None:
     say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")
 else:
-    print(f"NOTE\tlookup: this Mac’s checker on the rare real word “ambages”: {rare.get('offer')} "
+    print(f"NOTE\tlookup: this Mac’s checker on the rare real word “ambages”: {rare.get('rule')} "
           f"{rare.get('correction') or ''}".rstrip())
 print("DONE")
 PYSPELLING
@@ -1538,35 +1542,107 @@ PYSPELLING
 consume_verdicts lookup "$(spelling_verdicts "$spelling")"
 
 #     **And as the reader meets it**: the typo selected in the fixture and ⌃⌥D pressed — the miss card first, then the
-#     line under it, then the line pressed and the corrected word's card in the same panel, and both readings in the
-#     ledger. Timed by polling from the keypress, so each figure is within a poll of the truth: the line's own time is
-#     the instrument's above.
-#     spelling_state <panel report>: `miss`, `line` and `card`, each where the lookup panel shows it, **read exactly**
-#     (audit, 2026-10-09): the typo's own miss, the control named for the suggestion, and the card headed by the corrected
-#     word itself — a definition or a sentence that holds the word, or a heading like "receiver", is not its card — and
-#     the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not there. And
-#     `exit`, the "Dictionaries…" control every answered card carries (plan-card-refinements WI-1), read on the miss card
-#     and on the corrected word's card.
+#     one button under it, then the button pressed and the corrected word's card in the same panel, and both readings in
+#     the ledger. Timed by polling from the keypress, so each figure is within a poll of the truth: the button's own time
+#     is the instrument's above.
+#     spelling_state <panel report> [term] [word]: `miss`, `line`, `offers=N` and `card`, each where the lookup panel shows
+#     it, **read exactly** (audit, 2026-10-09): the term's own miss, the control named for the offered word, how many
+#     "Look up “…”" controls the card holds — one or none, never two (the owner's ruling of 2026-10-11) — and the card
+#     headed by the word itself — a definition or a sentence that holds the word, or a heading like "receiver", is not its
+#     card — and the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not
+#     there. And `exit`, the "Dictionaries…" control every answered card carries (plan-card-refinements WI-1), read on the
+#     miss card and on the corrected word's card. The term and word default to the fixture's typo and its correction.
 #     `TheSpellingStepReadsThePanelExactly` holds each of those with a control.
 spelling_state() {
-    python3 - "$1" <<'PYSTATE' 2>/dev/null || true
+    python3 - "$1" "${2:-recieve}" "${3:-receive}" <<'PYSTATE' 2>/dev/null || true
 import json, sys
 try:
     report = json.loads(sys.argv[1], strict=False)
 except ValueError:
     report = {}
+term, word = sys.argv[2], sys.argv[3]
 windows = report.get("windows", [])
 texts = [t for w in windows for t in w.get("texts", [])]
 controls = [c for w in windows for c in w.get("controls", [])]
 state = []
-if any("No entry for" in t and "“recieve”" in t for t in texts): state.append("miss")
-if "Did you mean “receive”?" in controls: state.append("line")
+if any("No entry for" in t and f"“{term}”" in t for t in texts): state.append("miss")
+if f"Look up “{word}”" in controls: state.append("line")
+offers = [c for c in controls if c.startswith("Look up “") and c.endswith("”")]
+state.append(f"offers={len(offers)}")
 # The way to Settings › Dictionary, which every answered card carries (plan-card-refinements WI-1).
 if "Dictionaries…" in controls: state.append("exit")
 answered = not any("No entry for" in t or "Looking up" in t for t in texts)
-if report.get("complete") is True and "receive" in texts and answered: state.append("card")
+if report.get("complete") is True and word in texts and answered: state.append("card")
 print(" ".join(state))
 PYSTATE
+}
+#     spelling_offer <term> <word or empty> <card style>: the term selected in the fixture and ⌃⌥D pressed; its miss card
+#     must come up, then — where a word is expected — exactly one button, "Look up “word”", with the miss still on the
+#     card; where none is, no button at all for 5 s after the miss. Leaves the panel up and its last reading in
+#     `spelling_view`; returns 1 where the expectation failed, having said why.
+spelling_view=""
+spelling_offer() {
+    local term=$1 word=$2 style=$3 why started missed="" offered="" state grant settled
+    if ! why=$("$helpers/select-text" com.apple.TextEdit "$term" 1 2>&1); then
+        flunk "lookup ($style): could not select “$term” in the fixture ($why)"
+        return 1
+    fi
+    started=$(now_seconds)
+    "$helpers/keys" 2 control option
+    for _ in $(seq 1 150); do
+        spelling_view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || spelling_view=""
+        state=$(spelling_state "$spelling_view" "$term" "${word:-"-"}")
+        if [ -z "$missed" ] && [[ " $state " == *" miss "* ]]; then missed=$(now_seconds); fi
+        if [ -n "$missed" ] && [ -n "$word" ] && [[ " $state " == *" line "* ]]; then offered=$(now_seconds); break; fi
+        if [ -n "$missed" ] && [ -z "$word" ]; then
+            # **Silence is watched, not assumed**: 5 s from the miss, longer than the instrument's slowest decision.
+            settled=$(python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]) >= 5)' "$missed" "$(now_seconds)")
+            [[ " $state " == *" offers=0 "* ]] || break
+            [ "$settled" = True ] && break
+        fi
+        sleep 0.1
+    done
+    if [ -z "$missed" ]; then
+        grant=$(missing_grant)
+        flunk "lookup ($style): “$term” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [ -z "$word" ]; then
+        if [[ " $state " == *" offers=0 "* ]] && [[ " $state " == *" miss "* ]]; then
+            pass "lookup ($style): the miss card for “$term” offers no button — its candidates disagree — and keeps its miss"
+            return 0
+        fi
+        flunk "lookup ($style): the miss card for “$term” offered a button where its candidates disagree: $state ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [ -z "$offered" ]; then
+        flunk "lookup ($style): the miss card for “$term” never offered “Look up “$word”” in 15 s ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [[ " $state " == *" offers=1 "* ]] && [[ " $state " == *" miss "* ]]; then
+        pass "lookup ($style): the miss card for “$term” came up $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, its miss kept and one button, “Look up “$word””, under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
+        return 0
+    fi
+    flunk "lookup ($style): the miss card for “$term” did not hold its miss and exactly one button: $state"
+    return 1
+}
+#     press_offer <word> <card style>: presses "Look up “word”" through Accessibility and waits for the word's own card in
+#     the one panel; leaves its reading in `spelling_view`. Pressed through Accessibility: the panel never activates the
+#     app, so the frontmost rule a real click needs can never be met for it (`click-element --press`).
+press_offer() {
+    local word=$1 style=$2 why state
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Look up “$word”" 2>&1); then
+        flunk "lookup ($style): “Look up “$word”” could not be pressed ($why)"
+        return 1
+    fi
+    for _ in $(seq 1 100); do
+        spelling_view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || spelling_view=""
+        state=$(spelling_state "$spelling_view" "-" "$word")
+        [[ " $state " == *" card "* ]] && return 0
+        sleep 0.1
+    done
+    flunk "lookup ($style): pressing the button never showed the card for “$word” ($(printf '%s' "$spelling_view" | head -c 300))"
+    return 1
 }
 #     **What a bilingual sense's label leaves out, on the default card, behind its own disclosure** (plan-card-refinements
 #     WI-4, the owner's decision of 2026-10-09). Which dictionary the card is on is read off the card — the name its
@@ -1777,78 +1853,45 @@ print("DONE")
 PYINPLACE
 }
 spelling_panel() {
-    local baseline why started missed="" offered="" shown="" view="" state grant result
+    local baseline result view drag state
     if ! ensure_fixture_open; then
         flunk "lookup: the TextEdit fixture would not come to the front, so the typo was never looked up"
         return 0
     fi
     baseline=$(newest_row_id)
     assert_default_shortcut || true
-    if ! why=$("$helpers/select-text" com.apple.TextEdit recieve 1 2>&1); then
-        flunk "lookup: could not select the fixture typo “recieve” ($why)"
-        return 0
-    fi
-    started=$(now_seconds)
-    "$helpers/keys" 2 control option
-    for _ in $(seq 1 150); do
-        view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
-        state=$(spelling_state "$view")
-        if [ -z "$missed" ] && [[ " $state " == *" miss "* ]]; then missed=$(now_seconds); fi
-        if [ -n "$missed" ] && [[ " $state " == *" line "* ]]; then offered=$(now_seconds); break; fi
-        sleep 0.1
-    done
-    if [ -z "$missed" ]; then
-        grant=$(missing_grant)
-        flunk "lookup: the typo “recieve” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$view" | head -c 300))"
+    if ! spelling_offer recieve receive "detailed card"; then
         "$helpers/keys" 53 2>/dev/null || true
         return 0
     fi
-    if [ -z "$offered" ]; then
-        flunk "lookup: the miss card for “recieve” never offered “Did you mean “receive”?” in 15 s ($(printf '%s' "$view" | head -c 300))"
-        "$helpers/keys" 53 2>/dev/null || true
-        return 0
-    fi
+    view=$spelling_view
+    state=$(spelling_state "$view")
     if [[ " $state " == *" exit "* ]]; then
         pass "lookup: the miss card for “recieve” offers “Dictionaries…”"
     else
         flunk "lookup: the miss card for “recieve” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
     fi
-    pass "lookup: the typo “recieve” drew its miss card $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, and “Did you mean “receive”?” under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
     # **The miss card dragged aside first, as a reader may** (audit of 2026-10-10): the card for the word must replace it
     # where the reader left it, not jump back to the misspelling. By its text, never a control, with real events.
-    local drag
     if ! drag=$("$helpers/drag-card" com.xiaolaidict Lookup "No entry for" 80 60 2>&1); then
         flunk "lookup: the miss card could not be dragged aside, so where its replacement goes was not checked ($drag)"
         drag=""
     fi
-    # Pressed through Accessibility: the panel never activates the app, so the frontmost rule a real click needs can
-    # never be met for it (`click-element --press`).
-    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Did you mean “receive”?" 2>&1); then
-        flunk "lookup: “Did you mean “receive”?” could not be pressed ($why)"
-        "$helpers/keys" 53 2>/dev/null || true
-        return 0
-    fi
-    for _ in $(seq 1 100); do
-        view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
+    if press_offer receive "detailed card"; then
+        view=$spelling_view
         state=$(spelling_state "$view")
-        if [[ " $state " == *" card "* ]]; then shown=yes; break; fi
-        sleep 0.1
-    done
-    if [ "$shown" = yes ]; then
         if [[ " $state " == *" exit "* ]]; then
             pass "lookup: the card for “receive” offers “Dictionaries…”"
         else
             flunk "lookup: the card for “receive” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
         fi
-    fi
-    if [ -n "$drag" ] && [ "$shown" = yes ]; then
-        consume_verdicts lookup "$(replaced_in_place "$drag" "$view")"
-    fi
-    if [ "$shown" = yes ] && [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
-        pass "lookup: pressing the line showed the card for “receive”, in the one panel"
-        sense_details_on "$view"
-    else
-        flunk "lookup: pressing the line never showed the card for “receive” ($(printf '%s' "$view" | head -c 300))"
+        [ -n "$drag" ] && consume_verdicts lookup "$(replaced_in_place "$drag" "$view")"
+        if [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
+            pass "lookup: pressing the button showed the card for “receive”, in the one panel"
+            sense_details_on "$view"
+        else
+            flunk "lookup: pressing the button showed the card for “receive” in more than one panel ($(printf '%s' "$view" | head -c 300))"
+        fi
     fi
     "$helpers/keys" 53 2>/dev/null || true
     # **The miss stays a miss, and the word is a reading of its own** — each waited for by its own row, in the app the
@@ -1865,8 +1908,44 @@ spelling_panel() {
     else
         flunk "lookup: expected the miss and then the suggested word in the ledger, got: ${result:-nothing}"
     fi
+    # **A typed inflection whose candidates disagree is offered nothing** (the owner's ruling of 2026-10-11): what this
+    # Mac's instrument decided for “heavied” is what its card must show — no button where the regular “heavy” meets the
+    # checker's “heavier”, the one word where the dictionaries print it.
+    spelling_offer heavied "$heavied_offer" "detailed card" || true
+    "$helpers/keys" 53 2>/dev/null || true
+}
+# The word the instrument offered for “heavied” on this Mac, or nothing — what both cards are held to.
+heavied_offer=$(printf '%s\n' "$spelling" | python3 -c '
+import json, sys
+for raw in sys.stdin:
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        continue
+    if line.get("term") == "heavied":
+        print(line.get("suggestion") or "")' 2>/dev/null) || heavied_offer=""
+# **The compact card draws the same one button** (the owner's ruling of 2026-10-11): the reader's card style set to
+# compact, the app started again to read it, the typo offered and followed and the contested inflection offered
+# nothing — then the reader's style put back and the app started again, so no later stage reads a compact card.
+compact_had=no; compact_was=$(defaults read com.xiaolaidict UsesCompactLookup 2>/dev/null) && compact_had=yes
+restore_compact() { restore_default UsesCompactLookup "$compact_had" "$compact_was" -bool; }
+spelling_compact() {
+    at_exit restore_compact
+    defaults write com.xiaolaidict UsesCompactLookup -bool true
+    relaunch_or_end_stage || return 0
+    if ! ensure_fixture_open; then
+        flunk "lookup (compact card): the TextEdit fixture would not come to the front"
+    elif spelling_offer recieve receive "compact card"; then
+        press_offer receive "compact card" && pass "lookup (compact card): pressing the button showed the card for “receive”"
+        "$helpers/keys" 53 2>/dev/null || true
+        spelling_offer heavied "$heavied_offer" "compact card" || true
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    restore_compact
+    relaunch_or_end_stage || return 0
 }
 spelling_panel
+spelling_compact
 fi
 
 if want crash; then

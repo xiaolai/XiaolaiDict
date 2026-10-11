@@ -74,10 +74,8 @@ public struct LookupPresentation: Equatable {
     /// A word the reader may have meant, under a miss — **a typed value, never display text**, and nil until the checker
     /// has answered and the dictionaries have the word (plan-spelling-suggestion §3). The miss is final-looking before
     /// this arrives, and nothing is drawn while it is being checked.
+    /// **One, never two** (the owner's ruling of 2026-10-11): where the evidence names no single word, there is none.
     public var suggestion: SpellingSuggestion?
-    /// The checker's verified correction offered beside a tentative dictionary form (`SpellingOffer.offered`'s
-    /// `beside`), nil everywhere else.
-    public var besideSuggestion: SpellingSuggestion?
 
     /// **The suggestion the card draws, and the rule for drawing one** — asked here, where a test can ask it, rather
     /// than inside a view body. Only under the service's own miss: a miss it could not answer already says the
@@ -87,15 +85,6 @@ public struct LookupPresentation: Equatable {
     public var offeredSuggestion: SpellingSuggestion? {
         guard let suggestion, suggestion.term == term, case .notFound(serviceFailure: nil)? = outcome else { return nil }
         return suggestion
-    }
-
-    /// **The second line, under the same rule as the first and only beside it**: drawn where the first is, for this
-    /// card's own term, and only under a tentative dictionary form.
-    public var offeredBeside: SpellingSuggestion? {
-        guard offeredSuggestion?.isTentative == true, let besideSuggestion, besideSuggestion.term == term else {
-            return nil
-        }
-        return besideSuggestion
     }
 
     /// **`request` has no default**, because a default is what makes two lookups share an identity.
