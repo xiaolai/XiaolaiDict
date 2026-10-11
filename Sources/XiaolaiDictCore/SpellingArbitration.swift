@@ -135,6 +135,19 @@ enum IrregularPattern: Sendable {
         }
     }
 
+    /// **The compound's first element** — *dales* of *dalesmen* — where the pattern reads the term as a compound in
+    /// *-man*: what supports the pattern where the dictionaries have no entry for the compound itself. Nil for an element
+    /// too short to be a word of its own.
+    func firstElement(of term: String) -> String? {
+        switch self {
+        case .menToMan:
+            let word = Lemmatizer.canonical(term)
+            guard word.hasSuffix("men") else { return nil }
+            let element = String(word.dropLast("men".count))
+            return element.count >= 3 ? element : nil
+        }
+    }
+
     /// **Lexically supported**: an entry headed by the base in lowercase gives it the class the pattern inflects — a
     /// noun for *-men*. A base the dictionaries do not have, or have as something else, supports nothing.
     func isSupported(_ base: String, by outcome: LookupOutcome) -> Bool {
@@ -142,6 +155,23 @@ enum IrregularPattern: Sendable {
         return entries.contains { entry in
             entry.match == .exact && !entry.headword.contains(where: \.isUppercase)
                 && Lemmatizer.canonical(entry.headword) == base
+                && entry.blocks.contains { WordClass.of($0.partOfSpeech).contains(.noun) }
+        }
+    }
+
+    /// **Or supported by its first element**: the dictionaries answer it — itself or its dictionary form, *dales* as
+    /// *dale* — with a lowercase noun, so *dales* + *-men* is a compound English makes (measured 2026-10-11 on the E2E
+    /// Mac, whose dictionaries have no *dalesman*: without this the checker's *salesmen* was offered for *dalesmen*).
+    /// The headword is judged by spelling, not by the entry's `match`: that asks the tagger about the element alone, and
+    /// *dales* alone is not read as *dale*'s plural.
+    func isSupported(element: String, by outcome: LookupOutcome) -> Bool {
+        guard case .entries(let entries, _) = outcome else { return false }
+        return entries.contains { entry in
+            let headword = Lemmatizer.canonical(entry.headword)
+            let names = headword == element || ([true, false, nil] as [Bool?]).contains {
+                RegularSpelling.slots(of: element, from: headword, doubling: $0).contains(.s)
+            }
+            return names && !entry.headword.contains(where: \.isUppercase)
                 && entry.blocks.contains { WordClass.of($0.partOfSpeech).contains(.noun) }
         }
     }

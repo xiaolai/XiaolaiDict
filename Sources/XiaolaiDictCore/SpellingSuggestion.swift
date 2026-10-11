@@ -277,6 +277,9 @@ public struct SpellingSuggester: Sendable {
             if pattern.isSupported(base, by: try await ask(base)) {
                 return trial.decided(.abstained(.irregularPattern))
             }
+            if let element = pattern.firstElement(of: asked), pattern.isSupported(element: element, by: try await ask(element)) {
+                return trial.decided(.abstained(.irregularPattern))
+            }
         }
         // 5. One edit, or nothing.
         guard edit.distance == 1, let operation = edit.operation else { return trial.decided(.abstained(.tooFar)) }

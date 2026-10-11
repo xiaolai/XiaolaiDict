@@ -167,8 +167,27 @@ struct SpellingArbitrationTests {
             == Self.offered("proped", "propped", .correction(.insertion)))
     }
 
-    /// **The *-men* pattern guards only where the dictionaries support it**: a base they do not have, or have only as a
-    /// name, supports nothing, and the checker's word stands.
+    /// **The *-men* pattern guards where the dictionaries support it — the compound, or its first element as a noun**
+    /// (measured 2026-10-11 on the E2E Mac, whose dictionaries have no *dalesman*: its *dales* is *dale*'s plural, a noun,
+    /// so *salesmen* is still blocked). A base and an element they do not have, or have only as a name or another class,
+    /// support nothing, and the checker's word stands.
+    @Test func aCompoundsFirstElementSupportsThePattern() async throws {
+        var entries = Self.lexicon
+        entries["dalesman"] = []
+        entries["dales"] = [Headed("dale", ["noun"])]
+        let dictionaries = Dictionaries(entries: entries)
+        let decided = try await decide("dalesmen", lemma: nil, checker: Checker(["dalesmen": "salesmen"]),
+                                       dictionaries: dictionaries)
+        #expect(decided.offer == .abstained(.irregularPattern))
+        #expect(dictionaries.questions == ["salesmen", "dalesman", "dales"])
+        for element in [[Headed("Dale", ["noun"])], [Headed("dale", ["verb"])]] {
+            entries["dales"] = element
+            #expect(try await decide("dalesmen", lemma: nil, checker: Checker(["dalesmen": "salesmen"]),
+                                     dictionaries: Dictionaries(entries: entries)).offer
+                == Self.offered("dalesmen", "salesmen", .correction(.substitution)), "\(element.map(\.headword))")
+        }
+    }
+
     @Test func anUnsupportedIrregularPatternGuardsNothing() async throws {
         for base in [[], [Headed("Dalesman", ["noun"])], [Headed("dalesman", ["adjective"])]] {
             var entries = Self.lexicon
