@@ -291,6 +291,8 @@ echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
 # anything is shipped, so a run that has nothing to do costs seconds — and printed, so a carry is never silent.
 stage "plan"
 e2e_os="$remote_os $remote_build"
+# The Mac this run reached, for `make e2e-status`, which asks the planner whether a row would be carried there.
+printf '%s\t%s\t%s\n' "$remote_uuid" "$e2e_os" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >.build/e2e-host.tsv
 # **Held to the keys and the tree taken before the bundle was built** (`make e2e` sets XIAOLAIDICT_E2E_PREBUILD): a key
 # that moved since then describes files the bundle may lack, so that stage runs and is filed with no key; a tree that
 # moved, or was dirty, files no tree, which a release refuses. Run without it — `e2e.sh` by hand — nothing says what the

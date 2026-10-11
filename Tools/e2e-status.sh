@@ -25,6 +25,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 readonly STATUS=.build/e2e-status.tsv
 readonly APP=.build/XiaolaiDict.app
+# The E2E Mac the last run reached — hardware UUID, macOS version and build, when — written by `Tools/e2e.sh`, so `show`
+# can ask the planner whether a row would be carried there without reaching the Mac.
+readonly SEEN=.build/e2e-host.tsv
 
 # The build the bundle on disk is, or `none` where there is no bundle. Read the same way for both
 # subcommands: a record filed against one build and read against another is what `show` calls stale,
@@ -71,25 +74,20 @@ record() {
     done
 }
 
+# **What each row is worth now**, by the planner's own rule rather than a second copy of it: FRESH PASS on the bundle on
+# disk, CARRIED where a plain `make e2e` would carry it to the E2E Mac the last run saw, STALE where it would run it,
+# UNKNOWN where the keys cannot be made or no run has recorded an E2E Mac, and FAILED. A pass is a fact about the build
+# it ran on: a carried row keeps that build, its time, its Mac and its macOS, and says it satisfies no merge or release.
 show() {
-    local ran name result on when
+    local ran python keys status=0
     ran=$(build)
-    echo "end-to-end stages, against build $ran on disk"
-    if [ ! -f "$STATUS" ]; then
-        echo "  nothing recorded yet"
-        return 0
-    fi
-    # **A pass is a fact about the build it ran on and expires with it.** One carried over from an
-    # older build is shown as stale rather than as a pass: a green mark that outlives what it tested
-    # is worse than no mark.
-    sort "$STATUS" | while IFS=$'\t' read -r name result on when _; do
-        if [ "$on" != "$ran" ]; then
-            printf '  %-14s %-4s stale (ran on %s, %s)\n' "$name" "$result" "$on" "$when"
-        else
-            printf '  %-14s %-4s %s\n' "$name" "$result" "$when"
-        fi
-    done
-    echo "  $STATUS"
+    python=$(Tools/python.sh) || exit 1
+    keys=$(mktemp)
+    # Keys that cannot be made leave the file empty, which reads as UNKNOWN: never a carry on a guess.
+    "$python" Tools/e2e-inputs.py keys >"$keys" 2>/dev/null || : >"$keys"
+    "$python" Tools/e2e-inputs.py show "$STATUS" "$ran" --keys "$keys" --seen "$SEEN" || status=$?
+    rm -f "$keys"
+    return "$status"
 }
 
 # **A merge or a release needs a fresh pass of every stage of its own source.** Not of its own *build*: a release is

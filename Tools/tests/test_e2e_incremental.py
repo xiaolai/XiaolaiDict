@@ -756,6 +756,75 @@ class TheIncidentalServicesAreClaimed(unittest.TestCase):
                         self.assertNotIn(module, inputs.closure(self.targets, others))
 
 
+class TheStatusSaysWhatEachRowIsWorth(unittest.TestCase):
+    """`make e2e-status`: FRESH PASS, CARRIED, STALE, UNKNOWN or FAILED, by the planner's own rule (`decide`). A carried
+    row keeps what was actually tested and says it does not satisfy a merge or a release."""
+
+    STAGES = ("lookup",)
+    LAST_SEEN = ("UUID-1", "27.0.1 26A434", "2026-10-11T02:00:00Z")
+
+    def verdict(self, rows, *, on_disk="2026.1011.2", keys=None, seen=LAST_SEEN):
+        keys = {"lookup": inputs.Key(KEY, "")} if keys is None else keys
+        lines = inputs.status_lines(self.STAGES, record(rows), on_disk, keys, seen)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0][0], "lookup")
+        return lines[0][1:]
+
+    def test_a_pass_on_the_bundle_on_disk_is_fresh(self):
+        verdict, text = self.verdict([RECEIPT], on_disk="2026.1011.1")
+        self.assertEqual(verdict, "FRESH PASS")
+
+    def test_an_older_pass_the_planner_would_carry_is_carried_and_keeps_what_was_tested(self):
+        verdict, text = self.verdict([RECEIPT])
+        self.assertEqual(verdict, "CARRIED")
+        for fact in ("2026.1011.1", "2026-10-11T01:00:00Z", HOST[:8], OS, "does not satisfy a merge or a release"):
+            self.assertIn(fact, text)
+
+    def test_that_carried_row_is_still_refused_by_the_release_gate(self):
+        self.assertEqual(self.verdict([RECEIPT])[0], "CARRIED")
+        refused = inputs.release_refusals(self.STAGES, record([RECEIPT]), "f" * 40)
+        self.assertEqual(len(refused), 1)
+        self.assertIn("stale", refused[0])
+
+    def test_an_older_pass_the_planner_would_run_is_stale_and_says_why(self):
+        for name, rows, keys, seen in (
+            ("inputs changed", [RECEIPT], {"lookup": inputs.Key("b" * 64, "")}, self.LAST_SEEN),
+            ("another Mac", [RECEIPT], None, ("UUID-2",) + self.LAST_SEEN[1:]),
+            ("no key on the row", [RECEIPT.replace(KEY, "-")], None, self.LAST_SEEN),
+        ):
+            with self.subTest(name):
+                verdict, text = self.verdict(rows, keys=keys, seen=seen)
+                self.assertEqual(verdict, "STALE")
+                self.assertIn("2026.1011.1", text)
+
+    def test_no_carry_is_invented_where_eligibility_cannot_be_established(self):
+        for name, keys, seen in (("keys could not be made", None, self.LAST_SEEN), ("no E2E Mac seen", "default", None)):
+            with self.subTest(name):
+                keys = {"lookup": inputs.Key(KEY, "")} if keys == "default" else keys
+                lines = inputs.status_lines(self.STAGES, record([RECEIPT]), "2026.1011.2", keys, seen)
+                self.assertEqual(lines[0][1], "UNKNOWN")
+
+    def test_a_failure_is_failed_on_any_build(self):
+        for on_disk in ("2026.1011.1", "2026.1011.2"):
+            self.assertEqual(self.verdict([RECEIPT.replace("\tpass\t", "\tfail\t")], on_disk=on_disk)[0], "FAILED")
+
+    def test_the_status_script_shows_unknown_where_it_cannot_compute_keys(self):
+        """A scratch repository has no package, so the keys cannot be made: the row is UNKNOWN, never CARRIED."""
+        root = scratch_git_repo(self, {f"Tools/{name}": (REPO / "Tools" / name).read_text()
+                                       for name in ("e2e-status.sh", "e2e-inputs.py", "python.sh", "e2e.sh")})
+        (root / ".build").mkdir()
+        (root / ".build" / "e2e-status.tsv").write_text(RECEIPT + "\n")
+        (root / ".build" / "e2e-host.tsv").write_text("\t".join(self.LAST_SEEN) + "\n")
+        done = subprocess.run([BASH, str(root / "Tools" / "e2e-status.sh"), "show"], capture_output=True, text=True,
+                              timeout=300, check=False)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertRegex(done.stdout, r"lookup\s+UNKNOWN")
+        self.assertNotRegex(done.stdout, r"(?m)^  \S+\s+CARRIED ")
+
+    def test_the_run_records_the_e2e_mac_it_saw(self):
+        self.assertIn(".build/e2e-host.tsv", (REPO / "Tools" / "e2e.sh").read_text())
+
+
 class TheCommandsAndTheRunUseIt(unittest.TestCase):
 
     def test_the_makefile_offers_incremental_full_and_named_runs(self):

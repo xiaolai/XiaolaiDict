@@ -467,6 +467,57 @@ def release_refusals(stages, records: dict[str, Record], tree: str | None) -> li
     return refused
 
 
+def status_lines(stages, records: dict[str, Record], on_disk: str, keys: dict[str, Key] | None,
+                 seen: tuple[str, ...] | None) -> list[tuple[str, str, str]]:
+    """What each recorded row is worth now, for `make e2e-status`: (name, verdict, text), sorted by name.
+
+    FAILED — its last result failed, on whatever build. FRESH PASS — a pass on the bundle on disk. Otherwise a pass on an
+    older build is judged by the planner's own rule (`decide`), against the keys now and the E2E Mac the last run saw:
+    CARRIED where a plain `make e2e` would carry it, STALE where it would run it, and UNKNOWN where that cannot be
+    established — the keys could not be made, or no run has recorded an E2E Mac — because a carry shown on a guess is
+    a false green. A row that is not a stage (the preflight, the cleanup) is FRESH PASS or STALE by its build alone."""
+    lines = []
+    for name in sorted(records):
+        record = records[name]
+        tested = f"build {record.build}, {record.when}"
+        if record.host not in (NO_KEY, ""):
+            tested += f", on {record.host[:8]} macOS {record.os}"
+        if record.result == "fail":
+            lines.append((name, "FAILED", tested))
+        elif record.result != "pass":
+            lines.append((name, "UNKNOWN", f"last result {record.result!r}, {tested}"))
+        elif record.build == on_disk:
+            lines.append((name, "FRESH PASS", tested))
+        elif name not in stages:
+            lines.append((name, "STALE", f"ran on {tested}"))
+        elif keys is None:
+            lines.append((name, "UNKNOWN", f"ran on {tested}; the stages' keys could not be made, so whether it would "
+                                           f"be carried is unknown"))
+        elif seen is None:
+            lines.append((name, "UNKNOWN", f"ran on {tested}; no run has recorded which E2E Mac it would be carried to"))
+        else:
+            decision = decide((name,), keys, records, seen[0], seen[1])[0]
+            if decision.carried:
+                lines.append((name, "CARRIED", f"fresh pass on {tested}; inputs unchanged, if the E2E Mac is still "
+                                               f"{seen[0][:8]} on macOS {seen[1]} as last seen {seen[2] if len(seen) > 2 else ''}"
+                                               f" — does not satisfy a merge or a release"))
+            else:
+                lines.append((name, "STALE", f"ran on {tested}; {decision.why}"))
+    return lines
+
+
+def show(lines: list[tuple[str, str, str]], on_disk: str, status: str) -> str:
+    out = [f"end-to-end stages, against build {on_disk} on disk"]
+    if not lines:
+        out.append("  nothing recorded yet")
+    out += [f"  {name:<14} {verdict:<10} {text}" for name, verdict, text in lines]
+    if any(verdict != "FRESH PASS" for _, verdict, _ in lines):
+        out.append("  only a fresh pass of every stage counts for a merge or a release; CARRIED, STALE, UNKNOWN and "
+                   "FAILED rows do not satisfy one (Tools/e2e-status.sh require-fresh)")
+    out.append(f"  {status}")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # What a release cannot have run.
 
@@ -669,6 +720,11 @@ def main(argv: list[str]) -> int:
     gate = commands.add_parser("release-gate")
     gate.add_argument("status")
     commands.add_parser("tree")
+    shown_status = commands.add_parser("show")
+    shown_status.add_argument("status")
+    shown_status.add_argument("build")
+    shown_status.add_argument("--keys")
+    shown_status.add_argument("--seen")
     mode = commands.add_parser("mode")
     mode.add_argument("build")
     snapshot = commands.add_parser("snapshot")
@@ -726,6 +782,20 @@ def main(argv: list[str]) -> int:
             print(f"end-to-end evidence: a fresh pass of every stage of source tree {tree}")
         print(release_gap(script_text, (REPO / "Tools" / "build-bundle.sh").read_text()))
         return 1 if refused else 0
+    if args.command == "show":
+        status = pathlib.Path(args.status)
+        records = read_status(status.read_text()) if status.exists() else {}
+        keys = None
+        if args.keys and pathlib.Path(args.keys).exists() and pathlib.Path(args.keys).read_text().strip():
+            keys = {stage: Key(None if value == NO_KEY else value, why)
+                    for stage, value, why in (line.split("\t", 2) for line in pathlib.Path(args.keys).read_text().split("\n")
+                                              if line)}
+        seen = None
+        if args.seen and pathlib.Path(args.seen).exists():
+            fields = pathlib.Path(args.seen).read_text().strip().split("\t")
+            seen = tuple(fields) if len(fields) >= 2 and all(fields[:2]) else None
+        print(show(status_lines(known_stages(script_text), records, args.build, keys, seen), args.build, args.status))
+        return 0
     if args.command == "tree":
         print(source_tree(REPO) or NO_KEY)
         return 0
