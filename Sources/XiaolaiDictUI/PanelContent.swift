@@ -26,10 +26,11 @@ public struct LookupPresentation: Equatable {
     /// answer still arriving for an old lookup lands in a view that is already gone.
     public let request: Int
     public let term: String
-    public let lemma: Lemma
+    /// Settled again, with `capture`, when a sentence still being read arrives whole (`sentenceStillBeingRead`).
+    public var lemma: Lemma
     /// The app, and the site, the word was read in.
     public let source: String?
-    public let capture: CaptureQuality
+    public var capture: CaptureQuality
     /// The reader's own sentence, where one was captured. The sentence pane explains this, and it
     /// is the only text the remote tier would ever be allowed to see.
     public var sentence: String?
@@ -45,6 +46,15 @@ public struct LookupPresentation: Equatable {
     /// **The captured sentence carries signs of a misread** (`CaptureQuality.doubts(sentence:)`), so `sentence` is nil
     /// and the card says why rather than drawing it as the reader's own — nor is it given to the sense picker or a model.
     public var sentenceLooksMisread = false
+    /// **Which ends of `sentence` may run past what could be read** (`CaptureQuality.Context.mayBeCut`). The sentence is
+    /// drawn and used all the same; the card marks the cut side and says, quietly, that it may go on.
+    public var sentenceCut: TextSegmenter.Clipping = []
+    /// **The rest of the sentence is still being read** — a taller strip of the screen (`PendingContext`). The card draws
+    /// the first strip's sentence and says, quietly, that it may be cut; no sense is proposed until it settles.
+    public var sentenceStillBeingRead = false
+    /// **A sentence that may be cut on a side nobody recorded** — a reading kept before the side was, reopened. Said
+    /// without a direction, and never drawn as a cut at the end.
+    public var sentenceCutSideUnknown: Bool { sentence != nil && capture.context == .mayBeCut && sentenceCut.isEmpty }
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?

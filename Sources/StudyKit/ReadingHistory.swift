@@ -87,6 +87,14 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
     /// "Confirm this meaning" confirms exactly what was shown; the encounter's gloss where it is not.
     public var meaning: String? { studyNoteID != nil ? studyAnswer : sense?.gloss }
 
+    /// **Which ends of `sentence` the capture may have cut**, as recorded from schema 14 — empty where the sentence is
+    /// whole, and where a possible cut's side was never recorded (`cutSideUnknown`). A card puts its ellipsis here.
+    public let sentenceCut: TextSegmenter.Clipping
+
+    /// **A possible cut whose side is not known** — every row written before schema 14, and a cut the capture could
+    /// not place. Said without a direction; never drawn as a cut at the end.
+    public var cutSideUnknown: Bool { cue == .truncatedSentence && sentenceCut.isEmpty }
+
     /// **What a surface beside "Confirm this meaning" draws: one value describing one note.** Where the
     /// reading is kept, its sense is the note's own encounter carrying the note's own answer, so the
     /// dictionary name, the sense badge and the revealed meaning all describe what confirming reaches.
@@ -115,8 +123,10 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
         partOfSpeech: String? = nil, sense: SenseNote? = nil, senseAbstention: Abstention? = nil,
         language: String? = nil, repeats: [Int] = [], disposition: LookupDisposition = .kept,
         studyNoteID: UUID? = nil, studyStatus: StudyReadiness? = nil, studyAnswer: String? = nil,
-        studySense: SenseNote? = nil, studyObstacle: StudyObstacle? = nil
+        studySense: SenseNote? = nil, studyObstacle: StudyObstacle? = nil, sentenceCut: TextSegmenter.Clipping = []
     ) {
+        // A side is a fact about a possible cut, so a whole sentence has none.
+        self.sentenceCut = quality?.context == .mayBeCut ? sentenceCut : []
         self.id = id
         self.lemma = lemma
         self.surface = surface
@@ -148,7 +158,7 @@ public struct ReadingEntry: Identifiable, Equatable, Sendable {
             place: place, at: at, result: result, quality: quality, partOfSpeech: partOfSpeech,
             sense: sense, senseAbstention: senseAbstention, language: language, repeats: repeats,
             disposition: disposition, studyNoteID: studyNoteID, studyStatus: studyStatus,
-            studyAnswer: studyAnswer, studySense: studySense, studyObstacle: studyObstacle)
+            studyAnswer: studyAnswer, studySense: studySense, studyObstacle: studyObstacle, sentenceCut: sentenceCut)
     }
 
     /// The parts of `sentence` a card emphasises. The work is `Lemmatizer.parts` — locating a
@@ -365,6 +375,7 @@ public enum ReadingHistory {
         let sentence: String
         let result: LookupResult
         let cue: SentenceCue
+        let cut: Int
         let dictionary: String?
         let block: Int?
         let ordinal: Int?
@@ -386,6 +397,8 @@ public enum ReadingHistory {
             // either into its neighbour makes one card stand for two visibly different states.
             result = entry.result
             cue = entry.cue
+            // The ellipsis is drawn on the cut side, so two sides are two cards.
+            cut = entry.sentenceCut.rawValue
             dictionary = entry.sense?.dictionary
             block = entry.sense?.block
             ordinal = entry.sense?.ordinal

@@ -350,7 +350,9 @@ done
 # **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,
 # and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
 # document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
-cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/canvas.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
+cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/canvas.html Tools/e2e/strip.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
+# The same page under a second name draws the overlong paragraph: `open` takes a query string as part of a file's name.
+cp -p Tools/e2e/strip.html .build/e2e/strip-long.html
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -2777,6 +2779,10 @@ except ValueError:
 gx, gy, gw, gh = map(float, sys.argv[2].split())
 truth = (gx + margin, gy + margin, gx + gw - margin, gy + gh - margin)
 b = r.get("bounds") or {}
+# The first read off the pixels in this stage, and on a bundle just installed the first this binary has made: how long
+# it took is the cold start a reader pays on the first hover after an install or an update.
+if r.get("captureSource") == "opticalRecognition":
+    print(f"NOTE\thover: the pixel fixture's read took {r.get('milliseconds', 0):.0f} ms")
 say(r.get("captureSource") == "opticalRecognition" and r.get("text") == "quixotic",
     "hover: the word drawn only in pixels is read off the screen: “quixotic”",
     f"hover: the pixel fixture was not read off the screen as “quixotic”: {sys.argv[1][:200]}")
@@ -2798,6 +2804,69 @@ print("DONE")
 PYPIXELS
 )"
 fi
+# **The context is the paragraph, not a fixed band** (the owner's report of 2026-10-11: a command soft-wrapped over eight
+# rows was kept to `pkill`, mid-command, as `complete`). `strip.html` draws, only in pixels, one sentence taller than the
+# old 140 pt band beside a second column, and as `strip-long.html` one taller than the tallest strip. The pointer goes on the
+# sentence's first row, aimed from the page's own geometry; the texts below are written here, not read from the page.
+# strip_read <page> <row> <dom-id>: the `--read-point` reading at the first word of that row of the left column.
+strip_read() {
+    open -a Safari "$helpers/$1"; sleep 3
+    local frame point
+    frame=$("$helpers/element-frame" com.apple.Safari "$3" 2>&1) || { echo "no frame: $frame"; return 1; }
+    point=$(python3 -c 'import sys; x, y, w, h = map(float, sys.argv[1:5]); row = int(sys.argv[5]); print("%.0f %.0f" % (x + 12 + 30, y + 12 + row * 26 + 13))' \
+        $frame "$2")
+    # shellcheck disable=SC2086
+    "$exe" --read-point $point 2>&1
+}
+strip_whole=$(strip_read strip.html 0 strip-text) || strip_whole="${strip_whole:-no reading}"
+strip_long=$(strip_read strip-long.html 8 strip-long) || strip_long="${strip_long:-no reading}"
+consume_verdicts hover "$(python3 - "$strip_whole" "$strip_long" <<'PYSTRIP' 2>&1 || true
+import difflib, json, re, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def words(text): return re.sub(r"[^a-z0-9 ]+", "", (text or "").lower().replace("-", " ")).split()
+expected = ("Lighthouse keepers along the northern coast counted every vessel that passed the outer rocks after dusk and "
+            "copied each name into a heavy ledger whose pages had gone soft with salt and lamp smoke until the winter "
+            "storms closed the harbour and nothing sailed again before the first warm days of spring returned.")
+foreign = {"meanwhile", "market", "crooked", "mayor", "baker", "bread", "inland", "farmers"}
+def parse(raw):
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return {}
+whole, long = parse(sys.argv[1]), parse(sys.argv[2])
+got = words(whole.get("sentence"))
+similarity = difflib.SequenceMatcher(None, got, words(expected)).ratio()
+say(whole.get("captureSource") == "opticalRecognition" and similarity >= 0.95,
+    f"hover: a sentence taller than the old band is read whole off the screen ({len(got)} words, similarity {similarity:.3f})",
+    f"hover: the tall sentence was not read whole (similarity {similarity:.3f}, context {whole.get('context')}): "
+    f"{whole.get('sentence') or sys.argv[1][:300]}")
+say(bool(got) and not foreign & set(got),
+    "hover: nothing of the other column, or of the next paragraph, is in it",
+    f"hover: the sentence took in text it does not hold: {sorted(foreign & set(got))}")
+say(whole.get("context") == "complete",
+    "hover: and its context is complete",
+    f"hover: its context is {whole.get('context')}, wanted complete")
+say(long.get("captureSource") == "opticalRecognition" and long.get("context") == "mayBeCut",
+    "hover: a sentence taller than the tallest strip is marked as possibly cut",
+    f"hover: the overlong sentence was not marked mayBeCut: {sys.argv[2][:400]}")
+# **The word first, the rest of the sentence after** (C1, 2026-10-11): the tall sentence runs off the first strip, so the
+# first reading arrives cut and marked, and the taller strip settles on the whole sentence later. The card is drawn with
+# the first; the sense waits for the second, which the runner tests hold.
+first = whole.get("first") or {}
+first_words = words(first.get("sentence"))
+say(bool(first) and first.get("grew") is True and first.get("context") == "mayBeCut",
+    "hover: the first reading of the tall sentence arrived cut and marked, and a taller strip replaced it",
+    f"hover: the tall sentence had no first reading that grew: {json.dumps(first)[:300]}")
+say(bool(first) and 0 < first.get("milliseconds", 0) < whole.get("milliseconds", 0) and 0 < len(first_words) < len(got),
+    f"hover: the word was there at {first.get('milliseconds', 0):.0f} ms with {len(first_words)} words, before the whole "
+    f"sentence at {whole.get('milliseconds', 0):.0f} ms with {len(got)}",
+    f"hover: the first reading was not earlier and shorter than the settled one: {json.dumps(first)[:300]}")
+for name, r in (("tall", whole), ("overlong", long)):
+    if r:
+        print(f"NOTE\thover: the {name} sentence's read took {r.get('milliseconds', 0):.0f} ms")
+print("DONE")
+PYSTRIP
+)"
 # **Chrome.** It builds no page tree for `AXManualAccessibility` — measured 2026-10-03, refused as
 # unsupported — only once told an assistive client is reading (`AXEnhancedUserInterface`), which the
 # reader asks after a hover that found nothing (`ChromiumEscalationTests` hold that). Told here first,

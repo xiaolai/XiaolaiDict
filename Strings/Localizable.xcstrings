@@ -1195,6 +1195,9 @@
     "Optional. A language model you already use — your Claude or Codex subscription, or a service you have an address for — can translate the sentence and explain how a word is used in it. Without one, Apple's own engines do what they can, on this Mac." : {
 
     },
+    "Part of this sentence may not have been read." : {
+
+    },
     "Partial result" : {
 
     },
@@ -1642,6 +1645,9 @@
     "Startup" : {
 
     },
+    "Still reading the rest of the sentence; what is shown may be cut." : {
+
+    },
     "Stop" : {
 
     },
@@ -1827,6 +1833,9 @@
 
     },
     "The sentence may be cut short" : {
+
+    },
+    "The sentence may go on past what could be read." : {
 
     },
     "The service does not know the model named. Check its name." : {

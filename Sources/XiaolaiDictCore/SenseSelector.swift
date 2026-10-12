@@ -182,7 +182,9 @@ public enum SenseCandidates {
         guard considered.count > 1 else {
             return .settled(.chose(key: considered[0].key, margin: .infinity, entryID: considered[0].entryID))
         }
-        guard context == .complete, let sentence,
+        // **A sentence that may be cut is still the reader's evidence** (the owner's decision, 2026-10-11): annotated on
+        // the card, never refused here. Only a capture with no sentence at all has nothing to choose by.
+        guard context != .missing, let sentence,
               !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return .settled(.abstained(.noContext)) }
         return .ask(considered, sentence: sentence)

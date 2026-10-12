@@ -11,9 +11,13 @@ public struct SentenceContext: Equatable, Sendable {
     /// Where the selection sits in `text`, UTF-16. Nil when that is not known, or the selection is
     /// not wholly inside the sentence.
     public let selection: NSRange?
+    /// **Which ends may be cut**: the start, the end, both, or neither — so the card can mark the side the sentence may
+    /// go on past. Never empty where `mayBeCut` is true: a cut whose side is not known is both.
+    public let cut: TextSegmenter.Clipping
 
-    /// Nil for blank text — no sentence, rather than an empty one — or for a selection outside it.
-    public init?(text: String, mayBeCut: Bool, selection: NSRange? = nil) {
+    /// Nil for blank text — no sentence, rather than an empty one — or for a selection outside it. `cut` names the ends
+    /// where it is known; `mayBeCut` without it is a cut on both.
+    public init?(text: String, mayBeCut: Bool, selection: NSRange? = nil, cut: TextSegmenter.Clipping? = nil) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         if let selection {
             guard selection.location >= 0, selection.length >= 0,
@@ -21,7 +25,9 @@ public struct SentenceContext: Equatable, Sendable {
             else { return nil }
         }
         self.text = text
-        self.mayBeCut = mayBeCut
+        let known = cut ?? []
+        self.cut = mayBeCut && known.isEmpty ? [.start, .end] : known
+        self.mayBeCut = mayBeCut || !known.isEmpty
         self.selection = selection
     }
 }
@@ -71,8 +77,9 @@ public enum TextSegmenter {
             $0.overlaps(selection) || $0.contains(selection.lowerBound)
         }
         guard let first = covering.first, let last = covering.last else { return nil }
-        let mayBeCut = (clipped.contains(.start) && first.lowerBound == text.startIndex)
-            || (clipped.contains(.end) && last.upperBound == text.endIndex)
+        var cut: Clipping = []
+        if clipped.contains(.start), first.lowerBound == text.startIndex { cut.insert(.start) }
+        if clipped.contains(.end), last.upperBound == text.endIndex { cut.insert(.end) }
         let sentence = trimmed(first.lowerBound..<last.upperBound, in: text)
         // The selection relative to the sentence, when it lies wholly inside it.
         let start = text.utf16.distance(from: text.startIndex, to: sentence.lowerBound)
@@ -80,8 +87,8 @@ public enum TextSegmenter {
         let offset = range.location - start
         let inside = offset >= 0 && range.length <= length - offset
         return SentenceContext(
-            text: String(text[sentence]), mayBeCut: mayBeCut,
-            selection: inside ? NSRange(location: offset, length: range.length) : nil)
+            text: String(text[sentence]), mayBeCut: !cut.isEmpty,
+            selection: inside ? NSRange(location: offset, length: range.length) : nil, cut: cut)
     }
 
     /// Every word in `text`, as the tokeniser breaks them. Used by the bounds-scan dialect, which

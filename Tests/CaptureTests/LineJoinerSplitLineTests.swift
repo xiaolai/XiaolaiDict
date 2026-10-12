@@ -116,7 +116,8 @@ struct RealCaptureBlockTests {
         line("/// key is a function of the shade; reverse exactness says the ordinal does its job, since two shades", x: 0.5160, width: 0.4738, top: 0.6842, height: 0.1852),
     ]
 
-    /// The band the app captured, in points: the window's width by `bandHeight`.
+    /// The band the app captured when this was measured, in points: the window's width by 140 pt — then a fixed band
+    /// height, now where the strip starts growing from (`ContextStrip.initialHeight`).
     static let band = CGSize(width: 2560, height: 140)
 
     /// The observation holding the word the reader pointed at.

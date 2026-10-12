@@ -41,12 +41,16 @@ public struct RecognisedLine: Equatable, Sendable {
     /// said anything was wrong while the recogniser returned `exthdt6n6` at confidence 0.5; the
     /// panel rendered it as confidently as a correct reading (finding 6b).
     public let confidence: Double
+    /// **Text is missing from inside this line**: a run on it was cut by a tile's inner edge in every tile that read it,
+    /// so what lay past that edge was read by none (`BandTiling.rereads`). False for a line read in one piece.
+    public let cutInside: Bool
 
-    public init(text: String, box: CGRect, runs: [RecognisedRun], confidence: Double = 1) {
+    public init(text: String, box: CGRect, runs: [RecognisedRun], confidence: Double = 1, cutInside: Bool = false) {
         self.text = text
         self.box = box
         self.runs = runs
         self.confidence = confidence
+        self.cutInside = cutInside
     }
 }
 
@@ -261,7 +265,7 @@ public enum LineJoiner {
     }
 
     /// The chosen rows as one run of text, with everything a caller needs to point back into it.
-    private static func assemble(
+    static func assemble(
         _ members: [Int], of rows: [Row], seed: Int, pointingAt index: Int, in lines: [RecognisedLine]
     ) -> TextBlock {
         var text = ""
@@ -535,6 +539,14 @@ public enum CaptureEdge {
             box.minX <= tolerance || box.maxX >= 1 - tolerance
                 || box.minY <= tolerance || box.maxY >= 1 - tolerance
         }
+    }
+
+    /// **Whether a box runs into the capture's left or right edge** — the window's own, since the strip is the window's
+    /// full width, so text that ran into it may go on in a part of the window that cannot be seen. The top and bottom are
+    /// not asked here: the strip's own edges are answered by `ParagraphFinder`, which asks whether the layout shows a
+    /// boundary before them, and a box merely near them proves nothing either way.
+    public static func clipsAcross(_ boxes: [CGRect], tolerance: CGFloat = 0.004) -> Bool {
+        boxes.contains { $0.minX <= tolerance || $0.maxX >= 1 - tolerance }
     }
 
     /// **Whether text may be missing between two observations a sentence runs across.**

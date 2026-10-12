@@ -54,6 +54,34 @@ struct ScreenTextRecogniserBandTests {
         #expect(lines.flatMap(\.runs).map(\.text) == ["t1", "t2", "t3", "t4"], "each tile's run once, in order")
     }
 
+    /// **The wire for a token every tile cut**: it is read again from a tile of its own, and the band's line holds it
+    /// whole. The stub knows a tile only by the order it is asked in — the plan's four, then the re-read.
+    @Test func aTokenEveryTileCutIsReadAgainWhole() throws {
+        let image = try Self.band(width: 5120)
+        let path = "/Users/alice/github/someone/myprojects/someonedict/.claude/worktrees/spelling-suggestion-gates2;"
+        var calls = 0
+        func line(_ text: String, from: CGFloat, to: CGFloat, tileX: CGFloat) -> RecognisedLine {
+            let box = CGRect(x: (from - tileX) / 2000, y: 0.4, width: (to - from) / 2000, height: 0.2)
+            return RecognisedLine(text: text, box: box, runs: [RecognisedRun(text: text, utf16Offset: 0, box: box)])
+        }
+        let lines = try ScreenTextRecogniser.recognise(image) { tile in
+            defer { calls += 1 }
+            #expect(tile.width == 2000)
+            switch calls {
+            case 0: return [line("/Users/alice", from: 1801, to: 2000, tileX: 0)]
+            case 1: return [line(String(path.dropLast()), from: 1801, to: 3400, tileX: 1400)]
+            case 2: return [line("vorktrees/spelling-suggestion-gates2;", from: 2800, to: 3419, tileX: 2800)]
+            case 3: return [line("ion-gates2;", from: 3120, to: 3419, tileX: 3120)]
+            default:
+                // The re-read is centred on the token's pieces: 1801...3419, centre 2610, so it starts at 1610.
+                return [line(path, from: 1801, to: 3419, tileX: 1610)]
+            }
+        }
+        #expect(calls == 5, "the token was read again \(calls - 4) times")
+        #expect(lines.flatMap(\.runs).map(\.text) == [path])
+        #expect(!lines.contains { $0.cutInside })
+    }
+
     /// A band that already fits is read in one call, exactly as before tiling: nothing changes for an ordinary window.
     @Test func aNarrowBandIsOneCallAndUntouched() throws {
         let image = try Self.band(width: 1600)

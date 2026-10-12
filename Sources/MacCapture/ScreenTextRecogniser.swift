@@ -1,5 +1,7 @@
 import Capture
 import DictionaryModel
+import os
+import XiaolaiDictBase
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import Vision
 
@@ -16,9 +18,16 @@ struct Recognition: Sendable {
     let mayBeCut: Bool
     let appName: String?
     let bundleID: String?
+    /// The sides on which the sentence ran into the strip's edge with no boundary in sight — where a taller strip could
+    /// finish it. Empty when the sentence is whole, or when what stopped it cannot be helped by reading more.
+    var wantsMore: StripSides = []
     /// **Where the word is on screen**, y down: the box of the run it was read from — the finest box Vision gives, so
     /// it holds the word and whatever the run joins to it (`containing`). Nil where the box is not one worth trusting.
     var bounds: ReadBounds?
+    /// **The rest of the sentence, still to be read**: a taller strip toward `wantsMore`, read while the card is already
+    /// up, answering the reading it settled on — or nil where nothing grew. Nil where there is nothing to grow, or no
+    /// budget to grow it in. Whoever runs it holds the one capture until it ends.
+    var growth: (@Sendable () async -> Recognition?)?
 }
 
 enum RecognitionError: LocalizedError, Equatable {
@@ -64,13 +73,9 @@ enum RecognitionError: LocalizedError, Equatable {
 /// and the only one that can be *wrong* rather than merely absent. It exists because some surfaces
 /// expose no text at all: a terminal, a canvas, an image.
 final class ScreenTextRecogniser: Sendable {
-    /// A band the full width of the window, tall enough for a sentence that wraps.
-    ///
-    /// Not a box around the pointer: that scope **fabricates sentences**. Two visible line
-    /// fragments were joined into one that reads perfectly and was never on screen. A band costs
-    /// 349 ms against the box's 267 ms and gets the sentence whole.
-    static let bandHeight: CGFloat = 140
-
+    /// **A strip the full width of the window, centred on the pointer's row** — `ContextStrip` has its heights and how
+    /// it grows. Not a box around the pointer: that scope **fabricates sentences**. Two visible line fragments were
+    /// joined into one that reads perfectly and was never on screen.
     /// **The widest image, in pixels, Vision is given in one call.** The band is the window's whole width — 5120
     /// px on the dev Mac — and the width of the *image* decides whether small text is read: in one call that band
     /// read 47% of uncommon words exactly on real Ghostty captures (0% at 12 pt, 25–30% at 14 pt) and 2000 px strips
@@ -86,6 +91,10 @@ final class ScreenTextRecogniser: Sendable {
     /// How far neighbouring tiles overlap, in pixels: a word on a boundary is whole in one of them when the overlap
     /// reaches half its length past the boundary on each side, so this holds a word of 25 cells at 2x.
     static let tileOverlapPixels: CGFloat = 600
+
+    /// How many times a band is read again for tokens every tile cut. Each round is one Vision call per such token,
+    /// ~50–100 ms, and only where one exists; two rounds read whole every path the 2026-10-11 sweep cut but one.
+    static let maximumRereadRounds = 2
 
     private let cache = ShareableContentCache()
 
@@ -114,6 +123,68 @@ final class ScreenTextRecogniser: Sendable {
         // guard while it did, so the lookup that *is* wanted queues behind it. Two simultaneous
         // captures deadlock, which is why that guard exists and why occupying it needlessly costs
         // the next lookup rather than only this one.
+        let started = ContinuousClock.now
+        var first = try await read(target, at: point, of: window)
+        let lastRead = ContinuousClock.now - started
+        // **The word now, the rest of the sentence after** (C1, 2026-10-11): the card does not wait for a taller strip.
+        // Offered only where a taller one could be read inside the budget, so a sentence nothing can finish is never
+        // drawn as still being read.
+        if Self.taller(than: target, toward: first.wantsMore, elapsed: lastRead, lastRead: lastRead) != nil {
+            first.growth = { [self, first] in
+                await self.grow(first, strip: target, at: point, of: window, started: started, lastRead: lastRead)
+            }
+        }
+        return first
+    }
+
+    /// The strip grown toward `sides`, where it can grow and a further read still fits the budget.
+    private static func taller(
+        than strip: Target, toward sides: StripSides, elapsed: Duration, lastRead: Duration
+    ) -> Target? {
+        guard !sides.isEmpty,
+              let taller = ContextStrip.grown(
+                  strip.region.minY...strip.region.maxY, toward: sides, within: strip.frame.minY...strip.frame.maxY),
+              ContextStrip.affordable(elapsed: elapsed, lastRead: lastRead)
+        else { return nil }
+        return strip.vertically(taller)
+    }
+
+    /// **Grown only where the sentence ran into the strip's edge**, one side at a time, and only while a further read can
+    /// finish inside the budget, counted from the first read's start: growing must never turn a read that answered into
+    /// one that timed out. Where growth stops short, the sentence is already marked as possibly cut. Answers the last
+    /// reading made, or nil where none was made beyond `first` — a reader who moved on included.
+    private func grow(
+        _ first: Recognition, strip from: Target, at point: CGPoint, of window: ListedWindow,
+        started: ContinuousClock.Instant, lastRead firstRead: Duration
+    ) async -> Recognition? {
+        var strip = from
+        var reading = first
+        var grown: Recognition?
+        var lastRead = firstRead
+        while let next = Self.taller(
+            than: strip, toward: reading.wantsMore, elapsed: ContinuousClock.now - started, lastRead: lastRead) {
+            guard !Task.isCancelled else { return nil }
+            let begun = ContinuousClock.now
+            do {
+                reading = try await read(next, at: point, of: window)
+            } catch {
+                // **What was read stands.** A window that moved, or a pointer the taller strip could not place, says
+                // nothing against the reading already made — which carries its own `mayBeCut`.
+                if !(error is CancellationError) {
+                    Self.log.notice("capture: the taller strip was not read (\(error.localizedDescription, privacy: .public)); keeping the \(Int(strip.region.height), privacy: .public) pt reading")
+                }
+                break
+            }
+            Self.log.info("capture: the strip grew to \(Int(next.region.height), privacy: .public) pt toward \(reading.wantsMore.rawValue, privacy: .public)")
+            strip = next
+            grown = reading
+            lastRead = ContinuousClock.now - begun
+        }
+        return Task.isCancelled ? nil : grown
+    }
+
+    /// One capture of `target` and its reading: the pixels, Vision, then the word and sentence under `point`.
+    private func read(_ target: Target, at point: CGPoint, of window: ListedWindow) async throws -> Recognition {
         try Task.checkCancellation()
         let image = try await capture(target, of: window)
         // Recognition is synchronous and the slowest step after the capture; a cancellation that
@@ -121,6 +192,9 @@ final class ScreenTextRecogniser: Sendable {
         try Task.checkCancellation()
         return try Self.hit(in: try recognise(image), at: point, target: target)
     }
+
+    /// Where a reading is said to have grown or stopped short. No reader-facing text.
+    private static let log = Logger(subsystem: XiaolaiDictIdentity.app, category: "recognition")
 
     /// Consent, then the window's capture target, then its owner against `policy` — all before a pixel.
     private func authorisedTarget(at point: CGPoint, window: ListedWindow, policy: HoverPolicy) async throws -> Target {
@@ -193,9 +267,11 @@ final class ScreenTextRecogniser: Sendable {
         _ lines: [RecognisedLine], pick: RecognisedPick, at cursor: CGPoint, region: CGSize,
         appName: String?, bundleID: String?
     ) -> Recognition? {
-        // A sentence outruns its line, so segment over the whole block of lines around it.
-        let block = LineJoiner.block(around: pick.line, in: lines, region: region)
-        let blockClipped = CaptureEdge.clips(block.lineIndices.map { lines[$0].box })
+        // **The paragraph around the pointer, in its own column**, and the sides on which the strip ran out before the
+        // paragraph did. A side with no boundary in evidence is a cut: the sentence may go on past it.
+        let paragraph = ParagraphFinder.paragraph(around: pick.line, in: lines, region: region)
+        let block = paragraph.block
+        let blockClipped = Self.clipping(paragraph.open, across: block.lineIndices.map { lines[$0].box })
         // **Which token of the run, decided by the pointer.** A run is all Vision can box, so
         // taking its start meant `/Users/alice/…` answered `Users` wherever in it the reader
         // pointed, and `state-of-the-art` answered `state`. The bounds-scan and text-marker
@@ -209,7 +285,7 @@ final class ScreenTextRecogniser: Sendable {
         let offset = block.offsetShift + run.utf16Offset + start
         guard let word = TextSegmenter.word(
             in: block.text, utf16Offset: offset,
-            clipped: blockClipped ? [.start, .end] : [])
+            clipped: blockClipped)
         else { return nil }
 
         // **Both quality signals are scoped to the sentence that is actually returned.** The block
@@ -218,7 +294,7 @@ final class ScreenTextRecogniser: Sendable {
         // and the block's clipping says a whole interior sentence may be cut when it cannot be.
         let span = Self.span(of: word.sentence, containing: offset, in: block.text)
         let covering = block.lines(covering: span, in: lines)
-        let clipped = CaptureEdge.clips(covering.map { lines[$0].box })
+        let clipped = Self.clipping(paragraph.open, across: covering.map { lines[$0].box })
 
         // **One clipping answer, because the two were answering different questions.** The
         // geometric test says an *observation* touches the capture's edge; `SentenceContext`
@@ -231,7 +307,7 @@ final class ScreenTextRecogniser: Sendable {
         // output. Cutting again where it differs costs one more segmentation and removes the
         // possibility of the two disagreeing, rather than relying on them not to.
         let settled = clipped == blockClipped ? word : TextSegmenter.word(
-            in: block.text, utf16Offset: offset, clipped: clipped ? [.start, .end] : [])
+            in: block.text, utf16Offset: offset, clipped: clipped)
         guard let settled else { return nil }
 
         // **And the junction, which neither answer sees.** A sentence running across two
@@ -251,16 +327,34 @@ final class ScreenTextRecogniser: Sendable {
         // sentence reach the block's ends — so it cannot express a cut in the middle, and leaving
         // the two to be computed separately is what let them disagree in the first place. The
         // sentence is rebuilt carrying the answer rather than left to derive its own.
-        let cut = settled.sentence.mayBeCut || junction
+        // **And text missing from inside a line**: a run every tile cut and no re-read could read whole. The sentence is
+        // kept, as any possibly-cut one is, and said to be so.
+        let cut = settled.sentence.mayBeCut || junction || covering.contains { lines[$0].cutInside }
         guard let sentence = SentenceContext(
-            text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection)
+            text: settled.sentence.text, mayBeCut: cut, selection: settled.sentence.selection, cut: settled.sentence.cut)
         else { return nil }
 
+        // **What a taller strip could finish**: an open side the sentence reaches, unless the length cap closed it.
+        var wantsMore: StripSides = []
+        if paragraph.growable.contains(.above), span.location == 0 { wantsMore.insert(.above) }
+        if paragraph.growable.contains(.below), NSMaxRange(span) >= (block.text as NSString).length {
+            wantsMore.insert(.below)
+        }
         return Recognition(
             word: WordAtPoint(word: settled.word, sentence: sentence),
             confidence: block.confidence(over: span, in: lines),
             mayBeCut: cut,
-            appName: appName, bundleID: bundleID)
+            appName: appName, bundleID: bundleID, wantsMore: wantsMore)
+    }
+
+    /// Which ends of the text read may be cuts: both, where a line runs into the window's left or right edge; otherwise
+    /// the start where the strip's top was open and the end where its bottom was.
+    static func clipping(_ open: StripSides, across boxes: [CGRect]) -> TextSegmenter.Clipping {
+        if CaptureEdge.clipsAcross(boxes) { return [.start, .end] }
+        var clipping: TextSegmenter.Clipping = []
+        if open.contains(.above) { clipping.insert(.start) }
+        if open.contains(.below) { clipping.insert(.end) }
+        return clipping
     }
 
     /// Where the returned sentence sits inside the block, UTF-16.
@@ -310,6 +404,15 @@ final class ScreenTextRecogniser: Sendable {
         let bundleID: String?
         /// The window's frame when the capture was set up, in global screen points.
         let frame: CGRect
+
+        /// The same window and width, over `rows` — a vertical range in global screen points.
+        func vertically(_ rows: ClosedRange<CGFloat>) -> Target {
+            let region = CGRect(x: region.minX, y: rows.lowerBound, width: region.width, height: rows.upperBound - rows.lowerBound)
+            return Target(
+                filter: filter, region: region,
+                sourceRect: CGRect(origin: CGPoint(x: region.minX - frame.minX, y: region.minY - frame.minY), size: region.size),
+                appName: appName, bundleID: bundleID, frame: frame)
+        }
     }
 
     /// The capture for `window`, found by its compositor number in ScreenCaptureKit's list.
@@ -334,7 +437,7 @@ final class ScreenTextRecogniser: Sendable {
         guard let window = found, Self.sameGeometry(window.frame, live) else { throw RecognitionError.windowNotCapturable }
         let frame = window.frame
         let region = CaptureGeometry.rect(
-            around: point, size: CGSize(width: frame.width, height: Self.bandHeight), within: frame)
+            around: point, size: CGSize(width: frame.width, height: ContextStrip.initialHeight), within: frame)
         // `sourceRect` is window-local and starts at (0, 0), even though `filter.contentRect`
         // reports the window's frame in *global* screen coordinates. Adding that origin puts
         // the rect outside the window and the capture fails with "invalid parameter" — and
@@ -420,11 +523,24 @@ final class ScreenTextRecogniser: Sendable {
             forWidth: image.width, maximum: Int(maximumTilePixels), overlap: Int(tileOverlapPixels))
         guard tiles.count > 1 else { return try readTile(image) }
         var read: [(tile: BandTile, lines: [RecognisedLine])] = []
-        for tile in tiles {
-            try Task.checkCancellation()
-            guard let part = image.cropping(to: CGRect(x: tile.x, y: 0, width: tile.width, height: image.height))
-            else { throw RecognitionError.windowNotCapturable }
-            read.append((tile, try readTile(part)))
+        func readAll(_ tiles: [BandTile]) throws {
+            for tile in tiles {
+                try Task.checkCancellation()
+                guard let part = image.cropping(to: CGRect(x: tile.x, y: 0, width: tile.width, height: image.height))
+                else { throw RecognitionError.windowNotCapturable }
+                read.append((tile, try readTile(part)))
+            }
+        }
+        try readAll(tiles)
+        // **A token longer than the overlap is read again, whole, from a tile of its own** — every tile cut it, and the
+        // merge could otherwise keep only one of its pieces (`BandTiling.rereads`). A re-read can itself cut a piece it
+        // chained in, so it is asked once more; past that a line still cut inside says so rather than reading on.
+        var rounds = 0
+        var again = BandTiling.rereads(read, bandWidth: image.width, maximum: Int(maximumTilePixels))
+        while !again.isEmpty, rounds < maximumRereadRounds {
+            try readAll(again)
+            rounds += 1
+            again = BandTiling.rereads(read, bandWidth: image.width, maximum: Int(maximumTilePixels))
         }
         return BandTiling.merged(read, bandWidth: image.width)
     }

@@ -89,16 +89,27 @@ final class LookupRunner {
     /// `placement` is where the word sits in the selection's sentence, nil for where the capture put it. A followed
     /// correction is `.notInSentence`: its sentence is the one the misspelling was read in, the word itself is in no
     /// position of it, and the card and the tagger must not go looking for it there.
+    ///
+    /// `context` is the rest of a sentence still being read off the screen (`PendingContext`). **The card does not wait
+    /// for it**: the dictionaries are asked and drawn at once, beside the first strip's sentence marked as still being
+    /// read. **The sense is proposed only once it settles**, on the sentence it settled to, and the reading is recorded
+    /// with that sentence — so no proposal is made on an interim sentence and none changes under the reader.
     func run(
-        _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
-        placement given: TermPlacement? = nil, protecting word: WordBounds? = nil,
+        _ read: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
+        placement given: TermPlacement? = nil, protecting word: WordBounds? = nil, context: PendingContext? = nil,
         seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
-        let placement = given ?? selection.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
+        // **Whatever ends this lookup before its context is used ends the reading for it too**, so the capture it holds
+        // is let go: a context nobody will show is not read on.
+        var unsettled = context
+        defer { unsettled?.cancel() }
+        // The interim reading, replaced by the settled one where a context settles while this lookup holds the panel.
+        var selection = read
+        var placement = given ?? selection.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
         // **The sentence the word is tagged in, and none for a word in no position of it.** Given the reader's sentence
         // and no range, the tagger binds the word to any other occurrence of it — the verb *record* in "They record it,
         // and the recrod shows." — and lemmatises and tags that one (audit, 2026-10-09). Alone, it is the word.
-        let taggedIn = placement == .notInSentence ? nil : selection.sentence
+        var taggedIn = placement == .notInSentence ? nil : selection.sentence
         let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
         // **A `stat`, and only to notice that the service finished a build** since this process last read the
         // table; the read itself is off this path, and a lookup meanwhile uses the table in force.
@@ -108,6 +119,7 @@ final class LookupRunner {
         let tableAtFirst = FormAuthority.shared.revision
         var lemma = Lemmatizer.lemma(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
         var presentation = Self.presentation(of: selection, placement: placement, lemma: lemma, request: ticket.number)
+        presentation.sentenceStillBeingRead = context != nil
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
         // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
         // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
@@ -127,7 +139,7 @@ final class LookupRunner {
         // a named word, without the sentence it is not in, and reopened the same way — so its language is the word's
         // alone: "I saw teh cat." reads as Catalan and "the" as English, and a note's language is part of its identity
         // (ADR-0029), so judged from the sentence, Save after a reopen made a second note (audit round 3, 2026-10-09).
-        let language = Lemmatizer.language(of: selection.text, in: taggedIn)
+        var language = Lemmatizer.language(of: selection.text, in: taggedIn)
         // **The primary is frozen only now, after the panel is up and not before**: a reader whose language
         // has not been derived yet (first lookup after an upgrade or a language change) waits here, bounded,
         // rather than studying from whatever is first in Dictionary.app's order for this one lookup.
@@ -146,7 +158,7 @@ final class LookupRunner {
         let chosenPrimary = primary()
         // **What every recording of this lookup shares, worked out once** — the pending row, the
         // answered one and the final one differ only in what they add to it (audit round 3, #29).
-        let basis = RecordingBasis(
+        var basis = RecordingBasis(
             selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
             lookup: existingLookup, keepPolicy: frozenKeepPolicy, placement: placement)
         let pending = basis.pending(primaryDictionary: chosenPrimary.chosen ?? chosenPrimary.automatic)
@@ -182,7 +194,9 @@ final class LookupRunner {
         }
         reportSeen(true)
         mark(.panelShown, ticket.number, shownAt)
-        initialRecording(pending, ticket.number)
+        // **No row before the context it will hold.** A reading still being read is begun once its sentence has
+        // settled, with that sentence — one reading, with the context its proposal is made on.
+        if context == nil { initialRecording(pending, ticket.number) }
         let (answered, answeredAt) = await answer
         guard let resolved = answered, panel.isCurrent(ticket) else {
             history.cancel()
@@ -215,7 +229,8 @@ final class LookupRunner {
         // senses under `take something into account` — noise in the candidate set, and a hypothesis the
         // selector could confidently pick. `PhraseHit.entries` is already empty for that case; this says so
         // rather than relying on it.
-        let phraseEntries = Self.candidateEntries(of: resolved.phrase)
+        var phrase = resolved.phrase
+        var phraseEntries = Self.candidateEntries(of: phrase)
         // Built here rather than inside the `async let`: the closure that reads the reader's chosen
         // dictionary belongs to this actor and must not travel with the work.
         // **Which entry the card opens on.** Set here, from the same `PrimaryDictionary` the
@@ -244,12 +259,13 @@ final class LookupRunner {
         // **The phrase's entries go with it**, so this early row claims no more than the resolver
         // will: a one-sense word inside a phrase is not yet resolved, and automatic keeping must
         // not confirm it before the selector has weighed the two.
-        let early = pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt)
-        initialRecording(basis.recording(
-            outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
-            phraseOfEncounter: Self.phrase(owning: early, in: resolved.phrase)), ticket.number)
+        if context == nil {
+            let early = pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt)
+            initialRecording(basis.recording(
+                outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
+                phraseOfEncounter: Self.phrase(owning: early, in: phrase)), ticket.number)
+        }
         let resolver = SenseResolver(primary: pinned, selector: selector)
-        let partOfSpeech = Lemmatizer.partOfSpeech(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
 
         // **Each arrives when it is ready, and neither waits for the other.** Both were already
         // started side by side, and then awaited in a fixed order — so a sense the selector had
@@ -264,29 +280,25 @@ final class LookupRunner {
         //
         // The memory strip is absent on a first lookup, so a reader meeting a word for the first
         // time is shown nothing rather than "0 previous".
-        enum Arrival: Sendable {
-            case memory(PriorEncounters)
-            case sense(SenseResolution)
-            /// Nil where the decision was cancelled — a newer lookup — and with how long it took.
-            case suggestion(SpellingDecision?, Duration)
-        }
         var resolution = SenseResolution(mark: nil, encounter: nil)
         await withTaskGroup(of: Arrival.self) { group in
             // **Cancelled with the group.** `history` is a task of its own, which cancelling this
             // child would not reach — a superseded lookup went on waiting for its ledger read.
             group.addTask { .memory(await value(of: history, orOnCancel: { PriorEncounters() })) }
-            // **A child of the group, never a `Task` of its own.** An unstructured task does not
-            // inherit cancellation, so superseding a lookup left the sense resolver running — and
-            // on the model's rung that is the GPU still answering a question nobody is waiting for.
-            // `async let` had that property and an earlier version of this merge threw it away by
-            // reaching for `Task { }`; a group child has it back, and the group is what allows the
-            // two answers to arrive in either order.
-            group.addTask {
-                .sense(await resolver.resolve(
-                    entries: entries, phrase: phraseEntries,
-                    // A misread sentence is no evidence for a meaning: the picker abstains for want of one.
-                    sentence: selection.quality.doubts(sentence: selection.sentence) ? nil : selection.sentence,
-                    context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
+            // **The sense is asked about a settled sentence only.** Where the rest of it is still being read, it is asked
+            // once that settles — a child of the group, so superseding the lookup cancels the reading as it cancels the
+            // sense — and the phrase is asked again about the sentence it settled to, which is what the sense weighs.
+            if let context {
+                group.addTask { [client] in
+                    guard let settled = await context.settled(bound: PendingContext.longestWait), !Task.isCancelled else { return .context(nil, nil) }
+                    let reply = try? await client.lookup(LookupRequest(
+                        term: settled.text, sentence: settled.sentence, termLocation: settled.rangeInSentence?.location,
+                        termLength: settled.rangeInSentence?.length))
+                    return .context(settled, reply?.phrase)
+                }
+            } else {
+                Self.addSense(to: &group, resolver: resolver, for: selection, in: taggedIn, entries: entries,
+                              phrase: phraseEntries)
             }
             // **"Look up “X”", a third arrival, after the miss is already on the card** — so the card is final-looking
             // the moment the dictionaries answer, and the line fills in once the checker and the dictionaries have spoken.
@@ -295,14 +307,50 @@ final class LookupRunner {
             // **And the dictionary form** (plan-card-refinements WI-3): the lemma this lookup already settled, weighed
             // against the checker's word — one offer or none, never looked up in the reader's place. The capture's source
             // is recorded with the decision and weighed by nothing: recognised text gets no larger edit budget.
-            group.addTask { [suggester, lemma] in
+            group.addTask { [suggester, lemma, term = selection.text, source = selection.quality.source] in
                 let started = ContinuousClock.now
-                let decision = try? await suggester.decide(for: selection.text, outcome: outcome, lemma: lemma,
-                                                           capture: selection.quality.source)
+                let decision = try? await suggester.decide(for: term, outcome: outcome, lemma: lemma,
+                                                           capture: source)
                 return .suggestion(decision, .now - started)
             }
-            for await arrival in group {
+            while let arrival = await group.next() {
                 switch arrival {
+                case .context(let settled, let found):
+                    unsettled = nil
+                    let current = panel.isCurrent(ticket)
+                    // **Only onto the card it was read for**: an older capture never updates a newer lookup.
+                    if let settled, current {
+                        selection = settled
+                        placement = given ?? settled.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
+                        taggedIn = placement == .notInSentence ? nil : settled.sentence
+                        lemma = Lemmatizer.lemma(of: settled.text, in: taggedIn, at: settled.rangeInSentence)
+                        language = Lemmatizer.language(of: settled.text, in: taggedIn)
+                        basis = RecordingBasis(
+                            selection: settled, lemma: lemma, language: language, requestedAt: requestedAt,
+                            lookup: existingLookup, keepPolicy: frozenKeepPolicy, placement: placement)
+                        let whole = Self.presentation(of: settled, placement: placement, lemma: lemma, request: ticket.number)
+                        presentation.lemma = whole.lemma
+                        presentation.capture = whole.capture
+                        presentation.sentence = whole.sentence
+                        presentation.sentenceLooksMisread = whole.sentenceLooksMisread
+                        presentation.sentenceCut = whole.sentenceCut
+                        presentation.termPlacement = whole.termPlacement
+                        if let found { phrase = found }
+                        phraseEntries = Self.candidateEntries(of: phrase)
+                        presentation.phrase = PhrasePresentation(
+                            phrase, sentence: presentation.sentence, studyDictionary: effectivePrimary)
+                    }
+                    presentation.sentenceStillBeingRead = false
+                    if current { panel.update(.lookup(presentation), for: ticket) }
+                    // **The reading is begun now, with the sentence its proposal is made on.**
+                    let early = pinned.encounter(among: entries, phrase: phraseEntries, at: requestedAt)
+                    initialRecording(basis.recording(
+                        outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
+                        phraseOfEncounter: Self.phrase(owning: early, in: phrase)), ticket.number)
+                    // A lookup the reader moved on from is asked for no proposal: nobody would see it.
+                    guard current, !Task.isCancelled else { continue }
+                    Self.addSense(to: &group, resolver: resolver, for: selection, in: taggedIn, entries: entries,
+                                  phrase: phraseEntries)
                 case .memory(let prior):
                     guard panel.isCurrent(ticket), prior != PriorEncounters() else { continue }
                     presentation.memory = MemoryStrip(prior)
@@ -312,7 +360,7 @@ final class LookupRunner {
                     resolution = answered
                     mark(.senseResolved, ticket.number, .now)
                     guard answered.mark != nil, panel.isCurrent(ticket) else { continue }
-                    Self.apply(answered, to: &presentation, phrase: resolved.phrase,
+                    Self.apply(answered, to: &presentation, phrase: phrase,
                                studyDictionary: effectivePrimary)
                     panel.update(.lookup(presentation), for: ticket)
                 case .suggestion(let decision, let took):
@@ -339,7 +387,26 @@ final class LookupRunner {
             // was never finished being asked.
             abstention: Task.isCancelled ? nil : resolution.abstention,
             encounter: resolution.encounter, primaryDictionary: effectivePrimary,
-            phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: resolved.phrase))
+            phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: phrase))
+    }
+
+    /// The sense question, asked of `selection`'s sentence — **a child of the group, never a `Task` of its own.** An
+    /// unstructured task does not inherit cancellation, so superseding a lookup left the sense resolver running — and on
+    /// the model's rung that is the GPU still answering a question nobody is waiting for. `async let` had that property
+    /// and an earlier version of this merge threw it away by reaching for `Task { }`; a group child has it back, and the
+    /// group is what allows the answers to arrive in any order.
+    private static func addSense(
+        to group: inout TaskGroup<Arrival>, resolver: SenseResolver, for selection: Selection, in taggedIn: String?,
+        entries: [DictionaryEntry], phrase: [DictionaryEntry]
+    ) {
+        let partOfSpeech = Lemmatizer.partOfSpeech(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
+        group.addTask {
+            .sense(await resolver.resolve(
+                entries: entries, phrase: phrase,
+                // A misread sentence is no evidence for a meaning: the picker abstains for want of one.
+                sentence: selection.quality.doubts(sentence: selection.sentence) ? nil : selection.sentence,
+                context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
+        }
     }
 
     /// **What a press on the card's "Look up “X”" looks up**: the offered word, in the sentence and the place the miss
@@ -396,11 +463,14 @@ final class LookupRunner {
         // **A sentence with signs of a misread is not the reader's sentence**, however whole: the card says so instead
         // of drawing it, and nothing downstream — the sentence pane, translation, the phrase line — is given it.
         let misread = selection.quality.doubts(sentence: selection.sentence)
-        let usable = selection.quality.context == .complete && !misread
+        // **A sentence that may be cut is shown and used, and marked** (the owner's decision, 2026-10-11): never gate,
+        // always annotate. Only a misread one is withheld.
+        let usable = !misread
         var presentation = LookupPresentation(
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
             sentence: usable ? selection.sentence : nil, outcome: nil)
         presentation.sentenceLooksMisread = misread
+        presentation.sentenceCut = usable && selection.sentence != nil ? selection.sentenceCut : []
         // Kept beside the sentence it indexes: without it the card has to search, and a search
         // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
         // the sentence, another occurrence of it.
@@ -490,6 +560,17 @@ final class LookupRunner {
 
 }
 
+/// What reaches a lookup after its entry is on the card, in whatever order it arrives.
+private enum Arrival: Sendable {
+    case memory(PriorEncounters)
+    case sense(SenseResolution)
+    /// The sentence a context settled to — nil where the first reading stands — and the phrase the dictionaries find in
+    /// it, nil where they could not be asked.
+    case context(Selection?, PhraseAnswer?)
+    /// Nil where the decision was cancelled — a newer lookup — and with how long it took.
+    case suggestion(SpellingDecision?, Duration)
+}
+
 /// What every recording of one lookup shares — the selection, its lemma and language, when it was asked,
 /// its script, which row it reopens and the keep policy frozen at the start. **Worked out once**: the
 /// pending row, the answered row and the final row were three constructions that each re-derived it,
@@ -565,7 +646,9 @@ private struct RecordingBasis {
             quality: quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
-            senseAbstention: abstention, script: script)
+            senseAbstention: abstention, script: script,
+            // Which side of the sentence may be cut, so a reopened card draws it where this one did.
+            contextCut: named ? [] : selection.sentenceCut)
     }
 }
 

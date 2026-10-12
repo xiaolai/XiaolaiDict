@@ -62,7 +62,9 @@ struct ReadingSentence: View {
     let ranges: [NSRange]
     let accent: Color
     var emphasis: WordEmphasis = CardOptions().emphasis
-    var truncated = false
+    /// The sides the capture may have cut, as recorded — empty for a whole sentence and for an unknown side alike: only
+    /// a known side gets an ellipsis.
+    var cut: TextSegmenter.Clipping = []
     var body: some View {
         SentenceWindowText(windows: SentenceExcerpt.windows(sentence: sentence, marks: ranges),
                            fullSentence: sentence, style: styled)
@@ -72,10 +74,9 @@ struct ReadingSentence: View {
             .fixedSize(horizontal: false, vertical: true)
     }
     private func styled(_ window: SentenceExcerpt) -> AttributedString {
-        var text = MarkedSentence.text(window.text, marking: window.marks, size: scale.text.body,
+        let text = MarkedSentence.text(window.text, marking: window.marks, size: scale.text.body,
                                        emphasis: emphasis, accent: accent)
-        if truncated { text.append(AttributedString("…")) }
-        return text
+        return CutEllipsis.applied(to: text, cut: cut, startAlreadyCut: window.clippedBefore)
     }
 }
 
@@ -379,9 +380,16 @@ struct ReadingCardView: View {
     /// The sentence, whole when it fits the card's lines and cut to a window around the word when
     /// it does not — the first that fits, chosen at the card's width. Where a window cut the start
     /// off, the whole sentence is one hover away: it is still the reader's own, and never a gloss.
-    private var sentenceLine: some View {
-        ReadingSentence(sentence: entry.sentence, ranges: entry.markedRanges, accent: accent,
-                        emphasis: options.emphasis, truncated: entry.cue == .truncatedSentence)
+    @ViewBuilder private var sentenceLine: some View {
+        let sentence = ReadingSentence(sentence: entry.sentence, ranges: entry.markedRanges, accent: accent,
+                                       emphasis: options.emphasis, cut: entry.sentenceCut)
+        // **A possible cut on a side never recorded**, said without a direction: drawn as one ellipsis at the end, a
+        // reading kept before the side was would have claimed where it was cut.
+        if entry.cutSideUnknown {
+            sentence.help(Text("Part of this sentence may not have been read."))
+        } else {
+            sentence
+        }
     }
 
     /// Shown only because the reader asked. Set apart from the sentence so it cannot be mistaken

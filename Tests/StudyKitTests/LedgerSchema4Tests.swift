@@ -112,8 +112,10 @@ struct LedgerSchema4Tests {
     ///
     /// 12: WI-007 — `review_events.kind` for practice, `study_tags`, and `study_ignored_lemmas`.
     /// `StudyOrganisationTests`.
+    ///
+    /// 14: `lookups.context_cut` — which side of a possible cut, NULL for a side never recorded. `ContextCutTests`.
     @Test func theSchemaIsTwelve() {
-        #expect(Ledger.schemaVersion == 13)
+        #expect(Ledger.schemaVersion == 14)
     }
 
     /// Schema 6: why the selector declined is kept, and "the model declined this sentence" reads

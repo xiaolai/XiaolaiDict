@@ -246,8 +246,9 @@ struct SenseSelectionAccuracyTests {
         let fine = try Self.candidates(for: "fine")
 
         #expect(await selector.choose(from: fine, reading: nil, context: .missing).abstention == .noContext)
+        // A sentence that may be cut is still evidence (the owner's decision, 2026-10-11): never refused as none.
         #expect(await selector.choose(
-            from: fine, reading: "He was ordered to pay a heavy", context: .mayBeCut).abstention == .noContext)
+            from: fine, reading: "He was ordered to pay a heavy", context: .mayBeCut).abstention != .noContext)
 
         // A dictionary that marks senses with nothing a parser can key to.
         let collins = try DictionaryBridge.entries(for: "fine").entries
@@ -362,14 +363,15 @@ struct FoundationModelsRungTests {
         if let key = choice.key { #expect(candidates.map(\.key).contains(key)) }
     }
 
-    /// The contract holds identically whether or not the model is there: no sentence, no choice.
-    @Test func itAbstainsWithoutAWholeSentence() async throws {
+    /// The contract holds identically whether or not the model is there: no sentence, no choice — and a cut one is one.
+    @Test func itAbstainsWithoutASentence() async throws {
         let candidates = try SenseSelectionAccuracyTests.candidates(for: "fine")
         let selector = FoundationModelsSenseSelector()
         #expect(await selector.choose(
             from: candidates, reading: nil, context: .missing, partOfSpeech: nil).abstention == .noContext)
+        // A sentence that may be cut is still evidence (the owner's decision, 2026-10-11): never refused as none.
         #expect(await selector.choose(
-            from: candidates, reading: "He paid the", context: .mayBeCut, partOfSpeech: nil).abstention == .noContext)
+            from: candidates, reading: "He paid the", context: .mayBeCut, partOfSpeech: nil).abstention != .noContext)
     }
 }
 

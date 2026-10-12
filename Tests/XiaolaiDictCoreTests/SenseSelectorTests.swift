@@ -42,10 +42,18 @@ struct SenseSelectorTests {
     }
 
     /// No sentence, no disambiguation. This is not a failure to report — it is the answer.
-    @Test(arguments: [CaptureQuality.Context.missing, .mayBeCut])
-    func withoutAWholeSentenceItAbstains(context: CaptureQuality.Context) async {
-        let choice = await selector.choose(from: Self.senses, reading: "He paid the fine.", context: context)
+    @Test func withoutASentenceItAbstains() async {
+        let choice = await selector.choose(from: Self.senses, reading: "He paid the fine.", context: .missing)
         #expect(choice == .abstained(.noContext))
+    }
+
+    /// **A sentence that may be cut is still the reader's evidence** (the owner's decision, 2026-10-11: annotate, never
+    /// gate). It was refused outright, so a lookup whose sentence ran one row past the strip lost its meaning too.
+    @Test func aSentenceThatMayBeCutIsStillAsked() async {
+        let cut = await selector.choose(from: Self.senses, reading: "He paid the fine.", context: .mayBeCut)
+        let whole = await selector.choose(from: Self.senses, reading: "He paid the fine.", context: .complete)
+        #expect(cut.abstention != .noContext, "a cut sentence was refused as no sentence: \(cut)")
+        #expect(cut == whole, "the same sentence answered differently for being marked cut")
     }
 
     @Test func anEmptySentenceIsNoSentence() async {
