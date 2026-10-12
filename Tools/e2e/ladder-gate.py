@@ -116,6 +116,13 @@ def judge(report):
     # refused every sentence, once passed unexamined.
     def earns(upper, lower):
         gain = (scored(upper, "right") - scored(lower, "right")) / cases * 100
+        # **The bundled model against Apple's is held to "no worse", not to a margin** (owner, 2026-10-12). The part-of-speech
+        # hint (`pos-hint`) moved the two to 5 right / 1 wrong each on these six cases — it fixed `sanction` for Apple's and
+        # cost the bundled model `rein` — and six cases cannot rank two rungs that tie. The bundled model is hidden
+        # (ADR-0053), so this pair decides no reader's answer by default; what the gate still refuses is the bundled model
+        # answering fewer right or more wrong than Apple's, and every other pair keeps its margin.
+        if (upper, lower) == ("localModel", "onDevice"):
+            return gain >= 0 and scored(upper, "wrong") <= scored(lower, "wrong")
         return gain >= MARGIN and scored(upper, "wrong") <= scored(lower, "wrong")
 
     # Every rung above every rung below it, not only the adjacent pairs: an order A, B, C where A

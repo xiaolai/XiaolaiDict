@@ -92,6 +92,22 @@ class LadderGateTests(unittest.TestCase):
         refusals = gate.judge(report(apple=("right",) * 3 + ("wrong",) * 3))
         self.assertTrue(any("onDevice does not earn its place above embedding" in why for why in refusals), refusals)
 
+    def test_the_bundled_model_tying_apples_rung_passes(self):
+        # 5 right / 1 wrong each, as measured on 2026-10-12 with the part-of-speech hint: a tie is not a refusal.
+        tie = report(local=("right",) * 5 + ("wrong",))
+        self.assertEqual(gate.judge(tie), [])
+
+    def test_the_bundled_model_doing_worse_than_apples_rung_is_refused(self):
+        worse = report(local=("right",) * 4 + ("wrong",) * 2)
+        refusals = gate.judge(worse)
+        self.assertTrue(any("localModel does not earn its place above onDevice" in why for why in refusals), refusals)
+
+    def test_a_tie_with_the_embedding_rung_is_still_refused(self):
+        # The relaxation is for the one pair; every other step keeps its ten-point margin.
+        tie = report(local=("right",) * 3 + ("wrong",) * 3, apple=("right",) * 3 + ("wrong",) * 3)
+        refusals = gate.judge(tie)
+        self.assertTrue(any("does not earn its place above embedding" in why for why in refusals), refusals)
+
     def test_an_apple_rung_that_is_absent_is_skipped(self):
         # Not on this Mac at all: every case abstains because it is unavailable, and the order is
         # then read without it.
