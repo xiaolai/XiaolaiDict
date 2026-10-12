@@ -82,7 +82,7 @@ struct RemoteSendTests {
             endpointSession: session, scratch: { nil }, events: { _ in })
         return ModelBackendRouter(
             source: { source }, local: .init(ask: { _ in nil }, prewarm: {}), factory: factory,
-            dictionaryTextMayLeave: RemoteDisclosure.dictionaryTextMayLeave)
+            consent: .sentenceOnly)
     }
 
     static func body(_ request: LoopbackHTTPServer.Request) -> String {
@@ -194,7 +194,7 @@ struct RemoteSendTests {
         let router = ModelBackendRouter(
             source: { .claudeCLI(path: nil, model: "haiku") }, local: .init(ask: { _ in nil }, prewarm: {}),
             factory: ModelBackendRouterTests.factory(finding: fake, events: EventLog()),
-            dictionaryTextMayLeave: RemoteDisclosure.dictionaryTextMayLeave)
+            consent: .sentenceOnly)
         #expect(await router.ask(.explain(Self.explanation), origin: .reader).tier == .remote)
         _ = await router.ask(.translate(Self.translation), origin: .reader)
         for origin in [QuestionOrigin.lookup, .reader] { _ = await router.ask(.pickSense(Self.senses), origin: origin) }

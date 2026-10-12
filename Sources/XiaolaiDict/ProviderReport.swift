@@ -26,20 +26,22 @@ enum ProviderReport {
         LookupCommand.writeError("provider-status: asking the chosen language-model source one trivial question")
         // **The app's own suite**: inside the bundle `.standard` is the reader's domain, where the choice is kept. The
         // local model is not this instrument's — `--model-status` asks it — so it is asked nothing here.
+        let settings = ProviderSettingsStore(defaults: .standard)
         let router = ModelBackendRouter(
-            choices: ProviderChoiceStore(defaults: .standard), settings: ProviderSettingsStore(defaults: .standard),
+            choices: ProviderChoiceStore(defaults: .standard), settings: settings,
             local: .init(ask: { _ in nil }, prewarm: {}))
-        return await status(router: router, write: LookupCommand.writeLine)
+        return await status(router: router, consent: RemoteConsent(settings.load()), write: LookupCommand.writeLine)
 #endif
     }
 
-    /// The report for `router`'s source, written through `write`. Ends whatever it started before it returns.
-    static func status(router: ModelBackendRouter, write: (String) -> Bool) async -> CommandStatus {
+    /// The report for `router`'s source under the reader's `consent`, written through `write`. Ends whatever it started
+    /// before it returns.
+    static func status(router: ModelBackendRouter, consent: RemoteConsent, write: (String) -> Bool) async -> CommandStatus {
         let source = await router.currentSource
         var report: [String: Any] = ["source": name(of: source), "tier": source.tier.rawValue]
         // **What the source may be sent, read off the client itself** — asked, with a provider that records and
         // answers nothing — so the report cannot describe a rule the client does not follow.
-        let disclosure = await disclosure(at: source.tier)
+        let disclosure = await disclosure(at: source.tier, consent: consent)
         report["sendsDictionaryText"] = disclosure.sendsDictionaryText
         report["asksSenseOnLookup"] = disclosure.asksSenseOnLookup
         report["asksSenseOnTap"] = disclosure.asksSenseOnTap
@@ -70,14 +72,14 @@ enum ProviderReport {
     }
 
     /// What a source at `tier` is sent, by asking a `ProviderClient` over a provider that only notes what it was handed.
-    private static func disclosure(at tier: ProviderTier) async
+    private static func disclosure(at tier: ProviderTier, consent: RemoteConsent) async
         -> (sendsDictionaryText: Bool, asksSenseOnLookup: Bool, asksSenseOnTap: Bool) {
         let marker = "xiaolaidict-provider-status-sense-marker"
         let senses = SenseQuestion(sentence: "A sentence to ask about.", taggerGuess: nil, senses: [marker, "another"].map { SenseQuestion.Sense(text: $0) })
         let explained = SentenceQuestion(sentence: "A sentence to ask about.", term: "sentence", senseText: marker)
         func sent(_ request: ModelRequest, _ origin: QuestionOrigin) async -> String? {
             let probe = NotingProvider()
-            _ = await ProviderClient(provider: probe, tier: tier).ask(request, origin: origin)
+            _ = await ProviderClient(provider: probe, tier: tier, consent: { consent }).ask(request, origin: origin)
             return probe.handed
         }
         return (sendsDictionaryText: await sent(.explain(explained), .reader)?.contains(marker) == true,

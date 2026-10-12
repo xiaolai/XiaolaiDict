@@ -473,10 +473,30 @@ struct LanguageModelPaneTests {
         // An address that names no server is remote, read failing closed — and says so without a host.
         #expect(LanguageModelDisclosure.of(.endpoint(url: "not an address", model: "m"), dictionaryTextMayLeave: false)
             == .sentenceOnly(to: .endpoint(host: nil)))
-        // **The default is the owner's constant**, so the pane says what the client does today.
-        #expect(LanguageModelDisclosure.of(claude)
-            == LanguageModelDisclosure.of(claude, dictionaryTextMayLeave: RemoteDisclosure.dictionaryTextMayLeave))
-        #expect(LanguageModelDisclosure.of(claude) == .sentenceOnly(to: .claude))
+    }
+
+    // MARK: - The reader's consent to the dictionary's text
+
+    /// **Both switches are off until the reader turns them on, and the second needs the first** — refused while the
+    /// text may not leave, and turned off with it, so it is never left on with nothing it could send. Kept in the suite
+    /// the router reads at every question.
+    @Test func theDictionaryTextSwitchesAreOffAndTheSecondNeedsTheFirst() {
+        let suite = TemporaryDefaults.suite()
+        let pane = Self.pane(suite)
+        #expect(!pane.settings.dictionaryTextMayLeave && !pane.settings.remoteSenseOnEveryLookup)
+        pane.setRemoteSenseOnEveryLookup(true)
+        #expect(!ProviderSettingsStore(defaults: suite).load().remoteSenseOnEveryLookup,
+                "every lookup was turned on with the dictionary's text still kept on this Mac")
+
+        pane.setDictionaryTextMayLeave(true)
+        pane.setRemoteSenseOnEveryLookup(true)
+        #expect(RemoteConsent(ProviderSettingsStore(defaults: suite).load())
+            == RemoteConsent(dictionaryText: true, senseOnEveryLookup: true))
+
+        pane.setDictionaryTextMayLeave(false)
+        let stored = ProviderSettingsStore(defaults: suite).load()
+        #expect(!stored.dictionaryTextMayLeave && !stored.remoteSenseOnEveryLookup,
+                "turning the text off left every lookup's question on")
     }
 
     // MARK: - What the reader must do

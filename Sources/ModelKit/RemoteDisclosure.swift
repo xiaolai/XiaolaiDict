@@ -6,31 +6,21 @@ public enum ProviderTier: String, Sendable, Equatable, CaseIterable {
     /// dictionary's sense text, as the local model always could.
     case onThisMac
     /// Anywhere else — both CLIs, and every endpoint that is not loopback beyond doubt. Sees the reader's own
-    /// sentence only, unless `RemoteDisclosure.dictionaryTextMayLeave` says otherwise.
+    /// sentence only, unless the reader agreed otherwise (`RemoteConsent`).
     case remote
 }
 
 /// **What may leave the Mac, decided in one place** — consulted by whatever builds a request for a provider, and by
 /// nothing that could decide it differently.
 ///
-/// The dictionaries are licensed to the reader, not to this app (ADR-0013): a publisher's definition may go to a
-/// model that runs on this Mac and not to a remote service. The reader's own sentence may go anywhere they send it.
+/// The dictionaries are licensed to the reader, not to this app (ADR-0013): a publisher's definition goes to a model
+/// that runs on this Mac, and to a remote service **only where the reader turned that on** (`RemoteConsent`, owner
+/// 2026-10-13) — their copy of the text, to the service they chose. The reader's own sentence may go anywhere they send it.
 /// So the tier is a licence boundary, and the endpoint's tier is read **failing closed**: a loopback server misread
 /// as remote costs an answer's quality, and a remote one misread as loopback sends a publisher's text off the Mac.
 public enum RemoteDisclosure {
-    /// **Whether the remote tier may be sent the dictionary's text. `false`, and the owner's to flip** (ADR-0053):
-    /// they have not said the dictionary's text may leave the Mac. Flipping it is the whole change — the remote tier is
-    /// then asked to pick a sense and told the sense a translation is for — and the one decision that turns the
-    /// measured quality of the hosted models into the product's.
-    public static let dictionaryTextMayLeave = false
-
-    /// Whether a source of `tier` may be sent a publisher's text: on this Mac always, remote only once the owner says.
-    public static func mayCarryDictionaryText(_ tier: ProviderTier) -> Bool {
-        mayCarryDictionaryText(tier, dictionaryTextMayLeave: dictionaryTextMayLeave)
-    }
-
-    /// The rule with the constant as an argument, so both arms of the flip are tested before anyone flips it. Public
-    /// for the providers' client, whose own tests pass both arms through it; the app reads the constant above.
+    /// Whether a source of `tier` may be sent a publisher's text: on this Mac always, remote only where the reader
+    /// turned it on.
     public static func mayCarryDictionaryText(_ tier: ProviderTier, dictionaryTextMayLeave: Bool) -> Bool {
         tier == .onThisMac || dictionaryTextMayLeave
     }
@@ -140,4 +130,28 @@ public enum RemoteDisclosure {
         case .name(let labels): labels.last == "localhost"
         }
     }
+}
+
+/// **What the reader agreed a remote source may be sent beyond their own sentence** — both off by default, both theirs
+/// (owner, 2026-10-13, ADR-0053 addendum). Read from their settings at every question, so a switch takes effect at the
+/// next one.
+public struct RemoteConsent: Sendable, Equatable {
+    /// The dictionary's text may go: a translation is told the sense it is for, and a tap may ask which sense it is.
+    public let dictionaryText: Bool
+    /// And every lookup asks a remote source which sense it is — on the reader's quota, every time. Only with
+    /// `dictionaryText`: the question *is* the dictionary's text.
+    public let senseOnEveryLookup: Bool
+
+    public init(dictionaryText: Bool, senseOnEveryLookup: Bool) {
+        self.dictionaryText = dictionaryText
+        self.senseOnEveryLookup = dictionaryText && senseOnEveryLookup
+    }
+
+    /// What the reader's settings say.
+    public init(_ settings: ProviderSettings) {
+        self.init(dictionaryText: settings.dictionaryTextMayLeave, senseOnEveryLookup: settings.remoteSenseOnEveryLookup)
+    }
+
+    /// Nothing beyond the sentence: what a reader who never opened the pane has agreed to.
+    public static let sentenceOnly = RemoteConsent(dictionaryText: false, senseOnEveryLookup: false)
 }

@@ -789,7 +789,9 @@ class TheProviderStage(unittest.TestCase):
     app's own preflight."""
 
     KEYS = ("LanguageModelProvider", "ProviderEndpointURL", "ProviderEndpointModel", "SubscriptionCLIsEnabled",
-            "ClaudeCLIPath", "ClaudeCLIModel")
+            "ClaudeCLIPath", "ClaudeCLIModel", "DictionaryTextMayLeave", "RemoteSenseOnEveryLookup")
+    # The reader's consents, which the stage deletes before its remote arms and writes for one of them.
+    CONSENTS = ("DictionaryTextMayLeave", "RemoteSenseOnEveryLookup")
 
     def setUp(self):
         self.text = SCRIPT.read_text()
@@ -808,6 +810,12 @@ class TheProviderStage(unittest.TestCase):
         for key in self.KEYS:
             self.assertIn(f"restore_default {key} ", restore, key)
         self.assertRegex(restore, r"restore_default SubscriptionCLIsEnabled .* -bool")
+        for key in self.CONSENTS:
+            self.assertRegex(restore, rf"restore_default {key} .* -bool", key)
+            # **A delete is a write too**: the reader's consent is taken away only once its putting back is registered.
+            registered = self.block.find("at_exit restore_provider_settings")
+            deleted = self.block.find(f"defaults delete com.xiaolaidict {key}")
+            self.assertTrue(registered != -1 and deleted != -1 and registered < deleted, key)
 
     def test_the_stub_ships_with_the_helpers_and_listens_only_on_loopback(self):
         install = re.search(r"^cp -p Tools/e2e/notes\.txt .*$", self.text, re.MULTILINE)
@@ -840,10 +848,21 @@ class TheProviderStage(unittest.TestCase):
     def test_the_stand_in_claude_is_written_as_data_and_chosen_behind_its_switch(self):
         fake = Fake(self)
         written = fake.root / "defaults-calls"
-        Fake.script(fake.bin / "defaults", f'echo "$*" >> "{written}"')
+        consented = fake.root / "consented"
+        # The reader's consent, as the defaults hold it: written yes, deleted no.
+        Fake.script(fake.bin / "defaults", textwrap.dedent(f"""\
+            echo "$*" >> "{written}"
+            case "$*" in
+                "write com.xiaolaidict DictionaryTextMayLeave -bool YES") touch "{consented}" ;;
+                "delete com.xiaolaidict DictionaryTextMayLeave") rm -f "{consented}" ;;
+            esac"""))
         report = fake.root / "report.json"
         report.write_text(json.dumps({"source": "claudeCLI", "tier": "remote", "sendsDictionaryText": False,
                                       "asksSenseOnLookup": False, "asksSenseOnTap": False, "readiness": "ready",
+                                      "answeredInSeconds": 0.4, "version": "9.9.9"}))
+        agreed = fake.root / "agreed.json"
+        agreed.write_text(json.dumps({"source": "claudeCLI", "tier": "remote", "sendsDictionaryText": True,
+                                      "asksSenseOnLookup": True, "asksSenseOnTap": True, "readiness": "ready",
                                       "answeredInSeconds": 0.4, "version": "9.9.9"}))
         evidence = fake.root / "evidence with a space"
         evidence.mkdir()
@@ -852,13 +871,15 @@ class TheProviderStage(unittest.TestCase):
             XIAOLAIDICT_PYTHON=/opt/chosen/python3.14
             provider_evidence="{evidence}"; provider_stub_log="{evidence}/stub.jsonl"
             provider_remote_model=xiaolaidict-e2e-remote
-            run_report() {{ cat "{report}"; }}
+            run_report() {{ if [ -e "{consented}" ]; then cat "{agreed}"; else cat "{report}"; fi; }}
             provider_claude_arm
             echo "failures=$failures"
             """), function("consume_verdicts"), function("provider_status_verdicts"), function("provider_claude_arm"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("failures=0", done.stdout)
         self.assertRegex(done.stdout, r"PASS  provider: claudeCLI answered the app.s preflight")
+        self.assertIn("as the reader agreed", done.stdout, "the consented arm was never judged")
+        self.assertFalse(consented.exists(), "the reader's consent was left written for the arms after this one")
         calls = written.read_text()
         self.assertIn("write com.xiaolaidict SubscriptionCLIsEnabled -bool YES", calls)
         self.assertIn(f"write com.xiaolaidict ClaudeCLIPath -string {evidence}/claude", calls)

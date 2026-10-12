@@ -9,18 +9,23 @@ import Testing
 /// misreading a remote one as loopback sends a publisher's text off the Mac. Each refusal below has a positive control
 /// beside it: the same shape, made loopback, is on this Mac, so the refusal is the host and not the parser failing.
 struct RemoteDisclosureTests {
-    /// The owner has not said the dictionary's text may leave (ADR-0053). Flipping this is the whole change.
-    @Test func theDictionarysTextMayNotLeave() {
-        #expect(RemoteDisclosure.dictionaryTextMayLeave == false)
-        #expect(RemoteDisclosure.mayCarryDictionaryText(.onThisMac))
-        #expect(!RemoteDisclosure.mayCarryDictionaryText(.remote))
-    }
-
-    /// **The flip is a constant**: with it set, the remote tier may carry the text too, and nothing else changes.
-    @Test func theFlipIsTheOnlyThingBetweenTheRemoteTierAndTheText() {
+    /// **The dictionary's text leaves only where the reader agreed** (owner, 2026-10-13): on this Mac always, remote
+    /// with their consent and never without it.
+    @Test func theDictionarysTextLeavesOnlyWithTheReadersConsent() {
         #expect(RemoteDisclosure.mayCarryDictionaryText(.remote, dictionaryTextMayLeave: true))
         #expect(!RemoteDisclosure.mayCarryDictionaryText(.remote, dictionaryTextMayLeave: false))
         #expect(RemoteDisclosure.mayCarryDictionaryText(.onThisMac, dictionaryTextMayLeave: false))
+    }
+
+    /// **Both switches are off for a reader who never opened the pane, and every lookup's question needs the text**:
+    /// the question *is* the dictionary's text, so it can never be on alone, whatever was written.
+    @Test func theConsentIsOffByDefaultAndEveryLookupNeedsTheText() {
+        #expect(RemoteConsent(ProviderSettings()) == .sentenceOnly)
+        #expect(RemoteConsent(dictionaryText: false, senseOnEveryLookup: true) == .sentenceOnly)
+        let both = RemoteConsent(ProviderSettings(dictionaryTextMayLeave: true, remoteSenseOnEveryLookup: true))
+        #expect(both.dictionaryText && both.senseOnEveryLookup)
+        let textOnly = RemoteConsent(ProviderSettings(dictionaryTextMayLeave: true))
+        #expect(textOnly.dictionaryText && !textOnly.senseOnEveryLookup)
     }
 
     /// Loopback, in every spelling the system resolver answers with loopback and nothing else. `*.localhost` is here

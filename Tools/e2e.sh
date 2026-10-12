@@ -1001,13 +1001,16 @@ else:
         f"{label} was chosen and the app reports {r.get('source')} as the source")
     # **What it may be sent, read off the client itself** (ProviderReport asks a ProviderClient over a provider that
     # only notes what it was handed). On this Mac: everything. Remote: neither the dictionary text nor a sense question
-    # — not on a lookup, and, while RemoteDisclosure.dictionaryTextMayLeave is false, not on a tap either.
-    on = tier == "onThisMac"
+    # — not on a lookup and not on a tap — unless the reader turned both consents on (`remote-consented`), and then all.
+    consented = tier == "remote-consented"
+    on = tier == "onThisMac" or consented
+    where = "remote" if consented else tier
     sent = (r.get("tier"), r.get("sendsDictionaryText"), r.get("asksSenseOnLookup"), r.get("asksSenseOnTap"))
-    say(sent == (tier, on, on, on),
-        f"{label} is {tier}, and " + ("may be sent the dictionary text and asked senses" if on
-                                       else "is sent no dictionary text and asked no sense question"),
-        f"{label}: tier, dictionary text, sense on lookup, sense on tap are {sent}; wanted {(tier, on, on, on)}")
+    say(sent == (where, on, on, on),
+        f"{label} is {where}, and " + ("may be sent the dictionary text and asked senses" if on
+                                        else "is sent no dictionary text and asked no sense question")
+        + (", as the reader agreed" if consented else ""),
+        f"{label}: tier, dictionary text, sense on lookup, sense on tap are {sent}; wanted {(where, on, on, on)}")
     readiness = r.get("readiness")
     if wanted == "none":
         say(readiness is None, f"{label} is asked nothing to be checked",
@@ -5321,6 +5324,18 @@ if provider_switch_original=$(defaults read com.xiaolaidict SubscriptionCLIsEnab
 else
     provider_switch_had=no; provider_switch_original=""
 fi
+# **The reader's two consents to the dictionary's text, set aside**: the remote arms below assert what a reader who never
+# turned them on is sent, and this Mac's reader may have turned them on. Put back with the rest.
+if provider_text_original=$(defaults read com.xiaolaidict DictionaryTextMayLeave 2>/dev/null); then
+    provider_text_had=yes
+else
+    provider_text_had=no; provider_text_original=""
+fi
+if provider_every_original=$(defaults read com.xiaolaidict RemoteSenseOnEveryLookup 2>/dev/null); then
+    provider_every_had=yes
+else
+    provider_every_had=no; provider_every_original=""
+fi
 if provider_claude_path_original=$(defaults read com.xiaolaidict ClaudeCLIPath 2>/dev/null); then
     provider_claude_path_had=yes
 else
@@ -5342,9 +5357,14 @@ restore_provider_settings() {
     restore_default ProviderEndpointURL "$provider_url_had" "$provider_url_original"
     restore_default ProviderEndpointModel "$provider_model_had" "$provider_model_original"
     restore_default SubscriptionCLIsEnabled "$provider_switch_had" "$provider_switch_original" -bool
+    restore_default DictionaryTextMayLeave "$provider_text_had" "$provider_text_original" -bool
+    restore_default RemoteSenseOnEveryLookup "$provider_every_had" "$provider_every_original" -bool
     restore_provider_claude
 }
 at_exit restore_provider_settings
+# Taken away only once their putting back is registered.
+defaults delete com.xiaolaidict DictionaryTextMayLeave 2>/dev/null || true
+defaults delete com.xiaolaidict RemoteSenseOnEveryLookup 2>/dev/null || true
 
 # The stub, ended however the run ends. Its log is kept beside the bundle for a person to read after a failure: it
 # holds the fixture sentence and the sense list the on-this-Mac arm was sent — this Mac's own dictionary's words, which
@@ -5440,6 +5460,22 @@ provider_claude_arm() {
         return 0
     fi
     consume_verdicts provider "$(provider_status_verdicts provider claudeCLI remote ready "$report")"
+    # **And once the reader agrees**, the same source is sent the dictionary's text and asked on every lookup — read
+    # off the client the app builds, over the suite the pane writes. Taken back at once; the arms after this assert
+    # what a reader who never agreed is sent.
+    if ! defaults write com.xiaolaidict DictionaryTextMayLeave -bool YES \
+       || ! defaults write com.xiaolaidict RemoteSenseOnEveryLookup -bool YES; then
+        flunk "provider: the reader's consent to the dictionary's text could not be written"
+        return 0
+    fi
+    report=$(run_report --provider-status 60) || true
+    defaults delete com.xiaolaidict DictionaryTextMayLeave 2>/dev/null || true
+    defaults delete com.xiaolaidict RemoteSenseOnEveryLookup 2>/dev/null || true
+    if [ -z "$report" ]; then
+        flunk "provider: --provider-status printed nothing for the stand-in claude the reader consented to ($(head -c 160 "$reports/provider-status.err" 2>/dev/null))"
+        return 0
+    fi
+    consume_verdicts provider "$(provider_status_verdicts provider claudeCLI remote-consented ready "$report")"
 }
 
 # provider_reading <tier>: one lookup of the fixture word through the shortcut, with the panel's Explain This Sentence

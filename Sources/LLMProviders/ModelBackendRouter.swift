@@ -64,8 +64,7 @@ public actor ModelBackendRouter {
     private let local: Local
     private let source: @Sendable () -> ProviderSource
     private let factory: ProviderFactory
-    /// How a made provider is wrapped: by `ProviderClient`'s own public initialiser, under the owner's constant — or,
-    /// for a test of the flip, with the constant as an argument.
+    /// How a made provider is wrapped: by `ProviderClient`, under what the reader agreed it may be sent.
     private let client: @Sendable (any TextGenerating, ProviderTier) -> ProviderClient
     private let events: @Sendable (RouterEvent) -> Void
 
@@ -73,15 +72,17 @@ public actor ModelBackendRouter {
     /// the app was given, handed in rather than the suite itself, which may not cross into this actor.
     public init(choices: ProviderChoiceStore, settings: ProviderSettingsStore, local: Local,
                 factory: ProviderFactory = .standard) {
+        // **The consent is read at each question, not when a source is made**: turning it on or off must not restart
+        // the reader's CLI, and must count from their next question.
         self.init(source: { ProviderSource(choice: choices.load(), settings: settings.load()) }, local: local,
-                  factory: factory, client: { ProviderClient(provider: $0, tier: $1) })
+                  factory: factory, client: { ProviderClient(provider: $0, tier: $1, consent: { RemoteConsent(settings.load()) }) })
     }
 
-    /// The same over a source of the caller's, with the flip as an argument, and what it does reported to `events`.
+    /// The same over a source of the caller's, with the consent as an argument, and what it does reported to `events`.
     init(source: @escaping @Sendable () -> ProviderSource, local: Local, factory: ProviderFactory,
-         dictionaryTextMayLeave: Bool, events: @escaping @Sendable (RouterEvent) -> Void = { _ in }) {
+         consent: RemoteConsent, events: @escaping @Sendable (RouterEvent) -> Void = { _ in }) {
         self.init(source: source, local: local, factory: factory, client: {
-            ProviderClient(provider: $0, tier: $1, dictionaryTextMayLeave: dictionaryTextMayLeave)
+            ProviderClient(provider: $0, tier: $1, consent: { consent })
         }, events: events)
     }
 

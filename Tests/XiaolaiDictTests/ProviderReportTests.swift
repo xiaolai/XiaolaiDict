@@ -11,13 +11,13 @@ import XiaolaiDictTestSupport
 @MainActor
 struct ProviderReportTests {
     /// The reader's settings, each field holding something the report must never print.
-    static func suite(choosing choice: ProviderChoice, endpoint: String) -> UserDefaults {
+    static func suite(choosing choice: ProviderChoice, endpoint: String, consenting: Bool = false) -> UserDefaults {
         let suite = TemporaryDefaults.suite()
         ProviderChoiceStore(defaults: suite).save(choice)
         ProviderSettingsStore(defaults: suite).save(ProviderSettings(
             endpointURL: endpoint, endpointModel: "private-endpoint-model",
             claudeCLIPath: "/Users/someone-private/.local/bin/claude", claudeCLIModel: "private-claude-model",
-            subscriptionCLIsEnabled: true))
+            subscriptionCLIsEnabled: true, dictionaryTextMayLeave: consenting, remoteSenseOnEveryLookup: consenting))
         return suite
     }
 
@@ -27,7 +27,8 @@ struct ProviderReportTests {
             choices: ProviderChoiceStore(defaults: suite), settings: ProviderSettingsStore(defaults: suite),
             local: .init(ask: { _ in nil }, prewarm: {}), factory: factory)
         var lines: [String] = []
-        let status = await ProviderReport.status(router: router) { lines.append($0); return true }
+        let consent = RemoteConsent(ProviderSettingsStore(defaults: suite).load())
+        let status = await ProviderReport.status(router: router, consent: consent) { lines.append($0); return true }
         let line = try #require(lines.first)
         #expect(lines.count == 1)
         let json = try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
@@ -53,6 +54,17 @@ struct ProviderReportTests {
         #expect(json["answeredInSeconds"] is NSNumber)
         for secret in Self.secrets { #expect(!line.contains(secret), "the report printed \(secret)") }
         #expect(backend.shutDowns == 1, "the instrument left what it started running")
+    }
+
+    /// **And where the reader agreed, it says so**: a remote source is sent the sense, and every lookup asks it.
+    @Test func aRemoteSourceTheReaderConsentedToIsReportedAsSentTheSense() async throws {
+        let (_, _, json) = try await Self.report(
+            Self.suite(choosing: .claudeCLI, endpoint: "https://api.example.com/v1", consenting: true),
+            ProviderFactory { _ in ProviderBuild(backend: FakeProvider()) })
+        #expect(json["tier"] as? String == "remote")
+        #expect(json["sendsDictionaryText"] as? Bool == true)
+        #expect(json["asksSenseOnLookup"] as? Bool == true)
+        #expect(json["asksSenseOnTap"] as? Bool == true)
     }
 
     /// **What it says a source may be sent is what the client does** — read by asking the real client, so the report

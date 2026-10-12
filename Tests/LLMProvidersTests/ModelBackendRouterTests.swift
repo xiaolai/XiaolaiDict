@@ -116,7 +116,7 @@ struct ModelBackendRouterTests {
 
     static func router(_ settings: Settings, _ local: LocalModel, _ factory: ProviderFactory) -> ModelBackendRouter {
         ModelBackendRouter(source: { settings.current }, local: local.access, factory: factory,
-                           dictionaryTextMayLeave: false)
+                           consent: .sentenceOnly)
     }
 
     static let loopback = ProviderSource.endpoint(url: "http://127.0.0.1:11434/v1", model: "m")
@@ -262,7 +262,7 @@ struct ModelBackendRouterTests {
         let (a, _, factory) = Self.twoSources(order)
         let settings = Settings(Self.hosted)
         let router = ModelBackendRouter(source: { settings.current }, local: LocalModel().access, factory: factory,
-                                        dictionaryTextMayLeave: false, events: log.sink)
+                                        consent: .sentenceOnly, events: log.sink)
         _ = await router.ask(.explain(Self.explanation), origin: .reader)
 
         settings.choose(.local)
@@ -523,6 +523,31 @@ struct ModelBackendRouterTests {
         else { return nil }
         return text
     }
+
+    /// **The router the app builds reads the reader's consent at each question**, from the suite the pane writes — the
+    /// wire, not the rule: a remote source refused a tap's sense question is asked it once the reader turns the text on,
+    /// without being made again.
+    @Test func theAppsRouterReadsTheReadersConsentAtEachQuestion() async {
+        let suite = TemporaryDefaults.suite()
+        ProviderChoiceStore(defaults: suite).save(.openAICompatible)
+        ProviderSettingsStore(defaults: suite).save(ProviderSettings(endpointURL: "https://api.example.com/v1",
+                                                                      endpointModel: "m"))
+        let provider = RecordingProvider { _ in "1" }
+        let makings = Mutex(0)
+        let router = ModelBackendRouter(
+            choices: ProviderChoiceStore(defaults: suite), settings: ProviderSettingsStore(defaults: suite),
+            local: .init(ask: { _ in nil }, prewarm: {}),
+            factory: ProviderFactory { _ in makings.withLock { $0 += 1 }; return ProviderBuild(backend: provider) })
+        #expect(await router.ask(.pickSense(ProviderClientTests.sense), origin: .reader).reply == nil)
+        #expect(provider.requests.isEmpty, "a sense list left the Mac before the reader agreed")
+
+        var consenting = ProviderSettingsStore(defaults: suite).load()
+        consenting.dictionaryTextMayLeave = true
+        ProviderSettingsStore(defaults: suite).save(consenting)
+        #expect(await router.ask(.pickSense(ProviderClientTests.sense), origin: .reader).reply == .sense(1))
+        #expect(provider.requests.count == 1, "the reader's consent did not reach the next question")
+        #expect(makings.withLock { $0 } == 1, "turning the consent on made the source again")
+    }
 }
 
 /// **The source a reader's choice and settings name**, and the tier it runs at.
@@ -632,7 +657,7 @@ struct ProviderFactoryTests {
             events: fake.holding { _ in })
         let router = ModelBackendRouter(
             source: { .claudeCLI(path: fake.executable.path, model: "haiku") },
-            local: .init(ask: { _ in nil }, prewarm: {}), factory: factory, dictionaryTextMayLeave: false)
+            local: .init(ask: { _ in nil }, prewarm: {}), factory: factory, consent: .sentenceOnly)
         let answer = try #require(await ModelBackendRouterTests.answer(router), "the CLI was not started")
         #expect(answer.hasPrefix("pid="))
         guard case .cli(.ready(let version, _))? = await router.check()?.readiness else {
@@ -658,7 +683,7 @@ struct ProviderFactoryTests {
             events: fake.holding { _ in })
         let router = ModelBackendRouter(source: { .claudeCLI(path: nil, model: "haiku") },
                                         local: .init(ask: { _ in nil }, prewarm: {}), factory: factory,
-                                        dictionaryTextMayLeave: false)
+                                        consent: .sentenceOnly)
         #expect(await ModelBackendRouterTests.answer(router)?.hasPrefix("pid=") == true, "the CLI was not started")
         await router.shutDown()
     }

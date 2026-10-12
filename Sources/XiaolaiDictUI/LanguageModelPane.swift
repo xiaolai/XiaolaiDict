@@ -345,7 +345,7 @@ struct LanguageModelPane: View {
         private var disclosureSection: some View {
             Section {
                 VStack(alignment: .leading, spacing: scale.space.line) {
-                    let said = LanguageModelDisclosure.of(model.source)
+                    let said = LanguageModelDisclosure.of(model.source, dictionaryTextMayLeave: model.settings.dictionaryTextMayLeave)
                     disclosure(said)
                     // What Codex sends besides, whatever this app sends it.
                     if said.destination == .codex { Text(LanguageModelPane.codexAlsoSends) }
@@ -353,6 +353,35 @@ struct LanguageModelPane: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("language-model-disclosure")
+                Toggle("Send the dictionary's meanings too", isOn: Binding(
+                    get: { model.settings.dictionaryTextMayLeave }, set: { model.setDictionaryTextMayLeave($0) }))
+                    .accessibilityIdentifier("language-model-dictionary-text")
+                Text("""
+                     Your dictionaries are licensed to you. With this on, the meanings of the word you looked up go \
+                     with your sentence to a service off this Mac, so a translation can follow the meaning you met, and \
+                     tapping the card can ask which meaning it is.
+                     """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Choose the meaning at every lookup", isOn: Binding(
+                    get: { model.settings.remoteSenseOnEveryLookup }, set: { model.setRemoteSenseOnEveryLookup($0) }))
+                    .disabled(!model.settings.dictionaryTextMayLeave)
+                    .accessibilityIdentifier("language-model-sense-every-lookup")
+                // **Why it is greyed, said where it is greyed.**
+                Group {
+                    if model.settings.dictionaryTextMayLeave {
+                        Text("""
+                             Asks the service at every word you look up. Each one spends your subscription or your \
+                             key's quota, and the mark arrives a few seconds after the card.
+                             """)
+                    } else {
+                        Text("Can be turned on once the dictionary's meanings may be sent.")
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("What Leaves This Mac")
             }
@@ -370,8 +399,8 @@ struct LanguageModelPane: View {
             case .sentenceOnly(let destination):
                 Text("""
                      When you ask for a translation or an explanation, the sentence and the word you looked up are sent \
-                     to \(Self.name(of: destination)). The dictionary's own text is never sent, so it does not choose \
-                     which meaning you met.
+                     to \(Self.name(of: destination)). The dictionary's own text is not sent unless you turn that on \
+                     below, so it does not choose which meaning you met.
                      """)
             case .sentenceAndDictionaryText(let destination):
                 Text("""

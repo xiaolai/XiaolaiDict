@@ -175,6 +175,24 @@ public final class LanguageModelPaneModel {
         if !on, choice == .claudeCLI || choice == .codexCLI { choose(.none) }
     }
 
+    /// Turns on or off sending the dictionary's text to a remote source. **Off, every lookup's question goes too**: it
+    /// is that text, so the second switch is never left on with nothing it could send.
+    public func setDictionaryTextMayLeave(_ on: Bool) {
+        var next = settings
+        next.dictionaryTextMayLeave = on
+        if !on { next.remoteSenseOnEveryLookup = false }
+        save(next)
+    }
+
+    /// Turns on or off asking a remote source which sense it is at every lookup. Refused while the dictionary's text
+    /// may not leave — the control is disabled then, and says why.
+    public func setRemoteSenseOnEveryLookup(_ on: Bool) {
+        guard settings.dictionaryTextMayLeave || !on else { return }
+        var next = settings
+        next.remoteSenseOnEveryLookup = on
+        save(next)
+    }
+
     /// Keeps what is typed in the text fields — in the suite the router reads, and read back from it, so the fields
     /// show what was kept. A location the store will not keep stays in its field, with `pathRefusal` saying why; **so
     /// does an address the app would not send to** (`addressRefusal`) — one carrying a password above all, which must
@@ -388,10 +406,8 @@ public enum LanguageModelDisclosure: Equatable, Sendable {
         case endpoint(host: String?)
     }
 
-    /// What leaves for `source`, under the owner's rule about the dictionary's text — an argument, so both of its
-    /// arms are tested before anyone flips it.
-    public static func of(_ source: ProviderSource,
-                          dictionaryTextMayLeave: Bool = RemoteDisclosure.dictionaryTextMayLeave) -> Self {
+    /// What leaves for `source`, where the reader has or has not agreed the dictionary's text may.
+    public static func of(_ source: ProviderSource, dictionaryTextMayLeave: Bool) -> Self {
         let destination: Destination
         switch source {
         case .local: return .nothingLeaves

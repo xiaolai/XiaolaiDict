@@ -71,11 +71,19 @@ public struct ProviderSettings: Sendable, Equatable {
     /// `claude` or `codex` they installed and signed in to. **Off by default**, and off is what anything unreadable is:
     /// with it off a CLI is never started, whatever source is chosen (`ProviderSource`).
     public var subscriptionCLIsEnabled: Bool
+    /// **The reader agreed the dictionary's text may go to a remote source** (owner, 2026-10-13). Off by default, and
+    /// off is what anything unreadable is: the dictionaries are licensed to the reader, so sending their text is theirs
+    /// to choose.
+    public var dictionaryTextMayLeave: Bool
+    /// **And that every lookup may ask a remote source which sense it is**, spending their quota on each. Off by
+    /// default; meaningless without `dictionaryTextMayLeave` (`RemoteConsent`).
+    public var remoteSenseOnEveryLookup: Bool
 
     public init(endpointURL: String = ProviderSettings.defaultEndpointURL, endpointModel: String = "",
                 claudeCLIPath: String? = nil, codexCLIPath: String? = nil,
                 claudeCLIModel: String = ProviderSettings.defaultClaudeCLIModel, codexCLIModel: String = "",
-                subscriptionCLIsEnabled: Bool = false) {
+                subscriptionCLIsEnabled: Bool = false, dictionaryTextMayLeave: Bool = false,
+                remoteSenseOnEveryLookup: Bool = false) {
         self.endpointURL = endpointURL
         self.endpointModel = endpointModel
         self.claudeCLIPath = claudeCLIPath
@@ -83,6 +91,8 @@ public struct ProviderSettings: Sendable, Equatable {
         self.claudeCLIModel = claudeCLIModel
         self.codexCLIModel = codexCLIModel
         self.subscriptionCLIsEnabled = subscriptionCLIsEnabled
+        self.dictionaryTextMayLeave = dictionaryTextMayLeave
+        self.remoteSenseOnEveryLookup = remoteSenseOnEveryLookup
     }
 }
 
@@ -109,6 +119,8 @@ public struct ProviderSettingsStore: @unchecked Sendable {
         public static let claudeCLIModel = "ClaudeCLIModel"
         public static let codexCLIModel = "CodexCLIModel"
         public static let subscriptionCLIsEnabled = "SubscriptionCLIsEnabled"
+        public static let dictionaryTextMayLeave = "DictionaryTextMayLeave"
+        public static let remoteSenseOnEveryLookup = "RemoteSenseOnEveryLookup"
     }
 
     private let defaults: UserDefaults
@@ -135,7 +147,9 @@ public struct ProviderSettingsStore: @unchecked Sendable {
             codexCLIPath: path(Key.codexCLIPath),
             claudeCLIModel: text(Key.claudeCLIModel) ?? standard.claudeCLIModel,
             codexCLIModel: text(Key.codexCLIModel) ?? standard.codexCLIModel,
-            subscriptionCLIsEnabled: isOn(Key.subscriptionCLIsEnabled))
+            subscriptionCLIsEnabled: isOn(Key.subscriptionCLIsEnabled),
+            dictionaryTextMayLeave: isOn(Key.dictionaryTextMayLeave),
+            remoteSenseOnEveryLookup: isOn(Key.remoteSenseOnEveryLookup))
     }
 
     private func write(_ settings: ProviderSettings) {
@@ -147,15 +161,18 @@ public struct ProviderSettingsStore: @unchecked Sendable {
         write(settings.claudeCLIModel, Key.claudeCLIModel, unless: standard.claudeCLIModel)
         write(settings.codexCLIModel, Key.codexCLIModel, unless: standard.codexCLIModel)
         // Off is the default, so off is no value at all.
-        if settings.subscriptionCLIsEnabled {
-            defaults.set(true, forKey: Key.subscriptionCLIsEnabled)
-        } else {
-            defaults.removeObject(forKey: Key.subscriptionCLIsEnabled)
-        }
+        write(settings.subscriptionCLIsEnabled, Key.subscriptionCLIsEnabled)
+        write(settings.dictionaryTextMayLeave, Key.dictionaryTextMayLeave)
+        write(settings.remoteSenseOnEveryLookup, Key.remoteSenseOnEveryLookup)
     }
 
-    /// **On only where a boolean yes was written** — the CLI switch is the reader's consent to this app starting their
-    /// CLI, so a string or a number that merely reads as yes is not one. `bool(forKey:)` would take `"YES"` and `2`.
+    /// A switch that is off by default: on is a boolean yes, off is no value at all.
+    private func write(_ on: Bool, _ key: String) {
+        if on { defaults.set(true, forKey: key) } else { defaults.removeObject(forKey: key) }
+    }
+
+    /// **On only where a boolean yes was written** — every switch here is the reader's consent (to starting their CLI, to
+    /// sending the dictionary's text), so a string or a number that merely reads as yes is not one. `bool(forKey:)` would take `"YES"` and `2`.
     private func isOn(_ key: String) -> Bool {
         guard let number = defaults.object(forKey: key) as? NSNumber,
               CFGetTypeID(number) == CFBooleanGetTypeID()

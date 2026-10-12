@@ -20,9 +20,14 @@ struct ProviderClientTests {
         sentence: "She banked the fire before going to bed.", target: "zh-Hans",
         met: .init(term: "banked", sense: "heap (a fire) with tightly packed fuel so that it burns slowly"))
 
+    /// The reader's consent to the dictionary's text, and to nothing more.
+    static func consent(_ dictionaryText: Bool) -> RemoteConsent {
+        RemoteConsent(dictionaryText: dictionaryText, senseOnEveryLookup: false)
+    }
+
     static func client(_ provider: RecordingProvider, _ tier: ProviderTier, flipped: Bool = false,
                        deadline: Duration? = nil) -> ProviderClient {
-        ProviderClient(provider: provider, tier: tier, dictionaryTextMayLeave: flipped,
+        ProviderClient(provider: provider, tier: tier, consent: { consent(flipped) },
                        deadline: { deadline ?? ModelDeadline.of($0) })
     }
 
@@ -69,7 +74,7 @@ struct ProviderClientTests {
     @Test func theSenseQuestionsRuleEveryArm() {
         func asked(_ tier: ProviderTier, _ origin: QuestionOrigin, flipped: Bool) -> Bool {
             if case .ask = ProviderClient.plan(.pickSense(Self.sense), tier: tier, origin: origin,
-                                               dictionaryTextMayLeave: flipped) { return true }
+                                               consent: Self.consent(flipped)) { return true }
             return false
         }
         #expect(asked(.onThisMac, .lookup, flipped: false) && asked(.onThisMac, .reader, flipped: false))
@@ -78,12 +83,41 @@ struct ProviderClientTests {
         #expect(asked(.remote, .reader, flipped: true))
     }
 
+    /// **Where the reader also agreed to every lookup, a lookup asks the remote source too** — and that consent alone,
+    /// without the text, asks nothing: the question is the text.
+    @Test func everyLookupAsksARemoteSourceOnlyWithBothConsents() async {
+        let provider = RecordingProvider { _ in "1" }
+        let both = ProviderClient(provider: provider, tier: .remote,
+                                  consent: { RemoteConsent(dictionaryText: true, senseOnEveryLookup: true) },
+                                  deadline: ModelDeadline.of)
+        #expect(await both.ask(.pickSense(Self.sense), origin: .lookup) == .sense(1))
+        #expect(provider.requests.count == 1, "a lookup did not ask with both consents given")
+        let unasked = RecordingProvider { _ in "1" }
+        let lookupOnly = ProviderClient(provider: unasked, tier: .remote,
+                                        consent: { RemoteConsent(dictionaryText: false, senseOnEveryLookup: true) },
+                                        deadline: ModelDeadline.of)
+        #expect(await lookupOnly.ask(.pickSense(Self.sense), origin: .lookup) == nil)
+        #expect(unasked.requests.isEmpty, "a sense list left the Mac without the reader's consent to its text")
+    }
+
+    /// **The consent is read at each question**: turned off between two, the second is not sent the text.
+    @Test func theConsentIsReadAtEachQuestion() async {
+        let provider = RecordingProvider { _ in "1" }
+        let given = Mutex(true)
+        let client = ProviderClient(provider: provider, tier: .remote,
+                                    consent: { Self.consent(given.withLock { $0 }) }, deadline: ModelDeadline.of)
+        #expect(await client.ask(.pickSense(Self.sense), origin: .reader) == .sense(1))
+        given.withLock { $0 = false }
+        #expect(await client.ask(.pickSense(Self.sense), origin: .reader) == nil)
+        #expect(provider.requests.count == 1, "a consent taken back still sent the dictionary's text")
+    }
+
     /// **Only a sense question takes an answer cut off at its budget**: its number comes first, while a translation's
     /// or an explanation's end is part of what it says.
     @Test func onlyASenseQuestionTakesAnAnswerCutOffAtItsBudget() {
         func usableWhenCut(_ request: ModelRequest) -> Bool? {
             guard case .ask(let generation, _) = ProviderClient.plan(request, tier: .onThisMac, origin: .reader,
-                                                                     dictionaryTextMayLeave: false) else { return nil }
+                                                                     consent: .sentenceOnly) else { return nil }
             return generation.usableWhenCut
         }
         #expect(usableWhenCut(.pickSense(Self.sense)) == true)
@@ -152,19 +186,21 @@ struct ProviderClientTests {
     /// reach the assertion, and the one defect it exists for. The control: the same wrong builder on this Mac sends,
     /// so the refusal is the tier's.
     @Test func aRemoteRequestCarryingTheSenseIsNotSent() async {
-        let leaky: @Sendable (ModelRequest, ProviderTier, QuestionOrigin, Bool) -> ProviderClient.Plan = { request, _, _, _ in
+        let leaky: @Sendable (ModelRequest, ProviderTier, QuestionOrigin, RemoteConsent) -> ProviderClient.Plan = { request, _, _, _ in
             guard case .explain(let question) = request else { return .notAsked }
             return .ask(GenerationRequest(instructions: ModelPrompt.explanationInstructions,
                                           prompt: question.prompt(for: .onDevice), maxTokens: 64, temperature: 1),
                         .explanation(sentence: question.sentence))
         }
         let remote = RecordingProvider { _ in "an explanation" }
-        let refused = ProviderClient(provider: remote, tier: .remote, dictionaryTextMayLeave: false, plan: leaky)
+        let refused = ProviderClient(provider: remote, tier: .remote, consent: { .sentenceOnly },
+                                     deadline: ModelDeadline.of, plan: leaky)
         #expect(await refused.ask(.explain(Self.explanation), origin: .reader) == nil)
         #expect(remote.requests.isEmpty, "a request carrying the publisher's text was handed to a remote source")
 
         let local = RecordingProvider { _ in "an explanation" }
-        let sent = ProviderClient(provider: local, tier: .onThisMac, dictionaryTextMayLeave: false, plan: leaky)
+        let sent = ProviderClient(provider: local, tier: .onThisMac, consent: { .sentenceOnly },
+                                  deadline: ModelDeadline.of, plan: leaky)
         #expect(await sent.ask(.explain(Self.explanation), origin: .reader) == .explanation("an explanation"))
         #expect(local.requests.count == 1)
     }
