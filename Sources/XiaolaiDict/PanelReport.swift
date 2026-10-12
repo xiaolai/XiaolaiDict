@@ -111,14 +111,10 @@ enum PanelReport {
         let wasAlreadyActive = activeBefore
 
         // The app's own hover path, so the panel is filled by `LookupRunner` exactly as it is for a
-        // reader — not by a presentation this file made up.
-        // **What the reader's ledger held before this.** The lookup below goes in by the door
-        // hover uses — deliberately, so the card measured is the card the product draws — and
-        // that door records. An instrument that leaves fabricated TextEdit reading behind
-        // changes the drawer, the suggestion ranking and every later measurement on this Mac.
-        let ledgerBefore = await Self.newestLookup(in: app)
-        defer { Task { await Self.removeLookups(after: ledgerBefore, in: app) } }
-
+        // reader — not by a presentation this file made up. **That door records**, and records into
+        // this run's own scratch ledger (`Instruments.ledgerSupport`), never the reader's: a fabricated
+        // TextEdit reading left behind changes the drawer, the suggestion ranking and every later
+        // measurement on the Mac.
         app.lookUpHovered(selection, at: UpPoint(NSEvent.mouseLocation))
 
         let appeared = await Instrument.settle(until: appearance) {
@@ -483,21 +479,6 @@ enum PanelReport {
             + " … " + parts.suffix(tail).joined(separator: separator)
     }
 
-    /// The newest lookup id, or nil where the ledger cannot be reached.
-    private static func newestLookup(in app: XiaolaiDictApp) async -> Int? {
-        guard let opening = app.recorder.store else { return nil }
-        return try? await opening.value.newestLookupID()
-    }
-
-    /// Removes whatever this measurement added, and only that. **Not a general clean-up**: it
-    /// deletes by id above a baseline this instrument took itself, so a lookup the reader made
-    /// while it ran is out of range by construction.
-    private static func removeLookups(after baseline: Int?, in app: XiaolaiDictApp) async {
-        guard let baseline, let opening = app.recorder.store,
-              let store = try? await opening.value else { return }
-        try? await store.deleteLookups(after: baseline)
-    }
-
     /// The frontmost application's bundle identifier, or its name where it has none.
     private static func frontmost() -> String {
         let app = NSWorkspace.shared.frontmostApplication
@@ -526,19 +507,11 @@ enum PanelReport {
 
     /// The press and the release, and nothing else — no AppKit, so it can be called from the thread
     /// that has to click while the main one is inside menu tracking.
+    /// Both through `Instrument.postMouse`, the one door an instrument posts by, which a release does not build.
     nonisolated private static func postClick(atFlipped point: CGPoint) -> Bool {
-        let button = CGMouseButton.ClickKind.leftMouse
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(
-                mouseEventSource: source, mouseType: button.down,
-                mouseCursorPosition: point, mouseButton: button.button),
-              let up = CGEvent(
-                mouseEventSource: source, mouseType: button.up,
-                mouseCursorPosition: point, mouseButton: button.button)
-        else { return false }
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-        return true
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
+        return Instrument.postMouse(.leftMouseDown, at: point, source: source)
+            && Instrument.postMouse(.leftMouseUp, at: point, source: source)
     }
 }
 
@@ -568,17 +541,5 @@ private final class MenuBail: NSObject {
     @objc func cancel() {
         didFire = true
         menu.cancelTracking()
-    }
-}
-
-extension CGMouseButton {
-    /// The three events one click is made of, named together so a caller cannot pair a left-button
-    /// down with a right-button up.
-    enum ClickKind {
-        case leftMouse
-
-        var down: CGEventType { .leftMouseDown }
-        var up: CGEventType { .leftMouseUp }
-        var button: CGMouseButton { .left }
     }
 }

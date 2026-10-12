@@ -194,7 +194,7 @@ struct ScriptFilterWiringTests {
     /// capture work, which is the ordering the gate exists for.
     @MainActor
     @Test func releasingTheModifierClearsTheSuppressedWord() async {
-        let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() })
+        let reader = HoverReader(policy: { .shipped }, pause: { HoverPause() }, captureDeadline: HoverFixtures.patient)
         reader.lastLookedUp = "run@12x25"
         let outcome = await reader.read(
             at: CGPoint(x: 100, y: 200), modifiersHeld: [], tappedTwice: false, pointerStillFor: .seconds(1),

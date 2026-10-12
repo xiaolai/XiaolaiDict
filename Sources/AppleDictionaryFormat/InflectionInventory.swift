@@ -42,7 +42,7 @@ public struct InflectionInventory: Sendable, Equatable {
     /// reason, as `PhraseInventory.formatVersion`: `contentVersion` says whether the dictionary changed and
     /// cannot say whether this code did. A stored table built by an older extraction would be accepted as
     /// current for ever. `FormTableReader` writes it into the table's sources, so moving it rebuilds.
-    public static let formatVersion = "inflections/2"
+    public static let formatVersion = "inflections/4"
 
     /// Which build of which dictionary this was read from — `DictionaryBundle.contentVersion()`.
     public let contentVersion: String
@@ -64,12 +64,21 @@ public struct InflectionInventory: Sendable, Equatable {
     /// a title. ~100 k words for NOAD, which is most of what this inventory weighs.
     public let headwords: Set<String>
 
+    /// **The titles this dictionary vouches for** — each one whose every entry it read whole for inflections: an entry
+    /// with no inflection group printed none, and one whose groups were parsed printed what it printed. Not a title any of
+    /// whose entries carried a group that could not be parsed, and **empty for a dictionary not seen to print a doubled
+    /// form** (`printsDoubling`) — the thesaurus, printing nothing, says nothing about a word's forms by printing none
+    /// (third audit of 2026-10-10). What the form table reads a title's silence as evidence by
+    /// (`FormTable.vouchesForSilence`).
+    public let covered: Set<String>
+
     public init(contentVersion: String, forms: [String: Set<Reading>], ownHeadwords: Set<String>,
-                headwords: Set<String> = []) {
+                headwords: Set<String> = [], covered: Set<String> = []) {
         self.contentVersion = contentVersion
         self.forms = forms
         self.ownHeadwords = ownHeadwords
         self.headwords = headwords
+        self.covered = covered
     }
 
     /// Reads one dictionary in a single body walk: the printed forms, and every entry's title so the forms
@@ -87,25 +96,43 @@ public struct InflectionInventory: Sendable, Equatable {
     public static func read(_ bundle: DictionaryBundle, contentVersion: String? = nil) throws -> InflectionInventory {
         var forms: [String: Set<Reading>] = [:]
         var titles = Set<String>()
+        // A title is vouched for unless one of its entries carried a group that could not be read.
+        var unparsed = Set<String>()
         try ContainerReader.forEachEntry(in: bundle.url) { xhtml in
             // An entry that printed inflections has been parsed and named already; the others are named from
             // their opening tag, and only a record with no `d:title` is parsed to find its headword block.
-            switch accumulate(xhtml, into: &forms) {
-            case .named(let named):
+            let read = accumulate(xhtml, into: &forms)
+            if case .named(let named) = read {
                 if !named.isEmpty { titles.insert(named) }
                 return
-            case .unread: break
             }
-            if let title = EntryTree.title(of: xhtml).map(normalised), !title.isEmpty {
-                titles.insert(title)
+            var title: String?
+            if let opening = EntryTree.title(of: xhtml).map(normalised), !opening.isEmpty {
+                title = opening
             } else if let tree = EntryTree.parse(xhtml) {
                 let named = lemma(of: tree)
-                if !named.isEmpty { titles.insert(named) }
+                if !named.isEmpty { title = named }
             }
+            guard let title else { return }
+            titles.insert(title)
+            if read == .unparsed { unparsed.insert(title) }
         }
+        let words = titles.filter(isWord)
         return InflectionInventory(contentVersion: contentVersion ?? bundle.contentVersion(), forms: forms,
                                    ownHeadwords: Set(forms.keys).intersection(titles),
-                                   headwords: titles.filter(isWord))
+                                   headwords: words, covered: printsDoubling(forms) ? words.subtracting(unparsed) : [])
+    }
+
+    /// **Whether a dictionary is seen to print a doubled consonant at all** — a form that is its headword, the last letter
+    /// again and *-ed* or *-ing* (*stopped*, *committed*). Only such a dictionary's silence about a word's doubling is
+    /// evidence (third audit of 2026-10-10): one printing irregulars alone, or nothing, says nothing about *commit*.
+    static func printsDoubling(_ forms: [String: Set<Reading>]) -> Bool {
+        forms.contains { form, readings in
+            readings.contains { reading in
+                guard let last = reading.lemma.last else { return false }
+                return form == reading.lemma + String(last) + "ed" || form == reading.lemma + String(last) + "ing"
+            }
+        }
     }
 
     // MARK: - One entry
@@ -127,8 +154,8 @@ public struct InflectionInventory: Sendable, Equatable {
     /// parse it a second time for its title; `unread` where the record was skipped.
     @discardableResult
     static func accumulate(_ xhtml: String, into forms: inout [String: Set<Reading>]) -> Named {
-        guard xhtml.contains(groupClass) else { return .unread }
-        guard let tree = EntryTree.parse(xhtml) else { return .unread }
+        guard xhtml.contains(groupClass) else { return .noInflections }
+        guard let tree = EntryTree.parse(xhtml) else { return .unparsed }
         let lemma = Self.lemma(of: tree)
         guard Self.isHeadword(lemma) else { return .named("") }
         let isSubEntry: (EntryNode) -> Bool = { Self.marksSubEntry($0) }
@@ -158,7 +185,10 @@ public struct InflectionInventory: Sendable, Equatable {
     /// has no usable headword** — told apart from `unread` so the caller does not parse it a second time to find
     /// out what is already known.
     enum Named: Equatable {
-        case unread
+        /// No inflection group in the record: it was not parsed, and it printed none.
+        case noInflections
+        /// A group in a record that could not be parsed: nothing is known about what it printed.
+        case unparsed
         case named(String)
     }
 

@@ -273,6 +273,15 @@ struct EndToEndTextTests {
              """,
          insteadRequire: ["Text(\"Downloading \\(size.displayName)", "\"Qwen3.5 \\(parameters)\""],
          fixture: nil),
+        (phrase: "Look up “receive”",
+         because: """
+             it spans an interpolation: the button is written `Look up “\\(suggestion.word)”`, and the word is the \
+             checker's correction of the fixture's typo. The `lookup` stage asserts the control by this exact name \
+             (audit, 2026-10-09; the one button of the owner's ruling of 2026-10-11), so the literal it is drawn from \
+             must still say it.
+             """,
+         insteadRequire: ["Text(\"Look up “\\(suggestion.word)”\")"],
+         fixture: nil),
         (phrase: "stopped meeting at noon",
          because: """
              it is the harness's own sentence, read out of a fixture and expected back out of the \
@@ -592,6 +601,12 @@ struct EndToEndReportKeyTests {
     /// the disk**, because a rule that names files stops covering its subject the day one moves.
     private static let instruments = [
         "Sources/XiaolaiDict/PanelReport.swift",
+        // Where the panel goes against a word's rectangle, at first show and grown (plan-card-refinements WI-2).
+        "Sources/XiaolaiDict/PlacementReport.swift",
+        // And what a reader's drag, the entry arriving and a disclosure do to it after (D3, 2026-10-10).
+        "Sources/XiaolaiDict/PlacementDragReport.swift",
+        // A pinned note's blank, and what a click on it or on the panel brings forward (reported 2026-10-10).
+        "Sources/XiaolaiDict/NoteReport.swift",
         "Sources/XiaolaiDict/HistoryReport.swift",
         "Sources/XiaolaiDict/SettingsReport.swift",
         "Sources/XiaolaiDict/ModelReport.swift",
@@ -605,9 +620,13 @@ struct EndToEndReportKeyTests {
         "Sources/XiaolaiDict/ProviderReport.swift",
         // The lookup instruments answer through `Codable` types rather than dictionaries.
         "Sources/XiaolaiDict/LookupCommand.swift",
+        // What a miss is offered, and how long the offer took (plan-spelling-suggestion) — a `Codable` line too.
+        "Sources/XiaolaiDict/SpellingReport.swift",
         // The helpers that answer the harness directly.
         "Tools/e2e/panel.swift",
         "Tools/e2e/on-screen.swift",
+        // Where a drag took the lookup card: the window's frame before and after (audit of 2026-10-10).
+        "Tools/e2e/drag-card.swift",
     ]
 
     @Test func everyInstrumentThisScanNamesIsOnDisk() {

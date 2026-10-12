@@ -29,6 +29,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -38,6 +39,8 @@ from ledger_schema import REPO
 SCRIPT = REPO / "Tools" / "e2e.sh"
 HELPERS = REPO / "Tools" / "e2e"
 RESOLVER = HELPERS / "shared" / "running-app.swift"
+# The one way a helper writes its report (`jsonLine`), compiled beside every helper as the resolver is.
+REPORTER = HELPERS / "shared" / "report.swift"
 # The shell the E2E Mac runs the remote script with: `#!/bin/bash` on macOS is 3.2.
 BASH = "/bin/bash"
 
@@ -197,11 +200,11 @@ def unchecked_launches(text: str) -> list[str]:
 # What may script another app from the SSH session, and why: an Apple event from there needs an Automation grant of
 # the session's own, and asked for the first time it raises a prompt nobody is there to answer. Each is guarded.
 APPLE_EVENTS = {
-    # The learning stage's appearance switch: no LaunchServices equivalent. The preflight requires System Events
-    # granted whenever the learning stage is asked for.
-    "learning_dark_before=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'",
-    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $learning_dark_before\"",
-    "if ! osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $wanted_dark\"",
+    # The system's appearance, read and set in one place (`dark_mode_now`, `set_dark_mode`): the learning stage's switch
+    # and the hover stage's look at the card above its word in the dark (plan-card-refinements D3) have no LaunchServices
+    # equivalent. The preflight requires System Events granted whenever either stage is asked for.
+    "answer=$(osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode' 2>&1)",
+    "true|false) osascript -e \"tell application \\\"System Events\\\" to tell appearance preferences to set dark mode to $1\" >/dev/null ;;",
 }
 
 
@@ -277,6 +280,8 @@ class TheScriptsShape(unittest.TestCase):
         self.assertEqual(built - sources, set(), "the install step builds a helper that is not there")
         self.assertIn("Tools/e2e/shared/running-app.swift", self.text[loop.end():loop.end() + 400],
                       "the helpers are no longer built with the shared resolver")
+        self.assertIn("Tools/e2e/shared/report.swift", self.text[loop.end():loop.end() + 400],
+                      "the helpers are no longer built with the one way they write a report")
 
 
 class EveryHelperFindsTheRealProcess(unittest.TestCase):
@@ -303,7 +308,7 @@ class EveryHelperFindsTheRealProcess(unittest.TestCase):
             folder.mkdir()
             shutil.copy(path, folder / "main.swift")
             done = subprocess.run(["xcrun", "swiftc", "-typecheck", "-warnings-as-errors", str(folder / "main.swift"),
-                                   str(RESOLVER)], capture_output=True, text=True, timeout=300, check=False,
+                                   str(RESOLVER), str(REPORTER)], capture_output=True, text=True, timeout=300, check=False,
                                   env={**os.environ, "TMPDIR": str(scratch)})
             return path.name, done.returncode, done.stderr[-600:]
 
@@ -480,13 +485,16 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         Fake.script(self.fake.helpers / "session-access", f"echo '{json.dumps(report)}'")
 
     def health(self, answers: list[dict]):
-        """`app-health` answering each of `answers` in turn, the last one for ever after."""
+        """`app-health` answering each of `answers` in turn, the last one for ever after — and noting every sentence it
+        was asked about, in `health-asked`."""
         counter = self.fake.root / "health-calls"
         counter.write_text("0")
+        asked = self.fake.root / "health-asked"
         cases = "\n".join(f'  {index}) echo \'{json.dumps(answer)}\'; exit {0 if answer["state"] == "ok" else 1} ;;'
                           for index, answer in enumerate(answers[:-1]))
         last = answers[-1]
         Fake.script(self.fake.helpers / "app-health", textwrap.dedent(f"""\
+            printf '%s\\n' "$2" >> "{asked}"
             n=$(cat "{counter}"); echo $((n + 1)) > "{counter}"
             case $n in
             {cases}
@@ -587,6 +595,39 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
         self.assertIn("it is opened again on the fixture", done.stdout)
         self.assertTrue(alive(running), "TextEdit was ended where opening the fixture again was enough")
 
+    def test_every_sentence_a_stage_selects_in_is_asked_for(self):
+        """The meeting line every lookup-driving stage selects in, **and the typo line `lookup` selects since
+        2026-10-09** (plan-spelling-suggestion): a TextEdit holding an older copy of the fixture shows the first and not
+        the second, and asking only the first passed it — measured on the E2E Mac, where `select-text` then found no
+        typo to select."""
+        done = self.preflight("lookup")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        asked = (self.fake.root / "health-asked").read_text().splitlines()
+        self.assertIn("The meeting ended after we stopped meeting at noon.", asked)
+        self.assertIn("We will recieve the parcel tomorrow.", asked)
+        fixture = (REPO / "Tools" / "e2e" / "notes.txt").read_text()
+        for sentence in set(asked):
+            self.assertIn(sentence, fixture, "the preflight asks for a sentence the fixture does not hold")
+
+    def test_a_textedit_holding_an_older_fixture_has_its_window_closed_and_the_fixture_opened_again(self):
+        """**`open` brings a document already open forward and never reads it again from disk** — measured 2026-10-09:
+        the fixture gained a line, `rsync` replaced the file, and TextEdit on the E2E Mac went on showing the old one.
+        The fixture's window is the harness's own document, so it is closed and the fixture opened again; TextEdit and
+        whatever else it holds are left alone."""
+        closed = self.fake.root / "closed"
+        Fake.script(self.fake.helpers / "close-window", f'echo "$@" >> "{closed}"; exit 0')
+        running = unrelated_process()
+        self.addCleanup(lambda: alive(running) and os.kill(running, 9))
+        self.health([{"state": "noFixture", "pid": running,
+                      "detail": "no window of com.apple.TextEdit holds the sentence (1 window(s): notes.txt)"}] * 20
+                    + [{"state": "ok", "detail": "“notes.txt” holds the fixture"}])
+        done = self.preflight("selection")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("NOTE  preflight: TextEdit held an older copy of the fixture", done.stdout)
+        # **By the fixture's own file, never its title** (audit round 3): another document called notes.txt is not ours.
+        self.assertEqual(closed.read_text().splitlines(), [f"--document {self.fake.helpers}/notes.txt com.apple.TextEdit"])
+        self.assertTrue(alive(running), "TextEdit was ended where closing the fixture's window was enough")
+
     def test_a_textedit_not_running_is_opened_again_without_ending_anything(self):
         # Not running for longer than the poll waits — an `open` that started nothing — and then opened again.
         self.health([{"state": "notRunning", "detail": "com.apple.TextEdit is not running"}] * 20
@@ -617,12 +658,14 @@ class ThePreflightNamesWhatIsMissing(unittest.TestCase):
 
     def test_the_provider_stage_needs_the_fixture_it_looks_up_in(self):
         """The provider stage drives two real lookups in TextEdit, so the preflight proves the fixture for it — and only
-        where a stage that selects in it is asked for."""
+        where a stage that selects in it is asked for: `crash` drives the dictionary service alone. **`lookup` selects
+        the fixture's typo since 2026-10-09** (plan-spelling-suggestion), so it needs the fixture too."""
         self.health([{"state": "notRunning", "detail": "com.apple.TextEdit is not running"}])
-        self.assertEqual(self.preflight("lookup").returncode, 0)
-        said = "\n".join(self.failures(self.preflight("provider")))
-        self.assertIn("TextEdit cannot hold the fixture", said)
-        self.assertIn("provider", said)
+        self.assertEqual(self.preflight("crash").returncode, 0)
+        for stage in ("provider", "lookup"):
+            said = "\n".join(self.failures(self.preflight(stage)))
+            self.assertIn("TextEdit cannot hold the fixture", said, stage)
+            self.assertIn(stage, said)
 
 
 class EveryRunReportsItsCleanups(unittest.TestCase):
@@ -806,6 +849,7 @@ class TheProviderStage(unittest.TestCase):
         evidence.mkdir()
         done = fake.run(textwrap.dedent(f"""\
             STAGE=provider
+            XIAOLAIDICT_PYTHON=/opt/chosen/python3.14
             provider_evidence="{evidence}"; provider_stub_log="{evidence}/stub.jsonl"
             provider_remote_model=xiaolaidict-e2e-remote
             run_report() {{ cat "{report}"; }}
@@ -819,7 +863,8 @@ class TheProviderStage(unittest.TestCase):
         self.assertIn("write com.xiaolaidict SubscriptionCLIsEnabled -bool YES", calls)
         self.assertIn(f"write com.xiaolaidict ClaudeCLIPath -string {evidence}/claude", calls)
         launcher = (evidence / "claude").read_text()
-        self.assertTrue(launcher.startswith("#!/bin/sh\nexec "), launcher)
+        self.assertTrue(launcher.startswith("#!/bin/sh\nexec /opt/chosen/python3.14 "),
+                        f"the launcher does not run the chosen Python (Tools/python.sh): {launcher}")
         self.assertIn("provider-stub.py claude", launcher)
         self.assertIn("evidence\\ with\\ a\\ space/stub.jsonl", launcher, "a path was spliced in unquoted")
 
@@ -917,3 +962,575 @@ class TheBundledModelIsHiddenNotRemoved(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSpellingStepReadsThePanelExactly(unittest.TestCase):
+    """`spelling_state`, the `lookup` stage's reading of the panel for "Look up “…”" (audit, 2026-10-09; the owner's ruling
+    of 2026-10-11). It took any text holding "receive" for the corrected word's card — a heading "receiver", a definition,
+    the reader's sentence — and any control holding the word for the button, and never asked whether the walk finished.
+    Each of those is a control here: the panel that should be called the card is, and every one that should not is not —
+    and it counts the buttons, since a card offering two words is the defect the ruling removed."""
+
+    TYPO_MISS = "No entry for “recieve” in your dictionaries."
+    LINE = "Look up “receive”"
+
+    def state(self, texts: list[str], controls: list[str] | None = None, complete: bool = True,
+              term: str | None = None, word: str | None = None) -> list[str]:
+        report = {"complete": complete, "frontmost": "com.apple.TextEdit", "incomplete": [] if complete else ["deadline"],
+                  "windows": [{"title": "Lookup", "texts": texts, "controls": controls or []}]}
+        source = function("spelling_state") + '\nspelling_state "$@"\n'
+        arguments = [json.dumps(report, ensure_ascii=False)] + [a for a in (term, word) if a is not None]
+        done = subprocess.run([BASH, "-c", source, "spelling_state", *arguments],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.split()
+
+    def test_the_corrected_words_card_is_headed_by_the_word_itself(self):
+        self.assertIn("card", self.state(["Lookup", "receive", "to be given something", "We will recieve the parcel."]))
+
+    def test_a_card_for_another_word_that_holds_the_word_is_not_its_card(self):
+        for texts in (["Lookup", "receiver", "A person appointed to receive money."],
+                      ["Lookup", "parcel", "They will receive it tomorrow."],
+                      ["Lookup", "receiving"]):
+            with self.subTest(texts=texts):
+                self.assertNotIn("card", self.state(texts))
+
+    def test_a_walk_that_did_not_finish_says_nothing_about_the_card(self):
+        self.assertNotIn("card", self.state(["Lookup", "receive", "to be given something"], complete=False))
+
+    def test_a_card_still_waiting_or_missing_is_not_the_words_card(self):
+        self.assertNotIn("card", self.state(["Lookup", "receive", "Looking up “receive” in your dictionaries…"]))
+        self.assertNotIn("card", self.state(["Lookup", "receive", "No entry for “receive” in your dictionaries."]))
+
+    def test_the_miss_and_the_button_are_read_by_their_own_words(self):
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE]), ["miss", "line", "offers=1"])
+        # A miss of another word, and a button naming another word, are neither — though the button is still counted.
+        self.assertEqual(self.state(["Lookup", "receiver", "No entry for “receiver” in your dictionaries."],
+                                    ["Look up “receiver”", "Look up “receive” instead"]), ["offers=1"])
+        # The retired wording is no button.
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], ["Did you mean “receive”?"]), ["miss", "offers=0"])
+
+    def test_two_buttons_are_counted_as_two(self):
+        """The owner's ruling of 2026-10-11: one offer or none. A card offering the regular form and the checker's word
+        side by side must read as two, so the stage can refuse it."""
+        self.assertEqual(self.state(["Lookup", "heavied", "No entry for “heavied” in your dictionaries."],
+                                    ["Look up “heavy”", "Look up “heavier”"], term="heavied", word="heavy"),
+                         ["miss", "line", "offers=2"])
+        self.assertEqual(self.state(["Lookup", "heavied", "No entry for “heavied” in your dictionaries."], [],
+                                    term="heavied", word="-"), ["miss", "offers=0"])
+
+    def test_the_dictionaries_exit_is_read_by_its_exact_name(self):
+        """plan-card-refinements WI-1: every answered card carries "Dictionaries…"; a control merely holding the word,
+        or named without its ellipsis, is not it."""
+        self.assertEqual(self.state(["Lookup", "recieve", self.TYPO_MISS], [self.LINE, "Dictionaries…"]),
+                         ["miss", "line", "offers=1", "exit"])
+        self.assertNotIn("exit", self.state(["Lookup", "receive"], ["Dictionaries", "Choose Another Dictionary…"]))
+
+
+class CloseWindowFindsTheFixtureByItsDocument(unittest.TestCase):
+    """`close-window --document`, which the preflight uses to put away a TextEdit window holding an older copy of the
+    fixture (audit round 3, 2026-10-09). By title it closed the first window called notes.txt — another document of that
+    name, which an unedited close discards from view and an edited one answers with a Save sheet on a Mac that may be
+    someone's. The fixture is found by its canonical file URL, and a match that is missing, doubled or cannot be checked
+    is refused. Asked through `--decide`, the same choice without Accessibility, of the helper as it is compiled."""
+
+    binary: pathlib.Path
+
+    @classmethod
+    def setUpClass(cls):
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-close-window-"))
+        cls.addClassCleanup(shutil.rmtree, scratch, True)
+        (scratch / "src").mkdir()
+        shutil.copy(HELPERS / "close-window.swift", scratch / "src" / "main.swift")
+        cls.binary = scratch / "close-window"
+        built = subprocess.run(["xcrun", "swiftc", str(scratch / "src" / "main.swift"), str(RESOLVER), "-o", str(cls.binary)],
+                               capture_output=True, text=True, timeout=300, check=False)
+        assert built.returncode == 0, built.stderr
+        # A real fixture under /tmp, which macOS reaches through the /private/tmp symlink — the same file by two paths.
+        cls.home = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-fixture-", dir="/tmp"))
+        cls.addClassCleanup(shutil.rmtree, cls.home, True)
+        cls.fixture = cls.home / "notes.txt"
+        cls.fixture.write_text("Intro line.\n")
+
+    def decide(self, *documents: str) -> str:
+        done = subprocess.run([str(self.binary), "--decide", str(self.fixture), *documents],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout.strip()
+
+    def test_another_document_with_the_fixtures_title_is_never_the_fixture(self):
+        """Two windows titled notes.txt, the reader's first: the fixture is the second, by its file."""
+        theirs = "file:///Users/someone/Documents/notes.txt"
+        self.assertEqual(self.decide(theirs, self.fixture.as_uri()), "window 1")
+
+    def test_the_fixture_is_found_by_its_canonical_file(self):
+        private = "file:///private" + str(self.fixture)
+        self.assertTrue(str(self.fixture).startswith("/tmp/"), "the fixture must be reached through the symlink")
+        self.assertEqual(self.decide("none", private), "window 1")
+
+    def test_a_missing_doubled_or_unreadable_match_is_refused(self):
+        self.assertEqual(self.decide("file:///Users/someone/Documents/notes.txt", "none"), "no window")
+        self.assertEqual(self.decide(self.fixture.as_uri(), self.fixture.as_uri()), "ambiguous 0,1")
+        # A window whose document cannot be read could be the fixture, or could be the window the fixture is not.
+        self.assertEqual(self.decide("unreadable", self.fixture.as_uri()), "unverifiable 0")
+
+
+class TheReadersLedgerIsLeftAsFound(unittest.TestCase):
+    """`ledger_digest` and `ledger_left`, the check that an instrument run left the E2E Mac's ledger exactly as it found it
+    (audit of 2026-10-10). It compared the newest lookup id, which a run passes while deleting another process's reading
+    below it, or leaving a study note behind — both of which the instruments' clean-up could do. The whole ledger is
+    compared now, and each of those is a control here."""
+
+    SCHEMA = """
+        CREATE TABLE lookups (id INTEGER PRIMARY KEY, surface TEXT NOT NULL);
+        CREATE TABLE sense_encounters (lookup_id INTEGER NOT NULL, sense TEXT NOT NULL);
+        CREATE TABLE study_notes (id TEXT PRIMARY KEY, created_at REAL NOT NULL);
+        INSERT INTO lookups (id, surface) VALUES (1, 'meeting'), (2, 'fine'), (3, 'receive');
+        INSERT INTO sense_encounters VALUES (2, 'fine.1');
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.ledger = pathlib.Path(self.scratch.name) / "ledger.sqlite"
+        subprocess.run(["sqlite3", str(self.ledger)], input=self.SCHEMA, text=True, check=True, timeout=30)
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def verdict(self, change: str | None, ledger: pathlib.Path | None = None) -> str:
+        """`ledger_left` after `change` is made to the ledger between the two readings, as the run would make it."""
+        source = "\n".join([
+            f"ledger={json.dumps(str(ledger or self.ledger))}",
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            function("ledger_source"), function("ledger_digest"), function("ledger_left"),
+            'before=$(ledger_digest "$ledger") || before=""',
+            f"sqlite3 {json.dumps(str(self.ledger))} {json.dumps(change)}" if change else ":",
+            'ledger_left "instrument" "$before"',
+        ])
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
+
+    def test_a_ledger_left_alone_passes(self):
+        self.assertTrue(self.verdict(None).startswith("PASS"), self.verdict(None))
+
+    def test_every_change_an_instrument_could_make_fails(self):
+        for change in ("INSERT INTO study_notes VALUES ('n1', 1.0)",  # a note left, the newest lookup unchanged
+                       "DELETE FROM lookups WHERE id = 2",  # another process's reading deleted below the newest
+                       "INSERT INTO lookups (id, surface) VALUES (4, 'fine')",  # a reading left
+                       "DELETE FROM sense_encounters",  # a sense met, gone
+                       "UPDATE lookups SET surface = 'fines' WHERE id = 1"):
+            with self.subTest(change=change):
+                self.assertTrue(self.verdict(change).startswith("FAIL"), self.verdict(change))
+
+    def test_a_ledger_that_could_not_be_read_is_not_one_left_alone(self):
+        missing = pathlib.Path(self.scratch.name) / "absent" / "ledger.sqlite"
+        self.assertTrue(self.verdict(None, ledger=missing).startswith("FAIL"))
+
+
+class ThePunctuatedSelectionIsBoxedByItsWord(unittest.TestCase):
+    """`punctuated_box`, the selection stage's check that a short word selected inside asymmetric punctuation — “Q…”,
+    (“ox, — is boxed by the word itself, run as `e2e.sh` writes it against a stand-in browser helper and app (audit of
+    2026-10-10). It checked the text and that the box's middle across fell on the word, so a box on the wrong line, a
+    thousand points tall, or one the app only said *contains* the word passed. Each of those is a control here: the
+    box must be the word's own, `exact`, every edge within a point of the word selected alone."""
+
+    WORD = {"x": 162.0, "y": 207.0, "width": 14.0, "height": 18.0}
+    WHOLE = {"x": 155.0, "y": 207.0, "width": 44.0, "height": 18.0}
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.scratch.name)
+        (self.root / "helpers").mkdir()
+        self.count = self.root / "count"
+        self.count.write_text("0")
+        # The browser helper: selects, and for the punctuated selection prints the whole selection's box.
+        helper = self.root / "helpers" / "select-web"
+        helper.write_text("#!/bin/bash\n[ \"$2\" = Q ] && exit 0\nprintf '%s\\n' \"$STUB_WHOLE\"\n")
+        helper.chmod(0o755)
+        # The app: the word alone at the first read, the punctuated selection at the second.
+        app = self.root / "XiaolaiDict"
+        app.write_text(textwrap.dedent(f"""\
+            #!/bin/bash
+            n=$(cat {self.count}); echo $((n + 1)) > {self.count}
+            [ "$n" = 0 ] && printf '%s\\n' "$STUB_ALONE" || printf '%s\\n' "$STUB_READING"
+            """))
+        app.chmod(0o755)
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def verdicts(self, reading_bounds: dict | None, text: str = "Q", quality: str = "exact") -> list[str]:
+        self.count.write_text("0")  # each run reads the word alone first
+        alone = {"text": "Q", "bounds": {**self.WORD, "quality": "exact"}}
+        reading = {"text": text, "bounds": None if reading_bounds is None else {**reading_bounds, "quality": quality}}
+        source = "\n".join([
+            f"helpers={json.dumps(str(self.root / 'helpers'))}", f"exe={json.dumps(str(self.root / 'XiaolaiDict'))}",
+            f"reports={json.dumps(str(self.root))}",
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            "consume_verdicts() { printf '%s\\n' \"$2\" | grep -E '^(PASS|FAIL)'; }",
+            function("punctuated_verdicts"), function("punctuated_box"), 'punctuated_box Q "“Q…”"',
+        ])
+        env = {**os.environ, "STUB_ALONE": json.dumps(alone), "STUB_READING": json.dumps(reading),
+               "STUB_WHOLE": json.dumps({"selected": self.WHOLE})}
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False, env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return [line.split("\t")[0].split(" ")[0] for line in done.stdout.splitlines()]
+
+    def test_the_words_own_box_passes(self):
+        self.assertEqual(set(self.verdicts(self.WORD)), {"PASS"})
+
+    def test_a_box_within_a_point_of_the_words_passes(self):
+        self.assertEqual(set(self.verdicts({**self.WORD, "x": 162.6, "height": 18.8})), {"PASS"})
+
+    def test_every_box_that_is_not_the_words_fails(self):
+        for label, box in (("on another line", {**self.WORD, "y": 237.0}), ("a thousand points tall", {**self.WORD, "height": 1000.0}),
+                           ("the whole selection's", self.WHOLE), ("wider to the right", {**self.WORD, "width": 20.0}),
+                           ("none", None)):
+            with self.subTest(box=label):
+                self.assertIn("FAIL", self.verdicts(box))
+
+    def test_a_box_the_app_only_says_contains_the_word_fails(self):
+        self.assertIn("FAIL", self.verdicts(self.WORD, quality="containing"))
+
+    def test_another_word_read_fails(self):
+        self.assertIn("FAIL", self.verdicts(self.WORD, text="Q…"))
+
+
+class TheAppearanceIsChangedOnlyWhenItCanBePutBack(unittest.TestCase):
+    """`placement_above`, the hover stage's look at the card above its word in the light and the dark appearance, run as
+    `e2e.sh` writes it against a stand-in `osascript` (audit of 2026-10-10). It read the appearance with its failure
+    suppressed, changed it anyway, and put back only a value that was `true` or `false` — so a read that failed left the
+    E2E Mac dark, and a restoration that failed said nothing. Each of those is a control here."""
+
+    OSASCRIPT = textwrap.dedent("""\
+        #!/bin/bash
+        case "$*" in
+            *"get dark mode"*)
+                [ "$STUB_GET" = fail ] && { echo "execution error: Not authorised (-1743)" >&2; exit 1; }
+                echo "$STUB_GET" ;;
+            *"set dark mode to "*)
+                all="$*"; value=${all##*set dark mode to }
+                echo "$value" >> "$STUB_LOG"
+                [ "${STUB_SET_FAILS_TO:-}" = "$value" ] && [ "$(grep -c . "$STUB_LOG")" -gt 2 ] && exit 1
+                exit 0 ;;
+        esac
+        """)
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.scratch.name)
+        (root / "bin").mkdir()
+        tool = root / "bin" / "osascript"
+        tool.write_text(self.OSASCRIPT)
+        tool.chmod(0o755)
+        self.path = f"{root / 'bin'}:{os.environ['PATH']}"
+        self.log = root / "sets"
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
+    def run_stage(self, get: str, set_fails_to: str = "") -> tuple[list[str], list[str]]:
+        """The verdicts, and every appearance set, in order — the cleanup `at_exit` registered run last, as `on_exit`
+        runs it."""
+        self.log.write_text("")
+        names = [name for name in ("dark_mode_now", "set_dark_mode") if f"\n{name}() {{" in SCRIPT.read_text()]
+        source = "\n".join([
+            'pass() { echo "PASS $*"; }', 'flunk() { echo "FAIL $*"; }',
+            "cleanups=(); at_exit() { cleanups+=(\"$1\"); }",
+            'placement_at() { :; }', 'placement_evidence=/tmp',
+            'last_placement=\'{"screen": {"x": 0, "y": 0, "width": 1512, "height": 982}}\'',
+            *[function(name) for name in names], function("placement_above"),
+            "placement_above",
+            'for cleanup in "${cleanups[@]}"; do "$cleanup" || echo "FAIL cleanup $cleanup"; done',
+        ])
+        env = {**os.environ, "PATH": self.path, "STUB_GET": get, "STUB_LOG": str(self.log),
+               "STUB_SET_FAILS_TO": set_fails_to}
+        done = subprocess.run([BASH, "-c", source], capture_output=True, text=True, timeout=60, check=False, env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        verdicts = [line.split(" ")[0] for line in done.stdout.splitlines() if line.startswith(("PASS", "FAIL"))]
+        return verdicts, self.log.read_text().split()
+
+    def test_an_appearance_read_is_put_back_after_both_are_seen(self):
+        for was in ("true", "false"):
+            with self.subTest(was=was):
+                verdicts, sets = self.run_stage(was)
+                self.assertNotIn("FAIL", verdicts)
+                self.assertEqual(sets[:2], ["false", "true"])
+                self.assertEqual(sets[-1], was, "the appearance was not put back")
+
+    def test_an_appearance_that_could_not_be_read_is_never_changed(self):
+        for get in ("fail", "missing value", ""):
+            with self.subTest(get=get):
+                verdicts, sets = self.run_stage(get)
+                self.assertEqual(sets, [], "the appearance was changed with nothing to put back")
+                self.assertIn("FAIL", verdicts)
+
+    def test_a_restoration_that_failed_is_reported(self):
+        verdicts, sets = self.run_stage("false", set_fails_to="false")
+        self.assertEqual(sets[-1], "false")
+        self.assertIn("FAIL", verdicts, "the appearance was left dark and nothing said so")
+
+
+class TheFollowedCardStaysWhereTheReaderLeftIt(unittest.TestCase):
+    """`replaced_in_place`, the lookup stage's check that pressing "Look up “…”" after dragging the miss card aside
+    replaces it where the reader left it (audit of 2026-10-10: the replacement was placed afresh against the
+    misspelling). The card held where the drag left it passes; one that jumped back, or a drag that never moved it, fails."""
+
+    BEFORE = {"x": 400.0, "y": 300.0, "width": 396.0, "height": 120.0}
+    AFTER = {"x": 480.0, "y": 360.0, "width": 396.0, "height": 120.0}
+
+    def verdicts(self, drag: dict, now: dict | None) -> list[str]:
+        nodes = [{"role": "AXWindow", "frame": now}] if now else []
+        view = {"windows": [{"title": "Lookup", "nodes": nodes, "texts": [], "controls": []}]}
+        source = function("replaced_in_place") + '\nreplaced_in_place "$1" "$2"\n'
+        done = subprocess.run([BASH, "-c", source, "replaced_in_place", json.dumps(drag), json.dumps(view)],
+                              capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return [line.split("\t")[0] for line in done.stdout.splitlines()]
+
+    def test_a_card_left_where_the_drag_put_it_passes(self):
+        grown = {**self.AFTER, "height": 290.0}
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": self.AFTER}, grown), ["PASS", "PASS", "DONE"])
+
+    def test_a_card_that_jumped_back_fails(self):
+        self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, self.BEFORE))
+
+    def test_a_drag_that_moved_nothing_fails_both(self):
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": self.BEFORE}, self.BEFORE), ["FAIL", "FAIL", "DONE"])
+
+    def test_no_frame_for_the_card_fails(self):
+        self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, None))
+
+
+def remote_scripts(text: str | None = None) -> dict[str, str]:
+    """Every script `e2e.sh` sends to the E2E Mac, assembled as it assembles them: each `<<'SH'` body, after
+    `common.sh` where the line that opens it reads `common.sh` first — the run, and the install step."""
+    lines = (SCRIPT.read_text() if text is None else text).split("\n")
+    openings = [i for i, line in enumerate(lines) if "<<'SH'" in line]
+
+    def body(start: int) -> list[str]:
+        end = lines.index("SH", start + 1)
+        return lines[start + 1:end]
+
+    common = next(body(i) for i in openings if 'cat >"$remote_scripts/common.sh"' in lines[i])
+    scripts = {}
+    for i in openings:
+        prefix = common if 'cat "$remote_scripts/common.sh" -' in lines[i] else []
+        scripts[f"line {i + 1}"] = "\n".join(prefix + body(i)) + "\n"
+    return scripts
+
+
+class TheRemoteScriptsParseUnderTheMacsOwnBash(unittest.TestCase):
+    """**Every script sent to the E2E Mac parses under `/bin/bash`, macOS's Bash 3.2** (third audit of 2026-10-10). The
+    E2E Mac happens to run Homebrew's Bash 5 for `bash -s`, so a run passed while the assembled run script did not parse
+    under the system's own: Bash 3.2 cannot parse a heredoc inside a command substitution whose body holds an apostrophe
+    — four validators did, from `got.get('correction')` to a comment's "card's". AGENTS.md names the same hazard for a
+    `python3 -c` block. Parsed as assembled, and a plant of the hazard is refused, so the check can fail."""
+
+    def parses(self, script: str) -> subprocess.CompletedProcess:
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+            handle.write(script)
+        try:
+            return subprocess.run([BASH, "-n", handle.name], capture_output=True, text=True, timeout=60, check=False)
+        finally:
+            os.unlink(handle.name)
+
+    def test_the_bash_is_the_systems_own(self):
+        version = subprocess.run([BASH, "--version"], capture_output=True, text=True, check=True).stdout
+        self.assertIn("version 3.2", version, "the check is only worth having against the Bash macOS ships")
+
+    def test_every_assembled_remote_script_parses(self):
+        scripts = remote_scripts()
+        self.assertGreaterEqual(len(scripts), 4, f"the assembly found only {sorted(scripts)}")
+        for name, script in scripts.items():
+            with self.subTest(script=name):
+                done = self.parses(script)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_validator_inside_a_substitution_with_an_apostrophe_is_refused(self):
+        planted = 'f() {\n    x="$(python3 - <<\'PYPLANT\' || true\nprint(got.get(\'correction\') or \'nothing\')\n' \
+                  "# the card's own words\nPYPLANT\n)\"\n}\n"
+        self.assertNotEqual(self.parses(planted).returncode, 0, "the plant parsed, so this check cannot fail")
+
+
+class TheDragHelperIsBoundedBeforeItPresses(unittest.TestCase):
+    """`drag-card` refuses a distance no card travels **before it asks Accessibility anything, let alone presses the
+    button** (third audit of 2026-10-10): `1e100` trapped on its step count after the button went down, with no mouse-up
+    to follow. Built as the install step builds it, and run with each distance; a bounded one goes on to the next check."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-drag-card-"))
+        source = cls.scratch / "main.swift"
+        shutil.copy(HELPERS / "drag-card.swift", source)
+        cls.helper = cls.scratch / "drag-card"
+        subprocess.run(["xcrun", "swiftc", "-O", str(source), str(RESOLVER), str(REPORTER), "-o", str(cls.helper)], check=True,
+                       capture_output=True, timeout=600, env={**os.environ, "TMPDIR": str(cls.scratch)})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.scratch, True)
+
+    def run_helper(self, dx: str, dy: str) -> subprocess.CompletedProcess:
+        return subprocess.run([str(self.helper), "com.example.nothing", "Lookup", "No entry for", dx, dy],
+                              capture_output=True, text=True, timeout=60, check=False)
+
+    def test_a_distance_no_card_travels_is_refused_as_usage(self):
+        for dx, dy in (("1e100", "0"), ("0", "-1e100"), ("inf", "0"), ("nan", "1"), ("2001", "0"), ("0", "-2001")):
+            with self.subTest(dx=dx, dy=dy):
+                done = self.run_helper(dx, dy)
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn("at most 2000 points", done.stderr)
+
+    def test_a_bounded_distance_goes_on_to_the_next_check(self):
+        done = self.run_helper("80", "-2000")
+        self.assertNotEqual(done.returncode, 2, done.stderr)
+
+
+class EveryHelperWritesItsReportThroughOneCheckedDoor(unittest.TestCase):
+    """**No helper hands `JSONSerialization` a report it has not asked `isValidJSONObject` about** (third audit of
+    2026-10-10). On Darwin `JSONSerialization.data(withJSONObject:)` *raises* for NaN or infinity — an Objective-C exception
+    no `try` sees — so a helper whose report held one frame of NaN died instead of answering (AGENTS.md). Five helpers called
+    it directly; they write through `jsonLine` in `shared/report.swift` now, which asks first. A scan for the call, a plant
+    the scan refuses, and the door itself run on NaN."""
+
+    REPORT = HELPERS / "shared" / "report.swift"
+
+    @staticmethod
+    def direct_calls(sources: dict[str, str]) -> list[str]:
+        return [name for name, text in sources.items() if "JSONSerialization.data(" in text]
+
+    def test_no_helper_serialises_a_report_itself(self):
+        sources = {path.name: path.read_text() for path in HELPERS.glob("*.swift")}
+        self.assertGreaterEqual(len(sources), 15)
+        self.assertEqual(self.direct_calls(sources), [], "these serialise a report without asking whether it can be")
+        planted = {"plant.swift": 'print(try! JSONSerialization.data(withJSONObject: ["x": 1]))'}
+        self.assertEqual(self.direct_calls(planted), ["plant.swift"], "the scan cannot see a direct call")
+
+    def test_the_door_asks_before_it_serialises(self):
+        code = "\n".join(line for line in self.REPORT.read_text().split("\n") if not line.strip().startswith("//"))
+        self.assertLess(code.index("isValidJSONObject"), code.index("JSONSerialization.data("))
+
+    def test_the_door_answers_nothing_for_a_report_it_cannot_write_and_a_line_for_one_it_can(self):
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-report-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        main = scratch / "main.swift"
+        main.write_text('print(jsonLine(["x": Double.nan]) == nil ? "refused" : "written")\n'
+                        'print(jsonLine(["y": 1, "x": "a"]) ?? "nothing")\n')
+        binary = scratch / "door"
+        subprocess.run(["xcrun", "swiftc", str(main), str(self.REPORT), "-o", str(binary)], check=True,
+                       capture_output=True, timeout=600, env={**os.environ, "TMPDIR": str(scratch)})
+        done = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split("\n")[:2], ["refused", '{"x":"a","y":1}'])
+
+
+class ALedgerTheBuildCannotOpenStopsTheRun(unittest.TestCase):
+    """`ledger_schema_refusal`, asked before anything is installed (2026-10-11). The E2E Mac's ledger is shared by every
+    branch's build, and a build refuses a ledger newer than its own schema (`LedgerError.newerSchema`) — so after a
+    newer branch's build migrated it, this branch's build recorded no lookup at all, and the lookup stage's ledger check
+    failed as "got: nothing" with no word about why. A ledger newer than the build stops the run and says so; one at
+    the build's schema or older, or none, does not."""
+
+    def refusal(self, found: str, supported: str) -> tuple[int, str]:
+        source = function("ledger_schema_refusal") + '\nledger_schema_refusal "$@"\n'
+        done = subprocess.run([BASH, "-c", source, "ledger_schema_refusal", found, supported],
+                              capture_output=True, text=True, timeout=60, check=False)
+        return done.returncode, done.stdout
+
+    def test_a_newer_ledger_is_refused_by_name(self):
+        status, said = self.refusal("14", "13")
+        self.assertEqual(status, 1)
+        self.assertIn("schema 14", said)
+        self.assertIn("13", said)
+
+    def test_a_ledger_this_build_can_open_is_not(self):
+        for found in ("13", "12", "0"):
+            with self.subTest(found=found):
+                self.assertEqual(self.refusal(found, "13"), (0, ""))
+
+    def test_an_unreadable_answer_is_refused_rather_than_passed(self):
+        status, said = self.refusal("", "13")
+        self.assertEqual(status, 1)
+        self.assertTrue(said)
+
+
+class NoVariableIsFollowedByANonAsciiCharacter(unittest.TestCase):
+    """macOS's own `/bin/bash` is 3.2, and it reads the first byte of a character after a bare `$name` as part of the
+    name: `"“$term”"` failed on the Mac mini as `term\\xe2: unbound variable` while the Homebrew bash 5 on the other
+    E2E Mac read it correctly (2026-10-12). The E2E script runs on whichever bash the test Mac puts first on its PATH,
+    so every variable directly before a non-ASCII character — a curly quote, a dash, an ellipsis — is braced."""
+
+    BARE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]")
+
+    def test_the_pattern_finds_the_shape_that_failed(self):
+        # A positive control: a check that cannot fail is not a check.
+        self.assertTrue(self.BARE.search('echo "“$term” was never looked up"'))
+        self.assertIsNone(self.BARE.search('echo "“${term}” was never looked up"'))
+
+    def test_the_e2e_script_braces_every_such_variable(self):
+        found = [f"line {number}: {line.strip()[:100]}"
+                 for number, line in enumerate(SCRIPT.read_text(encoding="utf-8").splitlines(), 1)
+                 if self.BARE.search(line)]
+        self.assertEqual(found, [], "bare variable before a non-ASCII character; write ${name}")
+
+    def test_the_stage_helpers_brace_them_too(self):
+        found = [f"{path.name}:{number}"
+                 for path in sorted(HELPERS.rglob("*.sh"))
+                 for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                 if self.BARE.search(line)]
+        self.assertEqual(found, [])
+
+
+class TheProviderStubEndsWhenItsPidIsEnded(unittest.TestCase):
+    """On the E2E Mac the remote `python3` is a **shell function** (the interpreter chosen by version), and under macOS's
+    own bash 3.2 `$!` of a backgrounded function is the wrapping subshell, not the Python inside it. The stage ended that
+    pid, the real stub survived with the SSH channel as its stdout, and the run waited on the channel for ever — twice,
+    on the Mac mini, 49 minutes and 1 h 47 min after every stage had already finished (2026-10-12). `mbp16`'s bash 5 ends
+    the function's process directly, so nothing there ever showed it."""
+
+    def run_it(self, extra: str = "") -> tuple[str, str]:
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="xiaolaidict-stub-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        stub = scratch / "provider-stub.py"
+        stub.write_text("import sys, time\ntime.sleep(120)\n")
+        script = "\n".join([
+            "set -u",
+            f'XIAOLAIDICT_PYTHON="{sys.executable}"',
+            'python3() { "$XIAOLAIDICT_PYTHON" "$@"; }',
+            f'helpers="{scratch}"; provider_stub_log="{scratch}/log"; provider_evidence="{scratch}"',
+            function("end_process"), function("start_provider_stub"), function("stop_provider_stub"),
+            "start_provider_stub; sleep 1; stop_provider_stub; echo ended-$?",
+            "sleep 0.5",
+            f'pgrep -f "{stub}" | wc -l',
+        ]) + extra
+        # To files, never pipes: a stub left holding a pipe is the very fault, and would hang this test as it hung the run.
+        with open(scratch / "out", "w") as out, open(scratch / "err", "w") as err:
+            subprocess.run([BASH, "-c", script], stdout=out, stderr=err, timeout=60, check=False)
+        # Whatever was left running is ended here, so a failing test leaves nothing behind.
+        subprocess.run(["pkill", "-f", str(stub)], check=False)
+        return (scratch / "out").read_text().split(), (scratch / "err").read_text()
+
+    def test_no_stub_is_left_running_and_none_holds_the_channel(self):
+        out, err = self.run_it()
+        self.assertEqual(out[0], "ended-0", err)
+        self.assertEqual(out[1], "0", "the stub outlived the stage that ended it; the SSH channel stays open on it")
+
+
+class TheSetupStageClicksTheLanguageModelRowByItsIdentifier(unittest.TestCase):
+    """The setup stage clicked a button called "Choose…" and refused when two were enabled, which they are on a Mac that
+    has no study dictionary chosen of its own (the dictionary row says "Choose…" too, `SetupView`): MacMini-001,
+    2026-10-12, where `mbp16` had one chosen and so showed "Change…" there. A stage that depends on what the machine has
+    accumulated measures the machine; the row's button is named by an identifier the view declares."""
+
+    IDENTIFIER = "setup-language-model-choose"
+
+    def test_the_stage_clicks_the_identifier_not_the_shared_label(self):
+        stage = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(f'click-element" com.xiaolaidict "{self.IDENTIFIER}"', stage)
+        self.assertNotIn('click-element" com.xiaolaidict "Choose…"', stage)
+
+    def test_the_view_declares_that_identifier_once(self):
+        view = (REPO / "Sources" / "XiaolaiDictUI" / "SetupView.swift").read_text(encoding="utf-8")
+        self.assertEqual(view.count(f'.accessibilityIdentifier("{self.IDENTIFIER}")'), 1)

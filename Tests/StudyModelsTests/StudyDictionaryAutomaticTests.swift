@@ -195,7 +195,7 @@ struct StudyDictionarySettlingTests {
         let defaults = TemporaryDefaults.suite()
         let dictionary = StudyDictionary(defaults: defaults, language: { "zh-Hans-CN" }) { _ in [Self.oxford] }
         #expect(!dictionary.isSettled)
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
         #expect(dictionary.isSettled)
         #expect(PrimaryDictionaryStore(defaults: defaults, language: { "zh-Hans-CN" }).load().automatic
             == Self.oxford.identity.key, "the lookup reads the primary from disk right after settling")
@@ -207,8 +207,8 @@ struct StudyDictionarySettlingTests {
             asked += 1
             return [Self.oxford]
         }
-        await dictionary.settled(bound: .seconds(60))
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
+        await dictionary.settled(bound: Patience.wait)
         #expect(asked == 1)
     }
 
@@ -217,7 +217,7 @@ struct StudyDictionarySettlingTests {
     @Test func settlingGivesUpWhileTheServiceIsStillPending() async {
         let answered = Flag()
         let dictionary = StudyDictionary(defaults: TemporaryDefaults.suite(), language: { "zh-Hans-CN" }) { _ in
-            try? await Task.sleep(for: .seconds(120))
+            try? await Task.sleep(for: Patience.never)
             answered.set()
             return nil
         }
@@ -252,7 +252,7 @@ struct StudyDictionaryReadinessTests {
         PrimaryDictionaryStore(defaults: defaults, language: { "en-US" }).saveAutomatic(Self.other.identity.key)
         let dictionary = StudyDictionary(defaults: defaults, language: { "en-US" }) { _ in [Self.other, Self.noad] }
         #expect(!dictionary.isSettled, "a stored derivation is not readiness")
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
         #expect(dictionary.isSettled)
         #expect(PrimaryDictionaryStore(defaults: defaults, language: { "en-US" }).load().automatic
             == Self.noad.identity.key)
@@ -263,7 +263,7 @@ struct StudyDictionaryReadinessTests {
         let defaults = TemporaryDefaults.suite()
         PrimaryDictionaryStore(defaults: defaults, language: { "en-US" }).saveAutomatic(Self.noad.identity.key)
         let dictionary = StudyDictionary(defaults: defaults, language: { "en-US" }) { _ in nil }
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
         #expect(!dictionary.isSettled)
         #expect(PrimaryDictionaryStore(defaults: defaults, language: { "en-US" }).load().automatic
             == Self.noad.identity.key)
@@ -280,7 +280,7 @@ struct StudyDictionaryReadinessTests {
             running.leave()
             return [Self.noad]
         }
-        async let a: Void = dictionary.settled(bound: .seconds(60))
+        async let a: Void = dictionary.settled(bound: Patience.wait)
         async let b: Void = dictionary.refresh(revalidate: true)
         async let c: Void = dictionary.askAgain()
         _ = await (a, b, c)
@@ -301,7 +301,7 @@ struct StudyDictionaryReadinessTests {
         let defaults = TemporaryDefaults.suite()
         var answer: [DictionaryCapability]? = [Self.noad]
         let dictionary = StudyDictionary(defaults: defaults, language: { "en-US" }) { _ in answer }
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
         #expect(dictionary.isSettled)
         answer = nil
         await dictionary.askAgain()
@@ -318,7 +318,7 @@ struct StudyDictionaryReadinessTests {
             language = "zh-Hans-CN"      // the system language changes while the service is answering
             return [Self.noad]
         }
-        await dictionary.settled(bound: .seconds(60))
+        await dictionary.settled(bound: Patience.wait)
         language = "en-US"
         #expect(PrimaryDictionaryStore(defaults: defaults, language: { "en-US" }).load().automatic
             == Self.noad.identity.key, "derived and stamped for the language the pass began under")
@@ -336,7 +336,7 @@ struct StudyDictionaryReadinessTests {
             if calls == 1 { await release.wait() }
             return [Self.noad]
         }
-        async let settling: Void = dictionary.settled(bound: .seconds(60))
+        async let settling: Void = dictionary.settled(bound: Patience.wait)
         await Task.yield(); await Task.yield()
         async let again: Void = dictionary.askAgain()
         await Task.yield(); await Task.yield()

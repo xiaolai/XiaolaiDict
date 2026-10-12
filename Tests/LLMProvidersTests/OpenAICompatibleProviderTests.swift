@@ -3,6 +3,7 @@ import Foundation
 import ModelKit
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// **`OpenAICompatibleProvider` against a stub of the endpoint** — the request it builds, every answer it reads, and
 /// every way an answer can fail, each mapped to one `ProviderFailure`. The wire itself — a kept connection, the
@@ -20,7 +21,7 @@ struct OpenAICompatibleProviderTests {
         // A stub's base is https, an address the app sends to.
         return OpenAICompatibleProvider(endpoint: EndpointAddress(url: base).unsafelyUnwrapped, model: model,
                                         credentials: credentials ?? InMemoryCredentials(key: "sk-test", for: base),
-                                        timeout: .seconds(10), sessionConfiguration: StubEndpoint.configuration(),
+                                        timeout: Patience.wait, sessionConfiguration: StubEndpoint.configuration(),
                                         responseByteLimit: limit)
     }
 
@@ -364,7 +365,8 @@ struct OpenAICompatibleProviderTests {
         let provider = Self.provider(endpoint)
         let call = Task { await Self.failure(of: provider) }
         // Wait for the request to be in flight — the work, not the call that started it.
-        for _ in 0..<500 where endpoint.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        // Bounded only so a defect fails rather than hangs: it ends when the request arrives.
+        _ = await Patience.until { !endpoint.requests.isEmpty }
         try #require(!endpoint.requests.isEmpty, "the request never reached the stub")
         call.cancel()
         #expect(await call.value == .cancelled)

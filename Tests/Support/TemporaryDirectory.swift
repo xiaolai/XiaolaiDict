@@ -28,14 +28,32 @@ public final class TemporaryDirectory: @unchecked Sendable {
 
     /// Removes `url` and everything in it. Permissions are put back first: a test about an
     /// unreadable store leaves 000 behind, and `removeItem` cannot descend into that.
-    static func remove(_ url: URL) {
-        let walk = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
-        for case let entry as URL in walk ?? .init() {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: entry.path)
+    ///
+    /// **Again while it is still there, and said when it cannot be.** `removeItem` walks the tree and
+    /// then removes the root, so an entry something adds during the walk fails the last step "not
+    /// empty". A test's detached prune does exactly that — it takes `.staging/store.lock` in a store
+    /// whose test has ended — and under a `try?` the lock was left behind, one directory in every few
+    /// runs (2026-10-09). A prune takes its lock once, so a second pass removes it; a writer that
+    /// outlasts every pass is named on standard error rather than swallowed.
+    static func remove(
+        _ url: URL, removing remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+        report: (String) -> Void = { FileHandle.standardError.write(Data("\($0)\n".utf8)) }
+    ) {
+        var failure: (any Error)?
+        for _ in 0..<removalPasses where FileManager.default.fileExists(atPath: url.path) {
+            let walk = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+            for case let entry as URL in walk ?? .init() {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: entry.path)
+            }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            do { try remove(url) } catch { failure = error }
         }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        report("TemporaryDirectory: \(url.path) is still there after \(removalPasses) passes: \(String(describing: failure))")
     }
+
+    /// Passes before a directory still there is reported: a racing prune needs the second; the third is margin.
+    private static let removalPasses = 3
 }
 
 /// A file of a test's own — a scratch ledger, say — **in a directory of its own**, for a fixture that

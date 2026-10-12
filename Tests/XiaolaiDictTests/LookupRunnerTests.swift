@@ -90,6 +90,20 @@ struct LookupRunnerTests {
 
     /// The local model is loaded while the dictionaries are asked, so the sense question after them
     /// does not pay for the load — and the lookup never waits on it.
+    /// **The word a hover located reaches the panel's placement** (plan-card-refinements WI-2), and a lookup with no
+    /// located word asks for none — today's pointer rule.
+    @Test func theLocatedWordReachesThePanel() async {
+        let word = WordBounds(rect: UpRect(x: 600, y: 730, width: 80, height: 20), quality: .exact)
+        for given in [word, nil] {
+            let panel = RecordingPanel()
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in nil }),
+                panel: panel)
+            _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest(), protecting: given)
+            #expect(panel.protected == [given])
+        }
+    }
+
     @Test func theModelIsPrewarmedBesideTheLookup() async throws {
         let prewarmed = Recorder(0)
         let panel = RecordingPanel()
@@ -99,7 +113,7 @@ struct LookupRunnerTests {
         // A ticket the panel handed out. `PanelTicket(number: 0)` stood here and was current only
         // because the stand-in's counter happened to start at 0 — a request nobody made.
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
-        for _ in 0..<200 where prewarmed.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { prewarmed.withLock({ $0 }) != 0 }
         #expect(prewarmed.withLock { $0 } == 1)
     }
 
@@ -146,7 +160,7 @@ struct LookupRunnerTests {
         let panel = RecordingPanel()
         let gate = ReplyGate()
         let runner = LookupRunner(
-            client: DictionaryClient(deadline: .seconds(600),
+            client: DictionaryClient(deadline: Patience.wait,
                                      connect: { [entry = Self.twoSenses] _ in RepliesWhenReleased(gate: gate, entry: entry) },
                                      fallback: { _ in nil }),
             panel: panel)
@@ -169,12 +183,36 @@ struct LookupRunnerTests {
         let panel = RecordingPanel()
         let supersede = SupersedingSelector(panel: panel)
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) }, fallback: { _ in nil }),
+            client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) }, fallback: { _ in nil }),
             panel: panel, selector: supersede)
         let recording = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         #expect(supersede.asked, "the selector never ran, so nothing was superseded during it")
         #expect(recording != nil, "a lookup the reader saw was dropped from the ledger")
         #expect(panel.updates.count == 1, "the mark was drawn into the newer panel")
+    }
+
+    /// **A misread sentence is neither the reader's sentence on the card nor the sense picker's evidence.** The ledger's
+    /// `comfortable (1TÆ฿J)` came back from Vision at 1.0 and was drawn as the reader's sentence; the lookup still runs.
+    @Test func aMisreadSentenceIsNotShownAsTheReadersOrUsedToChoose() async throws {
+        for (sentence, misread) in [("comfortable (1TÆ฿J)", true), ("A comfortable chair.", false)] {
+            let panel = RecordingPanel()
+            let selector = SentenceRecordingSelector()
+            let runner = LookupRunner(
+                client: DictionaryClient(deadline: Patience.wait, connect: { [entry = Self.twoSenses] _ in AnswersWith(entry: entry) },
+                                         fallback: { _ in nil }),
+                panel: panel, selector: selector)
+            let selection = Selection(
+                text: "comfortable", sentence: sentence, rangeInSentence: nil,
+                quality: try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete)),
+                place: ReadingPlace())
+            let recording = await runner.run(selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
+            #expect(recording != nil, "the lookup must still run and be recorded")
+            guard case .lookup(let shown)? = panel.contents.first else { Issue.record("no lookup shown"); continue }
+            #expect(shown.sentenceLooksMisread == misread)
+            #expect((shown.sentence == nil) == misread, "a misread sentence was drawn as the reader's")
+            #expect(misread || !selector.sentences.isEmpty, "the picker was never asked, so this proves nothing")
+            #expect(selector.sentences.allSatisfy { ($0 == nil) == misread }, "the picker was given \(selector.sentences)")
+        }
     }
 
     /// Each lookup's panel content carries its request, which is what gives it a view of its own.
@@ -205,7 +243,7 @@ struct LookupRunnerTests {
     @Test func theAnsweredLookupIsRecorded() async throws {
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }), panel: panel)
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }), panel: panel)
         let recording = try #require(await runner.run(
             Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest()))
         let record = recording.record
@@ -237,7 +275,7 @@ struct LookupRunnerTests {
             occasions: [PriorEncounter(at: .now.addingTimeInterval(-86_400), where: "Preview", title: "paper")],
             met: [met])
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
             panel: panel,
             priorEncounters: { _, _, language in
                 // The ledger is asked in the language the sentence was read in.
@@ -258,7 +296,7 @@ struct LookupRunnerTests {
     @Test func aFirstLookupIsShownNoMemoryStrip() async throws {
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
+            client: DictionaryClient(deadline: .milliseconds(50), connect: { _ in NeverReplies() }, fallback: { _ in "plain text" }),
             panel: panel)
         _ = await runner.run(Self.selection, near: .zero, requestedAt: .now, ticket: panel.newRequest())
         // **A run that produced no lookup would pass this loop without executing one assertion.**
@@ -281,7 +319,7 @@ struct LookupRunnerTests {
 /// for. It must outlast the deadline, so it sleeps well past it rather than racing it.
 struct NeverReplies: DictionaryTransport {
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
-        try await Task.sleep(for: .seconds(60))
+        try await Task.sleep(for: Patience.never)
         return .lookup(LookupAnswer(word: .notFound))
     }
 
@@ -304,7 +342,10 @@ private struct RepliesWhenReleased: DictionaryTransport {
     let entry: DictionaryEntry
     func send(_ request: ServiceRequest) async throws -> ServiceReply {
         gate.ask()
-        while !gate.isOpen { try await Task.sleep(for: .milliseconds(5)) }
+        if await !Patience.until({ gate.isOpen }) {
+            try Task.checkCancellation()
+            Issue.record("the reply gate was never opened")
+        }
         return .lookup(LookupAnswer(word: .entries(NonEmpty([entry])!, unreadable: [])))
     }
     func cancel(reason: String) {}
@@ -333,6 +374,19 @@ private struct Abstains: SenseSelecting {
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection { .abstained(.tooClose) }
+}
+
+/// A selector that remembers the sentence it was asked to choose by.
+private final class SentenceRecordingSelector: SenseSelecting, @unchecked Sendable {
+    private let lock = Mutex<[String?]>([])
+    var sentences: [String?] { lock.withLock { $0 } }
+    func choose(
+        from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
+        partOfSpeech: String?
+    ) async -> SenseSelection {
+        lock.withLock { $0.append(sentence) }
+        return .abstained(.noContext)
+    }
 }
 
 /// A selector during which the reader presses the shortcut again.
@@ -364,6 +418,9 @@ final class RecordingPanel: LookupPanelPresenting {
     func begin() -> Int { requests.begin() }
     func claim(_ request: Int) -> PanelTicket? { requests.claim(request) ? PanelTicket(number: request) : nil }
     func isCurrent(_ ticket: PanelTicket) -> Bool { requests.isCurrent(ticket.number) }
+    /// The reader dismissed the panel — Escape, a click away, its close button: every request it held is over, as the
+    /// controller's `closed()` makes it.
+    func close() { requests.close() }
 
     /// Whether the panel can be drawn at all. The real controller answers `false` when the window
     /// actions have not been captured; a test sets this to drive that branch.
@@ -373,9 +430,13 @@ final class RecordingPanel: LookupPanelPresenting {
     /// happens**, so a test need not race a deadline to see it.
     private(set) var updatesWhenFirstShown: Int?
 
+    /// The word each showing was asked to keep clear of, in order.
+    private(set) var protected: [WordBounds?] = []
+
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool {
         guard isCurrent(ticket), canShow else { return false }
+        protected.append(word)
         if updatesWhenFirstShown == nil { updatesWhenFirstShown = updates.count }
         contents.append(content)
         return true
@@ -392,11 +453,7 @@ final class RecordingPanel: LookupPanelPresenting {
 
     /// Waits for the panel to be presented, rather than assuming it already has been.
     func waitForShow() async throws {
-        for _ in 0..<2_000 {
-            if !contents.isEmpty { return }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        Issue.record("the panel was never shown")
+        if await !Patience.until(every: .milliseconds(1), { !contents.isEmpty }) { Issue.record("the panel was never shown") }
     }
 }
 
@@ -438,7 +495,7 @@ struct AutomaticKeepWiringTests {
                 senses:[DictionarySense(path:SensePath(block:1,ordinal:1),key:"s",keyKind:.publisher,definition:"meaning",text:"meaning")])]))
         var preference = PrimaryDictionary(chosen:chosen)
         var received: [LookupRecording] = []
-        let runner = LookupRunner(client:DictionaryClient(connect:{ _ in AnswersWith(entry:entry) }),panel:panel,
+        let runner = LookupRunner(client:DictionaryClient(deadline: Patience.wait, connect:{ _ in AnswersWith(entry:entry) }),panel:panel,
             primary:{ preference },keepPolicy:{ .automatic },initialRecording:{ row,_ in
                 received.append(row); preference = PrimaryDictionary(chosen:"changed-in-flight")
             })
@@ -467,7 +524,7 @@ struct AutomaticKeepWiringTests {
         let word = entry("e", "s")
         var received: [LookupRecording] = []
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithPhrase(entry: word, hit: hit) }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithPhrase(entry: word, hit: hit) }), panel: panel,
             selector: Abstains(), keepPolicy: { .automatic }, initialRecording: { row, _ in received.append(row) })
         let selection = Selection(text: "fine", sentence: "A fine print day.", rangeInSentence: NSRange(location: 2, length: 4),
             quality: .accessibility(.accessibilityTextRange, context: .complete), place: ReadingPlace())

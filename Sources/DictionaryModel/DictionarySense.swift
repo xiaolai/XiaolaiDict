@@ -62,14 +62,23 @@ public struct DictionarySense: Codable, Sendable, Equatable {
     /// moving a sense, rather than silently re-pointing the reader's history at another meaning
     /// (`dev-docs/study-unit.md` §5.2).
     public let textHash: String
+    /// **What a bilingual sense says beyond its label**, for the card to show behind its expand
+    /// (plan-card-refinements WI-4). Display only: nothing keys, hashes or saves from it, so `label`, `text` and
+    /// `textHash` are exactly what they were. Nil where the sense has nothing of the kind — every monolingual — and
+    /// absent from a sense encoded before it existed.
+    public let display: SenseDisplay?
 
-    public init(path: SensePath, key: String?, keyKind: SenseKeyKind, definition: String?, text: String) {
+    public init(
+        path: SensePath, key: String?, keyKind: SenseKeyKind, definition: String?, text: String,
+        display: SenseDisplay? = nil
+    ) {
         self.path = path
         self.key = key
         self.keyKind = keyKind
         self.definition = definition
         self.text = text
         self.textHash = Self.hash(text)
+        self.display = display
     }
 
     /// Truncated to 16 hex characters: enough that two senses of one entry colliding is not a
@@ -80,7 +89,11 @@ public struct DictionarySense: Codable, Sendable, Equatable {
 
     /// What the reader sees in the sidebar: the definition where there is one, else the start of
     /// the sense's own text. Never empty, and never a promise the sense cannot keep.
-    public var label: String {
+    public var label: String { Self.label(definition: definition, text: text) }
+
+    /// The label a sense with this definition and text is drawn with — cut at 64 characters with "…". One spelling, so
+    /// what decides whether display data says more than the label (`EntryDocument`) reads the label as it is drawn.
+    public static func label(definition: String?, text: String) -> String {
         let source = definition ?? text
         guard source.count > 64 else { return source }
         return source.prefix(63).trimmingCharacters(in: .whitespaces) + "…"
@@ -128,4 +141,41 @@ public extension SenseStructured {
     /// never reports itself as carrying publisher ids, and one with no senses reports `.none`. The
     /// quality signal a card must carry, so a positional claim never reads as a publisher's.
     var senseKeyKind: SenseKeyKind { senses.map(\.keyKind).max() ?? SenseKeyKind.none }
+}
+
+/// **The parts of a bilingual sense the label leaves out** (plan-card-refinements WI-4), read in the same walk as the
+/// sense: every translation with the English indicator that says which reading it is, an English definition where the
+/// dictionary gives one, and its grammar and usage notes. Examples are not here — they are in `text` already.
+public struct SenseDisplay: Codable, Sendable, Equatable {
+    public struct Translation: Codable, Sendable, Equatable {
+        public let text: String
+        /// The English sense indicator inside this translation's own group — "(just)" — where it has one.
+        public let indicator: String?
+
+        public init(text: String, indicator: String?) {
+            self.text = text
+            self.indicator = indicator
+        }
+    }
+
+    public let translations: [Translation]
+    /// Indicators that belong to the sense rather than to one of its translations.
+    public let indicators: [String]
+    public let englishDefinition: String?
+    public let notes: [String]
+
+    public init(translations: [Translation], indicators: [String], englishDefinition: String?, notes: [String]) {
+        self.translations = translations
+        self.indicators = indicators
+        self.englishDefinition = englishDefinition
+        self.notes = notes
+    }
+
+    /// **Nothing to show beyond `label`, as it is drawn** — at most one translation, with no indicator, that the label
+    /// shows whole, and nothing else. Against the label as drawn, cut short included (audit of 2026-10-10): a lone
+    /// translation longer than the label's 64 characters was taken for the label again, and its ending shown nowhere.
+    public func saysNothingBeyond(_ label: String) -> Bool {
+        translations.count <= 1 && translations.allSatisfy { $0.indicator == nil && label.contains($0.text) }
+            && indicators.isEmpty && englishDefinition == nil && notes.isEmpty
+    }
 }

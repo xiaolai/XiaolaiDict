@@ -66,6 +66,7 @@ public enum FormTableReader {
         var forms: [String: Set<FormTable.Reading>] = [:]
         var own = Set<String>()
         var headwords = Set<String>()
+        var covered = Set<String>()
         var read: [String] = [], failed: [String] = []
         var sources: [String] = []
         for (bundle, version, source) in versioned {
@@ -78,6 +79,8 @@ public enum FormTableReader {
                 }
                 own.formUnion(found.ownHeadwords)
                 headwords.formUnion(found.headwords)
+                // Each dictionary's own, never its titles: what a printing dictionary read whole (third audit).
+                covered.formUnion(found.covered)
                 sources.append(source)
                 read.append(bundle.displayName)
             } catch {
@@ -91,7 +94,7 @@ public enum FormTableReader {
         // own titles.
         own.formUnion(Set(forms.keys).intersection(headwords))
         let table = FormTable(sources: sources.sorted() + [InflectionInventory.formatVersion],
-                              forms: forms, ownHeadwords: own, words: headwords)
+                              forms: forms, ownHeadwords: own, words: headwords, covered: covered)
         do {
             try store.write(table)
         } catch {

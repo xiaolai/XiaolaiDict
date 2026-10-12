@@ -28,9 +28,6 @@ enum Wiring {
         return (directory, { ScratchFile.remove(directory.path) })
     }
 
-    /// How long a model is given to reach a state. One number, because two suites disagreeing
-    /// about patience is a flake that looks like a defect in whichever is stricter.
-
     /// A word the reader looked up and enrolled. **One spelling, parameterised** — three copies
     /// of this had drifted in their context text and their answer's origin, and a test reading
     /// one suite's rows against another's expectations could not be written at all.
@@ -70,22 +67,17 @@ enum Wiring {
         { Task { try LedgerStore(path: path) } }
     }
 
-    static let patience = 2_000
-
-    /// Waits for `condition`, and **throws when it never holds**.
+    /// Waits for `condition`, within `Patience.wait`, and **throws when it never holds**. It was 2,000
+    /// looks of 5 ms — a ten-second clock, which a starved main actor outlasted.
     ///
     /// Recording an issue and returning normally let every assertion after the wait run against a
     /// model still mid-flight, and let teardown delete the SQLite files while a task was still
     /// using them — so one missed state produced a cascade of failures that named the wrong
     /// thing, or a crash in cleanup. A wait that did not happen stops the test.
     @MainActor
-    static func settle(_ what: String = "the model never reached the expected state",
+    static func settle(_ what: String = "the model never reached the expected state", within bound: Duration = Patience.wait,
                        _ condition: () -> Bool) async throws {
-        for _ in 0..<patience {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        throw WiringTimeout(what: what)
+        guard await Patience.until(within: bound, condition) else { throw WiringTimeout(what: what) }
     }
 }
 
@@ -93,5 +85,5 @@ enum Wiring {
 /// everything after it run and fail for reasons of its own.
 struct WiringTimeout: Error, CustomStringConvertible {
     let what: String
-    var description: String { "\(what) (waited \(Wiring.patience * 5) ms)" }
+    var description: String { "\(what) (waited out the bound)" }
 }

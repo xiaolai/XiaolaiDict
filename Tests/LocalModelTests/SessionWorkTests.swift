@@ -6,9 +6,11 @@ import XiaolaiDictTestSupport
 /// One session's work, made and tracked under the same lock — so there is no moment where work is
 /// running that the session does not know about.
 struct SessionWorkTests {
+    /// Work that runs until it is cancelled — `Patience.never`, so no starved test pool can outlast it (the
+    /// ten seconds it was could be, 2026-10-10: `DeadlineTests.workThatOverrunsIsCancelled`).
     private func waiting(_ cancelled: Recorder<Bool>) -> @Sendable () async -> Void {
         { await withTaskCancellationHandler {
-            try? await Task.sleep(for: .seconds(10))
+            try? await Task.sleep(for: Patience.never)
         } onCancel: { cancelled.withLock { $0 = true } } }
     }
 
@@ -29,7 +31,7 @@ struct SessionWorkTests {
         let cancelled = Recorder(false)
         #expect(session.run(waiting(cancelled)))
         session.close()
-        for _ in 0..<100 where !cancelled.withLock({ $0 }) { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { cancelled.withLock({ $0 }) }
         #expect(cancelled.withLock { $0 })
         #expect(session.runningCount == 0)
     }
@@ -43,7 +45,7 @@ struct SessionWorkTests {
         #expect(theirs.run(waiting(theirsCancelled)))
 
         mine.close()
-        for _ in 0..<100 where !mineCancelled.withLock({ $0 }) { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { mineCancelled.withLock({ $0 }) }
         #expect(mineCancelled.withLock { $0 })
         #expect(!theirsCancelled.withLock { $0 }, "another client's work was cancelled with this one")
         #expect(!theirs.isClosed)
@@ -54,7 +56,7 @@ struct SessionWorkTests {
     @Test func finishedWorkIsNotKept() async throws {
         let session = SessionWork()
         for _ in 0..<5 { #expect(session.run {}) }
-        for _ in 0..<200 where session.runningCount > 0 { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { session.runningCount == 0 }
         #expect(session.runningCount == 0)
     }
 }

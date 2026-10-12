@@ -119,7 +119,12 @@ struct TestInventoryTests {
         // app composes them (`ProviderCompositionTests`, 10) — a lookup answered through a chosen provider, the panes
         // marked with where their question went, the source warmed once at launch and put away when left and at the
         // quit — `--provider-status` (`ProviderReportTests`, 6), and the pane's remote translation label (1).
-        "XiaolaiDictTests": 1_245,
+        // Raised 1,245 → 1,318 by "Did you mean …?" (plan-spelling-suggestion, 2026-10-09): the floor had lagged by 49
+        // (1,294 were there), and 24 came with it — the real checker against the plan's table (`SystemSpellCheckerTests`,
+        // 5), the runner's miss first and its line after, verified, the term again, cancelled and never kept for a card no
+        // longer shown (`LookupRunnerSpellingTests`, 7), the line's rule, its press and the app's hook
+        // (`SpellingSuggestionLineTests`, 6), `--spelling-report` (`SpellingReportTests`, 5) and its launch argument (1).
+        "XiaolaiDictTests": 1_318,
         // **865 → 840 on 2026-10-04, a transfer and not a loss**: 25 tests moved to `ReviewKitTests`
         // with the code they test (ADR-0047) — parity 6, ReviewSession 11, the StudyDay struct 6 and
         // ReviewInstant 2. Core counted 894 before the move and 881 after it: 869 plus the 12 that WI-1
@@ -191,9 +196,18 @@ struct TestInventoryTests {
         // this Mac, every host trick refused with a control beside it, both CLIs remote, and the constant's flip.
         // Raised 483 → 487 by P3 (2026-10-09): the send-time check for the dictionary's text — every prompt that carries
         // it caught and none without it, a cut, flattened or raw sense alike, the reader's own words never a leak.
-        "XiaolaiDictCoreTests": 487,
+        // Raised 487 → 518 by "Did you mean …?" (plan-spelling-suggestion, 2026-10-09): the floor had lagged by 11 (498
+        // were there), and 20 came with it — when a miss is asked and when an answer is believed
+        // (`SpellingSuggestionTests`), which English the checker is asked in, American English as plain `en` included
+        // (`SpellingLanguageTests`), and the one path from a miss to an offer, counted question by question
+        // (`SpellingSuggesterTests`).
+        "XiaolaiDictCoreTests": 518,
         // Added 2026-10-08 with the target, at the 386 that moved out of `XiaolaiDictCoreTests` above.
-        "StudyKitTests": 386,
+        // **Lowered 386 → 385 on 2026-10-10, a deletion**: `removingAninstrumentsRowsCannotReachTheReadersOwn` tested
+        // `Ledger.deleteLookups(after:)`, the instruments' baseline-and-delete clean-up, which the audit found deleting
+        // readings recorded meanwhile; an instrument records into a scratch ledger of its own now
+        // (`InstrumentLedgerTests`, 3, in `XiaolaiDictTests`), and the call and its test are gone.
+        "StudyKitTests": 385,
         // Added 2026-10-08 with the target, at the 229 that moved out of `XiaolaiDictCoreTests` above.
         "CaptureTests": 229,
         // Added 2026-10-08 with the target, at the 76 that moved out of `XiaolaiDictTests` above: the ledger's

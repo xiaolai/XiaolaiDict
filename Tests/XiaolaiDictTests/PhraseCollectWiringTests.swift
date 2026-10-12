@@ -179,7 +179,7 @@ struct PhraseCollectWiringTests {
         let hit = PhraseHit(phrase: Self.spelling, location: 5, length: 20, separation: .marked(1),
                             meaning: PhraseMeaning(filings: [filing]))
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithAPhrase(entry: word, hit: hit) }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithAPhrase(entry: word, hit: hit) }), panel: panel,
             primary: { PrimaryDictionary(chosen: Self.noad.key) }, selector: AbstainsFromChoosing())
         let selection = Selection(
             text: "took", sentence: sentence, rangeInSentence: NSRange(location: 5, length: 4),
@@ -235,7 +235,7 @@ struct PhraseCollectWiringTests {
                        term: NSRange = NSRange(location: 14, length: 7),
                        selector: some SenseSelecting) async throws -> (LookupPresentation, Int) {
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithAPhrase(entry: word, hit: hit) }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithAPhrase(entry: word, hit: hit) }), panel: panel,
             primary: { PrimaryDictionary(chosen: Self.noad.key) }, selector: selector,
             keepPolicy: { .automatic },
             initialRecording: { [recorder = app.recorder] row, request in recorder.begin(row, request: request) })

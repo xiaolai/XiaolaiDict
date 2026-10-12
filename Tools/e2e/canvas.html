@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>XiaolaiDict E2E pixels</title>
+<style>
+  body { margin: 60px; background: #fff; }
+  #pixel-word { display: inline-block; }
+  #pixel-word canvas { display: block; }
+</style></head>
+<body>
+<!--
+  A word drawn only as pixels: a canvas gives Accessibility no text, so a hover over it is read by the recogniser.
+  The canvas is the word's ink box and a fixed margin on every side, so where the word is on screen is known without
+  asking the recogniser: the group's frame, inset by the margin. `element-frame` reads that frame.
+-->
+<div id="pixel-word" role="group"><canvas id="ink"></canvas></div>
+<script>
+  const margin = 12, word = "quixotic", font = "36px Helvetica";
+  const canvas = document.getElementById("ink"), context = canvas.getContext("2d");
+  context.font = font;
+  const metrics = context.measureText(word);
+  const width = Math.round(metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight) + 2 * margin;
+  const height = Math.round(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + 2 * margin;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  context.scale(scale, scale);
+  context.font = font;
+  context.fillStyle = "#000";
+  context.fillText(word, margin + metrics.actualBoundingBoxLeft, margin + metrics.actualBoundingBoxAscent);
+</script>
+</body></html>

@@ -42,6 +42,13 @@ public enum CaptureGeometry {
         CGPoint(x: (point.x - region.minX) / region.width, y: (point.y - region.minY) / region.height)
     }
 
+    /// A box in `region`'s normalised space, back in the region's own points — `normalized`'s inverse, for a box the
+    /// recogniser read in a capture of that region.
+    public static func box(_ normalised: CGRect, in region: CGRect) -> CGRect {
+        CGRect(x: region.minX + normalised.minX * region.width, y: region.minY + normalised.minY * region.height,
+               width: normalised.width * region.width, height: normalised.height * region.height)
+    }
+
     /// Which of `count` characters spread evenly across `span` lies under `x`, clamped to the span.
     ///
     /// An estimate, and exact for monospaced runs such as CJK — which is where it is needed. Word

@@ -9,6 +9,7 @@ import Testing
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// The drawer's own wiring. The geometry, the day grouping and the pile arithmetic are tested
 /// where they live; what is left here is the part that can only go wrong in the controller.
@@ -658,9 +659,9 @@ struct HistoryDrawerModelTests {
         }
         model.remove(entry("qqqq", id: 1))
         model.remove(entry("qqqq", id: 1))
-        for _ in 0..<500 where asked == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        _ = await Patience.until { asked != 0 }
         releasing.yield()
-        for _ in 0..<500 where model.discardedReceipt == nil { try await Task.sleep(for: .milliseconds(10)) }
+        _ = await Patience.until { model.discardedReceipt != nil }
         #expect(asked == 1, "the ledger was asked \(asked) times for one card")
         #expect(model.discardedReceipt?.affected == 1)
     }

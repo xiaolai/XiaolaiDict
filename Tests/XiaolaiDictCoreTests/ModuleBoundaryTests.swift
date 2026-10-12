@@ -767,7 +767,7 @@ struct ModuleBoundaryTests {
     /// compiler lists as one module. The list of subjects comes from the manifest, and
     /// `everyLibraryTargetIsEitherCheckedOrTheViewLayer` is what refuses a manifest read that came back
     /// short.
-    @Test(.timeLimit(.minutes(1)), arguments: try subjects())
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)), arguments: try subjects())
     func theCompilerHoldsEveryTargetToItsBoundary(target: String) throws {
         let compiled = try Self.compiledImports(of: Self.sources(of: target))
         let problems = try Self.verdict(on: target, compiled: compiled)
@@ -831,7 +831,7 @@ struct ModuleBoundaryTests {
     /// **The controls: each binding planted in a copy is refused, and the clean copy passes.** Never
     /// planted into `Sources`, where a parallel test would read it and a crash would leave it for
     /// `swift build` to compile.
-    @Test(.timeLimit(.minutes(1)), arguments: plants)
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)), arguments: plants)
     func aBindingPlantedInACopyIsRefusedByTheCompilersVerdict(plant: Plant) throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-planted-binding")
         let copy = scratch.appending("DictionaryIndex")
@@ -920,7 +920,7 @@ struct ModuleBoundaryTests {
     /// incremental build and in no pass the list makes, so the import behind it was never listed: the verdict
     /// depended on what happened to be importable. So a condition must be built from the configurations' own
     /// defines — or be in `conditionsAllowed` for this target, with its reason.
-    @Test(.timeLimit(.minutes(1)), arguments: try subjects())
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)), arguments: try subjects())
     func everyConditionIsOneTheBuildConfigurationsDecide(target: String) throws {
         let problems = Self.conditionVerdict(on: target, listed: try Self.conditions(of: Self.sources(of: target)))
         #expect(problems.isEmpty, "\(problems)")
@@ -943,7 +943,7 @@ struct ModuleBoundaryTests {
               refusal: Plant.undecided("#if canImport(MLX)"), pastTheScan: true),
     ]
 
-    @Test(.timeLimit(.minutes(1)), arguments: conditionPlants)
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)), arguments: conditionPlants)
     func aConditionOnWhatABuildHasBuiltIsRefused(plant: Plant) throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-planted-condition")
         let copy = scratch.appending("DictionaryIndex")
@@ -1002,7 +1002,7 @@ struct ModuleBoundaryTests {
     }
 
     /// **A list of conditions that could not be made is never an empty one**, as for the compiler's list.
-    @Test(.timeLimit(.minutes(1))) func aListOfConditionsThatCouldNotBeMadeThrows() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aListOfConditionsThatCouldNotBeMadeThrows() throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-unlistable-conditions")
         let empty = scratch.appending("Empty")
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
@@ -1099,7 +1099,7 @@ struct ModuleBoundaryTests {
     /// dependency. What the reader cannot spell, whatever its next blind spot is, is a disagreement here —
     /// the coverage no longer rests on the reader's own reading. `dump-package` with a scratch path of its
     /// own: about 0.5 s, byte-identical run to run, and nothing of `swift test`'s `.build` to wait on.
-    @Test(.timeLimit(.minutes(1))) func theManifestReaderAgreesWithSwiftPM() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func theManifestReaderAgreesWithSwiftPM() throws {
         let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
         let disagreements = try Self.disagreements(reading: manifest, swiftPM: Self.swiftPMTargets(of: Self.repository))
         #expect(disagreements.isEmpty, "\(disagreements)")
@@ -1107,7 +1107,7 @@ struct ModuleBoundaryTests {
 
     /// **The control: a copy of the manifest with a target the reader of the original never saw** — SwiftPM
     /// lists it, and the comparison names it.
-    @Test(.timeLimit(.minutes(1))) func aTargetTheReaderMissedIsADisagreement() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aTargetTheReaderMissedIsADisagreement() throws {
         let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
         let anchor = #".target(name: "ReviewKit"),"#
         let planted = manifest.replacingOccurrences(
@@ -1188,14 +1188,14 @@ struct ModuleBoundaryTests {
     /// a file that reaches a module only through its members compiles with no diagnostic at all, which neither the
     /// compiler nor the warning gate can see. 26 such file and module pairs in 24 files had collected before it was
     /// on (2026-10-08); with it on, a removed import is an error in debug, development and release builds alike.
-    @Test(.timeLimit(.minutes(1))) func everyTargetIsCompiledWithMemberImportVisibilityAndWarningsAsErrors() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func everyTargetIsCompiledWithMemberImportVisibilityAndWarningsAsErrors() throws {
         let unset = try Self.settingsMissing(from: Self.dumpedTargets(of: Self.repository))
         #expect(unset.isEmpty, "\(unset)")
     }
 
     /// **The control: a target declared after the loop, and a loop without the feature** — the first named alone,
     /// the second for every target, each in a copy of the manifest SwiftPM evaluated.
-    @Test(.timeLimit(.minutes(1))) func aTargetCompiledWithoutTheFeatureIsNamed() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aTargetCompiledWithoutTheFeatureIsNamed() throws {
         let manifest = try String(contentsOf: Self.repository.appending(path: "Package.swift"), encoding: .utf8)
         let feature = #", .enableUpcomingFeature("MemberImportVisibility")"#
         #expect(manifest.components(separatedBy: feature).count == 2, "premise: the loop sets the feature in one place")
@@ -1233,7 +1233,7 @@ struct ModuleBoundaryTests {
     /// **A list that could not be made is never an empty one.** The script refuses a directory with no
     /// Swift in it and a file the compiler cannot read, and the refusal reaches the test as a throw that
     /// carries what the script said.
-    @Test(.timeLimit(.minutes(1))) func aListTheCompilerCouldNotMakeThrows() throws {
+    @Test(.timeLimit(.minutes(Patience.limitMinutes))) func aListTheCompilerCouldNotMakeThrows() throws {
         let scratch = TemporaryDirectory(named: "xiaolaidict-unlistable")
         let empty = scratch.appending("Empty")
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)

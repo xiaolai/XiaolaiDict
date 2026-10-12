@@ -1,4 +1,5 @@
 import CaptureModel
+import CoreGraphics
 import DictionaryModel
 import Foundation
 import MacCapture
@@ -138,6 +139,29 @@ struct LookupCommandTests {
                 "a release must refuse --read-point rather than read the screen")
         #expect(await LookupCommand.readSelection(bundleID: "com.apple.Finder") == .usage,
                 "a release must refuse --read-selection rather than read another app's selection")
+#endif
+    }
+
+    /// **And every instrument that captures the screen or posts an input event** (ADR-0010, addendum of 2026-10-10):
+    /// `--placement-report` wrote any region of the screen to a file its caller named and posted a drag where its command
+    /// line aimed, in a release. Refused at the door, each by its own sentence, and the two doors under them — the
+    /// capture and the mouse event — shut too, so nothing that reaches them in a release can do either.
+    @Test func theWindowedInstrumentsThatCaptureOrClickRefuseWhereTheyAreNotBuiltIn() async {
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+        #expect(Instruments.Windowed.allCases.allSatisfy { $0.refusalInARelease == nil })
+#else
+        for instrument in [Instruments.Windowed.history, .panel, .note, .placement] {
+            #expect(instrument.refusalInARelease?.hasSuffix("is a development instrument and is not built into a release")
+                    == true, "\(instrument) is built into a release")
+        }
+        #expect(Instruments.Windowed.settings.refusalInARelease == nil, "--settings-report reads only its own window")
+        // Off screen and harmless where it would post — and it must not.
+        #expect(!Instrument.postMouse(.leftMouseDown, at: CGPoint(x: -30_000, y: -30_000)),
+                "a release posts a mouse event")
+        await #expect(throws: Instrument.ScreenCaptureFailure.notBuiltIn) {
+            _ = try await Instrument.screenImage(of: CGRect(x: 0, y: 0, width: 1, height: 1), size: CGSize(width: 1, height: 1),
+                                                 onDisplay: CGMainDisplayID())
+        }
 #endif
     }
 }

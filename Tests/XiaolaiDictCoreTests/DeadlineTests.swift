@@ -1,6 +1,7 @@
 import XiaolaiDictBase
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// A deadline that gives up on work that never answers. The spike found the case that matters: a
 /// continuation that is never resumed. A task group cannot bound that — it waits for every child
@@ -16,12 +17,12 @@ struct DeadlineTests {
     }
 
     /// **No clock is read here.** The work **never finishes**, so a guard that waited for it would
-    /// hang for ever; that hang is the failure, and the framework's own time limit (minute
-    /// granularity, far beyond any scheduling stall) is what turns it into one. This asserted
+    /// hang for ever; that hang is the failure, and the framework's own time limit (the shared
+    /// `Patience.limitMinutes`, far beyond any scheduling stall) is what turns it into one. This asserted
     /// `clock.now - started < .seconds(10)` before, and failed twice while other builds loaded the
     /// machine (load average 14–17): a unit test may not assert elapsed wall-clock time against an
     /// absolute bound (AGENTS.md), and a ten-second bound measures how busy the machine is.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func workThatNeverAnswersIsAbandonedAtTheDeadline() async {
         await #expect(throws: DeadlineExceeded.self) {
             try await withDeadline(.milliseconds(200)) { () async -> Int in
@@ -31,13 +32,13 @@ struct DeadlineTests {
     }
 
     /// A caller that gives up must get its answer now — not when the work or the deadline, which
-    /// may be minutes away, finally settles. The deadline is **ten minutes** and the time limit two:
+    /// may be minutes away, finally settles. The deadline is **`Patience.never`**, longer than the time limit:
     /// a guard that answered a cancelled caller only at the deadline would still be waiting when the
     /// framework ends the test, so the failure is structural and no stopwatch is involved.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func aCancelledCallerIsAnsweredAtOnce() async {
         let caller = Task {
-            try await withDeadline(.seconds(600)) { () async -> Int in
+            try await withDeadline(Patience.never) { () async -> Int in
                 await withUnsafeContinuation { _ in }  // never resumed
             }
         }
@@ -49,7 +50,7 @@ struct DeadlineTests {
     @Test func aCallerCancelledBeforeItStartsIsAnsweredAtOnce() async {
         let caller = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await withDeadline(.seconds(10)) { () async -> Int in
+            return try await withDeadline(Patience.never) { () async -> Int in
                 await withUnsafeContinuation { _ in }
             }
         }
@@ -62,17 +63,24 @@ struct DeadlineTests {
     /// **The test waits for the work to say what happened, never for a duration.** It polled for
     /// one second (`for _ in 0..<100 … sleep(10 ms)`) and failed under load, the same defect as the
     /// stopwatch asserts above: a poll bound measures how busy the machine is. Now the work closes a
-    /// stream on every exit (cancelled, or finished after ten seconds if nobody cancelled it), and
-    /// the test reads the stream to its end, so it ends when the work has *answered* and the verdict
-    /// is only whether it was cancelled.
-    @Test(.timeLimit(.minutes(1)))
+    /// stream on every exit (cancelled, or finished if nobody cancelled it), and the test reads the
+    /// stream to its end, so it ends when the work has *answered* and the verdict is only whether it
+    /// was cancelled.
+    ///
+    /// **And the work runs for `Patience.never`, longer than the test's limit, not for ten seconds.** Ten
+    /// seconds was itself a stopwatch: on 2026-10-10, in a full suite whose every test in this target
+    /// reported 13.7 s, the guard threw `DeadlineExceeded` as it should and yet the work ran out its
+    /// ten seconds uncancelled — which only a timer starved of its thread for that long explains
+    /// (inferred; nothing measured the timer). Now work nobody cancels outlives the test, and the
+    /// framework's limit is the failure.
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
     func workThatOverrunsIsCancelled() async throws {
         let stopped = Mutex(false)
         let (exits, exit) = AsyncStream<Void>.makeStream()
         await #expect(throws: DeadlineExceeded.self) {
             try await withDeadline(.milliseconds(100)) { () async throws -> Int in
                 do {
-                    try await Task.sleep(for: .seconds(10))
+                    try await Task.sleep(for: Patience.never)
                 } catch {
                     stopped.withLock { $0 = true }
                     exit.finish()

@@ -64,7 +64,7 @@ struct ModelClientTests {
 
     @Test func aDeadServiceIsNilAndTheNextQuestionOpensAFreshSession() async {
         let service = Service()
-        let client = ModelClient(connect: { service.connect($0) })
+        let client = ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait })
         service.dies.withLock { $0 = true }
         #expect(await client.ask(Self.question) == nil)
         #expect(await client.openSessionGeneration == nil, "a dead session was kept")
@@ -77,13 +77,13 @@ struct ModelClientTests {
     /// itself, because the one that comes back holds nothing.
     @Test func itPrewarmsOncePerServiceProcess() async throws {
         let service = Service()
-        let client = ModelClient(connect: { service.connect($0) })
+        let client = ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait })
         await client.prewarmOnce()
         await client.prewarmOnce()
         #expect(service.asked.withLock { $0.filter { $0 == .prewarm }.count } == 1)
 
         service.endItself()
-        for _ in 0..<200 where await client.openSessionGeneration != nil { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { await client.openSessionGeneration == nil }
         await client.prewarmOnce()
         #expect(service.asked.withLock { $0.filter { $0 == .prewarm }.count } == 2)
     }
@@ -93,7 +93,7 @@ struct ModelClientTests {
     /// nothing, be told to end, and count as having replaced the model it never held.
     @Test func unloadingWhenNothingRunsStartsNothing() async {
         let service = Service()
-        let client = ModelClient(connect: { service.connect($0) }, servicePresence: { .gone })
+        let client = ModelClient(connect: { service.connect($0) }, servicePresence: { .gone }, deadline: { _ in Patience.wait })
         #expect(await client.unload())
         #expect(service.sessions.withLock { $0 } == 0, "a service was started in order to end it")
         #expect(service.asked.withLock { $0.isEmpty })
@@ -108,7 +108,7 @@ struct ModelClientTests {
         service.dies.withLock { $0 = true }
         let client = ModelClient(
             connect: { service.connect($0) }, servicePresence: { running.withLock { $0 } ? .running : .gone },
-            shutdownLimit: .milliseconds(50))
+            shutdownLimit: .milliseconds(50), deadline: { _ in Patience.wait })
         #expect(await client.unload() == false, "a service still running was reported as ended")
 
         running.withLock { $0 = false }
@@ -123,11 +123,9 @@ struct ModelClientTests {
         let service = Service()
         let client = ModelClient(
             connect: { service.connect($0) }, servicePresence: { running.withLock { $0 } ? .running : .gone },
-            shutdownLimit: .seconds(600), deadline: { _ in .milliseconds(100) })
+            shutdownLimit: Patience.never, deadline: { _ in .milliseconds(100) })
         let unloading = Task { await client.unload() }
-        for _ in 0..<400 where !service.asked.withLock({ $0.contains(.unload) }) {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        _ = await Patience.until { service.asked.withLock({ $0.contains(.unload) }) }
         let given = Recorder<[String]>([])
         let cancelled = Task {
             _ = await client.ask(Self.question)
@@ -138,7 +136,7 @@ struct ModelClientTests {
             _ = await client.ask(Self.question)
             given.withLock { $0.append("deadline") }
         }
-        for _ in 0..<2_000 where given.withLock({ $0.count }) < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { given.withLock({ $0.count }) >= 2 }
         #expect(Set(given.withLock { $0 }) == ["cancelled", "deadline"], "a question waited out the unload")
         running.withLock { $0 = false }
         #expect(await unloading.value, "giving up on the wait ended the unload")
@@ -152,7 +150,7 @@ struct ModelClientTests {
         let service = Service()
         let client = ModelClient(
             connect: { service.connect($0) }, servicePresence: { .couldNotTell },
-            shutdownLimit: .milliseconds(50))
+            shutdownLimit: .milliseconds(50), deadline: { _ in Patience.wait })
         #expect(await client.unload() == false, "a scan that failed was taken for a service that had gone")
     }
 
@@ -165,7 +163,7 @@ struct ModelClientTests {
         let (store, scratch) = try Self.storeWithAModel()
         scratches.withLock { $0.append(scratch) }
         let access = LocalModelAccess(
-            client: ModelClient(connect: { service.connect($0) }), store: store,
+            client: ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait }), store: store,
             physicalMemory: 48 * 1_073_741_824)
         #expect(access.isInstalled)
         access.quarantine.hold()
@@ -182,10 +180,10 @@ struct ModelClientTests {
         let (store, scratch) = try Self.storeWithAModel()
         scratches.withLock { $0.append(scratch) }
         let roomy = LocalModelAccess(
-            client: ModelClient(connect: { service.connect($0) }), store: store,
+            client: ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait }), store: store,
             physicalMemory: 48 * 1_073_741_824)
         let small = LocalModelAccess(
-            client: ModelClient(connect: { service.connect($0) }), store: store,
+            client: ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait }), store: store,
             physicalMemory: 8 * 1_073_741_824)
         #expect(roomy.isInstalled)
         #expect(!small.isInstalled, "a model this Mac cannot load counted as one it has")
@@ -208,7 +206,7 @@ struct ModelClientTests {
         // closure that names `.explain` is its own now, over the router, and the reader's choice is the default — no
         // source — which asks the model on this Mac.
         let models = LocalModelCoordinator(
-            defaults: TemporaryDefaults.suite(), store: store, client: ModelClient(connect: { service.connect($0) }),
+            defaults: TemporaryDefaults.suite(), store: store, client: ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait }),
             transport: LocalModelControllerTests.Transport(fails: true), probe: LocalModelControllerTests.FixedProbe(),
             physicalMemory: 48 * 1_073_741_824)
         let question = SentenceQuestion(
@@ -258,7 +256,7 @@ struct ModelClientTests {
     @Test func withNoModelInstalledTheServiceIsNeverAsked() async {
         let service = Service()
         let empty = ModelStore(root: ScratchFile.unmade("model-client", file: "models"))
-        let access = LocalModelAccess(client: ModelClient(connect: { service.connect($0) }), store: empty)
+        let access = LocalModelAccess(client: ModelClient(connect: { service.connect($0) }, deadline: { _ in Patience.wait }), store: empty)
         #expect(await access.ask(Self.question) == .failure(.notInstalled))
         await access.prewarm()
         #expect(service.sessions.withLock { $0 } == 0)

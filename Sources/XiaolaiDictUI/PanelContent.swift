@@ -4,6 +4,19 @@ import DictionaryModel
 import StudyKit
 import XiaolaiDictCore
 
+/// **Where the looked-up word sits in the reader's sentence** — three answers in one value, so nothing has to decide
+/// from an absent range whether the word was not recorded or is not there.
+public enum TermPlacement: Equatable, Sendable {
+    /// Where the capture recorded it, UTF-16, and checked against the sentence before it is used.
+    case at(NSRange)
+    /// Not recorded. The card may look for the word in the sentence, as it always has.
+    case unrecorded
+    /// **In no position of the sentence** — a correction the reader followed from a misspelling, looked up in the
+    /// sentence the misspelling was read in. Nothing may look for it there: *the* would find the opening "The" of
+    /// "The cat saw teh dog." (audit, 2026-10-09).
+    case notInSentence
+}
+
 /// One lookup, as the panel shows it — a container that fills in rather than a payload that is
 /// awaited. Everything known the moment the reader pressed the shortcut is here at once; what the
 /// dictionaries say arrives later, in the same panel.
@@ -20,14 +33,18 @@ public struct LookupPresentation: Equatable {
     /// The reader's own sentence, where one was captured. The sentence pane explains this, and it
     /// is the only text the remote tier would ever be allowed to see.
     public var sentence: String?
-    /// Where the word sits in `sentence`, UTF-16 — the range the capture actually recorded.
+    /// Where the word sits in `sentence` — the range the capture actually recorded, or that it recorded none, or that
+    /// the word is in no position of it.
     ///
     /// **The card searched for the word instead**, taking the first case-insensitive substring
     /// match: looking up *he* in "The man said he was fine" marked the *he* inside "The", and a
     /// word repeated in its own sentence marked the wrong occurrence. `Selection.rangeInSentence`
     /// was captured and thrown away at this boundary; the history drawer never had that bug
     /// because the ledger stores the range.
-    public var sentenceRange: NSRange?
+    public var termPlacement: TermPlacement = .unrecorded
+    /// **The captured sentence carries signs of a misread** (`CaptureQuality.doubts(sentence:)`), so `sentence` is nil
+    /// and the card says why rather than drawing it as the reader's own — nor is it given to the sense picker or a model.
+    public var sentenceLooksMisread = false
     /// Nil while the dictionaries are still being asked. The panel says so rather than showing an
     /// empty pane that reads like an entry.
     public var outcome: LookupOutcome?
@@ -54,6 +71,21 @@ public struct LookupPresentation: Equatable {
     /// Nil covers three different facts on the wire — no sentence, no phrase, and an inventory still being
     /// read — and `PhrasePresentation.init(_:sentence:)` is where that collapse happens, once.
     public var phrase: PhrasePresentation?
+    /// A word the reader may have meant, under a miss — **a typed value, never display text**, and nil until the checker
+    /// has answered and the dictionaries have the word (plan-spelling-suggestion §3). The miss is final-looking before
+    /// this arrives, and nothing is drawn while it is being checked.
+    /// **One, never two** (the owner's ruling of 2026-10-11): where the evidence names no single word, there is none.
+    public var suggestion: SpellingSuggestion?
+
+    /// **The suggestion the card draws, and the rule for drawing one** — asked here, where a test can ask it, rather
+    /// than inside a view body. Only under the service's own miss: a miss it could not answer already says the
+    /// dictionaries could not all be asked, and a line under it would read as a confirmed absence. Only for this card's
+    /// own term: a suggestion made for another lookup is never drawn on this one. Nil while anything is still being
+    /// asked, so nothing is drawn while the suggestion is checked.
+    public var offeredSuggestion: SpellingSuggestion? {
+        guard let suggestion, suggestion.term == term, case .notFound(serviceFailure: nil)? = outcome else { return nil }
+        return suggestion
+    }
 
     /// **`request` has no default**, because a default is what makes two lookups share an identity.
     /// The panel resets a card's own state — a revealed gloss, a translation, an explanation — when

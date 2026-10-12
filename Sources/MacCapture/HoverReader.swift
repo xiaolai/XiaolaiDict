@@ -181,7 +181,8 @@ public final class HoverReader: HoverReading {
 
     public enum Outcome: Sendable {
         /// A word, the panel request it was read for, and the key that suppresses it once shown.
-        case selection(Selection, request: Int, key: String)
+        /// `bounds` is where the word is on screen, y down, where the read could say (plan-card-refinements WI-2).
+        case selection(Selection, request: Int, key: String, bounds: ReadBounds?)
         /// The gate said no. Ordinary, and not worth showing.
         case quiet(HoverRefusal)
         /// The gate said yes and nothing could be read, with why — worth a log line, not a panel.
@@ -247,7 +248,7 @@ public final class HoverReader: HoverReading {
         if let target {
             switch await source.read(at: point, in: target, budget: accessibilityBudget) {
             case .hit(let hit):
-                return accept(Self.selection(from: hit), request: request, policy: policy, point: point)
+                return accept(Self.selection(from: hit), bounds: hit.bounds, request: request, policy: policy, point: point)
             case .miss(let reason):
                 log.debug("accessibility missed: \(reason, privacy: .public)")
             case .cancelled:
@@ -339,7 +340,10 @@ public final class HoverReader: HoverReading {
             let recognition = try await bounded {
                 try await source.recognise(at: point, window: window, policy: policy)
             }
-            return accept(Self.selection(from: recognition), request: request, policy: policy, point: point)
+            // **The run's box, which holds the word** (`containing`) — measured against a word whose box is known on the
+            // E2E Mac before it was carried (plan-card-refinements §6, the owner's decision of 2026-10-09).
+            return accept(Self.selection(from: recognition), bounds: recognition.bounds, request: request, policy: policy,
+                          point: point)
         } catch RecognitionError.screenRecordingDenied {
             // A reader who moved on is not told anything.
             return Task.isCancelled ? .quiet(.cancelled) : .needsScreenRecording(request: request)
@@ -365,14 +369,14 @@ public final class HoverReader: HoverReading {
     /// delivered and `lastLookedUp` written under them. The work cannot be stopped; accepting its
     /// result can be.
     private func accept(
-        _ selection: Selection?, request: Int, policy: HoverPolicy, point: CGPoint
+        _ selection: Selection?, bounds: ReadBounds?, request: Int, policy: HoverPolicy, point: CGPoint
     ) -> Outcome {
         guard !Task.isCancelled else { return .quiet(.cancelled) }
         guard let selection else { return .nothing("no word under the pointer") }
         if let refusal = postReadRefusal(selection, policy: policy, point: point) {
             return .quiet(refusal)
         }
-        return .selection(selection, request: request, key: Self.key(selection, at: point))
+        return .selection(selection, request: request, key: Self.key(selection, at: point), bounds: bounds)
     }
 
     func remember(_ key: String) { lastLookedUp = key }

@@ -23,7 +23,13 @@ enum ScreenWordReader {
         let source: CaptureQuality.Source
         let appName: String
         let bundleID: String?
+        /// Where the word is on screen, y down, where the dialect can say it and the box is worth trusting — what the
+        /// lookup panel keeps clear (plan-card-refinements WI-2). Nil leaves the panel to the pointer rule.
+        var bounds: ReadBounds?
     }
+
+    /// A word a dialect read, and its box where it has one.
+    typealias Located = (word: WordAtPoint, bounds: ReadBounds?)
 
     enum Outcome: Sendable {
         case hit(Hit)
@@ -142,14 +148,15 @@ enum ScreenWordReader {
     /// to the next dialect.
     static func read(at point: CGPoint, in target: Target, with ax: some AccessibilityReading) -> Outcome {
         let element = target.element
-        func hit(_ word: WordAtPoint, _ source: CaptureQuality.Source) -> Outcome {
-            .hit(Hit(word: word, source: source, appName: target.appName, bundleID: target.bundleID))
+        func hit(_ found: Located, _ source: CaptureQuality.Source) -> Outcome {
+            .hit(Hit(word: found.word, source: source, appName: target.appName, bundleID: target.bundleID,
+                     bounds: found.bounds))
         }
         do throws(CaptureError) {
             try awaken(target, ax)
-            if let word = try textRange(element, at: point, ax) { return hit(word, .accessibilityTextRange) }
-            if let word = try textMarkers(element, at: point, ax) { return hit(word, .accessibilityTextMarkers) }
-            if let word = try boundsScan(element, at: point, ax) { return hit(word, .accessibilityBoundsScan) }
+            if let found = try textRange(element, at: point, ax) { return hit(found, .accessibilityTextRange) }
+            if let found = try textMarkers(element, at: point, ax) { return hit(found, .accessibilityTextMarkers) }
+            if let found = try boundsScan(element, at: point, ax) { return hit(found, .accessibilityBoundsScan) }
             // **Nothing answered: ask the app, once, to build its tree for an assistive client.** Chrome
             // exposes no page until it is told one is reading it, so without this every Chrome hover
             // went to the pixels. This hover still does — the tree arrives about two seconds later —
@@ -195,13 +202,15 @@ enum ScreenWordReader {
 
     private static func textRange(
         _ element: AXUIElement, at point: CGPoint, _ ax: some AccessibilityReading
-    ) throws(CaptureError) -> WordAtPoint? {
+    ) throws(CaptureError) -> Located? {
         guard let index = try ax.range(element, kAXRangeForPositionParameterizedAttribute, value(point))?.location,
               let count = try ax.integer(element, kAXNumberOfCharactersAttribute),
               index >= 0, index < count
         else { return nil }
+        // `index` and `count` are another process's: `index + 300` trapped for an index within 300 of `Int.max`
+        // (audit of 2026-10-10). `count - index` is positive here, so neither line can overflow.
         let start = max(0, index - 300)
-        let end = min(count, index + 300)
+        let end = index + min(300, count - index)
         guard let text = try ax.string(
             element, kAXStringForRangeParameterizedAttribute, value(CFRange(location: start, length: end - start)))
         else { return nil }
@@ -215,16 +224,39 @@ enum ScreenWordReader {
         // line, and just past a word that character is the following space — so without a glyph
         // check, blank space looks up the closest word (finding 9). Weigh it and its neighbours by
         // their glyph boxes, under the tolerance every path shares.
-        var best: (hit: WordAtPoint, distance: CGFloat)?
+        var best: (hit: WordAtPoint, offset: Int, distance: CGFloat)?
         for candidate in [index, index - 1, index + 1] where candidate >= start && candidate < end {
             guard let glyph = try ax.rect(
                     element, kAXBoundsForRangeParameterizedAttribute, value(CFRange(location: candidate, length: 1))),
                   let distance = HitTolerance.distance(from: point, to: glyph),
                   let hit = TextSegmenter.word(in: text, utf16Offset: candidate - start, clipped: clipped)
             else { continue }
-            if best.map({ distance < $0.distance }) ?? true { best = (hit, distance) }
+            if best.map({ distance < $0.distance }) ?? true { best = (hit, candidate - start, distance) }
         }
-        return best?.hit
+        guard let best else { return nil }
+        // **The token's own box: one more request, for the token's own range** — the glyph box above is one
+        // character's. The token is found again by the tokeniser that made it, and asked for only where it reads as
+        // the word delivered.
+        var bounds: ReadBounds?
+        if let token = TextSegmenter.wordRanges(in: text).first(where: { range in
+            let lower = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
+            let upper = text.utf16.distance(from: text.startIndex, to: range.upperBound)
+            return lower <= best.offset && best.offset < upper
+        }), String(text[token]) == best.hit.word {
+            // **The word is read; its box is worth having, not worth the word** (audit of 2026-10-10). A failure here
+            // ended the read as a miss and sent a good capture to the pixels — a poor capture suppressing retrieval. It
+            // leaves the word with no box now; only the reader moving on (`cancelled`) still ends the read.
+            do throws(CaptureError) {
+                if let box = try ax.rect(element, kAXBoundsForRangeParameterizedAttribute, value(CFRange(
+                    location: start + text.utf16.distance(from: text.startIndex, to: token.lowerBound),
+                    length: text.utf16.distance(from: token.lowerBound, to: token.upperBound)))) {
+                    bounds = ReadBounds.checked(box, quality: .exact, near: point)
+                }
+            } catch {
+                if error == .cancelled { throw error }
+            }
+        }
+        return (best.hit, bounds)
     }
 
     // MARK: - text markers
@@ -233,12 +265,15 @@ enum ScreenWordReader {
     /// word, `context` places it in its sentence (audit round 3, #36).
     private static func textMarkers(
         _ element: AXUIElement, at point: CGPoint, _ ax: some AccessibilityReading
-    ) throws(CaptureError) -> WordAtPoint? {
+    ) throws(CaptureError) -> Located? {
         let host = try ax.webArea(containing: element) ?? element
         guard let marker = try ax.parameterized(host, "AXTextMarkerForPosition", value(point)),
-              let best = try markedWord(at: point, marker: marker, in: host, ax)
+              let best = try markedWord(at: point, marker: marker, in: host, ax),
+              let word = try context(of: best, at: point, marker: marker, in: host, ax)
         else { return nil }
-        return try context(of: best, at: point, marker: marker, in: host, ax)
+        // **WebKit's word, which holds the token** — the same word where they agree, the run around it where WebKit
+        // calls 看书 one word. Larger than the token, which is safe to keep clear; so it is `containing`, never `exact`.
+        return (word, ReadBounds.checked(best.box, quality: .containing, near: point))
     }
 
     /// A word under the pointer, as the markers give it: its text, its box, and how far the pointer is
@@ -320,11 +355,11 @@ enum ScreenWordReader {
 
     private static func boundsScan(
         _ element: AXUIElement, at point: CGPoint, _ ax: some AccessibilityReading
-    ) throws(CaptureError) -> WordAtPoint? {
+    ) throws(CaptureError) -> Located? {
         guard let text = try ax.string(element, kAXValueAttribute), !text.isEmpty else { return nil }
         let words = TextSegmenter.wordRanges(in: text)
         guard words.count <= maximumScannedWords else { return nil }
-        var best: (offset: Int, distance: CGFloat)?
+        var best: (offset: Int, distance: CGFloat, box: CGRect, word: String)?
         for word in words {
             let location = text.utf16.distance(from: text.startIndex, to: word.lowerBound)
             let length = text.utf16.distance(from: word.lowerBound, to: word.upperBound)
@@ -336,9 +371,15 @@ enum ScreenWordReader {
             // Follow the pointer inside the word, so CJK re-segmentation lands on the right character.
             let within = CaptureGeometry.characterIndex(
                 at: point.x, across: box.minX...box.maxX, count: length)
-            if best.map({ distance < $0.distance }) ?? true { best = (location + within, distance) }
+            if best.map({ distance < $0.distance }) ?? true {
+                best = (location + within, distance, box, String(text[word]))
+            }
         }
-        return best.flatMap { TextSegmenter.word(in: text, utf16Offset: $0.offset) }
+        guard let best, let found = TextSegmenter.word(in: text, utf16Offset: best.offset) else { return nil }
+        // **The scanned word's own box, which this dialect already asked for** and used to drop. Exact where the
+        // delivered token is that word; where re-segmentation took a part of it, the box holds the token.
+        let quality: WordBounds.Quality = found.word == best.word ? .exact : .containing
+        return (found, ReadBounds.checked(best.box, quality: quality, near: point))
     }
 
     // MARK: - Plumbing

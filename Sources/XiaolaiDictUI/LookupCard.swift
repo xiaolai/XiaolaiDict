@@ -61,14 +61,51 @@ public struct LookupCard: Equatable {
     }
 
     public let term: String
+    /// **The entry the card is drawn from** (`EntryPresentation.identity`), nil for a card with none — a miss, prose.
+    /// What the card's disclosures belong to: another entry is another card, however alike the two read (D2,
+    /// 2026-10-10).
+    public let entry: String?
     /// The word's dictionary form, and **what its colour is hashed from**. The drawer hashes
     /// `ReadingEntry.lemma`; this hashed `term`, the surface — so one encounter changed colour
     /// between the panel and the history: *tempered* lands on palette index 6 and *temper* on 5.
     /// Falls back to the surface where no lemma was worked out, which is what the ledger stores
     /// too.
     public let lemma: String
-    /// Where `term` sits in `sentence`, from the capture rather than from a search of it.
-    public let sentenceRange: NSRange?
+    /// Where `term` sits in `sentence`: recorded by the capture, not recorded, or in no position of it at all.
+    public let placement: TermPlacement
+
+    /// The range the capture recorded, where it recorded one.
+    public var sentenceRange: NSRange? {
+        guard case .at(let range) = placement else { return nil }
+        return range
+    }
+
+    /// **The span of `sentence` the card marks as the word, or nil where it marks none** — asked here, where a test can
+    /// ask it, rather than inside the view that draws it.
+    ///
+    /// The recorded range where it holds the word; a search only where the range was not recorded, or does not land
+    /// on the word — a search takes the first case-insensitive match, which is why it is the last resort. **Never a
+    /// search for a word in no position of the sentence**: a followed correction would find another occurrence and
+    /// mark it, the opening "The" of "The cat saw teh dog." for *the*.
+    public var markedRange: NSRange? {
+        guard let sentence, !sentence.isEmpty else { return nil }
+        let text = sentence as NSString
+        func search() -> NSRange? {
+            let found = text.range(of: term, options: .caseInsensitive)
+            return found.location == NSNotFound ? nil : found
+        }
+        switch placement {
+        case .notInSentence:
+            return nil
+        case .unrecorded:
+            return search()
+        case .at(let range):
+            guard range.location >= 0, NSMaxRange(range) <= text.length,
+                  text.substring(with: range).compare(term, options: .caseInsensitive) == .orderedSame
+            else { return search() }
+            return range
+        }
+    }
     public let heading: String
     public let partOfSpeech: String?
     public let pronunciation: String?
@@ -87,6 +124,19 @@ public struct LookupCard: Equatable {
     public let alternatives: [SensePresentation]
     /// The phrase the reader was standing inside, where there was one — shown under their sentence.
     public let phrase: PhrasePresentation?
+    /// **"Look up “X”" under a miss**, where the panel's rule offers one (`LookupPresentation.offeredSuggestion`) — nil
+    /// on every card with an entry, and on a miss nobody has a suggestion for.
+    public let suggestion: SpellingSuggestion?
+    /// **What the entry's senses say beyond their labels** (plan-card-refinements WI-4) — every sense's, the one the card
+    /// leads with included. Empty for a monolingual entry and for every card without one.
+    public let details: SenseDetails
+
+    /// **The details the card's own disclosure offers, or nil where it offers none** — nothing to show, or the compact
+    /// card's expansion, whose `DictionaryDetailsView` already draws the same text (the owner's decision of 2026-10-09:
+    /// on the default card as well, never twice and never by default).
+    public func detailsDisclosure(inCompactExpansion: Bool) -> SenseDetails? {
+        inCompactExpansion || details.isEmpty ? nil : details
+    }
 
     /// How many senses the reader could turn to. Named rather than `alternatives.count` at the
     /// call site so the view cannot start counting something else.
@@ -226,15 +276,19 @@ public struct LookupCard: Equatable {
     }
 
     public init(
-        term: String, lemma: String? = nil, sentenceRange: NSRange? = nil,
+        term: String, lemma: String? = nil, placement: TermPlacement = .unrecorded, entry: String? = nil,
         heading: String, partOfSpeech: String?, pronunciation: String?,
         answer: Answer, sentence: String?, alternatives: [SensePresentation],
-        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
+        memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil, suggestion: SpellingSuggestion? = nil,
+        details: SenseDetails = .none
     ) {
         self.term = term
+        self.entry = entry
+        self.details = details
         self.lemma = lemma ?? term
         self.phrase = phrase
-        self.sentenceRange = sentenceRange
+        self.suggestion = suggestion
+        self.placement = placement
         self.heading = heading
         self.partOfSpeech = partOfSpeech
         self.pronunciation = pronunciation
@@ -253,7 +307,7 @@ public extension LookupCard {
     /// a card that led with one of them would be picking from a pile nobody can check.
     init(
         presentation: EntryPresentation, term: String, lemma: String? = nil,
-        sentenceRange: NSRange? = nil, sentence: String?, mark: SenseMark?,
+        placement: TermPlacement = .unrecorded, sentence: String?, mark: SenseMark?,
         memory: MemoryStrip? = nil, phrase: PhrasePresentation? = nil
     ) {
         let chosen = presentation.senses.first { sense in
@@ -303,7 +357,8 @@ public extension LookupCard {
         self.init(
             term: term,
             lemma: lemma,
-            sentenceRange: sentenceRange,
+            placement: placement,
+            entry: presentation.identity,
             heading: presentation.heading,
             // The chosen sense's own part of speech where there is one: an entry's list of every
             // part of speech it covers says less than the one the reader is actually in.
@@ -326,6 +381,7 @@ public extension LookupCard {
             sentence: sentence,
             alternatives: presentation.senses.filter { ($0.key ?? "\($0.ordinal)") != shown },
             memory: memory,
-            phrase: phrase)
+            phrase: phrase,
+            details: SenseDetails(senses: presentation.senses))
     }
 }

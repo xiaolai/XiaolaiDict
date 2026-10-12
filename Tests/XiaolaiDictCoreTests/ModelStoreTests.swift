@@ -107,7 +107,7 @@ struct ModelStoreTests {
             progress(offset + Int64(slice.count))
             guard file.path == parkingOn else { return }
             landed.withLock { $0 = true }
-            try await Task.sleep(for: .seconds(30))
+            try await Task.sleep(for: Patience.never)
             throw NeverCancelled()
         }
     }
@@ -833,11 +833,7 @@ struct ModelStoreTests {
         // the installer telling us it has reached the one step this test is about. Probing its lock
         // instead would take the lock the installer needs and fail the install outright.
         let marker = staged.appending(path: ModelStore.completionMarker)
-        var reachedTheCommit = false
-        for _ in 0..<500 where !reachedTheCommit {
-            if FileManager.default.fileExists(atPath: marker.path) { reachedTheCommit = true; break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        let reachedTheCommit = await Patience.until { FileManager.default.fileExists(atPath: marker.path) }
         #expect(reachedTheCommit, "the installer never reached the commit, so the assertion below proves nothing")
         #expect(store.installed(second) == nil, "a model was committed while the store was locked")
         held.release()
@@ -1190,11 +1186,7 @@ struct ModelStoreTests {
             try await ModelDownloader(store: store, transport: parking, freeDisk: { _ in .max })
                 .install(manifest)
         }
-        var parked = false
-        for _ in 0..<500 where !parked {
-            if parking.landed.withLock({ $0 }) { parked = true; break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        let parked = await Patience.until { parking.landed.withLock({ $0 }) }
         #expect(parked, "the transport never wrote anything, so the assertions below prove nothing")
 
         install.cancel()

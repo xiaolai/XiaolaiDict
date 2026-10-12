@@ -76,6 +76,10 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.reportPanelFit) private var reportPanelFit
+    /// The tail the panel gave the card, pointing at its word — nil for a card placed by the pointer, which is drawn as
+    /// every card was before (the owner's decision of 2026-10-09).
+    @Environment(\.panelTail) private var tail
+    @Environment(\.drawnCard) private var drawn
     /// The word's own colour, which the card's second shadow is thrown in. Nil for a message,
     /// which is about no word.
     let accent: Color?
@@ -148,10 +152,21 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             idealWidth: compact ? scale.space.lookupWidth : scale.space.cardWidth,
             maxWidth: compact ? scale.space.lookupWidth : scale.space.cardMaxWidth,
             alignment: .leading)
+        // **The tail's strip is inside the card's outline**, so the content sits clear of it and the paper, the edge and
+        // the clip below take the tail in with the card.
+        .padding(.top, tail?.edge == .top ? scale.space.tailLength : 0)
+        .padding(.bottom, tail?.edge == .bottom ? scale.space.tailLength : 0)
         // **The card is the window.** Its scene is `.plain`, which draws no background at all, so
         // the surface, the edge and the lift are the card's own — and they live here, in the
         // layer that has the tokens, rather than as literals in the scene that hosts it.
         .background(CardSurface.panel(for: scheme), in: shape)
+        // **The card is taken hold of by its paper** (plan-card-refinements D3, 2026-10-10). The window is movable by its
+        // background, and that was all that let a reader drag the card: measured on the E2E Mac, a posted drag moved a
+        // borderless window holding a plain view and did not move one holding SwiftUI content — `mouseDownCanMoveWindow`
+        // answers true at every point of the card and SwiftUI takes the mouse anyway. So no reader could ever drag it, and
+        // the anchor's release on a drag was unreachable. SwiftUI's own gesture moves the window; a control's own gesture
+        // is asked first, so a press on a button is still a press.
+        .gesture(WindowDragGesture())
         // Through `CardSurface`, so the hairline becomes a line when the reader has asked the
         // system for more contrast. At 12% of the label colour it was a hint either way.
         .overlay(shape.strokeBorder(
@@ -166,11 +181,40 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
             x: scale.shadow.panelOffset, y: scale.shadow.panelOffset)
         .modifier(AccentGlow(accent: accent))
         // Asymmetric, because the shadows are. Uniform padding would leave dead space above and
-        // to the left of a window that is exactly the size of its content.
-        .padding(.top, scale.shadow.glowBefore)
-        .padding(.leading, scale.shadow.glowBefore)
-        .padding(.bottom, scale.shadow.glowAfter)
-        .padding(.trailing, scale.shadow.glowAfter)
+        // to the left of a window that is exactly the size of its content. **`CardChrome` says how much** — the
+        // placement reads the same numbers to put the card, and its tail, where they are drawn.
+        .padding(CardChrome(scale).insets(tail: tail))
+        .mask { shown }
+        // **Which outline was drawn, said to the panel**, whose click-away test judges a click by it.
+        .onChange(of: compact, initial: true) { _, compact in drawn?.drew(compact: compact) }
+    }
+
+    /// **What of the surface the window shows: the shadow fades to nothing at every edge of the window**, and the card and
+    /// its tail stay whole (plan-card-refinements D3, 2026-10-10). The window keeps only so much room round the card for
+    /// its shadows (`CardChrome.insets`), and the shadow reaches further, so each edge cut it in a straight line —
+    /// measured on the E2E Mac at Huge on a white page, steps of 6–8 grey levels in one pixel at the sides, and **15 in
+    /// the light appearance and 11 in the dark** below a card above its word, where the window ends just past the tip so
+    /// the tip is as near the word as a top tail's, and the shadow falls darkest. Each band of room now fades across its
+    /// width; below a tail pointing down the band is the tail's strip and the room past its tip.
+    private var shown: some View {
+        let insets = CardChrome(scale).insets(tail: tail)
+        let bottom = tail?.edge == .bottom ? scale.space.tailLength + insets.bottom : insets.bottom
+        return ZStack {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: insets.top)
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: insets.leading)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: insets.trailing)
+                }
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: bottom)
+            }
+            shape.padding(insets)
+        }
     }
 
     /// **How tall the scrolling region may grow: the card's cap, less the row pinned under it.**
@@ -202,8 +246,11 @@ struct PanelSurface<Scrolling: View, Bar: View>: View {
         max(0, scrollCap - barHeight)
     }
 
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: compact ? scale.radius.lookup : scale.radius.panel, style: .continuous)
+    /// The card's outline: its rounded rectangle, and its tail where the panel gave it one — by `CardChrome`'s corner,
+    /// which the click-away test judges by too.
+    private var shape: CardShape {
+        CardShape(cornerRadius: CardChrome(scale).radius(compact: compact), tail: tail,
+                  tailLength: scale.space.tailLength, tailHalfWidth: scale.space.tailHalfWidth)
     }
 }
 
@@ -234,8 +281,12 @@ extension View {
     /// controls. The system's edge effect softens the boundary; it is not what keeps a row of
     /// icons legible over a line of text. Applied by the bar itself, never by `PanelSurface` —
     /// which cannot tell an empty bar from a full one.
+    ///
+    /// **In a rectangle, said** (D3, 2026-10-10): a background given no shape fills the card's own outline here — measured
+    /// on the E2E Mac, the bar's paper was a rounded card inside the card and, on a card above its word, carried a second
+    /// tail at the bar's foot.
     func pinnedToTheCard(in scheme: ColorScheme) -> some View {
-        background(CardSurface.panel(for: scheme))
+        background(CardSurface.panel(for: scheme), in: Rectangle())
     }
 }
 

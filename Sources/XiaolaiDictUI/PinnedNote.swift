@@ -81,6 +81,21 @@ public struct PinnedNote: Equatable, Identifiable {
     }
 }
 
+#if XIAOLAIDICT_CAPTURE_INSTRUMENTS
+extension PinnedNote {
+    /// **A note `--note-report` pins**, through the `PinnedNoteController.pin` the card's pin button reaches. Development
+    /// builds only: a member only an instrument calls is never public in a library (ADR-0052), so this one rides the
+    /// define the instruments do.
+    public static func measured(
+        heading: String, dictionary: DictionaryIdentity, partOfSpeech: String?, pronunciation: String?, text: String,
+        standing: Standing
+    ) -> PinnedNote {
+        PinnedNote(heading: heading, dictionary: dictionary, partOfSpeech: partOfSpeech, pronunciation: pronunciation,
+                   text: text, standing: standing)
+    }
+}
+#endif
+
 /// The pinned notes on screen. Each is its own always-on-top window, closed by its own button — a
 /// new lookup never touches them, which is the whole point of pinning one.
 ///
@@ -105,6 +120,30 @@ public struct PinnedNoteView: View {
     public init(note: PinnedNote, unpin: @escaping () -> Void) {
         self.note = note
         self.unpin = unpin
+    }
+
+    /// **How wide a note opens: the quick card's measure, at the reader's text size.** It was 320 pt at every size, so at
+    /// Huge a line held half the words the card's did. For the window, which is sized in AppKit before any view is.
+    public static func openingWidth(for size: TextSize) -> CGFloat { Scale(size).space.lookupWidth }
+
+    /// **The unpin control's hit target, as `unpinControl` draws it**: the glyph at the body size, padded to the
+    /// pointing floor (`IconButton`). Measured from the symbol itself, so a size whose glyph outgrows the floor is
+    /// answered with the glyph.
+    public static func unpinTarget(for size: TextSize) -> CGSize {
+        let glyph = NSImage(systemSymbolName: ActionSymbol.unpinNote.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: Scale(size).text.body, weight: .regular))?
+            .size ?? .zero
+        return CGSize(width: max(Token.Target.minimum, glyph.width), height: max(Token.Target.minimum, glyph.height))
+    }
+
+    /// **How far each note pinned at the same point is stepped down from the one before**: enough that the older
+    /// note's whole unpin target, and the space between items on a line, is left uncovered — the control's top inset
+    /// (`unpinControl`'s `padDown`), its target's height, and `inline`. A newer note is in front and covers everything
+    /// of the older below its own top edge, so the vertical step alone is what exposes the control (2026-10-11: the
+    /// fixed 24 pt step left a newer note over the older's control, which sits 1.25 em down and is 28 pt tall).
+    public static func cascadeStep(for size: TextSize) -> CGFloat {
+        let scale = Scale(size)
+        return scale.space.padDown + unpinTarget(for: size).height + scale.space.inline
     }
 
     public var body: some View {
@@ -149,13 +188,18 @@ public struct PinnedNoteView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, scale.space.padAcross)
-            // Symmetric with the bottom, because nothing floats over the top any more. This was a
-            // 28 pt structural offset dodging the traffic lights; they are gone, and so is it — the
-            // note was that offset's last reader in the whole project.
+            // Symmetric with the bottom, the card's own padding at both edges. This was a 28 pt
+            // structural offset dodging the traffic lights; they are gone, and so is it — and the
+            // title bar's inset that outlived them is the scene's to give up (`PinnedNoteSceneView`).
             .padding(.top, scale.space.padDown)
             .padding(.bottom, scale.space.padDown)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // **As tall as its words, as the card is** — by the card's own fit, up to the card's own cap,
+        // past which the words scroll. The window opened at a fixed 200 pt, and a note shorter than
+        // that stood in the difference (reported 2026-10-10; measured on the E2E Mac, “user” at 51.5 pt
+        // of white below its last line and 47 above it, against the card's 15).
+        .fitsItsContent(upTo: scale.space.cardMaxHeight)
         // On the scroll view, so it stays in the corner rather than scrolling away with the words.
         .overlay(alignment: .topTrailing) { unpinControl }
         // The same act from the pointer's other button, for a reader who looks there first.
@@ -171,6 +215,9 @@ public struct PinnedNoteView: View {
                 .accessibilityHidden(true)
         }
         .onHover { pointerIsOver = $0 }
+        // **The narrowest a reader may drag it, at their text size** — the quick card's narrowest, so it still holds a
+        // sentence. A width alone: the height is the words', which the fit gives it.
+        .frame(minWidth: scale.space.lookupMinWidth)
     }
 
     /// **Always in the view tree, and so always in the accessibility tree.**
@@ -179,17 +226,20 @@ public struct PinnedNoteView: View {
     /// button at all, and the note's window has no traffic lights — so a VoiceOver or keyboard
     /// reader could make an always-on-top window and had no way to remove it (2026-10-01). The
     /// reader asked for the control to stay out of sight until wanted, and it still does: that is
-    /// the opacity. Its existence no longer depends on a pointer.
+    /// its colour, faded to nothing. Its existence no longer depends on a pointer.
     ///
     /// Command-W is bound here, and named in the tooltip, because this window has no menu to
     /// offer Close from.
     private var unpinControl: some View {
         IconButton(.unpinNote, shortcut: KeyboardShortcut("w", modifiers: .command), action: unpin)
             .focused($unpinIsFocused)
-            .foregroundStyle(.secondary)
+            // **Faded by its colour, never by its opacity.** SwiftUI drops a view of opacity 0 from the
+            // accessibility tree: measured 2026-10-10 on the E2E Mac, a note's tree held its words and no
+            // button at all, with or without a pointer over it — so the control this comment promises
+            // VoiceOver was never there. Its ink is what goes; the button stays.
+            .foregroundStyle(HierarchicalShapeStyle.secondary.opacity(pointerIsOver || unpinIsFocused ? 1 : 0))
             .padding(.top, scale.space.padDown)
             .padding(.trailing, scale.space.padAcross)
-            .opacity(pointerIsOver || unpinIsFocused ? 1 : 0)
             .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: pointerIsOver)
             .motionAwareAnimation(.easeInOut(duration: Token.Motion.hover), value: unpinIsFocused)
     }

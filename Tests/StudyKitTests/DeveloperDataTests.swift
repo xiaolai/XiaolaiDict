@@ -20,7 +20,9 @@ struct DeveloperDataTests {
     /// **A table nobody classified is a table the clear would delete or keep by accident.** Fails the day the
     /// schema grows, which is the moment someone has to say which kind the new one is.
     @Test func everyTableIsClassifiedAsUserDataOrBookkeeping() throws {
-        let ledger = try Ledger(path: ScratchFile.path("developer-tables"))
+        let path = ScratchFile.path("developer-tables")
+        defer { ScratchFile.remove(path) }
+        let ledger = try Ledger(path: path)
         let known: Set<String> = [
             "lookup_disposition_operations", "lookup_disposition_receipts", "lookups", "removed_keep_targets",
             "review_events", "sense_encounters", "study_answers", "study_cards", "study_ignored_lemmas",
@@ -32,6 +34,7 @@ struct DeveloperDataTests {
 
     @Test func deployingFillsAnEmptyLedgerWithEveryKindOfRow() throws {
         let path = ScratchFile.path("developer-deploy")
+        defer { ScratchFile.remove(path) }
         let ledger = try Ledger(path: path)
         let report = try ledger.deployTestData(now: now)
         let rows = try counts(ledger)
@@ -51,6 +54,7 @@ struct DeveloperDataTests {
     /// in it, is refused and changes nothing.
     @Test func deployingRefusesALedgerThatHoldsAnything() throws {
         let path = ScratchFile.path("developer-deploy-refused")
+        defer { ScratchFile.remove(path) }
         let ledger = try Ledger(path: path)
         _ = try ledger.deployTestData(now: now)
         let before = try counts(ledger)
@@ -60,6 +64,7 @@ struct DeveloperDataTests {
 
     @Test func clearingEmptiesEveryUserTableAndLeavesALedgerThatStillWorks() throws {
         let path = ScratchFile.path("developer-clear")
+        defer { ScratchFile.remove(path) }
         let ledger = try Ledger(path: path)
         _ = try ledger.deployTestData(now: now)
         let removed = try ledger.clearEveryRow()
@@ -77,6 +82,7 @@ struct DeveloperDataTests {
 
     @Test func clearingAnEmptyLedgerRemovesNothingAndSaysSo() throws {
         let path = ScratchFile.path("developer-clear-empty")
+        defer { ScratchFile.remove(path) }
         #expect(try Ledger(path: path).clearEveryRow() == 0)
     }
 }

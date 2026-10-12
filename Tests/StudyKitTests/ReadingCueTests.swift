@@ -101,4 +101,29 @@ struct ReadingCueTests {
             result: .notFound)
         #expect(read.cue == .sentence)
     }
+
+    // MARK: - A sentence that looks misread (2026-10-11)
+
+    /// **History and Library mark a sentence read off the screen that carries a misread's signs**, derived from the
+    /// stored source and sentence (`CaptureQuality.doubts(sentence:)`) — nothing stored twice. The sentence is still
+    /// shown, for inspection; the mark says it is not an exact quotation.
+    @Test func anOpticalSentenceWithAMisreadsSignsLooksMisread() throws {
+        let optical = try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete))
+        let read = entry("comfortable", sentence: "comfortable (1TÆ฿J)", quality: optical)
+        #expect(read.looksMisread)
+        #expect(read.cue == .sentence, "the sentence was hidden rather than marked")
+    }
+
+    /// The controls: the same characters held by an app's own text, a clean optical read, a read with no sentence, and
+    /// a row written before the quality column — none is marked.
+    @Test func onlyAnOpticalReadWithSignsIsMarked() throws {
+        let optical = try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .complete))
+        #expect(!entry("comfortable", sentence: "comfortable (1TÆ฿J)", quality: quality(.complete)).looksMisread)
+        #expect(!entry("comfortable", sentence: "It was comfortable enough.", quality: optical).looksMisread)
+        #expect(!entry("comfortable", sentence: "", quality: optical).looksMisread)
+        #expect(!entry("comfortable", sentence: "comfortable (1TÆ฿J)", quality: nil).looksMisread)
+        let missing = try #require(CaptureQuality(source: .opticalRecognition, confidence: 1, context: .missing))
+        #expect(!entry("comfortable", sentence: "comfortable (1TÆ฿J)", quality: missing).looksMisread,
+                "a sentence the card does not show was marked")
+    }
 }

@@ -31,10 +31,12 @@ struct ScriptedModel: LanguageModel {
         /// running when the test makes its second request. This is what makes `mostAtOnce == 1` a
         /// measurement rather than a coincidence.
         case answerWhenReleased(String)
-        /// Hangs the **first** request for ten seconds — longer than anything in this suite waits —
+        /// Hangs the **first** request for `Patience.never` — longer than anything in this suite waits —
         /// and answers every request after it at once: a prewarm the tests can treat as never
         /// coming back, in front of a question that would answer immediately if it were let
-        /// through. **A cancelled wedge is not failed**: the sleep is `try?`, so a cancelled wedge
+        /// through. **Never, not the ten seconds it was**: a suite that starves the cooperative
+        /// pool can hold a waiting test longer than ten seconds (2026-10-10, `DeadlineTests`), and a
+        /// wedge that ran out in that time would read as a question that waited for it. **A cancelled wedge is not failed**: the sleep is `try?`, so a cancelled wedge
         /// falls out of the pause and answers. That is why every test here asserts what it came for
         /// before it cancels the prewarm, never after.
         case wedgeOnce(String)
@@ -141,16 +143,13 @@ struct ScriptedExecutor: LanguageModelExecutor {
                     if var counts = $0[id] { counts.now -= 1; $0[id] = counts }
                 }
             }
-            // Bounded by a count of looks and not by the clock, for the reason `waitUntil` gives:
-            // these tests run in parallel, so an elapsed-time bound measures the runner's load. A
-            // gate nobody releases therefore fails the test that forgot to, rather than hanging it.
-            for _ in 0..<2_000 where !ScriptedModel.released.withLock({ $0.contains(id) }) {
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            // Bounded by `Patience`, for the reason `waitUntil` gives. A gate nobody releases fails the
+            // test that forgot to, rather than hanging it.
+            _ = await Patience.until { ScriptedModel.released.withLock({ $0.contains(id) }) }
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .wedgeOnce(let text)?:
             if ScriptedModel.wedged.withLock({ $0.insert(id).inserted }) {
-                try? await Task.sleep(for: .seconds(10))
+                try? await Task.sleep(for: Patience.never)
             }
             await channel.send(.response(action: .appendText(text, tokenCount: 1)))
         case .refuse?:
@@ -222,12 +221,12 @@ struct ModelServiceTests {
         return (store, scratch)
     }
 
-    /// Waits for something to become true, **bounded by a count of looks rather than by the clock**:
-    /// these tests run in parallel, so an elapsed-time bound measures how busy the runner is. The
-    /// caller asserts the condition straight afterwards, so a wait that ran out fails by name
-    /// instead of going quietly on to measure nothing.
+    /// Waits for something to become true, **bounded by `Patience`**: these tests run in parallel, so a
+    /// short bound measures how busy the runner is — and a count of looks was one, 600 looks of 5 ms
+    /// being a three-second clock. The caller asserts the condition straight afterwards, so a wait that
+    /// ran out fails by name instead of going quietly on to measure nothing.
     private static func waitUntil(_ condition: @Sendable () -> Bool) async {
-        for _ in 0..<600 where !condition() { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await Patience.until { condition() }
     }
 
     /// The scratch directories these tests made, held for the life of the test instance so they are
@@ -243,7 +242,7 @@ struct ModelServiceTests {
         physical: UInt64 = 48 * gigabyte,
         built: Recorder<Int> = Recorder(0), chose: Recorder<[LocalModelSize]> = Recorder([]),
         manifests: [ModelManifest] = [ModelServiceTests.manifest(.standard)],
-        prewarmWait: Duration = .seconds(45)
+        prewarmWait: Duration = Patience.wait
     ) throws -> ModelService {
         let store = try store ?? {
             let (made, scratch) = try Self.installedStore()
@@ -407,7 +406,7 @@ struct ModelServiceTests {
                 makeModel: { _, size in
                     chose.withLock { $0.append(size) }
                     return ScriptedModel(.answer(#"{"senseNumber": 1}"#))
-                }, wanted: { wanted })
+                }, prewarmWait: Patience.wait, wanted: { wanted })
             #expect(await service.reply(to: .pickSense(Self.question)) == .sense(1))
             #expect(chose.withLock { $0 } == [loaded], "chose \(wanted) with \(available / Self.gigabyte) GB free")
             guard case .status(let status) = await service.reply(to: .status) else {
@@ -458,7 +457,7 @@ struct ModelServiceTests {
                          return made }(),
             manifests: [Self.manifest(.standard)], physicalMemory: 48 * Self.gigabyte,
             availableMemory: { nil },
-            makeModel: { _, _ in built.withLock { $0 += 1 }; return ScriptedModel(.answer("{}")) })
+            makeModel: { _, _ in built.withLock { $0 += 1 }; return ScriptedModel(.answer("{}")) }, prewarmWait: Patience.wait)
         guard case .failure(.insufficientMemory) = await service.reply(to: .pickSense(Self.question)) else {
             Issue.record("loaded with free memory unknown")
             return

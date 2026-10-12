@@ -38,7 +38,7 @@ struct ProviderCompositionTests {
         struct NoService: Error {}
         let coordinator = LocalModelCoordinator(
             defaults: suite, store: ModelStore(root: ScratchFile.unmade("providers", file: "models")),
-            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }),
+            client: ModelClient(connect: { _ in throw NoService() }, servicePresence: { .gone }, deadline: { _ in Patience.wait }),
             providers: ProviderFactory { _ in ProviderBuild(backend: backend) })
         return (coordinator, suite)
     }
@@ -53,7 +53,7 @@ struct ProviderCompositionTests {
         let (models, _) = Self.coordinator(choosing: .openAICompatible, backend: backend)
         let panel = RecordingPanel()
         let runner = LookupRunner(
-            client: DictionaryClient(connect: { _ in AnswersWithTwoSenses() }), panel: panel,
+            client: DictionaryClient(deadline: Patience.wait, connect: { _ in AnswersWithTwoSenses() }), panel: panel,
             primary: { PrimaryDictionary(chosen: "noad") }, selector: models.senseLadder)
         let selection = Selection(
             text: "fine", sentence: "He paid a heavy fine.", rangeInSentence: NSRange(location: 16, length: 4),
@@ -234,8 +234,7 @@ struct ProviderCompositionTests {
         #expect(app.endProvidersThenQuit { replied.withLock { $0 = true } } == .terminateLater)
         // `-[NSApplication _shouldTerminate]`'s wait, synchronously, bounded only so a hang is a failure and not a run
         // that never ends: past the providers' own bound, which a quit is allowed to spend.
-        Self.spinTheRunLoop(until: { replied.withLock { $0 } },
-                            for: Double(XiaolaiDictApp.providerShutdown.components.seconds) + 5)
+        Self.spinTheRunLoop(until: { replied.withLock { $0 } })
         #expect(replied.withLock { $0 }, "a quit asked for from inside the main queue was never let go on")
         #expect(backend.shutDowns == 1, "the app quit without putting its provider away")
     }
@@ -252,14 +251,13 @@ struct ProviderCompositionTests {
                 "AppKit's quit does not wait for the providers")
     }
 
-    /// The run loop, turned on this thread until `done` or `seconds` have passed — synchronously, as AppKit turns it
-    /// while it waits for a reply to `.terminateLater`. Not `async`: suspending would leave the main queue's drain, and
-    /// staying inside it is the point.
-    static func spinTheRunLoop(until done: () -> Bool, for seconds: Double) {
-        let bound = Date.now.addingTimeInterval(seconds)
-        while !done(), Date.now < bound {
-            RunLoop.main.run(mode: .default, before: Date.now.addingTimeInterval(0.05))
-        }
+    /// The run loop, turned on this thread until `done` or `Patience.wait` has passed — synchronously, as AppKit turns
+    /// it while it waits for a reply to `.terminateLater`. Not `async`: suspending would leave the main queue's drain,
+    /// and staying inside it is the point.
+    static func spinTheRunLoop(until done: () -> Bool) {
+        _ = Patience.blockingUntil(every: .milliseconds(50), pause: {
+            RunLoop.main.run(mode: .default, before: Date.now.addingTimeInterval($0 / .seconds(1)))
+        }, done)
     }
 
     static func source(_ path: String) throws -> String {

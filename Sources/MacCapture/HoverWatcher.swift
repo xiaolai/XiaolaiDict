@@ -29,7 +29,9 @@ public protocol HoverDelivering: AnyObject {
     /// monotonic clock, for timings — a wall-clock date changes under a clock adjustment.
     /// `seen` is told once whether the compositor ever drew the panel — **true only then**. A claim
     /// granted is not a word shown, and a word remembered on the claim alone was never offered again.
-    func deliver(_ selection: Selection, at pointer: UpPoint, request: Int, requestedAt: Date,
+    /// `word` is where the word is on screen, in AppKit's space, where the read could say — for the panel to keep
+    /// clear (plan-card-refinements WI-2).
+    func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
                  askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool
     /// A hover needed the pixels and Screen Recording is off. Hover never asks the system; this
     /// tells the reader where to grant it — **once per launch**, and answers whether it told them.
@@ -73,7 +75,7 @@ public final class HoverWatcher {
     private var cancelSettle: Cancel?
     private var readTask: Task<Void, Never>?
     /// What a read found, kept until the session says whether to deliver it.
-    private var found: [Int: (selection: Selection, request: Int, key: String)] = [:]
+    private var found: [Int: (selection: Selection, request: Int, key: String, bounds: ReadBounds?)] = [:]
     /// Each request's panel number and when it was asked — **by origin**, so a tap served after the
     /// read it waited for, or a rest asked again once a capture freed, keeps the number and the time
     /// of the gesture that asked. Re-numbered, an older gesture could claim the panel over a lookup
@@ -260,8 +262,8 @@ public final class HoverWatcher {
         if session.inFlight?.serial == intent.serial { readTask = nil }
         let end: HoverSession.ReadEnd
         switch outcome {
-        case .selection(let selection, let request, let key):
-            found[intent.serial] = (selection, request, key)
+        case .selection(let selection, let request, let key, let bounds):
+            found[intent.serial] = (selection, request, key, bounds)
             end = .word
         case .quiet(.captureInFlight):
             end = .captureBusy
@@ -288,8 +290,11 @@ public final class HoverWatcher {
     private func deliver(_ intent: HoverIntent) {
         guard let word = found.removeValue(forKey: intent.serial) else { return }
         let asked = origins[intent.origin] ?? (word.request, date(), now())
+        // **Flipped here, beside the pointer's own flip and about the same height** — the one place the two spaces
+        // meet. No display to measure from is no box: the panel keeps the pointer rule.
+        let protected = Self.primaryHeight(among: screens()).flatMap { word.bounds?.flipped(aboutPrimaryHeight: $0) }
         guard let delivery,
-              delivery.deliver(word.selection, at: intent.point, request: word.request,
+              delivery.deliver(word.selection, at: intent.point, protecting: protected, request: word.request,
                                requestedAt: asked.date, askedAt: asked.instant,
                                seen: { [weak self] shown in if !shown { self?.reader.forget(word.key) } })
         else {

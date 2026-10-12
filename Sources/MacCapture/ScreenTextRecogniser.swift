@@ -16,6 +16,9 @@ struct Recognition: Sendable {
     let mayBeCut: Bool
     let appName: String?
     let bundleID: String?
+    /// **Where the word is on screen**, y down: the box of the run it was read from — the finest box Vision gives, so
+    /// it holds the word and whatever the run joins to it (`containing`). Nil where the box is not one worth trusting.
+    var bounds: ReadBounds?
 }
 
 enum RecognitionError: LocalizedError, Equatable {
@@ -170,10 +173,13 @@ final class ScreenTextRecogniser: Sendable {
             at: cursor, in: lines, slack: slack, region: target.region.size) else {
             throw RecognitionError.nothingUnderPointer
         }
-        guard let read = reading(
+        guard var read = reading(
             lines, pick: pick, at: cursor, region: target.region.size,
             appName: target.appName, bundleID: target.bundleID)
         else { throw RecognitionError.nothingUnderPointer }
+        // The run the word was read from, back in screen points — checked under the pointer as every dialect's box is.
+        read.bounds = ReadBounds.checked(
+            CaptureGeometry.box(lines[pick.line].runs[pick.run].box, in: target.region), quality: .containing, near: point)
         return read
     }
 

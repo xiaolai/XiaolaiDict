@@ -2,6 +2,7 @@ import AVFoundation
 import SwiftUI
 @testable import XiaolaiDictUI
 import Testing
+import XiaolaiDictTestSupport
 
 /// Stage 6, as Spike S1 left it: use the system's voices, take the best one installed, and say so
 /// when the best one installed is only a compact voice.
@@ -83,9 +84,7 @@ struct SpeechTests {
         NotificationCenter.default.post(
             name: AVSpeechSynthesizer.availableVoicesDidChangeNotification, object: nil)
         // The observer hops to the main actor, so give it a turn before asking.
-        for _ in 0..<50 where Speech.timesVoicesChanged == before {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await Patience.until { Speech.timesVoicesChanged != before }
         #expect(Speech.timesVoicesChanged > before,
                 "a new voice would not be noticed until the next launch")
         // And the list is still readable afterwards, so the invalidation is not a one-way door.

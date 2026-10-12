@@ -5,6 +5,7 @@ import Testing
 
 @testable import XiaolaiDict
 @testable import XiaolaiDictUI
+import XiaolaiDictTestSupport
 
 /// **One sticky per sense, and a note that carries no window controls.**
 ///
@@ -61,6 +62,24 @@ import Testing
         #expect(notes.count == 2)
     }
 
+    /// **A note's window is found by its id, and let go with the note.** Two notes may share a headword, which is
+    /// their windows' title, so the scene reports each window against the id it was opened for.
+    @Test func aNotesWindowIsFoundByItsIdAndLetGoWithIt() {
+        let notes = PinnedNoteController()
+        let first = notes.pin(note(text: "a penalty"), near: .zero)
+        let second = notes.pin(note(text: "of high quality"), near: .zero)
+        let windows = (0..<2).map { _ in
+            NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        }
+        notes.attach(windows[0], to: first)
+        notes.attach(windows[1], to: second)
+        #expect(notes.window(of: first) === windows[0])
+        #expect(notes.window(of: second) === windows[1])
+        notes.dismissed(first)
+        #expect(notes.window(of: first) == nil, "an unpinned note's window is still held")
+        #expect(notes.window(of: second) === windows[1])
+    }
+
     /// **Unpinning really lets go.** Without this the dedupe would be a one-way door: a sense
     /// pinned, closed, and wanted back would match nothing on screen and still have to open.
     @Test func aSenseCanBePinnedAgainAfterItIsUnpinned() {
@@ -71,5 +90,153 @@ import Testing
         let second = notes.pin(note(), near: .zero)
         #expect(notes.count == 1)
         #expect(second != first)
+    }
+
+    // MARK: - Where a note opens
+
+    /// The cascade step the design names at the standard size, written here rather than read from the controller, so a
+    /// changed step fails: the unpin control's top inset (1.25 em), its 28 pt target and the inline gap (0.5 em).
+    private let step: CGFloat = 15 + 28 + 6
+
+    /// **What the scene hands `WindowPlacement` is a top-left, y down from the top of the primary display** — the space
+    /// SwiftUI reads it in, measured 2026-10-10 on the E2E Mac: an AppKit origin of y 780 (the bottom of a note pinned
+    /// 80 pt under the menu bar) opened the note with its *top* 780 pt down. So the placement for a pointer near the top
+    /// must be near the top.
+    @Test func whatTheSceneIsHandedIsTheTopLeftYDown() throws {
+        let screen = try #require(NSScreen.screens.first, "no display to place a note on")
+        let visible = screen.visibleFrame
+        let pointer = NSPoint(x: visible.minX + 100, y: visible.maxY - 80)
+        let notes = PinnedNoteController()
+        notes.pin(note(), near: UpPoint(pointer))
+        let fromTheTop = screen.frame.height - pointer.y
+        #expect(notes.placement.minX == pointer.x + step)
+        #expect(notes.placement.minY == fromTheTop + step,
+                "the note's top is handed to SwiftUI \(notes.placement.minY) pt down for a pointer \(fromTheTop) pt down")
+    }
+
+    /// **The window is put where the note was pinned once the scene reports it** — SwiftUI's placement is a first guess,
+    /// and for a second window of the group it is not taken at all: measured on the E2E Mac, the second of two notes
+    /// pinned 820 pt apart opened 29 pt from the first, its own cascade, and covered the first's unpin control.
+    @Test func theReportedWindowIsMovedBesideThePointer() async throws {
+        let screen = try #require(NSScreen.screens.first, "no display to place a note on")
+        let visible = screen.visibleFrame
+        let pointer = NSPoint(x: visible.minX + 100, y: visible.maxY - 80)
+        let notes = PinnedNoteController()
+        let first = notes.pin(note(text: "a penalty"), near: UpPoint(pointer))
+        let second = notes.pin(note(text: "of high quality"), near: UpPoint(pointer))
+        let windows = (0..<2).map { _ in
+            NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120), styleMask: [.borderless],
+                     backing: .buffered, defer: true)
+        }
+        notes.attach(windows[0], to: first)
+        notes.attach(windows[1], to: second)
+        let placed = await Poll.until(within: Patience.wait) {
+            windows[0].frame.minX == pointer.x + step && windows[1].frame.minX == pointer.x + step + step
+        }
+        #expect(placed == .met, "the windows stayed at \(windows.map(\.frame))")
+        // Top-left, the cascade a step further for the note already open.
+        #expect(windows[0].frame.maxY == pointer.y - step)
+        #expect(windows[1].frame.maxY == pointer.y - step - step)
+    }
+
+    /// **Placed once.** The scene reports its window on every update; a reader who drags a note keeps it where they put it.
+    @Test func aNoteIsPlacedOnceNotOnEveryReport() async throws {
+        let screen = try #require(NSScreen.screens.first, "no display to place a note on")
+        let visible = screen.visibleFrame
+        let notes = PinnedNoteController()
+        let id = notes.pin(note(), near: UpPoint(NSPoint(x: visible.minX + 100, y: visible.maxY - 80)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        notes.attach(window, to: id)
+        _ = await Poll.until(within: Patience.wait) { window.frame.minX != 0 }
+        let dragged = NSPoint(x: visible.minX + 400, y: visible.maxY - 300)
+        window.setFrameTopLeftPoint(dragged)
+        notes.attach(window, to: id)
+        _ = await Poll.until(within: .milliseconds(300)) { window.frame.minX != dragged.x }
+        #expect(window.frame.minX == dragged.x && window.frame.maxY == dragged.y, "a reported window was placed again")
+    }
+
+    /// **The arithmetic at the screen's edges**: a pointer in the bottom-right corner keeps the note on the usable area,
+    /// a screen margin in, and the cascade starts again after its length.
+    @Test func aNoteNearAnEdgeStaysOnTheScreen() {
+        let visible = NSRect(x: 0, y: 40, width: 1000, height: 700)
+        let size = NSSize(width: 300, height: 200)
+        let margin: CGFloat = 8
+        // In the corner the whole cascade is raised so its last note sits a margin above the foot.
+        let corner = PinnedNoteController.frame(near: NSPoint(x: 990, y: 50), size: size, visible: visible, openBefore: 0,
+                                                step: step)
+        #expect(corner.maxX == visible.maxX - margin)
+        let last = PinnedNoteController.frame(near: NSPoint(x: 990, y: 50), size: size, visible: visible, openBefore: 7,
+                                              step: step)
+        #expect(last.minY == visible.minY + margin)
+        let top = PinnedNoteController.frame(near: NSPoint(x: 100, y: 739), size: size, visible: visible, openBefore: 0,
+                                             step: step)
+        #expect(top.maxY == 739 - step)
+        let wrapped = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 8,
+                                                 step: step)
+        let fresh = PinnedNoteController.frame(near: NSPoint(x: 100, y: 600), size: size, visible: visible, openBefore: 0,
+                                               step: step)
+        #expect(wrapped == fresh, "the cascade does not start again after eight notes")
+    }
+
+    /// **Two notes pinned at one point leave the older one's whole unpin target uncovered, at every text size and at
+    /// every edge** (2026-10-11). The control is drawn at the note's top-right, `padDown` and `padAcross` in, as tall as
+    /// its target; the newer note is in front. The positive control: the old fixed 24 pt step covers it. Clamping each
+    /// note to the screen's foot on its own (the old rule) put two notes pinned there at one top — the foot pointers.
+    @Test(arguments: TextSize.allCases)
+    func aSteppedNoteLeavesTheOlderOnesUnpinTargetUncovered(textSize: TextSize) {
+        let visible = NSRect(x: 0, y: 40, width: 1728, height: 1077)
+        let size = NSSize(width: PinnedNoteView.openingWidth(for: textSize), height: PinnedNoteController.openingHeight)
+        let scale = Scale(textSize), target = PinnedNoteView.unpinTarget(for: textSize)
+        #expect(target.width >= Token.Target.minimum && target.height >= Token.Target.minimum)
+        func control(of note: NSRect) -> NSRect {
+            NSRect(x: note.maxX - scale.space.padAcross - target.width, y: note.maxY - scale.space.padDown - target.height,
+                   width: target.width, height: target.height)
+        }
+        func uncovered(at pointer: NSPoint, step: CGFloat, count: Int) -> Bool {
+            let frames = (0..<count).map {
+                PinnedNoteController.frame(near: pointer, size: size, visible: visible, openBefore: $0, step: step)
+            }
+            return frames.indices.allSatisfy { older in
+                frames[(older + 1)...].allSatisfy { newer in
+                    let exposed = control(of: frames[older])
+                    return !newer.intersects(exposed) && exposed.minY - newer.maxY >= scale.space.inline - 0.001
+                }
+            }
+        }
+        let step = PinnedNoteView.cascadeStep(for: textSize)
+        let pointers = [NSPoint(x: 600, y: 700), NSPoint(x: 1720, y: 700), NSPoint(x: 600, y: 45),
+                        NSPoint(x: 1720, y: 45), NSPoint(x: 0, y: 1117)]
+        for pointer in pointers {
+            #expect(uncovered(at: pointer, step: step, count: 2), "\(textSize) at \(pointer)")
+            #expect(uncovered(at: pointer, step: step, count: PinnedNoteController.cascadeLength), "\(textSize) at \(pointer)")
+        }
+        #expect(!uncovered(at: NSPoint(x: 600, y: 700), step: 24, count: 2), "the old 24 pt step was not caught")
+    }
+
+    // MARK: - How wide a note opens
+
+    /// **At the reader's text size, as the card it came from** — 25 em, the quick card's measure. It was 320 pt at every
+    /// size, so at Huge, where an em is 24 pt, a line held half the words a line of the card did. The ems are written
+    /// here, not read from the scale, so a changed measure fails.
+    @Test func aNoteOpensAsWideAsTheReadersTextAsks() throws {
+        for size in [TextSize.standard, .huge] {
+            let notes = PinnedNoteController()
+            notes.textSize = { size }
+            notes.pin(note(), near: .zero)
+            #expect(notes.placement.width == size.em * 25, "at \(size) a note opens \(notes.placement.width) pt wide")
+        }
+    }
+
+    /// The size is the reader's at the moment of pinning, read each time: a reader who changes the size between two
+    /// notes gets the second at the new one.
+    @Test func eachNoteReadsTheSizeWhenItIsPinned() {
+        let notes = PinnedNoteController()
+        notes.textSize = { .standard }
+        notes.pin(note(text: "a penalty"), near: .zero)
+        let first = notes.placement.width
+        notes.textSize = { .huge }
+        notes.pin(note(text: "of high quality"), near: .zero)
+        #expect(notes.placement.width == first * 2)
     }
 }

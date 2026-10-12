@@ -41,7 +41,8 @@ enum CLIPreflight {
     static func readiness<Wire: ResidentWire>(of executable: URL, asking session: ResidentSession<Wire>) async
         -> CLIReadiness {
         let version = await CLIVersion.read(executable, in: session.launch.workingDirectory,
-                                             searchPath: session.launch.searchPath)
+                                             searchPath: session.launch.searchPath,
+                                             timeout: session.configuration.versionTimeout)
         let start = ContinuousClock.now
         do {
             _ = try await session.ask(question)

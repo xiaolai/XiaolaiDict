@@ -116,6 +116,25 @@ struct ClaudeCLIProviderTests {
 
     // MARK: - Preflight
 
+    /// **The version read waits as long as the provider's configuration says** — the product's own five seconds, or a
+    /// test's — never a bound the configuration cannot reach: a `--version` the Mac is slow to start is then a fact
+    /// about the configuration, not about how loaded the Mac running it is. The fake answers after six seconds.
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
+    func thePreflightWaitsForTheVersionAsLongAsItsConfigurationSays() async throws {
+        let fake = try FakeCLI.claude(.slowVersion)
+        var configuration = ResidentSessionTests.configuration()
+        configuration.versionTimeout = .seconds(60)
+        let provider = ClaudeCLIProvider(executable: fake.executable, model: "haiku", workingDirectory: fake.workingDirectory,
+                                         configuration: configuration, events: fake.holding { _ in })
+        guard case .ready(let version, _) = await provider.preflight() else {
+            Issue.record("not ready")
+            return
+        }
+        #expect(version == "9.9.9", "the version read stopped at a bound of its own")
+        #expect(ResidentConfiguration().versionTimeout == .seconds(5), "the product's own bound moved")
+        await provider.shutDown()
+    }
+
     @Test func aPreflightThatAnswersIsReadyWithTheVersionAndTheTime() async throws {
         let fake = try FakeCLI.claude()
         let provider = Self.provider(fake)

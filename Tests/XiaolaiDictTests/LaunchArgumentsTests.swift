@@ -34,6 +34,16 @@ struct LaunchArgumentsTests {
         #expect(parse("--lookup", "ephemeral", "--interval", "1.5", "--repeat", "3") == .success(expected))
     }
 
+    /// **`--spelling-report TERM…`: every term, in order** (plan-spelling-suggestion §3) — and nothing that is not a term:
+    /// a report about no term at all, a blank one or an option in a term's place is a typo, refused rather than run.
+    @Test func aSpellingReportTakesOneOrMoreTerms() {
+        #expect(parse("--spelling-report", "recieve") == .success(.spellingReport(terms: ["recieve"])))
+        #expect(parse("--spelling-report", "recieve", "ambages") == .success(.spellingReport(terms: ["recieve", "ambages"])))
+        #expect(refused("--spelling-report"))
+        #expect(refused("--spelling-report", "  "))
+        #expect(refused("--spelling-report", "recieve", "--repeat"))
+    }
+
     @Test func readSelection() {
         #expect(parse("--read-selection", "com.apple.TextEdit") == .success(.readSelection(bundleID: "com.apple.TextEdit")))
     }
@@ -170,6 +180,7 @@ struct CommandCoverageTests {
         ("--model-report", LaunchMode.modelReport),
         ("--sense-report", LaunchMode.senseReport),
         ("--panel-report", LaunchMode.panelReport),
+        ("--note-report", LaunchMode.noteReport),
         ("--review-report", LaunchMode.reviewReport),
         ("--reminder-report", LaunchMode.reminderReport),
         ("--provider-status", LaunchMode.providerStatus),
@@ -178,6 +189,50 @@ struct CommandCoverageTests {
         #expect(LaunchArguments.parse([command]) == .success(mode))
         if case .success(let parsed) = LaunchArguments.parse([command, "extra"]) {
             Issue.record("\(command) accepted an argument and parsed as \(parsed)")
+        }
+    }
+
+    /// `--placement-report X Y W H`: the word's rectangle, y down, as Accessibility gives it (plan-card-refinements
+    /// WI-2). Four numbers, a box with area; anything else is refused.
+    @Test func thePlacementReportTakesAWordRectangle() {
+        #expect(LaunchArguments.parse(["--placement-report", "600", "690", "80", "20"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20)))
+        #expect(LaunchArguments.parse(["--placement-report", "-1200", "-400", "50.5", "18"])
+                == .success(.placementReport(x: -1200, y: -400, width: 50.5, height: 18)))
+        for wrong in [["600", "690", "80"], ["600", "690", "80", "0"], ["600", "690", "-80", "20"],
+                      ["a", "690", "80", "20"], ["600", "690", "80", "20", "1"], ["600", "690", "inf", "20"]] {
+            if case .success(let parsed) = LaunchArguments.parse(["--placement-report"] + wrong) {
+                Issue.record("\(wrong) parsed as \(parsed)")
+            }
+        }
+    }
+
+    /// **And what it is asked to do with the card** (plan-card-refinements D3, 2026-10-10): keep a PNG of it for a person
+    /// to look at, and drag it by a move with real events — each once, each whole, in either order.
+    @Test func thePlacementReportTakesACaptureAndADrag() {
+        let box = ["--placement-report", "600", "690", "80", "20"]
+        #expect(LaunchArguments.parse(box + ["--capture", "/tmp/card.png", "--drag", "-40", "120"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, capture: "/tmp/card.png",
+                                             drag: PlacementDrag(dx: -40, dy: 120))))
+        #expect(LaunchArguments.parse(box + ["--drag", "30", "0"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: 30, dy: 0))))
+        for wrong in [["--capture"], ["--capture", "card.jpg"], ["--capture", "--drag"], ["--drag", "1"],
+                      ["--drag", "0", "0"], ["--drag", "a", "1"], ["--drag", "1", "1", "--drag", "2", "2"],
+                      ["--capture", "a.png", "--capture", "b.png"], ["--shake"],
+                      // **Bounded, not merely finite** (third audit of 2026-10-10): `1e100` trapped on the drag's step
+                      // count with the button down.
+                      ["--drag", "1e100", "0"], ["--drag", "0", "-2001"], ["--drag", "inf", "1"], ["--drag", "nan", "1"]] {
+            if case .success(let parsed) = LaunchArguments.parse(box + wrong) {
+                Issue.record("\(wrong) parsed as \(parsed)")
+            }
+        }
+        #expect(LaunchArguments.parse(box + ["--drag", "-2000", "2000"])
+                == .success(.placementReport(x: 600, y: 690, width: 80, height: 20, drag: PlacementDrag(dx: -2000, dy: 2000))))
+        // And a box no screen holds: its capture's pixel count is an `Int`.
+        for huge in [["1e100", "690", "80", "20"], ["600", "690", "1e100", "20"], ["600", "-1e6", "80", "20"]] {
+            if case .success(let parsed) = LaunchArguments.parse(["--placement-report"] + huge) {
+                Issue.record("\(huge) parsed as \(parsed)")
+            }
         }
     }
 

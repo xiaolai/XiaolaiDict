@@ -50,7 +50,7 @@ struct SenseReportTests {
     /// model, which is every Mac running this suite.
     private static func noModel() -> LocalModelAccess {
         LocalModelAccess(
-            client: ModelClient(connect: { _ in throw NoService() }),
+            client: ModelClient(connect: { _ in throw NoService() }, deadline: { _ in Patience.wait }),
             store: ModelStore(root: ScratchFile.unmade("sense-report", file: "models")))
     }
 
@@ -190,49 +190,64 @@ struct SenseReportTests {
     /// **A rung that never answers is named.** `withDeadline` gives up on work it cannot cancel, so
     /// a warm-up that overran would go on generating beside every timing after it — and a report
     /// killed from outside says nothing at all about which rung stopped.
+    ///
+    /// **Run again where load, not the rung, broke the premise.** The limit is the subject, so it is short, and the
+    /// rung that answers at once must still answer inside it — which a starved run can stop it doing, and the report
+    /// then names *that* rung, in its own words. Such a run measured the Mac; it is run again, within `Patience`, and
+    /// only a run whose fast rung kept to the limit is read. Any other answer fails as it did.
     @Test func aRungThatOutlivesTheLimitWhileWarmingIsNamed() async throws {
-        let slow = ScriptedRung { word, _ in
-            try? await Task.sleep(for: .seconds(30))
-            return .chose(key: "\(word).right", margin: nil)
+        var why: String?
+        let measured = await Patience.until {
+            let slow = ScriptedRung { word, _ in
+                try? await Task.sleep(for: Patience.never)
+                return .chose(key: "\(word).right", margin: nil)
+            }
+            let lines = Recorder<[String]>([])
+            let status = await SenseReport.run(
+                write: { line in lines.withLock { $0.append(line) }; return true },
+                models: Self.noModel(),
+                rungs: [("fast", ScriptedRung { word, _ in .chose(key: "\(word).right", margin: nil) }),
+                        ("stalled", slow)],
+                cases: Self.cases,
+                candidates: { Self.candidates(for: $0) },
+                limit: .milliseconds(100))
+            #expect(status == .failure)
+            why = try? Self.written(lines.withLock { $0 })["error"] as? String
+            return why?.hasPrefix("fast did not warm up within") != true
         }
-        let lines = Recorder<[String]>([])
-
-        let status = await SenseReport.run(
-            write: { line in lines.withLock { $0.append(line) }; return true },
-            models: Self.noModel(),
-            rungs: [("fast", ScriptedRung { word, _ in .chose(key: "\(word).right", margin: nil) }),
-                    ("stalled", slow)],
-            cases: Self.cases,
-            candidates: { Self.candidates(for: $0) },
-            limit: .milliseconds(100))
-
-        #expect(status == .failure)
-        let why = try #require(try Self.written(lines.withLock { $0 })["error"] as? String)
-        #expect(why.hasPrefix("stalled did not warm up within"), "the report did not name the rung that stopped: \(why)")
+        #expect(measured, "the rung that answers at once never kept to the limit, so nothing was measured")
+        #expect(why?.hasPrefix("stalled did not warm up within") == true,
+                "the report did not name the rung that stopped: \(why ?? "nothing")")
     }
 
     /// The same bound while the rungs are being timed — and there the **word** matters too: a rung
     /// that answers five cases and stalls on the sixth is a different finding from one that never
     /// answered at all.
+    ///
+    /// Run again, as the test above is, where load stopped the warm-up — which must pass — keeping to the limit.
     @Test func aRungThatStallsWhileBeingTimedIsNamedWithTheWordItStalledOn() async throws {
-        // The first call is the warm-up, which must pass; every call after it stalls.
-        let slow = ScriptedRung { word, turn in
-            if turn > 1 { try? await Task.sleep(for: .seconds(30)) }
-            return .chose(key: "\(word).right", margin: nil)
+        var why: String?
+        let measured = await Patience.until {
+            // The first call is the warm-up, which must pass; every call after it stalls.
+            let slow = ScriptedRung { word, turn in
+                if turn > 1 { try? await Task.sleep(for: Patience.never) }
+                return .chose(key: "\(word).right", margin: nil)
+            }
+            let lines = Recorder<[String]>([])
+            let status = await SenseReport.run(
+                write: { line in lines.withLock { $0.append(line) }; return true },
+                models: Self.noModel(),
+                rungs: [("stalled", slow)],
+                cases: Self.cases,
+                candidates: { Self.candidates(for: $0) },
+                limit: .milliseconds(100))
+            #expect(status == .failure)
+            why = try? Self.written(lines.withLock { $0 })["error"] as? String
+            return why?.hasPrefix("stalled did not warm up within") != true
         }
-        let lines = Recorder<[String]>([])
-
-        let status = await SenseReport.run(
-            write: { line in lines.withLock { $0.append(line) }; return true },
-            models: Self.noModel(),
-            rungs: [("stalled", slow)],
-            cases: Self.cases,
-            candidates: { Self.candidates(for: $0) },
-            limit: .milliseconds(100))
-
-        #expect(status == .failure)
-        let why = try #require(try Self.written(lines.withLock { $0 })["error"] as? String)
-        #expect(why.hasPrefix("stalled did not answer for fine:"), "the report did not say which case stopped: \(why)")
+        #expect(measured, "the warm-up never kept to the limit, so nothing was measured")
+        #expect(why?.hasPrefix("stalled did not answer for fine:") == true,
+                "the report did not say which case stopped: \(why ?? "nothing")")
     }
 
     /// **A run someone stopped measured nothing.** Reported as a failure it would read as a defect
@@ -264,7 +279,7 @@ struct SenseReportTests {
             installed: .standard, loaded: true, gpu: "Apple M4 Max", footprint: 2_733 * 1_048_576,
             availableMemory: 20 * 1_073_741_824))
         let models = LocalModelAccess(
-            client: ModelClient(connect: { _ in service.transport() }), store: store,
+            client: ModelClient(connect: { _ in service.transport() }, deadline: { _ in Patience.wait }), store: store,
             physicalMemory: 48 * 1_073_741_824)
         let lines = Recorder<[String]>([])
 
@@ -416,7 +431,7 @@ private final class FakeDictionaries: Sendable {
     }
 
     func client() -> DictionaryClient {
-        DictionaryClient(connect: { _ in Transport(service: self) }, fallback: { _ in nil })
+        DictionaryClient(deadline: Patience.wait, connect: { _ in Transport(service: self) }, fallback: { _ in nil })
     }
 
     private struct Transport: DictionaryTransport {

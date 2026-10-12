@@ -3,6 +3,7 @@ import Capture
 import StudyKit
 import StudyModels
 import XiaolaiDictBase
+import XiaolaiDictCore
 import XiaolaiDictUI
 import SwiftUI
 import os
@@ -23,8 +24,11 @@ protocol LookupPanelPresenting: AnyObject {
     func isCurrent(_ ticket: PanelTicket) -> Bool
     /// Shows the panel; answers whether it is on screen. `LookupRunner` stops on `false`, so a
     /// panel that could not be drawn never becomes a ledger row.
+    ///
+    /// `word` is where the looked-up word is on screen, where a capture knew it: the card is kept clear of it, now and
+    /// as it grows (plan-card-refinements WI-2). Nil is today's pointer rule.
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool
     /// Replaces a shown panel's content without moving or resizing it. A panel the reader has
     /// dragged somewhere must not jump when its entry arrives.
     func update(_ content: PanelContent, for ticket: PanelTicket)
@@ -33,11 +37,22 @@ protocol LookupPanelPresenting: AnyObject {
     func seenOnScreen(_ ticket: PanelTicket) async -> Bool
 }
 
+extension LookupPanelPresenting {
+    /// A panel with no word to keep clear — every caller but a lookup a capture located.
+    @discardableResult
+    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+        show(content, near: pointer, protecting: nil, for: ticket)
+    }
+}
+
 /// A request for the panel. A newer request supersedes every older one, and closing the panel
 /// supersedes them all: a result that arrives late is dropped, not shown over a newer one or
 /// reopened after the reader dismissed it.
 struct PanelTicket: Equatable {
     let number: Int
+    /// **A replacement of the card on screen, where it is** — a followed suggestion's (audit of 2026-10-10). Its showing
+    /// keeps the window where the reader has it, and a card the reader dragged off its word stays let go.
+    var inPlace = false
 }
 
 /// What the panel is showing. A scene's content reads this; nothing hands a window a view.
@@ -47,6 +62,15 @@ final class LookupPanelModel {
     var content: PanelContent?
     /// Per kind, so a panel of one kind does not inherit the minimum of another.
     var minimumSize: NSSize = PanelContent.Kind.lookup.minimumSize(for: .standard)
+    /// **Which way, and how far, the content fit may grow the window** — away from the word the card keeps clear
+    /// (plan-card-refinements WI-2; up as well as down, the owner's decision of 2026-10-09), nil for down to the screen's
+    /// bottom, as before. Read by `fitsItsContent` through the environment.
+    var growth: PanelGrowth?
+    /// **The tail the card carries, pointing at its word** — nil for a card placed by the pointer. Read by the card's
+    /// surface through the environment, and moved by every later fit so it keeps pointing at the word.
+    var tail: CardTail?
+    /// **Which outline the card drew** — written by its surface, read by the click-away test.
+    @ObservationIgnored let drawn = DrawnCard()
 
     /// Moved by every `show`, so the scene can say which showing it has drawn.
     private(set) var generation = 0
@@ -118,6 +142,8 @@ final class LookupPanelController: LookupPanelPresenting {
     /// a placement nothing could vary: deleted rather than repaired, because there is no drag to
     /// remember and the window's height is the content's to decide now.
     private(set) var fitObserver: (any NSObjectProtocol)?
+    /// The move observer, which tells a reader's drag from the controller's own moves. Replaced with `fitObserver`.
+    private(set) var moveObserver: (any NSObjectProtocol)?
     /// Which window the two observers above are registered on, held weakly so a closed window is
     /// not kept alive by the bookkeeping that exists to avoid re-registering on it.
     private weak var watched: NSWindow?
@@ -127,6 +153,16 @@ final class LookupPanelController: LookupPanelPresenting {
     private(set) var lastPointer = UpPoint(.zero)
     /// Where the scene should be placed, worked out before it opens. A scene cannot be handed a
     /// frame, so `defaultWindowPlacement` reads this back.
+    /// The word the shown card keeps clear of, and the room it was given for that — nil where none was located. A
+    /// followed suggestion is the same word on screen, so it is placed against it again.
+    private(set) var lastWord: WordBounds?
+    /// What the card is anchored on — its word, the side it went on and the room there — re-applied after every fit;
+    /// nil for a card placed by the pointer, and once the reader has dragged the card off its word.
+    private(set) var anchor: PanelPlacement.Anchor?
+    /// The frame this controller last gave the window, and the last it saw — what tells the reader's drag from a move of
+    /// its own (`PanelPlacement.isReadersDrag`).
+    private var gaveFrame: NSRect?
+    private var sawFrame: NSRect?
     private(set) var placement = NSRect(origin: .zero, size: PanelContent.Kind.lookup.defaultSize(for: .standard))
     /// The reader's text size, asked at each showing: the window opens as wide as the card is at
     /// that size. Set by the app once its appearance model exists; a test leaves it standard.
@@ -171,6 +207,10 @@ final class LookupPanelController: LookupPanelPresenting {
     var onCollectPhrase: (@MainActor (PhraseCollection, Int) -> Bool)?
     /// Settings, on its Dictionary pane. Set by the app, which owns the window and the discovery.
     var onOpenDictionarySettings: (@MainActor () -> Void)?
+    /// The reader pressed "Look up “X”" on the card `Int` drew (plan-spelling-suggestion §3). Set by the app, which
+    /// starts lookups — under the card's request, for the reason the study hooks carry one: the runner kept the
+    /// suggestion under it, and a press filed under another card follows nothing.
+    var onFollowSuggestion: (@MainActor (SpellingSuggestion, Int) -> Void)?
     /// The last two numbers the window fit was computed from: what the card's content wanted, and
     /// what its scroll view was given. Read by `--panel-report`, and by nothing else — the window's
     /// height can be seen from outside, but not what it was asked for.
@@ -194,6 +234,11 @@ final class LookupPanelController: LookupPanelPresenting {
     }
 
     func newRequest() -> PanelTicket { PanelTicket(number: requests.next()) }
+
+    /// A request whose card replaces the one on screen in place (`PanelTicket.inPlace`).
+    func newRequest(replacingInPlace: Bool) -> PanelTicket {
+        PanelTicket(number: requests.next(), inPlace: replacingInPlace)
+    }
 
     func begin() -> Int { requests.begin() }
 
@@ -242,15 +287,35 @@ final class LookupPanelController: LookupPanelPresenting {
     /// action made this a silent no-op while `isCurrent(ticket)` went on answering true — the whole
     /// lookup ran, a sense was resolved, and a ledger row was written for nothing.
     @discardableResult
-    func show(_ content: PanelContent, near pointer: UpPoint, for ticket: PanelTicket) -> Bool {
+    func show(_ content: PanelContent, near pointer: UpPoint, protecting word: WordBounds?, for ticket: PanelTicket) -> Bool {
         guard isCurrent(ticket) else { return false }
         lastPointer = pointer
+        lastWord = word
         let kind = content.kind
         let screen = NSScreen.screens.first { $0.frame.contains(pointer.cg) } ?? NSScreen.main
         let size = textSize()
         let visible = UpRect(screen?.visibleFrame ?? NSRect(origin: .zero, size: kind.defaultSize(for: size)))
-        placement = PanelPlacement.frame(
-            for: kind.defaultSize(for: size), near: pointer, within: visible)
+        // **A replacement in place keeps the reader's place** (audit of 2026-10-10): a followed suggestion replaces the
+        // card on screen, and where the reader has let that card go of its word — dragged it aside — placing afresh against
+        // the misspelling moved it back and pointed it again. Its frame and its let-go tail stay; an anchored card is
+        // placed on the same word again, which puts it where it was.
+        if ticket.inPlace, shownKind != nil, anchor == nil,
+           let current = (window?.isVisible == true ? window?.frame : nil) ?? sawFrame {
+            placement = current
+            model.growth = nil
+            gaveFrame = current
+        } else {
+            let placed = PanelPlacement.placed(
+                for: kind.defaultSize(for: size), near: pointer, protecting: word, within: visible,
+                chrome: CardChrome(textSize: size))
+            placement = placed.frame
+            // **Every later fit is held to the anchor** — the card centred on its word, on its side, growing away from
+            // it, its tail following the word. Without a word there is no anchor, and both are the screen, as they were.
+            anchor = placed.anchor
+            model.growth = placed.growth
+            model.tail = placed.tail
+            gaveFrame = placed.frame
+        }
 
         model.minimumSize = kind.minimumSize(for: size)
         showing = (ticket.number, model.present(content))
@@ -336,10 +401,15 @@ final class LookupPanelController: LookupPanelPresenting {
     /// coordinates; where there is one, the window converts it. **`.zero` is a place, not a
     /// missing value** — the bottom-left corner of the primary display — so it is never replaced
     /// by the live pointer, which would bring back the dependence on where the pointer went next.
+    ///
+    /// **On the card, not merely in its window, where the card carries a tail** (the owner's decision of 2026-10-09): the
+    /// strip beside the tail is the window's but not the card's, and a click there — which reaches the app beneath — is
+    /// a click away. A card with no tail answers with its whole window, as before.
     private func closeIfClickWasAway(_ event: NSEvent) {
         guard let window, window.isVisible else { return }
         let point = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? event.locationInWindow
-        guard !window.frame.contains(point) else { return }
+        guard !CardChrome(textSize: textSize()).holds(point, inWindow: window.frame, tail: model.tail,
+                                                           compact: model.drawn.compact) else { return }
         close()
     }
 
@@ -363,6 +433,9 @@ final class LookupPanelController: LookupPanelPresenting {
         // The window this watched has gone with the panel. Left registered, the observer holds the
         // closed window alive and waits for a resize that cannot come.
         stopWatchingForResize()
+        anchor = nil
+        model.tail = nil
+        model.growth = nil
     }
 
     /// Watches one window for the reader finishing a drag. Registering again replaces the last
@@ -386,8 +459,36 @@ final class LookupPanelController: LookupPanelPresenting {
             forName: NSWindow.didResizeNotification, object: window, queue: .main
         ) { [weak self, weak window] _ in
             guard let window else { return }
-            MainActor.assumeIsolated { self?.keepWhollyOnScreen(window) }
+            MainActor.assumeIsolated {
+                self?.keepWhollyOnScreen(window)
+                self?.sawFrame = window.frame
+            }
         }
+        // **A move the reader makes lets go of the word**: a card dragged aside keeps no tail pointing at a word it has
+        // left, and is not pulled back to the word by the next fit (WI-2 held it to the room whatever the reader did).
+        moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: window, queue: .main
+        ) { [weak self, weak window] _ in
+            guard let window else { return }
+            MainActor.assumeIsolated { self?.windowMoved(window, buttonDown: NSEvent.pressedMouseButtons & 1 != 0) }
+        }
+    }
+
+    /// The window moved: the reader's drag releases the anchor, and any move is remembered as the last frame seen.
+    func windowMoved(_ window: NSWindow, buttonDown: Bool) {
+        defer { sawFrame = window.frame }
+        guard anchor != nil, let sawFrame,
+              PanelPlacement.isReadersDrag(from: sawFrame, to: window.frame, ours: gaveFrame, buttonDown: buttonDown)
+        else { return }
+        releaseAnchor()
+    }
+
+    /// **The card is the reader's now**: its tail stops pointing, keeping its strip so the card does not jump, and it
+    /// grows down to the screen as a card placed by the pointer does.
+    func releaseAnchor() {
+        anchor = nil
+        model.tail = model.tail?.released
+        model.growth = nil
     }
 
     /// Puts a window the **content** resized back onto the screen it is on.
@@ -415,14 +516,27 @@ final class LookupPanelController: LookupPanelPresenting {
     /// Guarded by comparing frames rather than by a flag: `setFrame` posts this same notification,
     /// so an unconditional call would recurse. `PanelPlacement.fitted` is idempotent — asserted in
     /// `PanelPlacementTests` — which is what makes that comparison terminate.
+    ///
+    /// **An anchored card is re-anchored instead** (the owner's decision of 2026-10-09): centred on its word again at
+    /// whatever width the content gave it, held to its side's room, the edge nearest the word kept, and its tail moved to
+    /// the word's middle.
     func keepWhollyOnScreen(_ window: NSWindow) {
         guard !window.inLiveResize else { return }
+        if let anchor {
+            let placed = anchor.placed(window.frame)
+            if model.tail != placed.tail { model.tail = placed.tail }
+            guard placed.frame != window.frame else { return }
+            gaveFrame = placed.frame
+            window.setFrame(placed.frame, display: true)
+            return
+        }
         guard let screen = window.screen
                 ?? NSScreen.screens.first(where: { $0.frame.contains(lastPointer.cg) })
                 ?? NSScreen.main
         else { return }
         let fitted = PanelPlacement.fitted(window.frame, within: UpRect(screen.visibleFrame))
         guard fitted != window.frame else { return }
+        gaveFrame = fitted
         window.setFrame(fitted, display: true)
     }
 
@@ -433,6 +547,8 @@ final class LookupPanelController: LookupPanelPresenting {
         // cannot come.
         if let fitObserver { NotificationCenter.default.removeObserver(fitObserver) }
         fitObserver = nil
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+        moveObserver = nil
         watched = nil
     }
 
@@ -472,6 +588,9 @@ struct LookupPanelSceneView: View {
                 // it now, inside its own surface; what it needs still arrives through the
                 // environment below.
                 PanelView(content: content)
+                    .environment(\.panelGrowth, model.growth)
+                    .environment(\.panelTail, model.tail)
+                    .environment(\.drawnCard, model.drawn)
                     .modifier(LookupCardWiring(
                         request: content.request, recorder: recorder, controller: controller,
                         translation: translation(), explainer: explainer()))
@@ -557,6 +676,16 @@ private struct LookupCardWiring: ViewModifier {
                 return collect(phrase, request)
             }
             .environment(\.phraseCollectStatuses, request.flatMap { recorder?.phraseStates[$0] } ?? [:])
+            // **"Look up “X”", under this card's request.** Unwired, it is loud: a press that reaches nothing is a
+            // broken switch.
+            .environment(\.followSuggestion) { [controller] suggestion in
+                guard let request, let follow = controller.onFollowSuggestion else {
+                    Logger(subsystem: XiaolaiDictIdentity.app, category: "panel")
+                        .fault("spelling: a suggestion was pressed on a panel with no request or no app hook")
+                    return
+                }
+                follow(suggestion, request)
+            }
             // The one window the panel may bring forward: a window the reader chose. The app's own
             // action, so the dictionary discovery that pane depends on is started by the same code
             // path every other route uses.
@@ -635,6 +764,89 @@ enum PanelPlacement {
                             y: pointer.y - pointerGap.height - size.height),
             size: size)
         return fitted(wanted, within: visible)
+    }
+
+    /// The gap kept between the card and the word it protects.
+    static let wordGap: CGFloat = 4
+
+    /// **Where the card goes, and what every later fit is held to** (plan-card-refinements WI-2; anchored on the word
+    /// by the owner's decision of 2026-10-09).
+    struct Placed: Equatable {
+        let frame: NSRect
+        /// The screen, or the side of the word the card was put on. `fitted(_:within:)` against it keeps the card
+        /// there: its margins land the window's edge exactly `wordGap` from the word.
+        let room: UpRect
+        /// Which way, and how far, the content may grow the window: away from the word. Nil where no word is
+        /// protected, which leaves the fit as it was — down, to the screen's bottom.
+        let growth: PanelGrowth?
+        /// The tail at the word's middle; nil with no word.
+        let tail: CardTail?
+        /// What every later fit re-applies; nil with no word.
+        let anchor: Anchor?
+    }
+
+    /// **With the word's rectangle the card is anchored on it** — centred across it, below it where it fits and above
+    /// where it does not (the larger side, shrunk, where neither does, so it scrolls rather than covers), its tail at the
+    /// word's middle. **No rectangle is the pointer's rule, bit for bit, and no tail.**
+    static func placed(for size: NSSize, near pointer: UpPoint, protecting word: WordBounds?, within visible: UpRect,
+                       chrome: CardChrome) -> Placed {
+        guard let word else {
+            return Placed(frame: frame(for: size, near: pointer, within: visible), room: visible, growth: nil, tail: nil,
+                          anchor: nil)
+        }
+        let screen = visible.cg
+        let box = word.rect.cg
+        // The window's edge may come no nearer the word than the gap; the room's edge is one margin further, because
+        // `fitted` keeps a margin inside whatever room it is given.
+        let belowTop = min(screen.maxY, box.minY - wordGap + margin)
+        let aboveBottom = max(screen.minY, box.maxY + wordGap - margin)
+        let below = UpRect(x: screen.minX, y: screen.minY, width: screen.width, height: max(0, belowTop - screen.minY))
+        let above = UpRect(x: screen.minX, y: aboveBottom, width: screen.width, height: max(0, screen.maxY - aboveBottom))
+        let belowSpace = below.cg.height - margin - margin
+        let aboveSpace = above.cg.height - margin - margin
+        let goesBelow = belowSpace >= size.height || (aboveSpace < size.height && belowSpace >= aboveSpace)
+        let anchor = Anchor(word: word.rect, room: goesBelow ? below : above, edge: goesBelow ? .top : .bottom,
+                            chrome: chrome)
+        // The edge nearest the word at the word's gap; `Anchor.placed` centres it and holds it to the room.
+        let nearest = goesBelow ? box.minY - wordGap - size.height : box.maxY + wordGap
+        return anchor.placed(NSRect(x: screen.minX, y: nearest, width: size.width, height: size.height))
+    }
+
+    /// **A card anchored on its word** — which word, the side it went on and the room there — so every later fit can put
+    /// the card back on it: the content growing it, the content widening it, the screen clamp.
+    struct Anchor: Equatable {
+        let word: UpRect
+        let room: UpRect
+        /// The card's edge that faces the word, and so the one its tail leaves from.
+        let edge: CardTail.Edge
+        let chrome: CardChrome
+
+        /// `frame`, anchored: no larger than the room; across, the card's middle on the word's as far as the room
+        /// allows; up and down, **the edge nearest the word kept** and held to the room; the tail at the word's middle,
+        /// clear of the card's corners. A fixed point — applying it to its own answer changes nothing — so a resize it
+        /// causes asks again and stops.
+        func placed(_ frame: NSRect) -> Placed {
+            let bounds = room.cg
+            let size = shrunk(frame.size, within: room)
+            let insets = chrome.insets(tail: CardTail(edge: edge, tip: nil))
+            let card = max(0, size.width - insets.leading - insets.trailing)
+            let middle = word.cg.midX
+            let x = clamp(middle - card / 2 - insets.leading, bounds.minX + margin, bounds.maxX - margin - size.width)
+            let y = edge == .top
+                ? clamp(frame.maxY - size.height, bounds.minY + margin, bounds.maxY - margin - size.height)
+                : clamp(frame.minY, bounds.minY + margin, bounds.maxY - margin - size.height)
+            let growth: PanelGrowth = edge == .top
+                ? .down(lowestBottom: bounds.minY + margin) : .up(highestTop: bounds.maxY - margin)
+            return Placed(
+                frame: NSRect(x: x, y: y, width: size.width, height: size.height), room: room, growth: growth,
+                tail: CardTail(edge: edge, tip: chrome.tip(at: middle - x - insets.leading, cardWidth: card)), anchor: self)
+        }
+    }
+
+    /// **Whether a move is the reader dragging the card** — the mouse button down, the size unchanged, and not a frame
+    /// this controller gave the window. Its own moves resize, or land exactly where it put them.
+    static func isReadersDrag(from before: NSRect, to after: NSRect, ours: NSRect?, buttonDown: Bool) -> Bool {
+        buttonDown && before.size == after.size && before.origin != after.origin && after != ours
     }
 
     /// The same shrink-then-clamp, applied to a frame that **already exists** — a window the

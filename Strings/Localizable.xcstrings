@@ -449,6 +449,12 @@
     "Choose a Meaning" : {
 
     },
+    "Choose a meaning first, then copy it" : {
+
+    },
+    "Choose a meaning first, then pin it" : {
+
+    },
     "Choose…" : {
 
     },
@@ -544,6 +550,9 @@
     },
     "Device Control and Data Access" : {
       "comment" : "macOS 27's name for the Accessibility list — use the system's own wording"
+    },
+    "Dictionaries…" : {
+
     },
     "Dictionary" : {
 
@@ -828,6 +837,9 @@
 
     },
     "Look up the selection" : {
+
+    },
+    "Look up “%@”" : {
 
     },
     "Looked up on ^[%lld day](inflect: true), in ^[%lld place](inflect: true)" : {
@@ -1168,6 +1180,9 @@
     "OpenAI, through your codex program" : {
       "comment" : "Where a question goes: the reader's own Codex CLI, which sends it to OpenAI"
     },
+    "Opens a new lookup." : {
+
+    },
     "Option" : {
       "comment" : "The Option key, in the hover key picker"
     },
@@ -1211,6 +1226,9 @@
       "comment" : "Menu bar warning row, when a permission probe failed"
     },
     "Pin as a Note" : {
+
+    },
+    "Possibly misread from the screen" : {
 
     },
     "Practice" : {
@@ -1805,6 +1823,9 @@
     "The sense you read could not be identified." : {
 
     },
+    "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning." : {
+
+    },
     "The sentence may be cut short" : {
 
     },
@@ -1930,6 +1951,9 @@
 
     },
     "Translation and Meanings" : {
+
+    },
+    "Translations and notes" : {
 
     },
     "Try Again" : {

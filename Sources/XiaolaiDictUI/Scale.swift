@@ -216,6 +216,11 @@ struct Scale: Equatable, Sendable {
         /// been given nothing, so this is the positive number it grows from. The fit takes the
         /// region to its content's height at once, shorter or taller.
         let panelScrollFloor: CGFloat
+        /// **The tail a card anchored on its word carries**: how far it reaches toward the word, and half its width where
+        /// it leaves the card (the owner's decision of 2026-10-09). About the system popup's at `standard`, and in ems so
+        /// it keeps its place between the corners, which grow with the text too.
+        let tailLength: CGFloat
+        let tailHalfWidth: CGFloat
         /// A bounded detail column beside a Library collection — its ideal width, and how far the
         /// reader may drag it. In ems because what it holds is reading: the sentence and the
         /// meaning, which need the same measure at every size. The floor is a card at its
@@ -262,6 +267,8 @@ struct Scale: Equatable, Sendable {
             lookupMinWidth = em * 23
             cardMaxHeight = em * 32
             panelScrollFloor = em * 2
+            tailLength = em * 0.75
+            tailHalfWidth = em * 0.75
             // **26 em, until that would leave the grid less than one whole card.** Measured against
             // the Library's opening window rather than the text alone: at Huge 26 em is 624 of the
             // detail column's 1,000 points, and the card beside it broke its words mid-word. So it

@@ -97,8 +97,26 @@ public struct SensePresentation: Equatable, Identifiable {
     /// The reader has been on this sense before (`feature-ledger-ux.md` C3) — which no surveyed
     /// dictionary shows. It is *whether*, never *what*: the earlier gloss is not carried here.
     public let metBefore: Bool
+    /// **What a bilingual sense says beyond its label** (plan-card-refinements WI-4), for the default card's details
+    /// disclosure. Display only — `label` and `key` are what they were, and nothing is keyed or saved from this.
+    public let display: SenseDisplay?
 
     public var id: String { key ?? "\(ordinal)" }
+
+    init(
+        key: String?, block: Int, ordinal: Int, partOfSpeech: String?, label: String, keyKind: SenseKeyKind,
+        standing: SenseStanding, metBefore: Bool, display: SenseDisplay? = nil
+    ) {
+        self.key = key
+        self.block = block
+        self.ordinal = ordinal
+        self.partOfSpeech = partOfSpeech
+        self.label = label
+        self.keyKind = keyKind
+        self.standing = standing
+        self.metBefore = metBefore
+        self.display = display
+    }
 }
 
 /// One entry's headword, printed the way its dictionary prints it.
@@ -147,6 +165,9 @@ public struct EntryNode: Equatable {
 /// publisher's, not XiaolaiDict's (B7). This is the chrome XiaolaiDict draws around it.
 public struct EntryPresentation: Equatable {
     public let dictionary: DictionaryIdentity
+    /// **Which entry this is** — its dictionary and its entry key, `PanelSelection`'s identity — so what the card keeps
+    /// for an entry (an open disclosure, a tapped sense) is told apart from another entry's that shows the same words.
+    public let identity: String
     /// The headword with its homograph number raised: *fine²*.
     public let heading: String
     /// The parts of speech this entry has blocks for, in order, without repeats.
@@ -164,6 +185,7 @@ public struct EntryPresentation: Equatable {
 
     public init(entry: DictionaryEntry, mark: SenseMark?, met: Set<StudyItem>) {
         dictionary = entry.dictionary
+        identity = PanelSelection.identity(of: entry)
         heading = EntryNode(headword: entry.headword, homograph: entry.homograph).label
         var seen: Set<String> = []
         partsOfSpeech = entry.blocks.compactMap(\.partOfSpeech).filter { seen.insert($0).inserted }
@@ -181,7 +203,8 @@ public struct EntryPresentation: Equatable {
                         met.contains(StudyItem(
                             dictionary: entry.dictionary.key, entryID: $0, senseKey: sense.key,
                             senseKeyKind: sense.keyKind))
-                    } ?? false)
+                    } ?? false,
+                    display: sense.display)
             }
         }
     }

@@ -63,8 +63,11 @@ struct CompactLookupSummary: Equatable {
 struct CompactLookupCardView: View {
     @Environment(\.scale) private var scale
     @Environment(\.closeLookup) private var close
+    @Environment(\.openDictionarySettings) private var openDictionarySettings
     let card: LookupCard
     var incomplete = false
+    /// Whether "Dictionaries…" is drawn — `CardExits`' decision. This card pins no footer, so the way out is here.
+    var offersDictionaries = false
     let onMore: () -> Void
 
     private var summary: CompactLookupSummary { CompactLookupSummary(card: card) }
@@ -105,6 +108,10 @@ struct CompactLookupCardView: View {
             meanings
 
             HStack(alignment: .firstTextBaseline, spacing: scale.space.inline) {
+                if offersDictionaries {
+                    IconButton(.dictionarySettings, action: openDictionarySettings)
+                        .foregroundStyle(.secondary)
+                }
                 if incomplete {
                     Label("Partial result", systemImage: ActionSymbol.warning.symbol)
                         .font(.system(size: scale.text.small))
@@ -154,21 +161,25 @@ struct CompactLookupCardView: View {
                 }
             }
         } else {
-            Group {
-                switch card.answer {
-                case .prose(let text):
-                    Text(verbatim: text).lineLimit(Token.Panel.compactProseLines)
-                case .absent:
-                    Text("No entry for “\(card.term)” in your dictionaries.")
-                case .undecided:
-                    Text("Open details to read this dictionary entry")
-                default:
-                    Text("The sense you read could not be identified.")
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Group {
+                    switch card.answer {
+                    case .prose(let text):
+                        Text(verbatim: text).lineLimit(Token.Panel.compactProseLines)
+                    case .absent:
+                        Text("No entry for “\(card.term)” in your dictionaries.")
+                    case .undecided:
+                        Text("Open details to read this dictionary entry")
+                    default:
+                        Text("The sense you read could not be identified.")
+                    }
                 }
+                .font(.system(size: scale.text.body))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                // Under the miss on the quick card too, so the way out is not one click further away (§3).
+                if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
             }
-            .font(.system(size: scale.text.body))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -180,7 +191,7 @@ struct DictionaryDetailsView: View {
     let entry: DictionaryEntry
 
     private var extended: [DictionarySense] {
-        entry.senses.filter { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) != $0.label }
+        entry.senses.filter { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) != $0.label || $0.display != nil }
     }
 
     var body: some View {
@@ -189,6 +200,15 @@ struct DictionaryDetailsView: View {
                 Text("Examples and details")
                     .font(.system(size: scale.text.heading, weight: .semibold))
                 ForEach(extended, id: \.path) { sense in
+                    // **What the label left out, set out first** (plan-card-refinements WI-4): every translation with
+                    // the indicator that says which reading it is, the English definition, the notes — then the
+                    // publisher's whole sense, examples and all, as before.
+                    ForEach(Array(SenseDisplayLines.of(sense.display).enumerated()), id: \.offset) { _, line in
+                        Text(verbatim: line)
+                            .font(.system(size: scale.text.body, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     Text(verbatim: sense.text)
                         .font(.system(size: scale.text.body))
                         .lineSpacing(scale.text.leading)
@@ -201,5 +221,23 @@ struct DictionaryDetailsView: View {
             .padding(.horizontal, scale.space.padAcross)
             .padding(.bottom, scale.space.padDown)
         }
+    }
+}
+
+/// **A bilingual sense's display data, as the expand reads it** (plan-card-refinements WI-4): the translations joined —
+/// each after its own indicator — then the English definition, the sense's own indicators and its notes. Nothing for a
+/// sense with none, so a monolingual expand is what it was. Display only: nothing here keys, saves or hashes.
+enum SenseDisplayLines {
+    static func of(_ display: SenseDisplay?) -> [String] {
+        guard let display else { return [] }
+        let readings = display.translations.map { translation in
+            translation.indicator.map { "\($0) \(translation.text)" } ?? translation.text
+        }
+        let separator = display.translations.contains { LineJoiner.isCJKText($0.text) } ? "；" : "; "
+        var lines = readings.isEmpty ? [] : [readings.joined(separator: separator)]
+        if let definition = display.englishDefinition { lines.append(definition) }
+        lines += display.indicators
+        lines += display.notes
+        return lines
     }
 }

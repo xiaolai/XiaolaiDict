@@ -239,6 +239,27 @@ struct HoverWatcherSequenceTests {
         #expect(rig.reader.remembered.count == 1)
     }
 
+    /// **The word's box reaches the app in AppKit's space** (plan-card-refinements WI-2): read y down, flipped once,
+    /// beside the pointer, about the primary display's height — 1,000 here — and a word read with no box delivers none.
+    @Test func theWordsBoxIsDeliveredFlippedAboutThePrimaryDisplay() async {
+        let rig = Rig()
+        await rig.rest()
+        let read = ReadBounds(rect: DownRect(x: 90, y: 890, width: 40, height: 20), quality: .exact)
+        rig.reader.answer(.selection(HoverFixtures.selection("tide"), request: rig.reader.asks[0].request,
+                                     key: "key-tide", bounds: read))
+        await HoverFixtures.settle { !rig.delivery.delivered.isEmpty }
+        #expect(rig.delivery.delivered.map(\.bounds)
+                == [WordBounds(rect: UpRect(x: 90, y: 90, width: 40, height: 20), quality: .exact)])
+    }
+
+    @Test func aWordReadWithNoBoxDeliversNone() async {
+        let rig = Rig()
+        await rig.rest()
+        rig.reader.answerWord("tide")
+        await HoverFixtures.settle { !rig.delivery.delivered.isEmpty }
+        #expect(rig.delivery.delivered.map(\.bounds) == [nil])
+    }
+
     /// **A word whose panel never drew is forgotten** (audit round 3, #38). It was remembered on the
     /// claim, so a failed opening left the reader unable to ask for that word again by resting on it.
     @Test func aWordWhosePanelNeverDrewIsForgotten() async throws {
@@ -299,7 +320,7 @@ struct HoverDeliveryTests {
         let hover = app.beginRequest()
         app.lookUpWord("tide")
         let newer = app.lookup
-        let claimed = app.deliver(HoverFixtures.selection("hold"), at: UpPoint(x: 1, y: 1), request: hover,
+        let claimed = app.deliver(HoverFixtures.selection("hold"), at: UpPoint(x: 1, y: 1), protecting: nil, request: hover,
                                   requestedAt: .now, askedAt: .now, seen: { _ in })
         #expect(!claimed)
         #expect(app.lookup == newer, "the late hover replaced the newer lookup's task")
@@ -332,7 +353,7 @@ struct HoverReaderSourceTests {
             return
         }
         screen.readOutcome = HoverFixtures.hit("tide")
-        guard case .selection(let selection, let request, _) = await read(reader(screen)) else {
+        guard case .selection(let selection, let request, _, _) = await read(reader(screen)) else {
             Issue.record("a Latin word was refused")
             return
         }
@@ -347,7 +368,7 @@ struct HoverReaderSourceTests {
         screen.targetOutcome = .found(HoverFixtures.target())
         screen.readOutcome = HoverFixtures.hit("tide")
         let reader = reader(screen)
-        guard case .selection(_, _, let key) = await read(reader) else {
+        guard case .selection(_, _, let key, _) = await read(reader) else {
             Issue.record("no word")
             return
         }

@@ -143,7 +143,7 @@ struct MarkedSentenceTests {
 struct CardMarkedRangeTests {
     private func card(range: NSRange?) -> LookupCard {
         LookupCard(
-            term: "he", lemma: "he", sentenceRange: range, heading: "he", partOfSpeech: nil,
+            term: "he", lemma: "he", placement: range.map(TermPlacement.at) ?? .unrecorded, heading: "he", partOfSpeech: nil,
             pronunciation: nil, answer: .undecided(reason: nil),
             sentence: "The man said he was fine.", alternatives: [], memory: nil)
     }
@@ -161,6 +161,20 @@ struct CardMarkedRangeTests {
         let real = ("The man said he was fine." as NSString).range(of: "he was")
         let marked = card(range: NSRange(location: real.location, length: 2))
         #expect(marked.sentenceRange?.location == 13, "the standalone he sits at 13, not inside The at 1")
+    }
+
+    /// **A correction the reader followed is in no position of their sentence, and the card never looks for it there**
+    /// (audit, 2026-10-09): *teh* → *the* in "The cat saw teh dog." marked the opening "The". The positive control is
+    /// the same card with no range recorded, which still searches — the behaviour every ordinary capture keeps.
+    @Test func aCorrectionIsNeverLookedForInTheSentence() {
+        func card(_ placement: TermPlacement) -> LookupCard {
+            LookupCard(term: "the", lemma: "the", placement: placement, heading: "the", partOfSpeech: nil,
+                       pronunciation: nil, answer: .undecided(reason: nil), sentence: "The cat saw teh dog.",
+                       alternatives: [], memory: nil)
+        }
+        #expect(card(.unrecorded).markedRange?.location == 0, "the positive control: an unrecorded range still searches")
+        #expect(card(.notInSentence).markedRange == nil, "the correction was marked in a sentence it is not in")
+        #expect(card(.at(NSRange(location: 0, length: 3))).markedRange?.location == 0, "a recorded range is used")
     }
 
     /// A range that does not land on the word it claims is refused rather than used — one from

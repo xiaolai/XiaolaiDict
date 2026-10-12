@@ -129,6 +129,33 @@ final class EntryReader: NSObject, XMLParserDelegate {
         case pronunciation
         /// The headword block, `x_xh0`, whose homograph marker labels the entry.
         case headword
+        /// Display data for a bilingual sense (plan-card-refinements WI-4) — never keys, labels or hashes.
+        /// An example group (`exg`, `eg`, `xrg`): nothing inside it is the sense's own translation or note.
+        case example
+        /// A translation group, `trg`, and one translation in it, `trans` (pinyin is `ty_pinyin`, and skipped).
+        case translationGroup
+        case translation
+        /// An English sense indicator, `ind`.
+        case indicator
+        /// An English definition, `df`, in a bilingual entry.
+        case englishDefinition
+        /// A grammar or usage note, `gg`.
+        case note
+    }
+
+    /// One sense's display data as the walk finds it, keyed like `definitions` by the sense's depth.
+    private struct PendingDisplay {
+        var translations: [SenseDisplay.Translation] = []
+        var indicators: [String] = []
+        var englishDefinition: String?
+        var notes: [String] = []
+    }
+    private var displays: [Int: PendingDisplay] = [:]
+    /// The open translation group's translations and indicator, innermost last.
+    private var groups: [(depth: Int, translations: [String], indicator: String?)] = []
+
+    private var isInsideExample: Bool {
+        open.contains { if case .example = $0.region { return true } else { return false } }
     }
 
     private struct Open {
@@ -138,6 +165,8 @@ final class EntryReader: NSObject, XMLParserDelegate {
     }
 
     private var open: [Open] = []
+    /// The depths of the open `gp` elements — printed punctuation, which a pronunciation leaves out.
+    private var punctuationDepths: [Int] = []
     private var depth = 0
 
     /// The block being filled, if any. One slot: the dictionaries do not nest part-of-speech blocks.
@@ -272,8 +301,12 @@ final class EntryReader: NSObject, XMLParserDelegate {
             open.append(Open(depth: depth, region: .sense(key: Self.publisherKey(attributes))))
         }
         if hasDictionaryAttribute("def", attributes) { open.append(Open(depth: depth, region: .definition)) }
+        openDisplayRegions(attributes)
         if hasDictionaryAttribute("pos", attributes) { open.append(Open(depth: depth, region: .partOfSpeech)) }
         if hasDictionaryAttribute("prn", attributes) { open.append(Open(depth: depth, region: .pronunciation)) }
+        // **The punctuation Oxford prints between two pronunciations sits inside the first one's element** (`gp`, a
+        // grammar-punctuation span): kept out of the pronunciation, never trimmed off it afterwards (2026-10-11).
+        if Self.hasClass("gp", attributes) { punctuationDepths.append(depth) }
     }
 
     func parser(_ parser: XMLParser, didEndElement qualified: String, namespaceURI: String?, qualifiedName: String?) {
@@ -291,6 +324,7 @@ final class EntryReader: NSObject, XMLParserDelegate {
             close(last)
         }
 
+        if punctuationDepths.last == depth { punctuationDepths.removeLast() }
         depth -= 1
         if scopes.count > 1 { scopes.removeLast() }
     }
@@ -307,7 +341,13 @@ final class EntryReader: NSObject, XMLParserDelegate {
     }
 
     private func appendToOpenRegions(_ text: String) {
-        for index in open.indices { open[index].text += text }
+        for index in open.indices {
+            // Separator punctuation opened inside a pronunciation is not part of it.
+            if case .pronunciation = open[index].region, let inner = punctuationDepths.last, inner > open[index].depth {
+                continue
+            }
+            open[index].text += text
+        }
     }
 
     /// XHTML elements that separate words even with no whitespace around them, opening *and*
@@ -348,13 +388,18 @@ final class EntryReader: NSObject, XMLParserDelegate {
         case .pronunciation:
             if !text.isEmpty { pronunciations.append(text) }
         case .sense(let key):
-            finishSense(key: key, definition: definitions.removeValue(forKey: closed.depth), text: text)
+            finishSense(key: key, definition: definitions.removeValue(forKey: closed.depth), text: text,
+                        display: displays.removeValue(forKey: closed.depth))
+        case .example:
+            break
+        case .translationGroup, .translation, .indicator, .englishDefinition, .note:
+            closeDisplayRegion(closed.region, text: text, depth: closed.depth)
         case .block:
             finishBlock()
         }
     }
 
-    private func finishSense(key publisherKey: String?, definition: String?, text: String) {
+    private func finishSense(key publisherKey: String?, definition: String?, text: String, display pending: PendingDisplay?) {
         // A sense outside any part-of-speech block still belongs somewhere, rather than being lost.
         if pendingBlock == nil { pendingBlock = (blocks.count + 1, nil, []) }
         guard var block = pendingBlock else { return }
@@ -365,8 +410,69 @@ final class EntryReader: NSObject, XMLParserDelegate {
             // where it sits, and `textHash` is what notices a content update moving it.
             key: publisherKey ?? "\(path.block).\(path.ordinal)",
             keyKind: publisherKey == nil ? .position : .publisher,
-            definition: definition, text: text))
+            definition: definition, text: text,
+            display: pending.flatMap { Self.display($0, beside: DictionarySense.label(definition: definition, text: text)) }))
         pendingBlock = block
+    }
+
+    // MARK: - Display data (plan-card-refinements WI-4)
+
+    private func openDisplayRegions(_ attributes: [String: String]) {
+        guard innermostSenseDepth != nil else { return }
+        if ["exg", "eg", "xrg"].contains(where: { Self.hasClass($0, attributes) }) {
+            open.append(Open(depth: depth, region: .example))
+        }
+        guard !isInsideExample else { return }
+        if Self.hasClass("trg", attributes) {
+            open.append(Open(depth: depth, region: .translationGroup))
+            groups.append((depth, [], nil))
+        }
+        if Self.hasClass("trans", attributes), !Self.hasClass("ty_pinyin", attributes) {
+            open.append(Open(depth: depth, region: .translation))
+        }
+        if Self.hasClass("ind", attributes) { open.append(Open(depth: depth, region: .indicator)) }
+        if Self.hasClass("df", attributes), !hasDictionaryAttribute("def", attributes) {
+            open.append(Open(depth: depth, region: .englishDefinition))
+        }
+        if Self.hasClass("gg", attributes) { open.append(Open(depth: depth, region: .note)) }
+    }
+
+    private func closeDisplayRegion(_ region: Region, text: String, depth closedDepth: Int) {
+        guard let sense = innermostSenseDepth else { return }
+        var pending = displays[sense] ?? PendingDisplay()
+        switch region {
+        case .translation:
+            if !text.isEmpty, !groups.isEmpty { groups[groups.count - 1].translations.append(text) }
+            else if !text.isEmpty { pending.translations.append(SenseDisplay.Translation(text: text, indicator: nil)) }
+        case .indicator:
+            guard !text.isEmpty else { break }
+            if !groups.isEmpty, groups[groups.count - 1].indicator == nil { groups[groups.count - 1].indicator = text }
+            else { pending.indicators.append(text) }
+        case .translationGroup:
+            guard let group = groups.popLast(), group.depth == closedDepth else { break }
+            pending.translations += group.translations.map {
+                SenseDisplay.Translation(text: $0, indicator: group.indicator)
+            }
+            if group.translations.isEmpty, let indicator = group.indicator { pending.indicators.append(indicator) }
+        case .englishDefinition:
+            if pending.englishDefinition == nil, !text.isEmpty { pending.englishDefinition = text }
+        case .note:
+            if !text.isEmpty { pending.notes.append(text) }
+        default:
+            break
+        }
+        displays[sense] = pending
+    }
+
+    /// The sense's display data, or nil where it holds nothing the label does not already say. **Bilingual senses
+    /// only** — a sense with no translation is a monolingual's, whose subsense `df` and `gg` the card already reads
+    /// in its own way (measured: 849 of NOAD's 4,417 first senses would otherwise have carried it).
+    private static func display(_ pending: PendingDisplay, beside label: String) -> SenseDisplay? {
+        guard !pending.translations.isEmpty else { return nil }
+        let display = SenseDisplay(
+            translations: pending.translations, indicators: pending.indicators,
+            englishDefinition: pending.englishDefinition, notes: pending.notes)
+        return display.saysNothingBeyond(label) ? nil : display
     }
 
     private func finishBlock() {

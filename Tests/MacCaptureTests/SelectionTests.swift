@@ -62,6 +62,13 @@ struct SelectionWindowTests {
         #expect(SelectionWindow(selection: range, documentLength: 100, radius: 400) == nil)
     }
 
+    /// **An answer longer than was asked for, near the end of an enormous document, is summed without trapping** (audit
+    /// of 2026-10-10): the window's start plus what came back is past `Int.max`, which is past the document's end too.
+    @Test func anAnswerPastTheLargestIndexReachesTheEndWithoutTrapping() throws {
+        let window = try #require(SelectionWindow(selection: CFRange(location: .max - 10, length: 0), documentLength: .max, radius: 400))
+        #expect(window.clipping(returnedLength: 1_000) == [.start])
+    }
+
     /// Without a reported length, a short answer cannot be told from a truncated one, so the end is
     /// never taken for the document's.
     @Test func anUnknownDocumentLengthStillMakesAWindow() throws {
@@ -156,7 +163,7 @@ struct CaptureTests {
 
     @Test func aCompleteSentenceIsReportedAsComplete() throws {
         let context = SentenceContext(text: "An ephemeral beauty.", mayBeCut: false, selection: NSRange(location: 3, length: 9))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, place: ReadingPlace()) else {
+        guard case .selected(let selection, _) = SelectionReader.selection(from: capture("ephemeral", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }
@@ -167,8 +174,8 @@ struct CaptureTests {
     /// Every capture says what its context amounts to: cut by the window, or missing altogether.
     @Test func aDegradedContextSaysSo() throws {
         let cut = SentenceContext(text: "rest of a long sentence", mayBeCut: true)
-        guard case .selected(let clipped) = SelectionReader.selection(from: capture("long", context: cut), app: app, place: ReadingPlace()),
-              case .selected(let bare) = SelectionReader.selection(from: capture("word", context: nil), app: app, place: ReadingPlace())
+        guard case .selected(let clipped, _) = SelectionReader.selection(from: capture("long", context: cut), app: app, place: ReadingPlace()),
+              case .selected(let bare, _) = SelectionReader.selection(from: capture("word", context: nil), app: app, place: ReadingPlace())
         else {
             Issue.record("expected selections")
             return
@@ -181,7 +188,7 @@ struct CaptureTests {
     /// The term's range in the sentence accounts for punctuation trimmed off the selection.
     @Test func theRangeFollowsTheTrimmedTerm() throws {
         let context = SentenceContext(text: "He said “ephemeral,” twice.", mayBeCut: false, selection: NSRange(location: 8, length: 12))
-        guard case .selected(let selection) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, place: ReadingPlace()) else {
+        guard case .selected(let selection, _) = SelectionReader.selection(from: capture("“ephemeral,”", context: context), app: app, place: ReadingPlace()) else {
             Issue.record("expected a selection")
             return
         }

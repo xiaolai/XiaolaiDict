@@ -34,8 +34,11 @@ public struct LookupCardView: View {
     public var onConfirm: (() -> Void)?
     /// Expansion from the compact card reveals all meanings immediately.
     public var showsAllMeanings: Bool
-    @State private var showingAlternatives = false
+    @State private var showingAlternatives: Bool
     @State private var showingMemory = false
+    /// Whether the details are open — **only ever by the reader's press**: nothing opens it on arrival, unlike the other
+    /// meanings, which the card opens wherever it cannot name the meaning (D5).
+    @State private var showingDetails = false
 
     public init(
         card: LookupCard, onChoose: ((SensePresentation) -> Void)? = nil,
@@ -45,7 +48,13 @@ public struct LookupCardView: View {
         self.onChoose = onChoose
         self.onConfirm = onConfirm
         self.showsAllMeanings = showsAllMeanings
-        _showingAlternatives = State(initialValue: showsAllMeanings)
+        _showingAlternatives = State(initialValue: Self.opensAlternatives(card, showsAllMeanings: showsAllMeanings))
+    }
+
+    /// Whether the other meanings are open when an entry's card arrives: all of them asked for, or a card that cannot
+    /// name the meaning (`LookupCard.opensAlternatives`).
+    private static func opensAlternatives(_ card: LookupCard, showsAllMeanings: Bool) -> Bool {
+        showsAllMeanings || card.opensAlternatives
     }
 
     public var body: some View {
@@ -55,6 +64,7 @@ public struct LookupCardView: View {
             answer
             evidence
             wayOut
+            details
         }
         .padding(scale.space.pad)
         // **Sized by its content, bounded by legibility.** The card is as tall as what it has to
@@ -67,6 +77,16 @@ public struct LookupCardView: View {
             maxWidth: scale.space.cardMaxWidth,
             alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+        // **Another entry is another card, reset by its identity** (D2, 2026-10-10). SwiftUI keeps this view's state when
+        // the reader switches dictionary, so whatever the last entry's disclosures were, the next one inherited. Keyed
+        // first by the heading, then by the details: two entries of one word share both — homographs, one word in two
+        // dictionaries — and the details' own reset sat inside the disclosure, absent while an entry with none was
+        // shown, so an entry left and come back to came back open. Here, on the card, it is always there. The same entry
+        // drawn again — its sense mark arriving — keeps what the reader opened. `CardDisclosureTests` presses both.
+        .onChange(of: card.entry) {
+            showingAlternatives = Self.opensAlternatives(card, showsAllMeanings: showsAllMeanings)
+            showingDetails = false
+        }
     }
 
     /// A disclosure opening or closing, as a fade — and through `MotionPreference`, so the one
@@ -234,9 +254,14 @@ public struct LookupCardView: View {
                 // and truncation only hides a public-fallback definition's end.
                 .fixedSize(horizontal: false, vertical: true)
         case .absent:
-            Text("No entry for “\(card.term)” in your dictionaries.")
-                .font(.system(size: scale.text.body))
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: scale.space.line) {
+                Text("No entry for “\(card.term)” in your dictionaries.")
+                    .font(.system(size: scale.text.body))
+                    .fixedSize(horizontal: false, vertical: true)
+                // **The way out for a typo or a misread — under the miss, never instead of it** (plan-spelling-suggestion
+                // §3). The miss is the answer; the button fills in once the dictionaries have the word.
+                if let suggestion = card.suggestion { SpellingSuggestionLine(suggestion: suggestion) }
+            }
         }
     }
 
@@ -344,23 +369,13 @@ public struct LookupCardView: View {
     /// used to ignore, hardcoding semibold in `.primary` while the drawer honoured the preference
     /// and coloured by the word's own accent.
     private func marked(_ sentence: String) -> AttributedString {
-        // **The captured range, and a search only where there is none.** Searching took the first
-        // case-insensitive substring, so looking up *he* in "The man said he was fine" marked the
-        // *he* inside "The", and a word appearing twice in its own sentence marked whichever came
-        // first. The range is checked against the sentence before it is trusted: one from another
-        // sentence would otherwise bracket whatever sits at that offset.
-        let text = sentence as NSString
-        let captured = card.sentenceRange.flatMap { range -> NSRange? in
-            guard range.location >= 0, NSMaxRange(range) <= text.length,
-                  text.substring(with: range).compare(card.term, options: .caseInsensitive) == .orderedSame
-            else { return nil }
-            return range
-        }
-        return MarkedSentence.text(
+        // **The captured range, and a search only where there is none — and never for a word in no position of the
+        // sentence.** Searching took the first case-insensitive substring, so looking up *he* in "The man said he was
+        // fine" marked the *he* inside "The", and a followed correction marked another occurrence of itself. The
+        // decision is `LookupCard.markedRange`, where a test can ask it.
+        MarkedSentence.text(
             sentence,
-            marking: Lemmatizer.parts(
-                of: card.term, surface: card.term, in: sentence,
-                at: captured ?? text.range(of: card.term, options: .caseInsensitive)),
+            marking: Lemmatizer.parts(of: card.term, surface: card.term, in: sentence, at: card.markedRange),
             phrase: card.phrase,
             size: scale.text.body, emphasis: options.emphasis, accent: accent)
     }
@@ -410,16 +425,32 @@ public struct LookupCardView: View {
                     }
                 }
             }
-            // **Keyed to the entry, not to `onAppear`.** SwiftUI keeps this child's identity when
-            // the reader switches dictionary, so `openedOnce` stayed true and the alternatives
-            // stayed however the *previous* entry had left them: an entry the selector could not
-            // decide came up collapsed, against `opensAlternatives`, because a different entry's
-            // list had been closed by hand.
-            //
-            // `task(id:)` rather than `onChange`: it runs on first appearance too, so one rule
-            // covers both and there is no `openedOnce` to get out of step.
-            .task(id: card.heading) {
-                showingAlternatives = showsAllMeanings || card.opensAlternatives
+            // Open on arrival where the card cannot name the meaning, and reset for each entry — `init` and the body's
+            // `onChange(of: card.entry)`, which `details` shares.
+        }
+    }
+
+    /// **What the dictionary says beyond each label, behind the card's own disclosure** (plan-card-refinements WI-4,
+    /// the owner's decision of 2026-10-09). Its own, not "N other meanings": that list opens itself on every card that
+    /// cannot name the meaning — every auxiliary dictionary's — and the text would then be shown unasked. Closed on
+    /// arrival and for every other entry (the body's `onChange(of: card.entry)`), so it is open only for the entry the
+    /// reader opened it on. Absent on the compact card's expansion, which draws the same text already.
+    @ViewBuilder
+    private var details: some View {
+        if let details = card.detailsDisclosure(inCompactExpansion: options.usesCompactLookup) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(disclosure) { showingDetails.toggle() }
+                } label: {
+                    HStack(spacing: scale.space.line) {
+                        DisclosureChevron(isOpen: showingDetails)
+                        Text("Translations and notes")
+                            .font(.system(size: scale.text.label, weight: .medium))
+                    }
+                }
+                .buttonStyle(CardRowButtonStyle())
+                .accessibilityValue(showingDetails ? Text("Expanded") : Text("Collapsed"))
+                if showingDetails { SenseDetailsView(details: details) }
             }
         }
     }
@@ -719,14 +750,17 @@ public struct LookupPanelContent: View {
     }
 
     private func compactCard(_ card: LookupCard) -> some View {
-        CompactLookupCardView(card: card, incomplete: compactIsIncomplete) {
+        CompactLookupCardView(
+            card: card, incomplete: compactIsIncomplete,
+            offersDictionaries: CardExits.of(presentation.outcome, compact: isCompact).dictionaries == .compactCard
+        ) {
             showingDetails = true
         }
     }
 
     /// Keep a short quality signal visible; expansion carries the precise explanation and remedy.
     private var compactIsIncomplete: Bool {
-        if PanelCaveats.serviceUnanswered(presentation.outcome)
+        if PanelCaveats.serviceUnanswered(presentation.outcome) || presentation.sentenceLooksMisread
             || PanelCaveats.readOffTheScreen(presentation.capture, warning: options.warnsAboutScreenReading) {
             return true
         }
@@ -748,12 +782,14 @@ public struct LookupPanelContent: View {
                 // unreachable XPC service, with the public fallback also finding nothing, told the
                 // reader their dictionaries do not have the word.
                 if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+                misreadCaveat
             }
         case .plainText(let text, _):
             VStack(alignment: .leading, spacing: scale.space.stack) {
                 let card = cardWithoutAnEntry(.prose(text))
                 LookupCardView(card: card)
                 if PanelCaveats.serviceUnanswered(presentation.outcome) { serviceCaveat }
+                misreadCaveat
                 // Its one action, Copy, is in `pinnedFooter`.
             }
         case .entries(_, let unreadable):
@@ -813,16 +849,40 @@ public struct LookupPanelContent: View {
     /// needs a key window. Copy needs none. Copy alone, and no pin: prose is not a sense, so a note
     /// made from it would carry no standing — which is the one thing `PinnedNote.Standing` exists
     /// to prevent.
+    ///
+    /// **Every answered state carries "Dictionaries…"** (plan-card-refinements WI-1) — a miss too, which pinned nothing
+    /// and so had no way to the setting that decides which dictionaries were asked. `CardExits` decides, as a table.
     @ViewBuilder
     private var pinnedFooter: some View {
-        switch presentation.outcome {
-        case .entries:
+        switch CardExits.of(presentation.outcome, compact: isCompact).footer {
+        case .entry:
             if let entry { footer(entry) }
-        case .plainText(let text, _):
-            proseFooter(cardWithoutAnEntry(.prose(text)))
-        case .none, .notFound:
+        case .prose:
+            if case .plainText(let text, _) = presentation.outcome { proseFooter(cardWithoutAnEntry(.prose(text))) }
+        case .miss:
+            missFooter
+        case .none:
             EmptyView()
         }
+    }
+
+    /// **The way to Settings › Dictionary**, leading the pinned row on every answered card. An icon, as the row's other
+    /// actions are, so it fits beside them at the card's minimum width and grows with them at every text size.
+    private var dictionariesExit: some View {
+        IconButton(.dictionarySettings, action: openDictionarySettings)
+            .foregroundStyle(.secondary)
+    }
+
+    /// A miss has nothing to act on, and the way out is all its row holds.
+    private var missFooter: some View {
+        HStack(spacing: scale.space.stack) {
+            dictionariesExit
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.top, scale.space.inline)
+        .padding(.bottom, footerBottomPadding)
+        .pinnedToTheCard(in: scheme)
     }
 
     /// Shown wherever the dictionary service could not be asked. It says the answer is incomplete
@@ -841,6 +901,20 @@ public struct LookupPanelContent: View {
         if PanelCaveats.readOffTheScreen(
             presentation.capture, warning: options.warnsAboutScreenReading) {
             Notice(text: Text("This word was read off the screen, so it may not be exactly right."))
+        }
+        misreadCaveat
+    }
+
+    /// **Not behind the reader's switch for the word's caveat**: that one fires on a quarter of optical reads, and this
+    /// on a sentence that carries a misread's own signs, where the card has withheld the sentence and owes the reason —
+    /// otherwise a missing sentence and an unpicked meaning are both unexplained. **On every card that answered** — an
+    /// entry, a miss and prose alike (2026-10-11: it was drawn only beside an entry, so a miss withheld its sentence
+    /// unexplained).
+    @ViewBuilder
+    private var misreadCaveat: some View {
+        if presentation.sentenceLooksMisread {
+            Notice(text: Text(
+                "The sentence around this word looks misread from the screen, so it is not shown or used to pick a meaning."))
         }
     }
 
@@ -888,7 +962,7 @@ public struct LookupPanelContent: View {
         return LookupCard(
             presentation: EntryPresentation(entry: entry, mark: mark, met: presentation.met),
             term: presentation.term, lemma: presentation.lemma.text,
-            sentenceRange: presentation.sentenceRange,
+            placement: presentation.termPlacement,
             sentence: presentation.sentence, mark: mark,
             memory: presentation.memory, phrase: presentation.phrase)
     }
@@ -899,14 +973,16 @@ public struct LookupPanelContent: View {
     /// card and not the other.
     private func cardWithoutAnEntry(_ answer: LookupCard.Answer) -> LookupCard {
         LookupCard(
-            term: presentation.term, lemma: presentation.lemma.text,
+            term: presentation.term, lemma: presentation.lemma.text, placement: presentation.termPlacement,
             heading: presentation.term, partOfSpeech: nil,
             pronunciation: nil, answer: answer,
             // **Shown on the no-entry card too**, and this is where it matters most: a reader whose
             // *take* found nothing is exactly the reader who needs to be told the sentence held
             // *take something into account*. A phrase answer does not depend on the word's.
             sentence: presentation.sentence, alternatives: [], memory: presentation.memory,
-            phrase: presentation.phrase)
+            phrase: presentation.phrase,
+            // Nil for prose: the rule draws a suggestion under the service's own miss and nowhere else.
+            suggestion: presentation.offeredSuggestion)
     }
 
     /// A tap on a sense is the reader's, and is recorded as theirs — the correction path for a
@@ -1098,11 +1174,11 @@ public struct LookupPanelContent: View {
 
     /// The one action a prose answer has. Built from `LookupCard.copyableText` like the footer's copy
     /// button, so the two cannot put different things on the pasteboard for the same card.
-    @ViewBuilder
     private func proseFooter(_ card: LookupCard) -> some View {
-        if let copyable = card.copyableText {
-            HStack(spacing: scale.space.stack) {
-                Spacer(minLength: 0)
+        HStack(spacing: scale.space.stack) {
+            dictionariesExit
+            Spacer(minLength: 0)
+            if let copyable = card.copyableText {
                 IconButton(
                     title: "Copy This Definition",
                     symbol: (copied ? ActionSymbol.done : ActionSymbol.copy).symbol
@@ -1113,11 +1189,11 @@ public struct LookupPanelContent: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, scale.space.padAcross)
-            .padding(.top, scale.space.inline)
-            .padding(.bottom, footerBottomPadding)
-            .pinnedToTheCard(in: scheme)
         }
+        .padding(.horizontal, scale.space.padAcross)
+        .padding(.top, scale.space.inline)
+        .padding(.bottom, footerBottomPadding)
+        .pinnedToTheCard(in: scheme)
     }
 
     /// The actions, on their own row under the dictionary control.
@@ -1125,6 +1201,7 @@ public struct LookupPanelContent: View {
         // `stack` between the targets, for the reason the heading gives: at `inline` the glyphs
         // were 18 pt apart.
         HStack(spacing: scale.space.stack) {
+            dictionariesExit
             Spacer(minLength: 0)
             if presentation.sentence?.isEmpty == false {
                 // **Absent, not disabled, where translating could say nothing.** `translate` answers
@@ -1309,9 +1386,7 @@ public struct LookupPanelContent: View {
             symbol: (copied ? ActionSymbol.done : ActionSymbol.copy).symbol,
             // Only where it has something to add: the name is the tooltip otherwise, and a help
             // that repeated the name was read twice by VoiceOver.
-            help: copyable == nil
-                ? Text("No meaning was identified, so there is nothing to copy")
-                : nil,
+            help: CardActionHelp.copy(card(for: entry)),
             isEnabled: copyable != nil
         ) {
             guard let copyable else { return }
@@ -1345,9 +1420,7 @@ public struct LookupPanelContent: View {
         let keep = card(for: entry).senseToKeep
         return IconButton(
             .pinNote,
-            help: keep == nil
-                ? Text("No meaning was identified, so there is nothing to pin")
-                : nil,
+            help: CardActionHelp.pin(card(for: entry)),
             isEnabled: keep != nil
         ) {
             guard let keep else { return }
@@ -1362,6 +1435,27 @@ public struct LookupPanelContent: View {
     }
 }
 
+
+/// **What a disabled Pin or Copy says, as a decision rather than view code.** The help is the tooltip
+/// and the accessibility hint both (`IconButton`), and nil where the control is on: its name says it
+/// all then. Where the card lists meanings to choose from, the remedy is to choose one, and the help
+/// says so — "no meaning was identified" beside seven listed meanings left the reader no way to tell
+/// what would turn the control on. Where there is nothing to choose, choosing is not offered.
+public enum CardActionHelp {
+    public static func pin(_ card: LookupCard) -> Text? {
+        guard card.senseToKeep == nil else { return nil }
+        return card.alternatives.isEmpty
+            ? Text("No meaning was identified, so there is nothing to pin")
+            : Text("Choose a meaning first, then pin it")
+    }
+
+    public static func copy(_ card: LookupCard) -> Text? {
+        guard card.copyableText == nil else { return nil }
+        return card.alternatives.isEmpty
+            ? Text("No meaning was identified, so there is nothing to copy")
+            : Text("Choose a meaning first, then copy it")
+    }
+}
 
 /// **Which caveats a result needs, as decisions rather than as view code.**
 ///

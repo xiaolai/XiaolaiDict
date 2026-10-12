@@ -27,14 +27,7 @@ struct ModelBackendRouterTests {
 
         /// Waits until the settings have been read `count` times in all — bounded, so a defect fails rather than hangs.
         func waitUntilRead(_ count: Int) async {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-            while reads < count {
-                guard ContinuousClock.now < deadline else {
-                    Issue.record("the settings were not read")
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            if await !Patience.until({ reads >= count }) { Issue.record("the settings were not read") }
         }
     }
 
@@ -53,14 +46,7 @@ struct ModelBackendRouterTests {
         var all: [RouterEvent] { events.withLock { $0 } }
 
         func wait(for event: RouterEvent) async {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-            while !all.contains(event) {
-                guard ContinuousClock.now < deadline else {
-                    Issue.record("the router never reported \(event)")
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(5))
-            }
+            if await !Patience.until({ all.contains(event) }) { Issue.record("the router never reported \(event)") }
         }
     }
 
@@ -192,25 +178,32 @@ struct ModelBackendRouterTests {
     /// it once it has been put away.** A, then B, then A again, each question asked while the first A is still being
     /// made: the question for B puts the first A away when that making ends, and the first question — matched by its
     /// source alone — would then be handed the A that had just been put away, while a new A was being made.
+    ///
+    /// **Ordered by what the router was seen to do, not by sleeps.** The first making is held until the test lets it
+    /// go, and each question is asked once the one before has read the reader's choice. It was ordered by two 50 ms
+    /// sleeps under a 400 ms making, and a question that read its choice after the next change was asked a different
+    /// question.
     @Test func aSourceChosenAgainIsANewOneAndTheOldIsNeverAsked() async {
         let settings = Settings(Self.hosted)
         let first = RecordingProvider { _ in "From the first." }, second = RecordingProvider { _ in "From the second." }
-        let made = Mutex(0)
+        let made = Mutex(0), released = Mutex(false)
         let factory = ProviderFactory { source in
             guard source == Self.hosted else { return ProviderBuild(backend: RecordingProvider { _ in "From B." }) }
             let count = made.withLock { $0 += 1; return $0 }
-            if count == 1 { try? await Task.sleep(for: .milliseconds(400)) }
+            if count == 1, await !Patience.until({ released.withLock { $0 } }) { Issue.record("the first making was never let go") }
             return ProviderBuild(backend: count == 1 ? first : second)
         }
         let router = Self.router(settings, LocalModel(), factory)
         async let waiting = router.ask(.explain(Self.explanation), origin: .reader)
-        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Patience.until { made.withLock { $0 } == 1 }, "the first question never started its making")
         settings.choose(Self.loopback)
         async let leaving = router.ask(.explain(Self.explanation), origin: .reader)
-        try? await Task.sleep(for: .milliseconds(50))
+        await settings.waitUntilRead(2)
         settings.choose(Self.hosted)
-        let again = await router.ask(.explain(Self.explanation), origin: .reader)
-        _ = await (waiting, leaving)
+        async let chosenAgain = router.ask(.explain(Self.explanation), origin: .reader)
+        await settings.waitUntilRead(3)
+        released.withLock { $0 = true }
+        let (again, _, _) = await (chosenAgain, waiting, leaving)
         #expect(again.reply == .explanation("From the second."))
         #expect(first.requests.isEmpty, "a question was sent to a source after it had been put away")
         #expect(first.shutDowns == 1)
@@ -458,7 +451,7 @@ struct ModelBackendRouterTests {
     /// reports its process's events to `events`.
     static func factory(finding fake: FakeCLI, events: EventLog) -> ProviderFactory {
         ProviderFactory(
-            locator: CLILocator(searchDirectories: [fake.directory.url], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [fake.directory.url], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding(events.sink))
@@ -577,7 +570,7 @@ struct ProviderSourceTests {
 struct ProviderFactoryTests {
     static func factory(searching directory: URL, scratch: URL) -> ProviderFactory {
         ProviderFactory(
-            locator: CLILocator(searchDirectories: [directory], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [directory], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: scratch) }, events: { _ in })
     }
@@ -633,7 +626,7 @@ struct ProviderFactoryTests {
     @Test func aCLIRunByAnInterpreterBesideItIsStartedAndAnswers() async throws {
         let fake = try FakeCLI.claude(runBy: "xiaolaidict-fake-interpreter")
         let factory = ProviderFactory(
-            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: .seconds(1)),
+            locator: CLILocator(searchDirectories: [], loginShell: nil, shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding { _ in })
@@ -659,7 +652,7 @@ struct ProviderFactoryTests {
                                                  "\(LoginShell.searchPathMarker)\(elsewhere.url.path):/usr/bin:/bin"])
         let factory = ProviderFactory(
             locator: CLILocator(searchDirectories: [], loginShell: LoginShell(accountShell: shell.executable.path),
-                                shellTimeout: .seconds(5)),
+                                shellTimeout: Patience.wait),
             credentials: InMemoryCredentials(), configuration: ResidentSessionTests.configuration(),
             endpointSession: { .ephemeral }, scratch: { ScratchDirectory(in: fake.directory.url) },
             events: fake.holding { _ in })

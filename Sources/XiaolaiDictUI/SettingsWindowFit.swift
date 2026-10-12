@@ -47,8 +47,16 @@ enum SettingsWindowFit {
     ///
     /// Shrinking is never bounded by it. A ceiling is a limit on growth; applied to a shrink it
     /// would pad a two-line answer out to the cap, which is this same defect wearing the other sign.
-    static func shortfall(wanted: CGFloat, given: CGFloat, ceiling: CGFloat? = nil) -> CGFloat? {
-        guard given > 0 else { return nil }
+    ///
+    /// **Nil while the reader is resizing the window by hand.** AppKit sizes a window under a drag from
+    /// where the drag began and where the pointer is, so a fit applied meanwhile is undone by the next
+    /// movement and applied again by the next layout — the edge under the reader's hand jumps between
+    /// the two for as long as they hold it. A pinned note is the first surface this fits that a reader
+    /// can resize; the fit waits for the drag to end and then fits once (`FitsItsContent`).
+    static func shortfall(
+        wanted: CGFloat, given: CGFloat, ceiling: CGFloat? = nil, whileResizing: Bool = false
+    ) -> CGFloat? {
+        guard given > 0, !whileResizing else { return nil }
         return min(wanted, ceiling ?? wanted) - given
     }
 
@@ -71,15 +79,20 @@ enum SettingsWindowFit {
     /// plus the shadow padding, which is a number to keep in step for no gain.
     /// **`reduceMotion` is read here rather than at each call site**, so no caller can forget it;
     /// it is a parameter only so a test can say which way it is set.
+    /// **`highestTop` grows the window up instead**, its bottom edge kept and its top stopping there: a lookup card above
+    /// its word, whose tail is at the bottom — grown down, it could not grow at all without covering the word (the
+    /// owner's decision of 2026-10-09). Shrinking keeps the bottom too.
     static func move(
-        _ window: NSWindow, by delta: CGFloat, width: CGFloat?, lowestBottom: CGFloat?,
+        _ window: NSWindow, by delta: CGFloat, width: CGFloat?, lowestBottom: CGFloat?, highestTop: CGFloat? = nil,
         animated: Bool, recentres: Bool = true,
         reduceMotion: Bool = MotionPreference.systemReduceMotion
     ) {
         let current = window.frame
         let width = width ?? current.width
         var height = current.height + delta
-        if let lowestBottom, delta > 0 {
+        if let highestTop, delta > 0 {
+            height = max(current.height, min(height, highestTop - current.minY))
+        } else if let lowestBottom, delta > 0 {
             height = max(current.height, min(height, current.maxY - lowestBottom))
         }
         let widthChange = width - current.width
@@ -90,7 +103,7 @@ enum SettingsWindowFit {
         guard abs(height - current.height) > rounding || abs(widthChange) > rounding else { return }
         var frame = current
         frame.size = CGSize(width: width, height: height)
-        frame.origin.y = current.maxY - height
+        frame.origin.y = highestTop == nil ? current.maxY - height : current.minY
         // **Reduce Motion is a jump, not a shorter glide.** The resize is the window travelling,
         // which is the kind of movement the setting exists to remove; the pane's content is
         // swapped by the system either way, so nothing is lost by arriving at once.
@@ -156,6 +169,10 @@ private struct FitsItsContent: ViewModifier {
     ///
     /// A reference type because it must outlive a body evaluation and be read at application time.
     @State private var fit = PendingFit()
+    /// Which way, and how far, the window may grow: down to the screen's bottom where nothing says otherwise, and on a
+    /// lookup panel anchored on its word, away from the word within the room on its side (plan-card-refinements WI-2,
+    /// the owner's decision of 2026-10-09).
+    @Environment(\.panelGrowth) private var growth
 
     func body(content: Content) -> some View {
         content
@@ -172,12 +189,20 @@ private struct FitsItsContent: ViewModifier {
             // pane kept its default size until some later geometry change happened to arrive.
             .background(WindowReader { attached in
                 window = attached
+                // **And when a reader's drag ends, the fit is asked once more** — it stood down while
+                // they held the edge (`shortfall`), and a drag that ends brings no geometry change of
+                // its own to ask again with.
+                fit.refit(whenLiveResizeEnds: attached) { apply() }
                 if attached != nil { apply() }
             })
             .onAppear { apply() }
             // **And the window is let go when the view does.** Held past disappearance, a queued
             // move could resize a window this modifier no longer belongs to.
-            .onDisappear { window = nil; fit.scheduled = false }
+            .onDisappear {
+                window = nil
+                fit.scheduled = false
+                fit.refit(whenLiveResizeEnds: nil) {}
+            }
     }
 
     /// Moves the window to the newest fit, once per runloop turn.
@@ -202,10 +227,12 @@ private struct FitsItsContent: ViewModifier {
             // before the window was replaced — resized something this view no longer owns.
             guard let live = self.window, live === window else { return }
             guard let delta = SettingsWindowFit.shortfall(
-                wanted: fit.wanted, given: fit.given, ceiling: ceiling) else { return }
+                wanted: fit.wanted, given: fit.given, ceiling: ceiling, whileResizing: live.inLiveResize)
+            else { return }
             SettingsWindowFit.move(
                 live, by: delta, width: width,
-                lowestBottom: live.screen?.visibleFrame.minY,
+                lowestBottom: growth == nil ? live.screen?.visibleFrame.minY : growth?.lowestBottom,
+                highestTop: growth?.highestTop,
                 animated: animates && live.isVisible, recentres: recentres)
         }
     }
@@ -253,6 +280,26 @@ private final class PendingFit {
     var wanted: CGFloat = 0
     var given: CGFloat = 0
     var scheduled = false
+    /// Told when a live resize of `watched` ends. **One at a time**, replaced rather than added to:
+    /// the view can be attached to a second window, and a token left on the first would refit a
+    /// window this modifier no longer belongs to.
+    private var resizeEnded: (any NSObjectProtocol)?
+    private weak var watched: NSWindow?
+
+    func refit(whenLiveResizeEnds window: NSWindow?, _ refit: @escaping @MainActor () -> Void) {
+        if let window, window === watched, resizeEnded != nil { return }
+        if let resizeEnded { NotificationCenter.default.removeObserver(resizeEnded) }
+        resizeEnded = nil
+        watched = window
+        guard let window else { return }
+        resizeEnded = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+        ) { _ in MainActor.assumeIsolated { refit() } }
+    }
+
+    isolated deinit {
+        if let resizeEnded { NotificationCenter.default.removeObserver(resizeEnded) }
+    }
 }
 
 extension View {
@@ -273,10 +320,39 @@ extension View {
     /// sets by hand — `show()` writes `Token.Panel.cardOpeningHeight` on open and on every reuse —
     /// so SwiftUI never revisits it however much the content wants. Measured 398 × 240 for every
     /// card, with the whole footer below the fold.
+    ///
+    /// **A pinned note is the fourth**, opened at a size SwiftUI was handed rather than one its words
+    /// asked for, and the first a reader can resize by hand: the width is theirs, and the height
+    /// returns to the words' when the drag ends.
     func fitsItsContent(
         upTo ceiling: CGFloat, report: ((CGFloat, CGFloat) -> Void)? = nil
     ) -> some View {
         modifier(FitsItsContent(
             width: nil, ceiling: ceiling, animates: false, recentres: false, report: report))
     }
+}
+
+/// **Which way a lookup panel may grow, and how far** — away from the word its card keeps clear: down from a word above
+/// it, up from a word below it (plan-card-refinements WI-2; up as well as down by the owner's decision of 2026-10-09).
+public enum PanelGrowth: Equatable, Sendable {
+    /// The top edge stays; the bottom grows down no further than `lowestBottom`.
+    case down(lowestBottom: CGFloat)
+    /// The bottom edge — a tail's — stays; the top grows up no further than `highestTop`.
+    case up(highestTop: CGFloat)
+
+    public var lowestBottom: CGFloat? {
+        guard case .down(let bottom) = self else { return nil }
+        return bottom
+    }
+
+    public var highestTop: CGFloat? {
+        guard case .up(let top) = self else { return nil }
+        return top
+    }
+}
+
+extension EnvironmentValues {
+    /// **How a growing window may grow, in place of down to the screen's bottom** — set by the lookup panel while its
+    /// card keeps the looked-up word clear. Nil everywhere else.
+    @Entry public var panelGrowth: PanelGrowth?
 }

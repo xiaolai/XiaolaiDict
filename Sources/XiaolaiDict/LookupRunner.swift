@@ -41,6 +41,13 @@ final class LookupRunner {
     private let settle: () async -> Void
     /// Notes each stage this lookup reaches, under its request — `LookupTimeline`.
     private let mark: @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void
+    /// **"Look up “X”"** — miss → the term's dictionary form and the operating system's checker → verified through this
+    /// runner's own `client` → one offer or none on the card (plan-spelling-suggestion §3; the owner's ruling of
+    /// 2026-10-11). Asked beside the sense and the memory strip, so it holds neither up.
+    private let suggester: SpellingSuggester
+    /// The suggestion the card on screen was offered, and the reading it was offered under — what a press on its line
+    /// looks up. **Only the latest**, because only the card on screen can be pressed.
+    private var offered: (request: Int, selection: Selection, suggestion: SpellingSuggestion)?
 
     init(
         client: DictionaryClient, panel: any LookupPanelPresenting,
@@ -51,9 +58,18 @@ final class LookupRunner {
         settle: @escaping () async -> Void = {},
         keepPolicy: @escaping @MainActor () -> LookupKeepPolicy = { .manual },
         initialRecording: @escaping @MainActor (LookupRecording, Int) -> Void = { _, _ in },
-        mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in }
+        mark: @escaping @MainActor (LookupTimeline.Stage, Int, ContinuousClock.Instant) -> Void = { _, _, _ in },
+        // **On by default, and the system's own checker**: a runner built without saying otherwise offers what the
+        // reader's runs offer. A test names a checker of its own.
+        spelling: any SpellingSuggesting = SystemSpellChecker(),
+        readerEnglish: @escaping @Sendable () -> String? = { SpellingLanguage.readers(Locale.preferredLanguages) }
     ) {
         self.mark = mark
+        // **The verification is an ordinary lookup through the client the reader's own goes through** — the same
+        // dictionaries, the same deadline, the same fallback that verifies nothing.
+        suggester = SpellingSuggester(
+            checker: spelling, lookUp: { [client] term throws(CancellationError) in try await client.lookup(term) },
+            language: readerEnglish)
         self.initialRecording = initialRecording
         self.keepPolicy = keepPolicy
         self.client = client
@@ -69,10 +85,20 @@ final class LookupRunner {
     ///
     /// Returns the row to record, or nil when the lookup was superseded before its answer arrived —
     /// a lookup nobody saw is not one the reader made, and does not belong in the ledger.
+    ///
+    /// `placement` is where the word sits in the selection's sentence, nil for where the capture put it. A followed
+    /// correction is `.notInSentence`: its sentence is the one the misspelling was read in, the word itself is in no
+    /// position of it, and the card and the tagger must not go looking for it there.
     func run(
         _ selection: Selection, near pointer: UpPoint, requestedAt: Date, ticket: PanelTicket, existingLookup: LookupIdentity? = nil,
+        placement given: TermPlacement? = nil, protecting word: WordBounds? = nil,
         seen reportSeen: @MainActor (Bool) -> Void = { _ in }
     ) async -> LookupRecording? {
+        let placement = given ?? selection.rangeInSentence.map(TermPlacement.at) ?? .unrecorded
+        // **The sentence the word is tagged in, and none for a word in no position of it.** Given the reader's sentence
+        // and no range, the tagger binds the word to any other occurrence of it — the verb *record* in "They record it,
+        // and the recrod shows." — and lemmatises and tags that one (audit, 2026-10-09). Alone, it is the word.
+        let taggedIn = placement == .notInSentence ? nil : selection.sentence
         let frozenKeepPolicy = existingLookup == nil ? keepPolicy() : .manual
         // **A `stat`, and only to notice that the service finished a build** since this process last read the
         // table; the read itself is off this path, and a lookup meanwhile uses the table in force.
@@ -80,14 +106,14 @@ final class LookupRunner {
         // Provisional: the card must not wait for the table, so the first lookup of a session shows the lemma the
         // tagger gave; the lemma that keys the ledger is settled below, once the panel is up.
         let tableAtFirst = FormAuthority.shared.revision
-        var lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
-        var presentation = Self.presentation(of: selection, lemma: lemma, request: ticket.number)
+        var lemma = Lemmatizer.lemma(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
+        var presentation = Self.presentation(of: selection, placement: placement, lemma: lemma, request: ticket.number)
         // **Stops here if the panel is not on screen.** Not a formality: the window action is
         // captured by a view's `.task`, so until that runs there is nothing to draw into, and a
         // lookup that ran anyway resolved a sense and wrote a ledger row for a panel the reader
         // never saw. The rule is "a lookup nobody saw is not recorded", and this is the only place
         // that can tell.
-        guard panel.show(.lookup(presentation), near: pointer, for: ticket) else {
+        guard panel.show(.lookup(presentation), near: pointer, protecting: word, for: ticket) else {
             reportSeen(false)
             return nil
         }
@@ -97,7 +123,11 @@ final class LookupRunner {
         // **Dated when the compositor listed it**, so "panel" times what the reader saw, and a panel
         // that never drew is never timed as shown.
         let seen = Task { () -> ContinuousClock.Instant? in await panel.seenOnScreen(ticket) ? .now : nil }
-        let language = Lemmatizer.language(of: selection.text, in: selection.sentence)
+        // **Judged from what is recorded, so a reopened reading is keyed the same.** A followed correction is recorded as
+        // a named word, without the sentence it is not in, and reopened the same way — so its language is the word's
+        // alone: "I saw teh cat." reads as Catalan and "the" as English, and a note's language is part of its identity
+        // (ADR-0029), so judged from the sentence, Save after a reopen made a second note (audit round 3, 2026-10-09).
+        let language = Lemmatizer.language(of: selection.text, in: taggedIn)
         // **The primary is frozen only now, after the panel is up and not before**: a reader whose language
         // has not been derived yet (first lookup after an upgrade or a language change) waits here, bounded,
         // rather than studying from whatever is first in Dictionary.app's order for this one lookup.
@@ -111,14 +141,14 @@ final class LookupRunner {
         // **Decided again if the table changed since the first reading**, however it got there: a load can finish
         // before the wait begins, which the wait reports as idle.
         if FormAuthority.shared.revision != tableAtFirst {
-            lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+            lemma = Lemmatizer.lemma(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
         }
         let chosenPrimary = primary()
         // **What every recording of this lookup shares, worked out once** — the pending row, the
         // answered one and the final one differ only in what they add to it (audit round 3, #29).
         let basis = RecordingBasis(
             selection: selection, lemma: lemma, language: language, requestedAt: requestedAt,
-            lookup: existingLookup, keepPolicy: frozenKeepPolicy)
+            lookup: existingLookup, keepPolicy: frozenKeepPolicy, placement: placement)
         let pending = basis.pending(primaryDictionary: chosenPrimary.chosen ?? chosenPrimary.automatic)
         // Not awaited, and **deliberately not cancelled with this lookup**: the load runs beside the
         // dictionary lookup, which is the time it has, and a reader who supersedes one lookup with
@@ -219,8 +249,7 @@ final class LookupRunner {
             outcome: outcome, abstention: nil, encounter: early, primaryDictionary: effectivePrimary,
             phraseOfEncounter: Self.phrase(owning: early, in: resolved.phrase)), ticket.number)
         let resolver = SenseResolver(primary: pinned, selector: selector)
-        let partOfSpeech = Lemmatizer.partOfSpeech(
-            of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
+        let partOfSpeech = Lemmatizer.partOfSpeech(of: selection.text, in: taggedIn, at: selection.rangeInSentence)
 
         // **Each arrives when it is ready, and neither waits for the other.** Both were already
         // started side by side, and then awaited in a fixed order — so a sense the selector had
@@ -238,6 +267,8 @@ final class LookupRunner {
         enum Arrival: Sendable {
             case memory(PriorEncounters)
             case sense(SenseResolution)
+            /// Nil where the decision was cancelled — a newer lookup — and with how long it took.
+            case suggestion(SpellingDecision?, Duration)
         }
         var resolution = SenseResolution(mark: nil, encounter: nil)
         await withTaskGroup(of: Arrival.self) { group in
@@ -252,8 +283,23 @@ final class LookupRunner {
             // two answers to arrive in either order.
             group.addTask {
                 .sense(await resolver.resolve(
-                    entries: entries, phrase: phraseEntries, sentence: selection.sentence,
+                    entries: entries, phrase: phraseEntries,
+                    // A misread sentence is no evidence for a meaning: the picker abstains for want of one.
+                    sentence: selection.quality.doubts(sentence: selection.sentence) ? nil : selection.sentence,
                     context: selection.quality.context, partOfSpeech: partOfSpeech, at: .now))
+            }
+            // **"Look up “X”", a third arrival, after the miss is already on the card** — so the card is final-looking
+            // the moment the dictionaries answer, and the line fills in once the checker and the dictionaries have spoken.
+            // Nothing is drawn while it is checked. A child of the group for the reason the sense is one: superseding the
+            // lookup cancels it, and the verification lookup a cancelled offer would have sent is never sent.
+            // **And the dictionary form** (plan-card-refinements WI-3): the lemma this lookup already settled, weighed
+            // against the checker's word — one offer or none, never looked up in the reader's place. The capture's source
+            // is recorded with the decision and weighed by nothing: recognised text gets no larger edit budget.
+            group.addTask { [suggester, lemma] in
+                let started = ContinuousClock.now
+                let decision = try? await suggester.decide(for: selection.text, outcome: outcome, lemma: lemma,
+                                                           capture: selection.quality.source)
+                return .suggestion(decision, .now - started)
             }
             for await arrival in group {
                 switch arrival {
@@ -268,6 +314,14 @@ final class LookupRunner {
                     guard answered.mark != nil, panel.isCurrent(ticket) else { continue }
                     Self.apply(answered, to: &presentation, phrase: resolved.phrase,
                                studyDictionary: effectivePrimary)
+                    panel.update(.lookup(presentation), for: ticket)
+                case .suggestion(let decision, let took):
+                    logSpelling(decision, took: took)
+                    // **Only on the card it was made for.** A hover's claim supersedes without cancelling, so the offer
+                    // can arrive for a card no longer shown: it is neither drawn nor kept to be followed.
+                    guard let suggestion = decision?.offer.suggestion, panel.isCurrent(ticket) else { continue }
+                    presentation.suggestion = suggestion
+                    offered = (ticket.number, selection, suggestion)
                     panel.update(.lookup(presentation), for: ticket)
                 }
             }
@@ -288,6 +342,39 @@ final class LookupRunner {
             phraseOfEncounter: Self.phrase(owning: resolution.encounter, in: resolved.phrase))
     }
 
+    /// **What a press on the card's "Look up “X”" looks up**: the offered word, in the sentence and the place the miss
+    /// was read in, as a reading of its own — the miss stays recorded as the miss it was. Nil where the card `request`
+    /// was not offered `suggestion`, so a press can only follow the line it pressed.
+    ///
+    /// **Only from the card on screen, and only once** (audit, 2026-10-09). A card a newer lookup replaced, or the reader
+    /// put away, is gone, and a press arriving late from it would launch a lookup — which cancels the newer one. So the
+    /// offer's own request must still hold the panel when the press arrives, and the press that follows it spends it.
+    ///
+    /// **No range.** The captured one is where the misspelling sits, and nothing may mark the corrected word there; the
+    /// app launches it as a word in no position of the sentence (`TermPlacement.notInSentence`).
+    func followUp(_ suggestion: SpellingSuggestion, from request: Int) -> Selection? {
+        guard let offered, offered.request == request, offered.suggestion == suggestion,
+              panel.isCurrent(PanelTicket(number: request)) else { return nil }
+        self.offered = nil
+        let read = offered.selection
+        return Selection(text: suggestion.word, sentence: read.sentence, rangeInSentence: nil,
+                         quality: read.quality, place: read.place)
+    }
+
+    /// One line about a miss's suggestion — **the rule that decided it and how long it took, never a word**: the term and
+    /// the candidates are the reader's reading. Silent for a word that was found, which is nearly every lookup.
+    private func logSpelling(_ decision: SpellingDecision?, took: Duration) {
+        let kind: String
+        switch decision?.offer {
+        case nil: kind = "cancelled"
+        case .offered?: kind = "offered (\(decision?.rule ?? ""))"
+        case .abstained(let why)?: kind = "nothing offered (\(why.rawValue))"
+        case .refused(.notAMiss)?: return
+        case .refused(let refusal)?: kind = "not asked (\(refusal.rawValue))"
+        }
+        log.notice("spelling: \(kind, privacy: .public) after \(Int(took.milliseconds), privacy: .public) ms")
+    }
+
     /// **The phrase whose own entry `encounter` is in**, by the inventory's spelling — the hit's, as *Save
     /// This Phrase* keys it — or nil where the encounter is the word's. The reply says which entries are a
     /// phrase's own (ADR-0028), so this is read off it, never inferred.
@@ -299,18 +386,25 @@ final class LookupRunner {
     }
 
     /// The card a lookup opens with, before anything has answered.
-    private static func presentation(of selection: Selection, lemma: Lemma, request: Int) -> LookupPresentation {
+    private static func presentation(
+        of selection: Selection, placement: TermPlacement, lemma: Lemma, request: Int
+    ) -> LookupPresentation {
         // The app, and then the most precise thing the app could say about where inside it — which
         // for 12 of the 17 apps measured is nothing at all.
         let source = [selection.place.name, selection.place.label]
             .compactMap { $0 }.filter { !$0.isEmpty }.removingAdjacentDuplicates().joined(separator: " · ")
+        // **A sentence with signs of a misread is not the reader's sentence**, however whole: the card says so instead
+        // of drawing it, and nothing downstream — the sentence pane, translation, the phrase line — is given it.
+        let misread = selection.quality.doubts(sentence: selection.sentence)
+        let usable = selection.quality.context == .complete && !misread
         var presentation = LookupPresentation(
             request: request, term: selection.text, lemma: lemma, source: source, capture: selection.quality,
-            sentence: selection.quality.context == .complete ? selection.sentence : nil, outcome: nil)
+            sentence: usable ? selection.sentence : nil, outcome: nil)
+        presentation.sentenceLooksMisread = misread
         // Kept beside the sentence it indexes: without it the card has to search, and a search
-        // finds the wrong occurrence of a word that appears twice.
-        presentation.sentenceRange =
-            selection.quality.context == .complete ? selection.rangeInSentence : nil
+        // finds the wrong occurrence of a word that appears twice — or, for a word in no position of
+        // the sentence, another occurrence of it.
+        presentation.termPlacement = usable ? placement : .unrecorded
         return presentation
     }
 
@@ -412,16 +506,33 @@ private struct RecordingBasis {
     /// file it under Latin and show it to a reader who asked not to see it. Nil where nothing classifies
     /// — a number, punctuation — which the drawer draws rather than hides.
     let script: ProbeScript?
+    /// **A word in no position of the sentence is recorded as a word the reader named** (audit round 2, 2026-10-09):
+    /// itself as its context, no range, the capture's context `missing` — "none consistent with the selection" — with
+    /// its source and confidence kept. The ledger records where `surface` sits in `context` and nothing that says it
+    /// sits nowhere, so a followed correction kept with the reader's sentence and no range reopened as an unrecorded
+    /// range, and the card searched again and marked another occurrence. Keeping that sentence would take a column of
+    /// its own (schema 14); this is the state a named word is already recorded and reopened in.
+    let named: Bool
 
     init(selection: Selection, lemma: Lemma, language: String?, requestedAt: Date,
-         lookup: LookupIdentity?, keepPolicy: LookupKeepPolicy) {
+         lookup: LookupIdentity?, keepPolicy: LookupKeepPolicy, placement: TermPlacement) {
         self.selection = selection
         self.lemma = lemma
         self.language = language
         self.requestedAt = requestedAt
         self.lookup = lookup
         self.keepPolicy = keepPolicy
+        named = placement == .notInSentence
         script = ProbeScript.dominant(in: selection.text)
+    }
+
+    /// How the reading was captured, as the ledger keeps it: the capture's own, but for a named word, whose context is
+    /// the word itself.
+    private var quality: CaptureQuality {
+        let captured = selection.quality
+        guard named else { return captured }
+        return CaptureQuality(source: captured.source, confidence: captured.confidence, context: .missing)
+            ?? .accessibility(captured.source, context: .missing)
     }
 
     /// The row a lookup starts with, before the dictionaries answer.
@@ -442,16 +553,16 @@ private struct RecordingBasis {
     /// marked where none was.
     private func record(outcome: LookupOutcome, abstention: Abstention?) -> LookupRecord {
         LookupRecord(
-            surface: selection.text, lemma: lemma.text, context: selection.sentence ?? selection.text,
+            surface: selection.text, lemma: lemma.text, context: named ? selection.text : selection.sentence ?? selection.text,
             // All four were computed at every lookup and thrown away at the ledger before schema 4.
             // **The language is passed in, not recognised again.** `run` already built an
             // `NLLanguageRecognizer` for the ledger read; a second one per lookup answered the same
             // question twice, and two recognisers could in principle disagree — the row and the
             // history query would then be keyed on different languages for one word.
             lemmaBasis: lemma.basis, language: language,
-            contextRange: selection.rangeInSentence, place: selection.place,
+            contextRange: named ? nil : selection.rangeInSentence, place: selection.place,
             lookedUpAt: requestedAt, result: outcome.result, answeredBy: outcome.answeredBy,
-            quality: selection.quality,
+            quality: quality,
             // Why no sense was marked — the selector's reason, which schema 6 keeps. Without it a
             // model that declined the sentence and a Mac with no model leave the same trace.
             senseAbstention: abstention, script: script)

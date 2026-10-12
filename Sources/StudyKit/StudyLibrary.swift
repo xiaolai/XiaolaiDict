@@ -1,3 +1,4 @@
+import CaptureModel
 import DictionaryModel
 import Foundation
 import ReviewKit
@@ -93,6 +94,9 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
     /// range, the same answer the drawer's `markedRanges` gives. A search for the word's spelling
     /// marked `he` inside `the` and never found the second half of a phrasal verb read apart.
     public let excerptMarks: [NSRange]
+    /// **`excerpt` was read off the screen and carries a misread's signs** (`CaptureQuality.doubts(sentence:)`), judged
+    /// from the newest reading's stored source and sentence at read time — never stored (2026-10-11).
+    public let excerptLooksMisread: Bool
     public let readAt: Date?
     /// The script the word is written in, so a row outside the reader's study scripts can be
     /// annotated rather than hidden.
@@ -105,7 +109,7 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
     public var id: UUID { note.id }
 
     public init(note: StudyNote, card: StudyCard?, word: String, lemma: String? = nil, excerpt: String,
-                excerptMarks: [NSRange], readAt: Date?,
+                excerptMarks: [NSRange], excerptLooksMisread: Bool = false, readAt: Date?,
                 script: ProbeScript?, readiness: StudyReadiness, obstacle: StudyObstacle?) {
         self.note = note
         self.card = card
@@ -113,6 +117,7 @@ public struct LibraryRow: Sendable, Equatable, Identifiable {
         self.lemma = lemma
         self.excerpt = excerpt
         self.excerptMarks = excerptMarks
+        self.excerptLooksMisread = excerptLooksMisread
         self.readAt = readAt
         self.script = script
         self.readiness = readiness
@@ -140,7 +145,7 @@ extension Ledger {
         // **Decoded first, then given their cards in one query.** Asking for a card inside the
         // row callback ran a statement per row while the page's own statement was still open.
         var pending: [(note: StudyNote, word: String, lemma: String?, excerpt: String, excerptMarks: [NSRange],
-                       readAt: Date?, script: ProbeScript?, facts: StudyReadiness.Facts)] = []
+                       looksMisread: Bool, readAt: Date?, script: ProbeScript?, facts: StudyReadiness.Facts)] = []
         try run("""
             SELECT n.id, n.target_kind, n.issuer, n.language, n.dictionary, n.entry_id, n.sense_key,
                    n.sense_key_kind, n.phrase_text, n.enrollment, n.confirmed_at, n.created_at,
@@ -157,7 +162,9 @@ extension Ledger {
                    EXISTS (SELECT 1 FROM study_answers a WHERE a.note_id = n.id AND a.is_usable = 1),
                    (SELECT a.origin FROM study_answers a WHERE a.note_id = n.id),
                    -- What marks the word in its sentence: the lemma and the captured range.
-                   newest.lemma, newest.context_range_location, newest.context_range_length
+                   newest.lemma, newest.context_range_location, newest.context_range_length,
+                   -- How the sentence was captured, so a misread's signs are judged where they were stored.
+                   newest.capture_source, newest.capture_confidence, newest.context_quality
             FROM study_notes n
             LEFT JOIN lookups newest ON newest.id = (
                 SELECT l.id FROM study_note_lookups nl JOIN lookups l ON l.id = nl.lookup_id
@@ -190,6 +197,7 @@ extension Ledger {
                 excerptMarks: row.optionalText(12).map {
                     Lemmatizer.parts(of: row.optionalText(19) ?? $0, surface: $0, in: excerpt, at: range)
                 } ?? [],
+                looksMisread: try row.quality(22)?.doubts(sentence: excerpt) == true,
                 readAt: row.isNull(14) ? nil : Date(timeIntervalSince1970: row.real(14)),
                 script: try row.optional(ProbeScript.self, 15, "lookups.script"),
                 facts: facts))
@@ -197,7 +205,7 @@ extension Ledger {
         let cards = try cards(ofNotes: pending.map(\.note.id), prompt: Self.libraryPrompt)
         return pending.map {
             LibraryRow(note: $0.note, card: cards[$0.note.id], word: $0.word, lemma: $0.lemma, excerpt: $0.excerpt,
-                       excerptMarks: $0.excerptMarks, readAt: $0.readAt, script: $0.script,
+                       excerptMarks: $0.excerptMarks, excerptLooksMisread: $0.looksMisread, readAt: $0.readAt, script: $0.script,
                        readiness: StudyReadiness.of($0.facts), obstacle: StudyReadiness.obstacle($0.facts))
         }
     }

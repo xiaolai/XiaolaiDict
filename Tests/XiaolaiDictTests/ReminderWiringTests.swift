@@ -595,7 +595,7 @@ struct ReminderWiringTests {
         // this failed in a full run on a busy machine, the whole suite having slowed to twice its usual time, with the
         // wait itself taking 11 s; the bound is for the sibling test below, which is about *not* getting them.
         let route = ReviewRoute(areWired: { wired.value }, open: { opened.value += 1; return true },
-                                fault: { faults.value.append($0) }, limit: .seconds(120))
+                                fault: { faults.value.append($0) }, limit: Patience.wait)
         let routing = Task { await route.open() }
         try await Task.sleep(for: .milliseconds(150))
         #expect(opened.value == 0, "Review was opened before there was a window action to open it with")

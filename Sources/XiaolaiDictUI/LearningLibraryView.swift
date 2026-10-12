@@ -334,6 +334,7 @@ public struct LearningLibraryView<Review: View>: View {
             if row.result == .notFound { Text("Not found") }
             if row.result == .pending { Text("No dictionary entry was recorded.") }
             if row.cue == .none { Text("No sentence was captured.") }
+            if row.looksMisread { PossiblyMisreadLabel() }
             if row.cue == .truncatedSentence {
                 StatusLabel(.caution, "The sentence may be cut short", size: scale.text.micro, prominence: .secondary)
             }

@@ -244,14 +244,19 @@ struct CodexCLIProviderTests {
         await provider.shutDown()
     }
 
+    /// **The silent question is the first**, as in `ResidentSessionTests.aCLIThatNeverAnswersIsEndedAtTheDeadline`
+    /// and for its reason: an ordinary question asked first had the same two seconds for its answer, which a loaded run
+    /// can outlast, failing the test on a deadline it is not about. The process is read off the session's own record.
     @Test func aSilentServerIsEndedAtTheDeadline() async throws {
         let fake = try FakeCLI.codex()
-        let provider = Self.provider(fake, configuration: ResidentSessionTests.configuration(turnTimeout: .seconds(2)))
-        let first = try answeringPID(try await provider.generate(ResidentSessionTests.question()))
+        let events = EventLog()
+        let provider = Self.provider(fake, configuration: ResidentSessionTests.configuration(turnTimeout: .seconds(2)),
+                                     events: events)
         let silent = Settling { () async throws(ProviderFailure) in
             try await provider.generate(ResidentSessionTests.question("[[silent]]"))
         }
-        try #require(await silent.outcome(within: .seconds(8)) == .failure(.timedOut), "the deadline held")
+        try #require(await silent.outcome() == .failure(.timedOut), "the deadline held")
+        let first = try #require(Self.spawned(events).first, "no process was started")
         #expect(await waitUntilGone(first))
         await provider.shutDown()
     }

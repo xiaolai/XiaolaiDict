@@ -18,16 +18,23 @@ public struct ResidentConfiguration: Sendable, Equatable {
     public var idleAfter: Duration?
     /// How long a process put away is given to end by itself, and then after `SIGTERM`, before `SIGKILL`.
     public var closeGrace: Duration
+    /// **How long the preflight waits for the CLI's `--version`** — five seconds, the bound it always had; a version
+    /// not printed by then is unknown, and the preflight goes on. In the configuration, so the one value a caller sets
+    /// reaches every bound the preflight keeps (2026-10-09: a test's fake, started on a loaded Mac, missed a bound no
+    /// configuration could reach).
+    public var versionTimeout: Duration
 
     public static let standard = ResidentConfiguration()
 
     public init(recycleAfter: Int = 6, turnTimeout: Duration = .seconds(30), openTimeout: Duration = .seconds(45),
-                idleAfter: Duration? = .seconds(ModelIdle.defaultSeconds), closeGrace: Duration = .seconds(1)) {
+                idleAfter: Duration? = .seconds(ModelIdle.defaultSeconds), closeGrace: Duration = .seconds(1),
+                versionTimeout: Duration = .seconds(5)) {
         self.recycleAfter = max(1, recycleAfter)
         self.turnTimeout = turnTimeout
         self.openTimeout = openTimeout
         self.idleAfter = idleAfter
         self.closeGrace = closeGrace
+        self.versionTimeout = versionTimeout
     }
 }
 
@@ -118,7 +125,7 @@ actor ResidentSession<Wire: ResidentWire> {
     private static var log: Logger { Logger(subsystem: XiaolaiDictIdentity.app, category: "providers") }
 
     private let wire: Wire
-    private let configuration: ResidentConfiguration
+    let configuration: ResidentConfiguration
     private let events: @Sendable (ResidentEvent) -> Void
     private let gate = TurnGate()
     private let children = ChildRegistry()

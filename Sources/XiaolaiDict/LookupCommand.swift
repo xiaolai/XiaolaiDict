@@ -112,8 +112,8 @@ enum LookupCommand {
             begin: { 0 })
         let took = (ContinuousClock.now - started).milliseconds
         switch outcome {
-        case .selection(let selection, _, _):
-            return emit(PointReport(selection, milliseconds: took.rounded()), through: writeLine) ?? .success
+        case .selection(let selection, _, _, let bounds):
+            return emit(PointReport(selection, bounds: bounds, milliseconds: took.rounded()), through: writeLine) ?? .success
         case .quiet(let refusal):
             writeError("nothing read: \(refusal.reason)")
             return .failure
@@ -154,8 +154,8 @@ enum LookupCommand {
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         if let front = (apps.first { $0.processIdentifier > 0 } ?? apps.first).flatMap({ FrontApp($0) }) {
             switch await SelectionReader.read(from: front) {
-            case .selected(let selection):
-                report = SelectionReport(selection)
+            case .selected(let selection, let bounds):
+                report = SelectionReport(selection, bounds: bounds)
                 status = .success
             case .nothing(let refusal):
                 report = ["nothing": refusal.message]
@@ -291,8 +291,23 @@ struct PointReport: Encodable, Equatable {
     let confidence: Double
     let context: String
     let milliseconds: Double
+    /// Where the word is, y down, and how well that is known — absent where the dialect could not say
+    /// (plan-card-refinements WI-2).
+    let bounds: Bounds?
 
-    init(_ selection: Selection, milliseconds: Double) {
+    struct Bounds: Encodable, Equatable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+        let quality: String
+    }
+
+    init(_ selection: Selection, bounds: ReadBounds?, milliseconds: Double) {
+        self.bounds = bounds.map {
+            Bounds(x: $0.rect.cg.minX, y: $0.rect.cg.minY, width: $0.rect.cg.width, height: $0.rect.cg.height,
+                   quality: $0.quality.rawValue)
+        }
         text = selection.text
         sentence = selection.sentence
         lemma = Lemmatizer.lemma(
@@ -325,8 +340,15 @@ struct SelectionReport: Encodable, Equatable {
     let captureSource: String
     let confidence: Double
     let context: String
+    /// Where the selected word is, y down, and how well that is known — absent where the app could not say (the
+    /// owner's decision of 2026-10-09: the card anchored on the word). `PointReport`'s shape.
+    let bounds: PointReport.Bounds?
 
-    init(_ selection: Selection) {
+    init(_ selection: Selection, bounds: ReadBounds? = nil) {
+        self.bounds = bounds.map {
+            PointReport.Bounds(x: $0.rect.cg.minX, y: $0.rect.cg.minY, width: $0.rect.cg.width, height: $0.rect.cg.height,
+                               quality: $0.quality.rawValue)
+        }
         let lemma = Lemmatizer.lemma(of: selection.text, in: selection.sentence, at: selection.rangeInSentence)
         text = selection.text
         sentence = selection.sentence

@@ -26,6 +26,14 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 readonly SELF
 cd "$(dirname "$SELF")/.."
 
+# **The Python this script's own checks run on — and, below, the E2E Mac's** — chosen by version (`Tools/python.sh`):
+# `python3` was whichever came first on PATH, and when a Homebrew upgrade left both Macs' newest Python unlinked on
+# 2026-10-10, macOS's 3.9.6 answered and the panel stage's validator no longer compiled. Every `python3` below is this.
+# shellcheck source=Tools/python.sh
+. Tools/python.sh
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "e2e: FAIL: no Python 3.12 or later on this Mac" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
+
 host=${1:?usage: e2e.sh <ssh-host> [stage...]}
 shift
 STAGES="$*"
@@ -246,6 +254,14 @@ is_running() {  # $1: an executable path. Stops the run, rather than answering, 
     [ "${#PIDS[@]}" -gt 0 ]
 }
 SH
+# **The E2E Mac's Python, chosen the way this Mac's is** — `Tools/python.sh`'s function, sent with every remote script,
+# and `python3` there made that choice, so every validator and helper below runs on 3.12 or later whatever its PATH
+# answers to `python3` (2026-10-10: 3.9.6, after a Homebrew upgrade). No such Python is a stopped run that says so.
+cat Tools/python.sh >>"$remote_scripts/common.sh"
+cat >>"$remote_scripts/common.sh" <<'SH'
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "e2e: the E2E Mac has no Python 3.12 or later" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
+SH
 
 # ---------------------------------------------------------------------------------------------
 stage "machine"
@@ -261,6 +277,44 @@ IFS='|' read -r remote_uuid remote_name remote_model remote_os remote_build <<<"
 [ -n "$remote_uuid" ] || fail "$host did not report a hardware UUID"
 [ "$remote_uuid" != "$local_uuid" ] || fail "$host is this Mac; E2E tests run on the E2E machine, not the one that builds"
 echo "$remote_name — $remote_model, macOS $remote_os ($remote_build)"
+
+# **The E2E Mac's ledger must be one this build can open** (2026-10-11). Every branch's build shares it, a build migrates
+# an older ledger forward, and a build refuses one newer than its own schema (`LedgerError.newerSchema`) — so once a newer
+# branch's build had run there, this branch's build recorded no lookup at all, and the lookup stage's ledger check failed
+# as "got: nothing" with nothing to say why. Asked before anything is installed, and stopped by name.
+#     ledger_schema_refusal <schema found there> <schema this build supports>: nothing and 0 where the build can open
+#     it; the reason and 1 where it cannot, or where the answer is no number.
+ledger_schema_refusal() {
+    local found=$1 supported=$2
+    case "$found" in
+        ''|*[!0-9]*) echo "the E2E Mac's ledger schema could not be read (answer: ${found:-nothing})"; return 1 ;;
+    esac
+    if [ "$found" -gt "$supported" ]; then
+        echo "the E2E Mac's ledger is at schema $found and this build supports $supported: a newer branch's build \
+migrated it, and this build refuses a newer ledger, so no lookup would be recorded. Move ledger.sqlite and its -wal and \
+-shm aside on that Mac (a .schema$supported.backup beside them is the ledger before that migration), or test a build of \
+schema $found"
+        return 1
+    fi
+}
+ledger_supported=$(sed -n 's/^ *public static let schemaVersion = \([0-9][0-9]*\)$/\1/p' Sources/StudyKit/Ledger.swift)
+[ -n "$ledger_supported" ] || fail "could not read Ledger.schemaVersion from Sources/StudyKit/Ledger.swift"
+# The quoted delimiter keeps this Mac's shell from expanding the remote $HOME and $f. **Read from a copy**: a ledger in
+# WAL mode whose app is not running has no -shm, and `-readonly` cannot open it at all (measured on the E2E Mac); a copy
+# with its -wal and -shm reads the same version and leaves the reader's files as they were.
+ledger_found=$(ssh_e2e bash -s <<'SH'
+f="$HOME/Library/Application Support/XiaolaiDict/ledger.sqlite"
+[ -f "$f" ] || { echo 0; exit 0; }
+t=$(mktemp -d)
+for part in "" -wal -shm; do [ ! -e "$f$part" ] || cp -p "$f$part" "$t/ledger.sqlite$part"; done
+sqlite3 "$t/ledger.sqlite" "pragma user_version"
+rm -rf "$t"
+SH
+) || ledger_found=""
+if ! why=$(ledger_schema_refusal "$ledger_found" "$ledger_supported"); then
+    fail "$why"
+fi
+echo "ledger: schema $ledger_found there, this build's $ledger_supported"
 
 # ---------------------------------------------------------------------------------------------
 # Runs on the E2E machine: quit a running copy of the E2E bundle, by its exact executable path.
@@ -288,15 +342,15 @@ stage "install"
 # compile error names `.build/e2e-src/<helper>/main.swift`. `Tools/tests/test_e2e_harness.py` compiles them all the
 # same way on every `make test`, so a helper that does not build is found before a run rather than at its start.
 rm -rf .build/e2e .build/e2e-src && mkdir -p .build/e2e
-for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions; do
+for helper in select-text select-web keys panel claim-escape word-point window-frame menu-click screen-state close-window click-element on-screen session-access app-health drawer-interactions element-frame drag-card; do
     mkdir -p ".build/e2e-src/$helper" && cp "Tools/e2e/$helper.swift" ".build/e2e-src/$helper/main.swift" \
-        && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift -o ".build/e2e/$helper" \
+        && swiftc -O ".build/e2e-src/$helper/main.swift" Tools/e2e/shared/running-app.swift Tools/e2e/shared/report.swift -o ".build/e2e/$helper" \
         || fail "could not build $helper"
 done
 # **`-p`, so a fixture that has not changed is not rewritten there.** `rsync -a` below sends a file whose time differs,
 # and a plain `cp` gave every fixture a new time on every run — so `notes.txt` was replaced under the TextEdit
 # document holding it open, each run, a change TextEdit has to reconcile and that nothing in a run needs.
-cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
+cp -p Tools/e2e/notes.txt Tools/e2e/page.html Tools/e2e/canvas.html Tools/e2e/ladder-gate.py Tools/e2e/library-layout.py Tools/e2e/review.py Tools/e2e/reminder.py Tools/e2e/provider-stub.py .build/e2e/
 remote_quit || fail "could not quit the running E2E copy"
 ssh_e2e "mkdir -p '$REMOTE_DIR'"
 rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy the bundle and helpers"
@@ -508,6 +562,8 @@ select_then_read() {
     local why reading
     if ! why=$("${selector[@]}" 2>&1); then flunk "$label: could not select ($why)"; return; fi
     reading=$("$exe" --read-selection "$app_id" 2>&1 || true)
+    # Kept for a check that asks more of the same reading (`selection_box`).
+    last_selection=$reading
     if why=$(expect "$reading" "$@" 2>&1); then pass "$label"; else flunk "$label: $why"; fi
 }
 
@@ -530,6 +586,29 @@ reports=$(mktemp -d /tmp/xiaolaidict-e2e.XXXXXX) || { echo "could not make a rep
 chmod 700 "$reports"
 drop_reports() { rm -rf "$reports"; }
 at_exit drop_reports
+
+# ledger_left <label> <ledger_digest before>: **an instrument run leaves the reader's ledger exactly as it found it** —
+# every reading, every sense met, all study state and the schema, by `ledger_digest`'s fingerprint of the whole file. The
+# panel and placement reports look a word up through the reader's door, which records, into a scratch ledger of their
+# own since 2026-10-10. Before that they recorded into this one and deleted every lookup above the newest id they had
+# started from — and this compared that id alone, so it passed a run that deleted another process's reading below it or
+# left a study note behind (the audit of 2026-10-10). A digest that could not be read, before or after, is no evidence.
+ledger_left() {
+    local label=$1 baseline=$2 now
+    if [ -z "$baseline" ]; then
+        flunk "$label: the reader's ledger could not be read before the run, so whether it was left alone is unknown"
+        return 0
+    fi
+    if ! now=$(ledger_digest "$ledger" 2>&1); then
+        flunk "$label: the reader's ledger could not be read after the run ($now)"
+        return 0
+    fi
+    if [ "$now" = "$baseline" ]; then
+        pass "$label left the reader's ledger exactly as it found it"
+    else
+        flunk "$label changed the reader's ledger: its readings, the senses met or its study state differ from before the run"
+    fi
+}
 
 # **A query that failed is not a ledger with no rows.** Falling back to 0 made every historical
 # lookup count as evidence of the one the stage had just driven — the baseline is what tells this
@@ -814,10 +893,14 @@ consume_verdicts() {  # consume_verdicts <stage-name> <verdicts>: PASS/NOTE/NOTR
 }
 
 run_report() {  # run_report <flag> <budget-seconds>: the report's JSON on stdout, or nothing
+    run_report_with "$@"
+}
+run_report_with() {  # run_report_with <flag> <budget-seconds> [argument...]: run_report, with the flag's own arguments
     local flag=$1 budget=$2 name=${1#--}
+    shift 2
     local out="$reports/$name.json" err="$reports/$name.err"
     rm -f "$out" "$err"
-    open -n --stdout "$out" --stderr "$err" "$app" --args "$flag"
+    open -n --stdout "$out" --stderr "$err" "$app" --args "$flag" "$@"
     local waited=0
     while [ ! -s "$out" ] && [ "$waited" -lt $((budget * 2)) ]; do sleep 0.5; waited=$((waited + 1)); done
     # Past its budget it is stopped; within it, it exits by itself once it has written. Waited for
@@ -1082,11 +1165,21 @@ end_process() {
 
 # fixture_health: `app-health`'s report on TextEdit and the fixture once it is `ok`, or the last one after 10 s — a
 # document opened a moment ago is still loading. Hung, blocked and no Accessibility are answers at once.
+#
+# **Every sentence a stage selects in, each asked for** (2026-10-09): the meeting line, and the typo line the `lookup`
+# stage looks up (plan-spelling-suggestion). Asking for the first alone passed a TextEdit holding an **older copy** of
+# the fixture — `open` brings a document already open forward and never reads it again — and `select-text` then found
+# no typo to select, on the E2E Mac, the first run after the fixture gained its line.
+fixture_sentences=("The meeting ended after we stopped meeting at noon." "We will recieve the parcel tomorrow."
+                   "The clouds heavied over the hill.")
 fixture_health() {
-    local health="" state
+    local health="" state sentence
     for _ in $(seq 1 20); do
-        health=$("$helpers/app-health" com.apple.TextEdit "The meeting ended after we stopped meeting at noon." 2>&1) && break
+        for sentence in "${fixture_sentences[@]}"; do
+            health=$("$helpers/app-health" com.apple.TextEdit "$sentence" 2>&1) || break
+        done
         state=$(printf '%s' "$health" | json_field state)
+        [ "$state" = ok ] && break
         if [ "$state" = hung ] || [ "$state" = blocked ] || [ "$state" = noAccessibility ]; then break; fi
         sleep 0.5
     done
@@ -1113,7 +1206,7 @@ fixture_ready() {
             return 1
         fi
         if [ "$attempt" = 2 ] || [ "$state" = noAccessibility ]; then
-            echo "TextEdit cannot hold the fixture the selection, shortcut, deadline, hover, drawer, learning, model and provider stages select in: $state — $detail$again" >&2
+            echo "TextEdit cannot hold the fixture the lookup, selection, shortcut, deadline, hover, drawer, learning, model and provider stages select in: $state — $detail$again" >&2
             return 1
         fi
         pid=$(printf '%s' "$health" | json_field pid)
@@ -1121,6 +1214,13 @@ fixture_ready() {
             echo "NOTE  preflight: TextEdit was $state — $detail; it is ended and opened again on the fixture"
             again=" (after it was ended and opened again)"
             end_process "$pid" || { echo "TextEdit was $state ($detail) and would not end (pid $pid)" >&2; return 1; }
+        # **A TextEdit holding an older copy of the fixture**: its window is the harness's own document, so it is closed —
+        # an unedited document closes without asking — and the fixture opened again, from disk. TextEdit, and whatever
+        # else it has open, are left alone. **Found by its file, never its title** (audit round 3): another document
+        # called notes.txt is someone else's, and a file no window, two windows or an unreadable one might hold is refused.
+        elif [ "$state" = noFixture ] && "$helpers/close-window" --document "$helpers/notes.txt" com.apple.TextEdit >/dev/null 2>&1; then
+            echo "NOTE  preflight: TextEdit held an older copy of the fixture — $detail; its window is closed and the fixture opened again from disk"
+            again=" (after its window was closed and the fixture opened again)"
         else
             echo "NOTE  preflight: TextEdit was $state — $detail; it is opened again on the fixture"
             again=" (after it was opened again)"
@@ -1167,7 +1267,8 @@ if wants_any learning hover; then
         lacks "screencapture from this SSH session made no picture ($(head -c 200 "$reports/preflight-screen.err")) although the session reads as allowed to record — the learning stage's captures would fail the same way"
     fi
 fi
-if wants_any learning; then
+# The hover stage too, since 2026-10-10: it sees the card above its word in the dark appearance (plan-card-refinements D3).
+if wants_any learning hover; then
     scripting=$(printf '%s' "$access" | json_field automation com.apple.systemevents)
     if [ "$scripting" = notRunning ]; then
         # Asked of a running System Events only; starting it is a LaunchServices launch, and sends no Apple event.
@@ -1180,7 +1281,7 @@ if wants_any learning; then
         done
     fi
     if [ "$scripting" != granted ]; then
-        lacks "this SSH session may not script System Events ($scripting), which the learning stage uses to switch the system's appearance — at the Mac, allow $session_client to control System Events in System Settings › Privacy & Security › Automation (notAsked means the first stage that scripts it would raise the Allow prompt on that screen, with nobody there to answer)"
+        lacks "this SSH session may not script System Events ($scripting), which the learning and hover stages use to switch the system's appearance — at the Mac, allow $session_client to control System Events in System Settings › Privacy & Security › Automation (notAsked means the first stage that scripts it would raise the Allow prompt on that screen, with nobody there to answer)"
     fi
 fi
 
@@ -1192,7 +1293,7 @@ fi
 # 5. **TextEdit, answering and holding the fixture**, where a stage selects in it — and only where this session can use
 #    Accessibility on an unlocked screen, or every answer here would be about that instead.
 if [ "$screen_ok" = yes ] && [ "$session_accessibility" = yes ] \
-   && wants_any selection shortcut deadline hover drawer learning model provider; then
+   && wants_any lookup selection shortcut deadline hover drawer learning model provider; then
     fixture_ready 2>"$reports/fixture-ready.err" || lacks "$(cat "$reports/fixture-ready.err")"
 fi
 
@@ -1256,6 +1357,27 @@ ledger_digest() {  # ledger_digest <path>: content fingerprint of a ledger that 
 # ledger aside goes through here.
 ledger_backup() {  # ledger_backup <ledger> <copy>: SQLite's own backup of the ledger into <copy>
     sqlite3 -readonly "$(ledger_source "$1")" ".backup '$2'"
+}
+
+# **The system's appearance, read and set in one place** — the learning and hover stages switch it, and each must put
+# back what it found. `dark_mode_now` prints `true` or `false` and fails on anything else: a read that failed, or
+# answered neither, is no value to put back, and a stage that cannot put the appearance back must not change it (audit
+# of 2026-10-10: both stages read it with the failure suppressed, changed it anyway, and restored only a `true` or
+# `false` — so a failed read left the Mac dark). `set_dark_mode` refuses anything but the two.
+dark_mode_now() {  # dark_mode_now: `true` or `false`, or the reason on stderr and a failure
+    local answer
+    answer=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2>&1) \
+        || { echo "the appearance could not be read: $answer" >&2; return 1; }
+    case $answer in
+        true|false) printf '%s' "$answer" ;;
+        *) echo "the appearance read as '$answer', which is neither dark nor light" >&2; return 1 ;;
+    esac
+}
+set_dark_mode() {  # set_dark_mode <true|false>
+    case ${1:-} in
+        true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" >/dev/null ;;
+        *) echo "set_dark_mode: '${1:-}' is not an appearance" >&2; return 1 ;;
+    esac
 }
 
 # **The reader's review reminders, around a stage that launches the app on a ledger that is not theirs.**
@@ -1350,6 +1472,531 @@ if lookup=$("$exe" --lookup ephemeral 2>&1) && [ "$(printf '%s\n' "$lookup" | ou
 else
     flunk "lookup: $lookup"
 fi
+
+# 2b. **"Look up “X”" under a miss (plan-spelling-suggestion; the owner's ruling of 2026-10-11, ADR-0054 part B), through
+#     the instrument and then as the reader meets it.** One offer chosen by evidence, or none where credible alternatives
+#     remain — never two side by side.
+#
+#     The instrument needs no grant: the fixture's typo, through this bundle's spell checker and dictionary service, is
+#     offered its correction — the same `SpellingSuggester` the card asks. The rare real word is reported, not asserted:
+#     what the checker says of `ambages` is a fact about the Mac (nothing on the development Mac, `ambles` on the E2E Mac,
+#     the same macOS build — plan §7, 2026-10-09).
+spelling_status=0
+spelling=$("$exe" --spelling-report recieve ambages gazeboes dalesmen droughtier heavied glacises prideed Frances \
+    2>"$reports/spelling-report.err") || spelling_status=$?
+if [ "$spelling_status" -ne 0 ]; then
+    flunk "lookup: --spelling-report exited $spelling_status ($(head -c 300 "$reports/spelling-report.err"))"
+fi
+# The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+# cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+spelling_verdicts() {
+    python3 - "$@" <<'PYSPELLING' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+# The terms the report is asked about, read back by name — terms, not report keys.
+typo_term, rare_term = "recieve", "ambages"
+lines = {}
+for raw in sys.argv[1].splitlines():
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        continue
+    lines[line.get("term")] = line
+typo = lines.get(typo_term) or {}
+say(typo.get("outcome") == "notFound" and typo.get("offer") == "offered" and typo.get("suggestion") == "receive"
+    and typo.get("rule") == "correction" and typo.get("correctionEdit") == "transposition",
+    f"lookup: --spelling-report offers “receive” for the fixture typo “recieve”, one transposition, "
+    f"{typo.get('suggestionMilliseconds')} ms after its {typo.get('lookupMilliseconds')} ms miss",
+    f"lookup: --spelling-report did not offer “receive” for “recieve” as one transposition: {typo or sys.argv[1][:300]}")
+# **Every line is one offer or none, and says which rule decided** (the owner's ruling of 2026-10-11): an offered line
+# names its one word and an offering rule; an abstention names no word. A step in which no line was read measured nothing.
+offering = {"printed", "regular", "agreement", "correction"}
+malformed = [t for t, got in lines.items()
+             if (got.get("offer") == "offered") != (bool(got.get("suggestion")) and got.get("rule") in offering)]
+rules = ", ".join(sorted(str(t) + "=" + str(got.get("rule")) for t, got in lines.items()))
+say(bool(lines) and not malformed,
+    f"lookup: {len(lines)} lines, each one offer or none with its deciding rule ({rules})",
+    f"lookup: lines whose offer and rule disagree: {malformed or 'no line at all'}")
+# **A missed inflection is offered its dictionary form, or nothing** (plan-card-refinements WI-3): `gazeboes` is
+# *gazebo*'s plural, printed or regular. Regular, it is offered only where the checker's word is the same noun's plural
+# (agreement) or the checker names no credible rival; against a rival from another family, nothing.
+form_term = "gazeboes"
+form = lines.get(form_term) or {}
+gazebo_offered = form.get("offer") == "offered" and form.get("suggestion") == "gazebo" \
+    and form.get("rule") in ("printed", "agreement", "regular")
+gazebo_silent = form.get("offer") == "abstained" and form.get("rule") == "conflict"
+say(form.get("outcome") == "notFound" and (gazebo_offered or gazebo_silent),
+    f"lookup: --spelling-report decides “gazeboes” by {form.get('rule')}: "
+    f"{'offers “gazebo”' if gazebo_offered else 'nothing, against the checker’s “' + str(form.get('correction')) + '”'}",
+    f"lookup: --spelling-report offered “gazeboes” neither “gazebo” nor a reasoned nothing: {form or sys.argv[1][:300]}")
+# **What the checker made of four real inflections on this Mac is never offered** (plan-card-refinements §6): it turned
+# them into salesmen, doughtier, heavier and glasses, and each verified. Printed, the form is offered and the checker is
+# not asked; unprinted, the checker's word is a rival and nothing is offered. A step in which none was decided measured
+# nothing, and fails.
+decided = 0
+for inflected_term, inflected_form, wrong in (("dalesmen", "dalesman", "salesmen"), ("droughtier", "droughty", "doughtier"),
+                                              ("heavied", "heavy", "heavier"), ("glacises", "glacis", "glasses")):
+    got = lines.get(inflected_term) or {}
+    if not got:
+        continue
+    decided += 1
+    printed = got.get("rule") == "printed" and got.get("suggestion") == inflected_form
+    say(got.get("outcome") == "notFound" and got.get("suggestion") != wrong
+        and (printed or got.get("offer") == "abstained" or got.get("suggestion") == inflected_form),
+        f"lookup: “{inflected_term}” is offered {('“' + inflected_form + '”, printed') if printed else 'nothing'} "
+        f"({got.get('rule')}), never the checker’s “{wrong}”",
+        f"lookup: “{inflected_term}” was offered the wrong word or no reasoned decision: {got}")
+if decided == 0:
+    say(False, "", "lookup: none of the four inflections was reported, so the order was not measured")
+# **Where nothing prints “heavied”, its regular “heavy” meets the checker’s “heavier” one edit away**, and the card is
+# offered nothing: two credible readings, never both (the owner's ruling of 2026-10-11). Printed, “heavy” stands alone.
+kept_term = "heavied"  # a term, read back by name, not a report key
+heavied = lines.get(kept_term) or {}
+say(heavied.get("outcome") == "notFound"
+    and ((heavied.get("rule") == "printed" and heavied.get("suggestion") == "heavy")
+         or (heavied.get("rule") == "conflict" and heavied.get("dictionaryForm") == "heavy"
+             and heavied.get("correctionDistance") == 1 and "suggestion" not in heavied)
+         or (heavied.get("rule") == "regular" and heavied.get("suggestion") == "heavy")),
+    f"lookup: “heavied” is decided by {heavied.get('rule')} on this Mac’s dictionaries "
+    f"(form {heavied.get('dictionaryForm')} {heavied.get('dictionaryFormEvidence')}, checker {heavied.get('correction')})",
+    f"lookup: “heavied” was not decided by print, agreement-free regularity or conflict: {heavied or sys.argv[1][:300]}")
+# **And refuse what the guards exist to refuse**: “prideed” is no form of “pride” and “Frances” no plural of “France”,
+# so no dictionary form is tried for either, and neither base is offered.
+for rejected_term, rejected_form in (("prideed", "pride"), ("Frances", "france")):
+    got = lines.get(rejected_term)
+    say(got is not None and got.get("dictionaryForm") is None and got.get("suggestion") != rejected_form,
+        f"lookup: the guards offer “{rejected_term}” no dictionary form; the decision is "
+        f"{(got or {}).get('rule')} “{(got or {}).get('suggestion') or 'nothing'}”",
+        f"lookup: the guards let “{rejected_term}” be offered “{rejected_form}”: {got or sys.argv[1][:300]}")
+rare = lines.get(rare_term)
+if rare is None:
+    say(False, "", f"lookup: --spelling-report wrote no line for “ambages”: {sys.argv[1][:300]}")
+else:
+    print(f"NOTE\tlookup: this Mac’s checker on the rare real word “ambages”: {rare.get('rule')} "
+          f"{rare.get('correction') or ''}".rstrip())
+print("DONE")
+PYSPELLING
+}
+consume_verdicts lookup "$(spelling_verdicts "$spelling")"
+
+#     **And as the reader meets it**: the typo selected in the fixture and ⌃⌥D pressed — the miss card first, then the
+#     one button under it, then the button pressed and the corrected word's card in the same panel, and both readings in
+#     the ledger. Timed by polling from the keypress, so each figure is within a poll of the truth: the button's own time
+#     is the instrument's above.
+#     spelling_state <panel report> [term] [word]: `miss`, `line`, `offers=N` and `card`, each where the lookup panel shows
+#     it, **read exactly** (audit, 2026-10-09): the term's own miss, the control named for the offered word, how many
+#     "Look up “…”" controls the card holds — one or none, never two (the owner's ruling of 2026-10-11) — and the card
+#     headed by the word itself — a definition or a sentence that holds the word, or a heading like "receiver", is not its
+#     card — and the card only from a walk that finished, since a walk cut short cannot say that "No entry for" is not
+#     there. And `exit`, the "Dictionaries…" control every answered card carries (plan-card-refinements WI-1), read on the
+#     miss card and on the corrected word's card. The term and word default to the fixture's typo and its correction.
+#     `TheSpellingStepReadsThePanelExactly` holds each of those with a control.
+spelling_state() {
+    python3 - "$1" "${2:-recieve}" "${3:-receive}" <<'PYSTATE' 2>/dev/null || true
+import json, sys
+try:
+    report = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    report = {}
+term, word = sys.argv[2], sys.argv[3]
+windows = report.get("windows", [])
+texts = [t for w in windows for t in w.get("texts", [])]
+controls = [c for w in windows for c in w.get("controls", [])]
+state = []
+if any("No entry for" in t and f"“{term}”" in t for t in texts): state.append("miss")
+if f"Look up “{word}”" in controls: state.append("line")
+offers = [c for c in controls if c.startswith("Look up “") and c.endswith("”")]
+state.append(f"offers={len(offers)}")
+# The way to Settings › Dictionary, which every answered card carries (plan-card-refinements WI-1).
+if "Dictionaries…" in controls: state.append("exit")
+answered = not any("No entry for" in t or "Looking up" in t for t in texts)
+if report.get("complete") is True and word in texts and answered: state.append("card")
+print(" ".join(state))
+PYSTATE
+}
+#     spelling_offer <term> <word or empty> <card style>: the term selected in the fixture and ⌃⌥D pressed; its miss card
+#     must come up, then — where a word is expected — exactly one button, "Look up “word”", with the miss still on the
+#     card; where none is, no button at all for 5 s after the miss. Leaves the panel up and its last reading in
+#     `spelling_view`; returns 1 where the expectation failed, having said why.
+spelling_view=""
+spelling_offer() {
+    local term=$1 word=$2 style=$3 why started missed="" offered="" state grant settled
+    # **The fixture in front at the moment of selecting**, not only before the step: the shortcut reads the selection of
+    # the app in front, and on the E2E Mac Safari came forward between a relaunch and this step (2026-10-11), so the
+    # compact card looked up Safari's selection instead of the typo.
+    if ! why=$(ensure_fixture_open 2>&1); then
+        flunk "lookup ($style): $why, so “${term}” was never looked up"
+        return 1
+    fi
+    if ! why=$("$helpers/select-text" com.apple.TextEdit "$term" 1 2>&1); then
+        flunk "lookup ($style): could not select “${term}” in the fixture ($why)"
+        return 1
+    fi
+    started=$(now_seconds)
+    "$helpers/keys" 2 control option
+    for _ in $(seq 1 150); do
+        spelling_view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || spelling_view=""
+        state=$(spelling_state "$spelling_view" "$term" "${word:-"-"}")
+        if [ -z "$missed" ] && [[ " $state " == *" miss "* ]]; then missed=$(now_seconds); fi
+        if [ -n "$missed" ] && [ -n "$word" ] && [[ " $state " == *" line "* ]]; then offered=$(now_seconds); break; fi
+        if [ -n "$missed" ] && [ -z "$word" ]; then
+            # **Silence is watched, not assumed**: 5 s from the miss, longer than the instrument's slowest decision.
+            settled=$(python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]) >= 5)' "$missed" "$(now_seconds)")
+            [[ " $state " == *" offers=0 "* ]] || break
+            [ "$settled" = True ] && break
+        fi
+        sleep 0.1
+    done
+    if [ -z "$missed" ]; then
+        grant=$(missing_grant)
+        flunk "lookup ($style): “${term}” never drew its miss card${grant:+ — the app says \"$grant\"} ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [ -z "$word" ]; then
+        if [[ " $state " == *" offers=0 "* ]] && [[ " $state " == *" miss "* ]]; then
+            pass "lookup ($style): the miss card for “${term}” offers no button — its candidates disagree — and keeps its miss"
+            return 0
+        fi
+        flunk "lookup ($style): the miss card for “${term}” offered a button where its candidates disagree: $state ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [ -z "$offered" ]; then
+        flunk "lookup ($style): the miss card for “${term}” never offered “Look up “${word}”” in 15 s ($(printf '%s' "$spelling_view" | head -c 300))"
+        return 1
+    fi
+    if [[ " $state " == *" offers=1 "* ]] && [[ " $state " == *" miss "* ]]; then
+        pass "lookup ($style): the miss card for “${term}” came up $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$started" "$missed")s after ⌃⌥D, its miss kept and one button, “Look up “${word}””, under it $(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$missed" "$offered")s later"
+        return 0
+    fi
+    flunk "lookup ($style): the miss card for “${term}” did not hold its miss and exactly one button: $state"
+    return 1
+}
+#     press_offer <word> <card style>: presses "Look up “word”" through Accessibility and waits for the word's own card in
+#     the one panel; leaves its reading in `spelling_view`. Pressed through Accessibility: the panel never activates the
+#     app, so the frontmost rule a real click needs can never be met for it (`click-element --press`).
+press_offer() {
+    local word=$1 style=$2 why state
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Look up “${word}”" 2>&1); then
+        flunk "lookup ($style): “Look up “${word}”” could not be pressed ($why)"
+        return 1
+    fi
+    for _ in $(seq 1 100); do
+        spelling_view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || spelling_view=""
+        state=$(spelling_state "$spelling_view" "-" "$word")
+        [[ " $state " == *" card "* ]] && return 0
+        sleep 0.1
+    done
+    flunk "lookup ($style): pressing the button never showed the card for “${word}” ($(printf '%s' "$spelling_view" | head -c 300))"
+    return 1
+}
+#     **What a bilingual sense's label leaves out, on the default card, behind its own disclosure** (plan-card-refinements
+#     WI-4, the owner's decision of 2026-10-09). Which dictionary the card is on is read off the card — the name its
+#     dictionary row carries — so the step follows this Mac's own choice of primary: a dictionary whose name is Chinese is
+#     a bilingual and must offer "Translations and notes", closed, and pressing it must add lines the card did not show
+#     before; a dictionary named in English is a monolingual and must not offer it. A card with no dictionary row (one
+#     dictionary answered) cannot say which it is, and is noted.
+#     details_state <panel report>: one JSON line — the card's dictionary, whether the disclosure is offered, the texts.
+details_state() {
+    python3 - "$1" <<'PYDETAILS' 2>/dev/null || true
+import json, re, sys
+try:
+    report = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    report = {}
+windows = report.get("windows", [])
+controls = [c for w in windows for c in w.get("controls", [])]
+row = next((c for c in controls if re.search(r", \d+ other dictionar(y|ies)$", c)), None)
+print(json.dumps({"dictionary": row.rsplit(", ", 1)[0] if row else None,
+                  "offered": "Translations and notes" in controls,
+                  "texts": [t for w in windows for t in w.get("texts", [])]}, ensure_ascii=False))
+PYDETAILS
+}
+# **The details belong to the entry they were opened on** (plan-card-refinements D2, 2026-10-10): with them open on the
+# bilingual card, the reader switches to another dictionary's entry and back through the card's own list, and the card
+# comes back closed — while it was away the disclosure was not drawn, so a reset carried by it could not run.
+# `CardDisclosureTests` holds the rule with presses in the test process; this holds it on the real panel.
+#     footer_row <panel report>: the label of the card's dictionary row, "<dictionary>, N other dictionaries", or nothing.
+footer_row() {
+    python3 - "$1" <<'PYFOOTER' 2>/dev/null || true
+import json, re, sys
+try:
+    report = json.loads(sys.argv[1], strict=False)
+except ValueError:
+    report = {}
+controls = [c for w in report.get("windows", []) for c in w.get("controls", [])]
+print(next((c for c in controls if re.search(r", \d+ other dictionar(y|ies)$", c)), ""))
+PYFOOTER
+}
+#     switch_dictionary <from-dictionary> <to: other|the name>: opens the list, presses a row of another dictionary (or
+#     of the one named), and waits until the card's own row names it. Says why where it could not.
+switch_dictionary() {
+    local from=$1 to=$2 view footer before after row why
+    view=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || view=""
+    footer=$(footer_row "$view")
+    [ -n "$footer" ] || { echo "the card has no dictionary row"; return 1; }
+    before=$view
+    why=$("$helpers/click-element" com.xiaolaidict --press "$footer" 2>&1) || { echo "its row would not open ($why)"; return 1; }
+    for _ in $(seq 1 30); do
+        after=$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null) || after=""
+        row=$(python3 - "$before" "$after" "$from" "$to" <<'PYROW' 2>/dev/null || true
+import json, sys
+def controls(raw):
+    try:
+        return [c for w in json.loads(raw, strict=False).get("windows", []) for c in w.get("controls", [])]
+    except ValueError:
+        return []
+was, now, source, target = set(controls(sys.argv[1])), controls(sys.argv[2]), sys.argv[3], sys.argv[4]
+rows = [c for c in now if c not in was]
+pick = [r for r in rows if not r.startswith(source)] if target == "other" else [r for r in rows if r.startswith(target)]
+print(pick[0] if pick else "")
+PYROW
+)
+        [ -n "$row" ] && break
+        sleep 0.1
+    done
+    [ -n "$row" ] || { echo "the list showed no row to switch to"; return 1; }
+    why=$("$helpers/click-element" com.xiaolaidict --press "$row" 2>&1) || { echo "“${row}” could not be pressed ($why)"; return 1; }
+    for _ in $(seq 1 30); do
+        footer=$(footer_row "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+        if [ -n "$footer" ] && { { [ "$to" = other ] && [[ "$footer" != "$from"* ]]; } || [[ "$footer" == "$to"* ]]; }; then
+            printf '%s' "${footer%, *}"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "pressing “${row}” never switched the card"; return 1
+}
+details_follow_the_entry() {  # details_follow_the_entry <details_state before the details were opened> <… once opened>
+    local before=$1 opened=$2 original other back after
+    original=$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["dictionary"] or "")' 2>/dev/null)
+    if ! other=$(switch_dictionary "$original" other); then
+        flunk "lookup: could not switch the card for “receive” to another dictionary: $other"
+        return 0
+    fi
+    if ! back=$(switch_dictionary "$other" "$original"); then
+        flunk "lookup: could not switch the card for “receive” back to $original: $back"
+        return 0
+    fi
+    after=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+    # **Read by pressing it once more**: a closed disclosure shows the lines it revealed again, an open one hides them.
+    # The card around it may change while it is away — the sense the selector proposes arrives late, and its label is new
+    # to the card — so which way the press moves the revealed lines is the reading, not whether any are shown.
+    local again="" why
+    if ! why=$("$helpers/click-element" com.xiaolaidict --press "Translations and notes" 2>&1); then
+        flunk "lookup: back on $original, “Translations and notes” could not be pressed ($why)"
+        return 0
+    fi
+    for _ in $(seq 1 30); do
+        again=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+        [ "$again" != "$after" ] && break
+        sleep 0.1
+    done
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    details_back_verdicts() {
+        python3 - "$@" <<'PYBACK' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def state(raw, empty): return json.loads(raw or empty)
+before, opened = state(sys.argv[1], "{}"), state(sys.argv[2], '{"texts": []}')
+back, again, other = state(sys.argv[3], '{"offered": null}'), state(sys.argv[4], '{"texts": []}'), sys.argv[5]
+revealed = set(opened.get("texts", [])) - set(before.get("texts", []))
+shown_back = revealed & set(back.get("texts", []))
+shown_again = revealed & set(again.get("texts", []))
+# `details_state`'s own key, read by subscript: it is this file's summary, not an instrument's report.
+say(back["offered"] is True and bool(revealed) and len(shown_again) > len(shown_back),
+    f"lookup: with its details open, the {before['dictionary']} card for “receive” switched to {other} and back comes up "
+    f"with “Translations and notes” closed — pressing it then shows {len(shown_again)} of the {len(revealed)} lines it "
+    f"had revealed, against {len(shown_back)} before the press",
+    f"lookup: the {before['dictionary']} card for “receive” came back from {other} with its details open, or without "
+    f"them: offered {back['offered']}, {len(shown_back)} of the {len(revealed)} revealed lines shown on return and "
+    f"{len(shown_again)} after a press, e.g. {sorted(shown_back)[:3]}")
+print("DONE")
+PYBACK
+    }
+    consume_verdicts lookup "$(details_back_verdicts "$before" "$opened" "$after" "$again" "$other")"
+}
+sense_details_on() {  # sense_details_on <panel report of the card for “receive”>
+    local before after why
+    before=$(details_state "$1")
+    case "$(printf '%s' "$before" | python3 -c '
+import json, re, sys
+s = json.load(sys.stdin)
+name = s.get("dictionary")
+print("unknown" if not name else ("bilingual" if re.search(r"[㐀-鿿]", name) else "monolingual"))' 2>/dev/null)" in
+    bilingual)
+        if [ "$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offered"])')" != True ]; then
+            flunk "lookup: the bilingual card for “receive” does not offer “Translations and notes” ($(printf '%s' "$before" | head -c 300))"
+            return 0
+        fi
+        if ! why=$("$helpers/click-element" com.xiaolaidict --press "Translations and notes" 2>&1); then
+            flunk "lookup: “Translations and notes” could not be pressed ($why)"
+            return 0
+        fi
+        for _ in $(seq 1 30); do
+            after=$(details_state "$("$helpers/panel" com.xiaolaidict 2>/dev/null | lookup_windows 2>/dev/null)")
+            [ "$(printf '%s\n%s' "$before" "$after" | python3 -c '
+import json, sys
+a, b = (json.loads(line) for line in sys.stdin.read().splitlines())
+print(len(set(b["texts"]) - set(a["texts"])))' 2>/dev/null)" -gt 0 ] 2>/dev/null && break
+            sleep 0.1
+        done
+        consume_verdicts lookup "$(python3 - "$before" "$after" <<'PYOPENED' 2>&1 || true
+import json, re, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+before, after = json.loads(sys.argv[1]), json.loads(sys.argv[2] or "{}")
+new = [t for t in after.get("texts", []) if t not in set(before.get("texts", []))]
+han = [t for t in new if re.search(r"[㐀-鿿]", t)]
+say(bool(han), f"lookup: the {before['dictionary']} card for “receive” offers “Translations and notes”, closed, and "
+    f"opening it shows {len(new)} lines it did not show before, e.g. “{(han or [''])[0][:40]}”",
+    f"lookup: opening “Translations and notes” showed nothing new in Chinese: {new[:10]}")
+print("DONE")
+PYOPENED
+)"
+        details_follow_the_entry "$before" "$after"
+        ;;
+    monolingual)
+        if [ "$(printf '%s' "$before" | python3 -c 'import json,sys; print(json.load(sys.stdin)["offered"])')" = True ]; then
+            flunk "lookup: the monolingual card for “receive” offers “Translations and notes”"
+        else
+            pass "lookup: the monolingual card for “receive” offers no “Translations and notes”"
+        fi
+        ;;
+    *)
+        echo "NOTE  lookup: the card for “receive” names no dictionary, so whether it should offer “Translations and notes” is unknown"
+        ;;
+    esac
+}
+# replaced_in_place <drag-card's line> <the panel's view once the word's card is up>: **the drag moved the miss card, and
+# the word's card is where the drag left it** (audit of 2026-10-10: a followed suggestion was placed afresh against the
+# misspelling, so a card the reader had dragged aside jumped back). The window's top-left is compared, within two points:
+# its height is the content's, growing down from a top the reader set.
+replaced_in_place() {
+    python3 - "$1" "$2" <<'PYINPLACE' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+try:
+    drag = json.loads(sys.argv[1])
+except ValueError:
+    drag = {}
+try:
+    view = json.loads(sys.argv[2], strict=False)
+except ValueError:
+    view = {}
+before, after = drag.get("before") or {}, drag.get("after") or {}
+nodes = ((view.get("windows") or [{}])[0].get("nodes") or [])
+now = next((n.get("frame") for n in nodes if n.get("role") == "AXWindow" and n.get("frame")), {}) or {}
+def at(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f}"
+moved = bool(before) and bool(after) and abs(after.get("x", 0) - before.get("x", 0) - 80) <= 3 \
+    and abs(after.get("y", 0) - before.get("y", 0) - 60) <= 3
+say(moved, f"lookup: the miss card was dragged aside, {at(before)} → {at(after)}",
+    f"lookup: a drag of +80,+60 did not move the miss card so: {before} → {after}")
+held = moved and bool(now) and abs(now.get("x", 0) - after.get("x", 0)) <= 2 and abs(now.get("y", 0) - after.get("y", 0)) <= 2
+say(held, f"lookup: the card for “receive” replaced it where the reader left it ({at(now)})",
+    f"lookup: the card for “receive” is at {at(now) if now else 'no frame'}, not where the reader left the miss card ({at(after)})")
+print("DONE")
+PYINPLACE
+}
+spelling_panel() {
+    local baseline result view drag state
+    if ! ensure_fixture_open; then
+        flunk "lookup: the TextEdit fixture would not come to the front, so the typo was never looked up"
+        return 0
+    fi
+    baseline=$(newest_row_id)
+    assert_default_shortcut || true
+    if ! spelling_offer recieve receive "detailed card"; then
+        "$helpers/keys" 53 2>/dev/null || true
+        return 0
+    fi
+    view=$spelling_view
+    state=$(spelling_state "$view")
+    if [[ " $state " == *" exit "* ]]; then
+        pass "lookup: the miss card for “recieve” offers “Dictionaries…”"
+    else
+        flunk "lookup: the miss card for “recieve” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
+    fi
+    # **The miss card dragged aside first, as a reader may** (audit of 2026-10-10): the card for the word must replace it
+    # where the reader left it, not jump back to the misspelling. By its text, never a control, with real events.
+    if ! drag=$("$helpers/drag-card" com.xiaolaidict Lookup "No entry for" 80 60 2>&1); then
+        flunk "lookup: the miss card could not be dragged aside, so where its replacement goes was not checked ($drag)"
+        drag=""
+    fi
+    if press_offer receive "detailed card"; then
+        view=$spelling_view
+        state=$(spelling_state "$view")
+        if [[ " $state " == *" exit "* ]]; then
+            pass "lookup: the card for “receive” offers “Dictionaries…”"
+        else
+            flunk "lookup: the card for “receive” has no “Dictionaries…” ($(printf '%s' "$view" | head -c 300))"
+        fi
+        [ -n "$drag" ] && consume_verdicts lookup "$(replaced_in_place "$drag" "$view")"
+        if [ "$(printf '%s' "$view" | python3 -c 'import json,sys; print(len(json.load(sys.stdin, strict=False)["windows"]))' 2>/dev/null)" = 1 ]; then
+            pass "lookup: pressing the button showed the card for “receive”, in the one panel"
+            sense_details_on "$view"
+        else
+            flunk "lookup: pressing the button showed the card for “receive” in more than one panel ($(printf '%s' "$view" | head -c 300))"
+        fi
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    # **The miss stays a miss, and the word is a reading of its own** — each waited for by its own row, in the app the
+    # typo was read in, since the corrected lookup keeps the reading's place.
+    row_after "$baseline" recieve com.apple.TextEdit >/dev/null
+    row_after "$baseline" receive com.apple.TextEdit >/dev/null
+    result=""
+    for _ in $(seq 1 80); do
+        result="$(sqlite3 -readonly "$ledger" "select group_concat(surface || '=' || result, ' ') from (select surface, result from lookups where id > $baseline and source_app = 'com.apple.TextEdit' and surface in ('recieve', 'receive') order by id)" 2>/dev/null || true)"
+        case "$result" in *pending*|"") sleep 0.25 ;; *) break ;; esac
+    done
+    if [ "$result" = "recieve=notFound receive=found" ]; then
+        pass "lookup: the ledger holds the miss as a miss and the suggested word as a reading of its own ($result)"
+    else
+        flunk "lookup: expected the miss and then the suggested word in the ledger, got: ${result:-nothing}"
+    fi
+    # **A typed inflection whose candidates disagree is offered nothing** (the owner's ruling of 2026-10-11): what this
+    # Mac's instrument decided for “heavied” is what its card must show — no button where the regular “heavy” meets the
+    # checker's “heavier”, the one word where the dictionaries print it.
+    # The fixture brought to the front again: pressing the button left the panel's app in front, and the shortcut reads
+    # the selection of the app in front.
+    if ensure_fixture_open; then
+        spelling_offer heavied "$heavied_offer" "detailed card" || true
+    else
+        flunk "lookup (detailed card): the TextEdit fixture would not come to the front for “heavied”"
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+}
+# The word the instrument offered for “heavied” on this Mac, or nothing — what both cards are held to.
+heavied_offer=$(printf '%s\n' "$spelling" | python3 -c '
+import json, sys
+for raw in sys.stdin:
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        continue
+    if line.get("term") == "heavied":
+        print(line.get("suggestion") or "")' 2>/dev/null) || heavied_offer=""
+# **The compact card draws the same one button** (the owner's ruling of 2026-10-11): the reader's card style set to
+# compact, the app started again to read it, the typo offered and followed and the contested inflection offered
+# nothing — then the reader's style put back and the app started again, so no later stage reads a compact card.
+compact_had=no; compact_was=$(defaults read com.xiaolaidict UsesCompactLookup 2>/dev/null) && compact_had=yes
+restore_compact() { restore_default UsesCompactLookup "$compact_had" "$compact_was" -bool; }
+spelling_compact() {
+    at_exit restore_compact
+    defaults write com.xiaolaidict UsesCompactLookup -bool true
+    relaunch_or_end_stage || return 0
+    if ! ensure_fixture_open; then
+        flunk "lookup (compact card): the TextEdit fixture would not come to the front"
+    elif spelling_offer recieve receive "compact card"; then
+        press_offer receive "compact card" && pass "lookup (compact card): pressing the button showed the card for “receive”"
+        "$helpers/keys" 53 2>/dev/null || true
+        spelling_offer heavied "$heavied_offer" "compact card" || true
+    fi
+    "$helpers/keys" 53 2>/dev/null || true
+    restore_compact
+    relaunch_or_end_stage || return 0
+}
+spelling_panel
+spelling_compact
 fi
 
 if want crash; then
@@ -1413,6 +2060,108 @@ fi
 pass "accessibility: readable"
 fi
 
+# selection_box <label> <--read-selection report> <word> <quality>: **where the selection shortcut says the word is**
+# (plan-card-refinements §6, the owner's decision of 2026-10-09: the card anchored on the word), checked against a second,
+# different reading of the same place: `--read-point` at the middle of the box must read the same word, through the
+# hover's dialect, with its own box — and the two boxes are reported side by side, with how far apart each edge is.
+selection_box() {
+    local label=$1 reading=$2 word=$3 quality=$4 centre hovered
+    if ! centre=$(python3 -c '
+import json, sys
+line = next((l for l in sys.argv[1].splitlines() if l.startswith("{")), "{}")
+b = json.loads(line).get("bounds")
+if not b: sys.exit("no box")
+print("%.1f %.1f" % (b["x"] + b["width"] / 2, b["y"] + b["height"] / 2))' "$reading" 2>&1); then
+        flunk "$label: --read-selection reported no box ($(printf '%s' "$reading" | head -c 200))"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    hovered=$("$exe" --read-point $centre 2>/dev/null) || hovered=""
+    consume_verdicts selection "$(python3 - "$reading" "$hovered" "$word" "$quality" "$label" <<'PYBOX' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+selected = json.loads(next((l for l in sys.argv[1].splitlines() if l.startswith("{")), "{}"))
+word, quality, label = sys.argv[3], sys.argv[4], sys.argv[5]
+try:
+    hovered = json.loads(sys.argv[2])
+except ValueError:
+    hovered = {}
+s, h = selected["bounds"], hovered.get("bounds") or {}
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}"
+say(s.get("quality") == quality and 0 < s["height"] <= 80 and 0 < s["width"] <= 600,
+    f"{label}: the selection's box is {box(s)}, {s.get('quality')}",
+    f"{label}: the selection's box is not a word's: {s}")
+say(hovered.get("text") == word, f"{label}: a hover at the middle of that box reads “{word}” too",
+    f"{label}: a hover at the middle of that box reads {hovered.get('text')!r}, not “{word}”: {sys.argv[2][:200]}")
+if h:
+    edges = [h["x"] - s["x"], h["y"] - s["y"], (h["x"] + h["width"]) - (s["x"] + s["width"]),
+             (h["y"] + h["height"]) - (s["y"] + s["height"])]
+    print(f"NOTE\t{label}: the hover's {h.get('quality')} box {box(h)} against the selection's {box(s)}: edges differ by "
+          + ", ".join(f"{e:+.1f}" for e in edges) + " (left, top, right, bottom)")
+print("DONE")
+PYBOX
+)"
+}
+# punctuated_box <word> <the word with its punctuation>: **a short word selected inside asymmetric punctuation**
+# (plan-card-refinements D3, 2026-10-10). The card's tail points at the middle of the box the selection shortcut reports,
+# and WebKit's box for a selection holds its punctuation too — so its middle is off the word by half of what lies on one
+# side more than the other, onto the punctuation for a word as narrow as “Q” beside “…”. The word's own box is read
+# first, the word selected alone; then the selection with its punctuation, whose box the app must give as the word's, and
+# whose whole box `select-web` reads beside it, so where a card centred on the selection would point is measured too.
+punctuated_box() {
+    local word=$1 punctuated=$2 alone whole reading why
+    if ! why=$("$helpers/select-web" com.apple.Safari "$word" 2>&1 >/dev/null); then
+        flunk "selection: could not select “${word}” alone ($why)"; return 0
+    fi
+    alone=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
+    if ! whole=$("$helpers/select-web" com.apple.Safari "$punctuated" 2>"$reports/select-web.err"); then
+        flunk "selection: could not select “${punctuated}” ($(head -c 200 "$reports/select-web.err"))"; return 0
+    fi
+    reading=$("$exe" --read-selection com.apple.Safari 2>/dev/null || true)
+    consume_verdicts selection "$(punctuated_verdicts "$alone" "$whole" "$reading" "$word" "$punctuated")"
+}
+# punctuated_verdicts <word alone> <select-web's line> <the punctuated reading> <word> <punctuated>: **the box must be the
+# word's own** — read as the word's (`exact`), every edge within `slack` of the box the word selected alone was given.
+# It asked only for the text and that the box's middle across fell on the word (audit of 2026-10-10), so a box on another
+# line, a thousand points tall, wider than the word, or one the app only said *contains* it, passed. A point of slack is
+# rounding; measured on the E2E Mac 2026-10-10 the two boxes were the same to the point. Its own function, so the
+# heredoc is not inside a command substitution, and `test_e2e_harness.py` runs `punctuated_box` against wrong boxes.
+punctuated_verdicts() {
+    python3 - "$@" <<'PYPUNCT' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def first(raw):
+    for line in raw.splitlines():
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                pass
+    return {}
+alone, whole, reading, word, punctuated = first(sys.argv[1]), first(sys.argv[2]), first(sys.argv[3]), sys.argv[4], sys.argv[5]
+w, r = alone.get("bounds") or {}, reading.get("bounds") or {}
+slack = 1.0
+# `select-web`'s own line, read by subscript: a helper's, not an instrument's report.
+s = whole["selected"] if "selected" in whole else {}
+def mid(b): return b.get("x", 0) + b.get("width", 0) / 2
+def box(b): return f"{b.get('x', 0):.1f},{b.get('y', 0):.1f} {b.get('width', 0):.1f}×{b.get('height', 0):.1f}"
+def edges(b): return [b.get("x", 0), b.get("y", 0), b.get("x", 0) + b.get("width", 0), b.get("y", 0) + b.get("height", 0)]
+def on(x): return bool(w) and w.get("x", 0) <= x <= w.get("x", 0) + w.get("width", 0)
+if w and s:
+    print(f"NOTE\tselection: “{punctuated}” boxed whole is {box(s)}; a tail at its middle, {mid(s):.1f}, would be "
+          + ("on" if on(mid(s)) else "OFF") + f" “{word}” ({box(w)}, middle {mid(w):.1f})")
+say(alone.get("text") == word and w.get("quality") == "exact" and w.get("width", 0) > 0 and w.get("height", 0) > 0,
+    f"selection: “{word}” alone is boxed {box(w)}, exact",
+    f"selection: “{word}” selected alone has no exact box to hold the punctuated one to: {alone}")
+off = [abs(a - b) for a, b in zip(edges(r), edges(w))] if r and w else []
+say(reading.get("text") == word and r.get("quality") == "exact" and len(off) == 4 and max(off) <= slack,
+    f"selection: “{punctuated}” is boxed by its word ({box(r)}, exact) — every edge within {slack:g} pt of “{word}” "
+    f"alone ({box(w)}), so a tail at its middle, {mid(r):.1f}, is on it",
+    f"selection: the box for “{punctuated}” is not “{word}”'s own: {r} against the word's {w}, edges off by "
+    f"{', '.join(f'{d:.1f}' for d in off) or 'nothing to compare'} (left, top, right, bottom; read {reading.get('text')!r})")
+print("DONE")
+PYPUNCT
+}
 if want selection; then
 # 5. Selections, read as the reader would see them. Fixtures open through LaunchServices, so no
 #    Automation prompt can block the screen. They need an unlocked screen — while it is locked,
@@ -1426,6 +2175,7 @@ select_then_read "TextEdit: the second of two words is the one read (range diale
     "$helpers/select-text" com.apple.TextEdit meeting 2 -- \
     text=meeting lemma=meet context=complete captureSource=accessibilityTextRange \
     "sentence=The meeting ended after we stopped meeting at noon."
+selection_box "selection: TextEdit's selected word" "$last_selection" meeting exact
 open -a Safari "$helpers/page.html"; sleep 3
 select_then_read "Safari: a selection across a sentence end gets both sentences (markers)" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "here. Second" -- \
@@ -1434,6 +2184,8 @@ select_then_read "Safari: a selection across a sentence end gets both sentences 
 select_then_read "Safari: wrapping punctuation is not part of the term" com.apple.Safari \
     "$helpers/select-web" com.apple.Safari "“ephemeral,”" -- \
     text=ephemeral lemma=ephemeral
+# `exact` since 2026-10-10 (D3): the term's own markers are boxed, no longer the selection's with its punctuation.
+selection_box "selection: Safari's selection, trimmed of its punctuation" "$last_selection" ephemeral exact
 # `likely`, not `inferred`: *saw* → *see* is the everyday reading of the shape, not something the
 # sentence established. This assertion said `inferred` and named itself "read from its grammar" until
 # 2026-09-29 — both were true before the basis was split, and the stage had not run since.
@@ -1441,6 +2193,9 @@ select_then_read "Safari: a past form NLTagger leaves alone is lemmatised from a
     com.apple.Safari \
     "$helpers/select-web" com.apple.Safari saw -- \
     text=saw lemma=see lemmaBasis=likely
+selection_box "selection: Safari's selected word" "$last_selection" saw exact
+punctuated_box Q "“Q…”"
+punctuated_box ox "(“ox,"
 fi
 
 if want shortcut; then
@@ -1452,6 +2207,9 @@ if ! why=$("$helpers/select-text" com.apple.TextEdit meeting 2 2>&1); then
     flunk "shortcut: could not select ($why)"
 else
     assert_default_shortcut || true
+    # Where the selected word is, as the shortcut's own reader finds it — held to a hover's box of the same word by the
+    # selection stage — for the anchoring check below (the owner's decision of 2026-10-09).
+    selected_box=$("$exe" --read-selection com.apple.TextEdit 2>/dev/null) || selected_box=""
     "$helpers/keys" 2 control option
     # Waits for the lemma *and* the rendered page, rather than polling for the first and sleeping
     # a fixed second for the second. The page is laid out by WebKit after the panel shows, and on
@@ -1513,6 +2271,41 @@ if not any("stopped meeting at noon" in t for t in panels[0]["texts"]):
 sys.exit("; ".join(problems) if problems else 0)
 PY
     ); then pass "shortcut: the card answers with the reader's sentence, and TextEdit keeps focus"; else flunk "shortcut: $why"; fi
+    # **Anchored on the selected word** (the owner's decision of 2026-10-09): the panel's frame as the compositor draws it,
+    # against the word's box read before the shortcut — clear of the word, a gap's width from it, and its middle across
+    # within the room the card keeps for its shadows of the word's middle, unless the screen's edge held it. Placed by
+    # the pointer as before, its left edge sat 12 pt right of the mouse, wherever the mouse was.
+    drawn_panel=$("$helpers/on-screen" com.xiaolaidict Lookup) || drawn_panel=""
+    consume_verdicts shortcut "$(python3 - "$selected_box" "$drawn_panel" <<'PYANCHOR' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def first_json(text):
+    line = next((l for l in text.splitlines() if l.startswith("{")), "{}")
+    try:
+        return json.loads(line)
+    except ValueError:
+        return {}
+word = first_json(sys.argv[1]).get("bounds") or {}
+panel = next((m for m in first_json(sys.argv[2]).get("matches", []) if m.get("drawn")), {})
+if not word or not panel:
+    say(False, "", f"shortcut: no word box ({word}) or no drawn lookup panel ({sys.argv[2][:200]}) to measure by")
+else:
+    wx, wy, ww, wh = word["x"], word["y"], word["width"], word["height"]
+    px, py, pw, ph = panel["x"], panel["y"], panel["width"], panel["height"]
+    below = py >= wy + wh
+    clear = px + pw <= wx or wx + ww <= px or py + ph <= wy or wy + wh <= py
+    gap = (py - (wy + wh)) if below else (wy - (py + ph))
+    say(clear and 0 <= gap <= 6,
+        f"shortcut: the panel ({px},{py} {pw}×{ph}) is {gap:.0f} pt {'below' if below else 'above'} the selected word "
+        f"({wx:.0f},{wy:.0f} {ww:.0f}×{wh:.0f}), anchored on it and clear of it",
+        f"shortcut: the panel is not anchored on the selected word: panel {px},{py} {pw}×{ph}, word {wx},{wy} {ww}×{wh}")
+    off = (px + pw / 2) - (wx + ww / 2)
+    held = px <= 10  # at the left screen edge, where the word is too near it to centre on
+    say(abs(off) <= 15 or held, f"shortcut: across, its middle is {off:+.1f} pt from the word's — the shadows' room, centred",
+        f"shortcut: the panel is not centred on the selected word: its middle is {off:+.1f} pt from the word's")
+print("DONE")
+PYANCHOR
+)"
 
     held=$("$helpers/claim-escape" || true)
     "$helpers/keys" 53
@@ -1697,6 +2490,38 @@ HOVERPY
 # Safari pointed at its tab's title, and Chrome at its page's text while the reader's restored "What's New" covered it.
 # `word-point` says on stderr which element it chose and where; a failed hover carries that, and a picture of the
 # screen goes to `hover-evidence` beside the bundle (the preflight has proved this session may record).
+# check_bounds <reading> <point "X Y"> <word-point's stderr> <expected quality>: the word's box `--read-point` reported
+# (plan-card-refinements WI-2), against what the stage knows independently — the point it aimed at, and the text
+# element's own frame, which `word-point` read through the position and size attributes rather than any text range.
+check_bounds() {
+    python3 - "$@" <<'BOUNDSPY'
+import json, re, sys
+r = json.loads(sys.argv[1])
+x, y = (float(v) for v in sys.argv[2].split())
+want = sys.argv[4]
+b = r.get("bounds")
+if not b:
+    sys.exit("no word box reported")
+problems = []
+if b.get("quality") != want:
+    problems.append(f"quality {b.get('quality')}, wanted {want}")
+left, top, w, h = b["x"], b["y"], b["width"], b["height"]
+# The tolerance every capture path shares: 3 pt across, 2 pt down.
+if not (left - 3 <= x <= left + w + 3 and top - 2 <= y <= top + h + 2):
+    problems.append(f"the aimed point {x:.0f},{y:.0f} is not in the box")
+m = re.search(r"at (-?\d+),(-?\d+) (\d+)×(\d+)", sys.argv[3])
+if m:
+    ex, ey, ew, eh = (float(v) for v in m.groups())
+    if not (ex - 2 <= left and left + w <= ex + ew + 2 and ey - 2 <= top and top + h <= ey + eh + 2):
+        problems.append(f"the box is outside its own text element ({ex:.0f},{ey:.0f} {ew:.0f}×{eh:.0f})")
+if not (0 < h <= 80 and 0 < w <= 600):
+    problems.append(f"a box no word has: {w:.0f}×{h:.0f}")
+if problems:
+    sys.exit("; ".join(problems) + f" — box {left:.0f},{top:.0f} {w:.0f}×{h:.0f}")
+print(f"{want} box {left:.0f},{top:.0f} {w:.0f}×{h:.0f} around the aimed point, inside its text element")
+BOUNDSPY
+}
+
 hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-point option...]
     local label=$1 app_id=$2 want=$3
     shift 3
@@ -1711,6 +2536,16 @@ hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-poi
     fi
     if summary=$(check_hover "$reading" "$want" 2>&1); then
         pass "$label: $summary"
+        # The word's box, for the panel to keep clear of: exact from the text range and the bounds scan, a box holding
+        # the word from WebKit's markers.
+        local quality=exact
+        [ "$want" = accessibilityTextMarkers ] && quality=containing
+        if summary=$(check_bounds "$reading" "$point" "$chose" "$quality" 2>&1); then
+            pass "$label, and says where: $summary"
+        else
+            flunk "$label, but its word box is wrong: $summary"
+        fi
+        last_reading=$reading
     else
         mkdir -p "$evidence" && screencapture -x "$evidence/$app_id.png" 2>/dev/null || true
         flunk "$label: $summary (at $point, on $chose; the screen is in $evidence/$app_id.png)"
@@ -1718,10 +2553,251 @@ hover_at() {  # hover_at <label> <bundle-id> <expected capture source> [word-poi
 }
 
 open -a TextEdit "$helpers/notes.txt"; sleep 2
+last_reading=""
 hover_at "hover: TextEdit answers the text-range dialect" com.apple.TextEdit accessibilityTextRange
+# **The card never covers the word** (plan-card-refinements WI-2): the box TextEdit's word was read at, handed to
+# `--placement-report`, which shows the real panel against it and reads the panel's frame from the compositor at first
+# listing and once the entry has grown it — at two text sizes, the reader's own put back afterwards.
+#     placement_at <reading> <text size> [capture PNG] [the side the card must take]: the PNG, where named, is the card on
+#     its word as composited, kept for a person to look at; the report is kept in `last_placement` for the checks after.
+placement_at() {  # placement_at <reading> <text size> [capture] [side]
+    local box report capture=${3:-} side=${4:-}
+    box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
+        || { flunk "placement: no word box to place against"; return; }
+    defaults write com.xiaolaidict TextSize "$2"
+    local ledger_before
+    ledger_before=$(ledger_digest "$ledger") || ledger_before=""
+    # shellcheck disable=SC2086
+    if [ -n "$capture" ]; then
+        report=$(run_report_with --placement-report 90 $box --capture "$capture") || true
+    else
+        report=$(run_report_with --placement-report 90 $box) || true
+    fi
+    last_placement=$report
+    ledger_left "placement ($2): --placement-report" "$ledger_before"
+    if [ -z "$report" ]; then
+        flunk "placement ($2): --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
+        return
+    fi
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    placement_verdicts() {
+        python3 - "$@" <<'PYPLACE' 2>&1 || true
+import json, sys
+r, size, capture, side = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+if side:
+    size = f"{size}, {side} the word"
+    say(r.get("side") == side, f"placement ({size}): the card is {side} its word on this screen",
+        f"placement ({size}): the card went {r.get('side')}, not {side}: {r}")
+if capture:
+    say(r.get("capture") == capture, f"placement ({size}): the card on its word is kept in {capture}, "
+        f"{r.get('appearance')} appearance, text size {r.get('textSize')}",
+        f"placement ({size}): no picture of the card was kept: {r.get('capture')}")
+    # **No straight edge where the window ends** (D3): the shadow fades out inside it. Cut by the window's edge it was a
+    # step of 15 grey levels in light and 11 in dark below a card above its word, and 6–8 at the sides (2026-10-10); a
+    # fade leaves one or two.
+    steps = {edge: r.get(f"{edge}EdgeStep") for edge in ("bottom", "left", "right")}
+    say(all(v is not None and v <= 3 for v in steps.values()),
+        f"placement ({size}): the window's edges change the screen by "
+        + ", ".join(f"{v:.1f} ({k})" for k, v in steps.items() if v is not None) + " grey levels — no straight edge",
+        f"placement ({size}): the shadow is cut by the window's edge: {steps} grey levels")
+w, a, z = r.get("word", {}), r.get("initial", {}), r.get("settled", {})
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}"
+say(r.get("appeared") is True and r.get("coversWordInitially") is False,
+    f"placement ({size}): the panel at first show ({box(a)}) is clear of the word ({box(w)}), {r.get('side')} it",
+    f"placement ({size}): the panel at first show covers the word: {r}")
+say(r.get("coversWordSettled") is False and r.get("onScreenSettled") is True,
+    f"placement ({size}): grown to {box(z)} it is still clear of the word and on the screen",
+    f"placement ({size}): grown, the panel covers the word or left the screen: {r}")
+say(r.get("grew") is True, f"placement ({size}): the entry grew the panel, so the growth was measured",
+    f"placement ({size}): the panel never grew, so nothing about growth was measured: {r}")
+# **The card on its word** (the owner's decision of 2026-10-09): centred across it — or as near as the screen allows, held
+# at the screen's margin — with its tail at the word's middle, just off its nearer edge; a click on the tail is the card's,
+# and one in the transparent strip beside it reaches the app beneath and is a click away.
+scr, t, mid = r.get("screen") or {}, r.get("tail") or {}, r.get("cardMidX")
+wmid = w.get("x", 0) + w.get("width", 0) / 2
+pinned = bool(scr) and (abs(z.get("x", 0) - (scr["x"] + 8)) <= 1
+                        or abs((scr["x"] + scr["width"] - 8) - (z.get("x", 0) + z.get("width", 0))) <= 1)
+centred = mid is not None and abs(mid - wmid) <= 1
+say(centred or (mid is not None and pinned),
+    f"placement ({size}): the card is " + ("centred on the word" if centred else "held at the screen's edge, as near the word's middle as it allows")
+    + f" (its middle {mid if mid is None else round(mid, 1)} against the word's {wmid:.1f})",
+    f"placement ({size}): the card is neither centred on the word nor held at the screen's edge: middle {mid}, word {wmid:.1f}, window {box(z)}")
+gap = (t.get("y", 0) - (w.get("y", 0) + w.get("height", 0))) if t.get("edge") == "top" else (w.get("y", 0) - t.get("y", 0))
+say(t.get("edge") in ("top", "bottom") and abs(t.get("x", -1e9) - wmid) <= 1 and 0 < gap <= 12,
+    f"placement ({size}): its tail points at the middle of the word from {t.get('edge')} edge, {gap:.1f} pt off it",
+    f"placement ({size}): the tail does not point at the word: {t} against {box(w)}")
+say(r.get("clickOnTheTail") == "panel" and r.get("openAfterTheClickOnTheTail") is True,
+    f"placement ({size}): a click on the tail is the card's, and leaves it open",
+    f"placement ({size}): a click on the tail was not the card's: {r.get('clickOnTheTail')}, open {r.get('openAfterTheClickOnTheTail')}")
+say(r.get("clickBesideTheTail") == "elsewhere" and r.get("openAfterTheClickBeside") is False,
+    f"placement ({size}): a click in the transparent strip beside the tail reaches the app beneath, and closes the card",
+    f"placement ({size}): a click beside the tail went to {r.get('clickBesideTheTail')}, card open {r.get('openAfterTheClickBeside')}")
+print("DONE")
+PYPLACE
+    }
+    consume_verdicts hover "$(placement_verdicts "$report" "$2" "$capture" "$side")"
+}
+# **A reader's drag lets go of the word** (plan-card-refinements D3, 2026-10-10): the card shown waiting on TextEdit's word,
+# dragged with real events, then its entry arriving and a disclosure opening — it must stay where the reader put it, its
+# tail pointing at nothing, and nothing jump at the release (`--placement-report … --drag`).
+placement_drag_at() {  # placement_drag_at <reading> <dx> <dy>
+    local box report ledger_before
+    box=$(python3 -c 'import json,sys; b=json.loads(sys.argv[1])["bounds"]; print(b["x"], b["y"], b["width"], b["height"])' "$1") \
+        || { flunk "drag: no word box to place against"; return; }
+    defaults write com.xiaolaidict TextSize standard
+    ledger_before=$(ledger_digest "$ledger") || ledger_before=""
+    # shellcheck disable=SC2086
+    report=$(run_report_with --placement-report 120 $box --drag "$2" "$3") || true
+    ledger_left "drag: --placement-report" "$ledger_before"
+    if [ -z "$report" ]; then
+        flunk "drag: --placement-report printed nothing ($(head -c 200 "$reports/placement-report.err" 2>/dev/null))"
+        return
+    fi
+    # The validator is a function of its own, so its heredoc is not inside a command substitution: Bash 3.2
+    # cannot parse an apostrophe in a heredoc there (the third audit of 2026-10-10; `test_e2e_harness.py`).
+    drag_verdicts() {
+        python3 - "$@" <<'PYDRAG' 2>&1 || true
+import json, sys
+r, dx, dy = json.loads(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def box(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f} {b.get('width', 0):.0f}×{b.get('height', 0):.0f}" if b else "nothing"
+def near(a, b): return abs(a - b) <= 1
+# A drag begins on its first move, so the window may lag the pointer by one of the instrument's 2-point steps.
+def followed(a, b): return abs(a - b) <= 3
+shown, dragged, released = r.get("shown") or {}, r.get("dragged") or {}, r.get("released") or {}
+arrived, expanded = r.get("arrived") or {}, r.get("expanded") or {}
+def points(t): return isinstance(t, dict) and t.get("tip") is not None
+def strip(t): return t.get("edge") if isinstance(t, dict) else None
+say(r.get("problem") is None and r.get("anchoredShown") is True and points(r.get("tailShown")),
+    f"drag: the waiting card was anchored on the word, its tail pointing at it ({box(shown)})",
+    f"drag: the card was not anchored to begin with: {r}")
+say(r.get("dragPosted") is True and bool(dragged) and followed(dragged.get("x", 0) - shown.get("x", 0), dx)
+    and followed(dragged.get("y", 0) - shown.get("y", 0), dy),
+    f"drag: a real drag by {dx:+.0f},{dy:+.0f} moved the card {dragged.get('x', 0) - shown.get('x', 0):+.0f},"
+    f"{dragged.get('y', 0) - shown.get('y', 0):+.0f} ({box(dragged)})",
+    f"drag: the card did not follow the drag {dx:+.0f},{dy:+.0f}: from {box(shown)} to {box(dragged)}")
+say(released == dragged and r.get("cardInsetsKept") is True,
+    f"drag: nothing jumped at the release — the frame as the button came up is where it stayed, and the card kept the "
+    f"tail's strip inside its window",
+    f"drag: the card moved after the release, or its strip went: {box(released)} then {box(dragged)}, "
+    f"strip kept {r.get('cardInsetsKept')}")
+say(r.get("anchoredDragged") is False and not points(r.get("tailDragged"))
+    and strip(r.get("tailDragged")) == strip(r.get("tailShown")),
+    "drag: the drag let go of the word — no tail points at it, the strip it left from kept",
+    f"drag: the dragged card still holds to its word: anchored {r.get('anchoredDragged')}, tail {r.get('tailDragged')}")
+say(bool(arrived) and near(arrived.get("x", 0), dragged.get("x", 0)) and near(arrived.get("y", 0), dragged.get("y", 0))
+    and arrived.get("height", 0) > dragged.get("height", 0) + 1 and not points(r.get("tailArrived")),
+    f"drag: the entry arriving grew the card from where the reader left it ({box(dragged)} → {box(arrived)}), no tail",
+    f"drag: the entry arriving moved the card or did not grow it: {box(dragged)} → {box(arrived)}, "
+    f"tail {r.get('tailArrived')}")
+say(r.get("disclosure") == "pressed" and bool(expanded) and near(expanded.get("x", 0), dragged.get("x", 0))
+    and near(expanded.get("y", 0), dragged.get("y", 0)) and expanded.get("height", 0) > arrived.get("height", 0) + 1
+    and not points(r.get("tailExpanded")) and r.get("anchoredExpanded") is False,
+    f"drag: opening the other meanings grew it again, still where the reader left it ({box(expanded)}), no tail",
+    f"drag: the disclosure ({r.get('disclosure')}) moved the card, did not grow it, or brought the tail back: "
+    f"{box(arrived)} → {box(expanded)}, tail {r.get('tailExpanded')}")
+print("DONE")
+PYDRAG
+    }
+    consume_verdicts hover "$(drag_verdicts "$report" "$2" "$3")"
+}
+# **The card above its word, on this screen** (D3): a word box near the foot of the screen, at Huge, in the light and the
+# dark appearance — placed above it, its tail on its bottom edge at the word's middle, a click beside that tail (where the
+# card's shadow falls) reaching the app beneath, and a picture of each kept for a person to look at: whether cutting the
+# faint lower shadow there leaves a conspicuous straight edge, and whether the tail's outline is whole. The box is a place
+# on the screen, not a word drawn there; the screen behind the card is whatever is open.
+placement_above() {  # placement_above: after placement_at, whose report names the screen
+    local reading appearance evidence="$placement_evidence"
+    reading=$(python3 -c '
+import json, sys
+s = json.loads(sys.argv[1]).get("screen") or {}
+if not s: sys.exit("no screen")
+print(json.dumps({"bounds": {"x": s["x"] + s["width"] / 2 - 40, "y": s["y"] + s["height"] - 60, "width": 80, "height": 18}}))' \
+        "$last_placement" 2>&1) || { flunk "placement: no screen to put a word at its foot ($reading)"; return; }
+    # Global, not local: `at_exit` runs after this function has returned, and puts back what it read. **Read, or not
+    # changed**: an appearance that could not be read cannot be put back (`dark_mode_now`).
+    if ! placement_dark_was=$(dark_mode_now 2>&1); then
+        flunk "placement: $placement_dark_was — so it was not changed, and the card above its word was seen in neither"
+        return
+    fi
+    restore_dark() { set_dark_mode "$placement_dark_was"; }
+    at_exit restore_dark
+    for appearance in light dark; do
+        local wanted=false
+        [ "$appearance" = dark ] && wanted=true
+        if ! set_dark_mode "$wanted" 2>/dev/null; then
+            flunk "placement: the $appearance appearance could not be set, so the card above its word was not seen in it"
+            continue
+        fi
+        sleep 1
+        placement_at "$reading" huge "$evidence/above-huge-$appearance.png" above
+    done
+    restore_dark || flunk "placement: the appearance could not be put back to dark mode $placement_dark_was"
+}
+if [ -n "$last_reading" ]; then
+    text_size_had=no; text_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && text_size_had=yes
+    restore_text_size() { restore_default TextSize "$text_size_had" "$text_size_was"; }
+    at_exit restore_text_size
+    placement_evidence="$e2e_home/placement-evidence"
+    mkdir -p "$placement_evidence" && chmod 700 "$placement_evidence" && rm -f "$placement_evidence"/*.png
+    placement_at "$last_reading" standard "$placement_evidence/below-standard-light.png"
+    placement_at "$last_reading" huge
+    placement_above
+    placement_drag_at "$last_reading" 120 80
+    restore_text_size
+fi
 open -a Safari "$helpers/page.html"; sleep 3
 # `--page`: the word comes from the page, never from the tab strip above it (`word-point`).
 hover_at "hover: Safari answers the text-marker dialect" com.apple.Safari accessibilityTextMarkers --page
+# **The pixel path's box, against a word whose box is known without asking it** (plan-card-refinements §6, the owner's
+# decision of 2026-10-09: whether the recogniser can say where a word is). `canvas.html` draws one word only in pixels —
+# a canvas has no text for Accessibility, so the hover reads it off the screen — at its ink box plus a fixed margin, so
+# the word's box on screen is the group's frame inset by the margin; `element-frame` reads that frame through
+# Accessibility's position and size, never through text. The recogniser's box must hold the word's; how much larger it
+# is on each side is reported, because that is what decides whether it is usable to centre a card on.
+open -a Safari "$helpers/canvas.html"; sleep 3
+if ! frame=$("$helpers/element-frame" com.apple.Safari pixel-word 2>&1); then
+    flunk "hover: the pixel fixture's word has no frame to measure against ($frame)"
+else
+    read -r gx gy gw gh <<<"$frame"
+    point=$(python3 -c 'import sys; x, y, w, h = map(float, sys.argv[1:]); print("%.0f %.0f" % (x + w / 2, y + h / 2))' \
+        "$gx" "$gy" "$gw" "$gh")
+    # shellcheck disable=SC2086
+    reading=$("$exe" --read-point $point 2>/dev/null) || reading=""
+    consume_verdicts hover "$(python3 - "$reading" "$frame" <<'PYPIXELS' 2>&1 || true
+import json, sys
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+margin = 12  # canvas.html's margin round the word's ink
+try:
+    r = json.loads(sys.argv[1])
+except ValueError:
+    r = {}
+gx, gy, gw, gh = map(float, sys.argv[2].split())
+truth = (gx + margin, gy + margin, gx + gw - margin, gy + gh - margin)
+b = r.get("bounds") or {}
+say(r.get("captureSource") == "opticalRecognition" and r.get("text") == "quixotic",
+    "hover: the word drawn only in pixels is read off the screen: “quixotic”",
+    f"hover: the pixel fixture was not read off the screen as “quixotic”: {sys.argv[1][:200]}")
+if b:
+    box = (b["x"], b["y"], b["x"] + b["width"], b["y"] + b["height"])
+    excess = (truth[0] - box[0], truth[1] - box[1], box[2] - truth[2], box[3] - truth[3])
+    # The tolerance every capture path shares: 3 pt across, 2 pt down — a box short of the ink by more is not holding it.
+    holds = excess[0] >= -3 and excess[2] >= -3 and excess[1] >= -2 and excess[3] >= -2
+    say(holds and b.get("quality") == "containing",
+        f"hover: the recogniser's box {b['x']:.0f},{b['y']:.0f} {b['width']:.0f}×{b['height']:.0f} holds the word's ink "
+        f"({truth[0]:.0f},{truth[1]:.0f} {truth[2] - truth[0]:.0f}×{truth[3] - truth[1]:.0f}), said to be {b.get('quality')}",
+        f"hover: the recogniser's box does not hold the word: box {box}, ink {truth}, quality {b.get('quality')}")
+    print("NOTE\thover: the recogniser's box exceeds the word's ink by " + ", ".join(f"{e:+.1f}" for e in excess)
+          + " pt (left, top, right, bottom); its middle is "
+          + f"{(box[0] + box[2]) / 2 - (truth[0] + truth[2]) / 2:+.1f} pt across from the word's")
+else:
+    say(False, "", f"hover: the pixel path reported no box for the word: {sys.argv[1][:200]}")
+print("DONE")
+PYPIXELS
+)"
+fi
 # **Chrome.** It builds no page tree for `AXManualAccessibility` — measured 2026-10-03, refused as
 # unsupported — only once told an assistive client is reading (`AXEnhancedUserInterface`), which the
 # reader asks after a hover that found nothing (`ChromiumEscalationTests` hold that). Told here first,
@@ -2422,7 +3498,7 @@ PYBOARD
     chose=no
     why=""
     for _ in $(seq 1 50); do
-        if why=$("$helpers/click-element" com.xiaolaidict "Choose…" 2>&1); then chose=yes; break; fi
+        if why=$("$helpers/click-element" com.xiaolaidict "setup-language-model-choose" 2>&1); then chose=yes; break; fi
         sleep 0.2
     done
     if [ "$chose" != yes ]; then
@@ -2677,7 +3753,12 @@ rm -f "$learning_evidence"/*.png "$learning_evidence"/*.json "$learning_evidence
 if ! defaults export com.xiaolaidict "$learning_evidence/preferences.plist"; then
     flunk "learning: the preferences could not be exported, so they could not be put back"; exit 1
 fi
-learning_dark_before=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode' 2> "$learning_evidence/theme.err" || true)
+# **Read, or not changed** (`dark_mode_now`): empty where it could not be read, and then the Light and Dark checks below
+# are not run and there is nothing to put back.
+if ! learning_dark_before=$(dark_mode_now 2> "$learning_evidence/theme.err"); then
+    flunk "learning: $(head -c 200 "$learning_evidence/theme.err") — so it is not changed, and the large-text Light and Dark checks are not run"
+    learning_dark_before=""
+fi
 if ! stop_app; then flunk "learning: app could not stop for ledger isolation"; exit 1; fi
 if ! reader_reminders "$learning_evidence"; then
     flunk "learning: the reader's own pending reminders could not be read, so nothing was set aside"; exit 1
@@ -2739,9 +3820,8 @@ restore_learning_fixture() {
     domain_cleared || return 1
     defaults import com.xiaolaidict "$learning_evidence/preferences.plist" \
         || { echo "restore: the preferences could not be imported; they are in $learning_evidence" >&2; return 1; }
-    case $learning_dark_before in
-        true|false) osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $learning_dark_before" || return 1 ;;
-    esac
+    [ -z "$learning_dark_before" ] || set_dark_mode "$learning_dark_before" \
+        || { echo "restore: the appearance could not be put back to dark mode $learning_dark_before" >&2; return 1; }
     reader_reminders_back "$learning_evidence" || return 1
     launch_app || { echo "restore: the ledger is back but XiaolaiDict did not reopen" >&2; return 1; }
     # **Last, once nothing else can fail**, so a retry from `on_exit` still has the copy to restore from.
@@ -2849,8 +3929,10 @@ PYLIBRARY
             else flunk "learning: Discarded recovery pane unreachable after relaunch"; fi
         else flunk "learning: the encounter could not be discarded a second time, so its survival across a relaunch was not tested"; fi
         for appearance in Light Dark; do
+            # Not changed where it could not be read, and so could not be put back; already a failure above.
+            [ -n "$learning_dark_before" ] || break
             wanted_dark=false; [ "$appearance" != Dark ] || wanted_dark=true
-            if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
+            if ! set_dark_mode "$wanted_dark" 2> "$learning_evidence/$appearance-theme.err"; then
                 flunk "learning: cannot set actual system $appearance appearance"
                 continue
             fi
@@ -3761,7 +4843,9 @@ if want panel; then
 #     stage's colour. A probe that failed on a discovery would be a stage that fails for telling us
 #     something.
 # 90 s: a cold process pays for the XPC service starting before the first lookup answers.
+panel_ledger_before=$(ledger_digest "$ledger") || panel_ledger_before=""
 report=$(run_report --panel-report 90) || true
+ledger_left "panel: --panel-report" "$panel_ledger_before"
 if [ -z "$report" ]; then
     flunk "panel: --panel-report printed nothing ($(head -c 160 $reports/panel-report.err 2>/dev/null))"
 else
@@ -3864,6 +4948,213 @@ PYCHECK
 )
     consume_verdicts panel "$verdicts"
 fi
+
+# 13b. **A pinned note: the blank above and below its words, and what a click on it does to the reader's other windows.**
+#
+#      Both reported by the owner on 2026-10-10, inspecting a running build. A note for “user” stood in far more white
+#      above its heading and below its provenance than the card it was pinned from; and with Settings open behind
+#      another app, a click on a note's unpin control brought Settings to the front. `--note-report` pins two notes in
+#      the real scene, reads their blank through Accessibility, opens Settings, puts TextEdit in front of it, and clicks a
+#      note's words and then its unpin control with real events, reading the compositor's order after each. Run at the
+#      standard size and at Huge, because the blank is the card's padding, which grows with the text.
+#
+#      **The bounds are this stage's own**: the card's padding is 1.25 em, and each text size names its em — read from
+#      the design, never from the app's report, so a report that agreed with a wrong layout would still fail here.
+note_verdicts() {  # note_verdicts <report> <text size>: PASS/FAIL/NOTE lines about one --note-report, then DONE
+    python3 - "$1" "$2" <<'PYNOTE' 2>&1 || true
+import json, sys
+r, size = json.loads(sys.argv[1]), sys.argv[2]
+def say(ok, good, bad): print(("PASS\t" + good) if ok else ("FAIL\t" + bad))
+def note(text): print("NOTE\t" + text)
+em = {"compact": 11, "standard": 12, "comfortable": 13.5, "large": 15, "extraLarge": 18, "huge": 24}[size]
+pad = 1.25 * em
+# A text frame lands on whole pixels, half a point on these displays, and the window fit leaves a change of a point or
+# less where it is, as rounding: 1.5 pt covers both and no real blank.
+tolerance = 1.5
+other = r.get("otherApp", "the other app")
+say(r.get("textSize") == size, f"note ({size}): the report ran at text size {size}",
+    f"note ({size}): the report ran at {r.get('textSize')}, so every blank below was measured at the wrong size")
+notes = r.get("notes") or []
+say(len(notes) == 2, f"note ({size}): both notes were pinned", f"note ({size}): {len(notes)} notes were pinned, not 2")
+for n in notes:
+    h = n.get("heading")
+    w, texts = n.get("window"), n.get("texts") or []
+    if not n.get("appeared"):
+        say(False, "", f"note ({size}): the note for {h} was never listed by the compositor")
+        continue
+    if not n.get("settled") or not w or not texts:
+        say(False, "", f"note ({size}): the note for {h} was not measured: {n.get('problem', 'no frame, or no text in it')}")
+        continue
+    top = min(t["frame"]["y"] for t in texts) - w["y"]
+    bottom = w["y"] + w["height"] - max(t["frame"]["y"] + t["frame"]["height"] for t in texts)
+    shape = (f"window {w['width']:.0f} x {w['height']:.0f} pt, title-bar inset {n.get('safeAreaTop')}, "
+             f"content area {n.get('contentLayoutHeight')} of {n.get('frameHeight')}")
+    say(abs(top - pad) <= tolerance,
+        f"note ({size}): “{h}” has {top:.1f} pt above its first line, the card's {pad:g}",
+        f"note ({size}): “{h}” has {top:.1f} pt above its first line where the card has {pad:g} ({shape})")
+    # **Unless its words outrun the room**: the fit stops at the card's cap, 32 em, and at the bottom of the screen's usable
+    # area, and past either the words scroll — so the last line is below the window's edge, and that is the design.
+    limit = n.get("visibleBottom")
+    held = (abs(w["height"] - 32 * em) <= tolerance
+            or (limit is not None and abs(w["y"] + w["height"] - limit) <= tolerance))
+    if bottom < 0 and held:
+        note(f"note ({size}): “{h}” is longer than the room it has, so it stops at the "
+             + ("card's cap" if abs(w["height"] - 32 * em) <= tolerance else "bottom of the screen")
+             + f" and scrolls ({shape})")
+    else:
+        say(abs(bottom - pad) <= tolerance,
+            f"note ({size}): “{h}” has {bottom:.1f} pt below its last line, the card's {pad:g}",
+            f"note ({size}): “{h}” has {bottom:.1f} pt below its last line where the card has {pad:g} ({shape})")
+    # Where each line of it sits, from the window's top, and how tall: a heading that wrapped is a heading too narrow.
+    note(f"note ({size}): “{h}” lines — " + ", ".join(
+        f"{t.get('text', '')[:16]} at {t['frame']['y'] - w['y']:.1f}, {t['frame']['height']:.1f} tall" for t in texts))
+    # **The unpin control is there for VoiceOver with no pointer over the note** — the rule its own comment states, and
+    # which a fade by opacity broke: no button in the note's tree at all (2026-10-10).
+    say(n.get("unpinListedAtRest") is True,
+        f"note ({size}): “{h}” lists its unpin control for VoiceOver with no pointer over it",
+        f"note ({size}): “{h}” lists no unpin control with no pointer over it; buttons: {n.get('buttonsAtRest')}")
+    note(f"note ({size}): “{h}” is a {n.get('class')}; isPanel={n.get('isPanel')}, "
+         f"nonactivatingPanel={n.get('nonactivatingPanel')}, canBecomeKey={n.get('canBecomeKey')}, "
+         f"canBecomeMain={n.get('canBecomeMain')}, resizableByHand={n.get('resizableByHand')}, "
+         f"styleMask={n.get('styleMask')}, level={n.get('level')}; {shape}")
+    # **Where it opens: beside where it was pinned** — its top-left a cascade step down and right of the pointer, and a
+    # step further for each note already open, so several notes fan out. The pointer is near the screen's top, so nothing
+    # here is pushed back by an edge. It opened about 780 pt down (2026-10-10). **The step is the design's, read from the
+    # design** (2026-10-11, e4b012b): enough to leave the older note's unpin control uncovered — its top inset (1.25 em),
+    # its target (at least 28 pt, its glyph's height where taller, at most 1.5 em) and the inline gap (0.5 em). It was a
+    # fixed 24 pt, which a newer note stacked at one point used to cover that control.
+    at, before = n.get("pinnedAt"), n.get("openBefore")
+    if at is None or before is None:
+        say(False, "", f"note ({size}): the report does not say where “{h}” was pinned")
+    else:
+        least, most = (1.75 * em + 28) * (before + 1), (1.75 * em + max(28, 1.5 * em)) * (before + 1)
+        dx, dy = w["x"] - at["x"], w["y"] - at["y"]
+        within = lambda d: least - tolerance <= d <= most + tolerance
+        say(within(dx) and within(dy),
+            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned, "
+            f"{least:g}–{most:g} each way",
+            f"note ({size}): “{h}” opened {dx:.0f} right and {dy:.0f} down of where it was pinned at "
+            f"({at['x']:.0f}, {at['y']:.0f}), not {least:g}–{most:g} each way ({shape})")
+    v = r.get("visible")
+    if v:
+        say(w["x"] >= v["x"] and w["y"] >= v["y"] and w["x"] + w["width"] <= v["x"] + v["width"]
+            and w["y"] + w["height"] <= v["y"] + v["height"] + tolerance,
+            f"note ({size}): “{h}” is wholly on the screen's usable area",
+            f"note ({size}): “{h}” at {w} is not wholly inside the usable area {v}")
+    # **As wide as the reader's text asks** — 25 em, the quick card's measure, at every size: it was 320 pt at all of
+    # them, so at Huge a line held half the words. And nothing written in it runs past either side of its window.
+    want = 25 * em
+    say(abs(w["width"] - want) <= tolerance,
+        f"note ({size}): “{h}” is {w['width']:.0f} pt wide, 25 em at this size",
+        f"note ({size}): “{h}” is {w['width']:.0f} pt wide where 25 em is {want:g}")
+    outside = [t.get("text", "")[:16] for t in texts
+               if t["frame"]["x"] < w["x"] - tolerance or t["frame"]["x"] + t["frame"]["width"] > w["x"] + w["width"] + tolerance]
+    say(not outside, f"note ({size}): every line of “{h}” lies within its window's width",
+        f"note ({size}): lines of “{h}” run past its window's sides: {outside}")
+o = r.get("order") or {}
+if not o.get("measured"):
+    say(False, "", f"note ({size}): what a click on a note does to Settings was not measured: {o.get('problem')}")
+    for k in ("before", "bodyClick", "beforeUnpin", "buttonsUnderThePointer"):
+        if k in o:
+            note(f"note ({size}): {k} — {o[k]}")
+else:
+    before, body, again, unpin = o["before"], o["bodyClick"], o["beforeUnpin"], o["unpin"]
+    say(r.get("notesLeftForTheClicks") == 1, f"note ({size}): one note is on screen for the clicks, as a reader with one has",
+        f"note ({size}): {r.get('notesLeftForTheClicks')} notes are on screen for the clicks, not 1")
+    # The positive controls: Settings really was behind the other app, and each click really landed.
+    say(before.get("settingsInFront") is False and before.get("frontmost") == other,
+        f"note ({size}): Settings is open behind {other}, which is in front",
+        f"note ({size}): Settings was not behind {other} before the clicks: {before}")
+    say(body.get("posted") is True and body.get("noteStillShown") is True,
+        f"note ({size}): a click on a note's words was posted, and left the note open",
+        f"note ({size}): the click on the note's words was not posted, or closed the note: {body}")
+    say(body.get("settingsInFront") is False,
+        f"note ({size}): a click on a note left Settings behind {other}",
+        f"note ({size}): a click on a note brought Settings in front of {other}: {body}")
+    say(again.get("settingsInFront") is False,
+        f"note ({size}): Settings is still behind {other} when the unpin control is clicked",
+        f"note ({size}): Settings was already in front of {other} before the unpin click: {again}")
+    say(unpin.get("posted") is True and unpin.get("noteClosed") is True,
+        f"note ({size}): a real click on the unpin control put the note away",
+        f"note ({size}): the click on the unpin control did not put the note away: {unpin}")
+    # Closed by the click, or — where the click did not reach the control — by the control pressed as VoiceOver presses
+    # it: the same action, and the same close, so what the close does to Settings is measured either way.
+    closing = unpin if unpin.get("noteClosed") else (o.get("unpinPressed") or {})
+    say(closing.get("noteClosed") is True and closing.get("settingsInFront") is False,
+        f"note ({size}): closing a note left Settings behind {other}",
+        f"note ({size}): closing a note brought Settings in front of {other}, or did not close it: {closing}")
+    note(f"note ({size}): at the unpin control Accessibility finds {o.get('hitAtTheControl')}; pressed by Accessibility "
+         f"after the click: {o.get('pressedByAccessibility')}, then {o.get('unpinPressed')}")
+    note(f"note ({size}): the unpin control was found by {o.get('unpinFoundBy')}, at {o.get('unpinControl')}; "
+         f"Accessibility listed, under the pointer, the buttons {o.get('buttonsUnderThePointer')}")
+    note(f"note ({size}): after a click on its words — frontmost={body.get('frontmost')}, "
+         f"appIsActive={body.get('appIsActive')}, keyWindow={body.get('keyWindow')}; after unpinning — "
+         f"frontmost={unpin.get('frontmost')}, appIsActive={unpin.get('appIsActive')}, "
+         f"keyWindow={unpin.get('keyWindow')}, settingsIsKey={unpin.get('settingsIsKey')}")
+# **The two notes stand apart**, as they were pinned: a note cascaded onto another covers the one behind it, unpin
+# control and all.
+shown = [n["window"] for n in notes if n.get("window")]
+if len(shown) == 2:
+    a, b = shown
+    apart = (a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"]
+             or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"])
+    say(apart, f"note ({size}): the two notes, pinned apart, do not overlap",
+        f"note ({size}): the two notes overlap — {a} and {b}")
+# **Each of two notes put away by a real click on its own control, the first first** (reported 2026-10-10: with two on
+# screen, the click on the first note's control did not reach it).
+# **And two pinned at one point, mid-screen and in the bottom-right corner** (2026-10-11): the older note is clicked away
+# first, with the newer one stepped over it, so its whole unpin control must be uncovered at every size.
+for key, where in (("bothUnpinned", "pinned apart"), ("stackedUnpinned", "pinned at one point"),
+                   ("stackedAtTheEdgeUnpinned", "pinned at one point in the corner")):
+    both = r.get(key) or []
+    say(len(both) == 2 and both[0].get("notesOnScreen") == 2,
+        f"note ({size}, {where}): two notes were on screen for the clicks that put each away",
+        f"note ({size}, {where}): {len(both)} notes for the unpin clicks, the first with "
+        f"{(both[0] if both else {}).get('notesOnScreen')} on screen, not 2")
+    for b in both:
+        h = b.get("heading")
+        if b.get("problem"):
+            say(False, "", f"note ({size}, {where}): “{h}” could not be clicked away: {b['problem']}")
+            continue
+        say(b.get("frontmostAtThePoint") == "this note",
+            f"note ({size}, {where}): at “{h}”'s unpin control the compositor draws that note in front",
+            f"note ({size}, {where}): at “{h}”'s unpin control {b.get('at')} the compositor draws "
+            f"{b.get('frontmostAtThePoint')} in front (Accessibility finds {b.get('hit')}; {b.get('notesOnScreen')} "
+            f"notes on screen, “{h}” at {b.get('window')})")
+        say(b.get("posted") is True and b.get("closed") is True,
+            f"note ({size}, {where}): a real click on “{h}”'s unpin control put it away with "
+            f"{b.get('notesOnScreen')} notes on screen",
+            f"note ({size}, {where}): a real click on “{h}”'s unpin control did not put it away: {b}")
+p = r.get("panel") or {}
+if p.get("measured"):
+    a = p["afterClick"]
+    note(f"note ({size}): the lookup panel, clicked with Settings behind {other} — "
+         f"settingsInFront={a.get('settingsInFront')}, frontmost={a.get('frontmost')}, "
+         f"appIsActive={a.get('appIsActive')}, keyWindow={a.get('keyWindow')}, posted={a.get('posted')}, "
+         f"panelStillShown={a.get('panelStillShown')}")
+else:
+    note(f"note ({size}): the lookup panel was not clicked: {p.get('problem')}")
+print("DONE")
+PYNOTE
+}
+note_size_had=no; note_size_was=$(defaults read com.xiaolaidict TextSize 2>/dev/null) && note_size_had=yes
+restore_note_size() { restore_default TextSize "$note_size_had" "$note_size_was"; }
+at_exit restore_note_size
+# The app Settings is left behind: TextEdit on the harness's own fixture, opened by LaunchServices.
+open -a TextEdit "$helpers/notes.txt" >/dev/null 2>&1 || true
+sleep 2
+for note_size in standard comfortable large huge; do
+    defaults write com.xiaolaidict TextSize "$note_size"
+    note_ledger_before=$(ledger_digest "$ledger") || note_ledger_before=""
+    report=$(run_report --note-report 150) || true
+    ledger_left "panel: --note-report ($note_size)" "$note_ledger_before"
+    if [ -z "$report" ]; then
+        flunk "panel: --note-report ($note_size) printed nothing ($(head -c 200 "$reports/note-report.err" 2>/dev/null))"
+        continue
+    fi
+    consume_verdicts panel "$(note_verdicts "$report" "$note_size")"
+done
+restore_note_size
 fi
 
 if want provider; then
@@ -3940,6 +5231,15 @@ at_exit restore_provider_settings
 provider_evidence="$e2e_home/provider-evidence"
 provider_stub_log="$provider_evidence/stub.jsonl"
 provider_stub_pid=""
+# **`exec`ed in a subshell, its stdout sent away, so `$!` is the stub and nothing it holds outlives it.** `python3` here is
+# a shell function (the chosen interpreter), and under macOS's bash 3.2 the pid of a backgrounded function is its
+# wrapping subshell: ending that pid left the stub running with the SSH channel as its stdout, and the run waited on
+# the channel for 49 minutes after every stage had finished (MacMini-001, 2026-10-12; bash 5 on `mbp16` ends it directly).
+start_provider_stub() {
+    ( exec "$XIAOLAIDICT_PYTHON" "$helpers/provider-stub.py" serve "$provider_stub_log" "$provider_evidence/stub.port" \
+        >/dev/null 2>"$provider_evidence/stub.err" ) &
+    provider_stub_pid=$!
+}
 stop_provider_stub() {
     [ -n "$provider_stub_pid" ] || return 0
     end_process "$provider_stub_pid" || { echo "the provider stub (pid $provider_stub_pid) would not end" >&2; return 1; }
@@ -3997,7 +5297,9 @@ provider_endpoint() {
 # app starts it exactly as it starts the reader's; its turns land in the stub's log under `provider_remote_model`.
 provider_claude_arm() {
     local launcher="$provider_evidence/claude" python report
-    python=$(command -v python3) || { flunk "provider: no python3 to run the stand-in claude"; return 0; }
+    # The chosen interpreter's own path: the launcher is a script of its own, where the `python3` function is not.
+    python=${XIAOLAIDICT_PYTHON:-}
+    [ -n "$python" ] || { flunk "provider: no Python to run the stand-in claude"; return 0; }
     # Arguments as data, quoted for the shell that runs the launcher: never a path spliced in as code.
     if ! printf '#!/bin/sh\nexec %q %q claude %q "$@"\n' "$python" "$helpers/provider-stub.py" "$provider_stub_log" \
             > "$launcher" || ! chmod 700 "$launcher"; then
@@ -4098,9 +5400,7 @@ provider_stage() {
     local port="" verdicts
     mkdir -p "$provider_evidence" && chmod 700 "$provider_evidence"
     rm -f "$provider_evidence/stub.port"
-    python3 "$helpers/provider-stub.py" serve "$provider_stub_log" "$provider_evidence/stub.port" \
-        2>"$provider_evidence/stub.err" &
-    provider_stub_pid=$!
+    start_provider_stub
     for _ in $(seq 1 50); do
         port=$(cat "$provider_evidence/stub.port" 2>/dev/null || true)
         [ -n "$port" ] && break

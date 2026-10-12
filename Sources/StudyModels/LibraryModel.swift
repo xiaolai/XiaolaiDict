@@ -1012,7 +1012,8 @@ public final class LibraryModel {
     static func row(_ row: LibraryRow, answer: String, at now: Date,
                     review: LibraryPresentation.Row.Review) -> LibraryPresentation.Row {
         LibraryPresentation.Row(
-            id: row.id, word: row.word, accentKey: row.lemma, excerpt: row.excerpt, marks: row.excerptMarks, answer: answer,
+            id: row.id, word: row.word, accentKey: row.lemma, excerpt: row.excerpt, marks: row.excerptMarks,
+            excerptLooksMisread: row.excerptLooksMisread, answer: answer,
             status: status(of: row), due: due(of: row, at: now), isConfirmable: row.obstacle == .confirmation,
             review: review)
     }

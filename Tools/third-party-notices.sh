@@ -11,6 +11,12 @@
 #
 #   third-party-notices.sh <output-file>
 set -euo pipefail
+# **The tool Python, chosen by version** (`Tools/python.sh`), as `make test-tools` and `e2e.sh` choose it. Started by
+# `build-bundle.sh` as a process of its own, where that script's choice does not reach.
+# shellcheck source=Tools/python.sh
+. "$(dirname "$0")/python.sh"
+XIAOLAIDICT_PYTHON=$(xiaolaidict_python) || { echo "third-party-notices: no Python 3.12 or later on this Mac" >&2; exit 1; }
+python3() { "$XIAOLAIDICT_PYTHON" "$@"; }
 
 out=${1:-}
 [ -n "$out" ] || { echo "usage: $0 <output-file>" >&2; exit 2; }

@@ -8,11 +8,14 @@ import XiaolaiDictTestSupport
 /// the two, against a fake `claude`. What is asserted is the process: which one answered (each answer names its pid),
 /// whether it is still there (`kill(pid, 0)`), and in what order the session started and put processes away.
 struct ResidentSessionTests {
-    /// A configuration whose bounds a test can wait out: short deadlines, no idle end unless a test sets one.
-    static func configuration(recycleAfter: Int = 6, turnTimeout: Duration = .seconds(10),
+    /// A configuration for a test whose subject is not a deadline: **bounds that only stop a defect hanging the run**,
+    /// a minute each, so a fake slow to start on a loaded Mac is not a failure (2026-10-09: 7.4 s for a fake's Python
+    /// to start and exit, and a preflight's version read missing a five-second bound no test could reach). A test of a
+    /// deadline names its own, short, against a fake that never answers. No idle end unless a test sets one.
+    static func configuration(recycleAfter: Int = 6, turnTimeout: Duration = Patience.wait,
                               idleAfter: Duration? = nil) -> ResidentConfiguration {
-        ResidentConfiguration(recycleAfter: recycleAfter, turnTimeout: turnTimeout, openTimeout: .seconds(10),
-                              idleAfter: idleAfter, closeGrace: .milliseconds(500))
+        ResidentConfiguration(recycleAfter: recycleAfter, turnTimeout: turnTimeout, openTimeout: Patience.wait,
+                              idleAfter: idleAfter, closeGrace: .milliseconds(500), versionTimeout: Patience.wait)
     }
 
     static func question(_ marks: String = "") -> GenerationRequest {
@@ -65,7 +68,7 @@ struct ResidentSessionTests {
             try await provider.generate(Self.question("[[silent]]"))
         }
         // Required, not expected: past a deadline that did not hold, the next question would wait behind this one.
-        try #require(await silent.outcome(within: .seconds(8)) == .failure(.timedOut), "the deadline held")
+        try #require(await silent.outcome() == .failure(.timedOut), "the deadline held")
         let first = try #require(events.all.compactMap { record -> Int32? in
             guard case .spawned(let pid) = record.event else { return nil }
             return pid
@@ -115,28 +118,31 @@ struct ResidentSessionTests {
         await provider.shutDown()
     }
 
-    /// A CLI that exits before reading anything fails the question at once rather than at the deadline.
-    @Test func aCLIThatExitsAtOnceFailsWithoutWaitingForTheDeadline() async throws {
+    /// A CLI that exits before reading anything fails the question at once rather than at the deadline. **Shown by the
+    /// test's limit, not a stopwatch** (AGENTS.md): the deadline is `Patience.never`, longer than the limit, so a session that
+    /// waited for it fails by the limit. The stopwatch it had measured the Mac's load — 7.4 s on 2026-10-09.
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
+    func aCLIThatExitsAtOnceFailsWithoutWaitingForTheDeadline() async throws {
         let fake = try FakeCLI.claude(.exitEarly)
-        let provider = Self.provider(fake, Self.configuration(turnTimeout: .seconds(20)))
-        let start = ContinuousClock.now
+        let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never))
         await #expect(throws: ProviderFailure.unreachable) { try await provider.generate(Self.question()) }
-        #expect(ContinuousClock.now - start < .seconds(5))
         await provider.shutDown()
     }
 
-    /// **A caller who gives up ends the turn and its process**, at once and not at the deadline.
-    @Test func cancellingAQuestionEndsItsProcess() async throws {
+    /// **A caller who gives up ends the turn and its process**, at once and not at the deadline — shown by the test's
+    /// limit: the answer and the deadline are both `Patience.never` away, longer than the limit.
+    @Test(.timeLimit(.minutes(Patience.limitMinutes)))
+    func cancellingAQuestionEndsItsProcess() async throws {
         let fake = try FakeCLI.claude()
         let events = EventLog()
-        let provider = Self.provider(fake, Self.configuration(turnTimeout: .seconds(30)), events: events)
-        let asking = Task { try await provider.generate(Self.question("[[slow:20]]")) }
+        let provider = Self.provider(fake, Self.configuration(turnTimeout: Patience.never), events: events)
+        let asking = Task { try await provider.generate(Self.question("[[slow:\(Int(Patience.never / .seconds(1)))]]")) }
         #expect(await events.wait { if case .opened = $0 { true } else { false } })
-        try await Task.sleep(for: .milliseconds(200))
-        let start = ContinuousClock.now
+        // The turn is in the fake's hands before the caller gives up — seen in its log, where a 200 ms sleep only
+        // usually arranged it, and a cancellation that landed first tested a question never asked.
+        try #require(try await Patience.until { try !fake.logged("turn", as: Int.self).isEmpty }, "the turn never reached the fake")
         asking.cancel()
         await #expect(throws: ProviderFailure.cancelled) { try await asking.value }
-        #expect(ContinuousClock.now - start < .seconds(5))
         let spawned = try #require(events.all.compactMap { record -> Int32? in
             if case .spawned(let pid) = record.event { pid } else { nil }
         }.first)
@@ -194,21 +200,28 @@ struct ResidentSessionTests {
         await provider.shutDown()
     }
 
-    /// A question waiting its turn that the caller gives up on leaves at once, without waiting for the one ahead.
+    /// A question waiting its turn that the caller gives up on leaves at once, without waiting for the one ahead —
+    /// **shown by order, not a stopwatch**: it has left while the question ahead, held until the test lets it go, is
+    /// still being answered. It was held for ten seconds, which a starved run could outlast before the cancellation
+    /// was seen. And the question ahead holds the turn first because the fake has its text, not because 300 ms passed.
     @Test func aWaitingQuestionThatIsCancelledLeavesAtOnce() async throws {
         let fake = try FakeCLI.claude()
         let provider = Self.provider(fake)
+        let release = fake.directory.appending("release-ahead")
         let ahead = Settling { () async throws(ProviderFailure) in
-            try await provider.generate(Self.question("[[slow:3]] [[echo:ahead]]"))
+            try await provider.generate(Self.question("[[hold:\(release.path)]] [[echo:ahead]]"))
         }
-        try await Task.sleep(for: .milliseconds(300))
+        try #require(try await Patience.until {
+            try fake.logged("text", as: String.self).contains(where: { $0.contains("echo:ahead") })
+        }, "the question ahead never reached the fake")
         let waiting = Settling { () async throws(ProviderFailure) in
             try await provider.generate(Self.question("[[echo:waiting]]"))
         }
         try await Task.sleep(for: .milliseconds(100))
         waiting.task.cancel()
-        try #require(await waiting.outcome(within: .seconds(1)) == .failure(.cancelled),
-                     "it left at once, without waiting for the question ahead")
+        try #require(await waiting.outcome() == .failure(.cancelled), "the waiting question was not cancelled")
+        #expect(await ahead.outcome(within: .zero) == nil, "it left only after the question ahead was answered")
+        try #require(FileManager.default.createFile(atPath: release.path, contents: nil), "the question ahead was never let go")
         #expect(try #require(await ahead.outcome()).get().hasSuffix("echo=ahead"))
         #expect(try fake.logged("text", as: String.self).allSatisfy { !$0.contains("echo:waiting") })
         await provider.shutDown()
@@ -249,13 +262,17 @@ struct ResidentSessionTests {
         await provider.shutDown()
     }
 
-    /// Questions keep a process from going idle: the clock starts again at each.
+    /// Questions keep a process from going idle: the clock starts again at each. **Timed, because the subject is a
+    /// clock**: a gap between questions is where a timer nobody restarted would fire — inside a turn the session
+    /// refuses to retire — so the gaps are real, and together outlast the idle interval. Each gap leaves the interval
+    /// four seconds of room for the hops between one answer and the next question. It left half a second (300 ms gaps
+    /// under 800 ms), which a loaded Mac's scheduling could take.
     @Test func questionsKeepAProcessFromGoingIdle() async throws {
         let fake = try FakeCLI.claude()
-        let provider = Self.provider(fake, Self.configuration(idleAfter: .milliseconds(800)))
+        let provider = Self.provider(fake, Self.configuration(idleAfter: .seconds(6)))
         let first = try answeringPID(try await provider.generate(Self.question()))
         for _ in 0..<4 {
-            try await Task.sleep(for: .milliseconds(300))
+            try await Task.sleep(for: .seconds(2))
             #expect(try answeringPID(try await provider.generate(Self.question())) == first)
         }
         await provider.shutDown()
@@ -377,15 +394,8 @@ final class TestGate: Sendable {
 
     var entered: Int { state.withLock { $0.entered } }
 
-    /// Waits until someone has reached the gate — bounded, so a defect that never reaches it fails the test.
-    func waitUntilEntered(_ count: Int = 1, within bound: Duration = .seconds(10)) async {
-        let deadline = ContinuousClock.now.advanced(by: bound)
-        while entered < count {
-            guard ContinuousClock.now < deadline else {
-                Issue.record("nothing reached the gate")
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    /// Waits until someone has reached the gate — bounded by `Patience`, so a defect that never reaches it fails the test.
+    func waitUntilEntered(_ count: Int = 1) async {
+        if await !Patience.until({ entered >= count }) { Issue.record("nothing reached the gate") }
     }
 }

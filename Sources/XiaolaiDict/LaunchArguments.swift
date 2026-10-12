@@ -47,6 +47,19 @@ enum LaunchMode: Equatable {
     /// reader clicks.
     case panelReport
 
+    /// `--note-report`: what a pinned note's window is, how much blank it leaves above and below its words, and whether a
+    /// click on it — on its words, on its unpin control — brings the app's other windows forward over the reader's. Pins
+    /// real notes in the real scene, so it runs inside the bundle like `--panel-report`.
+    case noteReport
+
+    /// `--placement-report X Y W H [--capture PATH] [--drag DX DY]`: where the lookup panel goes for a word at that
+    /// rectangle (y down, as Accessibility gives it), at first show and once its content has grown — and whether it covers
+    /// the word (plan-card-refinements WI-2). Shows the real panel, so it runs inside the bundle like `--panel-report`.
+    /// `--capture` keeps a PNG of the card on its word for a person to look at; `--drag` drags the card by DX DY with
+    /// real events before its entry arrives and a disclosure opens (D3, 2026-10-10).
+    case placementReport(x: Double, y: Double, width: Double, height: Double, capture: String? = nil,
+                         drag: PlacementDrag? = nil)
+
     /// `--review-report`: what Review will ask, and what its model holds before and after the reveal,
     /// read through the window's own `ReviewModel` against the reader's ledger. **Writes nothing**: it
     /// draws a sitting and reveals one card, both reads, so the `review` stage can ask the app whether
@@ -62,6 +75,11 @@ enum LaunchMode: Equatable {
     /// may be sent, and what it said when asked one trivial question — never a sentence, an answer, a
     /// path, a URL or a key. Compiled out of a release (ADR-0053).
     case providerStatus
+
+    /// `--spelling-report TERM…`: what each term's miss would be offered — "Look up “X”" — through the
+    /// checker and the dictionaries the card is offered it by, and how long each took. Never dictionary
+    /// text. Compiled out of a release (plan-spelling-suggestion).
+    case spellingReport(terms: [String])
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -84,9 +102,12 @@ enum LaunchArguments {
                XiaolaiDict --model-report
                XiaolaiDict --sense-report
                XiaolaiDict --panel-report
+               XiaolaiDict --note-report
+               XiaolaiDict --placement-report X Y WIDTH HEIGHT [--capture PATH.png] [--drag DX DY]
                XiaolaiDict --review-report
                XiaolaiDict --reminder-report
                XiaolaiDict --provider-status
+               XiaolaiDict --spelling-report TERM [TERM...]
         """
 
     static let repeatRange = 1...1_000
@@ -109,9 +130,12 @@ enum LaunchArguments {
         case "--model-report": alone(arguments, is: .modelReport)
         case "--sense-report": alone(arguments, is: .senseReport)
         case "--panel-report": alone(arguments, is: .panelReport)
+        case "--note-report": alone(arguments, is: .noteReport)
+        case "--placement-report": placementReport(Array(arguments.dropFirst()))
         case "--review-report": alone(arguments, is: .reviewReport)
         case "--reminder-report": alone(arguments, is: .reminderReport)
         case "--provider-status": alone(arguments, is: .providerStatus)
+        case "--spelling-report": spellingReport(Array(arguments.dropFirst()))
         case let first? where first.hasPrefix("--"): fail("unknown command \(first)")
         default: .success(.app)
         }
@@ -145,12 +169,64 @@ enum LaunchArguments {
         return .success(.lookup(term: term, repeats: repeats ?? 1, interval: .seconds(interval ?? 0)))
     }
 
+    /// Every term after the command, at least one, none blank and none an option: a report about a term nobody typed is
+    /// a report nobody asked for.
+    private static func spellingReport(_ terms: [String]) -> Result<LaunchMode, UsageError> {
+        guard !terms.isEmpty else { return fail("--spelling-report needs at least one TERM") }
+        if let option = terms.first(where: { $0.hasPrefix("--") }) { return fail("unexpected \(option) among the TERMs") }
+        guard terms.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            return fail("a TERM is blank")
+        }
+        return .success(.spellingReport(terms: terms))
+    }
+
     private static func readPoint(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
         guard arguments.count == 2 else { return fail("--read-point needs X and Y") }
         guard let x = Double(arguments[0]), let y = Double(arguments[1]), x.isFinite, y.isFinite else {
             return fail("--read-point needs two numbers, not \(arguments.joined(separator: " "))")
         }
         return .success(.readPoint(x: x, y: y))
+    }
+
+    /// The farthest from the origin a point or a box's side on any display may be, in points.
+    static let screenLimit: Double = 100_000
+
+    private static func placementReport(_ arguments: [String]) -> Result<LaunchMode, UsageError> {
+        let box = Array(arguments.prefix(4))
+        // **On a screen, not merely finite** (third audit of 2026-10-10): a box of `1e100` reached a capture whose pixel
+        // count is an `Int`. No display holds a point or a word past `screenLimit`.
+        let numbers = box.compactMap(Double.init).filter { $0.isFinite && abs($0) <= Self.screenLimit }
+        guard box.count == 4, numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else {
+            return fail("--placement-report needs X Y WIDTH HEIGHT, a box with area on a screen, not \(arguments.joined(separator: " "))")
+        }
+        var capture: String?
+        var drag: PlacementDrag?
+        var rest = arguments.dropFirst(4)
+        while let option = rest.first {
+            rest = rest.dropFirst()
+            switch option {
+            case "--capture":
+                guard capture == nil else { return fail("--capture given twice") }
+                guard let path = rest.first, !path.hasPrefix("--"), path.hasSuffix(".png") else {
+                    return fail("--capture needs a PATH ending .png")
+                }
+                capture = path
+                rest = rest.dropFirst()
+            case "--drag":
+                guard drag == nil else { return fail("--drag given twice") }
+                // Within `PlacementReport.dragLimit`, which the drag checks again before the button goes down.
+                let move = rest.prefix(2).compactMap(Double.init).filter { $0.isFinite && abs($0) <= PlacementReport.dragLimit }
+                guard move.count == 2, move != [0, 0] else {
+                    return fail("--drag needs DX DY, a move of at most \(Int(PlacementReport.dragLimit)) points each way, not nothing")
+                }
+                drag = PlacementDrag(dx: move[0], dy: move[1])
+                rest = rest.dropFirst(2)
+            default:
+                return fail("unknown option \(option) after the box")
+            }
+        }
+        return .success(.placementReport(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3],
+                                         capture: capture, drag: drag))
     }
 
     private static func readSelection(_ arguments: [String]) -> Result<LaunchMode, UsageError> {

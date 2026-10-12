@@ -6,6 +6,7 @@ import DictionaryModel
 @testable import MacCapture
 import Synchronization
 import Testing
+import XiaolaiDictTestSupport
 
 /// The stand-ins hover's behavioural tests share — **one spelling each**, for the reason
 /// `Wiring` gives: two copies of a fake drift, and then a test proves something about the copy.
@@ -108,7 +109,8 @@ final class ScriptedHoverReader: HoverReading {
     /// Ends the oldest read in flight with a word, for the request it was given.
     func answerWord(_ text: String = "hold") {
         guard let ask = asks.last else { return }
-        answer(.selection(HoverFixtures.selection(text), request: ask.request, key: "key-\(text)-\(ask.request)"))
+        answer(.selection(HoverFixtures.selection(text), request: ask.request, key: "key-\(text)-\(ask.request)",
+                          bounds: nil))
     }
 
     func answer(_ outcome: HoverReader.Outcome) {
@@ -121,14 +123,14 @@ final class ScriptedHoverReader: HoverReading {
 @MainActor
 final class RecordingDelivery: HoverDelivering {
     var requests = RequestSequence()
-    private(set) var delivered: [(text: String, at: UpPoint, request: Int, requestedAt: Date)] = []
+    private(set) var delivered: [(text: String, at: UpPoint, request: Int, requestedAt: Date, bounds: WordBounds?)] = []
 
     func beginRequest() -> Int { requests.begin() }
 
-    func deliver(_ selection: Selection, at pointer: UpPoint, request: Int, requestedAt: Date,
+    func deliver(_ selection: Selection, at pointer: UpPoint, protecting word: WordBounds?, request: Int, requestedAt: Date,
                  askedAt: ContinuousClock.Instant, seen: @escaping @MainActor (Bool) -> Void) -> Bool {
         guard requests.claim(request) else { return false }
-        delivered.append((selection.text, pointer, request, requestedAt))
+        delivered.append((selection.text, pointer, request, requestedAt, word))
         seens.append(seen)
         return true
     }
@@ -208,7 +210,7 @@ final class ScriptedScreenWords: ScreenWordSource, @unchecked Sendable {
 enum HoverFixtures {
     /// A capture deadline for tests that are not about the deadline. The shipped 5 s fired under a
     /// busy full-suite run, and a test about consent then failed on a deadline it never mentioned.
-    static let patient: Duration = .seconds(600)
+    static let patient: Duration = Patience.wait
 
     static func selection(_ text: String, in bundleID: String = "com.apple.TextEdit") -> Selection {
         Selection(
@@ -229,11 +231,6 @@ enum HoverFixtures {
         return .hit(ScreenWordReader.Hit(word: found, source: .accessibilityTextRange, appName: "TextEdit", bundleID: bundleID))
     }
 
-    /// Lets started work run until `condition` holds — waiting for the work, not for a call that
-    /// started it. **Yields first, then sleeps a millisecond a turn**: work on the cooperative pool
-    /// is not scheduled by the main actor's yields, and under a full parallel run two thousand bare
-    /// yields went by before a released capture's task had run at all. The bound only stops a
-    /// failure hanging; nothing here asserts how long anything took.
     /// Lets already-started work run, for an assertion that something did **not** happen. Short on
     /// purpose: it cannot prove an absence, only give the absence a fair chance to be broken — so a
     /// slow machine can make it miss a defect, never invent one.
@@ -244,10 +241,14 @@ enum HoverFixtures {
         }
     }
 
+    /// Lets started work run until `condition` holds — waiting for the work, not for a call that
+    /// started it. **Sleeps a millisecond a turn**: work on the cooperative pool is not scheduled by
+    /// the main actor's yields, and under a full parallel run two thousand bare yields went by before
+    /// a released capture's task had run at all. The bound, `Patience.wait`, only stops a failure
+    /// hanging — the 12,000 turns it was were a twelve-second clock — and nothing here asserts how
+    /// long anything took.
     @MainActor
     static func settle(until condition: @MainActor () -> Bool) async {
-        for turn in 0..<12_000 where !condition() {
-            if turn < 200 { await Task.yield() } else { try? await Task.sleep(for: .milliseconds(1)) }
-        }
+        _ = await Patience.until(every: .milliseconds(1), condition)
     }
 }
