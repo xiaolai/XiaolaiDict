@@ -159,6 +159,36 @@ struct CardAnchorTests {
         #expect(window.frame.height == first.frame.height)
     }
 
+    /// **A resize that kept the window's top is put back on the word** — measured on the E2E Mac (1920 × 1080, visible
+    /// frame 0…1050 y up, the text size huge, the word at 920, 42, 80 × 18 y up): the fit grew the card above its word to
+    /// 906 from its bottom at 64, and the next resize, made by neither the fit nor the anchor, took it to 798 **keeping
+    /// its top**, so its bottom stood at 172 — 108 points over the word, the tail pointing at nothing. Inside the room,
+    /// so holding the frame to the room let it stay; the edge nearest the word has one place, the word's gap.
+    @Test func aResizeThatKeptTheTopPutsTheCardBackOnItsWord() throws {
+        let mini = UpRect(x: 0, y: 0, width: 1_920, height: 1_050)
+        let protected = WordBounds(rect: UpRect(x: 920, y: 42, width: 80, height: 18), quality: .exact)
+        let first = PanelPlacement.placed(
+            for: NSSize(width: 792, height: 240), near: UpPoint(x: 960, y: 51), protecting: protected, within: mini,
+            chrome: CardChrome(textSize: .huge))
+        let anchor = try #require(first.anchor)
+        #expect(first.tail?.edge == .bottom)
+        #expect(first.frame.minY == 64)
+        let resized = anchor.placed(NSRect(x: 578, y: 172, width: 792, height: 798))
+        #expect(resized.frame.minY == 64, "the card's bottom left its word: \(resized.frame)")
+        #expect(resized.frame.height == 798)
+    }
+
+    /// The same on the other side: a card below its word, resized keeping its bottom, is put back under the word.
+    @Test func aResizeThatKeptTheBottomPutsACardBelowBackUnderItsWord() throws {
+        let protected = word(600, 500)
+        let first = placed(protected)
+        let anchor = try #require(first.anchor)
+        #expect(first.tail?.edge == .top)
+        let shrunk = anchor.placed(NSRect(x: first.frame.minX, y: first.frame.minY, width: first.frame.width,
+                                          height: first.frame.height - 100))
+        #expect(shrunk.frame.maxY == first.frame.maxY, "the card's top left its word: \(shrunk.frame)")
+    }
+
     /// A window the content made wider is centred on the word again, and its tail moves with it.
     @Test func aWiderWindowIsCentredAgain() throws {
         let protected = word(600, 500)
@@ -286,6 +316,18 @@ struct UpwardGrowthTests {
         SettingsWindowFit.move(window, by: -300, width: nil, lowestBottom: nil, highestTop: 800,
                                animated: false, recentres: false)
         #expect(window.frame == NSRect(x: 100, y: 200, width: 396, height: 300), "a shrink moved the tail's edge")
+    }
+
+    /// **Never past the window's own maximum.** Measured on the E2E Mac at the huge text size: the fit grew a card to 906
+    /// in a window whose `contentMaxSize` SwiftUI had set to 798, and the window was taken back to 798 keeping its top —
+    /// the card's far edge, so its tail's edge jumped 108 points and the card flashed taller first.
+    @Test func growingStopsAtTheWindowsMaximum() {
+        let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        window.setFrame(NSRect(x: 578, y: 64, width: 792, height: 214), display: false)
+        window.maxSize = NSSize(width: 1_145, height: 798)
+        SettingsWindowFit.move(window, by: 692, width: nil, lowestBottom: nil, highestTop: 1_042,
+                               animated: false, recentres: false)
+        #expect(window.frame == NSRect(x: 578, y: 64, width: 792, height: 798))
     }
 }
 

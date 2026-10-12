@@ -95,6 +95,10 @@ enum SettingsWindowFit {
         } else if let lowestBottom, delta > 0 {
             height = max(current.height, min(height, current.maxY - lowestBottom))
         }
+        // **Never past the window's own maximum** — SwiftUI sets it from the content (`.contentSize`), and a frame
+        // taller is taken back to it **keeping the top**, whichever edge this kept. Measured on the E2E Mac at the huge
+        // text size: grown to 906 against a maximum of 798, a card above its word lost its tail's edge by 108 points.
+        if delta > 0 { height = max(current.height, min(height, window.maxSize.height)) }
         let widthChange = width - current.width
         // More than a point: a point or less is rounding, and moving for it would restart the
         // animation on a window already where it belongs — and put a reversal in front of the

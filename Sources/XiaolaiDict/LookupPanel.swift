@@ -807,9 +807,8 @@ enum PanelPlacement {
         let goesBelow = belowSpace >= size.height || (aboveSpace < size.height && belowSpace >= aboveSpace)
         let anchor = Anchor(word: word.rect, room: goesBelow ? below : above, edge: goesBelow ? .top : .bottom,
                             chrome: chrome)
-        // The edge nearest the word at the word's gap; `Anchor.placed` centres it and holds it to the room.
-        let nearest = goesBelow ? box.minY - wordGap - size.height : box.maxY + wordGap
-        return anchor.placed(NSRect(x: screen.minX, y: nearest, width: size.width, height: size.height))
+        // Only the size is given: `Anchor.placed` puts the edge nearest the word at the word's gap and centres it.
+        return anchor.placed(NSRect(origin: .zero, size: size))
     }
 
     /// **A card anchored on its word** — which word, the side it went on and the room there — so every later fit can put
@@ -822,9 +821,15 @@ enum PanelPlacement {
         let chrome: CardChrome
 
         /// `frame`, anchored: no larger than the room; across, the card's middle on the word's as far as the room
-        /// allows; up and down, **the edge nearest the word kept** and held to the room; the tail at the word's middle,
-        /// clear of the card's corners. A fixed point — applying it to its own answer changes nothing — so a resize it
-        /// causes asks again and stops.
+        /// allows; up and down, **the edge nearest the word at the room's edge by the word** — the word's gap, or the
+        /// screen's margin where the screen ends first — whatever the frame's own position; the tail at the word's
+        /// middle, clear of the card's corners. A fixed point — applying it to its own answer changes nothing — so a
+        /// resize it causes asks again and stops.
+        ///
+        /// **Only the frame's size is read, never its position.** Holding the frame's own edge to the room let any
+        /// resize that kept the *far* edge carry the near one off the word while staying inside the room: measured on
+        /// the E2E Mac at the huge text size, a resize made by neither the fit nor this kept a card's top as it went
+        /// from 906 to 798 and left its tail 108 points above the word (2026-10-12).
         func placed(_ frame: NSRect) -> Placed {
             let bounds = room.cg
             let size = shrunk(frame.size, within: room)
@@ -832,9 +837,9 @@ enum PanelPlacement {
             let card = max(0, size.width - insets.leading - insets.trailing)
             let middle = word.cg.midX
             let x = clamp(middle - card / 2 - insets.leading, bounds.minX + margin, bounds.maxX - margin - size.width)
-            let y = edge == .top
-                ? clamp(frame.maxY - size.height, bounds.minY + margin, bounds.maxY - margin - size.height)
-                : clamp(frame.minY, bounds.minY + margin, bounds.maxY - margin - size.height)
+            // `max`: a room shorter than its margins pins to the lower bound, as `clamp` does.
+            let lowest = bounds.minY + margin, highest = bounds.maxY - margin - size.height
+            let y = edge == .top ? max(lowest, highest) : lowest
             let growth: PanelGrowth = edge == .top
                 ? .down(lowestBottom: bounds.minY + margin) : .up(highestTop: bounds.maxY - margin)
             return Placed(
