@@ -119,7 +119,7 @@ enum PlacementReport {
         if let capture {
             let region = settled.union(given).insetBy(dx: -Self.captureMargin, dy: -Self.captureMargin)
             let kept = await Self.capture(region, on: window.screen ?? primary, primaryHeight: height, to: capture,
-                                          window: settled)
+                                          window: settled, hiding: window)
             report["capture"] = kept.problem ?? capture
             for (key, step) in [("bottomEdgeStep", kept.steps.bottom), ("leftEdgeStep", kept.steps.left),
                                 ("rightEdgeStep", kept.steps.right)] {
@@ -157,8 +157,14 @@ enum PlacementReport {
     /// screen changes by from the pixel just inside the window to the one just outside, the median of four places along
     /// each edge, clear of the corners and of a tail at the middle. A shadow cut by the window's edge is a step; one that
     /// has faded out is none.
+    ///
+    /// **The step is the card's own, not the screen's** (2026-10-12): the screen across a window's edge changes by
+    /// whatever lies behind it — a page's black text on the edge read 98.7 grey levels, a wallpaper photograph 14.8 —
+    /// and a shadow that had faded out entirely (0.8 at most, measured with and without the card) failed the check. So
+    /// the same region is captured once more with `hiding` made transparent, and each sample is what the card added
+    /// to the backdrop there, before the inside is compared with the outside.
     static func capture(
-        _ region: CGRect, on screen: NSScreen, primaryHeight: CGFloat, to path: String, window: CGRect
+        _ region: CGRect, on screen: NSScreen, primaryHeight: CGFloat, to path: String, window: CGRect, hiding card: NSWindow
     ) async -> (problem: String?, steps: (bottom: Double?, left: Double?, right: Double?)) {
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             return ("the display has no number", (nil, nil, nil))
@@ -172,22 +178,41 @@ enum PlacementReport {
             let image = try await withDeadline(.seconds(30)) {
                 try await Instrument.screenImage(of: source, size: pixels, onDisplay: number.uint32Value)
             }
+            // The backdrop alone: the card made transparent for one capture and put back whatever happens.
+            card.alphaValue = 0
+            try? await Task.sleep(for: .milliseconds(300))
+            let behind: CGImage?
+            do {
+                behind = try await withDeadline(.seconds(30)) {
+                    try await Instrument.screenImage(of: source, size: pixels, onDisplay: number.uint32Value)
+                }
+            } catch {
+                card.alphaValue = 1
+                throw error
+            }
+            card.alphaValue = 1
             let scale = screen.backingScaleFactor
             let bitmap = NSBitmapImageRep(cgImage: image)
+            let backdrop = behind.map { NSBitmapImageRep(cgImage: $0) }
             func pixel(_ x: CGFloat, _ y: CGFloat) -> (x: Int, y: Int) {
                 (Int(((x - region.minX) * scale).rounded()), Int(((y - region.minY) * scale).rounded()))
             }
-            func grey(_ at: (x: Int, y: Int)) -> Double? {
-                guard at.x >= 0, at.y >= 0, at.x < bitmap.pixelsWide, at.y < bitmap.pixelsHigh,
-                      let colour = bitmap.colorAt(x: at.x, y: at.y)?.usingColorSpace(.sRGB) else { return nil }
+            func grey(_ at: (x: Int, y: Int), in rep: NSBitmapImageRep) -> Double? {
+                guard at.x >= 0, at.y >= 0, at.x < rep.pixelsWide, at.y < rep.pixelsHigh,
+                      let colour = rep.colorAt(x: at.x, y: at.y)?.usingColorSpace(.sRGB) else { return nil }
                 return (colour.redComponent + colour.greenComponent + colour.blueComponent) / 3 * 255
+            }
+            /// What the card added at a pixel: the screen with it, less the screen without it.
+            func added(_ at: (x: Int, y: Int)) -> Double? {
+                guard let with = grey(at, in: bitmap), let backdrop, let without = grey(at, in: backdrop) else { return nil }
+                return with - without
             }
             func median(_ steps: [Double]) -> Double? {
                 let sorted = steps.sorted()
                 return sorted.isEmpty ? nil : (sorted[(sorted.count - 1) / 2] + sorted[sorted.count / 2]) / 2
             }
             func step(_ inside: (x: Int, y: Int), _ outside: (x: Int, y: Int)) -> Double? {
-                guard let inside = grey(inside), let outside = grey(outside) else { return nil }
+                guard let inside = added(inside), let outside = added(outside) else { return nil }
                 return abs(inside - outside)
             }
             let bottom = median(Self.edgeSamples.compactMap { fraction in
