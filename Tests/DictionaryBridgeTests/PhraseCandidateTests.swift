@@ -121,7 +121,7 @@ extension PhraseCandidateTests {
     /// measuring the enlargement properly needs labelled **phrase** cases, which is a labelling job and not
     /// something a passing test here should be read as having done.
     @Test func enlargingTheCandidateSetDoesNotRaiseTheConfidentlyWrongRate() async throws {
-        let selector = EmbeddingSenseSelector(matchesPartOfSpeech: false)
+        let selector = EmbeddingSenseSelector()
         var wrongAlone = 0, wrongBoth = 0, moved = 0, withAPhrase = 0
         for labelled in SenseSelectionAccuracyTests.hardCases {
             let word = try Self.candidates(for: labelled.word)

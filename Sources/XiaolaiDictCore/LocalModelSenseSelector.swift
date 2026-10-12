@@ -7,7 +7,7 @@ import XiaolaiDictBase
 /// The top rung: Qwen, in the model service, guided to the candidate set.
 ///
 /// The same closed-set question the on-device rung asks, with the same instructions, prompt,
-/// narrowing and generation options — so the two are scored on one field and differ in nothing but
+/// candidate field and generation options — so the two are scored on one field and differ in nothing but
 /// the model. The model
 /// answers with a position in the list it was given, and the answer is checked against that list
 /// **here**, mechanically: a small model that answers "10" of eight senses (Qwen3.5-2B did, once)
@@ -24,21 +24,16 @@ public struct LocalModelSenseSelector: SenseSelecting {
     public typealias Ask = @Sendable (SenseQuestion) async -> ModelReply?
 
     private let ask: Ask
-    private let matchesPartOfSpeech: Bool
 
-    public init(matchesPartOfSpeech: Bool = true, ask: @escaping Ask) {
+    public init(ask: @escaping Ask) {
         self.ask = ask
-        self.matchesPartOfSpeech = matchesPartOfSpeech
     }
 
     public func choose(
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        await SenseCandidates.asking(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
-            context: context
-        ) { considered, reading in
+        await SenseCandidates.asking(candidates, reading: sentence, context: context) { considered, reading in
             // **Asked only for a list the answer can name.** The service refuses a longer one as an
             // invalid request — a defect in whatever built it — and an entry with a hundred senses is
             // not a defect, it is *run* in a large dictionary. The rung below has no such bound.
@@ -48,8 +43,11 @@ public struct LocalModelSenseSelector: SenseSelecting {
             // them, and a single COBUILD sense runs to hundreds of characters — serialises kilobytes
             // that are then thrown away on the other side.
             let question = SenseQuestion(
-                sentence: reading, partOfSpeech: partOfSpeech,
-                senses: considered.map { String($0.text.prefix(ModelPrompt.senseCharacterLimit)) })
+                sentence: reading, taggerGuess: partOfSpeech,
+                senses: considered.map {
+                    SenseQuestion.Sense(
+                        text: String($0.text.prefix(ModelPrompt.senseCharacterLimit)), partOfSpeech: $0.partOfSpeech)
+                })
             switch await ask(question) {
             case .sense(0)?:
                 // The answer its instructions call correct and expected: the sentence does not settle

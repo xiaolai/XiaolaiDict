@@ -219,7 +219,13 @@ struct TestInventoryTests {
         // and the selection reader against a scripted tree, with the selection's term, window and sentence.
         "MacCaptureTests": 71,
         // Raised 54 → 83 on 2026-10-08 to the exact count before the core was split.
-        "DictionaryBridgeTests": 83,
+        // **Lowered 83 → 82 on 2026-10-11, a deletion**: rung 1b, the embedding narrowed to the tagger's part of speech,
+        // no longer exists (ADR-0053 addendum), so its pinned score and its D6 comparison against rung 1 became one test,
+        // `theShippedEmbeddingRungIsRungOne`, which pins that the shipped rung scores as rung 1 with or without a tag.
+        // Raised 82 → 96 on 2026-10-11 by the embedding rung's part-of-speech bonus (ADR-0053 addendum): rung 1b back
+        // as the evaluation-only `LegacyNarrowingComparator` with its D6 comparison (2), and the paired evaluator's own
+        // tests and its run (12).
+        "DictionaryBridgeTests": 96,
         "LocalModelTests": 48,
         // Added 2026-10-09 with the target (ADR-0053, the providers' P1), at the count it shipped with: the answer
         // parser the 270-case measurement scored with, the failures' mapping to the ladders' vocabulary, the Keychain

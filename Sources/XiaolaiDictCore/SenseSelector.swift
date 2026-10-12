@@ -111,55 +111,35 @@ public extension SenseSelecting {
     }
 }
 
-/// Narrowing the candidates to the senses the word could grammatically be.
+/// Whether a dictionary's part-of-speech label names the tagger's part of speech.
 ///
-/// A word used as a noun cannot mean a verb sense, however close the wording is. Every sense
-/// already knows its block's `d:pos`, and `NLTagger` — linked already, for lemmas — says how the
-/// word is being used, so this is a fact both sides already have rather than a tuned threshold. It
-/// is applied to **every** rung, so no rung is compared against another on a different field.
-///
-/// It only ever narrows: if the tagger did not commit, or nothing matches — a dictionary that
-/// labels its blocks in another vocabulary, or a tagger that read the word wrongly — the full set
-/// is kept. A filter that can empty the field would turn one wrong reading into a wrong answer.
-///
-/// **A label is matched by word, never by prefix and never by substring.** A dictionary qualifies
-/// the part of speech: 牛津英汉汉英 prints `plural noun`, `transitive verb`, `impersonal verb`,
-/// `adverb phrase`, and a `plural noun` sense is a noun sense. Matched by prefix, the tagger's
-/// "noun" kept 牛津's `noun` block and dropped its `plural noun` one — which is where *sanction*'s
-/// commonest reading lives ("sanctions against the regime"), and *water*'s "the waters",
-/// *content*'s "contents", *rain*'s "the rains". Measured 2026-09-21: six of twenty-six words
-/// narrowed to a subset missing senses of the very part of speech asked for. By substring it would
-/// be wrong the other way — `adverb` contains `verb` — which is the same reason the entry parser
-/// matches classes by token.
-///
-/// It stays inert where the vocabulary is not English words at all: 譯典通 labels its blocks `n.`
-/// and `vt.`, nothing matches, and the whole entry goes to the selector.
-public enum PartOfSpeechFilter {
-    public static func narrow(_ candidates: [SenseCandidate], to partOfSpeech: String?) -> [SenseCandidate] {
-        guard let partOfSpeech, !partOfSpeech.isEmpty else { return candidates }
-        let wanted = partOfSpeech.lowercased()
-        let matching = candidates.filter { candidate in
-            candidate.partOfSpeech?.lowercased()
-                .split(whereSeparator: { !$0.isLetter })
-                .contains(Substring(wanted)) ?? false
-        }
-        return matching.isEmpty ? candidates : matching
+/// **By whole word, never by prefix and never by substring.** A dictionary qualifies the part of speech:
+/// 牛津英汉汉英 prints `plural noun`, `transitive verb`, `impersonal verb`, `adverb phrase`, and a `plural noun`
+/// sense is a noun sense — where *sanction*'s commonest reading lives. Matched by prefix the tagger's "noun" missed
+/// it; matched by substring `adverb` would answer to "verb". 譯典通's `n.` and `vt.` are a vocabulary this does not
+/// read, so they match nothing — inert, never wrong. An absent tag or label matches nothing either.
+public enum PartOfSpeechLabel {
+    public static func matches(_ label: String?, tag: String?) -> Bool {
+        guard let label, let tag, !tag.isEmpty else { return false }
+        return label.lowercased().split(whereSeparator: { !$0.isLetter }).contains(Substring(tag.lowercased()))
     }
 }
 
 /// The candidates a rung will actually consider, before any scoring.
 ///
-/// Shared by every rung deliberately: two rungs that narrowed differently would be compared on
-/// different fields, and the measurement would be reading the narrowing rather than the rungs. It
-/// drops the senses the dictionary cannot key — a choice among those could never be recorded
-/// anywhere — then narrows to the part of speech the word actually carries, which only ever
-/// narrows and never empties.
+/// Shared by every rung deliberately: two rungs that considered different fields would be compared on
+/// different fields. It drops the senses the dictionary cannot key — a choice among those could never be
+/// recorded anywhere — **and nothing else**.
+///
+/// **The tagger's part of speech removes nothing** (ADR-0053; AGENTS.md, "never gate, always annotate").
+/// This used to narrow to the senses whose block label matched the tag. Measured on 270 hard cases, that
+/// deleted the right sense in 40, because a tagger is wrong often enough on exactly the words a reader looks
+/// up; on the six-case labelled set it had looked like a gain. The tag now reaches a model rung as a guess
+/// said to be fallible, beside each sense's own label (`ModelPrompt.sense`); the embedding rung may weigh it
+/// as a bounded bonus that reorders and never removes (`EmbeddingSenseSelector.partOfSpeechWeight`).
 public enum SenseCandidates {
-    public static func considered(
-        _ candidates: [SenseCandidate], matching partOfSpeech: String?
-    ) -> [SenseCandidate] {
-        let keyable = candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
-        return PartOfSpeechFilter.narrow(keyable, to: partOfSpeech)
+    public static func considered(_ candidates: [SenseCandidate]) -> [SenseCandidate] {
+        candidates.filter { $0.keyKind != SenseKeyKind.none && !$0.text.isEmpty }
     }
 
     /// What a rung settles **before** asking anything: nothing to choose between, one sense, or no
@@ -173,10 +153,9 @@ public enum SenseCandidates {
     }
 
     static func preflight(
-        _ candidates: [SenseCandidate], matching partOfSpeech: String?, reading sentence: String?,
-        context: CaptureQuality.Context
+        _ candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context
     ) -> Preflight {
-        let considered = considered(candidates, matching: partOfSpeech)
+        let considered = considered(candidates)
         guard !considered.isEmpty else { return .settled(.abstained(.noCandidates)) }
         // One sense is not a choice. Nothing was chosen, so nothing can be wrong.
         guard considered.count > 1 else {
@@ -199,11 +178,10 @@ public enum SenseCandidates {
     /// precisely so no rung answers those three questions differently from another. A rung cannot
     /// now reach its own body without having gone through them.
     static func asking(
-        _ candidates: [SenseCandidate], matching partOfSpeech: String?, reading sentence: String?,
-        context: CaptureQuality.Context,
+        _ candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         _ body: (_ considered: [SenseCandidate], _ reading: String) async -> SenseSelection
     ) async -> SenseSelection {
-        switch preflight(candidates, matching: partOfSpeech, reading: sentence, context: context) {
+        switch preflight(candidates, reading: sentence, context: context) {
         case .settled(let answer): return answer
         case .ask(let considered, let reading): return await body(considered, reading)
         }
@@ -223,20 +201,38 @@ public struct EmbeddingSenseSelector: SenseSelecting {
     /// Beyond this, nothing in the entry is close to the sentence.
     public static let maximumDistance = 1.45
 
+    /// **The part-of-speech bonus, 0.1 — chosen on a development half and held to a held-out half (2026-10-11).**
+    ///
+    /// A candidate whose dictionary label names the tagger's part of speech (`PartOfSpeechLabel.matches`) is ranked by
+    /// `distance - weight`; any other candidate, an absent tag and an unlabelled sense contribute nothing. It reorders
+    /// **eligible** candidates only — eligibility stays the raw distance against `maximumDistance` — so it can never
+    /// rescue a sentence with no context, a language with no embedding, or a sense nothing in the sentence is close to,
+    /// and it removes no candidate (AGENTS.md, "never gate, always annotate").
+    ///
+    /// A weight is a tuned threshold (D6), so it was chosen by a rule fixed before measuring, on 320 development cases,
+    /// from a grid declared in advance, and then frozen. On 585 held-out NOAD cases over 123 other headwords it was
+    /// right on 36.6% against the unfiltered rung's 28.5% (paired 95% lower bound on the gain +5.3 points) and
+    /// confidently wrong on 27.4% against 35.4%, and against the retired narrowing's 31.8% (ADR-0053 addendum). The
+    /// paired evaluator is `Tests/DictionaryBridgeTests/SenseEvaluation`; its cases are derived from NOAD and are not
+    /// in the repository, so changing this number means re-running it on a Mac that has them.
+    public static let partOfSpeechWeight = 0.1
+
     private let minimumMargin: Double
     private let maximumDistance: Double
-    private let matchesPartOfSpeech: Bool
+    private let partOfSpeechWeight: Double
     private let embedding: @Sendable (NLLanguage) -> NLEmbedding?
 
     public init(
         minimumMargin: Double = EmbeddingSenseSelector.minimumMargin,
         maximumDistance: Double = EmbeddingSenseSelector.maximumDistance,
-        matchesPartOfSpeech: Bool = true,
+        partOfSpeechWeight: Double = EmbeddingSenseSelector.partOfSpeechWeight,
         embedding: @escaping @Sendable (NLLanguage) -> NLEmbedding? = { NLEmbedding.sentenceEmbedding(for: $0) }
     ) {
+        // A negative weight is a penalty for agreeing with the tagger, and a non-finite one is no bound at all.
+        precondition(partOfSpeechWeight >= 0 && partOfSpeechWeight.isFinite, "a part-of-speech weight is a bounded bonus")
         self.minimumMargin = minimumMargin
         self.maximumDistance = maximumDistance
-        self.matchesPartOfSpeech = matchesPartOfSpeech
+        self.partOfSpeechWeight = partOfSpeechWeight
         self.embedding = embedding
     }
 
@@ -245,36 +241,65 @@ public struct EmbeddingSenseSelector: SenseSelecting {
         partOfSpeech: String?
     ) async -> SenseSelection {
         // A dictionary that cannot key its senses offers nothing to choose between, so this can
-        // never yield a sense-level choice for one. And, measured: "kept a tight rein on spending"
-        // drew the *verb* "to hold something back" over the noun "the power to steer or restrain"
-        // — the meaning right, the grammar wrong. The three answers before any scoring are the
+        // never yield a sense-level choice for one. The three answers before any scoring are the
         // shared ones, so no rung answers them differently from another.
-        await SenseCandidates.asking(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
-            context: context
-        ) { keyable, reading in
-            let scored = rank(keyable, reading: reading)
-            guard let best = scored.first else { return .abstained(.unavailable) }
-            guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
-
-            // The list is in distance order, so the first entry holding a *different* key is the
-            // runner-up. Keys repeat across entries: a positional key is literally
-            // "\(block).\(ordinal)", so a margin measured against a second copy of the favourite's
-            // own key would be zero, and a set with no real rival in it would abstain as "too close".
-            let runnerUp = scored.first { $0.candidate.key != best.candidate.key }?.distance
-            guard let runnerUp else {
-                return .chose(key: best.candidate.key, margin: .infinity, entryID: best.candidate.entryID)
-            }
-            let margin = runnerUp - best.distance
-            guard margin >= minimumMargin else {
-                // The favourite is kept rather than discarded. It is not a choice — the margin says
-                // so — but it is the most useful thing known about a sentence that does not settle.
-                return .abstained(
-                    .tooClose,
-                    nearest: NearMiss(key: best.candidate.key, margin: margin, among: scored.count))
-            }
-            return .chose(key: best.candidate.key, margin: margin, entryID: best.candidate.entryID)
+        await SenseCandidates.asking(candidates, reading: sentence, context: context) { keyable, reading in
+            decide(rank(keyable, reading: reading), partOfSpeech: partOfSpeech)
         }
+    }
+
+    /// One candidate as the decision sees it: its raw distance, which decides eligibility, and its score, which
+    /// decides order — the distance less the part-of-speech bonus where it applies, so `distance - weight <= score
+    /// <= distance` always.
+    struct Scored {
+        let candidate: SenseCandidate
+        let distance: Double
+        let score: Double
+    }
+
+    /// The bonus applied: every candidate kept, eligible ones reordered by score with the incoming order as the tie
+    /// break. At weight zero this is the incoming order exactly.
+    func scored(
+        _ ranked: [(candidate: SenseCandidate, distance: Double)], partOfSpeech: String?
+    ) -> [Scored] {
+        let scored = ranked.map { entry in
+            // Only a sense the sentence already reaches earns it, so an ineligible sense can never overtake one.
+            let earns = entry.distance <= maximumDistance
+                && PartOfSpeechLabel.matches(entry.candidate.partOfSpeech, tag: partOfSpeech)
+            return Scored(candidate: entry.candidate, distance: entry.distance,
+                          score: earns ? entry.distance - partOfSpeechWeight : entry.distance)
+        }
+        return scored.indices
+            .sorted { scored[$0].score == scored[$1].score ? $0 < $1 : scored[$0].score < scored[$1].score }
+            .map { scored[$0] }
+    }
+
+    /// The half of `choose` after ranking: `ranked` is `rank`'s answer for the keyable candidates.
+    func decide(
+        _ ranked: [(candidate: SenseCandidate, distance: Double)], partOfSpeech: String?
+    ) -> SenseSelection {
+        let scored = scored(ranked, partOfSpeech: partOfSpeech)
+        guard let best = scored.first else { return .abstained(.unavailable) }
+        // Raw distance, never the score: the bonus reorders what the sentence already reaches and rescues nothing.
+        guard best.distance <= maximumDistance else { return .abstained(.nothingFits) }
+
+        // The list is in score order, so the first entry holding a *different* key is the
+        // runner-up. Keys repeat across entries: a positional key is literally
+        // "\(block).\(ordinal)", so a margin measured against a second copy of the favourite's
+        // own key would be zero, and a set with no real rival in it would abstain as "too close".
+        let runnerUp = scored.first { $0.candidate.key != best.candidate.key }?.score
+        guard let runnerUp else {
+            return .chose(key: best.candidate.key, margin: .infinity, entryID: best.candidate.entryID)
+        }
+        let margin = runnerUp - best.score
+        guard margin >= minimumMargin else {
+            // The favourite is kept rather than discarded. It is not a choice — the margin says
+            // so — but it is the most useful thing known about a sentence that does not settle.
+            return .abstained(
+                .tooClose,
+                nearest: NearMiss(key: best.candidate.key, margin: margin, among: scored.count))
+        }
+        return .chose(key: best.candidate.key, margin: margin, entryID: best.candidate.entryID)
     }
 
     /// The candidates in distance order, nearest first — the scoring half of `choose`, with none
@@ -285,8 +310,8 @@ public struct EmbeddingSenseSelector: SenseSelecting {
     /// list to a model. Empty where the space cannot run — no dominant language, no embedding for
     /// it, or nothing that scored a finite distance — which every caller reads as `.unavailable`.
     ///
-    /// **It filters nothing.** The keyable and part-of-speech narrowing belong to the caller and
-    /// are applied once, so a shortlist and a direct choice are ranked over exactly the same set
+    /// **It filters nothing.** Dropping the unkeyable senses belongs to the caller and is applied
+    /// once, so a shortlist and a direct choice are ranked over exactly the same set
     /// and the comparison between them stays like for like.
     public func rank(
         _ candidates: [SenseCandidate], reading sentence: String
@@ -372,8 +397,9 @@ public struct LadderSenseSelector: SenseSelecting {
 /// keyable senses, 13 once narrowed to the verb, which is a 2,952-character prompt against 1,211
 /// for the best five — **59% less prompt, not the order of magnitude an earlier note implied.**
 /// That note's "73 senses" was the part-of-speech filter failing to narrow at all, which was fixed
-/// on 2026-09-21; the number to argue from is 13, and whether 59% is worth a rung is what the
-/// latency measurement has to say.
+/// on 2026-09-21; the number to argue from was 13, and whether 59% is worth a rung is what the
+/// latency measurement has to say. **Since the narrowing was retired (ADR-0053, 2026-10-11) every
+/// rung sees all 27**, so the shortlist removes more than it did, and none of this has been re-measured.
 ///
 /// Its accuracy is **capped by the embedding's recall@K** — a sense the shortlist dropped is one
 /// the decider can never recover — so `theEmbeddingsRecallAtKIsMeasured` is the measurement that
@@ -390,31 +416,24 @@ public struct LadderSenseSelector: SenseSelecting {
 /// nothing until the labelled set can say when to use it.
 public struct ShortlistSenseSelector: SenseSelecting {
     public let shortlist: Int
-    /// Only `rank` is used, so this instance's own part-of-speech setting is irrelevant — the
-    /// narrowing happens once here, before ranking.
+    /// Only `rank` is used.
     private let ranker: EmbeddingSenseSelector
     private let decider: any SenseSelecting
-    private let matchesPartOfSpeech: Bool
 
     public init(
         shortlist: Int, decider: any SenseSelecting,
-        ranker: EmbeddingSenseSelector = EmbeddingSenseSelector(),
-        matchesPartOfSpeech: Bool = true
+        ranker: EmbeddingSenseSelector = EmbeddingSenseSelector()
     ) {
         self.shortlist = max(1, shortlist)
         self.decider = decider
         self.ranker = ranker
-        self.matchesPartOfSpeech = matchesPartOfSpeech
     }
 
     public func choose(
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        await SenseCandidates.asking(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
-            context: context
-        ) { considered, reading in
+        await SenseCandidates.asking(candidates, reading: sentence, context: context) { considered, reading in
             let ranked = ranker.rank(considered, reading: reading)
             // **A shortlist it could not build is not an abstention.** Where the embedding cannot run
             // — which is every Traditional Chinese, Japanese and Korean sentence, measured — the
@@ -424,8 +443,7 @@ public struct ShortlistSenseSelector: SenseSelecting {
                 ? considered
                 : ranked.prefix(shortlist).map(\.candidate)
 
-            // The part of speech is passed on although the narrowing is already done: the decider may
-            // put it in its prompt, and narrowing an already-narrowed set is a no-op.
+            // The tagger's guess is passed on: a model decider says it in its prompt, as a guess.
             return await decider.choose(
                 from: shortlisted, reading: reading, context: context, partOfSpeech: partOfSpeech)
         }

@@ -10,9 +10,9 @@ import XiaolaiDictTestSupport
 /// asserts what reached it and not only what came back.
 struct ProviderClientTests {
     static let sense = SenseQuestion(
-        sentence: "She banked the fire before going to bed.", partOfSpeech: "verb",
+        sentence: "She banked the fire before going to bed.", taggerGuess: "verb",
         senses: ["build up (a fire) with tightly packed fuel so that it burns slowly",
-                 "deposit (money or valuables) in a bank"])
+                 "deposit (money or valuables) in a bank"].map { SenseQuestion.Sense(text: $0) })
     static let explanation = SentenceQuestion(
         sentence: "She banked the fire before going to bed.", term: "banked",
         senseText: "heap (a fire) with tightly packed fuel so that it burns slowly")
@@ -252,9 +252,9 @@ struct ProviderClientTests {
     @Test func anEmptyQuestionIsRefusedAsInvalid() async {
         let provider = RecordingProvider { _ in "1" }
         let client = Self.client(provider, .onThisMac)
-        let noSenses = SenseQuestion(sentence: "A sentence.", partOfSpeech: nil, senses: [])
-        let tooMany = SenseQuestion(sentence: "A sentence.", partOfSpeech: nil,
-                                    senses: Array(repeating: "a sense", count: ModelPrompt.maximumSenses + 1))
+        let noSenses = SenseQuestion(sentence: "A sentence.", taggerGuess: nil, senses: [])
+        let tooMany = SenseQuestion(sentence: "A sentence.", taggerGuess: nil,
+                                    senses: Array(repeating: "a sense", count: ModelPrompt.maximumSenses + 1).map { SenseQuestion.Sense(text: $0) })
         for request in [ModelRequest.pickSense(noSenses), .pickSense(tooMany),
                         .explain(SentenceQuestion(sentence: " ", term: "x")),
                         .translate(TranslationQuestion(sentence: "A sentence.", target: ""))] {

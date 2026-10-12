@@ -56,7 +56,7 @@ struct ModelClientTests {
     }
 
     private static let question = ModelRequest.pickSense(
-        SenseQuestion(sentence: "The ship's hold was full.", partOfSpeech: "noun", senses: ["a", "b"]))
+        SenseQuestion(sentence: "The ship's hold was full.", taggerGuess: "noun", senses: ["a", "b"].map { SenseQuestion.Sense(text: $0) }))
 
     /// The scratch directories this test made, held for as long as the test instance lives so they
     /// are removed when it ends. A local `let` would be released while the store is still in use.

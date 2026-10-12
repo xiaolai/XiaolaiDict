@@ -23,22 +23,15 @@ import os
 ///   sentence under both settings. A refusal maps to `.refused`, **never to a pick of this rung's
 ///   own** — a selector that answers anyway when the model declined is a selector that is guessing.
 public struct FoundationModelsSenseSelector: SenseSelecting {
-    private let matchesPartOfSpeech: Bool
-
-    /// `matchesPartOfSpeech` is the same structural narrowing rung 1 gets. It is applied to every
-    /// rung so that no rung is scored against another on a different field.
-    public init(matchesPartOfSpeech: Bool = true) {
-        self.matchesPartOfSpeech = matchesPartOfSpeech
-    }
+    /// Every rung considers the same field — the keyable senses, never narrowed by the tagger
+    /// (ADR-0053) — so no rung is scored against another on a different one.
+    public init() {}
 
     public func choose(
         from candidates: [SenseCandidate], reading sentence: String?, context: CaptureQuality.Context,
         partOfSpeech: String?
     ) async -> SenseSelection {
-        await SenseCandidates.asking(
-            candidates, matching: matchesPartOfSpeech ? partOfSpeech : nil, reading: sentence,
-            context: context
-        ) { keyable, reading in
+        await SenseCandidates.asking(candidates, reading: sentence, context: context) { keyable, reading in
             // Asked through `SenseEngine`, not here. This site used to match `.available` itself and
             // drop the `.unavailable(reason)` payload, so nothing could say *why* a reader was on the
             // fallback rung — while `OnDeviceSentenceExplainer` kept the reason and rendered it. One
@@ -52,7 +45,8 @@ public struct FoundationModelsSenseSelector: SenseSelecting {
                 // being refused. Two rungs measured on one field have to ask one question.
                 guard keyable.count <= ModelPrompt.maximumSenses else { return .abstained(.unavailable) }
                 let question = SenseQuestion(
-                    sentence: reading, partOfSpeech: partOfSpeech, senses: keyable.map(\.text))
+                    sentence: reading, taggerGuess: partOfSpeech,
+                    senses: keyable.map { SenseQuestion.Sense(text: $0.text, partOfSpeech: $0.partOfSpeech) })
                 let session = LanguageModelSession(instructions: ModelPrompt.senseInstructions)
                 // **Temperature 0, like rung 1.** Picking a sense is a choice from a numbered list,
                 // not writing; sampling only lets one sentence be answered two ways. Left at the

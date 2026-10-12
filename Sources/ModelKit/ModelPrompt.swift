@@ -13,12 +13,13 @@ import FoundationModels
 /// The model's instructions and prompts, shared by the service that sends them and the tests that
 /// check what reaches the model.
 public enum ModelPrompt {
-    /// The app's sense instructions, unchanged from the on-device rung — the ones the Qwen
-    /// measurements ran with, so the numbers carry over.
+    /// The app's sense instructions, shared by every rung that asks. The Qwen measurements ran without the sentence
+    /// about labels, which arrived with them (ADR-0053's part-of-speech decision, 2026-10-11); no measurement here has
+    /// been repeated since.
     public static let senseInstructions = """
         You identify which dictionary sense of a word is being used in a sentence.
         You are given the word, the sentence it appears in, and a numbered list of that word's \
-        senses from a dictionary.
+        senses from a dictionary. A sense may begin with the dictionary's part-of-speech label in parentheses.
         Answer with the number of the single sense that the word carries in that sentence.
         Answer 0 if no sense clearly fits, or if two or more fit equally well. Answering 0 is \
         correct and expected whenever the sentence does not settle the question.
@@ -65,12 +66,22 @@ public enum ModelPrompt {
     /// grammar per schema, and the cold compile is the expensive part of a first answer.
     public static let maximumSenses = 99
 
+    /// The longest part-of-speech label a sense line carries: "adverb phrase", "transitive verb" with room to spare.
+    public static let labelCharacterLimit = 40
+
+    /// **The tagger's part of speech is a hint said as fallible, and the dictionary's label sits beside each sense**, so
+    /// the model weighs the two rather than obeying one. Neither removes a sense: narrowing to the tag deleted the right
+    /// sense in 40 of 270 hard cases, and "The word is used as a verb." stated as a fact was nearly as harmful (ADR-0053).
     public static func sense(_ question: SenseQuestion) -> String {
         var lines = ["Sentence: \(flattened(question.sentence, limit: sentenceCharacterLimit))"]
-        if let partOfSpeech = question.partOfSpeech { lines.append("The word is used as a \(partOfSpeech).") }
+        if let guess = question.taggerGuess.map({ flattened($0, limit: labelCharacterLimit) }), !guess.isEmpty {
+            lines.append("A part-of-speech tagger guessed the word is a \(guess) in this sentence; the guess may be wrong.")
+        }
         lines.append("Senses:")
-        for (index, text) in question.senses.enumerated() {
-            lines.append("\(index + 1). \(flattened(text, limit: senseCharacterLimit))")
+        for (index, sense) in question.senses.enumerated() {
+            let label = sense.partOfSpeech.map { flattened($0, limit: labelCharacterLimit) } ?? ""
+            let text = flattened(sense.text, limit: senseCharacterLimit)
+            lines.append(label.isEmpty ? "\(index + 1). \(text)" : "\(index + 1). (\(label)) \(text)")
         }
         lines.append("Which number?")
         return lines.joined(separator: "\n")

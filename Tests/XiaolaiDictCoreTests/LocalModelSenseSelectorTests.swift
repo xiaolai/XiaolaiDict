@@ -61,16 +61,21 @@ struct LocalModelSenseSelectorTests {
                 "the model was sent a shorter list than the entry has")
     }
 
-    /// The number is a position in the list the model was sent — narrowed to nouns and to what can
-    /// be keyed — and it comes back as that sense's key and entry.
+    /// The number is a position in the list the model was sent — every sense that can be keyed,
+    /// whatever the tagger said, each with its dictionary's label — and it comes back as that
+    /// sense's key and entry. The tag travels as a guess, never as a narrowing (ADR-0053).
     @Test func theAnswerIsReadAgainstTheListTheModelWasSent() async {
         let asked = Recorder<[SenseQuestion]>([])
-        let choice = await Self.choose(.sense(1), asked: asked)
+        let choice = await Self.choose(.sense(2), asked: asked)
         // **No margin.** A model answers with a position, not a score, so a number here would be
         // one this rung invented — and the accuracy report would read it as confidence.
         #expect(choice == .chose(key: "h.2", margin: nil, entryID: "hold2"))
-        #expect(asked.withLock { $0.first?.senses } == ["the cargo space of a ship", "a grip in wrestling"])
-        #expect(asked.withLock { $0.first?.partOfSpeech } == "noun")
+        #expect(asked.withLock { $0.first?.senses } == [
+            SenseQuestion.Sense(text: "grasp with the hands", partOfSpeech: "verb"),
+            SenseQuestion.Sense(text: "the cargo space of a ship", partOfSpeech: "noun"),
+            SenseQuestion.Sense(text: "a grip in wrestling", partOfSpeech: "noun"),
+        ])
+        #expect(asked.withLock { $0.first?.taggerGuess } == "noun")
     }
 
     /// 0 is the model saying the sentence does not settle it — a decision, which the ladder respects.
@@ -85,7 +90,8 @@ struct LocalModelSenseSelectorTests {
     /// **A number that names no sense in the list is not a decision.** 2B answered "10" of eight
     /// senses once; that rung could not run, so the answer must let the next one try rather than
     /// standing as an abstention of its own.
-    @Test(arguments: [3, 10, -1])
+    /// 4 is one past the three keyable senses the list holds.
+    @Test(arguments: [4, 10, -1])
     func aNumberOutsideTheListLetsTheNextRungAnswer(number: Int) async {
         #expect(await Self.choose(.sense(number)) == .abstained(.unavailable))
     }

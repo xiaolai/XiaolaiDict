@@ -28,15 +28,30 @@ public enum ModelRequest: Codable, Sendable, Equatable {
 /// position in this list, and the app maps it back — so nothing the model says can name a sense
 /// that is not in the list.
 public struct SenseQuestion: Codable, Sendable, Equatable {
-    public let sentence: String
-    /// How the word is used in the sentence, where the tagger committed. Said in the prompt.
-    public let partOfSpeech: String?
-    /// The senses' texts, in the order the answer will be read against.
-    public let senses: [String]
+    /// One sense as the model is shown it: the dictionary's text, and the part of speech the dictionary filed it
+    /// under. **One value, so a label cannot drift onto its neighbour's sense** — two parallel lists can.
+    public struct Sense: Codable, Sendable, Equatable {
+        public let text: String
+        /// The dictionary's own label for the sense's block — "noun", "transitive verb", "n." — or nil where it
+        /// printed none. The publisher's, so it is cut and flattened like the text.
+        public let partOfSpeech: String?
 
-    public init(sentence: String, partOfSpeech: String?, senses: [String]) {
+        public init(text: String, partOfSpeech: String? = nil) {
+            self.text = text
+            self.partOfSpeech = partOfSpeech
+        }
+    }
+
+    public let sentence: String
+    /// **What the tagger guessed** the word is in the sentence, where it committed. A guess, and said in the prompt as
+    /// one: stated as a fact it cost a model 24 right answers where the tagger was wrong (ADR-0053).
+    public let taggerGuess: String?
+    /// The senses, in the order the answer will be read against.
+    public let senses: [Sense]
+
+    public init(sentence: String, taggerGuess: String?, senses: [Sense]) {
         self.sentence = sentence
-        self.partOfSpeech = partOfSpeech
+        self.taggerGuess = taggerGuess
         self.senses = senses
     }
 }

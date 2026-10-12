@@ -259,9 +259,9 @@ struct ShortlistSenseSelectorTests {
         #expect(choice.abstention == nil, "an unrankable sentence became an abstention")
     }
 
-    /// Narrowing happens once, here, so the decider is never asked to narrow a different set —
-    /// otherwise the comparison between configurations would be reading the narrowing.
-    @Test func itNarrowsByPartOfSpeechBeforeRanking() async {
+    /// **The tagger's part of speech narrows nothing** (ADR-0053): every sense is ranked, and the
+    /// guess is passed on for the decider to say in its prompt.
+    @Test func itNeverNarrowsByPartOfSpeech() async {
         let spy = Spy()
         let mixed = [
             Self.sense("e.1", "to do something", pos: "verb"),
@@ -270,9 +270,7 @@ struct ShortlistSenseSelectorTests {
         ]
         _ = await ShortlistSenseSelector(shortlist: 9, decider: spy).choose(
             from: mixed, reading: "a sentence", context: .complete, partOfSpeech: "noun")
-        #expect(spy.saw.withLock { $0.map(\.key) } == ["e.2", "e.3"])
-        // Passed on regardless: the decider may want it for its prompt, and narrowing an
-        // already-narrowed set is a no-op.
+        #expect(Set(spy.saw.withLock { $0.map(\.key) }) == ["e.1", "e.2", "e.3"])
         #expect(spy.sawPartOfSpeech.withLock { $0 } == "noun")
     }
 

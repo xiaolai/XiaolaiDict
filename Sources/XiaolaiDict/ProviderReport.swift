@@ -73,7 +73,7 @@ enum ProviderReport {
     private static func disclosure(at tier: ProviderTier) async
         -> (sendsDictionaryText: Bool, asksSenseOnLookup: Bool, asksSenseOnTap: Bool) {
         let marker = "xiaolaidict-provider-status-sense-marker"
-        let senses = SenseQuestion(sentence: "A sentence to ask about.", partOfSpeech: nil, senses: [marker, "another"])
+        let senses = SenseQuestion(sentence: "A sentence to ask about.", taggerGuess: nil, senses: [marker, "another"].map { SenseQuestion.Sense(text: $0) })
         let explained = SentenceQuestion(sentence: "A sentence to ask about.", term: "sentence", senseText: marker)
         func sent(_ request: ModelRequest, _ origin: QuestionOrigin) async -> String? {
             let probe = NotingProvider()

@@ -49,7 +49,8 @@ public enum RemoteDisclosure {
     /// for either: it cannot be told from an ordinary word, and it holds none of a publisher's expression.
     public static func leaks(_ outgoing: String, of request: ModelRequest) -> Bool {
         let (texts, own): ([String], [String]) = switch request {
-        case .pickSense(let question): (question.senses, [question.sentence])
+        case .pickSense(let question):
+            (question.senses.flatMap { [$0.text] + ($0.partOfSpeech.map { [$0] } ?? []) }, [question.sentence])
         case .translate(let question): (question.met.map { [$0.sense] } ?? [], [question.sentence, question.met?.term ?? ""])
         case .explain(let question): (question.senseText.map { [$0] } ?? [], [question.sentence, question.term])
         case .prewarm, .status, .unload: ([], [])

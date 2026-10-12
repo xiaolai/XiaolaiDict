@@ -23,8 +23,8 @@ struct RemoteSendTests {
     static let explanation = SentenceQuestion(sentence: sentence, term: "banked", senseText: sense)
     static let translation = TranslationQuestion(sentence: sentence, target: "zh-Hans",
                                                  met: .init(term: "banked", sense: sense))
-    static let senses = SenseQuestion(sentence: sentence, partOfSpeech: "verb",
-                                      senses: [sense, "deposit (money or valuables) in a bank"])
+    static let senses = SenseQuestion(sentence: sentence, taggerGuess: "verb",
+                                      senses: [sense, "deposit (money or valuables) in a bank"].map { SenseQuestion.Sense(text: $0) })
     static let remoteHost = "dictionary-host.example"
 
     /// A loopback server that answers as a chat completions endpoint would: a translation for a translation, a number

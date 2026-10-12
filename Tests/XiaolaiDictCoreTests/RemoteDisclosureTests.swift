@@ -122,8 +122,8 @@ struct RemoteDisclosureTests {
         #expect(RemoteDisclosure.leaks(ModelPrompt.translation(told), of: .translate(told)))
         #expect(!RemoteDisclosure.leaks(ModelPrompt.translation(untold), of: .translate(told)))
 
-        let listed = SenseQuestion(sentence: Self.sentence, partOfSpeech: nil,
-                                   senses: ["deposit (money or valuables) in a bank", Self.sense])
+        let listed = SenseQuestion(sentence: Self.sentence, taggerGuess: nil,
+                                   senses: ["deposit (money or valuables) in a bank", Self.sense].map { SenseQuestion.Sense(text: $0) })
         #expect(RemoteDisclosure.leaks(ModelPrompt.sense(listed), of: .pickSense(listed)))
         #expect(!RemoteDisclosure.leaks("Sentence: \(Self.sentence)\nWhich number?", of: .pickSense(listed)))
     }

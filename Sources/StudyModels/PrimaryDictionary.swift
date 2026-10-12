@@ -265,7 +265,7 @@ public struct SenseResolver: Sendable {
     /// sequence the reader needs, which is the only reason the method is long.
     ///
     /// The part of speech comes from the block rather than the sense: it is a property of the
-    /// entry's grammatical division, and the selector matches on it.
+    /// entry's grammatical division. A model rung shows it beside the sense; nothing filters by it.
     public static func candidates(in entries: [DictionaryEntry]) -> [SenseCandidate] {
         entries.flatMap { entry in
             entry.blocks.flatMap { block in
@@ -326,9 +326,9 @@ public struct SenseResolver: Sendable {
         let choice = await selector.choose(
             from: candidates, reading: sentence, context: context, partOfSpeech: partOfSpeech)
         switch choice {
-        // **`.model` covers a choice no model made**: where the part-of-speech filter leaves one
-        // sense, the rung answers without asking anything. That is still a hypothesis — the tagger
-        // can be wrong about the part of speech — and `.model` is the provenance that draws as one.
+        // **`.model` covers a choice no model made**: where only one candidate can be keyed, the
+        // rung answers without asking anything. That is still a hypothesis — the entries offered
+        // other senses, unkeyable ones — and `.model` is the provenance that draws as one.
         // `.onlySense` would be the stronger claim, and it belongs to an entry that has one sense.
         case .chose(let key, _, let entryID):
             // By entry *and* key. A positional key is `"\(block).\(ordinal)"`, so every entry in

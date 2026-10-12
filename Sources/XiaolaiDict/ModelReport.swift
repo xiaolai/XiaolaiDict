@@ -192,7 +192,7 @@ enum ModelReport {
         let senseStarted = ContinuousClock.now
         let sentence = "It was stowed forward in the ship's hold, where the rats had got at the biscuit."
         let sense = await client.ask(.pickSense(SenseQuestion(
-            sentence: sentence, partOfSpeech: "noun", senses: senses)))
+            sentence: sentence, taggerGuess: "noun", senses: senses.map { SenseQuestion.Sense(text: $0) })))
         try Task.checkCancellation()
         report["senseSeconds"] = seconds(since: senseStarted)
         // The sentence itself, because the gate checks the explanation is not this handed back —

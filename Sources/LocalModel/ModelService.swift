@@ -180,8 +180,8 @@ public actor ModelService {
         prewarmInFlight = true
         let work = Task { () -> ModelReply in
             let warmed = await pickSense(SenseQuestion(
-                sentence: "The ship's hold was full.", partOfSpeech: "noun",
-                senses: ["a grip", "the cargo space of a ship"]))
+                sentence: "The ship's hold was full.", taggerGuess: "noun",
+                senses: ["a grip", "the cargo space of a ship"].map { SenseQuestion.Sense(text: $0) }))
             if case .failure(let failure) = warmed { return .failure(failure) }
             return .prewarmed
         }
