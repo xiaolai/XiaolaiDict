@@ -79,11 +79,21 @@ final class ShellActivationController {
     struct System {
         var setPolicy: @MainActor (NSApplication.ActivationPolicy) -> Void
         var activate: @MainActor () -> Void
+        /// Whether the app is active — what says an `activate()` was refused.
+        var isActive: @MainActor () -> Bool = { true }
+        /// Asks for the app the way the Dock does. The system sends a reopen for it.
+        var activateThroughLaunchServices: @MainActor () -> Void = {}
 
         /// The real ones. Named by `XiaolaiDictApp.init()` and by nothing else.
         static let appKit = System(
             setPolicy: { NSApplication.shared.setActivationPolicy($0) },
-            activate: { NSApplication.shared.activate() })
+            activate: { NSApplication.shared.activate() },
+            isActive: { NSApplication.shared.isActive },
+            activateThroughLaunchServices: {
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
+                NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+            })
         /// Does nothing — what a test gets unless it asks to watch.
         static let inert = System(setPolicy: { _ in }, activate: {})
     }
@@ -93,10 +103,16 @@ final class ShellActivationController {
     private let settingsWindow: @MainActor () -> NSWindow?
     private var closeObserver: (any NSObjectProtocol)?
     private(set) var current: NSApplication.ActivationPolicy = .accessory
+    /// How long an activation is given before it is called refused. Measured on the E2E Mac 2026-10-13: one that took
+    /// was active within 0.5 s every time, and one refused was still refused at 2 s.
+    private let refusalCheck: Duration
+    /// Until when a reopen is LaunchServices answering `askAgainIfRefused`, not the reader.
+    private var ownReopenUntil: ContinuousClock.Instant?
 
-    init(system: System, settingsWindow: @escaping @MainActor () -> NSWindow?) {
+    init(system: System, settingsWindow: @escaping @MainActor () -> NSWindow?, refusalCheck: Duration = .seconds(1)) {
         self.system = system
         self.settingsWindow = settingsWindow
+        self.refusalCheck = refusalCheck
     }
 
     /// Starts following window closes. Not in `init`: a test builds the app without wanting an
@@ -123,6 +139,34 @@ final class ShellActivationController {
         }
         set(ShellActivation.policy(for: windows(closing: nil), opening: kind), because: "a window was asked for")
         system.activate()
+        Task { [weak self, refusalCheck] in
+            try? await Task.sleep(for: refusalCheck)
+            self?.askAgainIfRefused()
+        }
+    }
+
+    /// **A refused activation is asked again through LaunchServices.** `activate()` is a request macOS may refuse,
+    /// and it does — with another app in front, Settings… chosen from the menu stayed behind it in 5 of 22 tries on the
+    /// E2E Mac, still refused 2 s on and refused again with `ignoringOtherApps`. LaunchServices is how the Dock brings
+    /// an app forward, and it brought this one forward every time. Only while a chosen window is still what the app is
+    /// in the Dock for: a reader who closed it, or never got it, is not pulled back.
+    private func askAgainIfRefused() {
+        guard current == .regular, !system.isActive() else { return }
+        log.notice("activation: refused, so asking LaunchServices")
+        ownReopenUntil = .now.advanced(by: Self.ownReopenWindow)
+        system.activateThroughLaunchServices()
+    }
+
+    /// How long after asking LaunchServices its reopen may arrive. It answers in milliseconds; a reader's own click
+    /// on the Dock icon inside this is taken as theirs anyway, since they already have the window they chose.
+    private static let ownReopenWindow: Duration = .seconds(2)
+
+    /// **Whether a reopen is LaunchServices answering this controller**, which a reopen handler must not take for the
+    /// reader asking for the Library. Answers yes once, and only within `ownReopenWindow` of the request.
+    func takeOwnReopen() -> Bool {
+        defer { ownReopenUntil = nil }
+        guard let until = ownReopenUntil else { return false }
+        return ContinuousClock.now < until
     }
 
     /// A window is going, or one that was asked for never came; decide again from what is

@@ -309,6 +309,11 @@ final class XiaolaiDictApp: NSObject, NSApplicationDelegate, HoverDelivering {
     /// and SwiftUI's default for an app whose scenes are all suppressed is not something to find
     /// out about in a release.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // The reopen LaunchServices sends when a refused activation is asked again is not the reader asking.
+        if activation.takeOwnReopen() {
+            log.notice("reopen: our own activation, not the reader's")
+            return false
+        }
         log.notice("reopen: showing the Library (visible windows: \(hasVisibleWindows, privacy: .public))")
         showLibrary()
         return false

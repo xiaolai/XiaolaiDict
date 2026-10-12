@@ -106,6 +106,38 @@ struct ShellActivationWiringTests {
         #expect(policies.set == [.regular, .accessory])
     }
 
+    /// **A refused activation is asked again through LaunchServices, and its reopen is not the reader's.** Measured on
+    /// the E2E Mac 2026-10-13: with Ghostty in front, Settings… chosen from the menu left the app inactive in 5 of 22
+    /// tries — `activate()` refused, still refused 2 s on, and refused again with `ignoringOtherApps` — while asking
+    /// LaunchServices brought it forward every time. LaunchServices sends the app a reopen for it, which would open the
+    /// Library unasked, so that one reopen is the controller's own.
+    @Test func aRefusedActivationIsAskedAgainThroughLaunchServices() async {
+        let policies = Policies()
+        var launches = 0
+        let controller = ShellActivationController(
+            system: .init(setPolicy: { policies.set.append($0) }, activate: { policies.activations += 1 },
+                          isActive: { false }, activateThroughLaunchServices: { launches += 1 }),
+            settingsWindow: { nil }, refusalCheck: .zero)
+        controller.bringForward(for: .settings)
+        #expect(await Patience.until { launches == 1 }, "a refused activation was left refused")
+        #expect(controller.takeOwnReopen(), "LaunchServices' reopen was taken for the reader's")
+        #expect(!controller.takeOwnReopen(), "the reader's next reopen was swallowed too")
+    }
+
+    /// And an activation that took is left alone: no second request, and every reopen is the reader's.
+    @Test func anActivationThatTookIsNotAskedAgain() async {
+        let policies = Policies()
+        var launches = 0, looked = false
+        let controller = ShellActivationController(
+            system: .init(setPolicy: { policies.set.append($0) }, activate: { policies.activations += 1 },
+                          isActive: { looked = true; return true }, activateThroughLaunchServices: { launches += 1 }),
+            settingsWindow: { nil }, refusalCheck: .zero)
+        controller.bringForward(for: .settings)
+        #expect(await Patience.until { looked }, "the activation was never checked")
+        #expect(launches == 0, "an activation that took was asked for again")
+        #expect(!controller.takeOwnReopen(), "a reopen was taken from the reader with nothing asked")
+    }
+
     /// A view reporting its window raises the policy and never lowers it: the report arrives before
     /// the window is on screen, and lowering there would undo the open that caused it.
     @Test func aWindowBeingAttachedNeverLowersThePolicy() {
