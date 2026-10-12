@@ -204,6 +204,10 @@ extension NoteReport {
             result["hit"] = hit(at: at)
             _ = Instrument.postMouse(.mouseMoved, at: CGPoint(x: frame.minX - approach, y: frame.midY))
             try? await Task.sleep(for: arrival)
+            // Onto the note's middle first and rested there, as `order` does and a hand does: the control is revealed under
+            // the pointer, and a pointer teleported from outside straight onto it can arrive before the note has seen it enter.
+            _ = Instrument.postMouse(.mouseMoved, at: CGPoint(x: frame.midX, y: frame.midY))
+            try? await Task.sleep(for: reveal)
             result["posted"] = await click(at: at, resting: reveal)
             result["closed"] = await Instrument.settle(until: delivery) { !Instrument.isOnScreen(window) }
             results.append(result)
