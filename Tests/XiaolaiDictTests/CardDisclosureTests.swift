@@ -74,8 +74,12 @@ struct CardDisclosureTests {
         /// Put away at the end of the test that made it.
         func close() { window.orderOut(nil) }
 
+        /// **Without animation**: a press opens a disclosure `withAnimation`, and the height a press is judged by is then
+        /// wherever the animation stood when it was read — the run loop is turned for no time at all, so whether the
+        /// change shows depends on the clock. These tests ask what state an entry arrives in, never how it moves.
         private static func view(_ card: LookupCard) -> AnyView {
-            AnyView(LookupCardView(card: card).environment(\.scale, Scale.standard).frame(width: 396))
+            AnyView(LookupCardView(card: card).environment(\.scale, Scale.standard).frame(width: 396)
+                .transaction { $0.animation = nil; $0.disablesAnimations = true })
         }
 
         /// The same view given another card — another entry — as the panel gives it one.
