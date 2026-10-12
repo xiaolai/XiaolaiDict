@@ -191,6 +191,9 @@ enum PlacementReport {
                 throw error
             }
             card.alphaValue = 1
+            // **The window server takes the card back before it answers clicks for it again**: a click on the tail
+            // straight after reached the app beneath (2026-10-12), so the card is waited for, not assumed.
+            try? await Task.sleep(for: .milliseconds(500))
             let scale = screen.backingScaleFactor
             let bitmap = NSBitmapImageRep(cgImage: image)
             let backdrop = behind.map { NSBitmapImageRep(cgImage: $0) }
