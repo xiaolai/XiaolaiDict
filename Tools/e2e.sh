@@ -1937,8 +1937,12 @@ before, after = drag.get("before") or {}, drag.get("after") or {}
 nodes = ((view.get("windows") or [{}])[0].get("nodes") or [])
 now = next((n.get("frame") for n in nodes if n.get("role") == "AXWindow" and n.get("frame")), {}) or {}
 def at(b): return f"{b.get('x', 0):.0f},{b.get('y', 0):.0f}"
-moved = bool(before) and bool(after) and abs(after.get("x", 0) - before.get("x", 0) - 80) <= 3 \
-    and abs(after.get("y", 0) - before.get("y", 0) - 60) <= 3
+# **Within four of the helper's two-point steps (8 pt), not three points**: the window server takes the first drag events to
+# begin a window drag, and they move nothing. Measured 2026-10-12 on the second E2E Mac: +76,+57 for a drag of +80,+60 — two steps
+# lost, every one after them followed — where other runs landed inside three. What this establishes is that the card was
+# dragged aside; the next assertion is the one about where the word's card goes, and it is judged to two points from `after`.
+moved = bool(before) and bool(after) and abs(after.get("x", 0) - before.get("x", 0) - 80) <= 8 \
+    and abs(after.get("y", 0) - before.get("y", 0) - 60) <= 8
 say(moved, f"lookup: the miss card was dragged aside, {at(before)} → {at(after)}",
     f"lookup: a drag of +80,+60 did not move the miss card so: {before} → {after}")
 held = moved and bool(now) and abs(now.get("x", 0) - after.get("x", 0)) <= 2 and abs(now.get("y", 0) - after.get("y", 0)) <= 2

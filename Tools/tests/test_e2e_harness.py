@@ -1293,6 +1293,15 @@ class TheFollowedCardStaysWhereTheReaderLeftIt(unittest.TestCase):
         grown = {**self.AFTER, "height": 290.0}
         self.assertEqual(self.verdicts({"before": self.BEFORE, "after": self.AFTER}, grown), ["PASS", "PASS", "DONE"])
 
+    def test_a_drag_that_lost_its_first_two_steps_still_counts_as_a_drag(self):
+        # Measured on the second E2E Mac: +76,+57 for a drag of +80,+60. The window server takes the first events to begin the drag.
+        lost = {"x": self.BEFORE["x"] + 76.0, "y": self.BEFORE["y"] + 57.0, "width": 396.0, "height": 120.0}
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": lost}, lost), ["PASS", "PASS", "DONE"])
+
+    def test_a_drag_that_moved_half_the_way_fails(self):
+        half = {"x": self.BEFORE["x"] + 40.0, "y": self.BEFORE["y"] + 30.0, "width": 396.0, "height": 120.0}
+        self.assertEqual(self.verdicts({"before": self.BEFORE, "after": half}, half), ["FAIL", "FAIL", "DONE"])
+
     def test_a_card_that_jumped_back_fails(self):
         self.assertIn("FAIL", self.verdicts({"before": self.BEFORE, "after": self.AFTER}, self.BEFORE))
 
