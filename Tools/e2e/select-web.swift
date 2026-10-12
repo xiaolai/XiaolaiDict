@@ -133,12 +133,25 @@ func isInside(_ element: AXUIElement, _ ancestor: AXUIElement) -> Bool {
     }
     return false
 }
-guard let pid = processID(),
-      let focused = attribute(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
-      CFGetTypeID(focused) == AXUIElementGetTypeID(), isInside(focused as! AXUIElement, page)
-else {
-    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"
-    fail("the click did not move focus into the page (\(front) is in front now)")
+func focusIsInPage() -> Bool {
+    guard let pid = processID(),
+          let focused = attribute(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
+          CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+    return isInside(focused as! AXUIElement, page)
+}
+// **Waited for, not looked at once.** A page's focused element is WebKit's answer, computed in its web content process
+// after the click reaches it; looked at once, 300 ms after the click, it was still outside the page on a full run on the
+// E2E Mac (2026-10-13) with Safari in front. The bound only stops a click that never lands from hanging the stage.
+let focusDeadline = Date().addingTimeInterval(3)
+var focusWaited = 0.3
+while !focusIsInPage() {
+    guard Date() < focusDeadline else {
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing"
+        fail("the click did not move focus into the page in \(String(format: "%.1f", focusWaited)) s "
+             + "(\(front) is in front now)")
+    }
+    usleep(50_000)
+    focusWaited += 0.05
 }
 
 let range = text.range(of: arguments[2])
