@@ -167,6 +167,16 @@ for part in "$BUILT" "$BUILT/Contents/XPCServices/XiaolaiDictService.xpc"; do
         || fail "get-task-allow is set on $part — the notary service would refuse it"
 done
 
+# **No upload without end-to-end evidence of this very source** (ADR-0024 addendum, 2026-10-11). Asked here, after the
+# build and before anything is sent to Apple, because the tree is read again now: an edit during the build would be
+# released without the evidence. `make release` asked once already, before its tests, so a missing run costs seconds
+# there. The evidence is a fresh `make e2e-full` of a *development* bundle built from the same clean git tree — never
+# CARRIED, never another tree. **This artifact itself is not what the harness drove**: a release compiles out the
+# instruments the stages observe through (ADR-0010), so `verify_bundle` is what checked it; the gate prints which
+# observations that leaves untested on the shipped binary.
+Tools/e2e-status.sh require-fresh \
+    || fail "no fresh end-to-end pass of this source tree: commit, run make e2e-full, then release"
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 ditto "$BUILT" "$APP"

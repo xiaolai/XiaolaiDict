@@ -6,14 +6,21 @@
 #
 #   e2e.sh <ssh-host> [stage...]   ship .build/XiaolaiDict.app to the host and run stages there
 #
-# With no stage names every stage runs. With them, only those — a full run costs minutes and most
-# changes touch one or two. The names are `KNOWN_STAGES` below, and a name that is not one of them
-# is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
+# With stage names, only those run, fresh. The names are `KNOWN_STAGES` below, and a name that is not
+# one of them is refused: a typo that ran nothing used to print "all stages passed" and exit 0.
 #
-# Each result is filed by `Tools/e2e-status.sh` against the build it ran on, which is also what
-# `make e2e-status` reads. A pass is only a fact about that build, so one carried over from an older
-# build is shown as stale rather than as a pass: a green mark that outlives what it tested is worse
-# than no mark.
+# **With none, the run is incremental** (2026-10-11): each stage's inputs — the modules its assertions
+# exercise and what they depend on, its helpers and fixtures, its own region of this file, and the
+# harness every stage shares (`Tools/e2e/stage-inputs.tsv`) — are hashed into a key by
+# `Tools/e2e-inputs.py`, and a stage whose key equals that of its last fresh pass, on the same E2E Mac
+# and macOS build, is CARRIED rather than run. The table says which, and why. `XIAOLAIDICT_E2E_FULL=1`
+# (`make e2e-full`) runs every stage fresh; `XIAOLAIDICT_E2E_WITHIN="a b"` (`make e2e WITHIN="a b"`) is
+# incremental over those stages alone. **CARRIED is a development-loop shortcut and is never
+# valid for a merge or a release**: those need a fresh pass of every stage of a development bundle
+# built from their own clean source tree, and `Tools/e2e-status.sh require-fresh` refuses anything else.
+#
+# Each result is filed by `Tools/e2e-status.sh` against the build it ran on and the key it ran under,
+# which is also what `make e2e-status` reads.
 #
 # Each stage asserts what it saw, including that the thing it tested happened at all: a test that
 # silently did nothing must not look like one that passed.
@@ -317,6 +324,46 @@ fi
 echo "ledger: schema $ledger_found there, this build's $ledger_supported"
 
 # ---------------------------------------------------------------------------------------------
+# **Which stages run.** Each stage's key is its inputs' hash; a stage last passed fresh under an equal key, on this
+# Mac and this macOS build, is carried. Asked-for stages and a full run ignore what is recorded. Computed here, before
+# anything is shipped, so a run that has nothing to do costs seconds — and printed, so a carry is never silent.
+stage "plan"
+e2e_os="$remote_os $remote_build"
+# The Mac this run reached, for `make e2e-status`, which asks the planner whether a row would be carried there.
+printf '%s\t%s\t%s\n' "$remote_uuid" "$e2e_os" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >.build/e2e-host.tsv
+# **Held to the keys and the tree taken before the bundle was built** (`make e2e` sets XIAOLAIDICT_E2E_PREBUILD): a key
+# that moved since then describes files the bundle may lack, so that stage runs and is filed with no key; a tree that
+# moved, or was dirty, files no tree, which a release refuses. Run without it — `e2e.sh` by hand — nothing says what the
+# bundle was built from, so the keys are the ones read now and the tree is `-`.
+python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys-now" || fail "the stages' input keys could not be computed"
+source_tree=-
+if [ -n "${XIAOLAIDICT_E2E_PREBUILD:-}" ]; then
+    python3 Tools/e2e-inputs.py since-build "$XIAOLAIDICT_E2E_PREBUILD/keys" "$remote_scripts/keys-now" >"$remote_scripts/keys" \
+        || fail "the keys taken before the build could not be read from $XIAOLAIDICT_E2E_PREBUILD"
+    built_tree=$(cat "$XIAOLAIDICT_E2E_PREBUILD/tree") || fail "the tree taken before the build could not be read"
+    [ "$built_tree" != "$(python3 Tools/e2e-inputs.py tree)" ] || source_tree=$built_tree
+else
+    cp "$remote_scripts/keys-now" "$remote_scripts/keys"
+fi
+if [ "$source_tree" = - ]; then
+    echo "source tree: none recorded (dirty, changed since the build, or not started by make e2e), so this run cannot be a release receipt"
+else
+    echo "source tree: $source_tree"
+fi
+full_flag=""
+[ -z "${XIAOLAIDICT_E2E_FULL:-}" ] || full_flag=--full
+python3 Tools/e2e-inputs.py plan "$remote_scripts/keys" .build/e2e-status.tsv "$remote_uuid" "$e2e_os" \
+    ${full_flag:+"$full_flag"} --asked "$STAGES" --within "${XIAOLAIDICT_E2E_WITHIN:-}" >"$remote_scripts/plan" \
+    || fail "the run could not be planned"
+python3 Tools/e2e-inputs.py table "$remote_scripts/plan"
+STAGES=$(awk -F'\t' '$2 == "run" { printf "%s ", $1 }' "$remote_scripts/plan")
+STAGES=${STAGES% }
+if [ -z "$STAGES" ]; then
+    echo "nothing to run: every stage in scope is carried forward"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------------------------
 # Runs on the E2E machine: quit a running copy of the E2E bundle, by its exact executable path.
 remote_quit() {
     cat "$remote_scripts/common.sh" - <<'SH' | ssh_e2e bash -s -- "$REMOTE_DIR"
@@ -359,6 +406,7 @@ rsync -a --delete "$APP" .build/e2e "$host:$REMOTE_DIR/" || fail "could not copy
 local_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
 remote_version=$(ssh_e2e "/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' '$REMOTE_DIR/XiaolaiDict.app/Contents/Info.plist'")
 [ "$local_version" = "$remote_version" ] || fail "shipped build $local_version, found $remote_version"
+build_mode=$(python3 Tools/e2e-inputs.py mode "$remote_version") || fail "the build mode of $remote_version could not be read"
 ssh_e2e "codesign --verify --strict --deep '$REMOTE_DIR/XiaolaiDict.app'" || fail "the shipped bundle does not verify there"
 echo "build $remote_version installed and verified"
 
@@ -5900,7 +5948,17 @@ if [ "$remote_status" -ge 2 ]; then
     echo "whatever the log holds is a partial run, not this build's verdict" >&2
     exit "$remote_status"
 fi
-Tools/e2e-status.sh record "$remote_version" <"$RUN_LOG"
+# **Filed under the key each stage ran under — unless that key moved while it ran.** A file edited mid-run is in no
+# bundle this run tested, so a stage whose key changed is filed with none and can never be carried from this pass.
+# A key that cannot be computed again files none for every stage: that direction is only ever an extra run.
+python3 Tools/e2e-inputs.py keys >"$remote_scripts/keys-after" || : >"$remote_scripts/keys-after"
+python3 Tools/e2e-inputs.py settle "$remote_scripts/keys" "$remote_scripts/keys-after" >"$remote_scripts/keys-settled" \
+    || fail "the keys this run ran under could not be settled; nothing is recorded"
+# The tree likewise: one that moved while the stages ran is no tree this run tested.
+[ "$source_tree" = "$(python3 Tools/e2e-inputs.py tree)" ] || source_tree=-
+Tools/e2e-status.sh record "$remote_version" "$remote_scripts/keys-settled" "$remote_uuid" "$e2e_os" "$source_tree" "$build_mode" <"$RUN_LOG"
+echo
+python3 Tools/e2e-inputs.py table "$remote_scripts/plan" "$RUN_LOG"
 echo
 Tools/e2e-status.sh show
 exit "$remote_status"

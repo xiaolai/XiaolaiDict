@@ -1,0 +1,177 @@
+# What each end-to-end stage's result depends on — read by Tools/e2e-inputs.py, which hashes it into the stage's key.
+#
+# **CARRIED is a development-loop shortcut, never a gate.** A stage whose key is unchanged since a fresh pass on the
+# same E2E Mac and macOS build is carried forward instead of run. A merge or a release needs a FRESH pass of every
+# stage of a development bundle built from its own clean source tree — `make e2e-full`, then `Tools/e2e-status.sh
+# require-fresh`, which refuses CARRIED and which `make release` asks before it uploads anything.
+#
+# One row per input, four tab-separated fields: stage, kind, value, reason.
+#   stage   a name in KNOWN_STAGES (Tools/e2e.sh); `*` for an input of every stage; `-` for an `unexercised` row
+#   module  a SwiftPM target and, transitively, every target it depends on — read off `swift package dump-package`
+#   own     a SwiftPM target's own files only: the app target, which every stage runs and which links nearly
+#           everything, so claiming it whole would make every stage claim every source change
+#   path    a file, a directory or a glob, relative to the repository; it must match at least one file
+#   unexercised  a target no stage claims, with the reason (test targets are never in the bundle and need no row)
+#
+# **A stage claims the modules its assertions exercise and those it runs on the way that can break it**, not everything
+# the app links. Decided 2026-10-11 (ADR-0024 addendum): the model service is claimed by every stage, since the
+# preflight launches the app for every stage and the app starts it; StudyKit by crash, deadline and scenes; the
+# dictionary service by every stage that launches a lookup or asserts the service answered. A row is added only where
+# the stage's other rows do not already reach the module transitively (`Tools/tests/test_e2e_incremental.py` holds both).
+# When in doubt a module is claimed: a false skip is far worse than an extra run.
+#
+# Every stage also depends on its own region of Tools/e2e.sh and on everything in that file outside the regions;
+# those are hashed without being listed here. The scan in Tools/tests/test_e2e_incremental.py holds this file to the
+# tree: every stage has an entry, every pattern matches a file, every shipped module is claimed or listed below, every
+# `$helpers/…` a region uses is declared for it.
+
+# --- The harness and the bundle, an input of every stage ------------------------------------------------------------
+*	path	Tools/e2e/shared	compiled beside every helper
+*	path	Tools/python.sh	the Python both Macs run the harness on
+*	path	Tools/e2e-status.sh	files and reads the record a carry is decided from
+*	path	Tools/e2e-inputs.py	computes the keys themselves
+*	path	Package.swift	the package graph, settings and dependencies every module is built under
+*	path	Package.resolved	the pinned versions of every external package
+*	path	Makefile	builds the bundle that is shipped
+*	path	Tools/build-bundle.sh	assembles, signs and verifies the bundle that is shipped
+*	path	Tools/third-party-notices.sh	writes into the bundle
+*	path	Tools/compiler-warnings.py	gates the bundle's build
+*	path	Resources	Info.plists, the icon and the menu-bar glyph of the bundle every stage launches
+*	path	Strings	the text every surface a stage reads is drawn in
+*	path	Tools/e2e/notes.txt	the TextEdit fixture the preflight opens for every stage
+*	path	Tools/e2e/select-text.swift	the shared selection read (select_then_read)
+*	path	Tools/e2e/select-web.swift	the shared selection-box checks (selection_box, punctuated_box)
+*	path	Tools/e2e/session-access.swift	the preflight's grant probe
+*	path	Tools/e2e/app-health.swift	the preflight's TextEdit check
+*	path	Tools/e2e/menu-click.swift	the preflight's menu-bar check
+*	path	Tools/e2e/on-screen.swift	the shared front-app and window reads
+*	path	Tools/e2e/close-window.swift	the preflight closes a stale fixture window with it
+*	path	Tools/e2e/screen-state.swift	the shared locked-screen check
+*	path	Tools/e2e/panel.swift	the shared lookup-panel reads (ensure_one_lookup)
+*	path	Tools/e2e/keys.swift	the shared key presses
+*	path	Tools/e2e/reminder.py	the shared restore of the reader's reminders
+*	module	XiaolaiDictModelService	the preflight launches the app for every stage and the app starts this service; a crash or hang there can fail any stage
+
+# --- Stage by stage -------------------------------------------------------------------------------------------------
+launch	own	XiaolaiDict	the app process LaunchServices starts and that must stay up
+launch	module	XiaolaiDictUI	its menu-bar item and scenes are composed at launch; a launch crash anywhere they link fails it
+
+lookup	own	XiaolaiDict	the lookup instrument and the panel's runner
+lookup	module	XiaolaiDictService	a lookup through the real XPC path answers with entries
+lookup	module	XiaolaiDictCore	the spelling suggestion and the sense ladder the card shows
+lookup	module	XiaolaiDictUI	the panel's "Did you mean" line is pressed and read
+lookup	module	StudyKit	the ledger rows each lookup writes are asserted
+lookup	module	StudyModels	LookupRecorder and LedgerStore, which write those rows
+lookup	path	Tools/e2e/click-element.swift	its helper
+lookup	path	Tools/e2e/drag-card.swift	its helper
+
+crash	own	XiaolaiDict	the client's fallback when its service dies, and its recovery
+crash	module	XiaolaiDictService	the service killed mid-run and started again
+crash	module	StudyKit	the ledger a recovered lookup writes; a write that fails takes the lookup with it
+
+accessibility	own	XiaolaiDict	the --read-point and --read-selection instruments
+accessibility	module	MacCapture	reads the selection and the point through Accessibility
+accessibility	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
+accessibility	path	Tools/e2e/select-web.swift	its helper
+
+selection	own	XiaolaiDict	the --read-selection instrument
+selection	module	MacCapture	selections read from TextEdit and Safari, as boxes and sentences
+selection	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
+selection	path	Tools/e2e/page.html	its Safari fixture
+selection	path	Tools/e2e/select-web.swift	its helper
+
+shortcut	own	XiaolaiDict	the hot key, the selection it reads and the panel it opens
+shortcut	module	MacCapture	the selection the shortcut reads
+shortcut	module	XiaolaiDictService	the lookup the shortcut makes
+shortcut	module	XiaolaiDictUI	the panel drawn at the selection, and Escape
+shortcut	module	StudyKit	the ledger row the lookup writes
+shortcut	module	StudyModels	LookupRecorder and LedgerStore, which write that row
+shortcut	path	Tools/e2e/claim-escape.swift	its helper
+
+deadline	own	XiaolaiDict	the 1 s promise is the client's deadline
+deadline	module	XiaolaiDictService	a hung service, suspended with SIGSTOP
+deadline	module	XiaolaiDictUI	the panel appears at once and says what it waits for; reaches StudyKit, the ledger the lookup writes
+
+hover	own	XiaolaiDict	the hover watcher and the --read-point instrument
+hover	module	MacCapture	the three Accessibility dialects and the recogniser
+hover	module	XiaolaiDictUI	the card's placement and the pinned note
+hover	module	XiaolaiDictService	the words hovered are looked up
+hover	module	StudyKit	the ledger rows a hover writes
+hover	module	StudyModels	LookupRecorder and LedgerStore, which write those rows
+hover	path	Tools/e2e/word-point.swift	its helper
+hover	path	Tools/e2e/element-frame.swift	its helper
+hover	path	Tools/e2e/page.html	its Safari and Chrome fixture
+hover	path	Tools/e2e/canvas.html	its pixels-only fixture
+
+drawer	own	XiaolaiDict	the history drawer and the --history-report instrument
+drawer	module	XiaolaiDictUI	the drawer's surface, docking and stripes
+drawer	module	StudyPresentation	what the drawer's cards say about each reading
+drawer	module	StudyKit	the readings the drawer lists
+drawer	module	StudyModels	LedgerStore, through which the drawer reads them
+drawer	path	Tools/e2e/drawer-interactions.swift	its helper
+
+recogniser	own	XiaolaiDict	the --read-point instrument
+recogniser	module	MacCapture	the OCR fallback, through a terminal that exposes no text
+recogniser	module	XiaolaiDictService	the app it reads through launches and asks the dictionary service
+recogniser	path	Tools/e2e/window-frame.swift	its helper
+
+setup	own	XiaolaiDict	the setup board, its menu item and its window
+setup	module	XiaolaiDictUI	the board's rows and Settings
+setup	module	XiaolaiDictService	the board's dictionary row waits on the service's list
+setup	module	XiaolaiDictModelService	the board's model row, with the model store stashed and put back
+setup	path	Tools/e2e/click-element.swift	its helper
+
+scenes	own	XiaolaiDict	the windows that are SwiftUI scenes
+scenes	module	XiaolaiDictUI	Settings' panes, sizes and shortcut recorder; reaches StudyKit, the ledger the scenes open
+scenes	module	XiaolaiDictService	asserted directly: the stage checks that the dictionary service answered
+scenes	path	Tools/e2e/click-element.swift	its helper
+
+panel	own	XiaolaiDict	the panel window and the --panel-report and --note-report instruments
+panel	module	XiaolaiDictUI	the panel's window, its key status and the pinned note
+panel	module	XiaolaiDictService	the lookups the panel shows
+panel	module	StudyModels	LookupRecorder and LedgerStore, and the pinned note's model
+panel	module	StudyKit	the ledger rows the panel's lookups write
+
+provider	own	XiaolaiDict	the router and the --provider-report instrument
+provider	module	LLMProviders	endpoints and CLIs, what may leave the Mac, refusals
+provider	module	XiaolaiDictCore	the questions the panes ask
+provider	module	XiaolaiDictUI	the panes the answers are read from
+provider	module	XiaolaiDictService	the lookup the panes are asked about
+provider	module	StudyModels	the ledger rows its lookups write are asserted
+provider	path	Tools/e2e/click-element.swift	its helper
+provider	path	Tools/e2e/provider-stub.py	the stub endpoint and stand-in CLI
+
+model	own	XiaolaiDict	the model client and the --model-report and --sense-report instruments
+model	module	XiaolaiDictModelService	download, sense answers, translation, footprint, idle unload
+model	module	XiaolaiDictCore	the sense ladder the labelled set is scored through
+model	module	XiaolaiDictService	the entries the senses are picked from
+model	module	StudyModels	the ledger rows its lookups write are asserted
+model	path	Tools/e2e/ladder-gate.py	the ladder gate that judges the order
+
+learning	own	XiaolaiDict	the Library scene, relaunch and appearance
+learning	module	XiaolaiDictUI	the Library's layout in both appearances
+learning	module	StudyModels	the Library's model
+learning	module	StudyKit	the encounter written and kept across a relaunch
+learning	module	XiaolaiDictService	the lookup that makes the encounter
+learning	path	Tools/e2e/click-element.swift	its helper
+learning	path	Tools/e2e/library-layout.py	seeds and judges the Library
+
+review	own	XiaolaiDict	the Review scene and the --review-report instrument
+review	module	StudyModels	the sitting, its planner and its keys
+review	module	XiaolaiDictUI	the review surface, read as VoiceOver reads it
+review	module	ReviewKit	the scheduler each grade moves
+review	module	XiaolaiDictService	the app the review runs in launches and asks the dictionary service
+review	path	Tools/e2e/review.py	seeds and judges the review
+
+reminder	own	XiaolaiDict	the reminder coordinator, delivery and the --reminder-report instrument
+reminder	module	StudyModels	the queue the reminder counts, claimed in doubt
+reminder	module	StudyKit	the cards the plan counts
+reminder	module	ReviewKit	the study day and allowance
+reminder	module	XiaolaiDictService	the app the reminder runs in launches and asks the dictionary service
+reminder	path	Tools/e2e/review.py	seeds the fixture cards
+
+# --- Modules no stage asserts on ------------------------------------------------------------------------------------
+-	unexercised	DictionaryIndex	not in the bundle: only the index tools link it
+-	unexercised	XiaolaiDictIndex	not in the bundle: a developer tool, built and run apart from the app
+-	unexercised	XiaolaiDictAlign	not in the bundle: a developer tool, built and run apart from the app
+-	unexercised	XiaolaiDictTestSupport	not in the bundle: test support only
