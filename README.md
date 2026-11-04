@@ -1,5 +1,21 @@
 # XiaolaiDict
 
+> **Archived on 2026-11-04. XiaolaiDict is retired in favour of [XDict](https://github.com/xiaolai/xdict).**
+>
+> XDict is the successor. It has the same macOS 27 / Apple Silicon requirement, reads your own `.mdx`
+> and `.mdd` files, and is [source-available](https://github.com/xiaolai/xdict/blob/main/LICENSING.md),
+> free for noncommercial use.
+>
+> ```sh
+> brew install --cask xiaolai/tap/xdict
+> ```
+>
+> Or download it from [XDict's releases](https://github.com/xiaolai/xdict/releases). XiaolaiDict's
+> settings and history are not imported; add your dictionaries to XDict.
+>
+> This repository is read-only and kept for history. The instructions below are historical and no
+> longer updated.
+
 A menu-bar dictionary for macOS that marks **which sense** of a word you just read.
 
 ## Requirements
